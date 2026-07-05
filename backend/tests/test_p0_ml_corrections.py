@@ -338,9 +338,13 @@ class TestLabelVersionRegistry:
         from backend.app.ml.feature_extractor import label_version_for_threshold
         assert label_version_for_threshold(1800.0) == "is_win_fast_v1"
 
-    def test_14400s_maps_to_is_tp_4h_v1(self):
+    def test_14400s_maps_to_is_tp_4h_v2_sim_outcome(self):
+        """ATUALIZADO (R2, 2026-07-05): label v2 renomeou o mapping 14400s de
+        'is_tp_4h_v1' para 'is_tp_4h_v2_sim_outcome' (simulator outcome only,
+        ttt_* proibido como target). v1 permanece apenas como alias legado
+        legível em ml_models antigos — nunca é gravado em modelos novos."""
         from backend.app.ml.feature_extractor import label_version_for_threshold
-        assert label_version_for_threshold(14400.0) == "is_tp_4h_v1"
+        assert label_version_for_threshold(14400.0) == "is_tp_4h_v2_sim_outcome"
 
     def test_unknown_threshold_uses_generic_name(self):
         from backend.app.ml.feature_extractor import label_version_for_threshold

@@ -7,6 +7,9 @@ Cobre as correções implementadas nas Fases 1-8:
   Fase 6: feature_importance extraído e normalizado em metrics_json
   Fase 7: NaN → None em features_snapshot, sem INSERT em ml_feature_observations
   Fase 8: build_training_dataframe prioriza ttt_fast_win_bucket como label
+          [SUPERSEDIDA pelo label v2 — TestLabelV2SimOutcome assere o contrato
+          vigente: outcome=='TP_HIT' AND holding<=threshold; TTT/pnl não
+          definem label. Reescrita R2 2026-07-05.]
 """
 
 import inspect
@@ -204,11 +207,22 @@ class TestFeatureImportanceExtraction:
 
 
 # ---------------------------------------------------------------------------
-# FASE 8 — ttt_fast_win_bucket como label primário em build_training_dataframe
+# FASE 8 (reescrita R2, 2026-07-05) — label v2: simulator ground truth
 # ---------------------------------------------------------------------------
 
-class TestTttLabelPriority:
-    """build_training_dataframe deve priorizar ttt_fast_win_bucket quando disponível."""
+class TestLabelV2SimOutcome:
+    """Label v2 (`is_tp_4h_v2_sim_outcome`): outcome=='TP_HIT' AND holding<=threshold.
+
+    HISTÓRICO (R2, 2026-07-05): a classe original (TestTttLabelPriority, plano
+    2026-06-30) asseria prioridade de `ttt_fast_win_bucket` e fallback por
+    `pnl_pct` — ambos REMOVIDOS deliberadamente pelo label v2: TTT buckets e
+    PnL realizado são sinais pós-entrada e não definem o label supervisionado
+    (ver docstring de build_training_dataframe). Testes reescritos para
+    asserir o contrato v2 com a mesma força:
+      - bucket TTT é IGNORADO (não prioriza nem sobrepõe o label);
+      - pnl_pct não define label (apenas pnl NULL derruba a linha);
+      - TP lento (holding > threshold) é 0; TP rápido é 1; não-TP é 0.
+    """
 
     def _make_record(self, ttt_bucket=None, outcome="TP_HIT", pnl_pct=1.5, holding_seconds=900):
         """Record com campos mínimos para build_training_dataframe."""
@@ -220,72 +234,70 @@ class TestTttLabelPriority:
             "created_at": "2026-06-29T00:00:00Z",
         }
 
-    def test_win_0_15m_bucket_is_positive(self):
+    def test_fast_tp_is_positive_and_ttt_column_gone(self):
+        """TP_HIT com holding<=threshold → 1; mecanismo _has_ttt_label não existe mais."""
         from backend.app.ml.feature_extractor import build_training_dataframe
         records = [self._make_record(ttt_bucket="WIN_0_15M")]
         df = build_training_dataframe(records, win_fast_threshold_s=1800.0)
         assert len(df) == 1
         assert df["is_win_fast"].iloc[0] == 1
-        assert df["_has_ttt_label"].iloc[0] == 1
+        assert "_has_ttt_label" not in df.columns, (
+            "coluna do mecanismo TTT removido não deve reaparecer no dataframe"
+        )
 
-    def test_win_15_30m_bucket_is_positive(self):
+    def test_slow_tp_is_negative_even_with_fast_bucket(self):
+        """v2: TP_HIT com holding>threshold é 0 — mesmo com bucket WIN_0_15M presente."""
         from backend.app.ml.feature_extractor import build_training_dataframe
-        records = [self._make_record(ttt_bucket="WIN_15_30M")]
-        df = build_training_dataframe(records, win_fast_threshold_s=1800.0)
-        assert df["is_win_fast"].iloc[0] == 1
-        assert df["_has_ttt_label"].iloc[0] == 1
-
-    def test_win_60_180m_bucket_is_negative(self):
-        """Slow TP (60-180min) deve ser label=0 mesmo com outcome=TP_HIT."""
-        from backend.app.ml.feature_extractor import build_training_dataframe
-        records = [self._make_record(ttt_bucket="WIN_60_180M", outcome="TP_HIT", pnl_pct=2.0)]
+        records = [self._make_record(ttt_bucket="WIN_0_15M", holding_seconds=7200)]
         df = build_training_dataframe(records, win_fast_threshold_s=1800.0)
         assert df["is_win_fast"].iloc[0] == 0, (
-            "WIN_60_180M is not a fast TP — must be label=0 even with pnl>threshold"
+            "slow win é entrada ruim com saída sortuda — label 0 independe do bucket TTT"
         )
-        assert df["_has_ttt_label"].iloc[0] == 1
 
-    def test_no_ttt_bucket_falls_back_to_pnl(self):
-        """Sem ttt_fast_win_bucket, usa fallback pnl_pct > _WIN_THRESHOLD."""
+    def test_slow_bucket_does_not_override_fast_holding(self):
+        """v2 IGNORA o bucket: WIN_60_180M com holding=900s<=1800 → 1 (outcome+holding mandam)."""
         from backend.app.ml.feature_extractor import build_training_dataframe
-        # pnl=1.5% > 0.96% threshold e holding=900s <= 1800s → label=1 via fallback
-        records = [self._make_record(ttt_bucket=None, pnl_pct=1.5, holding_seconds=900)]
+        records = [self._make_record(ttt_bucket="WIN_60_180M", pnl_pct=3.0, holding_seconds=900)]
         df = build_training_dataframe(records, win_fast_threshold_s=1800.0)
-        assert df["_has_ttt_label"].iloc[0] == 0  # sem ttt
-        assert df["is_win_fast"].iloc[0] == 1  # label via pnl fallback
+        assert df["is_win_fast"].iloc[0] == 1, (
+            "ttt_fast_win_bucket não sobrepõe o ground truth do simulador no v2"
+        )
 
-    def test_no_ttt_bucket_low_pnl_is_negative(self):
-        """Sem ttt e pnl abaixo do threshold → label=0."""
+    def test_high_pnl_without_tp_outcome_is_negative(self):
+        """pnl_pct não define label: TIMEOUT com pnl=3.0% é 0."""
         from backend.app.ml.feature_extractor import build_training_dataframe
-        # pnl=0.5% < 0.96% → label=0 mesmo com holding curto
+        records = [self._make_record(ttt_bucket=None, outcome="TIMEOUT", pnl_pct=3.0, holding_seconds=600)]
+        df = build_training_dataframe(records, win_fast_threshold_s=1800.0)
+        assert df["is_win_fast"].iloc[0] == 0, (
+            "sem TP_HIT não há label 1 — pnl alto não é fallback no v2"
+        )
+
+    def test_low_pnl_fast_tp_is_positive(self):
+        """Mudança INTENCIONAL vs plano jun-30: pnl=0.5% não derruba o label —
+        TP_HIT + holding ok → 1 (ground truth do simulador, sem threshold de pnl)."""
+        from backend.app.ml.feature_extractor import build_training_dataframe
         records = [self._make_record(ttt_bucket=None, pnl_pct=0.5, holding_seconds=600)]
         df = build_training_dataframe(records, win_fast_threshold_s=1800.0)
-        assert df["is_win_fast"].iloc[0] == 0
+        assert df["is_win_fast"].iloc[0] == 1
 
-    def test_ttt_label_overrides_pnl_even_with_high_pnl(self):
-        """ttt_bucket='WIN_60_180M' → label=0 mesmo se pnl=3.0% (muito acima do threshold).
-        Label vem do ttt, não do pnl quando ttt disponível.
-        """
+    def test_null_pnl_row_dropped(self):
+        """pnl_pct NULL → linha descartada (não vira label 0 silencioso)."""
         from backend.app.ml.feature_extractor import build_training_dataframe
-        records = [self._make_record(ttt_bucket="WIN_60_180M", pnl_pct=3.0, holding_seconds=1800)]
+        records = [self._make_record(pnl_pct=None)]
         df = build_training_dataframe(records, win_fast_threshold_s=1800.0)
-        assert df["is_win_fast"].iloc[0] == 0, (
-            "ttt_bucket must override pnl label — slow TP must be 0 regardless of pnl"
-        )
+        assert len(df) == 0
 
-    def test_positive_rate_with_ttt_labels_reflects_ttt_distribution(self):
-        """Com ttt_fast_win_bucket disponível, positive_rate deve refletir a distribuição real (15-17%), não 3.1%."""
+    def test_positive_rate_reflects_outcome_holding_distribution(self):
+        """positive_rate = fração de TP_HIT rápidos — 157/1000 = 15.7%."""
         from backend.app.ml.feature_extractor import build_training_dataframe
-        # 157 fast wins (WIN_0_15M or WIN_15_30M) out of 1000 total → ~15.7%
         records = (
-            [self._make_record(ttt_bucket="WIN_0_15M")] * 85
-            + [self._make_record(ttt_bucket="WIN_15_30M")] * 72
-            + [self._make_record(ttt_bucket="WIN_60_180M")] * 200  # slow TPs → label=0
-            + [self._make_record(ttt_bucket=None, outcome="SL_HIT", pnl_pct=-1.0)] * 643
+            [self._make_record(holding_seconds=800)] * 85       # TP rápido → 1
+            + [self._make_record(holding_seconds=1500)] * 72    # TP rápido → 1
+            + [self._make_record(holding_seconds=7200)] * 200   # TP lento → 0
+            + [self._make_record(outcome="SL_HIT", pnl_pct=-1.0)] * 643  # → 0
         )
         df = build_training_dataframe(records, win_fast_threshold_s=1800.0)
         pos_rate = df["is_win_fast"].mean()
-        # 157/1000 = 15.7%
         assert abs(pos_rate - 0.157) < 0.01, (
-            f"Expected ~15.7% positive rate with ttt labels, got {pos_rate:.1%}"
+            f"Expected ~15.7% positive rate under label v2, got {pos_rate:.1%}"
         )

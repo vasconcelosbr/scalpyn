@@ -167,7 +167,7 @@ class TestMigration106:
     def _migration_source(self) -> str:
         path = (
             Path(__file__).resolve().parents[2]
-            / "backend" / "alembic" / "versions" / "106_shadow_ml_lineage.py"
+            / "backend" / "alembic" / "versions" / "legacy" / "106_shadow_ml_lineage.py"  # R2 2026-07-05: movida para legacy/ (baseline 000)
         )
         return path.read_text(encoding="utf-8")
 

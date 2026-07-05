@@ -87,7 +87,7 @@ class TestMigration105SchemaSupportsProducer:
     def test_ml_opportunity_rankings_columns_match_producer_insert(self):
         path = (
             Path(__file__).resolve().parents[2]
-            / "backend" / "alembic" / "versions" / "105_ml_opportunity_rankings.py"
+            / "backend" / "alembic" / "versions" / "legacy" / "105_ml_opportunity_rankings.py"  # R2 2026-07-05: movida para legacy/ (baseline 000)
         )
         source = path.read_text(encoding="utf-8")
         for col in (

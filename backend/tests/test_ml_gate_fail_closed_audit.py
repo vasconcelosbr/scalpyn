@@ -15,6 +15,10 @@ def _repo_root() -> Path:
 
 
 def test_predict_proba_exception_returns_fail_closed_contract():
+    # ATUALIZADO (R2, 2026-07-05): removido o patch de fetch_macro_context —
+    # o enriquecimento macro na inferência foi eliminado do prediction_service
+    # (ml_macro_feature_names=[] em config). O contrato fail-closed sob
+    # exceção de predict_proba permanece asserido com a mesma força.
     from backend.app.ml.prediction_service import WinFastPredictor
 
     predictor = WinFastPredictor()
@@ -24,17 +28,13 @@ def test_predict_proba_exception_returns_fail_closed_contract():
             "_get_threshold",
             new=AsyncMock(return_value=("00000000-0000-0000-0000-000000000001", 0.5, "50")),
         ):
-            with patch(
-                "backend.app.ml.prediction_service.fetch_macro_context",
-                new=AsyncMock(return_value={"macro_context_available": False}),
-            ):
-                result = asyncio.run(
-                    predictor.predict(
-                        metrics={"rsi": 50.0},
-                        db=AsyncMock(),
-                        model_lane="L3_PROFILE",
-                    )
+            result = asyncio.run(
+                predictor.predict(
+                    metrics={"rsi": 50.0},
+                    db=AsyncMock(),
+                    model_lane="L3_PROFILE",
                 )
+            )
 
     assert result["win_fast_probability"] is None
     assert result["model_approved"] is False
@@ -134,11 +134,15 @@ def test_l1_ranker_top_k_is_used_before_l3_gate():
 
 
 def test_migration_112_adds_ml_gate_lineage_contract():
+    # ATUALIZADO (R2, 2026-07-05): migrations pré-baseline movidas para
+    # alembic/versions/legacy/ (repo reestruturado com 000_baseline_prod_schema).
+    # Mesmas asserções de DDL; só o path mudou.
     source = (
         _repo_root()
         / "backend"
         / "alembic"
         / "versions"
+        / "legacy"
         / "112_ml_gate_lineage_contract.py"
     ).read_text(encoding="utf-8")
 
@@ -156,11 +160,14 @@ def test_migration_112_adds_ml_gate_lineage_contract():
 
 
 def test_migration_111_relaxes_ml_predictions_for_gate_blocks():
+    # ATUALIZADO (R2, 2026-07-05): path corrigido para alembic/versions/legacy/
+    # (repo reestruturado com 000_baseline_prod_schema). Asserções inalteradas.
     source = (
         _repo_root()
         / "backend"
         / "alembic"
         / "versions"
+        / "legacy"
         / "111_ml_gate_audit_payload.py"
     ).read_text(encoding="utf-8")
 

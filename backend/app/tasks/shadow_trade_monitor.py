@@ -119,6 +119,42 @@ def _mark_force_close(
     shadow.exit_metrics_json = {**(shadow.exit_metrics_json or {}), **marker}
 
 
+def _resolve_expired_timeout(
+    shadow: ShadowTrade,
+    mm_price,
+    ohlcv_price,
+    entry_price: float,
+    now_utc: datetime,
+) -> Optional[float]:
+    """R3 (2026-07-05): trade vencido fecha por TIMEOUT ANTES de TP/SL corrente.
+
+    Para trade com ``elapsed >= timeout_candles`` (minutos, candles 1m), o
+    veredito é TIMEOUT — nunca barreira a preço corrente. Sem candles 1m no
+    banco, um "TP corrente" após a janela é epistemicamente ambíguo (o
+    cruzamento pode ter ocorrido dias depois da expiração, ou o preço pode
+    ter batido o SL primeiro dentro da janela sem detecção); fechar como TP
+    inflaria win-rate/EV (F2 do encerramento: TP_HITs com holding 28-31h).
+    Labels v2 não são afetados (holding > 4h ⇒ 0).
+
+    Retorna o exit_price (precedência mm > ohlcv > entry, a mesma do
+    timeout-elapsed) quando o trade está vencido; None caso contrário.
+    """
+    timeout_m = int(shadow.timeout_candles or 0)
+    if not timeout_m or shadow.entry_timestamp is None:
+        return None
+    entry_ts = shadow.entry_timestamp
+    if entry_ts.tzinfo is None:
+        entry_ts = entry_ts.replace(tzinfo=timezone.utc)
+    elapsed_m = (now_utc - entry_ts).total_seconds() / 60.0
+    if elapsed_m < timeout_m:
+        return None
+    if mm_price is not None:
+        return float(mm_price)
+    if ohlcv_price is not None:
+        return float(ohlcv_price)
+    return entry_price
+
+
 def _run_async(coro):
     """Run async coroutine in a sync Celery task.
 
@@ -974,6 +1010,23 @@ async def _advance_shadow(
             shadow.min_price_post_entry = min_price
         if shadow.max_price_post_entry is None or max_price > shadow.max_price_post_entry:
             shadow.max_price_post_entry = max_price
+
+        # ── R3 (2026-07-05): TIMEOUT precede TP/SL para trade vencido ────
+        # Ver _resolve_expired_timeout. MAE/MFE acima ainda atualizam
+        # (observacionais); o outcome de trade expirado é sempre TIMEOUT.
+        _now_utc_r3 = datetime.now(timezone.utc)
+        _expired_exit = _resolve_expired_timeout(
+            shadow, mm_price, ohlcv_price, entry_price, _now_utc_r3
+        )
+        if _expired_exit is not None:
+            logger.info(
+                "[shadow-monitor] timeout-precedence shadow_id=%s symbol=%s "
+                "timeout_candles=%s exit_price=%.8f (barreira corrente ignorada "
+                "para trade vencido)",
+                shadow.id, shadow.symbol, shadow.timeout_candles, _expired_exit,
+            )
+            _finalize_outcome(shadow, "TIMEOUT", _expired_exit, _now_utc_r3, entry_price)
+            return "completed"
 
         live_outcome: Optional[str] = None
         chosen_price: Optional[float] = None

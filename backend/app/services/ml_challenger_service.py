@@ -214,6 +214,29 @@ def _calibrate_ev_threshold(
 # Sync training functions (run in thread pool — CPU-bound)
 # ---------------------------------------------------------------------------
 
+def _suggest_params_from_space(trial, search_space: Dict[str, Any]) -> Dict[str, Any]:
+    """R1: espaço de busca Optuna vem 100% da config (`ml_optuna_search_space`).
+
+    Cada entrada declara ``{"type": "int"|"float", "low": x, "high": y, "log": bool}``.
+    Zero range hardcoded em código — mudar o espaço é mudar config, não deploy.
+    """
+    params: Dict[str, Any] = {}
+    for name, spec in search_space.items():
+        ptype = str((spec or {}).get("type") or "")
+        if ptype == "int":
+            params[name] = trial.suggest_int(name, int(spec["low"]), int(spec["high"]))
+        elif ptype == "float":
+            params[name] = trial.suggest_float(
+                name, float(spec["low"]), float(spec["high"]),
+                log=bool(spec.get("log", False)),
+            )
+        else:
+            raise ValueError(
+                f"ml_optuna_search_space: type inválido '{ptype}' em '{name}'"
+            )
+    return params
+
+
 def _train_lgbm_sync(
     X_train, y_train, X_val, y_val,
     n_trials: int = 30,
@@ -221,39 +244,56 @@ def _train_lgbm_sync(
     val_returns=None, test_returns=None,
     threshold_grid_step: float = 0.01,
     threshold_min_positives: int = 10,
+    search_space: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     import lightgbm as lgb
     import numpy as np
     import optuna
     from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, precision_score, recall_score
 
+    # R1 fail-closed: espaço de busca obrigatório via config — sem fallback
+    # hardcoded (mesmo padrão da fronteira ml_dataset_valid_from).
+    if not search_space:
+        raise ValueError("missing_ml_optuna_search_space_lightgbm")
+
     optuna.logging.set_verbosity(optuna.logging.WARNING)
+    logger.info(
+        "[MLChallenger] Optuna(R1): n_trials=%d search_space=%s",
+        n_trials, json.dumps(search_space, sort_keys=True),
+    )
 
     dtrain = lgb.Dataset(X_train, label=y_train)
     dval = lgb.Dataset(X_val, label=y_val, reference=dtrain)
 
     best_params: Dict[str, Any] = {}
+    _fixed_params = {
+        "objective": "binary",
+        "metric": "auc",
+        "verbosity": -1,
+        "boosting_type": "gbdt",
+        "feature_pre_filter": False,
+    }
+    _trial_selection_objective = "net_ev" if val_returns is not None else "roc_auc"
 
     def objective(trial: optuna.Trial) -> float:
-        params = {
-            "objective": "binary",
-            "metric": "auc",
-            "verbosity": -1,
-            "boosting_type": "gbdt",
-            "feature_pre_filter": False,
-            "n_estimators": trial.suggest_int("n_estimators", 100, 600),
-            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
-            "num_leaves": trial.suggest_int("num_leaves", 15, 127),
-            "min_child_samples": trial.suggest_int("min_child_samples", 10, 100),
-            "feature_fraction": trial.suggest_float("feature_fraction", 0.4, 1.0),
-            "bagging_fraction": trial.suggest_float("bagging_fraction", 0.4, 1.0),
-            "bagging_freq": trial.suggest_int("bagging_freq", 1, 7),
-            "reg_alpha": trial.suggest_float("reg_alpha", 1e-8, 10.0, log=True),
-            "reg_lambda": trial.suggest_float("reg_lambda", 1e-8, 10.0, log=True),
-        }
+        params = {**_fixed_params, **_suggest_params_from_space(trial, search_space)}
         callbacks = [lgb.early_stopping(20, verbose=False), lgb.log_evaluation(-1)]
         model = lgb.train(params, dtrain, valid_sets=[dval], callbacks=callbacks)
         preds = model.predict(X_val)
+        # R1.3: seleção do trial por EV LÍQUIDO de validação — mesmo critério do
+        # threshold final (_calibrate_ev_threshold). Selecionar por val AUC e
+        # decidir por EV cria otimismo de seleção; aqui o trial otimiza o que
+        # o gate cobra. Test set jamais é lido aqui.
+        if val_returns is not None:
+            try:
+                _, _trial_curve = _calibrate_ev_threshold(
+                    preds, val_returns, threshold_grid_step, threshold_min_positives
+                )
+                return max(point["net_ev"] for point in _trial_curve)
+            except ValueError:
+                # Nenhum threshold elegível (min_positives) — trial ruim,
+                # não aborta o study.
+                return -float("inf")
         return float(roc_auc_score(y_val, preds))
 
     study = optuna.create_study(direction="maximize")
@@ -312,6 +352,8 @@ def _train_lgbm_sync(
             "recall": rec,
             "fpr": fpr,
             "n_trials": n_trials,
+            "trial_selection_objective": _trial_selection_objective,
+            "optuna_search_space": search_space,
             "best_trial_number": study.best_trial.number,
             "best_trial_value": study.best_trial.value,
             "val_samples": int(len(y_val)),
@@ -1309,6 +1351,24 @@ class MLChallengerService:
                 }
             elif _is_installed("lightgbm"):
                 try:
+                    # R1 fail-closed: n_trials e espaço de busca do Optuna vêm da
+                    # config — ausência aborta a lane com mensagem (mesmo padrão
+                    # da fronteira ml_dataset_valid_from). Zero fallback.
+                    _raw_optuna_trials = ml_config.get("ml_optuna_max_trials")
+                    if _raw_optuna_trials is None:
+                        raise ValueError(
+                            "missing_ml_optuna_max_trials: gravar em config_profiles"
+                            "(config_type='ml') antes do treino"
+                        )
+                    n_trials_lgbm = int(_raw_optuna_trials)
+                    lgbm_search_space = (
+                        ml_config.get("ml_optuna_search_space") or {}
+                    ).get("lightgbm")
+                    if not lgbm_search_space:
+                        raise ValueError(
+                            "missing_ml_optuna_search_space_lightgbm: gravar em "
+                            "config_profiles(config_type='ml') antes do treino"
+                        )
                     X, y, available_cols, returns, created_at, shadow_ids, holding_seconds = self._build_dataset(
                         lgbm_records, lgbm_feature_columns, win_fast_threshold_s,
                         lane_contract=lgbm_lane_contract, feature_ranges=feature_ranges,
@@ -1350,6 +1410,7 @@ class MLChallengerService:
                                 _train_lgbm_sync,
                                 X_tr, y_tr, X_va, y_va, n_trials_lgbm, X_te, y_te,
                                 ret_va, ret_te, threshold_grid_step, threshold_min_positives,
+                                lgbm_search_space,
                             )
                             _lgbm_at_tr = _lgbm_split["meta_tr"][1]  # created_at post-purge train rows
                             model_id = await self._save_to_db(
