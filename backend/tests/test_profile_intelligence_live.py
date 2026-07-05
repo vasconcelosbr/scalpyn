@@ -8,6 +8,8 @@ These tests verify:
 - Safety: mutation_applied default, requires_human_approval default
 """
 
+import inspect
+
 import pytest
 
 from backend.app.services.profile_intelligence_live_service import (
@@ -16,6 +18,7 @@ from backend.app.services.profile_intelligence_live_service import (
     _FORBIDDEN_SUGGESTION_TYPES,
     _FORBIDDEN_ACTION_TYPES,
 )
+import backend.app.services.profile_intelligence_live_service as live_service
 
 
 # ── Forbidden type contracts ────────────────────────────────────────────────
@@ -139,3 +142,10 @@ def test_allowed_suggestion_types_do_not_overlap_forbidden():
     }
     overlap = allowed & _FORBIDDEN_SUGGESTION_TYPES
     assert overlap == set(), f"Overlap between allowed and forbidden: {overlap}"
+
+
+def test_asyncpg_safe_uuid_binds_for_profile_queries():
+    """SQLAlchemy asyncpg binds cannot use :pid::uuid syntax."""
+    source = inspect.getsource(live_service)
+    assert ":pid::uuid" not in source
+    assert "CAST(:pid AS uuid)" in source

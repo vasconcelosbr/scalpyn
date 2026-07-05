@@ -424,7 +424,7 @@ async def run_medium_cycle(db: AsyncSession) -> dict:
             # Read actual current minimum_score so current_value is never null
             cfg_row = await db.execute(text("""
                 SELECT config->'scoring'->>'minimum_score' AS min_score
-                FROM profiles WHERE id = :pid::uuid
+                FROM profiles WHERE id = CAST(:pid AS uuid)
             """), {"pid": pid})
             raw_min_score = cfg_row.scalar()
             current_min_json = (
@@ -575,7 +575,7 @@ async def run_shadow_calibration_cycle(db: AsyncSession) -> dict:
                     COUNT(*) FILTER (WHERE outcome = 'TP_HIT') AS tp,
                     COUNT(*) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT','TIMEOUT')) AS total
                 FROM shadow_trades
-                WHERE profile_id = :pid::uuid
+                WHERE profile_id = CAST(:pid AS uuid)
                   AND status = 'COMPLETED'
                   AND outcome IS NOT NULL
                   AND created_at >= now() - interval '14 days'
@@ -725,7 +725,7 @@ async def run_shadow_validation_cycle(db: AsyncSession) -> dict:
                 COUNT(*) FILTER (WHERE outcome = 'TP_HIT') AS tp,
                 COUNT(*) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT','TIMEOUT')) AS total
             FROM shadow_trades
-            WHERE profile_id = :pid::uuid
+            WHERE profile_id = CAST(:pid AS uuid)
               AND status = 'COMPLETED'
               AND outcome IS NOT NULL
               AND created_at >= :pav_created - interval '14 days'
@@ -739,7 +739,7 @@ async def run_shadow_validation_cycle(db: AsyncSession) -> dict:
                 COUNT(*) FILTER (WHERE outcome = 'TP_HIT') AS tp,
                 COUNT(*) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT','TIMEOUT')) AS total
             FROM shadow_trades
-            WHERE profile_id = :pid::uuid
+            WHERE profile_id = CAST(:pid AS uuid)
               AND status = 'COMPLETED'
               AND outcome IS NOT NULL
               AND created_at >= :pav_created
