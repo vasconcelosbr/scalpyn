@@ -25,6 +25,7 @@ from app.services.robust_indicators.score import (
     calculate_score_with_confidence,
 )
 from app.services.robust_indicators.asset_score import compute_asset_score
+from app.tasks.pipeline_scan import _decision_metrics
 
 
 def _env(name: str, value, *, source=DataSource.GATE_CANDLES,
@@ -119,6 +120,48 @@ class TestCriticalGateRemoved:
         envelopes = {"rsi": _env("rsi", 55.0)}
         result = calculate_score_with_confidence(envelopes, [])
         assert result.score == 0.0
+
+
+class TestL3DecisionMetrics:
+    def test_l3_approved_snapshot_preserves_robust_component_fields(self):
+        asset = {
+            "symbol": "SUI_USDT",
+            "price": 1.25,
+            "indicators": {
+                "adx": 31.0,
+                "volume_delta": 120.0,
+            },
+            "_score_components": {
+                "component_fields": {
+                    "liquidity_score": 87.5,
+                    "market_structure_score": 62.5,
+                    "momentum_score": 75.0,
+                    "signal_score": 50.0,
+                },
+            },
+            "di_trend": True,
+        }
+        processed = {
+            "score": {
+                "total_score": 80.0,
+                "components": {
+                    "liquidity_score": 87.5,
+                    "market_structure_score": 62.5,
+                    "momentum_score": 75.0,
+                    "signal_score": 50.0,
+                },
+            },
+            "signal": {"direction": "long"},
+        }
+
+        metrics = _decision_metrics(asset, processed)
+        snap = metrics["indicators_snapshot"]
+
+        assert snap["liquidity_score"]["value"] == 87.5
+        assert snap["market_structure_score"]["value"] == 62.5
+        assert snap["momentum_score"]["value"] == 75.0
+        assert snap["signal_score"]["value"] == 50.0
+        assert snap["di_trend"]["value"] is True
 
 
 class TestConfidenceGateSoftened:

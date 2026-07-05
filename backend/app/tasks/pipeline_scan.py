@@ -1251,9 +1251,26 @@ def _decision_reason_map(processed: dict, has_signal_conditions: bool) -> dict:
 
 def _decision_metrics(asset: dict, processed: dict) -> dict:
     score = processed.get("score", {}) or {}
+    robust_context = asset.get("_score_components") or {}
+    component_fields = (
+        (robust_context.get("component_fields") or {})
+        if isinstance(robust_context, dict) else {}
+    )
+    flat_indicators = asset.get("indicators") or {}
+    if not component_fields and isinstance(flat_indicators, dict):
+        component_fields = {
+            key: flat_indicators.get(key)
+            for key in (
+                "liquidity_score",
+                "market_structure_score",
+                "momentum_score",
+                "signal_score",
+            )
+            if flat_indicators.get(key) is not None
+        }
     score_components = (
         score.get("components")
-        or (asset.get("_score_components") or {}).get("component_fields")
+        or component_fields
         or {}
     )
     metrics = {
@@ -1286,7 +1303,6 @@ def _decision_metrics(asset: dict, processed: dict) -> dict:
     #   values that actually drove the decision — a train-serve skew source.
     #   Fix: after building from merged, overlay asset["indicators"] for any
     #   live-injection field so the snapshot is always decision-time-accurate.
-    flat_indicators = asset.get("indicators") or {}
     merged = asset.get("_merged_indicators")
 
     if merged is not None:
@@ -1327,7 +1343,12 @@ def _decision_metrics(asset: dict, processed: dict) -> dict:
                     snapshot[key] = {"value": live_val, "source_group": "live_injection"}
 
         for key in _DECISION_CONTEXT_SNAPSHOT_FIELDS:
-            if key in asset and asset.get(key) is not None:
+            if key in component_fields and component_fields.get(key) is not None:
+                snapshot[key] = {
+                    "value": component_fields.get(key),
+                    "source_group": "decision_context",
+                }
+            elif key in asset and asset.get(key) is not None:
                 snapshot[key] = {
                     "value": asset.get(key),
                     "source_group": "decision_context",
@@ -1351,7 +1372,12 @@ def _decision_metrics(asset: dict, processed: dict) -> dict:
             if isinstance(v, (int, float, bool, type(None)))
         }
         for key in _DECISION_CONTEXT_SNAPSHOT_FIELDS:
-            if key in asset and asset.get(key) is not None:
+            if key in component_fields and component_fields.get(key) is not None:
+                metrics["indicators_snapshot"][key] = {
+                    "value": component_fields.get(key),
+                    "source_group": "decision_context",
+                }
+            elif key in asset and asset.get(key) is not None:
                 metrics["indicators_snapshot"][key] = {
                     "value": asset.get(key),
                     "source_group": "decision_context",

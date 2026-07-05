@@ -18,6 +18,19 @@ _REQUIRED_OHLCV_COLUMNS = ["time", "open", "high", "low", "close", "volume"]
 _MARKET_METADATA_BULK_CHUNK = 200
 
 
+def _is_poisoned_transaction_error(exc: Exception) -> bool:
+    exc_name = type(exc).__name__.lower()
+    msg = str(exc).lower()
+    return (
+        "pendingrollback" in exc_name
+        or "pendingrollback" in msg
+        or "infailedsqltransaction" in exc_name
+        or "infailedsqltransaction" in msg
+        or "current transaction is aborted" in msg
+        or "can't operate on closed transaction" in msg
+    )
+
+
 async def _bulk_upsert_market_metadata(db, rows: list[dict], origin: str) -> int:
     """Task #251: single-statement multi-row UPSERT into ``market_metadata``.
 
@@ -84,12 +97,12 @@ async def _bulk_upsert_market_metadata(db, rows: list[dict], origin: str) -> int
         except Exception as bulk_exc:
             # SAVEPOINT auto-rolled back. Per "Nested-savepoint rollback
             # rule" gotcha, do NOT call db.rollback().
-            if not db.is_active:
+            if _is_poisoned_transaction_error(bulk_exc) or not db.is_active:
                 logger.error(
                     "[BULK-UPSERT %s] outer tx poisoned mid-chunk %d/%d — stopping",
                     origin, chunk_start, len(rows),
                 )
-                break
+                raise
             logger.warning(
                 "[BULK-UPSERT %s] chunk %d-%d failed (%s) — falling back to per-row",
                 origin, chunk_start, chunk_start + len(chunk), bulk_exc,
@@ -122,6 +135,12 @@ async def _bulk_upsert_market_metadata(db, rows: list[dict], origin: str) -> int
                         await db.execute(row_sql, r)
                     upserted += 1
                 except Exception as row_exc:
+                    if _is_poisoned_transaction_error(row_exc) or not db.is_active:
+                        logger.error(
+                            "[BULK-UPSERT %s] transaction poisoned during fallback for %s (%s) - aborting cycle for rollback",
+                            origin, r.get("symbol", "?"), row_exc,
+                        )
+                        raise
                     logger.debug(
                         "[BULK-UPSERT %s] per-row fallback failed for %s: %s",
                         origin, r.get("symbol", "?"), row_exc,
@@ -416,6 +435,10 @@ async def _collect_all_async():
             logger.error(
                 "[COLLECT-TICKERS] failed: %s", exc, exc_info=True,
             )
+            try:
+                await db.rollback()
+            except Exception as rb_exc:
+                logger.warning("[COLLECT-TICKERS] rollback after failure failed: %s", rb_exc)
             return 0
 
 
