@@ -18,6 +18,67 @@ _REQUIRED_OHLCV_COLUMNS = ["time", "open", "high", "low", "close", "volume"]
 _MARKET_METADATA_BULK_CHUNK = 200
 
 
+def _dedupe_market_metadata_rows(rows: list[dict]) -> list[dict]:
+    """Keep one ticker row per symbol before bulk ON CONFLICT.
+
+    Postgres cannot update the same conflict target twice in a single INSERT.
+    Gate ticker snapshots can occasionally contain repeated pairs, so the
+    collector must collapse them before building the VALUES tuple.
+    """
+    by_symbol: dict[str, dict] = {}
+    for row in rows:
+        symbol = str(row.get("symbol") or "").upper()
+        if not symbol:
+            continue
+        by_symbol[symbol] = {**row, "symbol": symbol}
+    return [by_symbol[symbol] for symbol in sorted(by_symbol)]
+
+
+def _build_market_metadata_bulk_statement(chunk: list[dict]) -> tuple[str, dict]:
+    sql_template = """
+        INSERT INTO market_metadata
+            (symbol, price, price_change_24h, volume_24h,
+             spread_pct, last_updated, volume_24h_updated_at)
+        VALUES {placeholders}
+        ON CONFLICT (symbol) DO UPDATE SET
+            price = EXCLUDED.price,
+            price_change_24h = EXCLUDED.price_change_24h,
+            volume_24h = EXCLUDED.volume_24h,
+            spread_pct = EXCLUDED.spread_pct,
+            last_updated = EXCLUDED.last_updated,
+            volume_24h_updated_at = EXCLUDED.volume_24h_updated_at
+    """
+    placeholders = []
+    params: dict = {}
+    for i, row in enumerate(chunk):
+        placeholders.append(
+            f"(:s{i}, :p{i}, :c{i}, :v{i}, :sp{i}, :u{i}, :u{i})"
+        )
+        params[f"s{i}"] = row["symbol"]
+        params[f"p{i}"] = row["price"]
+        params[f"c{i}"] = row["change"]
+        params[f"v{i}"] = row["volume"]
+        params[f"sp{i}"] = row["spread"]
+        params[f"u{i}"] = row["updated"]
+    return sql_template.format(placeholders=", ".join(placeholders)), params
+
+
+_MARKET_METADATA_ROW_SQL = """
+    INSERT INTO market_metadata
+        (symbol, price, price_change_24h, volume_24h,
+         spread_pct, last_updated, volume_24h_updated_at)
+    VALUES (:symbol, :price, :change, :volume, :spread,
+            :updated, :updated)
+    ON CONFLICT (symbol) DO UPDATE SET
+        price = EXCLUDED.price,
+        price_change_24h = EXCLUDED.price_change_24h,
+        volume_24h = EXCLUDED.volume_24h,
+        spread_pct = EXCLUDED.spread_pct,
+        last_updated = EXCLUDED.last_updated,
+        volume_24h_updated_at = EXCLUDED.volume_24h_updated_at
+"""
+
+
 def _is_poisoned_transaction_error(exc: Exception) -> bool:
     exc_name = type(exc).__name__.lower()
     msg = str(exc).lower()
@@ -59,36 +120,12 @@ async def _bulk_upsert_market_metadata(db, rows: list[dict], origin: str) -> int
     if not rows:
         return 0
 
-    sql_template = """
-        INSERT INTO market_metadata
-            (symbol, price, price_change_24h, volume_24h,
-             spread_pct, last_updated, volume_24h_updated_at)
-        VALUES {placeholders}
-        ON CONFLICT (symbol) DO UPDATE SET
-            price = EXCLUDED.price,
-            price_change_24h = EXCLUDED.price_change_24h,
-            volume_24h = EXCLUDED.volume_24h,
-            spread_pct = EXCLUDED.spread_pct,
-            last_updated = EXCLUDED.last_updated,
-            volume_24h_updated_at = EXCLUDED.volume_24h_updated_at
-    """
+    rows = _dedupe_market_metadata_rows(rows)
 
     upserted = 0
     for chunk_start in range(0, len(rows), _MARKET_METADATA_BULK_CHUNK):
         chunk = rows[chunk_start:chunk_start + _MARKET_METADATA_BULK_CHUNK]
-        placeholders = []
-        params: dict = {}
-        for i, r in enumerate(chunk):
-            placeholders.append(
-                f"(:s{i}, :p{i}, :c{i}, :v{i}, :sp{i}, :u{i}, :u{i})"
-            )
-            params[f"s{i}"] = r["symbol"]
-            params[f"p{i}"] = r["price"]
-            params[f"c{i}"] = r["change"]
-            params[f"v{i}"] = r["volume"]
-            params[f"sp{i}"] = r["spread"]
-            params[f"u{i}"] = r["updated"]
-        sql = sql_template.format(placeholders=", ".join(placeholders))
+        sql, params = _build_market_metadata_bulk_statement(chunk)
 
         try:
             async with db.begin_nested():
@@ -109,20 +146,7 @@ async def _bulk_upsert_market_metadata(db, rows: list[dict], origin: str) -> int
             )
             # Per-row fallback for THIS chunk only. Symbols still in sorted
             # order, so deadlock invariant preserved across workers.
-            row_sql = text("""
-                INSERT INTO market_metadata
-                    (symbol, price, price_change_24h, volume_24h,
-                     spread_pct, last_updated, volume_24h_updated_at)
-                VALUES (:symbol, :price, :change, :volume, :spread,
-                        :updated, :updated)
-                ON CONFLICT (symbol) DO UPDATE SET
-                    price = EXCLUDED.price,
-                    price_change_24h = EXCLUDED.price_change_24h,
-                    volume_24h = EXCLUDED.volume_24h,
-                    spread_pct = EXCLUDED.spread_pct,
-                    last_updated = EXCLUDED.last_updated,
-                    volume_24h_updated_at = EXCLUDED.volume_24h_updated_at
-            """)
+            row_sql = text(_MARKET_METADATA_ROW_SQL)
             for r in chunk:
                 if not db.is_active:
                     logger.error(
@@ -146,6 +170,53 @@ async def _bulk_upsert_market_metadata(db, rows: list[dict], origin: str) -> int
                         origin, r.get("symbol", "?"), row_exc,
                     )
                     continue
+
+    return upserted
+
+
+async def _bulk_upsert_market_metadata_autonomous(rows: list[dict], origin: str) -> int:
+    """Upsert metadata in independent transactions for collect_all.
+
+    ``collect_all`` is metadata-only, so it does not need one outer transaction
+    spanning the entire ticker batch. If a bulk chunk aborts the transaction,
+    this path closes that session and retries per-row with fresh sessions
+    instead of reusing a poisoned transaction.
+    """
+    from sqlalchemy import text
+    from ..database import CeleryAsyncSessionLocal
+
+    rows = _dedupe_market_metadata_rows(rows)
+    if not rows:
+        return 0
+
+    row_sql = text(_MARKET_METADATA_ROW_SQL)
+    upserted = 0
+    for chunk_start in range(0, len(rows), _MARKET_METADATA_BULK_CHUNK):
+        chunk = rows[chunk_start:chunk_start + _MARKET_METADATA_BULK_CHUNK]
+        sql, params = _build_market_metadata_bulk_statement(chunk)
+        try:
+            async with CeleryAsyncSessionLocal() as db:
+                async with db.begin():
+                    await db.execute(text(sql), params)
+            upserted += len(chunk)
+            continue
+        except Exception as bulk_exc:
+            logger.warning(
+                "[BULK-UPSERT %s] chunk %d-%d failed (%s) - retrying per-row with fresh transactions",
+                origin, chunk_start, chunk_start + len(chunk), bulk_exc,
+            )
+
+        for row in chunk:
+            try:
+                async with CeleryAsyncSessionLocal() as db:
+                    async with db.begin():
+                        await db.execute(row_sql, row)
+                upserted += 1
+            except Exception as row_exc:
+                logger.debug(
+                    "[BULK-UPSERT %s] autonomous per-row failed for %s: %s",
+                    origin, row.get("symbol", "?"), row_exc,
+                )
 
     return upserted
 
@@ -342,7 +413,7 @@ async def _collect_all_async():
     # opostas (precondição do deadlock determinístico).
     symbols = sorted(valid_symbols)
 
-    async def _inner(db, queue_mode: bool = False) -> int:
+    async def _inner(db=None, queue_mode: bool = False, autonomous_writer: bool = False) -> int:
         """Ticker bulk fetch + market_metadata UPSERT only.
 
         Task #262 — OHLCV 1h foi migrado para ``collect_structural_30m``
@@ -420,9 +491,14 @@ async def _collect_all_async():
                     )
                 ticker_ok = len(valid_rows)
             else:
-                ticker_ok = await _bulk_upsert_market_metadata(
-                    db, valid_rows, origin="ticker-60s",
-                )
+                if autonomous_writer:
+                    ticker_ok = await _bulk_upsert_market_metadata_autonomous(
+                        valid_rows, origin="ticker-60s",
+                    )
+                else:
+                    ticker_ok = await _bulk_upsert_market_metadata(
+                        db, valid_rows, origin="ticker-60s",
+                    )
 
             _cycle_dt = _time.monotonic() - _cycle_t0
             logger.info(
@@ -435,10 +511,11 @@ async def _collect_all_async():
             logger.error(
                 "[COLLECT-TICKERS] failed: %s", exc, exc_info=True,
             )
-            try:
-                await db.rollback()
-            except Exception as rb_exc:
-                logger.warning("[COLLECT-TICKERS] rollback after failure failed: %s", rb_exc)
+            if db is not None:
+                try:
+                    await db.rollback()
+                except Exception as rb_exc:
+                    logger.warning("[COLLECT-TICKERS] rollback after failure failed: %s", rb_exc)
             return 0
 
 
@@ -451,7 +528,7 @@ async def _collect_all_async():
         from ..database import CeleryAsyncSessionLocal
         async with CeleryAsyncSessionLocal() as db:
             return await _inner(db, queue_mode=True)
-    return await run_db_task(_inner, celery=True)
+    return await _inner(autonomous_writer=True)
 
 
 def _record_collect_all_marker(key: str, value: str) -> None:

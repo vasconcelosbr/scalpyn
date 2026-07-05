@@ -244,3 +244,61 @@ def test_update_last_scanned_recovers_session_on_failure():
             assert row == 7
 
     _run(run)
+
+
+def test_market_metadata_bulk_rows_are_deduplicated_before_on_conflict():
+    """Duplicate symbols in one VALUES tuple can abort ON CONFLICT DO UPDATE.
+
+    The collector must keep one row per symbol before building a bulk INSERT.
+    """
+    from app.tasks.collect_market_data import (
+        _build_market_metadata_bulk_statement,
+        _dedupe_market_metadata_rows,
+    )
+
+    rows = [
+        {
+            "symbol": "BNB_USDT",
+            "price": 1,
+            "change": 0,
+            "volume": 10,
+            "spread": 0.1,
+            "updated": "t1",
+        },
+        {
+            "symbol": "XLM_USDT",
+            "price": 2,
+            "change": 0,
+            "volume": 20,
+            "spread": 0.2,
+            "updated": "t1",
+        },
+        {
+            "symbol": "bnb_usdt",
+            "price": 3,
+            "change": 1,
+            "volume": 30,
+            "spread": 0.3,
+            "updated": "t2",
+        },
+    ]
+
+    deduped = _dedupe_market_metadata_rows(rows)
+    assert [row["symbol"] for row in deduped] == ["BNB_USDT", "XLM_USDT"]
+    assert deduped[0]["price"] == 3
+
+    sql, params = _build_market_metadata_bulk_statement(deduped)
+    assert sql.count("(:s") == 2
+    assert params["s0"] == "BNB_USDT"
+    assert params["s1"] == "XLM_USDT"
+
+
+def test_collect_all_uses_autonomous_market_metadata_writer():
+    """The collect_all ticker path must not share one long DB transaction."""
+    import inspect
+
+    from app.tasks.collect_market_data import _collect_all_async
+
+    source = inspect.getsource(_collect_all_async)
+    assert "_bulk_upsert_market_metadata_autonomous(" in source
+    assert "return await _inner(autonomous_writer=True)" in source
