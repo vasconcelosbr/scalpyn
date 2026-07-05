@@ -565,6 +565,8 @@ async def catboost_readiness(
         "l3":       DatasetPolicy.L3_ONLY,
         "L3_LAB":   DatasetPolicy.L3_LAB_ONLY,
         "l3_lab":   DatasetPolicy.L3_LAB_ONLY,
+        "L3_REJECTED": DatasetPolicy.L3_REJECTED_ONLY,
+        "l3_rejected": DatasetPolicy.L3_REJECTED_ONLY,
         "combined": DatasetPolicy.L3_COMBINED,
         "L3_COMBINED": DatasetPolicy.L3_COMBINED,
     }

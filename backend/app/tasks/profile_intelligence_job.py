@@ -164,6 +164,11 @@ async def _run_ml_challengers_if_enabled(db, user_id) -> None:
         if not enable_lgbm and not enable_cb:
             return
         win_threshold_s = float(cfg.get("ml_win_fast_threshold_seconds", 1800.0))
+        catboost_source_filter = cfg.get("catboost_source_filter")
+        if isinstance(catboost_source_filter, str):
+            catboost_source_filter = [catboost_source_filter]
+        if not isinstance(catboost_source_filter, list):
+            catboost_source_filter = None
         from ..services.ml_challenger_service import MLChallengerService
         result = await MLChallengerService().train_challengers(
             db=db,
@@ -171,6 +176,7 @@ async def _run_ml_challengers_if_enabled(db, user_id) -> None:
             enable_lightgbm=enable_lgbm,
             enable_catboost=enable_cb,
             win_fast_threshold_s=win_threshold_s,
+            catboost_source_filter=catboost_source_filter,
         )
         logger.info("[PIJob] ML challengers result for user %s: %s", user_id, result)
     except Exception as exc:

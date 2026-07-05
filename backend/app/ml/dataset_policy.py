@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional, Tuple
 class DatasetPolicy:
     L3_ONLY      = "L3_ONLY"       # source = 'L3' only
     L3_LAB_ONLY  = "L3_LAB_ONLY"   # source = 'L3_LAB' only
+    L3_REJECTED_ONLY = "L3_REJECTED_ONLY"  # source = 'L3_REJECTED' only
     L3_COMBINED  = "L3_COMBINED"    # L3 + L3_LAB — blocked by default
 
 
@@ -33,6 +34,7 @@ class DatasetPolicy:
 POLICY_SOURCES: Dict[str, List[str]] = {
     DatasetPolicy.L3_ONLY:     ["L3"],
     DatasetPolicy.L3_LAB_ONLY: ["L3_LAB"],
+    DatasetPolicy.L3_REJECTED_ONLY: ["L3_REJECTED"],
     DatasetPolicy.L3_COMBINED: ["L3", "L3_LAB"],
 }
 
@@ -189,6 +191,8 @@ def audit_feature_coverage(
     if feature_names is None:
         if source == "L3":
             feature_names = L3_EXPECTED_FEATURES + L3_MACRO_FEATURES
+        elif source == "L3_REJECTED":
+            feature_names = L3_EXPECTED_FEATURES
         else:
             feature_names = L3_LAB_EXPECTED_FEATURES
 
@@ -291,7 +295,7 @@ class CatBoostReadinessGate:
                 source="unknown",
                 ready=False,
                 blocked_reasons=["UNKNOWN_POLICY"],
-                recommendation="Use L3_ONLY, L3_LAB_ONLY, or L3_COMBINED.",
+                recommendation="Use L3_ONLY, L3_LAB_ONLY, L3_REJECTED_ONLY, or L3_COMBINED.",
             )
 
         # Combined policy: hard-blocked unless caller opts in
@@ -304,7 +308,7 @@ class CatBoostReadinessGate:
                 recommendation=(
                     "L3+L3_LAB combined training is disabled. Source composition "
                     "shift (79% L3_LAB train → 91% L3 test) caused AUC inversion "
-                    "in v42. Use L3_ONLY or L3_LAB_ONLY instead."
+                    "in v42. Use L3_ONLY, L3_LAB_ONLY, or L3_REJECTED_ONLY instead."
                 ),
             )
 
@@ -673,6 +677,11 @@ def governance_flags_for_model(model_row: Dict[str, Any]) -> Dict[str, Any]:
     # L3_PROFILE lane with test AUC < 0.5
     if lane == "L3_PROFILE" and test_auc is not None and test_auc < 0.50:
         blocked.append(f"TEST_AUC_BELOW_RANDOM ({test_auc:.4f})")
+
+    # Rejected-source models are diagnostic hard-negative models only. They
+    # can explain what to avoid, but must never drive production ALLOW/BLOCK.
+    if lane == "L3_REJECTED_PROFILE":
+        blocked.append("REJECTED_SOURCE_DIAGNOSTIC_ONLY")
 
     # Determine allowed_usage
     if blocked:

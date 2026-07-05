@@ -52,6 +52,8 @@ LGBM_TRAIN_SOURCES: List[str] = ["L1_SPECTRUM"]
 # Lane 2 (CatBoost validator): L3 only.
 CATBOOST_TRAIN_SOURCES: List[str] = ["L3"]
 CATBOOST_L3_ONLY_SOURCES: List[str] = ["L3"]
+CATBOOST_L3_LAB_ONLY_SOURCES: List[str] = ["L3_LAB"]
+CATBOOST_L3_REJECTED_ONLY_SOURCES: List[str] = ["L3_REJECTED"]
 # Backwards-compat alias — callers that pass source_filter still work.
 TRAIN_SOURCES: List[str] = LGBM_TRAIN_SOURCES  # was ["L3", "L1_SPECTRUM"] — deprecated
 
@@ -580,8 +582,14 @@ class MLChallengerService:
         distinct = len({r["profile_id"] for r in strict_records if r.get("profile_id")})
         unknown = sum(1 for r in strict_records if not r.get("profile_id"))
         src_breakdown = {s: sum(1 for r in strict_records if r.get("source") == s) for s in sources}
+        if sources == ["L3_REJECTED"]:
+            policy = "L3_REJECTED_PROFILE_STRICT"
+        elif sources == ["L3_LAB"]:
+            policy = "L3_LAB_PROFILE_STRICT"
+        else:
+            policy = "L3_PROFILE_STRICT"
         return {
-            "dataset_policy": "L3_PROFILE_STRICT",
+            "dataset_policy": policy,
             "included_trade_count": len(strict_records),
             "excluded_null_profile_id": excluded,
             "unknown_profile_count": unknown,
@@ -606,6 +614,7 @@ class MLChallengerService:
         feature_ranges: Optional[Dict[str, Any]] = None,
         backfilled_feature_names: Optional[List[str]] = None,
         backfill_marker_key: Optional[str] = None,
+        lane_name: str = "L3_PROFILE",
     ):
         """Constrói feature matrix e labels usando o feature_extractor canônico."""
         import numpy as np
@@ -700,7 +709,7 @@ class MLChallengerService:
 
         # E7: Row-level contract validation (required features + range checks)
         df, rows_rejected_by_contract = _apply_feature_contract(
-            df, lane_contract, feature_ranges, lane_name="L3_PROFILE"
+            df, lane_contract, feature_ranges, lane_name=lane_name
         )
         # Re-align valid_records to match filtered df rows
         valid_records = [valid_records[i] for i in df.index]
@@ -1223,6 +1232,28 @@ class MLChallengerService:
             return MIXED_SOURCE_BLOCKED_REASON
         return None
 
+    @staticmethod
+    def _catboost_lane_for_sources(cb_sources: List[str]) -> str:
+        """Return the persisted model_lane for a CatBoost source policy."""
+        if cb_sources == ["L3"]:
+            return "L3_PROFILE"
+        if cb_sources == ["L3_LAB"]:
+            return "L3_LAB_PROFILE"
+        if cb_sources == ["L3_REJECTED"]:
+            return "L3_REJECTED_PROFILE"
+        return "L3_PROFILE"
+
+    @staticmethod
+    def _catboost_dataset_policy_for_sources(cb_sources: List[str]) -> str:
+        """Return the governance dataset_policy label for a CatBoost source policy."""
+        if cb_sources == ["L3"]:
+            return "L3_ONLY"
+        if cb_sources == ["L3_LAB"]:
+            return "L3_LAB_ONLY"
+        if cb_sources == ["L3_REJECTED"]:
+            return "L3_REJECTED_ONLY"
+        return "L3_COMBINED"
+
     async def train_challengers(
         self,
         db: AsyncSession,
@@ -1487,6 +1518,8 @@ class MLChallengerService:
             # L3_PROFILE_STRICT policy: load all records first for metadata, then filter.
             # L3 has 66%+ NULL profile_id — training without filter produces a "global/unknown"
             # model, defeating the purpose of the L3_PROFILE lane.
+            cb_lane = self._catboost_lane_for_sources(cb_sources)
+            cb_dataset_policy = self._catboost_dataset_policy_for_sources(cb_sources)
             cb_all_records = await self._load_shadow_data(
                 db, user_id, lookback_days, cb_sources, dataset_valid_from=dataset_valid_from
             )
@@ -1516,6 +1549,7 @@ class MLChallengerService:
                         lane_contract=cb_lane_contract, feature_ranges=feature_ranges,
                         backfilled_feature_names=backfilled_feature_names,
                         backfill_marker_key=backfill_marker_key,
+                        lane_name=cb_lane,
                     )
                     if len(y) < MIN_RECORDS:
                         results["catboost"] = {"status": "skipped", "reason": "insufficient_labeled"}
@@ -1554,13 +1588,6 @@ class MLChallengerService:
                                 X_tr, y_tr, X_va, y_va, all_cols, n_trials_cb, cat_indices, X_te, y_te,
                                 ret_va, ret_te, threshold_grid_step, threshold_min_positives,
                             )
-                            # Derive lane from sources: single-source policies get distinct lanes.
-                            if cb_sources == ["L3"]:
-                                cb_lane = "L3_PROFILE"
-                            elif cb_sources == ["L3_LAB"]:
-                                cb_lane = "L3_LAB_PROFILE"
-                            else:
-                                cb_lane = "L3_PROFILE"  # combined (only if allow_mixed_source)
                             model_id = await self._save_to_db(
                                 db, user_id=user_id,
                                 model_type="catboost",
@@ -1575,11 +1602,7 @@ class MLChallengerService:
                                     "dataset_hash": hashlib.sha256(
                                         "|".join(sorted(str(x) for x in shadow_ids if x)).encode()
                                     ).hexdigest(),
-                                    "dataset_policy": (
-                                        "L3_ONLY" if cb_sources == ["L3"]
-                                        else "L3_LAB_ONLY" if cb_sources == ["L3_LAB"]
-                                        else "L3_COMBINED"
-                                    ),
+                                    "dataset_policy": cb_dataset_policy,
                                     "cat_features": ["source_encoded"],
                                     **l3_meta,
                                 },

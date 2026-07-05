@@ -202,6 +202,19 @@ _LIVE_ORDER_FLOW_FIELDS = {
     "taker_sell_volume": "taker_sell_volume",
     "volume_delta":      "volume_delta",
 }
+
+# Fields computed during pipeline scoring/profile evaluation that must be
+# persisted with the decision-time snapshot. They are not raw indicators from
+# indicators_history, but they are rules/features that L3 profiles actually
+# evaluate and the ML dataset needs to learn from.
+_DECISION_CONTEXT_SNAPSHOT_FIELDS = (
+    "score",
+    "liquidity_score",
+    "market_structure_score",
+    "momentum_score",
+    "signal_score",
+    "di_trend",
+)
 # Janela do agregado live em segundos. Tempo curto → mais sensível ao
 # regime corrente; tempo longo → mais robusto a ruído. Configurável via
 # ``ConfigProfile(config_type="pipeline")["l3_order_flow_window_seconds"]``.
@@ -505,15 +518,20 @@ def _build_pipeline_asset(
     if di_plus is not None and di_minus is not None:
         try:
             asset["di_trend"] = float(di_plus) > float(di_minus)
+            indicators["di_trend"] = asset["di_trend"]
         except (TypeError, ValueError):
             pass
 
     if score_row:
-        asset["score"] = float(score_row.score) if score_row.score else 0.0
-        asset["liquidity_score"] = float(score_row.liquidity_score) if score_row.liquidity_score else 0.0
-        asset["market_structure_score"] = float(score_row.market_structure_score) if score_row.market_structure_score else 0.0
-        asset["momentum_score"] = float(score_row.momentum_score) if score_row.momentum_score else 0.0
-        asset["signal_score"] = float(score_row.signal_score) if score_row.signal_score else 0.0
+        score_fields = {
+            "score": float(score_row.score) if score_row.score else 0.0,
+            "liquidity_score": float(score_row.liquidity_score) if score_row.liquidity_score else 0.0,
+            "market_structure_score": float(score_row.market_structure_score) if score_row.market_structure_score else 0.0,
+            "momentum_score": float(score_row.momentum_score) if score_row.momentum_score else 0.0,
+            "signal_score": float(score_row.signal_score) if score_row.signal_score else 0.0,
+        }
+        asset.update(score_fields)
+        indicators.update(score_fields)
 
     return asset
 
@@ -1271,6 +1289,18 @@ def _decision_metrics(asset: dict, processed: dict) -> dict:
                 else:
                     snapshot[key] = {"value": live_val, "source_group": "live_injection"}
 
+        for key in _DECISION_CONTEXT_SNAPSHOT_FIELDS:
+            if key in asset and asset.get(key) is not None:
+                snapshot[key] = {
+                    "value": asset.get(key),
+                    "source_group": "decision_context",
+                }
+            elif key in flat_indicators and flat_indicators.get(key) is not None:
+                snapshot[key] = {
+                    "value": flat_indicators.get(key),
+                    "source_group": "decision_context",
+                }
+
         metrics["indicators_snapshot"] = snapshot
 
     else:
@@ -1283,6 +1313,12 @@ def _decision_metrics(asset: dict, processed: dict) -> dict:
             for k, v in flat_indicators.items()
             if isinstance(v, (int, float, bool, type(None)))
         }
+        for key in _DECISION_CONTEXT_SNAPSHOT_FIELDS:
+            if key in asset and asset.get(key) is not None:
+                metrics["indicators_snapshot"][key] = {
+                    "value": asset.get(key),
+                    "source_group": "decision_context",
+                }
 
     return _jsonable(metrics)
 
@@ -3843,7 +3879,10 @@ async def _run_pipeline_scan():
                         _fsym = _fa.get("symbol")
                         if not _fsym or _fsym in _allowed_syms_l3 or _fsym in _decided_syms:
                             continue
-                        _find = _fa.get("indicators") or {}
+                        _find = dict(_fa.get("indicators") or {})
+                        for _ctx_key in _DECISION_CONTEXT_SNAPSHOT_FIELDS:
+                            if _ctx_key in _fa and _fa.get(_ctx_key) is not None:
+                                _find[_ctx_key] = _fa.get(_ctx_key)
                         _filter_rejected_block.append({
                             "symbol": _fsym,
                             "strategy": level,
