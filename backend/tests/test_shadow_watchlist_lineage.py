@@ -208,9 +208,63 @@ class TestFunctionSignatures:
         assert "profile_name=profile_name" in block
         assert "profile_version=profile_version" in block
 
-        metrics_start = source.index("_metrics: dict = {", block_start - 1500)
+        metrics_start = source.index("_build_on_demand_l3_decision_metrics(", block_start - 1500)
         metrics_block = source[metrics_start:block_start]
-        assert '"watchlist_id": str(wl.id)' in metrics_block
+        assert "watchlist_id=wl.id" in metrics_block
+        assert "_l3_decision_snapshot_complete(_metrics)" in metrics_block
+
+    def test_on_demand_l3_decision_metrics_preserve_ml_context(self):
+        from uuid import UUID
+
+        from backend.app.api.watchlists import (
+            _build_on_demand_l3_decision_metrics,
+            _l3_decision_snapshot_complete,
+        )
+
+        metrics = _build_on_demand_l3_decision_metrics(
+            watchlist_id=UUID("11111111-1111-1111-1111-111111111111"),
+            watchlist_name="L3_TEST_PROFILE",
+            score=83.76,
+            flat_indicators={
+                "adx": 31.2,
+                "di_plus": 22.0,
+                "di_minus": 10.0,
+            },
+            component_fields={
+                "liquidity_score": 100.0,
+                "market_structure_score": 88.0952,
+                "momentum_score": 76.4706,
+                "signal_score": 51.5152,
+            },
+            asset_data={},
+        )
+
+        assert metrics["score_components"]["liquidity_score"] == 100.0
+        assert metrics["indicators_snapshot"]["liquidity_score"]["value"] == 100.0
+        assert metrics["indicators_snapshot"]["market_structure_score"]["value"] == 88.0952
+        assert metrics["indicators_snapshot"]["momentum_score"]["value"] == 76.4706
+        assert metrics["indicators_snapshot"]["signal_score"]["value"] == 51.5152
+        assert metrics["indicators_snapshot"]["di_trend"]["value"] is True
+        assert _l3_decision_snapshot_complete(metrics)
+
+    def test_on_demand_l3_decision_metrics_fail_closed_when_incomplete(self):
+        from uuid import UUID
+
+        from backend.app.api.watchlists import (
+            _build_on_demand_l3_decision_metrics,
+            _l3_decision_snapshot_complete,
+        )
+
+        metrics = _build_on_demand_l3_decision_metrics(
+            watchlist_id=UUID("11111111-1111-1111-1111-111111111111"),
+            watchlist_name="L3_TEST_PROFILE",
+            score=83.76,
+            flat_indicators={"adx": 31.2},
+            component_fields={"liquidity_score": 100.0},
+            asset_data={},
+        )
+
+        assert not _l3_decision_snapshot_complete(metrics)
 
     def test_create_l3_simulated_accepts_lineage(self):
         from backend.app.services.shadow_trade_service import create_l3_simulated_shadows

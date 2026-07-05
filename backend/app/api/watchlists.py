@@ -74,11 +74,117 @@ _PIPELINE_SCAN_STALE_SECONDS_DEFAULT = 900
 # the full pipeline computation cost.
 _watchlist_refresh_locks: Dict[str, asyncio.Lock] = {}
 
+_L3_DECISION_CONTEXT_FIELDS = (
+    "liquidity_score",
+    "market_structure_score",
+    "momentum_score",
+    "signal_score",
+    "di_trend",
+)
+_L3_COMPONENT_FIELDS = (
+    "liquidity_score",
+    "market_structure_score",
+    "momentum_score",
+    "signal_score",
+)
+
 
 def _get_watchlist_refresh_lock(watchlist_id: str) -> asyncio.Lock:
     if watchlist_id not in _watchlist_refresh_locks:
         _watchlist_refresh_locks[watchlist_id] = asyncio.Lock()
     return _watchlist_refresh_locks[watchlist_id]
+
+
+def _numeric_or_none(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _alpha_component_fields(score_row: Any) -> Dict[str, Optional[float]]:
+    return {
+        field: _numeric_or_none(getattr(score_row, field, None))
+        for field in _L3_COMPONENT_FIELDS
+    }
+
+
+def _derive_di_trend(flat_indicators: Dict[str, Any], asset_data: Dict[str, Any]) -> Optional[bool]:
+    if "di_trend" in flat_indicators:
+        value = flat_indicators.get("di_trend")
+        if isinstance(value, bool):
+            return value
+    if "di_trend" in asset_data:
+        value = asset_data.get("di_trend")
+        if isinstance(value, bool):
+            return value
+    di_plus = flat_indicators.get("di_plus", asset_data.get("di_plus"))
+    di_minus = flat_indicators.get("di_minus", asset_data.get("di_minus"))
+    if di_plus is None or di_minus is None:
+        return None
+    try:
+        return float(di_plus) > float(di_minus)
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_on_demand_l3_decision_metrics(
+    *,
+    watchlist_id: UUID,
+    watchlist_name: str,
+    score: float,
+    flat_indicators: Dict[str, Any],
+    component_fields: Dict[str, Any],
+    asset_data: Dict[str, Any],
+) -> Dict[str, Any]:
+    metrics: Dict[str, Any] = {
+        "watchlist_id": str(watchlist_id),
+        "watchlist_name": watchlist_name,
+        "score": score,
+    }
+
+    for key, value in (flat_indicators or {}).items():
+        if isinstance(value, (int, float, bool, str, type(None))):
+            metrics[key] = value
+
+    score_components = {
+        field: _numeric_or_none(component_fields.get(field))
+        for field in _L3_COMPONENT_FIELDS
+    }
+    score_components = {
+        field: value for field, value in score_components.items()
+        if value is not None
+    }
+    metrics.update(score_components)
+    metrics["score_components"] = score_components
+
+    di_trend = _derive_di_trend(flat_indicators or {}, asset_data or {})
+    if di_trend is not None:
+        metrics["di_trend"] = di_trend
+
+    snapshot = {
+        key: {"value": value, "source_group": "api_resolve"}
+        for key, value in (flat_indicators or {}).items()
+        if isinstance(value, (int, float, bool, type(None)))
+    }
+    for key in _L3_COMPONENT_FIELDS:
+        value = score_components.get(key)
+        if value is not None:
+            snapshot[key] = {"value": value, "source_group": "decision_context"}
+    if di_trend is not None:
+        snapshot["di_trend"] = {"value": di_trend, "source_group": "decision_context"}
+
+    metrics["indicators_snapshot"] = snapshot
+    return metrics
+
+
+def _l3_decision_snapshot_complete(metrics: Dict[str, Any]) -> bool:
+    snapshot = metrics.get("indicators_snapshot")
+    if not isinstance(snapshot, dict):
+        return False
+    return all(field in snapshot for field in _L3_DECISION_CONTEXT_FIELDS)
 
 
 def _pipeline_scan_stale_threshold_seconds() -> int:
@@ -1658,19 +1764,26 @@ async def _resolve_and_persist(
         pass
 
     # Load pre-computed alpha scores (used as fallback when no rules configured)
+    precomp_component_map: Dict[str, Dict[str, Optional[float]]] = {}
     try:
         score_rows = (await db.execute(
             text("""
-                SELECT DISTINCT ON (symbol) symbol, score
+                SELECT DISTINCT ON (symbol)
+                    symbol, score,
+                    liquidity_score, market_structure_score,
+                    momentum_score, signal_score
                 FROM alpha_scores
                 WHERE symbol = ANY(:symbols)
+                  AND time > now() - interval '2 hours'
                 ORDER BY symbol, time DESC
             """),
             {"symbols": list(base_symbols)},
         )).fetchall()
         precomp_score_map = {r.symbol: float(r.score) if r.score else 0.0 for r in score_rows}
+        precomp_component_map = {r.symbol: _alpha_component_fields(r) for r in score_rows}
     except Exception:
         precomp_score_map = {}
+        precomp_component_map = {}
 
     # Compute live alpha scores using the user's global score config
     from ..services.score_engine import ScoreEngine as _SE, merge_score_config
@@ -1709,7 +1822,18 @@ async def _resolve_and_persist(
     for sym in base_symbols:
         ind = ind_map.get(sym, {})
         meta = meta_map.get(sym, {})
-        if ind:
+        if sym in precomp_score_map:
+            live_score_map[sym] = precomp_score_map.get(sym, 0.0)
+            if ind:
+                eval_data = {
+                    **ind,
+                    "price":      meta.get("price", 0),
+                    "volume_24h": meta.get("volume_24h", 0),
+                    "market_cap": meta.get("market_cap", 0),
+                    "change_24h": meta.get("price_change_24h", 0),
+                }
+                _, score_rules_map[sym] = _score_engine.compute_score_with_breakdown(eval_data)
+        elif ind:
             eval_data = {
                 **ind,
                 "price":      meta.get("price", 0),
@@ -2079,22 +2203,32 @@ async def _resolve_and_persist(
                     _reasons[_rname] = _rstatus
                 if not _reasons:
                     _reasons["pipeline"] = "OK"
-                # Build metrics from ind_map (flat indicator snapshot)
+                # Build metrics from ind_map + latest robust alpha_scores.
+                # This on-demand producer must obey the same ML feature
+                # contract as pipeline_scan; otherwise /api/watchlists refreshes
+                # create L3 approved shadows without the component fields the
+                # L3 trainer needs.
                 _flat_ind = ind_map.get(_sym) or {}
-                _metrics: dict = {
-                    "watchlist_id": str(wl.id),
-                    "watchlist_name": wl.name,
-                    "score": _score,
-                }
-                if _flat_ind:
-                    _metrics.update({
-                        **{k: v for k, v in _flat_ind.items() if isinstance(v, (int, float, bool, str, type(None)))},
-                        "indicators_snapshot": {
-                            k: {"value": v, "source_group": "api_resolve"}
-                            for k, v in _flat_ind.items()
-                            if isinstance(v, (int, float, bool, type(None)))
-                        },
-                    })
+                _component_fields = precomp_component_map.get(_sym) or {}
+                _metrics = _build_on_demand_l3_decision_metrics(
+                    watchlist_id=wl.id,
+                    watchlist_name=wl.name,
+                    score=_score,
+                    flat_indicators=_flat_ind,
+                    component_fields=_component_fields,
+                    asset_data=_ad,
+                )
+                if not _l3_decision_snapshot_complete(_metrics):
+                    logger.warning(
+                        "[Pipeline] _resolve_and_persist: skipping L3 decisions_log "
+                        "for %s wl=%s event=%s reason=incomplete_l3_metric_snapshot "
+                        "snapshot_keys=%s",
+                        _sym,
+                        wl.id,
+                        _evt,
+                        sorted((_metrics.get("indicators_snapshot") or {}).keys()),
+                    )
+                    continue
                 _dl_rows.append(_DecisionLog(
                     symbol=_sym,
                     strategy="L3",
