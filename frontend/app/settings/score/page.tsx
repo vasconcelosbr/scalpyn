@@ -232,6 +232,20 @@ function parseScoreImport(text: string): ScoreImportResult {
   };
 }
 
+function getOperatorHint(indicator: string): string {
+  if (indicator === "ema_trend") return "ema9>ema50 | ema50>ema200 | ema9>ema50>ema200";
+  if (indicator === "di_trend") return "di+>di- | di->di+";
+  if (indicator === "adx_acceleration") return ">prev+ | >prev";
+  if (RANGE_INDICATORS.has(indicator)) return "between | <= | >= | < | > | =";
+  return "<= | >= | < | > | =";
+}
+
+const SCORE_INDICATOR_REFERENCE = INDICATORS.map((indicator) => ({
+  indicator,
+  category: DEFAULT_RULE_CATEGORIES[indicator] || "momentum",
+  operators: getOperatorHint(indicator),
+}));
+
 export default function ScoreEngineSettings() {
   const { config, updateConfig, isLoading } = useConfig("score");
   const [weights, setWeights] = useState(DEFAULT_WEIGHTS);
@@ -517,6 +531,9 @@ export default function ScoreEngineSettings() {
               <div className="border-l border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-5 overflow-auto space-y-4">
                 <div>
                   <h3 className="text-[13px] font-semibold text-[var(--text-primary)] mb-2">Estrutura esperada</h3>
+                  <p className="text-[11px] text-[var(--text-secondary)] mb-2">
+                    O campo <code className="font-mono text-[var(--accent-primary)]">indicator</code> aceita somente os indicadores listados na referência abaixo. Qualquer outro valor é rejeitado antes de aplicar a matriz.
+                  </p>
                   <pre className="rounded-lg bg-[var(--bg-base)] border border-[var(--border-subtle)] p-3 text-[10px] leading-relaxed text-[var(--text-secondary)] overflow-auto">{`{
   "weights": {
     "liquidity": 35,
@@ -542,6 +559,36 @@ export default function ScoreEngineSettings() {
     }
   ]
 }`}</pre>
+                </div>
+
+                <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-base)] overflow-hidden">
+                  <div className="flex items-center justify-between gap-3 border-b border-[var(--border-subtle)] px-3 py-2">
+                    <div>
+                      <h3 className="text-[13px] font-semibold text-[var(--text-primary)]">Indicadores disponíveis</h3>
+                      <p className="text-[10px] text-[var(--text-tertiary)]">{SCORE_INDICATOR_REFERENCE.length} valores aceitos em scoring_rules[].indicator</p>
+                    </div>
+                    <span className="rounded bg-[var(--accent-primary)]/10 px-2 py-1 text-[10px] font-semibold text-[var(--accent-primary)]">catálogo score</span>
+                  </div>
+                  <div className="max-h-64 overflow-auto">
+                    <table className="w-full text-[11px]">
+                      <thead className="sticky top-0 bg-[var(--bg-tertiary)]">
+                        <tr className="border-b border-[var(--border-subtle)]">
+                          <th className="px-3 py-2 text-left text-[10px] uppercase tracking-wider text-[var(--text-tertiary)]">indicator</th>
+                          <th className="px-3 py-2 text-left text-[10px] uppercase tracking-wider text-[var(--text-tertiary)]">category</th>
+                          <th className="px-3 py-2 text-left text-[10px] uppercase tracking-wider text-[var(--text-tertiary)]">operadores</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {SCORE_INDICATOR_REFERENCE.map((item) => (
+                          <tr key={item.indicator} className="border-b border-[var(--border-subtle)]/60 last:border-0">
+                            <td className="px-3 py-1.5 font-mono font-semibold text-[var(--text-primary)]">{item.indicator}</td>
+                            <td className="px-3 py-1.5 text-[var(--text-secondary)]">{item.category.replace("_", " ")}</td>
+                            <td className="px-3 py-1.5 font-mono text-[10px] text-[var(--text-tertiary)]">{item.operators}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
 
                 <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-base)] p-3 text-[11px] text-[var(--text-secondary)] space-y-2">
