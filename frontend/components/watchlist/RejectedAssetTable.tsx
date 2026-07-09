@@ -54,10 +54,20 @@ export interface WatchlistDecisionItem {
   ml_probability?: number | null;
   ml_final_score?: number | null;
   blocked_by_ml?: boolean | null;
+  crypto_ev?: CryptoEVSummary | null;
 }
 
 export type RejectedTraceItem = DecisionTraceItem;
 export type RejectedAssetItem = WatchlistDecisionItem;
+
+interface CryptoEVSummary {
+  score: number | null;
+  state: string;
+  n_trades: number;
+  n_excluded_unreplayable?: number | null;
+  w?: number | null;
+  computed_at?: string | null;
+}
 
 function fmtValue(value: unknown): string {
   return formatEvaluationTraceValue(value);
@@ -86,6 +96,34 @@ function ScoreBar({ value }: { value?: number | null }) {
         {Math.round(value)}
       </span>
     </div>
+  );
+}
+
+function cryptoEvClass(state: string | null | undefined): string {
+  if (state === "FAVORABLE") return "bg-[#34D399]/10 text-[#34D399] border-[#34D399]/20";
+  if (state === "RISKY") return "bg-[#FBBF24]/10 text-[#FBBF24] border-[#FBBF24]/20";
+  if (state === "AVOID") return "bg-[#F87171]/10 text-[#F87171] border-[#F87171]/20";
+  if (state === "NEUTRAL") return "bg-[#1E2433] text-[#94A3B8] border-[#334155]";
+  return "bg-[#0A0C14] text-[#4B5563] border-[#1A2035]";
+}
+
+function CryptoEVBadge({ value }: { value?: CryptoEVSummary | null }) {
+  if (!value || value.score == null) return <span className="text-[#4B5563]">-</span>;
+  const tip = [
+    `Crypto EV: ${Number(value.score).toFixed(1)}`,
+    value.state ? `state ${value.state}` : null,
+    `N=${value.n_trades ?? 0}`,
+    value.n_excluded_unreplayable != null ? `unreplayable=${value.n_excluded_unreplayable}` : null,
+    value.w != null ? `w=${Number(value.w).toFixed(2)}` : null,
+    value.computed_at ? `as of ${value.computed_at}` : null,
+  ].filter(Boolean).join(" | ");
+  return (
+    <span
+      className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border tabular-nums ${cryptoEvClass(value.state)}`}
+      title={tip}
+    >
+      {Number(value.score).toFixed(0)}
+    </span>
   );
 }
 
@@ -238,6 +276,9 @@ export function WatchlistDecisionTable({
         } else if (sortKey === "ml") {
           aVal = a.ml_probability ?? -Infinity;
           bVal = b.ml_probability ?? -Infinity;
+        } else if (sortKey === "crypto_ev") {
+          aVal = a.crypto_ev?.score ?? -Infinity;
+          bVal = b.crypto_ev?.score ?? -Infinity;
         } else {
           const av = a.current_values?.[sortKey];
           const bv = b.current_values?.[sortKey];
@@ -315,8 +356,8 @@ export function WatchlistDecisionTable({
           // Column count: chevron + Symbol + [Score] + ML + [dynCols] + Exaustão + Stage + Status + Timestamp
           //          OR  chevron + Symbol + [Score] + ML + Exaustão + Stage + Status + Indicators + Conditions + Timestamp
           const scoreCol = showScore ? 1 : 0;
-          const totalCols = useDynamic ? 7 + scoreCol + dynCols.length : 9 + scoreCol;
-          const minWidth = useDynamic ? Math.max(810, 510 + dynCols.length * 110) : 1130;
+          const totalCols = useDynamic ? 8 + scoreCol + dynCols.length : 10 + scoreCol;
+          const minWidth = useDynamic ? Math.max(870, 570 + dynCols.length * 110) : 1190;
           return (
         <div className="overflow-x-auto">
           <table className="w-full text-xs" style={{ minWidth: `${minWidth}px` }}>
@@ -339,6 +380,14 @@ export function WatchlistDecisionTable({
                     ML
                     <span className={`text-[9px] ${sortKey === "ml" ? "text-[#60A5FA]" : "opacity-30"}`}>
                       {sortKey === "ml" ? (sortDir === "desc" ? "▼" : "▲") : "⇅"}
+                    </span>
+                  </button>
+                </th>
+                <th className="px-3 py-2.5 text-center text-[#4B5563] whitespace-nowrap min-w-[86px]">
+                  <button onClick={() => toggleSort("crypto_ev")} className="flex items-center gap-1 justify-center hover:text-[#94A3B8] transition-colors w-full">
+                    EV Cripto
+                    <span className={`text-[9px] ${sortKey === "crypto_ev" ? "text-[#60A5FA]" : "opacity-30"}`}>
+                      {sortKey === "crypto_ev" ? (sortDir === "desc" ? "v" : "^") : "<>"}
                     </span>
                   </button>
                 </th>
@@ -418,6 +467,9 @@ export function WatchlistDecisionTable({
                         ) : (
                           <span className="text-[#4B5563]">—</span>
                         )}
+                      </td>
+                      <td className="px-3 py-2.5 text-center">
+                        <CryptoEVBadge value={item.crypto_ev} />
                       </td>
                       {useDynamic ? (
                         dynCols.map((col) => (
