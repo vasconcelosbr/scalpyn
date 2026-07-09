@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Save, RefreshCw, Plus, Trash2 } from "lucide-react";
+import { AlertCircle, FileJson, Save, RefreshCw, Plus, Trash2, Upload, X } from "lucide-react";
 import { useConfig } from "@/hooks/useConfig";
 
 const INDICATORS = [
@@ -16,12 +16,16 @@ const INDICATORS = [
 ];
 
 const OPERATORS = ["<=", ">=", "<", ">", "=", "between", "ema9>ema50>ema200", "ema9>ema50", "ema50>ema200", "di+>di-", "di->di+", ">prev+", ">prev"];
+type CategoryKey = "liquidity" | "market_structure" | "momentum" | "signal";
+
 const CATEGORY_OPTIONS = [
   { value: "liquidity", label: "liquidity" },
   { value: "market_structure", label: "market structure" },
   { value: "momentum", label: "momentum" },
   { value: "signal", label: "signal" },
 ];
+const DEFAULT_WEIGHTS: Record<CategoryKey, number> = { liquidity: 35, market_structure: 25, momentum: 25, signal: 15 };
+const DEFAULT_THRESHOLDS = { strong_buy: 80, buy: 65, neutral: 40 };
 const DEFAULT_RULE_CATEGORIES: Record<string, string> = {
   volume_spike: "liquidity",
   volume_24h: "liquidity",
@@ -63,25 +67,196 @@ const DEFAULT_RULE_CATEGORIES: Record<string, string> = {
 // Indicators where "between" range is the most common use-case
 const RANGE_INDICATORS = new Set(["rsi", "stoch_k", "stoch_d", "adx", "vwap_distance_pct", "bb_width", "ema9_distance_pct"]);
 
+interface ScoreRule {
+  id: string;
+  indicator: string;
+  operator: string;
+  value?: number | string | boolean | null;
+  min?: number | null;
+  max?: number | null;
+  points: number;
+  category: CategoryKey | string;
+}
+
+interface ScoreImportResult {
+  rules: ScoreRule[];
+  weights?: Record<CategoryKey, number>;
+  thresholds?: { strong_buy: number; buy: number; neutral: number };
+  topN?: number;
+  minScore?: number;
+}
+
+const SCORE_JSON_TEMPLATE = `{
+  "weights": {
+    "liquidity": 35,
+    "market_structure": 25,
+    "momentum": 25,
+    "signal": 15
+  },
+  "thresholds": {
+    "strong_buy": 80,
+    "buy": 65,
+    "neutral": 40
+  },
+  "auto_select_top_n": 5,
+  "auto_select_min_score": 80,
+  "scoring_rules": [
+    {
+      "id": "rule_ema_trend_ema9_gt_ema50",
+      "indicator": "ema_trend",
+      "operator": "ema9>ema50",
+      "points": 10,
+      "category": "market_structure"
+    },
+    {
+      "id": "rule_adx_ge_25",
+      "indicator": "adx",
+      "operator": ">=",
+      "value": 25,
+      "points": 12,
+      "category": "market_structure"
+    },
+    {
+      "id": "rule_taker_ratio_ge_055",
+      "indicator": "taker_ratio",
+      "operator": ">=",
+      "value": 0.55,
+      "points": 8,
+      "category": "liquidity"
+    }
+  ]
+}`;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function toNumber(value: unknown, fallback: number): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function toNullableValue(value: unknown): number | string | boolean | null {
+  if (typeof value === "number" || typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
+  return null;
+}
+
+function makeRuleId(indicator: string, operator: string, index: number): string {
+  const slug = `${indicator}_${operator}_${index + 1}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return `rule_${slug}`;
+}
+
+function normalizeImportedRule(raw: unknown, index: number): ScoreRule {
+  if (!isRecord(raw)) {
+    throw new Error(`scoring_rules[${index}] deve ser um objeto`);
+  }
+
+  const indicator = String(raw.indicator || "").trim();
+  if (!indicator) {
+    throw new Error(`scoring_rules[${index}].indicator é obrigatório`);
+  }
+  if (!INDICATORS.includes(indicator)) {
+    throw new Error(`scoring_rules[${index}].indicator inválido: ${indicator}`);
+  }
+
+  const operator = String(raw.operator || (RANGE_INDICATORS.has(indicator) ? "between" : ">=")).trim();
+  if (!OPERATORS.includes(operator)) {
+    throw new Error(`scoring_rules[${index}].operator inválido: ${operator}`);
+  }
+
+  const category = String(raw.category || DEFAULT_RULE_CATEGORIES[indicator] || "momentum").trim();
+  const rule: ScoreRule = {
+    id: String(raw.id || makeRuleId(indicator, operator, index)),
+    indicator,
+    operator,
+    points: toNumber(raw.points, 0),
+    category,
+  };
+
+  if (operator === "between") {
+    rule.min = toNumber(raw.min, 0);
+    rule.max = toNumber(raw.max, 100);
+    rule.value = null;
+  } else {
+    rule.value = toNullableValue(raw.value);
+  }
+
+  return rule;
+}
+
+function normalizeWeights(raw: unknown): Record<CategoryKey, number> | undefined {
+  if (!isRecord(raw)) return undefined;
+  return {
+    liquidity: toNumber(raw.liquidity, 35),
+    market_structure: toNumber(raw.market_structure, 25),
+    momentum: toNumber(raw.momentum, 25),
+    signal: toNumber(raw.signal, 15),
+  };
+}
+
+function normalizeThresholds(raw: unknown): ScoreImportResult["thresholds"] | undefined {
+  if (!isRecord(raw)) return undefined;
+  return {
+    strong_buy: toNumber(raw.strong_buy, 80),
+    buy: toNumber(raw.buy, 65),
+    neutral: toNumber(raw.neutral, 40),
+  };
+}
+
+function parseScoreImport(text: string): ScoreImportResult {
+  const parsed: unknown = JSON.parse(text);
+  const payload = Array.isArray(parsed) ? { scoring_rules: parsed } : parsed;
+  if (!isRecord(payload)) {
+    throw new Error('JSON deve ser um objeto com "scoring_rules" ou um array de regras');
+  }
+
+  const rawRules = payload.scoring_rules || payload.rules || payload.score_rules;
+  if (!Array.isArray(rawRules) || rawRules.length === 0) {
+    throw new Error('Informe "scoring_rules": [...] com ao menos uma regra');
+  }
+  if (rawRules.length > 300) {
+    throw new Error(`Máximo 300 scoring_rules por importação. JSON tem ${rawRules.length}.`);
+  }
+
+  return {
+    rules: rawRules.map(normalizeImportedRule),
+    weights: normalizeWeights(payload.weights),
+    thresholds: normalizeThresholds(payload.thresholds),
+    topN: payload.auto_select_top_n == null ? undefined : toNumber(payload.auto_select_top_n, 5),
+    minScore: payload.auto_select_min_score == null ? undefined : toNumber(payload.auto_select_min_score, 80),
+  };
+}
+
 export default function ScoreEngineSettings() {
   const { config, updateConfig, isLoading } = useConfig("score");
-  const [weights, setWeights] = useState({ liquidity: 35, market_structure: 25, momentum: 25, signal: 15 });
-  const [rules, setRules] = useState<any[]>([]);
-  const [thresholds, setThresholds] = useState({ strong_buy: 80, buy: 65, neutral: 40 });
+  const [weights, setWeights] = useState(DEFAULT_WEIGHTS);
+  const [rules, setRules] = useState<ScoreRule[]>([]);
+  const [thresholds, setThresholds] = useState(DEFAULT_THRESHOLDS);
   const [topN, setTopN] = useState(5);
   const [minScore, setMinScore] = useState(80);
   const [saving, setSaving] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importText, setImportText] = useState(SCORE_JSON_TEMPLATE);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importNotice, setImportNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (config && Object.keys(config).length > 0) {
-      setWeights(config.weights || weights);
-      setRules((config.scoring_rules || []).map((rule: any) => ({
+      /* eslint-disable react-hooks/set-state-in-effect */
+      setWeights(config.weights || DEFAULT_WEIGHTS);
+      setRules((config.scoring_rules || []).map((rule: ScoreRule) => ({
         ...rule,
         category: rule.category || DEFAULT_RULE_CATEGORIES[rule.indicator] || "momentum",
       })));
-      setThresholds(config.thresholds || thresholds);
+      setThresholds(config.thresholds || DEFAULT_THRESHOLDS);
       setTopN(config.auto_select_top_n || 5);
       setMinScore(config.auto_select_min_score || 80);
+      /* eslint-enable react-hooks/set-state-in-effect */
     }
   }, [config]);
 
@@ -111,8 +286,24 @@ export default function ScoreEngineSettings() {
 
   const removeRule = (id: string) => setRules((currentRules) => currentRules.filter((r) => r.id !== id));
 
-  const updateRule = (id: string, field: string, value: any) => {
+  const updateRule = (id: string, field: keyof ScoreRule, value: ScoreRule[keyof ScoreRule]) => {
     setRules((currentRules) => currentRules.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
+  };
+
+  const handleImportJson = () => {
+    try {
+      const imported = parseScoreImport(importText);
+      setRules(imported.rules);
+      if (imported.weights) setWeights(imported.weights);
+      if (imported.thresholds) setThresholds(imported.thresholds);
+      if (imported.topN != null) setTopN(imported.topN);
+      if (imported.minScore != null) setMinScore(imported.minScore);
+      setImportError(null);
+      setImportOpen(false);
+      setImportNotice(`${imported.rules.length} regras carregadas na matriz. Revise e clique em Save para persistir.`);
+    } catch (err: unknown) {
+      setImportError(err instanceof Error ? err.message : String(err));
+    }
   };
 
   // Parse numeric input, preserving zero
@@ -139,11 +330,26 @@ export default function ScoreEngineSettings() {
         </button>
       </div>
 
+      {importNotice && (
+        <div className="rounded-lg border border-[var(--accent-primary)]/25 bg-[var(--accent-primary)]/8 px-4 py-3 text-[12px] text-[var(--text-secondary)] flex items-center justify-between gap-3">
+          <span>{importNotice}</span>
+          <button className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)]" onClick={() => setImportNotice(null)}>
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Scoring Rules */}
       <div className="card">
         <div className="card-header">
           <h3>Scoring Rules</h3>
-          <button onClick={addRule} className="btn btn-secondary text-[12px] px-3 py-1.5"><Plus className="w-3.5 h-3.5 mr-1" />Add Rule</button>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setImportOpen(true)} className="btn btn-secondary text-[12px] px-3 py-1.5">
+              <FileJson className="w-3.5 h-3.5 mr-1" />
+              Import JSON
+            </button>
+            <button onClick={addRule} className="btn btn-secondary text-[12px] px-3 py-1.5"><Plus className="w-3.5 h-3.5 mr-1" />Add Rule</button>
+          </div>
         </div>
         <div className="overflow-x-auto">
           <table className="data-table">
@@ -220,7 +426,7 @@ export default function ScoreEngineSettings() {
                       <input
                         type="number"
                         className="input numeric h-8 w-20 text-[13px]"
-                        value={rule.value ?? ""}
+                        value={typeof rule.value === "number" || typeof rule.value === "string" ? rule.value : ""}
                         onChange={(e) => updateRule(rule.id, "value", parseNum(e.target.value))}
                         data-testid={`rule-value-${rule.id}`}
                       />
@@ -264,7 +470,7 @@ export default function ScoreEngineSettings() {
               {rules.length === 0 && (
                 <tr>
                   <td colSpan={6} className="text-center text-[var(--text-secondary)] text-[13px] py-6">
-                    No scoring rules. Click "Add Rule" to create one.
+                    No scoring rules. Use Add Rule to create one.
                   </td>
                 </tr>
               )}
@@ -272,6 +478,98 @@ export default function ScoreEngineSettings() {
           </table>
         </div>
       </div>
+
+      {importOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6">
+          <div className="w-full max-w-5xl max-h-[88vh] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--bg-base)] shadow-2xl">
+            <div className="flex items-center justify-between gap-4 border-b border-[var(--border-subtle)] px-5 py-4">
+              <div>
+                <h2 className="text-lg font-semibold text-[var(--text-primary)] flex items-center gap-2">
+                  <FileJson className="w-5 h-5 text-[var(--accent-primary)]" />
+                  Importar matriz de Score via JSON
+                </h2>
+                <p className="text-[12px] text-[var(--text-secondary)] mt-1">
+                  Carregue os indicadores globais do Score Engine. Os IDs criados aqui podem ser usados em Strategy Profiles no campo profile_scoring.selected_rule_ids.
+                </p>
+              </div>
+              <button className="btn-icon w-8 h-8" onClick={() => setImportOpen(false)}>
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid gap-0 lg:grid-cols-[minmax(0,1fr)_360px] max-h-[calc(88vh-132px)] overflow-hidden">
+              <div className="p-5 overflow-auto space-y-3">
+                <label className="label">JSON da matriz</label>
+                <textarea
+                  className="input min-h-[460px] w-full resize-y font-mono text-[11px] leading-relaxed"
+                  value={importText}
+                  onChange={(event) => setImportText(event.target.value)}
+                  spellCheck={false}
+                />
+                {importError && (
+                  <div className="flex items-start gap-2 rounded-lg border border-red-500/25 bg-red-500/8 px-3 py-2 text-[12px] text-red-400">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>{importError}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="border-l border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-5 overflow-auto space-y-4">
+                <div>
+                  <h3 className="text-[13px] font-semibold text-[var(--text-primary)] mb-2">Estrutura esperada</h3>
+                  <pre className="rounded-lg bg-[var(--bg-base)] border border-[var(--border-subtle)] p-3 text-[10px] leading-relaxed text-[var(--text-secondary)] overflow-auto">{`{
+  "weights": {
+    "liquidity": 35,
+    "market_structure": 25,
+    "momentum": 25,
+    "signal": 15
+  },
+  "thresholds": {
+    "strong_buy": 80,
+    "buy": 65,
+    "neutral": 40
+  },
+  "auto_select_top_n": 5,
+  "auto_select_min_score": 80,
+  "scoring_rules": [
+    {
+      "id": "rule_adx_ge_25",
+      "indicator": "adx",
+      "operator": ">=",
+      "value": 25,
+      "points": 12,
+      "category": "market_structure"
+    }
+  ]
+}`}</pre>
+                </div>
+
+                <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-base)] p-3 text-[11px] text-[var(--text-secondary)] space-y-2">
+                  <p className="font-semibold text-[var(--text-primary)]">Uso nos profiles</p>
+                  <p>Depois de salvar a matriz, use os mesmos IDs no import de Strategy Profiles:</p>
+                  <pre className="rounded bg-[var(--bg-tertiary)] p-2 font-mono text-[10px] overflow-auto">{`{
+  "profile_scoring": {
+    "selected_rule_ids": [
+      "rule_adx_ge_25",
+      "rule_taker_ratio_ge_055"
+    ]
+  },
+  "profiles": [...]
+}`}</pre>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 border-t border-[var(--border-subtle)] px-5 py-4">
+              <button className="btn btn-secondary" onClick={() => setImportOpen(false)}>Cancel</button>
+              <button className="btn btn-primary" onClick={handleImportJson}>
+                <Upload className="w-4 h-4 mr-2" />
+                Aplicar matriz
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Order flow indicator reference */}
       <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-hover)] px-4 py-3 text-[12px] text-[var(--text-secondary)] space-y-1">

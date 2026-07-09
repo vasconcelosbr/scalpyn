@@ -49,6 +49,11 @@ interface ParsedProfile {
   validationError?: string;
 }
 
+interface ParsedImportPayload {
+  profiles: ImportProfile[];
+  sharedScoring?: ScoringPayload;
+}
+
 interface ImportResult {
   index: number;
   name: string;
@@ -99,7 +104,7 @@ function normalizeScoring(scoring?: ImportProfile["scoring"], fallback?: ImportP
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
-function parseProfilesPayload(data: ImportFilePayload | ImportProfile[]) {
+function parseProfilesPayload(data: ImportFilePayload | ImportProfile[]): ParsedImportPayload {
   const profiles: ImportProfile[] | null = Array.isArray(data)
     ? data
     : Array.isArray(data?.profiles)
@@ -117,10 +122,13 @@ function parseProfilesPayload(data: ImportFilePayload | ImportProfile[]) {
         data.scoring_rule_ids ? { selected_rule_ids: data.scoring_rule_ids } : undefined
       );
 
-  return profiles.map((profile) => ({
-    ...profile,
-    scoring: normalizeScoring(profile.scoring, sharedScoring) || profile.scoring,
-  }));
+  return {
+    profiles: profiles.map((profile) => ({
+      ...profile,
+      scoring: normalizeScoring(profile.scoring, sharedScoring) || profile.scoring,
+    })),
+    sharedScoring,
+  };
 }
 
 // ── Role Badge ────────────────────────────────────────────────────────────────
@@ -152,6 +160,7 @@ export function JsonImportBuilder({ onClose }: Props) {
   const [showRef, setShowRef]           = useState(false);
   const [parseError, setParseError]     = useState<string | null>(null);
   const [parsed, setParsed]             = useState<ParsedProfile[]>([]);
+  const [sharedScoring, setSharedScoring] = useState<ScoringPayload | undefined>(undefined);
   const [rawJson, setRawJson]           = useState<string>("");
   const [showJson, setShowJson]         = useState(false);
   const [editingIdx, setEditingIdx]     = useState<number | null>(null);
@@ -164,7 +173,8 @@ export function JsonImportBuilder({ onClose }: Props) {
   const processJsonText = useCallback((text: string) => {
     setRawJson(text);
     try {
-      const profiles = parseProfilesPayload(JSON.parse(text));
+      const parsedPayload = parseProfilesPayload(JSON.parse(text));
+      const profiles = parsedPayload.profiles;
       if (profiles.length === 0) {
         setParseError("Nenhum profile encontrado no JSON");
         return;
@@ -181,6 +191,7 @@ export function JsonImportBuilder({ onClose }: Props) {
 
       setParseError(null);
       setParsed(parsedList);
+      setSharedScoring(parsedPayload.sharedScoring);
       setStage("preview");
     } catch (err: unknown) {
       setParseError(`JSON inválido: ${err instanceof Error ? err.message : String(err)}`);
@@ -237,7 +248,10 @@ export function JsonImportBuilder({ onClose }: Props) {
         ...p.raw,
         name: p.editedName || p.raw.name,
       }));
-      const res = await apiPost("/profiles/bulk-import", { profiles: profilesPayload });
+      const res = await apiPost("/profiles/bulk-import", {
+        profiles: profilesPayload,
+        ...(sharedScoring ? { profile_scoring: sharedScoring } : {}),
+      });
       setResults(res.results ?? []);
       setSummary({ created: res.created ?? 0, failed: res.failed ?? 0 });
       setStage("result");
