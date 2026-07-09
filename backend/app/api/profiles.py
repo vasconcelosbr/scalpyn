@@ -126,6 +126,23 @@ _FUNNEL_ROLE_ORDER: Dict[str, str] = {
 }
 
 
+def _normalize_import_scoring(
+    scoring: Optional[Dict[str, Any]],
+    fallback: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    base = fallback if isinstance(fallback, dict) else {}
+    current = scoring if isinstance(scoring, dict) else {}
+    merged: Dict[str, Any] = {**base, **current}
+
+    selected_rule_ids = merged.get("selected_rule_ids")
+    if selected_rule_ids is not None:
+        if not isinstance(selected_rule_ids, list):
+            raise ValueError("scoring.selected_rule_ids must be an array")
+        merged["selected_rule_ids"] = [str(rule_id) for rule_id in selected_rule_ids if str(rule_id).strip()]
+
+    return merged
+
+
 @router.post("/bulk-import")
 async def bulk_import_profiles(
     payload: Dict[str, Any],
@@ -148,9 +165,12 @@ async def bulk_import_profiles(
                 "signals": {...},              (optional)
                 "block_rules": {...},          (optional)
                 "entry_triggers": {...},       (optional)
-                "scoring": {...}               (optional)
+                "scoring": {...}               (optional, per-profile)
             }
-        ]
+        ],
+        "profile_scoring": {                   (optional, applied to every profile)
+            "selected_rule_ids": [...]
+        }
     }
     Returns: { "created": N, "failed": N, "results": [...] }
     """
@@ -163,6 +183,15 @@ async def bulk_import_profiles(
     results: List[Dict[str, Any]] = []
     created = 0
     failed = 0
+    try:
+        shared_scoring = _normalize_import_scoring(
+            payload.get("profile_scoring") or payload.get("scoring"),
+            {"selected_rule_ids": payload.get("scoring_rule_ids")}
+            if isinstance(payload.get("scoring_rule_ids"), list)
+            else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
     for i, p in enumerate(profiles_data):
         try:
@@ -176,7 +205,7 @@ async def bulk_import_profiles(
                 "signals":        p.get("signals",        {"logic": "AND", "conditions": []}),
                 "block_rules":    p.get("block_rules",    {"blocks": []}),
                 "entry_triggers": p.get("entry_triggers", {"logic": "AND", "conditions": []}),
-                "scoring":        p.get("scoring",        {}),
+                "scoring":        _normalize_import_scoring(p.get("scoring"), shared_scoring),
             }
             validated_config = _validate_profile_config(config_input)
 

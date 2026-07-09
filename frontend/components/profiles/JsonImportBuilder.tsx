@@ -3,13 +3,24 @@
 import { useState, useRef, useCallback } from "react";
 import {
   ArrowLeft, Upload, FileJson, CheckCircle2, XCircle,
-  AlertTriangle, Loader2, Globe, Filter, Target, ShoppingCart,
+  Loader2, Globe, Filter, Target, ShoppingCart,
   ChevronRight, Eye, EyeOff, Pencil, Check, X, BookOpen, ChevronDown,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { apiPost } from "@/lib/api";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type FunnelRole = "universe_filter" | "primary_filter" | "score_engine" | "acquisition_queue";
+type JsonObject = Record<string, unknown>;
+type RulePayload = JsonObject;
+
+interface ScoringPayload {
+  enabled?: boolean;
+  weights?: JsonObject;
+  thresholds?: JsonObject;
+  selected_rule_ids?: string[];
+  rules?: RulePayload[];
+}
 
 interface ImportProfile {
   name: string;
@@ -17,11 +28,18 @@ interface ImportProfile {
   funnel_role?: FunnelRole;
   pipeline_label?: string;
   default_timeframe?: string;
-  filters?:        { logic?: string; conditions?: any[] };
-  signals?:        { logic?: string; conditions?: any[] };
-  block_rules?:    { blocks?: any[] };
-  entry_triggers?: { logic?: string; conditions?: any[] };
-  scoring?:        { enabled?: boolean; weights?: any; thresholds?: any };
+  filters?:        { logic?: string; conditions?: RulePayload[] };
+  signals?:        { logic?: string; conditions?: RulePayload[] };
+  block_rules?:    { blocks?: RulePayload[] };
+  entry_triggers?: { logic?: string; conditions?: RulePayload[] };
+  scoring?:        ScoringPayload;
+}
+
+interface ImportFilePayload {
+  profiles?: ImportProfile[];
+  profile_scoring?: ImportProfile["scoring"];
+  scoring?: ImportProfile["scoring"];
+  scoring_rule_ids?: string[];
 }
 
 interface ParsedProfile {
@@ -40,7 +58,7 @@ interface ImportResult {
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const ROLE_META: Record<string, { label: string; short: string; color: string; bg: string; border: string; icon: any }> = {
+const ROLE_META: Record<string, { label: string; short: string; color: string; bg: string; border: string; icon: LucideIcon }> = {
   universe_filter:   { label: "Filtro de Universo", short: "POOL", color: "#8B92A5", bg: "rgba(139,146,165,0.12)", border: "rgba(139,146,165,0.25)", icon: Globe },
   primary_filter:    { label: "Filtro Primário",    short: "L1",   color: "#4F7BF7", bg: "rgba(79,123,247,0.12)",  border: "rgba(79,123,247,0.25)",  icon: Filter },
   score_engine:      { label: "Score Engine",       short: "L2",   color: "#FBBF24", bg: "rgba(251,191,36,0.12)", border: "rgba(251,191,36,0.25)",  icon: Target },
@@ -66,6 +84,44 @@ const countConds  = (p: ImportProfile) =>
   (p.signals?.conditions?.length ?? 0);
 const countBlocks = (p: ImportProfile) => p.block_rules?.blocks?.length ?? 0;
 const countTrigs  = (p: ImportProfile) => p.entry_triggers?.conditions?.length ?? 0;
+const countScoreRules = (p: ImportProfile) =>
+  p.scoring?.selected_rule_ids?.length ?? p.scoring?.rules?.length ?? 0;
+
+function normalizeScoring(scoring?: ImportProfile["scoring"], fallback?: ImportProfile["scoring"]) {
+  const selected = scoring?.selected_rule_ids ?? fallback?.selected_rule_ids;
+  const rules = scoring?.rules ?? fallback?.rules;
+  const merged = {
+    ...(fallback || {}),
+    ...(scoring || {}),
+    ...(selected ? { selected_rule_ids: selected.map(String) } : {}),
+    ...(rules ? { rules } : {}),
+  };
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function parseProfilesPayload(data: ImportFilePayload | ImportProfile[]) {
+  const profiles: ImportProfile[] | null = Array.isArray(data)
+    ? data
+    : Array.isArray(data?.profiles)
+    ? data.profiles
+    : null;
+
+  if (!profiles) {
+    throw new Error('JSON deve ser um array de profiles ou { "profiles": [...] }');
+  }
+
+  const sharedScoring = Array.isArray(data)
+    ? undefined
+    : normalizeScoring(
+        data.profile_scoring || data.scoring,
+        data.scoring_rule_ids ? { selected_rule_ids: data.scoring_rule_ids } : undefined
+      );
+
+  return profiles.map((profile) => ({
+    ...profile,
+    scoring: normalizeScoring(profile.scoring, sharedScoring) || profile.scoring,
+  }));
+}
 
 // ── Role Badge ────────────────────────────────────────────────────────────────
 function RoleBadge({ role }: { role?: string }) {
@@ -105,6 +161,32 @@ export function JsonImportBuilder({ onClose }: Props) {
   const [summary, setSummary]           = useState({ created: 0, failed: 0 });
   const fileRef = useRef<HTMLInputElement>(null);
 
+  const processJsonText = useCallback((text: string) => {
+    setRawJson(text);
+    try {
+      const profiles = parseProfilesPayload(JSON.parse(text));
+      if (profiles.length === 0) {
+        setParseError("Nenhum profile encontrado no JSON");
+        return;
+      }
+      if (profiles.length > 200) {
+        setParseError(`Máximo 200 profiles por importação. JSON tem ${profiles.length}.`);
+        return;
+      }
+
+      const parsedList: ParsedProfile[] = profiles.map((p) => {
+        const v = validateProfile(p);
+        return { raw: p, editedName: p.name?.trim() ?? "", valid: v.valid, validationError: v.error };
+      });
+
+      setParseError(null);
+      setParsed(parsedList);
+      setStage("preview");
+    } catch (err: unknown) {
+      setParseError(`JSON inválido: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, []);
+
   // ── Parse file ──────────────────────────────────────────────────────────────
   const processFile = useCallback((file: File) => {
     if (!file.name.endsWith(".json")) {
@@ -114,42 +196,10 @@ export function JsonImportBuilder({ onClose }: Props) {
     const reader = new FileReader();
     reader.onload = (e) => {
       const text = e.target?.result as string;
-      setRawJson(text);
-      try {
-        const data = JSON.parse(text);
-        const profiles: ImportProfile[] = Array.isArray(data)
-          ? data
-          : Array.isArray(data?.profiles)
-          ? data.profiles
-          : null as any;
-
-        if (!profiles) {
-          setParseError("JSON deve ser um array de profiles ou { \"profiles\": [...] }");
-          return;
-        }
-        if (profiles.length === 0) {
-          setParseError("Nenhum profile encontrado no arquivo");
-          return;
-        }
-        if (profiles.length > 200) {
-          setParseError(`Máximo 200 profiles por importação. Arquivo tem ${profiles.length}.`);
-          return;
-        }
-
-        const parsedList: ParsedProfile[] = profiles.map((p) => {
-          const v = validateProfile(p);
-          return { raw: p, editedName: p.name?.trim() ?? "", valid: v.valid, validationError: v.error };
-        });
-
-        setParseError(null);
-        setParsed(parsedList);
-        setStage("preview");
-      } catch (err: any) {
-        setParseError(`JSON inválido: ${err.message}`);
-      }
+      processJsonText(text);
     };
     reader.readAsText(file);
-  }, []);
+  }, [processJsonText]);
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -191,8 +241,8 @@ export function JsonImportBuilder({ onClose }: Props) {
       setResults(res.results ?? []);
       setSummary({ created: res.created ?? 0, failed: res.failed ?? 0 });
       setStage("result");
-    } catch (err: any) {
-      alert(`Erro na importação: ${err.message}`);
+    } catch (err: unknown) {
+      alert(`Erro na importação: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setImporting(false);
     }
@@ -274,6 +324,35 @@ export function JsonImportBuilder({ onClose }: Props) {
             <input ref={fileRef} type="file" accept=".json" className="hidden" onChange={handleFileInput} />
           </div>
 
+          <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-xl p-4 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-[13px] font-semibold text-[var(--text-primary)] flex items-center gap-2">
+                  <FileJson className="w-4 h-4 text-[var(--text-tertiary)]" />
+                  Colar JSON
+                </h3>
+                <p className="text-[12px] text-[var(--text-secondary)] mt-1">
+                  Use este campo para importar em massa sem arquivo. O bloco <code className="font-mono text-[var(--accent-primary)]">profile_scoring</code> aplica as mesmas regras do Score Engine em todos os profiles.
+                </p>
+              </div>
+              <button
+                className="btn btn-secondary text-[12px] px-3 py-1.5 shrink-0"
+                onClick={() => processJsonText(rawJson)}
+                disabled={!rawJson.trim()}
+              >
+                <Upload className="w-3.5 h-3.5 mr-1.5" />
+                Revisar JSON
+              </button>
+            </div>
+            <textarea
+              className="input min-h-[180px] w-full font-mono text-[11px] leading-relaxed resize-y"
+              value={rawJson}
+              onChange={(e) => setRawJson(e.target.value)}
+              placeholder='{"profile_scoring":{"selected_rule_ids":["rule_ema_trend","rule_adx"]},"profiles":[{"name":"L3_TREND_FORTE_V1","funnel_role":"acquisition_queue"}]}'
+              spellCheck={false}
+            />
+          </div>
+
           {parseError && (
             <div className="flex items-start gap-3 p-4 rounded-xl bg-red-500/8 border border-red-500/20 text-red-400 text-[13px]">
               <XCircle className="w-5 h-5 shrink-0 mt-0.5" />
@@ -288,6 +367,16 @@ export function JsonImportBuilder({ onClose }: Props) {
               Estrutura esperada
             </h3>
             <pre className="text-[11px] text-[var(--text-secondary)] font-mono overflow-x-auto leading-relaxed">{`{
+  "profile_scoring": {
+    "enabled": true,
+    "selected_rule_ids": [
+      "rule_ema_trend_ema9_gt_ema50",
+      "rule_adx_ge_25",
+      "rule_taker_ratio_ge_055"
+    ],
+    "weights": { "signal": 25, "momentum": 25, "liquidity": 25, "market_structure": 25 },
+    "thresholds": { "buy": 65, "strong_buy": 80, "neutral": 40 }
+  },
   "profiles": [
     {
       "name": "L3_TREND_FORTE_V1",           // obrigatório
@@ -363,6 +452,7 @@ export function JsonImportBuilder({ onClose }: Props) {
 
       // ── scoring ───────────────────────────────────────────────────
       "scoring": {
+        "selected_rule_ids": ["rule_ema_trend_ema9_gt_ema50"],  // opcional; sobrescreve/combina com profile_scoring
         "weights":    { "signal": 25, "momentum": 25, "liquidity": 25, "market_structure": 25 },
         "thresholds": { "buy": 65, "strong_buy": 80, "neutral": 40 }
       }
@@ -622,6 +712,7 @@ export function JsonImportBuilder({ onClose }: Props) {
                   <th className="text-left px-4 py-3 text-[11px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider">Nome</th>
                   <th className="text-left px-4 py-3 text-[11px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider">Papel no Funil</th>
                   <th className="text-center px-4 py-3 text-[11px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider">TF</th>
+                  <th className="text-center px-4 py-3 text-[11px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider">Scoring</th>
                   <th className="text-center px-4 py-3 text-[11px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider">Filters+Signals</th>
                   <th className="text-center px-4 py-3 text-[11px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider">Blocks</th>
                   <th className="text-center px-4 py-3 text-[11px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider">Triggers</th>
@@ -681,6 +772,11 @@ export function JsonImportBuilder({ onClose }: Props) {
 
                     <td className="px-4 py-3 text-center font-mono text-[11px] text-[var(--text-secondary)]">
                       {p.raw.default_timeframe ?? "5m"}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      {countScoreRules(p.raw) > 0
+                        ? <span className="text-[12px] font-semibold text-[var(--accent-primary)]">{countScoreRules(p.raw)} rules</span>
+                        : <span className="text-[11px] text-[var(--text-tertiary)]">all</span>}
                     </td>
                     <td className="px-4 py-3 text-center">
                       {countConds(p.raw) > 0
