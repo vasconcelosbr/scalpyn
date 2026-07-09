@@ -34,6 +34,9 @@ from typing import Dict, Any, List, Optional, Set, Tuple
 
 # ── Display labels per indicator name ─────────────────────────────────────────
 _IND_LABELS: Dict[str, str] = {
+    "price": "Price", "market_cap": "Market Cap", "change_24h": "Change 24h%",
+    "alpha_score": "Alpha Score", "score": "Alpha Score",
+    "liquidity_score": "Liquidity Score", "momentum_score": "Momentum Score",
     "rsi": "RSI", "volume_spike": "Vol Spike",
     "taker_ratio": "Taker Ratio (buy/(buy+sell))",
     "buy_pressure": "Buy Pressure (buy/(buy+sell))",
@@ -47,11 +50,17 @@ _IND_LABELS: Dict[str, str] = {
     "obv": "OBV", "vwap_distance_pct": "VWAP%", "stoch_k": "Stoch%K",
     "stoch_d": "Stoch%D", "bb_width": "BB Width", "volume_24h": "Vol 24h",
     "zscore": "Z-Score", "psar_trend": "PSAR", "atr_pct": "ATR%", "atr": "ATR",
-    "ema9_distance_pct": "EMA9 Dist%", "volume_delta": "Vol Delta",
+    "atr_percent": "ATR%", "ema9_distance_pct": "EMA9 Dist%",
+    "ema5": "EMA5", "ema9": "EMA9", "ema21": "EMA21",
+    "ema50": "EMA50", "ema200": "EMA200",
+    "ema9_gt_ema21": "EMA 9>21", "volume_delta": "Vol Delta",
 }
 
 # ── Category per indicator name ────────────────────────────────────────────────
 _IND_CATEGORY: Dict[str, str] = {
+    "price": "market_structure", "market_cap": "liquidity",
+    "change_24h": "momentum", "alpha_score": "signal", "score": "signal",
+    "liquidity_score": "liquidity", "momentum_score": "momentum",
     "volume_spike": "liquidity", "volume_24h": "liquidity",
     "spread_pct": "liquidity", "orderbook_depth_usdt": "liquidity",
     "obv": "liquidity",
@@ -61,15 +70,20 @@ _IND_CATEGORY: Dict[str, str] = {
     "taker_sell_volume": "liquidity",
     "adx": "market_structure", "ema_trend": "market_structure",
     "atr": "market_structure", "atr_pct": "market_structure",
+    "atr_percent": "market_structure",
     "psar_trend": "market_structure", "bb_width": "market_structure",
     "di_plus": "market_structure", "di_minus": "market_structure",
     "di_trend": "market_structure",
+    "ema5": "market_structure", "ema9": "market_structure",
+    "ema21": "market_structure", "ema50": "market_structure",
+    "ema200": "market_structure",
     "rsi": "momentum", "macd": "momentum", "macd_signal": "momentum",
     "macd_histogram": "momentum", "stoch_k": "momentum",
     "stoch_d": "momentum", "zscore": "momentum", "vwap_distance_pct": "momentum",
     "ema9_distance_pct": "momentum",
     "adx_acceleration": "signal", "volume_delta": "signal",
-    "funding_rate": "signal", "ema9_gt_ema50": "signal",
+    "funding_rate": "signal", "ema9_gt_ema21": "signal",
+    "ema9_gt_ema50": "signal",
     "ema50_gt_ema200": "signal", "ema_full_alignment": "signal",
 }
 
@@ -241,6 +255,7 @@ OPERATORS = {
     "<": op.lt,
     ">": op.gt,
     "=": op.eq,
+    "==": op.eq,
     "!=": op.ne,
 }
 
@@ -397,6 +412,14 @@ class ScoreEngine:
             # below compares against the scalar instead of the dict.
             return unwrap_envelope_value(indicators.get(name))
 
+        if operator_str == "is_true":
+            actual = get_indicator_value(indicator_name)
+            return actual is not None and bool(actual) is True
+
+        if operator_str == "is_false":
+            actual = get_indicator_value(indicator_name)
+            return actual is not None and bool(actual) is False
+
         # Special EMA trend operators
         if operator_str == "ema9>ema50>ema200":
             return bool(get_indicator_value("ema_full_alignment") or False)
@@ -441,6 +464,18 @@ class ScoreEngine:
             if accel is None:
                 return False
             return accel > 0
+
+        if isinstance(target_value, str):
+            referenced_value = get_indicator_value(target_value)
+            if referenced_value is not None:
+                target_value = referenced_value
+
+        # String / boolean equality
+        if operator_str in ("=", "==", "!=") and isinstance(target_value, (str, bool)):
+            actual = get_indicator_value(indicator_name)
+            if operator_str == "!=":
+                return actual != target_value
+            return actual == target_value
 
         # String equality
         if operator_str == "=" and isinstance(target_value, str):

@@ -131,6 +131,17 @@ def _evaluate_rule(
     target = rule.get("value")
     actual = env.value
 
+    if isinstance(target, str) and envelopes:
+        target_env = envelopes.get(target)
+        if target_env and target_env.is_usable:
+            target = target_env.value
+
+    if operator_str == "is_true":
+        return actual is not None and bool(actual) is True
+
+    if operator_str == "is_false":
+        return actual is not None and bool(actual) is False
+
     if operator_str in _BOOL_TREND_OPS:
         return bool(actual)
 

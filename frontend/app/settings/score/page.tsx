@@ -5,17 +5,20 @@ import { AlertCircle, FileJson, Save, RefreshCw, Plus, Trash2, Upload, X } from 
 import { useConfig } from "@/hooks/useConfig";
 
 const INDICATORS = [
-  "rsi", "adx", "ema_trend", "adx_acceleration",
-  "taker_ratio", "buy_pressure", "taker_buy_volume", "taker_sell_volume",
-  "volume_spike", "volume_delta", "macd_signal", "macd_histogram",
+  "price", "market_cap", "change_24h", "volume_24h",
+  "ema5", "ema9", "ema21", "ema50", "ema200",
+  "alpha_score", "score", "liquidity_score", "momentum_score",
+  "rsi", "adx", "macd", "macd_signal", "macd_histogram",
+  "ema_trend", "adx_acceleration", "taker_ratio", "buy_pressure",
+  "taker_buy_volume", "taker_sell_volume", "volume_spike", "volume_delta",
   "di_plus", "di_minus", "di_trend", "spread_pct", "orderbook_depth_usdt",
-  "orderbook_pressure", "bid_ask_imbalance", "bb_width", "stoch_k", "stoch_d", "vwap_distance_pct",
-  "volume_24h", "obv", "atr", "atr_pct", "psar_trend", "zscore",
-  "funding_rate", "ema9_distance_pct",
+  "orderbook_pressure", "bid_ask_imbalance", "bb_width", "stoch_k", "stoch_d",
+  "vwap_distance_pct", "obv", "atr", "atr_pct", "atr_percent", "psar_trend",
+  "zscore", "funding_rate", "ema9_distance_pct", "ema9_gt_ema21",
   "ema9_gt_ema50", "ema50_gt_ema200", "ema_full_alignment",
 ];
 
-const OPERATORS = ["<=", ">=", "<", ">", "=", "between", "ema9>ema50>ema200", "ema9>ema50", "ema50>ema200", "di+>di-", "di->di+", ">prev+", ">prev"];
+const OPERATORS = ["<=", ">=", "<", ">", "=", "==", "!=", "between", "is_true", "is_false", "ema9>ema50>ema200", "ema9>ema50", "ema50>ema200", "di+>di-", "di->di+", ">prev+", ">prev"];
 type CategoryKey = "liquidity" | "market_structure" | "momentum" | "signal";
 
 const CATEGORY_OPTIONS = [
@@ -27,6 +30,9 @@ const CATEGORY_OPTIONS = [
 const DEFAULT_WEIGHTS: Record<CategoryKey, number> = { liquidity: 35, market_structure: 25, momentum: 25, signal: 15 };
 const DEFAULT_THRESHOLDS = { strong_buy: 80, buy: 65, neutral: 40 };
 const DEFAULT_RULE_CATEGORIES: Record<string, string> = {
+  price: "market_structure",
+  market_cap: "liquidity",
+  change_24h: "momentum",
   volume_spike: "liquidity",
   volume_24h: "liquidity",
   spread_pct: "liquidity",
@@ -40,13 +46,23 @@ const DEFAULT_RULE_CATEGORIES: Record<string, string> = {
   taker_ratio: "liquidity",         // buy/(buy+sell), [0, 1] — threshold around 0.5 (#82)
   adx: "market_structure",
   ema_trend: "market_structure",
+  ema5: "market_structure",
+  ema9: "market_structure",
+  ema21: "market_structure",
+  ema50: "market_structure",
+  ema200: "market_structure",
   atr: "market_structure",
   atr_pct: "market_structure",
+  atr_percent: "market_structure",
   psar_trend: "market_structure",
   bb_width: "market_structure",
   di_plus: "market_structure",
   di_minus: "market_structure",
   di_trend: "market_structure",
+  alpha_score: "signal",
+  score: "signal",
+  liquidity_score: "liquidity",
+  momentum_score: "momentum",
   rsi: "momentum",
   macd: "momentum",
   macd_signal: "momentum",
@@ -59,13 +75,16 @@ const DEFAULT_RULE_CATEGORIES: Record<string, string> = {
   adx_acceleration: "signal",
   volume_delta: "signal",
   funding_rate: "signal",
+  ema9_gt_ema21: "signal",
   ema9_gt_ema50: "signal",
   ema50_gt_ema200: "signal",
   ema_full_alignment: "signal",
 };
 
 // Indicators where "between" range is the most common use-case
-const RANGE_INDICATORS = new Set(["rsi", "stoch_k", "stoch_d", "adx", "vwap_distance_pct", "bb_width", "ema9_distance_pct"]);
+const RANGE_INDICATORS = new Set(["rsi", "stoch_k", "stoch_d", "adx", "vwap_distance_pct", "bb_width", "ema9_distance_pct", "atr_pct", "atr_percent", "zscore", "funding_rate"]);
+const BOOLEAN_INDICATORS = new Set(["ema_full_alignment", "ema9_gt_ema21", "ema9_gt_ema50", "ema50_gt_ema200", "di_trend"]);
+const VALUELESS_OPERATORS = new Set(["is_true", "is_false", "ema9>ema50>ema200", "ema9>ema50", "ema50>ema200", "di+>di-", "di->di+", ">prev"]);
 
 interface ScoreRule {
   id: string;
@@ -143,6 +162,10 @@ function toNullableValue(value: unknown): number | string | boolean | null {
   return null;
 }
 
+function isNumericString(value: string): boolean {
+  return value.trim() !== "" && Number.isFinite(Number(value));
+}
+
 function makeRuleId(indicator: string, operator: string, index: number): string {
   const slug = `${indicator}_${operator}_${index + 1}`
     .toLowerCase()
@@ -164,7 +187,7 @@ function normalizeImportedRule(raw: unknown, index: number): ScoreRule {
     throw new Error(`scoring_rules[${index}].indicator inválido: ${indicator}`);
   }
 
-  const operator = String(raw.operator || (RANGE_INDICATORS.has(indicator) ? "between" : ">=")).trim();
+  const operator = String(raw.operator || (BOOLEAN_INDICATORS.has(indicator) ? "is_true" : RANGE_INDICATORS.has(indicator) ? "between" : ">=")).trim();
   if (!OPERATORS.includes(operator)) {
     throw new Error(`scoring_rules[${index}].operator inválido: ${operator}`);
   }
@@ -181,6 +204,12 @@ function normalizeImportedRule(raw: unknown, index: number): ScoreRule {
   if (operator === "between") {
     rule.min = toNumber(raw.min, 0);
     rule.max = toNumber(raw.max, 100);
+    rule.value = null;
+  } else if (operator === "is_true") {
+    rule.value = true;
+  } else if (operator === "is_false") {
+    rule.value = false;
+  } else if (VALUELESS_OPERATORS.has(operator)) {
     rule.value = null;
   } else {
     rule.value = toNullableValue(raw.value);
@@ -235,9 +264,10 @@ function parseScoreImport(text: string): ScoreImportResult {
 function getOperatorHint(indicator: string): string {
   if (indicator === "ema_trend") return "ema9>ema50 | ema50>ema200 | ema9>ema50>ema200";
   if (indicator === "di_trend") return "di+>di- | di->di+";
+  if (BOOLEAN_INDICATORS.has(indicator)) return "is_true | is_false | == | !=";
   if (indicator === "adx_acceleration") return ">prev+ | >prev";
-  if (RANGE_INDICATORS.has(indicator)) return "between | <= | >= | < | > | =";
-  return "<= | >= | < | > | =";
+  if (RANGE_INDICATORS.has(indicator)) return "between | <= | >= | < | > | == | !=";
+  return "<= | >= | < | > | == | !=";
 }
 
 const SCORE_INDICATOR_REFERENCE = INDICATORS.map((indicator) => ({
@@ -387,8 +417,9 @@ export default function ScoreEngineSettings() {
                       value={rule.indicator}
                       onChange={(e) => {
                         const ind = e.target.value;
-                        const op = RANGE_INDICATORS.has(ind) && rule.operator === "between" ? "between"
-                          : RANGE_INDICATORS.has(ind) && !["<=",">=","<",">","=","between"].includes(rule.operator) ? "between"
+                        const op = BOOLEAN_INDICATORS.has(ind) ? "is_true"
+                          : RANGE_INDICATORS.has(ind) && rule.operator === "between" ? "between"
+                          : RANGE_INDICATORS.has(ind) && !["<=",">=","<",">","=","==","!=","between"].includes(rule.operator) ? "between"
                           : rule.operator;
                         updateRule(rule.id, "indicator", ind);
                         if (op !== rule.operator) updateRule(rule.id, "operator", op);
@@ -436,12 +467,14 @@ export default function ScoreEngineSettings() {
                           data-testid={`rule-max-${rule.id}`}
                         />
                       </div>
+                    ) : VALUELESS_OPERATORS.has(rule.operator) ? (
+                      <span className="text-[11px] text-[var(--text-tertiary)]">auto</span>
                     ) : (
                       <input
-                        type="number"
+                        type={typeof rule.value === "string" && !isNumericString(rule.value) ? "text" : "number"}
                         className="input numeric h-8 w-20 text-[13px]"
                         value={typeof rule.value === "number" || typeof rule.value === "string" ? rule.value : ""}
-                        onChange={(e) => updateRule(rule.id, "value", parseNum(e.target.value))}
+                        onChange={(e) => updateRule(rule.id, "value", e.target.type === "text" ? e.target.value : parseNum(e.target.value))}
                         data-testid={`rule-value-${rule.id}`}
                       />
                     )}

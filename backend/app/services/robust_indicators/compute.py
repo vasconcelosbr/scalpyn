@@ -68,6 +68,12 @@ _DEFAULT_SOURCE_BY_INDICATOR: Dict[str, DataSource] = {
     "close": DataSource.GATE_CANDLES,
     "close_5m": DataSource.GATE_CANDLES,
     "price": DataSource.GATE_CANDLES,
+    "change_24h": DataSource.GATE_TICKER,
+    "market_cap": DataSource.GATE_TICKER,
+    "alpha_score": DataSource.DERIVED,
+    "score": DataSource.DERIVED,
+    "liquidity_score": DataSource.DERIVED,
+    "momentum_score": DataSource.DERIVED,
     # flow / live data
     "taker_ratio": DataSource.GATE_TRADES,
     "buy_pressure": DataSource.GATE_TRADES,
@@ -77,6 +83,10 @@ _DEFAULT_SOURCE_BY_INDICATOR: Dict[str, DataSource] = {
     # orderbook / ticker
     "spread_pct": DataSource.GATE_ORDERBOOK,
     "orderbook_depth_usdt": DataSource.GATE_ORDERBOOK,
+    "orderbook_pressure": DataSource.GATE_ORDERBOOK,
+    "bid_ask_imbalance": DataSource.GATE_ORDERBOOK,
+    "funding_rate": DataSource.GATE_TICKER,
+    "volume_24h": DataSource.GATE_TICKER,
     "volume_24h_base": DataSource.GATE_TICKER,
     "volume_24h_usdt": DataSource.GATE_TICKER,
     # derived booleans
