@@ -6,9 +6,11 @@ from sqlalchemy import select, text
 from typing import Dict, Any, List, Optional
 from uuid import UUID
 import logging
+from datetime import datetime, timezone as _tz
 
 from ..database import get_db
 from ..models.profile import Profile, WatchlistProfile
+from ..models.profile_audit_log import ProfileAuditLog
 from .config import get_current_user_id
 from ..services.profile_engine import ProfileEngine
 from ..services.score_engine import hydrate_profile_scoring
@@ -150,7 +152,8 @@ async def bulk_import_profiles(
     user_id: UUID = Depends(get_current_user_id),
 ):
     """
-    Create multiple profiles from a JSON import file.
+    Create multiple profiles from a JSON import file, or replace scoring for
+    every active profile when ``apply_to_active_profiles`` is true.
 
     Expected payload:
     {
@@ -170,19 +173,15 @@ async def bulk_import_profiles(
         ],
         "profile_scoring": {                   (optional, applied to every profile)
             "selected_rule_ids": [...]
-        }
+        },
+        "apply_to_active_profiles": true       (optional, update existing active profiles)
     }
     Returns: { "created": N, "failed": N, "results": [...] }
     """
-    profiles_data = payload.get("profiles", [])
-    if not profiles_data or not isinstance(profiles_data, list):
-        raise HTTPException(status_code=400, detail="'profiles' array is required")
-    if len(profiles_data) > 200:
-        raise HTTPException(status_code=400, detail="Maximum 200 profiles per import")
-
     results: List[Dict[str, Any]] = []
     created = 0
     failed = 0
+    updated = 0
     try:
         shared_scoring = _normalize_import_scoring(
             payload.get("profile_scoring") or payload.get("scoring"),
@@ -192,6 +191,67 @@ async def bulk_import_profiles(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+    apply_to_active_profiles = bool(
+        payload.get("apply_to_active_profiles")
+        or payload.get("update_active_profiles")
+        or payload.get("active_profiles_only")
+    )
+
+    if apply_to_active_profiles:
+        selected_rule_ids = shared_scoring.get("selected_rule_ids")
+        if selected_rule_ids is None:
+            raise HTTPException(
+                status_code=400,
+                detail="profile_scoring.selected_rule_ids is required when apply_to_active_profiles=true",
+            )
+
+        query = select(Profile).where(Profile.user_id == user_id, Profile.is_active.is_(True))
+        profiles = (await db.execute(query)).scalars().all()
+
+        for i, profile in enumerate(profiles):
+            try:
+                previous_config = profile.config or {}
+                next_config = {
+                    **previous_config,
+                    "scoring": _normalize_import_scoring(shared_scoring),
+                }
+                profile.config = _validate_profile_config(next_config)
+                old_version = getattr(profile, "profile_version", None)
+                new_version = datetime.now(_tz.utc)
+                profile.profile_version = new_version
+                db.add(ProfileAuditLog(
+                    user_id=user_id,
+                    profile_id=profile.id,
+                    changed_by=user_id,
+                    change_source="api",
+                    change_description="scoring replaced via POST /profiles/bulk-import apply_to_active_profiles",
+                    previous_config=previous_config,
+                    new_config=profile.config,
+                    previous_profile_version=old_version,
+                    new_profile_version=new_version,
+                ))
+                results.append({"index": i, "name": profile.name, "status": "updated", "id": str(profile.id)})
+                updated += 1
+            except Exception as exc:
+                failed += 1
+                results.append({
+                    "index": i,
+                    "name": profile.name,
+                    "status": "error",
+                    "error": str(exc),
+                })
+
+        if updated > 0:
+            await db.commit()
+
+        return {"created": 0, "updated": updated, "failed": failed, "results": results}
+
+    profiles_data = payload.get("profiles", [])
+    if not profiles_data or not isinstance(profiles_data, list):
+        raise HTTPException(status_code=400, detail="'profiles' array is required")
+    if len(profiles_data) > 200:
+        raise HTTPException(status_code=400, detail="Maximum 200 profiles per import")
 
     for i, p in enumerate(profiles_data):
         try:
@@ -243,7 +303,7 @@ async def bulk_import_profiles(
     if created > 0:
         await db.commit()
 
-    return {"created": created, "failed": failed, "results": results}
+    return {"created": created, "updated": updated, "failed": failed, "results": results}
 
 
 @router.post("/")

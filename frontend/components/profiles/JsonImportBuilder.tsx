@@ -40,6 +40,9 @@ interface ImportFilePayload {
   profile_scoring?: ImportProfile["scoring"];
   scoring?: ImportProfile["scoring"];
   scoring_rule_ids?: string[];
+  apply_to_active_profiles?: boolean;
+  update_active_profiles?: boolean;
+  active_profiles_only?: boolean;
 }
 
 interface ParsedProfile {
@@ -52,12 +55,13 @@ interface ParsedProfile {
 interface ParsedImportPayload {
   profiles: ImportProfile[];
   sharedScoring?: ScoringPayload;
+  applyToActiveProfiles: boolean;
 }
 
 interface ImportResult {
   index: number;
   name: string;
-  status: "created" | "error";
+  status: "created" | "updated" | "error";
   id?: string;
   error?: string;
 }
@@ -111,7 +115,11 @@ function parseProfilesPayload(data: ImportFilePayload | ImportProfile[]): Parsed
     ? data.profiles
     : null;
 
-  if (!profiles) {
+  const applyToActiveProfiles = !Array.isArray(data) && Boolean(
+    data?.apply_to_active_profiles || data?.update_active_profiles || data?.active_profiles_only
+  );
+
+  if (!profiles && !applyToActiveProfiles) {
     throw new Error('JSON deve ser um array de profiles ou { "profiles": [...] }');
   }
 
@@ -122,12 +130,17 @@ function parseProfilesPayload(data: ImportFilePayload | ImportProfile[]): Parsed
         data.scoring_rule_ids ? { selected_rule_ids: data.scoring_rule_ids } : undefined
       );
 
+  if (applyToActiveProfiles && !Array.isArray(sharedScoring?.selected_rule_ids)) {
+    throw new Error('Para atualizar profiles ativos, informe "profile_scoring.selected_rule_ids": [...]');
+  }
+
   return {
-    profiles: profiles.map((profile) => ({
+    profiles: (profiles || []).map((profile) => ({
       ...profile,
       scoring: normalizeScoring(profile.scoring, sharedScoring) || profile.scoring,
     })),
     sharedScoring,
+    applyToActiveProfiles,
   };
 }
 
@@ -161,13 +174,14 @@ export function JsonImportBuilder({ onClose }: Props) {
   const [parseError, setParseError]     = useState<string | null>(null);
   const [parsed, setParsed]             = useState<ParsedProfile[]>([]);
   const [sharedScoring, setSharedScoring] = useState<ScoringPayload | undefined>(undefined);
+  const [applyToActiveProfiles, setApplyToActiveProfiles] = useState(false);
   const [rawJson, setRawJson]           = useState<string>("");
   const [showJson, setShowJson]         = useState(false);
   const [editingIdx, setEditingIdx]     = useState<number | null>(null);
   const [editingVal, setEditingVal]     = useState("");
   const [importing, setImporting]       = useState(false);
   const [results, setResults]           = useState<ImportResult[]>([]);
-  const [summary, setSummary]           = useState({ created: 0, failed: 0 });
+  const [summary, setSummary]           = useState({ created: 0, updated: 0, failed: 0 });
   const fileRef = useRef<HTMLInputElement>(null);
 
   const processJsonText = useCallback((text: string) => {
@@ -175,7 +189,7 @@ export function JsonImportBuilder({ onClose }: Props) {
     try {
       const parsedPayload = parseProfilesPayload(JSON.parse(text));
       const profiles = parsedPayload.profiles;
-      if (profiles.length === 0) {
+      if (!parsedPayload.applyToActiveProfiles && profiles.length === 0) {
         setParseError("Nenhum profile encontrado no JSON");
         return;
       }
@@ -192,6 +206,7 @@ export function JsonImportBuilder({ onClose }: Props) {
       setParseError(null);
       setParsed(parsedList);
       setSharedScoring(parsedPayload.sharedScoring);
+      setApplyToActiveProfiles(parsedPayload.applyToActiveProfiles);
       setStage("preview");
     } catch (err: unknown) {
       setParseError(`JSON inválido: ${err instanceof Error ? err.message : String(err)}`);
@@ -248,12 +263,17 @@ export function JsonImportBuilder({ onClose }: Props) {
         ...p.raw,
         name: p.editedName || p.raw.name,
       }));
-      const res = await apiPost("/profiles/bulk-import", {
-        profiles: profilesPayload,
-        ...(sharedScoring ? { profile_scoring: sharedScoring } : {}),
-      });
+      const res = await apiPost("/profiles/bulk-import", applyToActiveProfiles
+        ? {
+            apply_to_active_profiles: true,
+            profile_scoring: sharedScoring,
+          }
+        : {
+            profiles: profilesPayload,
+            ...(sharedScoring ? { profile_scoring: sharedScoring } : {}),
+          });
       setResults(res.results ?? []);
-      setSummary({ created: res.created ?? 0, failed: res.failed ?? 0 });
+      setSummary({ created: res.created ?? 0, updated: res.updated ?? 0, failed: res.failed ?? 0 });
       setStage("result");
     } catch (err: unknown) {
       alert(`Erro na importação: ${err instanceof Error ? err.message : String(err)}`);
@@ -262,8 +282,12 @@ export function JsonImportBuilder({ onClose }: Props) {
     }
   };
 
-  const validCount   = parsed.filter((p) => p.valid).length;
-  const invalidCount = parsed.length - validCount;
+  const validCount   = applyToActiveProfiles ? 1 : parsed.filter((p) => p.valid).length;
+  const invalidCount = applyToActiveProfiles ? 0 : parsed.length - validCount;
+  const selectedScoringCount = sharedScoring?.selected_rule_ids?.length ?? 0;
+  const canImport = applyToActiveProfiles
+    ? Array.isArray(sharedScoring?.selected_rule_ids)
+    : validCount > 0;
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
@@ -282,8 +306,12 @@ export function JsonImportBuilder({ onClose }: Props) {
           </h1>
           <p className="text-[var(--text-secondary)] mt-0.5 text-[13px]">
             {stage === "upload"  && "Faça upload do arquivo .json com os profiles a criar"}
-            {stage === "preview" && `${parsed.length} profiles encontrados — revise antes de importar`}
-            {stage === "result"  && `Importação concluída: ${summary.created} criados · ${summary.failed} com erro`}
+            {stage === "preview" && (applyToActiveProfiles
+              ? `${selectedScoringCount} regras de Scoring para aplicar aos profiles ativos`
+              : `${parsed.length} profiles encontrados — revise antes de importar`)}
+            {stage === "result"  && (applyToActiveProfiles
+              ? `Atualizacao concluida: ${summary.updated} atualizados · ${summary.failed} com erro`
+              : `Importação concluída: ${summary.created} criados · ${summary.failed} com erro`)}
           </p>
         </div>
 
@@ -346,7 +374,7 @@ export function JsonImportBuilder({ onClose }: Props) {
                   Colar JSON
                 </h3>
                 <p className="text-[12px] text-[var(--text-secondary)] mt-1">
-                  Use este campo para importar em massa sem arquivo. O bloco <code className="font-mono text-[var(--accent-primary)]">profile_scoring</code> aplica as mesmas regras do Score Engine em todos os profiles.
+                  Use este campo para importar em massa sem arquivo. Com <code className="font-mono text-[var(--accent-primary)]">apply_to_active_profiles</code>, o bloco <code className="font-mono text-[var(--accent-primary)]">profile_scoring</code> substitui o Scoring de todos os profiles ativos.
                 </p>
               </div>
               <button
@@ -362,7 +390,7 @@ export function JsonImportBuilder({ onClose }: Props) {
               className="input min-h-[180px] w-full font-mono text-[11px] leading-relaxed resize-y"
               value={rawJson}
               onChange={(e) => setRawJson(e.target.value)}
-              placeholder='{"profile_scoring":{"selected_rule_ids":["rule_ema_trend","rule_adx"]},"profiles":[{"name":"L3_TREND_FORTE_V1","funnel_role":"acquisition_queue"}]}'
+              placeholder='{"apply_to_active_profiles":true,"profile_scoring":{"selected_rule_ids":["rule_ema_trend_ema9_gt_ema50","rule_adx_ge_25"]}}'
               spellCheck={false}
             />
           </div>
@@ -381,6 +409,7 @@ export function JsonImportBuilder({ onClose }: Props) {
               Estrutura esperada
             </h3>
             <pre className="text-[11px] text-[var(--text-secondary)] font-mono overflow-x-auto leading-relaxed">{`{
+  "apply_to_active_profiles": false,          // true = nao cria profiles; substitui scoring de todos os ativos
   "profile_scoring": {
     "enabled": true,
     "selected_rule_ids": [
@@ -466,7 +495,7 @@ export function JsonImportBuilder({ onClose }: Props) {
 
       // ── scoring ───────────────────────────────────────────────────
       "scoring": {
-        "selected_rule_ids": ["rule_ema_trend_ema9_gt_ema50"],  // opcional; sobrescreve/combina com profile_scoring
+        "selected_rule_ids": ["rule_ema_trend_ema9_gt_ema50"],  // opcional; substitui profile_scoring neste profile
         "weights":    { "signal": 25, "momentum": 25, "liquidity": 25, "market_structure": 25 },
         "thresholds": { "buy": 65, "strong_buy": 80, "neutral": 40 }
       }
@@ -693,17 +722,19 @@ export function JsonImportBuilder({ onClose }: Props) {
               </button>
               <button
                 className="btn btn-secondary text-[12px] px-3 py-1.5"
-                onClick={() => { setParsed([]); setStage("upload"); setParseError(null); }}
+                onClick={() => { setParsed([]); setApplyToActiveProfiles(false); setStage("upload"); setParseError(null); }}
               >
                 Trocar arquivo
               </button>
               <button
                 className="btn btn-primary px-5"
                 onClick={handleImport}
-                disabled={importing || validCount === 0}
+                disabled={importing || !canImport}
               >
                 {importing
                   ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Importando...</>
+                  : applyToActiveProfiles
+                  ? <><Upload className="w-4 h-4 mr-2" />Atualizar profiles ativos</>
                   : <><Upload className="w-4 h-4 mr-2" />Importar {validCount} profile{validCount !== 1 ? "s" : ""}</>
                 }
               </button>
@@ -717,7 +748,24 @@ export function JsonImportBuilder({ onClose }: Props) {
             </div>
           )}
 
+          {applyToActiveProfiles && (
+            <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-xl p-5 space-y-3">
+              <h3 className="text-[14px] font-semibold text-[var(--text-primary)]">
+                Atualizacao em massa do Scoring
+              </h3>
+              <p className="text-[13px] text-[var(--text-secondary)] leading-relaxed">
+                Esta importacao nao cria profiles. Ela atualiza todos os profiles ativos do usuario e substitui
+                <code className="mx-1 font-mono text-[var(--accent-primary)]">config.scoring.selected_rule_ids</code>
+                pelos IDs informados em <code className="font-mono text-[var(--accent-primary)]">profile_scoring.selected_rule_ids</code>.
+              </p>
+              <div className="text-[12px] text-[var(--text-secondary)]">
+                Regras selecionadas: <span className="font-semibold text-[var(--text-primary)]">{selectedScoringCount}</span>
+              </div>
+            </div>
+          )}
+
           {/* Profiles table */}
+          {!applyToActiveProfiles && (
           <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-xl overflow-hidden">
             <table className="w-full text-[13px]">
               <thead>
@@ -825,6 +873,7 @@ export function JsonImportBuilder({ onClose }: Props) {
               </tbody>
             </table>
           </div>
+          )}
         </div>
       )}
 
@@ -835,8 +884,10 @@ export function JsonImportBuilder({ onClose }: Props) {
           <div className="grid grid-cols-2 gap-4">
             <div className="bg-[var(--color-profit)]/8 border border-[var(--color-profit)]/20 rounded-xl p-6 text-center">
               <CheckCircle2 className="w-8 h-8 text-[var(--color-profit)] mx-auto mb-2" />
-              <div className="text-3xl font-bold text-[var(--color-profit)]">{summary.created}</div>
-              <div className="text-[13px] text-[var(--text-secondary)] mt-1">profiles criados</div>
+              <div className="text-3xl font-bold text-[var(--color-profit)]">{applyToActiveProfiles ? summary.updated : summary.created}</div>
+              <div className="text-[13px] text-[var(--text-secondary)] mt-1">
+                {applyToActiveProfiles ? "profiles atualizados" : "profiles criados"}
+              </div>
             </div>
             <div className={`${summary.failed > 0 ? "bg-red-500/8 border-red-500/20" : "bg-[var(--bg-secondary)] border-[var(--border-subtle)]"} border rounded-xl p-6 text-center`}>
               {summary.failed > 0
@@ -856,7 +907,7 @@ export function JsonImportBuilder({ onClose }: Props) {
                   r.status === "error" ? "bg-red-500/4" : ""
                 }`}
               >
-                {r.status === "created"
+                {r.status !== "error"
                   ? <CheckCircle2 className="w-4 h-4 text-[var(--color-profit)] shrink-0" />
                   : <XCircle className="w-4 h-4 text-[var(--color-loss)] shrink-0" />
                 }
@@ -864,7 +915,7 @@ export function JsonImportBuilder({ onClose }: Props) {
                 {r.status === "error" && (
                   <span className="text-[12px] text-[var(--color-loss)]">{r.error}</span>
                 )}
-                {r.status === "created" && r.id && (
+                {r.status !== "error" && r.id && (
                   <span className="text-[11px] text-[var(--text-tertiary)] font-mono">{r.id.slice(0, 8)}…</span>
                 )}
               </div>
@@ -872,7 +923,7 @@ export function JsonImportBuilder({ onClose }: Props) {
           </div>
 
           <div className="flex gap-3">
-            <button className="btn btn-secondary flex-1" onClick={() => { setParsed([]); setRawJson(""); setStage("upload"); }}>
+            <button className="btn btn-secondary flex-1" onClick={() => { setParsed([]); setRawJson(""); setApplyToActiveProfiles(false); setStage("upload"); }}>
               <Upload className="w-4 h-4 mr-2" />
               Importar outro arquivo
             </button>
