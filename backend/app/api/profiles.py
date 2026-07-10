@@ -174,9 +174,17 @@ async def bulk_import_profiles(
         "profile_scoring": {                   (optional, applied to every profile)
             "selected_rule_ids": [...]
         },
-        "apply_to_active_profiles": true       (optional, update existing active profiles)
+        "apply_to_active_profiles": true,      (optional, update existing active profiles)
+        "scoring_assignments": [               (optional, update scoring of specific
+            {                                   existing profiles by id or name)
+                "profile_id": "uuid",          (or "profile_name": "...")
+                "selected_rule_ids": [...],    (or nested under "scoring": {...})
+                "weights": {...},              (optional)
+                "thresholds": {...}            (optional)
+            }
+        ]
     }
-    Returns: { "created": N, "failed": N, "results": [...] }
+    Returns: { "created": N, "updated": N, "failed": N, "results": [...] }
     """
     results: List[Dict[str, Any]] = []
     created = 0
@@ -247,8 +255,87 @@ async def bulk_import_profiles(
 
         return {"created": 0, "updated": updated, "failed": failed, "results": results}
 
+    scoring_assignments = payload.get("scoring_assignments")
+    if scoring_assignments is not None and not isinstance(scoring_assignments, list):
+        raise HTTPException(status_code=400, detail="'scoring_assignments' must be an array")
+    scoring_assignments = scoring_assignments or []
+    if len(scoring_assignments) > 200:
+        raise HTTPException(status_code=400, detail="Maximum 200 scoring_assignments per import")
+
+    for i, assignment in enumerate(scoring_assignments):
+        target_label = ""
+        try:
+            if not isinstance(assignment, dict):
+                raise ValueError("assignment must be an object")
+
+            profile_id = assignment.get("profile_id") or assignment.get("id")
+            profile_name = assignment.get("profile_name") or assignment.get("name")
+            target_label = str(profile_id or profile_name or f"assignment_{i}")
+            if not profile_id and not profile_name:
+                raise ValueError("'profile_id' or 'profile_name' is required")
+
+            scoring_input = assignment.get("scoring")
+            if not isinstance(scoring_input, dict):
+                scoring_input = {
+                    key: assignment[key]
+                    for key in ("selected_rule_ids", "weights", "thresholds", "enabled")
+                    if key in assignment
+                }
+            merged_scoring = _normalize_import_scoring(scoring_input, shared_scoring)
+            if merged_scoring.get("selected_rule_ids") is None:
+                raise ValueError("'selected_rule_ids' is required (inline or via profile_scoring)")
+
+            if profile_id:
+                try:
+                    profile_uuid = UUID(str(profile_id))
+                except ValueError:
+                    raise ValueError(f"invalid profile_id: {profile_id}")
+                q = select(Profile).where(Profile.id == profile_uuid, Profile.user_id == user_id)
+                profile = (await db.execute(q)).scalars().first()
+            else:
+                q = select(Profile).where(Profile.user_id == user_id, Profile.name.ilike(str(profile_name)))
+                matches = (await db.execute(q)).scalars().all()
+                if len(matches) > 1:
+                    raise ValueError(
+                        f"{len(matches)} profiles named '{profile_name}' — use profile_id to disambiguate"
+                    )
+                profile = matches[0] if matches else None
+
+            if not profile:
+                raise ValueError("profile not found")
+
+            previous_config = profile.config or {}
+            next_config = {**previous_config, "scoring": merged_scoring}
+            profile.config = _validate_profile_config(next_config)
+            old_version = getattr(profile, "profile_version", None)
+            new_version = datetime.now(_tz.utc)
+            profile.profile_version = new_version
+            db.add(ProfileAuditLog(
+                user_id=user_id,
+                profile_id=profile.id,
+                changed_by=user_id,
+                change_source="api",
+                change_description="scoring replaced via POST /profiles/bulk-import scoring_assignments",
+                previous_config=previous_config,
+                new_config=profile.config,
+                previous_profile_version=old_version,
+                new_profile_version=new_version,
+            ))
+            results.append({"index": i, "name": profile.name, "status": "updated", "id": str(profile.id)})
+            updated += 1
+        except Exception as exc:
+            failed += 1
+            results.append({
+                "index": i,
+                "name": target_label,
+                "status": "error",
+                "error": str(exc),
+            })
+
     profiles_data = payload.get("profiles", [])
-    if not profiles_data or not isinstance(profiles_data, list):
+    if not isinstance(profiles_data, list):
+        raise HTTPException(status_code=400, detail="'profiles' must be an array")
+    if not profiles_data and not scoring_assignments:
         raise HTTPException(status_code=400, detail="'profiles' array is required")
     if len(profiles_data) > 200:
         raise HTTPException(status_code=400, detail="Maximum 200 profiles per import")
@@ -300,7 +387,7 @@ async def bulk_import_profiles(
                 "error":  str(exc),
             })
 
-    if created > 0:
+    if created > 0 or updated > 0:
         await db.commit()
 
     return {"created": created, "updated": updated, "failed": failed, "results": results}

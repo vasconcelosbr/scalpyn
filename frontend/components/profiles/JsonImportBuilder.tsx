@@ -1,13 +1,15 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   ArrowLeft, Upload, FileJson, CheckCircle2, XCircle,
   Loader2, Globe, Filter, Target, ShoppingCart,
   ChevronRight, Eye, EyeOff, Pencil, Check, X, BookOpen, ChevronDown,
+  AlertTriangle,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { apiPost } from "@/lib/api";
+import { apiGet, apiPost } from "@/lib/api";
+import { useConfig } from "@/hooks/useConfig";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type FunnelRole = "universe_filter" | "primary_filter" | "score_engine" | "acquisition_queue";
@@ -35,6 +37,18 @@ interface ImportProfile {
   scoring?:        ScoringPayload;
 }
 
+interface ScoringAssignment {
+  profile_id?: string;
+  id?: string;
+  profile_name?: string;
+  name?: string;
+  scoring?: ScoringPayload;
+  selected_rule_ids?: string[];
+  weights?: JsonObject;
+  thresholds?: JsonObject;
+  enabled?: boolean;
+}
+
 interface ImportFilePayload {
   profiles?: ImportProfile[];
   profile_scoring?: ImportProfile["scoring"];
@@ -43,6 +57,15 @@ interface ImportFilePayload {
   apply_to_active_profiles?: boolean;
   update_active_profiles?: boolean;
   active_profiles_only?: boolean;
+  scoring_assignments?: ScoringAssignment[];
+}
+
+interface ExistingProfileRef {
+  id: string;
+  name: string;
+  profile_role?: string | null;
+  is_active?: boolean;
+  selected_rule_ids: string[];
 }
 
 interface ParsedProfile {
@@ -56,6 +79,7 @@ interface ParsedImportPayload {
   profiles: ImportProfile[];
   sharedScoring?: ScoringPayload;
   applyToActiveProfiles: boolean;
+  scoringAssignments: ScoringAssignment[];
 }
 
 interface ImportResult {
@@ -108,6 +132,15 @@ function normalizeScoring(scoring?: ImportProfile["scoring"], fallback?: ImportP
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
+function assignmentTarget(a: ScoringAssignment): string {
+  return String(a.profile_name || a.name || a.profile_id || a.id || "");
+}
+
+function assignmentRuleIds(a: ScoringAssignment, shared?: ScoringPayload): string[] {
+  const ids = a.scoring?.selected_rule_ids ?? a.selected_rule_ids ?? shared?.selected_rule_ids;
+  return Array.isArray(ids) ? ids.map(String) : [];
+}
+
 function parseProfilesPayload(data: ImportFilePayload | ImportProfile[]): ParsedImportPayload {
   const profiles: ImportProfile[] | null = Array.isArray(data)
     ? data
@@ -119,8 +152,13 @@ function parseProfilesPayload(data: ImportFilePayload | ImportProfile[]): Parsed
     data?.apply_to_active_profiles || data?.update_active_profiles || data?.active_profiles_only
   );
 
-  if (!profiles && !applyToActiveProfiles) {
-    throw new Error('JSON deve ser um array de profiles ou { "profiles": [...] }');
+  const scoringAssignments: ScoringAssignment[] =
+    !Array.isArray(data) && Array.isArray(data?.scoring_assignments)
+      ? data.scoring_assignments
+      : [];
+
+  if (!profiles && !applyToActiveProfiles && scoringAssignments.length === 0) {
+    throw new Error('JSON deve ser um array de profiles, { "profiles": [...] } ou { "scoring_assignments": [...] }');
   }
 
   const sharedScoring = Array.isArray(data)
@@ -134,6 +172,20 @@ function parseProfilesPayload(data: ImportFilePayload | ImportProfile[]): Parsed
     throw new Error('Para atualizar profiles ativos, informe "profile_scoring.selected_rule_ids": [...]');
   }
 
+  for (const [i, assignment] of scoringAssignments.entries()) {
+    if (!isRecordLike(assignment)) {
+      throw new Error(`scoring_assignments[${i}] deve ser um objeto`);
+    }
+    if (!assignment.profile_id && !assignment.id && !assignment.profile_name && !assignment.name) {
+      throw new Error(`scoring_assignments[${i}] precisa de "profile_id" ou "profile_name"`);
+    }
+    if (assignmentRuleIds(assignment, sharedScoring).length === 0) {
+      throw new Error(
+        `scoring_assignments[${i}] precisa de "selected_rule_ids" (inline ou via "profile_scoring")`
+      );
+    }
+  }
+
   return {
     profiles: (profiles || []).map((profile) => ({
       ...profile,
@@ -141,7 +193,12 @@ function parseProfilesPayload(data: ImportFilePayload | ImportProfile[]): Parsed
     })),
     sharedScoring,
     applyToActiveProfiles,
+    scoringAssignments,
   };
+}
+
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 // ── Role Badge ────────────────────────────────────────────────────────────────
@@ -175,10 +232,48 @@ export function JsonImportBuilder({ onClose }: Props) {
   const [parsed, setParsed]             = useState<ParsedProfile[]>([]);
   const [sharedScoring, setSharedScoring] = useState<ScoringPayload | undefined>(undefined);
   const [applyToActiveProfiles, setApplyToActiveProfiles] = useState(false);
+  const [scoringAssignments, setScoringAssignments] = useState<ScoringAssignment[]>([]);
+  const [existingProfiles, setExistingProfiles] = useState<ExistingProfileRef[]>([]);
+  const { config: globalScoreConfig } = useConfig("score");
+  const globalRules: { id: string; indicator?: string; operator?: string; points?: number; category?: string }[] =
+    Array.isArray(globalScoreConfig?.scoring_rules) ? globalScoreConfig.scoring_rules : [];
+  const globalRuleIds = new Set(globalRules.map((r) => String(r.id)));
+
+  useEffect(() => {
+    apiGet("/profiles")
+      .then((res) => setExistingProfiles(
+        ((res.profiles ?? []) as Array<Record<string, unknown>>).map((p) => {
+          const config = p.config as Record<string, unknown> | undefined;
+          const scoring = config?.scoring as Record<string, unknown> | undefined;
+          const rawIds = scoring?.selected_rule_ids;
+          return {
+            id: String(p.id),
+            name: String(p.name ?? ""),
+            profile_role: (p.profile_role as string | null) ?? null,
+            is_active: p.is_active !== false,
+            selected_rule_ids: Array.isArray(rawIds) ? rawIds.map(String) : [],
+          };
+        })
+      ))
+      .catch(() => setExistingProfiles([]));
+  }, []);
+
+  const buildAssignmentsTemplate = () => JSON.stringify(
+    {
+      scoring_assignments: existingProfiles.map((p) => ({
+        profile_id: p.id,
+        profile_name: p.name,
+        selected_rule_ids: p.selected_rule_ids,
+      })),
+    },
+    null,
+    2
+  );
   const [rawJson, setRawJson]           = useState<string>("");
   const [showJson, setShowJson]         = useState(false);
   const [editingIdx, setEditingIdx]     = useState<number | null>(null);
   const [editingVal, setEditingVal]     = useState("");
+  const [templateNotice, setTemplateNotice] = useState<string | null>(null);
   const [importing, setImporting]       = useState(false);
   const [results, setResults]           = useState<ImportResult[]>([]);
   const [summary, setSummary]           = useState({ created: 0, updated: 0, failed: 0 });
@@ -189,12 +284,20 @@ export function JsonImportBuilder({ onClose }: Props) {
     try {
       const parsedPayload = parseProfilesPayload(JSON.parse(text));
       const profiles = parsedPayload.profiles;
-      if (!parsedPayload.applyToActiveProfiles && profiles.length === 0) {
+      if (
+        !parsedPayload.applyToActiveProfiles
+        && profiles.length === 0
+        && parsedPayload.scoringAssignments.length === 0
+      ) {
         setParseError("Nenhum profile encontrado no JSON");
         return;
       }
       if (profiles.length > 200) {
         setParseError(`Máximo 200 profiles por importação. JSON tem ${profiles.length}.`);
+        return;
+      }
+      if (parsedPayload.scoringAssignments.length > 200) {
+        setParseError(`Máximo 200 scoring_assignments por importação. JSON tem ${parsedPayload.scoringAssignments.length}.`);
         return;
       }
 
@@ -207,6 +310,7 @@ export function JsonImportBuilder({ onClose }: Props) {
       setParsed(parsedList);
       setSharedScoring(parsedPayload.sharedScoring);
       setApplyToActiveProfiles(parsedPayload.applyToActiveProfiles);
+      setScoringAssignments(parsedPayload.scoringAssignments);
       setStage("preview");
     } catch (err: unknown) {
       setParseError(`JSON inválido: ${err instanceof Error ? err.message : String(err)}`);
@@ -269,8 +373,9 @@ export function JsonImportBuilder({ onClose }: Props) {
             profile_scoring: sharedScoring,
           }
         : {
-            profiles: profilesPayload,
+            ...(profilesPayload.length > 0 ? { profiles: profilesPayload } : {}),
             ...(sharedScoring ? { profile_scoring: sharedScoring } : {}),
+            ...(scoringAssignments.length > 0 ? { scoring_assignments: scoringAssignments } : {}),
           });
       setResults(res.results ?? []);
       setSummary({ created: res.created ?? 0, updated: res.updated ?? 0, failed: res.failed ?? 0 });
@@ -287,7 +392,16 @@ export function JsonImportBuilder({ onClose }: Props) {
   const selectedScoringCount = sharedScoring?.selected_rule_ids?.length ?? 0;
   const canImport = applyToActiveProfiles
     ? Array.isArray(sharedScoring?.selected_rule_ids)
-    : validCount > 0;
+    : validCount > 0 || scoringAssignments.length > 0;
+
+  const existingProfileById = new Map(existingProfiles.map((p) => [p.id, p]));
+  const existingProfileByName = new Map(existingProfiles.map((p) => [p.name.toLowerCase(), p]));
+  const resolveAssignmentProfile = (a: ScoringAssignment): ExistingProfileRef | undefined => {
+    const pid = a.profile_id || a.id;
+    if (pid) return existingProfileById.get(String(pid));
+    const pname = a.profile_name || a.name;
+    return pname ? existingProfileByName.get(String(pname).toLowerCase()) : undefined;
+  };
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
@@ -308,10 +422,13 @@ export function JsonImportBuilder({ onClose }: Props) {
             {stage === "upload"  && "Faça upload do arquivo .json com os profiles a criar"}
             {stage === "preview" && (applyToActiveProfiles
               ? `${selectedScoringCount} regras de Scoring para aplicar aos profiles ativos`
-              : `${parsed.length} profiles encontrados — revise antes de importar`)}
+              : [
+                  parsed.length > 0 ? `${parsed.length} profiles encontrados` : null,
+                  scoringAssignments.length > 0 ? `${scoringAssignments.length} associações de scoring` : null,
+                ].filter(Boolean).join(" · ") + " — revise antes de importar")}
             {stage === "result"  && (applyToActiveProfiles
               ? `Atualizacao concluida: ${summary.updated} atualizados · ${summary.failed} com erro`
-              : `Importação concluída: ${summary.created} criados · ${summary.failed} com erro`)}
+              : `Importação concluída: ${summary.created} criados · ${summary.updated} atualizados · ${summary.failed} com erro`)}
           </p>
         </div>
 
@@ -692,6 +809,154 @@ export function JsonImportBuilder({ onClose }: Props) {
               </div>
             )}
           </div>
+
+          {/* Scoring association reference card */}
+          <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-xl p-5 space-y-4">
+            <div>
+              <h3 className="text-[13px] font-semibold text-[var(--text-primary)] flex items-center gap-2">
+                <Target className="w-4 h-4 text-[#FBBF24]" />
+                Estrutura esperada — Associação de Scoring (profiles existentes)
+              </h3>
+              <p className="text-[12px] text-[var(--text-secondary)] mt-1">
+                Use <code className="font-mono text-[var(--accent-primary)]">scoring_assignments</code> para associar
+                regras da matriz global à aba Scoring de profiles já existentes, por{" "}
+                <code className="font-mono text-[var(--accent-primary)]">profile_id</code> ou{" "}
+                <code className="font-mono text-[var(--accent-primary)]">profile_name</code>. Os IDs válidos estão
+                nas tabelas abaixo — qualquer ID fora delas falha na importação.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                className="btn btn-primary text-[12px] px-3 py-1.5"
+                disabled={existingProfiles.length === 0}
+                onClick={() => {
+                  setRawJson(buildAssignmentsTemplate());
+                  setParseError(null);
+                  setTemplateNotice(
+                    `Modelo preenchido com ${existingProfiles.length} profiles carregado no campo "Colar JSON" acima — ajuste os selected_rule_ids de cada profile e clique em Revisar JSON.`
+                  );
+                }}
+                data-testid="load-scoring-template"
+              >
+                <FileJson className="w-3.5 h-3.5 mr-1.5" />
+                Carregar modelo preenchido no editor
+              </button>
+              <button
+                className="btn btn-secondary text-[12px] px-3 py-1.5"
+                disabled={existingProfiles.length === 0}
+                onClick={() => {
+                  navigator.clipboard.writeText(buildAssignmentsTemplate())
+                    .then(() => setTemplateNotice(`Modelo com ${existingProfiles.length} profiles copiado para a área de transferência.`))
+                    .catch(() => setTemplateNotice("Não foi possível copiar — use o botão de carregar no editor."));
+                }}
+                data-testid="copy-scoring-template"
+              >
+                Copiar modelo
+              </button>
+            </div>
+            {templateNotice && (
+              <div className="rounded-lg border border-[var(--accent-primary)]/25 bg-[var(--accent-primary)]/8 px-3 py-2 text-[12px] text-[var(--text-secondary)]">
+                {templateNotice}
+              </div>
+            )}
+            <p className="text-[11px] text-[var(--text-tertiary)]">
+              O modelo já vem com <code className="font-mono">profile_id</code>, <code className="font-mono">profile_name</code> e os{" "}
+              <code className="font-mono">selected_rule_ids</code> atuais de cada profile — não altere id/nome, apenas as regras.
+              Campos opcionais por profile: <code className="font-mono">weights</code> e <code className="font-mono">thresholds</code>.
+            </p>
+            <pre className="text-[11px] text-[var(--text-secondary)] font-mono overflow-x-auto leading-relaxed">{`{
+  "scoring_assignments": [
+    {
+      "profile_id": "<preenchido automaticamente>",
+      "profile_name": "<preenchido automaticamente>",
+      "selected_rule_ids": ["rule_adx_ge_25", "rule_taker_ratio_ge_055"]
+    }
+  ]
+}`}</pre>
+
+            {/* Live: available profiles */}
+            <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-base)] overflow-hidden">
+              <div className="flex items-center justify-between gap-3 border-b border-[var(--border-subtle)] px-3 py-2">
+                <div>
+                  <h4 className="text-[12px] font-semibold text-[var(--text-primary)]">Profiles disponíveis em Strategy Profiles</h4>
+                  <p className="text-[10px] text-[var(--text-tertiary)]">{existingProfiles.length} profiles — use profile_id ou profile_name</p>
+                </div>
+                <span className="rounded bg-[var(--accent-primary)]/10 px-2 py-1 text-[10px] font-semibold text-[var(--accent-primary)]">ao vivo</span>
+              </div>
+              {existingProfiles.length > 0 ? (
+                <div className="max-h-56 overflow-auto">
+                  <table className="w-full text-[11px]">
+                    <thead className="sticky top-0 bg-[var(--bg-tertiary)]">
+                      <tr className="border-b border-[var(--border-subtle)]">
+                        <th className="px-3 py-2 text-left text-[10px] uppercase tracking-wider text-[var(--text-tertiary)]">profile_id</th>
+                        <th className="px-3 py-2 text-left text-[10px] uppercase tracking-wider text-[var(--text-tertiary)]">profile_name</th>
+                        <th className="px-3 py-2 text-left text-[10px] uppercase tracking-wider text-[var(--text-tertiary)]">papel</th>
+                        <th className="px-3 py-2 text-center text-[10px] uppercase tracking-wider text-[var(--text-tertiary)]">ativo</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {existingProfiles.map((p) => (
+                        <tr key={p.id} className="border-b border-[var(--border-subtle)]/60 last:border-0">
+                          <td className="px-3 py-1.5 font-mono text-[10px] text-[var(--text-secondary)] select-all">{p.id}</td>
+                          <td className="px-3 py-1.5 font-medium text-[var(--text-primary)]">{p.name}</td>
+                          <td className="px-3 py-1.5"><RoleBadge role={p.profile_role ?? undefined} /></td>
+                          <td className="px-3 py-1.5 text-center">
+                            {p.is_active
+                              ? <CheckCircle2 className="w-3 h-3 text-[var(--color-profit)] mx-auto" />
+                              : <span className="text-[var(--text-tertiary)]">—</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="px-3 py-3 text-[11px] text-[var(--text-tertiary)]">Nenhum profile encontrado (ou ainda carregando).</p>
+              )}
+            </div>
+
+            {/* Live: available rule ids */}
+            <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-base)] overflow-hidden">
+              <div className="flex items-center justify-between gap-3 border-b border-[var(--border-subtle)] px-3 py-2">
+                <div>
+                  <h4 className="text-[12px] font-semibold text-[var(--text-primary)]">Rule IDs disponíveis na matriz global de Score</h4>
+                  <p className="text-[10px] text-[var(--text-tertiary)]">{globalRules.length} regras — valores aceitos em selected_rule_ids</p>
+                </div>
+                <span className="rounded bg-[var(--accent-primary)]/10 px-2 py-1 text-[10px] font-semibold text-[var(--accent-primary)]">ao vivo</span>
+              </div>
+              {globalRules.length > 0 ? (
+                <div className="max-h-56 overflow-auto">
+                  <table className="w-full text-[11px]">
+                    <thead className="sticky top-0 bg-[var(--bg-tertiary)]">
+                      <tr className="border-b border-[var(--border-subtle)]">
+                        <th className="px-3 py-2 text-left text-[10px] uppercase tracking-wider text-[var(--text-tertiary)]">rule_id</th>
+                        <th className="px-3 py-2 text-left text-[10px] uppercase tracking-wider text-[var(--text-tertiary)]">indicator</th>
+                        <th className="px-3 py-2 text-left text-[10px] uppercase tracking-wider text-[var(--text-tertiary)]">category</th>
+                        <th className="px-3 py-2 text-right text-[10px] uppercase tracking-wider text-[var(--text-tertiary)]">points</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {globalRules.map((rule) => (
+                        <tr key={String(rule.id)} className="border-b border-[var(--border-subtle)]/60 last:border-0">
+                          <td className="px-3 py-1.5 font-mono text-[10px] font-semibold text-[var(--text-primary)] select-all">{String(rule.id)}</td>
+                          <td className="px-3 py-1.5 font-mono text-[var(--text-secondary)]">{rule.indicator}</td>
+                          <td className="px-3 py-1.5 text-[var(--text-secondary)]">{String(rule.category || "").replace("_", " ")}</td>
+                          <td className="px-3 py-1.5 text-right font-mono text-[var(--accent-primary)]">{rule.points}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="px-3 py-3 text-[11px] text-[var(--text-tertiary)]">
+                  Matriz global vazia — importe e salve a matriz em{" "}
+                  <a href="/settings/score" className="text-[var(--accent-primary)] hover:underline">Settings → Score Engine</a>{" "}
+                  antes de associar regras aos profiles.
+                </p>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
@@ -700,11 +965,20 @@ export function JsonImportBuilder({ onClose }: Props) {
         <div className="space-y-4">
           {/* Summary bar */}
           <div className="flex items-center gap-4 p-4 bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-xl">
-            <div className="flex items-center gap-2 text-[13px]">
-              <CheckCircle2 className="w-4 h-4 text-[var(--color-profit)]" />
-              <span className="text-[var(--text-primary)] font-semibold">{validCount}</span>
-              <span className="text-[var(--text-secondary)]">válidos</span>
-            </div>
+            {(applyToActiveProfiles || parsed.length > 0) && (
+              <div className="flex items-center gap-2 text-[13px]">
+                <CheckCircle2 className="w-4 h-4 text-[var(--color-profit)]" />
+                <span className="text-[var(--text-primary)] font-semibold">{validCount}</span>
+                <span className="text-[var(--text-secondary)]">válidos</span>
+              </div>
+            )}
+            {scoringAssignments.length > 0 && (
+              <div className="flex items-center gap-2 text-[13px]">
+                <Target className="w-4 h-4 text-[#FBBF24]" />
+                <span className="text-[var(--text-primary)] font-semibold">{scoringAssignments.length}</span>
+                <span className="text-[var(--text-secondary)]">associações de scoring</span>
+              </div>
+            )}
             {invalidCount > 0 && (
               <div className="flex items-center gap-2 text-[13px]">
                 <XCircle className="w-4 h-4 text-[var(--color-loss)]" />
@@ -722,7 +996,7 @@ export function JsonImportBuilder({ onClose }: Props) {
               </button>
               <button
                 className="btn btn-secondary text-[12px] px-3 py-1.5"
-                onClick={() => { setParsed([]); setApplyToActiveProfiles(false); setStage("upload"); setParseError(null); }}
+                onClick={() => { setParsed([]); setScoringAssignments([]); setApplyToActiveProfiles(false); setStage("upload"); setParseError(null); }}
               >
                 Trocar arquivo
               </button>
@@ -735,7 +1009,12 @@ export function JsonImportBuilder({ onClose }: Props) {
                   ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Importando...</>
                   : applyToActiveProfiles
                   ? <><Upload className="w-4 h-4 mr-2" />Atualizar profiles ativos</>
-                  : <><Upload className="w-4 h-4 mr-2" />Importar {validCount} profile{validCount !== 1 ? "s" : ""}</>
+                  : <><Upload className="w-4 h-4 mr-2" />
+                      {[
+                        validCount > 0 ? `Importar ${validCount} profile${validCount !== 1 ? "s" : ""}` : null,
+                        scoringAssignments.length > 0 ? `${validCount > 0 ? "+ " : "Aplicar "}${scoringAssignments.length} scoring${scoringAssignments.length !== 1 ? "s" : ""}` : null,
+                      ].filter(Boolean).join(" ")}
+                    </>
                 }
               </button>
             </div>
@@ -764,8 +1043,72 @@ export function JsonImportBuilder({ onClose }: Props) {
             </div>
           )}
 
+          {/* Scoring assignments preview */}
+          {!applyToActiveProfiles && scoringAssignments.length > 0 && (
+            <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-xl overflow-hidden">
+              <div className="px-4 py-3 border-b border-[var(--border-default)] bg-[var(--bg-tertiary)]">
+                <h3 className="text-[13px] font-semibold text-[var(--text-primary)] flex items-center gap-2">
+                  <Target className="w-4 h-4 text-[#FBBF24]" />
+                  Associações de Scoring ({scoringAssignments.length})
+                </h3>
+              </div>
+              <table className="w-full text-[13px]">
+                <thead>
+                  <tr className="border-b border-[var(--border-subtle)]">
+                    <th className="text-left px-4 py-2 text-[11px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider w-8">#</th>
+                    <th className="text-left px-4 py-2 text-[11px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider">Profile alvo</th>
+                    <th className="text-center px-4 py-2 text-[11px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider">Regras</th>
+                    <th className="text-left px-4 py-2 text-[11px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider">Verificação</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {scoringAssignments.map((a, idx) => {
+                    const resolved = resolveAssignmentProfile(a);
+                    const ruleIds = assignmentRuleIds(a, sharedScoring);
+                    const unknownRules = globalRuleIds.size > 0
+                      ? ruleIds.filter((id) => !globalRuleIds.has(id))
+                      : [];
+                    return (
+                      <tr key={idx} className="border-b border-[var(--border-subtle)] last:border-0">
+                        <td className="px-4 py-2.5 text-[var(--text-tertiary)] font-mono text-[11px]">{idx + 1}</td>
+                        <td className="px-4 py-2.5">
+                          <span className="font-medium text-[var(--text-primary)]">
+                            {resolved?.name ?? assignmentTarget(a)}
+                          </span>
+                          {resolved && (
+                            <span className="ml-2 font-mono text-[10px] text-[var(--text-tertiary)]">{resolved.id.slice(0, 8)}…</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5 text-center font-semibold text-[var(--accent-primary)]">{ruleIds.length}</td>
+                        <td className="px-4 py-2.5 text-[12px]">
+                          {!resolved ? (
+                            <span className="flex items-center gap-1.5 text-[var(--color-loss)]">
+                              <XCircle className="w-3.5 h-3.5 shrink-0" />
+                              Profile não encontrado em Strategy Profiles
+                            </span>
+                          ) : unknownRules.length > 0 ? (
+                            <span className="flex items-center gap-1.5 text-yellow-400">
+                              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                              {unknownRules.length} rule_id{unknownRules.length > 1 ? "s" : ""} fora da matriz global:{" "}
+                              <span className="font-mono text-[10px]">{unknownRules.join(", ")}</span>
+                            </span>
+                          ) : (
+                            <span className="flex items-center gap-1.5 text-[var(--color-profit)]">
+                              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                              OK
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
           {/* Profiles table */}
-          {!applyToActiveProfiles && (
+          {!applyToActiveProfiles && parsed.length > 0 && (
           <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-xl overflow-hidden">
             <table className="w-full text-[13px]">
               <thead>
@@ -884,9 +1227,15 @@ export function JsonImportBuilder({ onClose }: Props) {
           <div className="grid grid-cols-2 gap-4">
             <div className="bg-[var(--color-profit)]/8 border border-[var(--color-profit)]/20 rounded-xl p-6 text-center">
               <CheckCircle2 className="w-8 h-8 text-[var(--color-profit)] mx-auto mb-2" />
-              <div className="text-3xl font-bold text-[var(--color-profit)]">{applyToActiveProfiles ? summary.updated : summary.created}</div>
+              <div className="text-3xl font-bold text-[var(--color-profit)]">
+                {applyToActiveProfiles ? summary.updated : summary.created + summary.updated}
+              </div>
               <div className="text-[13px] text-[var(--text-secondary)] mt-1">
-                {applyToActiveProfiles ? "profiles atualizados" : "profiles criados"}
+                {applyToActiveProfiles
+                  ? "profiles atualizados"
+                  : summary.updated > 0
+                  ? `${summary.created} criados · ${summary.updated} scoring atualizado${summary.updated !== 1 ? "s" : ""}`
+                  : "profiles criados"}
               </div>
             </div>
             <div className={`${summary.failed > 0 ? "bg-red-500/8 border-red-500/20" : "bg-[var(--bg-secondary)] border-[var(--border-subtle)]"} border rounded-xl p-6 text-center`}>
@@ -923,7 +1272,7 @@ export function JsonImportBuilder({ onClose }: Props) {
           </div>
 
           <div className="flex gap-3">
-            <button className="btn btn-secondary flex-1" onClick={() => { setParsed([]); setRawJson(""); setApplyToActiveProfiles(false); setStage("upload"); }}>
+            <button className="btn btn-secondary flex-1" onClick={() => { setParsed([]); setScoringAssignments([]); setRawJson(""); setApplyToActiveProfiles(false); setStage("upload"); }}>
               <Upload className="w-4 h-4 mr-2" />
               Importar outro arquivo
             </button>
