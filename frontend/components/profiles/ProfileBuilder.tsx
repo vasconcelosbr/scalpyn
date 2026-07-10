@@ -373,6 +373,8 @@ function ScoreEngineConfigPanel({
   onToggleEnabled,
   testid = "score-engine",
 }: ScoreEngineConfigPanelProps) {
+  const knownRuleIds = new Set(scoreRules.map((rule) => rule.id));
+  const orphanSelectedIds = selectedIds.filter((id) => !knownRuleIds.has(id));
   return (
     <div className="space-y-6">
       <div className="space-y-3">
@@ -383,6 +385,18 @@ function ScoreEngineConfigPanel({
             {scoreRules.length === 0 && " (Configure scoring rules in Settings → Score Engine)"}
           </p>
         </div>
+        {orphanSelectedIds.length > 0 && (
+          <div
+            className="rounded-lg border border-yellow-500/25 bg-yellow-500/8 px-3 py-2 text-[12px] text-yellow-400"
+            data-testid={`${testid}-orphan-rule-ids`}
+          >
+            {orphanSelectedIds.length} regra{orphanSelectedIds.length > 1 ? "s" : ""} selecionada{orphanSelectedIds.length > 1 ? "s" : ""} neste
+            profile não existe{orphanSelectedIds.length > 1 ? "m" : ""} na matriz global de Score:
+            <span className="ml-1 font-mono">{orphanSelectedIds.join(", ")}</span>.
+            {" "}Importe/salve a matriz com esses IDs em{" "}
+            <a href="/settings/score" className="text-[var(--accent-primary)] hover:underline">Settings → Score Engine</a>.
+          </div>
+        )}
         {scoreRules.length > 0 ? (
           <div className="space-y-1.5" data-testid={`${testid}-rule-selection`}>
             {scoreRules.map((rule) => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { AlertCircle, FileJson, Save, RefreshCw, Plus, Trash2, Upload, X } from "lucide-react";
 import { useConfig } from "@/hooks/useConfig";
 
@@ -288,6 +288,8 @@ export default function ScoreEngineSettings() {
   const [importText, setImportText] = useState(SCORE_JSON_TEMPLATE);
   const [importError, setImportError] = useState<string | null>(null);
   const [importNotice, setImportNotice] = useState<string | null>(null);
+  const [importSaving, setImportSaving] = useState(false);
+  const importFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (config && Object.keys(config).length > 0) {
@@ -334,19 +336,57 @@ export default function ScoreEngineSettings() {
     setRules((currentRules) => currentRules.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
   };
 
-  const handleImportJson = () => {
-    try {
-      const imported = parseScoreImport(importText);
-      setRules(imported.rules);
-      if (imported.weights) setWeights(imported.weights);
-      if (imported.thresholds) setThresholds(imported.thresholds);
-      if (imported.topN != null) setTopN(imported.topN);
-      if (imported.minScore != null) setMinScore(imported.minScore);
+  const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (!file.name.endsWith(".json")) {
+      setImportError("Arquivo deve ter extensão .json");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      setImportText(String(ev.target?.result ?? ""));
       setImportError(null);
-      setImportOpen(false);
-      setImportNotice(`${imported.rules.length} regras carregadas na matriz. Revise e clique em Save para persistir.`);
+    };
+    reader.readAsText(file);
+  };
+
+  const handleImportJson = async () => {
+    let imported: ScoreImportResult;
+    try {
+      imported = parseScoreImport(importText);
     } catch (err: unknown) {
       setImportError(err instanceof Error ? err.message : String(err));
+      return;
+    }
+
+    const nextWeights = imported.weights ?? weights;
+    const nextThresholds = imported.thresholds ?? thresholds;
+    const nextTopN = imported.topN ?? topN;
+    const nextMinScore = imported.minScore ?? minScore;
+
+    setImportSaving(true);
+    try {
+      await updateConfig({
+        weights: nextWeights,
+        scoring_rules: imported.rules,
+        thresholds: nextThresholds,
+        auto_select_top_n: nextTopN,
+        auto_select_min_score: nextMinScore,
+      });
+      setRules(imported.rules);
+      setWeights(nextWeights);
+      setThresholds(nextThresholds);
+      setTopN(nextTopN);
+      setMinScore(nextMinScore);
+      setImportError(null);
+      setImportOpen(false);
+      setImportNotice(`${imported.rules.length} regras importadas e salvas na matriz global. Os IDs já podem ser associados aos profiles.`);
+    } catch (err: unknown) {
+      setImportError(`Falha ao salvar a matriz: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setImportSaving(false);
     }
   };
 
@@ -546,7 +586,24 @@ export default function ScoreEngineSettings() {
 
             <div className="grid gap-0 lg:grid-cols-[minmax(0,1fr)_360px] max-h-[calc(88vh-132px)] overflow-hidden">
               <div className="p-5 overflow-auto space-y-3">
-                <label className="label">JSON da matriz</label>
+                <div className="flex items-center justify-between gap-3">
+                  <label className="label">JSON da matriz</label>
+                  <button
+                    className="btn btn-secondary text-[12px] px-3 py-1.5"
+                    onClick={() => importFileRef.current?.click()}
+                    data-testid="score-import-file-button"
+                  >
+                    <FileJson className="w-3.5 h-3.5 mr-1.5" />
+                    Selecionar arquivo .json
+                  </button>
+                  <input
+                    ref={importFileRef}
+                    type="file"
+                    accept=".json,application/json"
+                    className="hidden"
+                    onChange={handleImportFile}
+                  />
+                </div>
                 <textarea
                   className="input min-h-[460px] w-full resize-y font-mono text-[11px] leading-relaxed"
                   value={importText}
@@ -642,9 +699,9 @@ export default function ScoreEngineSettings() {
 
             <div className="flex items-center justify-end gap-3 border-t border-[var(--border-subtle)] px-5 py-4">
               <button className="btn btn-secondary" onClick={() => setImportOpen(false)}>Cancel</button>
-              <button className="btn btn-primary" onClick={handleImportJson}>
-                <Upload className="w-4 h-4 mr-2" />
-                Aplicar matriz
+              <button className="btn btn-primary" onClick={handleImportJson} disabled={importSaving}>
+                {importSaving ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+                {importSaving ? "Salvando..." : "Aplicar e salvar matriz"}
               </button>
             </div>
           </div>
