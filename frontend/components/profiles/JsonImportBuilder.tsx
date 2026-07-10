@@ -58,6 +58,7 @@ interface ImportFilePayload {
   update_active_profiles?: boolean;
   active_profiles_only?: boolean;
   scoring_assignments?: ScoringAssignment[];
+  scoring_rules?: unknown[];
 }
 
 interface ExistingProfileRef {
@@ -158,6 +159,12 @@ function parseProfilesPayload(data: ImportFilePayload | ImportProfile[]): Parsed
       : [];
 
   if (!profiles && !applyToActiveProfiles && scoringAssignments.length === 0) {
+    if (!Array.isArray(data) && Array.isArray(data?.scoring_rules)) {
+      throw new Error(
+        'Este JSON é uma matriz de Score ("scoring_rules") — importe em Settings → Score Engine → Import JSON. '
+        + 'Depois use "scoring_assignments" aqui para associar as regras aos profiles.'
+      );
+    }
     throw new Error('JSON deve ser um array de profiles, { "profiles": [...] } ou { "scoring_assignments": [...] }');
   }
 
