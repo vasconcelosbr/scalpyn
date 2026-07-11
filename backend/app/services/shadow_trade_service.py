@@ -88,9 +88,9 @@ _SHADOW_SL_PCT_OVERRIDE = float(os.environ.get("SHADOW_SL_PCT", "0.0"))
 def _apply_barrier_params(user_config: dict, ml_config: dict) -> dict:
     """Merge ATR barrier parameters from ml_config into user_config.
 
-    When shadow_barrier_mode='ATR_DYNAMIC', _create_from_decision will
-    override sl_pct (and optionally tp_pct) using per-asset atr_percent.
-    FIXED mode (default) preserves existing tp_pct/sl_pct unchanged.
+    When shadow_barrier_mode='ATR_DYNAMIC', _create_from_decision overrides
+    sl_pct using per-asset atr_percent. shadow_tp_pct is an independent ML
+    policy and overrides tp_pct in every barrier mode.
     """
     user_config["shadow_barrier_mode"] = ml_config.get("shadow_barrier_mode", "FIXED")
     user_config["sl_atr_multiplier"]   = ml_config.get("shadow_atr_multiplier_sl", 1.5)
@@ -101,6 +101,42 @@ def _apply_barrier_params(user_config: dict, ml_config: dict) -> dict:
     if _tp_override:
         user_config["shadow_tp_pct"] = float(_tp_override)
     return user_config
+
+
+def _merge_ml_shadow_config(user_config: dict, ml_config: dict) -> dict:
+    """Return a copy carrying the complete ML shadow economic contract."""
+    merged = dict(user_config or {})
+    _apply_barrier_params(merged, ml_config or {})
+    merged["ml_fee_roundtrip_pct"] = (ml_config or {}).get("ml_fee_roundtrip_pct")
+    return merged
+
+
+async def _load_ml_shadow_config(user_id, user_config: dict) -> dict:
+    """Load the active ML config for legacy execution-gate shadow writers.
+
+    execute_buy passes the spot-engine barrier to safe_create_from_symbol_skip
+    and safe_bulk_create_from_user_skip.  Without this merge those canonical
+    L3 writers silently ignore shadow_tp_pct/shadow_barrier_mode.
+    """
+    from ..database import CeleryAsyncSessionLocal
+    from ..models.config_profile import ConfigProfile
+
+    ml_config: Dict[str, Any] = {}
+    try:
+        async with CeleryAsyncSessionLocal() as db:
+            result = await db.execute(
+                select(ConfigProfile).where(
+                    ConfigProfile.user_id == user_id,
+                    ConfigProfile.config_type == "ml",
+                    ConfigProfile.is_active.is_(True),
+                ).limit(1)
+            )
+            row = result.scalar_one_or_none()
+            if row and isinstance(row.config_json, dict):
+                ml_config = row.config_json
+    except Exception:
+        logger.exception("[shadow] ML barrier config load failed user=%s", user_id)
+    return _merge_ml_shadow_config(user_config, ml_config)
 
 # ── TTT Policy defaults (Zero Hardcode — override via Cloud Run env vars) ─────
 # Valores de negócio definidos em config_profiles (config_type='ttt_policy').
@@ -647,8 +683,15 @@ async def _create_from_decision(
     # Fase 3 (migration 071) — barreira mode e pcts aplicados (snapshot na abertura).
     barrier_mode = user_config.get("shadow_barrier_mode", "FIXED")
 
+    # shadow_tp_pct is the ML dataset's economic contract. It must not depend
+    # on the production spot barrier mode; otherwise a spot-engine TP edit
+    # silently changes the supervised population while ml.shadow_tp_pct stays
+    # unchanged.
+    _shadow_tp = user_config.get("shadow_tp_pct")
+    if _shadow_tp:
+        tp_pct = float(_shadow_tp)
+
     # P0-1: ATR_DYNAMIC — SL computed per-asset from atr_percent at entry.
-    # TP overridden by shadow_tp_pct when set (reads risk.take_profit_pct via DB update).
     if barrier_mode == "ATR_DYNAMIC":
         _feats_early = _build_features_snapshot(decision)
         _atr_pct = float(_feats_early.get("atr_percent") or 0.0)
@@ -657,9 +700,6 @@ async def _create_from_decision(
             _min_sl  = float(user_config.get("sl_min_pct", 0.5))
             _max_sl  = float(user_config.get("sl_max_pct", 3.0))
             sl_pct = max(_min_sl, min(_max_sl, _atr_pct * _sl_mult))
-        _shadow_tp = user_config.get("shadow_tp_pct")
-        if _shadow_tp:
-            tp_pct = float(_shadow_tp)
 
     # Entry-at-decision-time (Task 2026-05-13): preço corrente no
     # instante da decisão ALLOW vira entry_price imediatamente.
@@ -827,6 +867,7 @@ async def safe_create_from_symbol_skip(
     """
     from ..database import CeleryAsyncSessionLocal
 
+    user_config = await _load_ml_shadow_config(user_id, user_config)
     try:
         async with CeleryAsyncSessionLocal() as own_db:
             async with own_db.begin():
@@ -874,25 +915,9 @@ async def safe_bulk_create_from_user_skip(
     """
     from ..database import CeleryAsyncSessionLocal
 
-    # B2: load ml_fee_roundtrip_pct so _finalize_outcome can compute net_return_pct.
-    # Identical pattern to create_shadows_for_new_decisions (lines 1029–1038 + 1059).
-    _skip_ml_fee: Any = None
-    try:
-        from ..models.config_profile import ConfigProfile
-        async with CeleryAsyncSessionLocal() as _skp_db:
-            _skp_res = await _skp_db.execute(
-                select(ConfigProfile).where(
-                    ConfigProfile.user_id == user_id,
-                    ConfigProfile.config_type == "ml",
-                    ConfigProfile.is_active.is_(True),
-                ).limit(1)
-            )
-            _skp_row = _skp_res.scalar_one_or_none()
-            if _skp_row and isinstance(_skp_row.config_json, dict):
-                _skip_ml_fee = _skp_row.config_json.get("ml_fee_roundtrip_pct")
-    except Exception:
-        logger.warning("[shadow] bulk_skip: ml fee load failed user=%s", user_id)
-    user_config = {**user_config, "ml_fee_roundtrip_pct": _skip_ml_fee}
+    # Merge the full ML barrier contract, not only the fee.  This keeps the
+    # canonical L3 writer aligned with L3_REJECTED/L1 capture writers.
+    user_config = await _load_ml_shadow_config(user_id, user_config)
 
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=lookback_minutes)
     created_count = 0
