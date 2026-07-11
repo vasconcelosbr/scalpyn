@@ -86,6 +86,17 @@ def _json_default(obj):
     return str(obj)
 
 
+def _require_positive_int_config(config: Dict[str, Any], key: str) -> int:
+    """Read a required positive integer from config_profiles JSONB."""
+    raw_value = config.get(key)
+    if raw_value is None:
+        raise ValueError(f"missing_{key}: gravar em config_profiles(config_type='ml') antes do treino")
+    value = int(raw_value)
+    if value <= 0:
+        raise ValueError(f"invalid_{key}: expected positive integer, got {raw_value!r}")
+    return value
+
+
 def _apply_feature_contract(
     df,
     lane_contract: Optional[Dict[str, Any]],
@@ -133,6 +144,30 @@ def _apply_feature_contract(
             n_rejected, len(df), lane_name,
         )
     return df[mask], n_rejected
+
+
+def _stable_train_feature_indices(
+    X_train,
+    feature_names: List[str],
+    *,
+    min_coverage: float,
+    excluded: Optional[List[str]] = None,
+) -> List[int]:
+    """Select columns using train data only, preventing schema leakage."""
+    import numpy as np
+
+    excluded_set = set(excluded or [])
+    keep: List[int] = []
+    for index, name in enumerate(feature_names):
+        if name in excluded_set:
+            continue
+        values = np.asarray(X_train[:, index], dtype=float)
+        finite = np.isfinite(values)
+        if float(finite.mean()) < float(min_coverage):
+            continue
+        if finite.any() and float(np.nanstd(values)) > 0.0:
+            keep.append(index)
+    return keep
 
 
 def _is_installed(package: str) -> bool:
@@ -615,16 +650,22 @@ class MLChallengerService:
         backfilled_feature_names: Optional[List[str]] = None,
         backfill_marker_key: Optional[str] = None,
         lane_name: str = "L3_PROFILE",
+        label_objective: str = "fast_tp",
     ):
         """Constrói feature matrix e labels usando o feature_extractor canônico."""
         import numpy as np
-        from app.ml.feature_extractor import build_training_dataframe
+        from app.ml.feature_extractor import (
+            assert_no_operational_feature_leakage,
+            build_training_dataframe,
+        )
 
+        assert_no_operational_feature_leakage(feature_columns)
         df = build_training_dataframe(
             records,
             fee_roundtrip_pct=0.0,
             label_net_of_fees=False,
             win_fast_threshold_s=win_fast_threshold_s,
+            label_objective=label_objective,
             backfilled_feature_names=backfilled_feature_names,
             backfill_marker_key=backfill_marker_key,
         )
@@ -680,6 +721,7 @@ class MLChallengerService:
         feature_ranges: Optional[Dict[str, Any]] = None,
         backfilled_feature_names: Optional[List[str]] = None,
         backfill_marker_key: Optional[str] = None,
+        label_objective: str = "fast_tp",
     ):
         """Constrói dataset L3 para CatBoost com features categóricas adicionais.
 
@@ -689,8 +731,12 @@ class MLChallengerService:
         features para não perturbar o índice do modelo L1.
         """
         import numpy as np
-        from app.ml.feature_extractor import build_training_dataframe
+        from app.ml.feature_extractor import (
+            assert_no_operational_feature_leakage,
+            build_training_dataframe,
+        )
 
+        assert_no_operational_feature_leakage(feature_columns)
         # Pre-filter para alinhar com o que build_training_dataframe vai manter.
         # build_training_dataframe faz `continue` em pnl_pct is None; mantendo
         # a mesma filtragem aqui garantimos que zip(valid, df.iterrows) é válido.
@@ -701,6 +747,7 @@ class MLChallengerService:
             fee_roundtrip_pct=0.0,
             label_net_of_fees=False,
             win_fast_threshold_s=win_fast_threshold_s,
+            label_objective=label_objective,
             backfilled_feature_names=backfilled_feature_names,
             backfill_marker_key=backfill_marker_key,
         )
@@ -1331,8 +1378,15 @@ class MLChallengerService:
         if "ml_win_fast_threshold_seconds" in ml_config:
             win_fast_threshold_s = float(ml_config["ml_win_fast_threshold_seconds"])
         dataset_valid_from = parse_required_ml_dataset_valid_from(ml_config)
+        min_lgbm_retrain_eligible = (
+            _require_positive_int_config(ml_config, "ml_retrain_min_eligible_rows")
+            if enable_lightgbm else None
+        )
         threshold_grid_step = float(ml_config.get("ml_threshold_grid_step", 0.01))
         threshold_min_positives = int(ml_config.get("ml_threshold_min_positives", 10))
+        label_objective = str(ml_config.get("ml_label_objective") or "fast_tp")
+        if label_objective not in {"fast_tp", "positive_net_return"}:
+            raise ValueError(f"unsupported_ml_label_objective:{label_objective}")
         # Embargo window = label horizon + 1h margin. Config key: ml_split_embargo_seconds.
         embargo_seconds = int(ml_config.get("ml_split_embargo_seconds", int(win_fast_threshold_s) + 3600))
         # E7: Per-lane feature contract + range assertions (from config, never hardcoded)
@@ -1373,7 +1427,17 @@ class MLChallengerService:
             logger.info(
                 "[MLChallenger] Lane1/LightGBM: sources=%s records=%d", lgbm_sources, len(lgbm_records),
             )
-            if len(lgbm_records) < MIN_RECORDS:
+            if min_lgbm_retrain_eligible is not None and len(lgbm_records) < min_lgbm_retrain_eligible:
+                results["lightgbm"] = {
+                    "status": "skipped",
+                    "reason": "insufficient_retrain_eligible_rows",
+                    "records": len(lgbm_records),
+                    "min_required": min_lgbm_retrain_eligible,
+                    "sources": lgbm_sources,
+                    "dataset_valid_from": dataset_valid_from.isoformat()
+                    if hasattr(dataset_valid_from, "isoformat") else str(dataset_valid_from),
+                }
+            elif len(lgbm_records) < MIN_RECORDS:
                 results["lightgbm"] = {
                     "status": "skipped",
                     "reason": "insufficient_data",
@@ -1551,6 +1615,7 @@ class MLChallengerService:
                         backfilled_feature_names=backfilled_feature_names,
                         backfill_marker_key=backfill_marker_key,
                         lane_name=cb_lane,
+                        label_objective=label_objective,
                     )
                     if len(y) < MIN_RECORDS:
                         results["catboost"] = {"status": "skipped", "reason": "insufficient_labeled"}
@@ -1568,6 +1633,22 @@ class MLChallengerService:
                         X_te, y_te = _cb_split["X_te"], _cb_split["y_te"]
                         ret_va = _cb_split["meta_va"][0]
                         ret_te = _cb_split["meta_te"][0] if _cb_split["has_test"] else None
+                        min_feature_coverage = float(ml_config.get("ml_feature_min_coverage_pct", 0.30))
+                        l3_exclusions = [str(x) for x in (ml_config.get("ml_l3_feature_exclusions") or [])]
+                        stable_indices = _stable_train_feature_indices(
+                            X_tr, all_cols,
+                            min_coverage=min_feature_coverage,
+                            excluded=l3_exclusions,
+                        )
+                        if not stable_indices:
+                            raise ValueError("no_stable_l3_features_after_train_filter")
+                        all_cols = [all_cols[i] for i in stable_indices]
+                        X_tr = X_tr[:, stable_indices]
+                        X_va = X_va[:, stable_indices]
+                        X_te = X_te[:, stable_indices] if X_te is not None else None
+                        cat_indices = [
+                            stable_indices.index(i) for i in cat_indices if i in stable_indices
+                        ]
                         logger.info(
                             "[MLChallenger] CatBoost split: train=%d val=%d test=%d "
                             "purged=%d embargoed=%d embargo_s=%d",
@@ -1604,7 +1685,8 @@ class MLChallengerService:
                                         "|".join(sorted(str(x) for x in shadow_ids if x)).encode()
                                     ).hexdigest(),
                                     "dataset_policy": cb_dataset_policy,
-                                    "cat_features": ["source_encoded"],
+                                    "cat_features": [all_cols[i] for i in cat_indices],
+                                    "label_objective": label_objective,
                                     **l3_meta,
                                 },
                                 threshold=cb_result["threshold"],

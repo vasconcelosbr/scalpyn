@@ -112,6 +112,25 @@ ML_EXCLUDED_FIELDS: frozenset = frozenset({
     "signal_direction",
 })
 
+FORBIDDEN_OPERATIONAL_PREFIXES: tuple[str, ...] = (
+    "crypto_ev",
+    "post_model_operational",
+)
+
+
+class MLLeakageError(RuntimeError):
+    """Raised when post-model operational fields reach the ML pipeline."""
+
+
+def assert_no_operational_feature_leakage(columns) -> None:
+    leaked = [
+        str(c)
+        for c in columns
+        if str(c).lower().startswith(FORBIDDEN_OPERATIONAL_PREFIXES)
+    ]
+    if leaked:
+        raise MLLeakageError(f"Colunas operacionais proibidas no treino: {sorted(leaked)}")
+
 FEATURE_COLUMNS = BASE_FEATURE_COLUMNS
 
 
@@ -183,6 +202,8 @@ def extract_features(metrics: dict) -> Dict[str, float]:
         # 0.0 é um sinal válido (ex.: taker_ratio=0 = 100% venda).
         # O pipeline de treino deve descartar rows com excesso de nan.
         return {f: _nan for f in FEATURE_COLUMNS}
+
+    assert_no_operational_feature_leakage(metrics.keys())
 
     # ML_EXCLUDED_FIELDS — strip leakage/redundant fields BEFORE qualquer
     # processamento. Defesa em profundidade: mesmo se um desses nomes
@@ -325,6 +346,7 @@ def build_training_dataframe(
     fee_roundtrip_pct: Optional[float] = None,
     label_net_of_fees: bool = False,
     win_fast_threshold_s: int = 1800,
+    label_objective: str = "fast_tp",
     backfilled_feature_names: Optional[List[str]] = None,
     backfill_marker_key: Optional[str] = None,
 ) -> pd.DataFrame:
@@ -372,6 +394,8 @@ def build_training_dataframe(
                 metrics = json.loads(metrics)
             except Exception:
                 metrics = {}
+        if isinstance(metrics, dict):
+            assert_no_operational_feature_leakage(metrics.keys())
 
         if marker_key and backfilled_features and isinstance(metrics, dict) and marker_key in metrics:
             metrics = dict(metrics)
@@ -395,12 +419,21 @@ def build_training_dataframe(
         # post-entry analysis signals and must not define the supervised label.
         holding_s = r.get("holding_seconds")
         holding_ok = holding_s is not None and holding_s <= win_fast_threshold_s
-        features["is_win_fast"] = 1 if (r.get("outcome") == "TP_HIT" and holding_ok) else 0
+        net_return = r.get("net_return_pct")
+        if net_return is None:
+            net_return = pnl_val
+        if label_objective == "positive_net_return":
+            features["is_win_fast"] = 1 if float(net_return) > 0.0 else 0
+        elif label_objective == "fast_tp":
+            features["is_win_fast"] = 1 if (r.get("outcome") == "TP_HIT" and holding_ok) else 0
+        else:
+            raise ValueError(f"unsupported_ml_label_objective:{label_objective}")
 
         # Metadata for time-based split — NOT model features
         features["_created_at"] = r.get("created_at")
         features["_outcome"] = r.get("outcome")
         features["_pnl_pct"] = pnl_val
+        features["_net_return_pct"] = float(net_return)
         features["_holding_seconds"] = r.get("holding_seconds", 0)
         rows.append(features)
 
@@ -431,6 +464,7 @@ def build_training_dataframe(
         f"ML_EXCLUDED_FIELDS detectados no training dataframe: {sorted(_leaked)}. "
         f"Verificar build_training_dataframe e extract_features."
     )
+    assert_no_operational_feature_leakage(df.columns)
 
     if len(df) > 0:
         win_rate = df["is_win_fast"].mean() * 100
