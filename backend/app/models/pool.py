@@ -40,3 +40,20 @@ class PoolCoin(Base):
     added_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     origin = Column(String(20), default='manual')          # "manual" or "discovered"
     discovered_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class PoolAssetExclusion(Base):
+    """Operator-owned denylist for automatic pool discovery.
+
+    Deleting a coin must not be interpreted as permission for a later discovery
+    run to recreate it.  A deliberate manual add clears this exclusion.
+    """
+
+    __tablename__ = "pool_asset_exclusions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    pool_id = Column(UUID(as_uuid=True), ForeignKey("pools.id", ondelete="CASCADE"), nullable=False)
+    symbol = Column(String(20), nullable=False)
+    reason = Column(String(32), nullable=False, default="manual_removal")
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)

@@ -4,8 +4,10 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.services.pool_selection import (
+    apply_pool_asset_exclusions,
     apply_pool_discovery_filters,
     extract_profile_discovery_thresholds,
+    is_auto_discovery_enabled,
 )
 
 
@@ -49,3 +51,17 @@ def test_apply_pool_discovery_filters_enforces_market_cap_before_cap_limit():
     assert result["pre_market_cap_count"] == 3
     assert result["post_market_cap_count"] == 1
     assert result["symbols"] == {"AAA_USDT"}
+
+
+def test_pool_asset_exclusion_survives_a_future_discovery_selection():
+    assert apply_pool_asset_exclusions(
+        {"BTC_USDT", "XAUT_USDT"},
+        {"XAUT_USDT"},
+    ) == {"BTC_USDT"}
+
+
+def test_auto_discovery_is_fail_closed_when_operator_disables_it():
+    assert is_auto_discovery_enabled({"auto_refresh": True}) is True
+    assert is_auto_discovery_enabled({"auto_refresh": False}) is False
+    assert is_auto_discovery_enabled({}) is False
+    assert is_auto_discovery_enabled({"auto_refresh": "true"}) is False

@@ -8,6 +8,8 @@ from sqlalchemy import text
 
 from ..tasks.celery_app import celery_app
 from ..services.pool_selection import (
+    apply_pool_asset_exclusions,
+    is_auto_discovery_enabled,
     apply_pool_discovery_filters,
     load_market_cap_map,
     load_profile_discovery_thresholds,
@@ -98,7 +100,7 @@ def _run_async(coro):
 
 async def _discover_async():
     from ..database import run_db_task
-    from ..models.pool import Pool, PoolCoin
+    from ..models.pool import Pool, PoolAssetExclusion, PoolCoin
     from ..exchange_adapters.gate_adapter import GateAdapter
     from sqlalchemy import select
 
@@ -130,6 +132,9 @@ async def _discover_async():
         ]
 
     pool_data_list = await run_db_task(_load_pools, celery=True)
+    if not pool_data_list:
+        logger.info("Auto-discover assets: no pool with auto_refresh=true; no mutation performed.")
+        return "0 pools | auto_refresh disabled"
 
     adapter = GateAdapter(api_key="", api_secret="")
 
@@ -139,6 +144,15 @@ async def _discover_async():
         try:
             market_type = pd["market_type"]
             overrides = pd["overrides"]
+            # Defense in depth: even if the selection query changes or stale
+            # data reaches this point, the scheduled task must never mutate a
+            # pool whose operator has disabled automatic discovery.
+            if not is_auto_discovery_enabled(overrides):
+                logger.warning(
+                    "[AUTO-DISCOVER-SKIP] pool=%s reason=auto_refresh_disabled",
+                    pd["name"],
+                )
+                continue
             auto_add = overrides.get("auto_add", True)
             auto_remove = overrides.get("auto_remove", False)
             max_assets = int(overrides.get("max_assets", 0))
@@ -274,6 +288,12 @@ async def _discover_async():
                     select(PoolCoin).where(PoolCoin.pool_id == _pd["id"])
                 )
                 existing_coins = coins_result.scalars().all()
+                exclusions_result = await db.execute(
+                    select(PoolAssetExclusion.symbol).where(
+                        PoolAssetExclusion.pool_id == _pd["id"]
+                    )
+                )
+                excluded_symbols = set(exclusions_result.scalars().all())
                 existing_manual = {
                     c.symbol for c in existing_coins if (c.origin or "manual") == "manual"
                 }
@@ -288,7 +308,10 @@ async def _discover_async():
                 removed = 0
 
                 if _auto_add:
-                    to_add = selected_symbols - existing_manual - set(existing_discovered.keys())
+                    to_add = apply_pool_asset_exclusions(
+                        selected_symbols,
+                        excluded_symbols,
+                    ) - existing_manual - set(existing_discovered.keys())
                     for symbol in to_add:
                         db.add(PoolCoin(
                             pool_id=_pd["id"],
@@ -307,13 +330,13 @@ async def _discover_async():
                         removed += 1
                 # run_db_task auto-commits on successful exit
 
-                return added, removed, len(selected_symbols)
+                return added, removed, len(selected_symbols), len(excluded_symbols)
 
-            added, removed, universe_size = await run_db_task(_persist, celery=True)
+            added, removed, universe_size, excluded_count = await run_db_task(_persist, celery=True)
 
             logger.info(
                 f"Pool '{pd['name']}': +{added} -{removed} assets "
-                f"(universe={universe_size})"
+                f"(universe={universe_size}, exclusions={excluded_count}, auto_refresh=true)"
             )
             total_added += added
             total_removed += removed

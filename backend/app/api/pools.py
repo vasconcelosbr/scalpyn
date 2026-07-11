@@ -4,12 +4,12 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import delete, select, func
 from typing import Dict, Any, List, Optional
 from uuid import UUID
 
 from ..database import get_db
-from ..models.pool import Pool, PoolCoin
+from ..models.pool import Pool, PoolAssetExclusion, PoolCoin
 from .config import get_current_user_id
 from ..services.pool_selection import (
     apply_pool_discovery_filters,
@@ -240,6 +240,10 @@ async def add_pool_coin(pool_id: UUID, payload: Dict[str, Any], db: AsyncSession
     if existing_result.scalars().first():
         raise HTTPException(status_code=409, detail="Symbol already in pool")
 
+    await db.execute(delete(PoolAssetExclusion).where(
+        PoolAssetExclusion.pool_id == pool_id,
+        PoolAssetExclusion.symbol == symbol,
+    ))
     coin = PoolCoin(pool_id=pool_id, symbol=symbol, market_type=market_type, is_active=True)
     db.add(coin)
     await db.commit()
@@ -315,6 +319,10 @@ async def bulk_add_pool_coins(
     # Bulk insert all new coins at once
     if new_coins:
         db.add_all(new_coins)
+        await db.execute(delete(PoolAssetExclusion).where(
+            PoolAssetExclusion.pool_id == pool_id,
+            PoolAssetExclusion.symbol.in_(added),
+        ))
 
     # Ensure market_metadata rows exist for newly added symbols
     if added:
@@ -425,8 +433,23 @@ async def remove_pool_coin(pool_id: UUID, symbol: str, db: AsyncSession = Depend
     if not coin:
         raise HTTPException(status_code=404, detail="Symbol not found in pool")
 
+    exclusion = (await db.execute(select(PoolAssetExclusion).where(
+        PoolAssetExclusion.pool_id == pool_id,
+        PoolAssetExclusion.symbol == coin.symbol,
+    ))).scalars().first()
+    if exclusion is None:
+        db.add(PoolAssetExclusion(
+            pool_id=pool_id,
+            symbol=coin.symbol,
+            reason="manual_removal",
+            created_by=user_id,
+        ))
     await db.delete(coin)
     await db.commit()
+    logger.info(
+        "[POOL-ASSET-EXCLUDED] pool=%s symbol=%s source=manual_remove caller=%s",
+        pool_id, coin.symbol, user_id,
+    )
     return {"status": "success", "message": f"{symbol} removed from pool"}
 
 
@@ -657,11 +680,15 @@ async def discover_pool_assets(
         select(PoolCoin).where(PoolCoin.pool_id == pool_id)
     )
     existing_coins = coins_result.scalars().all()
+    exclusions_result = await db.execute(
+        select(PoolAssetExclusion.symbol).where(PoolAssetExclusion.pool_id == pool_id)
+    )
+    excluded_symbols = set(exclusions_result.scalars().all())
     existing_manual = {c.symbol for c in existing_coins if (c.origin or "manual") == "manual"}
     existing_discovered = {c.symbol: c for c in existing_coins if (c.origin or "manual") == "discovered"}
 
     # ── 5. Diff ───────────────────────────────────────────────────────────────
-    to_add = universe_symbols - existing_manual - set(existing_discovered.keys())
+    to_add = universe_symbols - excluded_symbols - existing_manual - set(existing_discovered.keys())
     to_remove = set(existing_discovered.keys()) - universe_symbols  # stale discovered
 
     now = datetime.now(timezone.utc)
@@ -692,6 +719,7 @@ async def discover_pool_assets(
         "added": len(to_add),
         "removed": len(to_remove),
         "kept_manual": len(existing_manual),
+        "excluded": len(excluded_symbols),
         "profile_applied": profile_applied,
         "filters_used": {
             "source": "profile" if profile_applied else "none",
@@ -896,10 +924,14 @@ async def scan_and_populate_pool(
     # Carregar coins existentes
     coins_result = await db.execute(select(PoolCoin).where(PoolCoin.pool_id == pool_id))
     existing_coins = coins_result.scalars().all()
+    exclusions_result = await db.execute(
+        select(PoolAssetExclusion.symbol).where(PoolAssetExclusion.pool_id == pool_id)
+    )
+    excluded_symbols = set(exclusions_result.scalars().all())
     existing_manual = {c.symbol for c in existing_coins if (c.origin or "manual") == "manual"}
     existing_discovered = {c.symbol: c for c in existing_coins if (c.origin or "manual") == "discovered"}
 
-    to_add = universe_symbols - existing_manual - set(existing_discovered.keys())
+    to_add = universe_symbols - excluded_symbols - existing_manual - set(existing_discovered.keys())
     to_remove = set(existing_discovered.keys()) - universe_symbols
 
     now = datetime.now(timezone.utc)
@@ -927,6 +959,7 @@ async def scan_and_populate_pool(
         "added": len(to_add),
         "removed": len(to_remove),
         "kept_manual": len(existing_manual),
+        "excluded": len(excluded_symbols),
         "profile_applied": profile_applied,
         "filters_used": {
             "source": "profile" if profile_applied else "none",

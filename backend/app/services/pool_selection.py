@@ -137,3 +137,20 @@ def apply_pool_discovery_filters(
         "post_market_cap_count": post_market_cap_count,
         "pre_cap_count": pre_cap_count,
     }
+
+
+def apply_pool_asset_exclusions(
+    symbols: set[str],
+    excluded_symbols: set[str],
+) -> set[str]:
+    """Remove operator-excluded assets after market/profile selection.
+
+    The exclusion is intentionally applied after all scoring/filtering so an
+    excluded asset never returns just because it again meets discovery rules.
+    """
+    return set(symbols) - set(excluded_symbols)
+
+
+def is_auto_discovery_enabled(overrides: dict[str, Any] | None) -> bool:
+    """Fail closed: only literal boolean ``true`` authorizes scheduled discovery."""
+    return (overrides or {}).get("auto_refresh") is True
