@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { apiGet } from "@/lib/api";
-import { Brain, CheckCircle, Archive, ChevronDown, ChevronRight } from "lucide-react";
+import { Brain, CheckCircle, Archive, ChevronDown, ChevronRight, ShieldCheck } from "lucide-react";
 
 interface MetricsBlock {
   precision: number | null;
@@ -11,6 +11,17 @@ interface MetricsBlock {
   f1: number | null;
   roc_auc: number | null;
   samples: number | null;
+  weighted_roc_auc?: number | null;
+  weighted_brier?: number | null;
+  effective_snapshots?: number | null;
+}
+
+interface IntelligenceFinding {
+  indicator: string;
+  action: "PRIORITIZE" | "BLOCK_CANDIDATE" | "OBSERVE";
+  bucket: { lower_exclusive: number | null; upper_inclusive: number | null };
+  validation: { lift: number; effective_cases: number };
+  test: { lift: number; effective_cases: number; positive_rate: number; net_return_pct: number };
 }
 
 interface MetricsJson {
@@ -18,12 +29,24 @@ interface MetricsJson {
   target_window_seconds: number | null;
   validation: MetricsBlock | null;
   test: MetricsBlock | null;
+  intelligence_gate?: {
+    status: "APPROVED" | "REJECTED" | "BLOCKED";
+    reasons: string[];
+    execution_authority: false;
+  } | null;
+  promotion_gate?: { status: string; reasons: string[] } | null;
+  indicator_intelligence?: {
+    scope: string;
+    execution_authority: false;
+    findings: IntelligenceFinding[];
+  } | null;
 }
 
 interface MlModel {
   id: string;
   version: number;
-  status: "active" | "retired";
+  status: "active" | "candidate" | "retired";
+  model_lane?: string | null;
   hyperparams: Record<string, unknown> | null;
   train_samples: number | null;
   val_samples: number | null;
@@ -155,9 +178,10 @@ export default function MlModelsPage() {
     apiGet("/api/ml/models")
       .then((data) => {
         setModels(data?.models ?? []);
-        // Auto-expand the active model
-        const active = (data?.models ?? []).find((m: MlModel) => m.status === "active");
-        if (active) setExpanded(active.id);
+        const featured = (data?.models ?? []).find((m: MlModel) =>
+          m.status === "active" || m.metrics_json?.intelligence_gate?.status === "APPROVED"
+        );
+        if (featured) setExpanded(featured.id);
       })
       .catch((e) => setError(e?.message ?? "Erro ao carregar modelos"))
       .finally(() => setLoading(false));
@@ -195,12 +219,18 @@ export default function MlModelsPage() {
       {models.map((m) => {
         const isExpanded = expanded === m.id;
         const isActive = m.status === "active";
+        const isIntelligence = m.model_lane === "L3_INTELLIGENCE";
+        const isIntelligenceApproved =
+          isIntelligence && m.metrics_json?.intelligence_gate?.status === "APPROVED";
+        const actionableFindings = (m.metrics_json?.indicator_intelligence?.findings ?? [])
+          .filter((finding) => finding.action !== "OBSERVE")
+          .slice(0, 8);
 
         return (
           <div
             key={m.id}
             className={`rounded-lg border transition-colors ${
-              isActive
+              isActive || isIntelligenceApproved
                 ? "border-[#34D399]/30 bg-[#060E18]"
                 : "border-[#1A2035] bg-[#060810]"
             }`}
@@ -217,9 +247,17 @@ export default function MlModelsPage() {
 
               <div className="flex items-center gap-2 min-w-[80px]">
                 <span className="text-[13px] font-bold font-mono text-[#E2E8F0]">v{m.version}</span>
-                {isActive ? (
+                {isIntelligenceApproved ? (
+                  <span className="flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-[#34D399]/10 text-[#34D399] border border-[#34D399]/20">
+                    <ShieldCheck size={9} /> INTELLIGENCE APPROVED
+                  </span>
+                ) : isActive ? (
                   <span className="flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-[#34D399]/10 text-[#34D399] border border-[#34D399]/20">
                     <CheckCircle size={9} /> ACTIVE
+                  </span>
+                ) : m.status === "candidate" ? (
+                  <span className="flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-[#F59E0B]/10 text-[#FBBF24] border border-[#F59E0B]/20">
+                    CANDIDATE
                   </span>
                 ) : (
                   <span className="flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-[#1A2035] text-[#4B5563] border border-[#1A2035]">
@@ -252,11 +290,67 @@ export default function MlModelsPage() {
                     <span className="text-[10px] px-2 py-0.5 rounded bg-[#1A2035] border border-[#334155] font-mono text-[#94A3B8]">
                       label: {m.label_version ?? m.metrics_json?.label_version ?? "—"}
                     </span>
+                    {m.model_lane && (
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-[#0C1020] border border-[#334155] font-mono text-[#60A5FA]">
+                        lane: {m.model_lane}
+                      </span>
+                    )}
                     {(m.target_window_seconds ?? m.metrics_json?.target_window_seconds) != null && (
                       <span className="text-[10px] px-2 py-0.5 rounded bg-[#1A2035] border border-[#334155] font-mono text-[#94A3B8]">
                         janela TP: {Math.round(((m.target_window_seconds ?? m.metrics_json?.target_window_seconds) as number) / 60)} min
                       </span>
                     )}
+                  </div>
+                )}
+
+                {isIntelligence && m.metrics_json?.intelligence_gate && (
+                  <div className="rounded-md border border-[#34D399]/20 bg-[#07140F] p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2 text-[#34D399]">
+                        <ShieldCheck size={15} />
+                        <span className="text-[11px] font-semibold uppercase tracking-widest">
+                          Aprovado para inteligência
+                        </span>
+                      </div>
+                      <span className="text-[10px] font-mono text-[#94A3B8]">
+                        execução: bloqueada
+                      </span>
+                    </div>
+                    <p className="mt-2 text-[11px] leading-relaxed text-[#64748B]">
+                      Este modelo explica probabilidade e padrões de indicadores. Ele não autoriza, bloqueia ou executa trades automaticamente.
+                    </p>
+                  </div>
+                )}
+
+                {isIntelligenceApproved && actionableFindings.length > 0 && (
+                  <div>
+                    <div className="text-[10px] uppercase tracking-widest text-[#334155] mb-3">
+                      Inteligência de indicadores — validação e hold-out concordantes
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {actionableFindings.map((finding, index) => (
+                        <div
+                          key={`${finding.indicator}-${index}`}
+                          className="flex items-center justify-between gap-3 rounded-md border border-[#1A2035] bg-[#080E1C] px-3 py-2.5"
+                        >
+                          <div className="min-w-0">
+                            <div className="truncate font-mono text-[11px] text-[#CBD5E1]">
+                              {finding.indicator}
+                            </div>
+                            <div className="mt-0.5 text-[10px] text-[#475569]">
+                              lift test {finding.test.lift >= 0 ? "+" : ""}{fmtPct(finding.test.lift)} · N efetivo {finding.test.effective_cases.toFixed(0)}
+                            </div>
+                          </div>
+                          <span className={`shrink-0 rounded px-2 py-1 text-[9px] font-semibold tracking-wide ${
+                            finding.action === "PRIORITIZE"
+                              ? "bg-[#34D399]/10 text-[#34D399]"
+                              : "bg-[#F87171]/10 text-[#F87171]"
+                          }`}>
+                            {finding.action === "PRIORITIZE" ? "PRIORIZAR SINAL" : "BLOQUEIO CANDIDATO"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
 
