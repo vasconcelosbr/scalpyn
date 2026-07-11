@@ -79,6 +79,17 @@ def _stable_profile_bucket(profile_id: Optional[str]) -> int:
     return int(hashlib.md5(profile_id.encode()).hexdigest()[:8], 16) % 9999
 
 
+def _snapshot_group_key(record: Dict[str, Any]) -> str:
+    """Stable identity for one market observation replicated across profiles."""
+    raw = json.dumps(
+        record.get("features_snapshot") or {},
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
 def _json_default(obj):
     """JSON serializer for types not handled by the standard encoder (e.g. datetime)."""
     if hasattr(obj, "isoformat"):
@@ -470,17 +481,27 @@ def _train_catboost_sync(
     val_returns=None, test_returns=None,
     threshold_grid_step: float = 0.01,
     threshold_min_positives: int = 10,
+    train_weights=None, val_weights=None, test_weights=None,
+    selection_objective: str = "net_ev",
+    fixed_params: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     from catboost import CatBoostClassifier, Pool
     import numpy as np
     import optuna
-    from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, precision_score, recall_score
+    from sklearn.metrics import (
+        average_precision_score,
+        brier_score_loss,
+        f1_score,
+        precision_score,
+        recall_score,
+        roc_auc_score,
+    )
 
     import pandas as pd
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-    def _make_pool(X, y):
+    def _make_pool(X, y, weights=None):
         if cat_feature_indices:
             # CatBoost rejects float numpy arrays with cat_features — use a
             # DataFrame with categorical columns converted to string so CatBoost
@@ -489,12 +510,12 @@ def _train_catboost_sync(
             cat_names = [list(feature_names)[i] for i in cat_feature_indices]
             for name in cat_names:
                 df[name] = df[name].astype(int).astype(str)
-            return Pool(df, label=y, cat_features=cat_names)
-        return Pool(X, label=y, feature_names=list(feature_names))
+            return Pool(df, label=y, weight=weights, cat_features=cat_names)
+        return Pool(X, label=y, weight=weights, feature_names=list(feature_names))
 
-    train_pool = _make_pool(X_train, y_train)
-    val_pool = _make_pool(X_val, y_val)
-    _trial_selection_objective = "net_ev" if val_returns is not None else "roc_auc"
+    train_pool = _make_pool(X_train, y_train, train_weights)
+    val_pool = _make_pool(X_val, y_val, val_weights)
+    _trial_selection_objective = selection_objective
 
     def objective(trial: optuna.Trial) -> float:
         params = {
@@ -513,6 +534,8 @@ def _train_catboost_sync(
         model = CatBoostClassifier(**params)
         model.fit(train_pool, eval_set=val_pool, early_stopping_rounds=20, verbose=False)
         preds = model.predict_proba(val_pool)[:, 1]
+        if selection_objective == "weighted_roc_auc":
+            return float(roc_auc_score(y_val, preds, sample_weight=val_weights))
         try:
             return _validation_selection_score(
                 preds,
@@ -524,11 +547,16 @@ def _train_catboost_sync(
         except ValueError:
             return -float("inf")
 
-    study = optuna.create_study(direction="maximize")
-    study.optimize(objective, n_trials=n_trials, timeout=180, show_progress_bar=False)
+    study = None
+    if fixed_params is None:
+        study = optuna.create_study(direction="maximize")
+        study.optimize(objective, n_trials=n_trials, timeout=180, show_progress_bar=False)
+        selected_params = study.best_params
+    else:
+        selected_params = dict(fixed_params)
 
     final_params = {
-        **study.best_params,
+        **selected_params,
         "verbose": False,
         "eval_metric": "AUC",
         "nan_mode": "Min",
@@ -539,11 +567,14 @@ def _train_catboost_sync(
     final_model.fit(train_pool, eval_set=val_pool, early_stopping_rounds=40, verbose=False)
 
     val_preds = final_model.predict_proba(val_pool)[:, 1]
-    roc_auc = float(roc_auc_score(y_val, val_preds))
-    pr_auc = float(average_precision_score(y_val, val_preds))
-    threshold, threshold_curve = _calibrate_ev_threshold(
-        val_preds, val_returns, threshold_grid_step, threshold_min_positives
-    )
+    roc_auc = float(roc_auc_score(y_val, val_preds, sample_weight=val_weights))
+    pr_auc = float(average_precision_score(y_val, val_preds, sample_weight=val_weights))
+    if selection_objective == "weighted_roc_auc":
+        threshold, threshold_curve = 0.5, []
+    else:
+        threshold, threshold_curve = _calibrate_ev_threshold(
+            val_preds, val_returns, threshold_grid_step, threshold_min_positives
+        )
     binary_preds = (val_preds >= threshold).astype(int)
     f1 = float(f1_score(y_val, binary_preds, zero_division=0))
     prec = float(precision_score(y_val, binary_preds, zero_division=0))
@@ -552,16 +583,21 @@ def _train_catboost_sync(
     fp = int(((binary_preds == 1) & (np.asarray(y_val) == 0)).sum())
     fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
 
+    validation_weighted = {
+        "weighted_roc_auc": roc_auc,
+        "weighted_brier": float(brier_score_loss(y_val, val_preds, sample_weight=val_weights)),
+        "effective_snapshots": float(np.asarray(val_weights).sum()) if val_weights is not None else float(len(y_val)),
+    }
     test_metrics: Dict[str, Any] = {}
     if X_test is not None and y_test is not None and len(y_test) >= 5:
-        test_pool = _make_pool(X_test, y_test)
+        test_pool = _make_pool(X_test, y_test, test_weights)
         t_preds = final_model.predict_proba(test_pool)[:, 1]
         t_bin = (t_preds >= threshold).astype(int)
         t_tn = int(((t_bin == 0) & (np.asarray(y_test) == 0)).sum())
         t_fp = int(((t_bin == 1) & (np.asarray(y_test) == 0)).sum())
         test_metrics = {
-            "roc_auc": float(roc_auc_score(y_test, t_preds)),
-            "pr_auc": float(average_precision_score(y_test, t_preds)),
+            "roc_auc": float(roc_auc_score(y_test, t_preds, sample_weight=test_weights)),
+            "pr_auc": float(average_precision_score(y_test, t_preds, sample_weight=test_weights)),
             "f1": float(f1_score(y_test, t_bin, zero_division=0)),
             "precision": float(precision_score(y_test, t_bin, zero_division=0)),
             "recall": float(recall_score(y_test, t_bin, zero_division=0)),
@@ -569,12 +605,15 @@ def _train_catboost_sync(
             "samples": int(len(y_test)),
             "positive_rate": float(np.asarray(y_test).mean()),
             "net_ev": float(np.nanmean(np.asarray(test_returns)[t_bin == 1])) if test_returns is not None and int(t_bin.sum()) > 0 else None,
+            "weighted_roc_auc": float(roc_auc_score(y_test, t_preds, sample_weight=test_weights)),
+            "weighted_brier": float(brier_score_loss(y_test, t_preds, sample_weight=test_weights)),
+            "effective_snapshots": float(np.asarray(test_weights).sum()) if test_weights is not None else float(len(y_test)),
         }
 
     return {
         "model": final_model,
         "model_type": "catboost",
-        "best_params": study.best_params,
+        "best_params": selected_params,
         "metrics": {
             "roc_auc": roc_auc,
             "pr_auc": pr_auc,
@@ -582,14 +621,16 @@ def _train_catboost_sync(
             "precision": prec,
             "recall": rec,
             "fpr": fpr,
-            "n_trials": n_trials,
+            "n_trials": n_trials if study is not None else 0,
             "trial_selection_objective": _trial_selection_objective,
-            "best_trial_number": study.best_trial.number,
-            "best_trial_value": study.best_trial.value,
+            "best_trial_number": study.best_trial.number if study is not None else None,
+            "best_trial_value": study.best_trial.value if study is not None else roc_auc,
+            "fixed_params": selected_params if study is None else None,
             "val_samples": int(len(y_val)),
             "train_samples": int(len(y_train)),
             "positive_rate": float(y_val.mean()) if hasattr(y_val, "mean") else 0.0,
             "threshold_curve": threshold_curve,
+            **validation_weighted,
         },
         "test_metrics": test_metrics,
         "threshold": threshold,
@@ -888,7 +929,11 @@ class MLChallengerService:
             list(df["_holding_seconds"]) if "_holding_seconds" in df.columns
             else [0.0] * len(df)
         )
-        return X, y, all_feature_names, cat_feature_indices, returns, created_at, ids, holding_seconds
+        snapshot_keys = [_snapshot_group_key(r) for r in valid_records]
+        return (
+            X, y, all_feature_names, cat_feature_indices, returns, created_at, ids,
+            holding_seconds, snapshot_keys,
+        )
 
     @staticmethod
     def _chronological_split_with_embargo(
@@ -1188,6 +1233,9 @@ class MLChallengerService:
                 "f1": f1,
                 "roc_auc": roc_auc,
                 "samples": n_val,
+                "weighted_roc_auc": metrics.get("weighted_roc_auc"),
+                "weighted_brier": metrics.get("weighted_brier"),
+                "effective_snapshots": metrics.get("effective_snapshots"),
             },
             "test": {
                 "precision": (test_metrics or {}).get("precision"),
@@ -1197,9 +1245,14 @@ class MLChallengerService:
                 "roc_auc": (test_metrics or {}).get("roc_auc"),
                 "samples": n_test or None,
                 "net_ev": (test_metrics or {}).get("net_ev"),
+                "weighted_roc_auc": (test_metrics or {}).get("weighted_roc_auc"),
+                "weighted_brier": (test_metrics or {}).get("weighted_brier"),
+                "effective_snapshots": (test_metrics or {}).get("effective_snapshots"),
             } if test_metrics else None,
             "feature_importance": _feature_importance or None,
         }
+        if metrics.get("intelligence_report") is not None:
+            _metrics_json_dict["indicator_intelligence"] = metrics["intelligence_report"]
 
         # Promotion Gate — evaluate eligibility at creation time (audit P0-1 fix).
         # A model is born 'candidate' regardless of gate outcome (no auto-promotion
@@ -1221,8 +1274,23 @@ class MLChallengerService:
             "dataset_query_cutoff": dataset_query_cutoff,
             "dataset_hash": dataset_hash,
         }
-        _gate_result = evaluate_promotion_gate(_gate_input, promotion_config=_ml_config)
-        _metrics_json_dict = merge_promotion_gate_into_metrics_json(_metrics_json_dict, _gate_result)
+        if model_lane == "L3_INTELLIGENCE":
+            from app.ml.intelligence_gate import evaluate_intelligence_gate
+            _intelligence_gate = evaluate_intelligence_gate(_metrics_json_dict, _ml_config)
+            _metrics_json_dict["intelligence_gate"] = _intelligence_gate
+            _gate_result = {
+                "status": "BLOCKED",
+                "evaluated_at": datetime.now(timezone.utc).isoformat(),
+                "reasons": ["advisory_only_no_execution_authority"],
+                "thresholds": {},
+                "metrics": {},
+            }
+            _metrics_json_dict = merge_promotion_gate_into_metrics_json(
+                _metrics_json_dict, _gate_result
+            )
+        else:
+            _gate_result = evaluate_promotion_gate(_gate_input, promotion_config=_ml_config)
+            _metrics_json_dict = merge_promotion_gate_into_metrics_json(_metrics_json_dict, _gate_result)
         _metrics_json = json.dumps(_metrics_json_dict, default=_json_default)
         logger.info(
             "[MLChallenger] PromotionGate model_type=%s lane=%s status=%s reasons=%s",
@@ -1361,7 +1429,7 @@ class MLChallengerService:
         if cb_sources == ["L3_LAB"]:
             return "L3_LAB_PROFILE"
         if cb_sources == ["L3_REJECTED"]:
-            return "L3_REJECTED_PROFILE"
+            return "L3_INTELLIGENCE"
         return "L3_PROFILE"
 
     @staticmethod
@@ -1663,8 +1731,11 @@ class MLChallengerService:
             # model, defeating the purpose of the L3_PROFILE lane.
             cb_lane = self._catboost_lane_for_sources(cb_sources)
             cb_dataset_policy = self._catboost_dataset_policy_for_sources(cb_sources)
+            cb_dataset_valid_from = (
+                dataset_valid_from if cb_lane == "L3_INTELLIGENCE" else l3_dataset_valid_from
+            )
             cb_all_records = await self._load_shadow_data(
-                db, user_id, lookback_days, cb_sources, dataset_valid_from=l3_dataset_valid_from
+                db, user_id, lookback_days, cb_sources, dataset_valid_from=cb_dataset_valid_from
             )
             cb_profile_records = [r for r in cb_all_records if r.get("profile_id")]
             barrier_meta: Dict[str, Any] = {}
@@ -1683,7 +1754,7 @@ class MLChallengerService:
             l3_meta = self._l3_strict_meta(cb_all_records, cb_profile_records, cb_sources)
             l3_meta.update(barrier_meta)
             l3_meta["included_trade_count"] = len(cb_records)
-            l3_meta["dataset_valid_from"] = l3_dataset_valid_from.isoformat()
+            l3_meta["dataset_valid_from"] = cb_dataset_valid_from.isoformat()
             logger.info(
                 "[MLChallenger] Lane2/CatBoost: sources=%s all=%d strict=%d excluded_null=%d "
                 "distinct_profiles=%d unknown_pct=%.1f%%",
@@ -1706,7 +1777,10 @@ class MLChallengerService:
                 }
             elif _is_installed("catboost"):
                 try:
-                    X, y, all_cols, cat_indices, returns, created_at, shadow_ids, holding_seconds = self._build_l3_dataset(
+                    (
+                        X, y, all_cols, cat_indices, returns, created_at, shadow_ids,
+                        holding_seconds, snapshot_keys,
+                    ) = self._build_l3_dataset(
                         cb_records, feature_columns, win_fast_threshold_s,
                         lane_contract=cb_lane_contract, feature_ranges=feature_ranges,
                         backfilled_feature_names=backfilled_feature_names,
@@ -1719,7 +1793,7 @@ class MLChallengerService:
                     else:
                         _cb_split = self._chronological_split_with_embargo(
                             X, y,
-                            metadata=[returns, created_at, shadow_ids],
+                            metadata=[returns, created_at, shadow_ids, snapshot_keys],
                             created_at=created_at,
                             holding_seconds=holding_seconds,
                             val_fraction=VAL_FRACTION,
@@ -1730,6 +1804,13 @@ class MLChallengerService:
                         X_te, y_te = _cb_split["X_te"], _cb_split["y_te"]
                         ret_va = _cb_split["meta_va"][0]
                         ret_te = _cb_split["meta_te"][0] if _cb_split["has_test"] else None
+                        intelligence_lane = cb_lane == "L3_INTELLIGENCE"
+                        train_weights = val_weights = test_weights = None
+                        if intelligence_lane:
+                            from app.ml.indicator_intelligence import inverse_group_frequency_weights
+                            train_weights = inverse_group_frequency_weights(_cb_split["meta_tr"][3])
+                            val_weights = inverse_group_frequency_weights(_cb_split["meta_va"][3])
+                            test_weights = inverse_group_frequency_weights(_cb_split["meta_te"][3])
                         min_feature_coverage = float(ml_config.get("ml_feature_min_coverage_pct", 0.30))
                         l3_exclusions = [str(x) for x in (ml_config.get("ml_l3_feature_exclusions") or [])]
                         stable_indices = _stable_train_feature_indices(
@@ -1766,7 +1847,25 @@ class MLChallengerService:
                                 _train_catboost_sync,
                                 X_tr, y_tr, X_va, y_va, all_cols, n_trials_cb, cat_indices, X_te, y_te,
                                 ret_va, ret_te, threshold_grid_step, threshold_min_positives,
+                                train_weights, val_weights, test_weights,
+                                "weighted_roc_auc" if intelligence_lane else "net_ev",
+                                ml_config.get("ml_intelligence_catboost_params")
+                                if intelligence_lane else None,
                             )
+                            intelligence_report = None
+                            if intelligence_lane:
+                                from app.ml.indicator_intelligence import build_indicator_intelligence_report
+                                intelligence_report = build_indicator_intelligence_report(
+                                    X_tr, y_tr, X_va, y_va, X_te, y_te, all_cols,
+                                    train_weights, val_weights, test_weights,
+                                    ret_va, ret_te,
+                                    min_effective_cases=float(
+                                        ml_config["ml_intelligence_indicator_min_effective_cases"]
+                                    ),
+                                    min_abs_lift=float(
+                                        ml_config["ml_intelligence_indicator_min_abs_lift"]
+                                    ),
+                                )
                             model_id = await self._save_to_db(
                                 db, user_id=user_id,
                                 model_type="catboost",
@@ -1784,6 +1883,7 @@ class MLChallengerService:
                                     "dataset_policy": cb_dataset_policy,
                                     "cat_features": [all_cols[i] for i in cat_indices],
                                     "label_objective": label_objective,
+                                    "intelligence_report": intelligence_report,
                                     **l3_meta,
                                 },
                                 threshold=cb_result["threshold"],
@@ -1805,7 +1905,7 @@ class MLChallengerService:
                                 "metrics": cb_result["metrics"],
                                 "test_metrics": cb_result.get("test_metrics"),
                                 "threshold": cb_result["threshold"],
-                                "cat_features": ["source_encoded"],
+                                "cat_features": [all_cols[i] for i in cat_indices],
                                 "l3_strict_meta": l3_meta,
                             }
                             logger.info(

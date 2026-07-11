@@ -485,6 +485,39 @@ async def list_eligible_models(
     return {"lane": lane, "eligible_models": models, "count": len(models)}
 
 
+@router.get("/models/intelligence/approved")
+async def list_approved_intelligence_models(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """Return advisory models approved for explanations, never for execution."""
+    from sqlalchemy import text as sa_text
+
+    rows = await db.execute(sa_text("""
+        SELECT id, version, model_lane, label_version, metrics_json,
+               decision_threshold, created_at
+        FROM ml_models
+        WHERE model_lane = 'L3_INTELLIGENCE'
+          AND (metrics_json->'intelligence_gate'->>'status') = 'APPROVED'
+          AND (metrics_json->'intelligence_gate'->>'execution_authority') = 'false'
+        ORDER BY created_at DESC
+    """))
+    models = []
+    for row in rows.mappings():
+        metrics = row["metrics_json"] or {}
+        models.append({
+            "id": str(row["id"]),
+            "version": row["version"],
+            "model_lane": row["model_lane"],
+            "label_version": row["label_version"],
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            "intelligence_gate": metrics.get("intelligence_gate"),
+            "indicator_intelligence": metrics.get("indicator_intelligence"),
+            "execution_authority": False,
+        })
+    return {"lane": "L3_INTELLIGENCE", "models": models, "count": len(models)}
+
+
 @router.post("/models/{model_id}/evaluate-promotion-gate")
 async def evaluate_model_promotion_gate(
     model_id: UUID,
