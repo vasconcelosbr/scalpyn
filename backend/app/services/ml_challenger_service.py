@@ -97,6 +97,47 @@ def _require_positive_int_config(config: Dict[str, Any], key: str) -> int:
     return value
 
 
+def _filter_l3_barrier_contract(
+    records: List[Dict[str, Any]],
+    *,
+    expected_mode: str,
+    expected_tp_pct: float,
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Keep rows produced under the active ML economic contract.
+
+    Canonical L3 historically inherited the spot-engine TP while the ML config
+    declared a different shadow_tp_pct. Mixing those policies changes both the
+    target payoff and break-even inside one chronological split.
+    """
+    mode = str(expected_mode).upper()
+    tp = float(expected_tp_pct)
+    kept: List[Dict[str, Any]] = []
+    mismatched_mode = 0
+    mismatched_tp = 0
+    missing_contract = 0
+    for record in records:
+        record_mode = record.get("barrier_mode")
+        record_tp = record.get("tp_pct_applied")
+        if record_mode is None or record_tp is None:
+            missing_contract += 1
+            continue
+        if str(record_mode).upper() != mode:
+            mismatched_mode += 1
+            continue
+        if not math.isclose(float(record_tp), tp, rel_tol=0.0, abs_tol=1e-9):
+            mismatched_tp += 1
+            continue
+        kept.append(record)
+    return kept, {
+        "barrier_contract_expected_mode": mode,
+        "barrier_contract_expected_tp_pct": tp,
+        "barrier_contract_included": len(kept),
+        "barrier_contract_missing": missing_contract,
+        "barrier_contract_mode_mismatch": mismatched_mode,
+        "barrier_contract_tp_mismatch": mismatched_tp,
+    }
+
+
 def _apply_feature_contract(
     df,
     lane_contract: Optional[Dict[str, Any]],
@@ -584,6 +625,10 @@ class MLChallengerService:
                 holding_seconds,
                 outcome,
                 features_snapshot,
+                config_snapshot,
+                barrier_mode,
+                tp_pct_applied,
+                sl_pct_applied,
                 created_at,
                 profile_id::text  AS profile_id
             FROM shadow_trades
@@ -1378,6 +1423,11 @@ class MLChallengerService:
         if "ml_win_fast_threshold_seconds" in ml_config:
             win_fast_threshold_s = float(ml_config["ml_win_fast_threshold_seconds"])
         dataset_valid_from = parse_required_ml_dataset_valid_from(ml_config)
+        l3_dataset_valid_from = dataset_valid_from
+        if ml_config.get("ml_l3_dataset_valid_from") not in (None, ""):
+            l3_dataset_valid_from = parse_required_ml_dataset_valid_from({
+                "ml_dataset_valid_from": ml_config["ml_l3_dataset_valid_from"]
+            })
         min_lgbm_retrain_eligible = (
             _require_positive_int_config(ml_config, "ml_retrain_min_eligible_rows")
             if enable_lightgbm else None
@@ -1586,10 +1636,26 @@ class MLChallengerService:
             cb_lane = self._catboost_lane_for_sources(cb_sources)
             cb_dataset_policy = self._catboost_dataset_policy_for_sources(cb_sources)
             cb_all_records = await self._load_shadow_data(
-                db, user_id, lookback_days, cb_sources, dataset_valid_from=dataset_valid_from
+                db, user_id, lookback_days, cb_sources, dataset_valid_from=l3_dataset_valid_from
             )
-            cb_records = [r for r in cb_all_records if r.get("profile_id")]
-            l3_meta = self._l3_strict_meta(cb_all_records, cb_records, cb_sources)
+            cb_profile_records = [r for r in cb_all_records if r.get("profile_id")]
+            barrier_meta: Dict[str, Any] = {}
+            if cb_sources in (["L3"], ["L3_REJECTED"]):
+                if ml_config.get("shadow_barrier_mode") in (None, ""):
+                    raise ValueError("missing_shadow_barrier_mode_for_l3_dataset_contract")
+                if ml_config.get("shadow_tp_pct") in (None, ""):
+                    raise ValueError("missing_shadow_tp_pct_for_l3_dataset_contract")
+                cb_records, barrier_meta = _filter_l3_barrier_contract(
+                    cb_profile_records,
+                    expected_mode=str(ml_config["shadow_barrier_mode"]),
+                    expected_tp_pct=float(ml_config["shadow_tp_pct"]),
+                )
+            else:
+                cb_records = cb_profile_records
+            l3_meta = self._l3_strict_meta(cb_all_records, cb_profile_records, cb_sources)
+            l3_meta.update(barrier_meta)
+            l3_meta["included_trade_count"] = len(cb_records)
+            l3_meta["dataset_valid_from"] = l3_dataset_valid_from.isoformat()
             logger.info(
                 "[MLChallenger] Lane2/CatBoost: sources=%s all=%d strict=%d excluded_null=%d "
                 "distinct_profiles=%d unknown_pct=%.1f%%",
@@ -1599,9 +1665,12 @@ class MLChallengerService:
                 l3_meta["unknown_profile_pct"],
             )
             if len(cb_records) < MIN_RECORDS:
-                results["catboost"] = {
-                    "status": "skipped",
-                    "reason": "insufficient_data",
+                    results["catboost"] = {
+                        "status": "skipped",
+                        "reason": (
+                            "insufficient_barrier_contract_data"
+                            if barrier_meta else "insufficient_data"
+                        ),
                     "records": len(cb_records),
                     "min_required": MIN_RECORDS,
                     "sources": cb_sources,

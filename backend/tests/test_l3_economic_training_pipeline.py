@@ -1,7 +1,10 @@
 import numpy as np
 
 from backend.app.ml.feature_extractor import build_training_dataframe
-from backend.app.services.ml_challenger_service import _stable_train_feature_indices
+from backend.app.services.ml_challenger_service import (
+    _filter_l3_barrier_contract,
+    _stable_train_feature_indices,
+)
 
 
 def test_positive_net_return_label_aligns_with_promotion_ev():
@@ -44,3 +47,24 @@ def test_stable_feature_filter_uses_train_coverage_and_exclusions():
     )
 
     assert indices == [0]
+
+
+def test_l3_barrier_contract_rejects_mixed_payoff_policies():
+    records = [
+        {"barrier_mode": "ATR_DYNAMIC", "tp_pct_applied": 1.5, "id": "keep"},
+        {"barrier_mode": "FIXED", "tp_pct_applied": 1.5, "id": "mode"},
+        {"barrier_mode": "ATR_DYNAMIC", "tp_pct_applied": 0.6, "id": "tp"},
+        {"barrier_mode": None, "tp_pct_applied": None, "id": "missing"},
+    ]
+
+    kept, meta = _filter_l3_barrier_contract(
+        records,
+        expected_mode="ATR_DYNAMIC",
+        expected_tp_pct=1.5,
+    )
+
+    assert [row["id"] for row in kept] == ["keep"]
+    assert meta["barrier_contract_included"] == 1
+    assert meta["barrier_contract_mode_mismatch"] == 1
+    assert meta["barrier_contract_tp_mismatch"] == 1
+    assert meta["barrier_contract_missing"] == 1
