@@ -288,6 +288,23 @@ def _calibrate_ev_threshold(
     return best_threshold, curve
 
 
+def _validation_selection_score(
+    predictions,
+    labels,
+    returns,
+    grid_step: float,
+    min_positives: int,
+) -> float:
+    """Optuna score aligned with the downstream economic threshold gate."""
+    if returns is not None:
+        _, curve = _calibrate_ev_threshold(
+            predictions, returns, grid_step, min_positives
+        )
+        return max(point["net_ev"] for point in curve)
+    from sklearn.metrics import roc_auc_score
+    return float(roc_auc_score(labels, predictions))
+
+
 # ---------------------------------------------------------------------------
 # Sync training functions (run in thread pool — CPU-bound)
 # ---------------------------------------------------------------------------
@@ -477,6 +494,7 @@ def _train_catboost_sync(
 
     train_pool = _make_pool(X_train, y_train)
     val_pool = _make_pool(X_val, y_val)
+    _trial_selection_objective = "net_ev" if val_returns is not None else "roc_auc"
 
     def objective(trial: optuna.Trial) -> float:
         params = {
@@ -495,7 +513,16 @@ def _train_catboost_sync(
         model = CatBoostClassifier(**params)
         model.fit(train_pool, eval_set=val_pool, early_stopping_rounds=20, verbose=False)
         preds = model.predict_proba(val_pool)[:, 1]
-        return float(roc_auc_score(y_val, preds))
+        try:
+            return _validation_selection_score(
+                preds,
+                y_val,
+                val_returns,
+                threshold_grid_step,
+                threshold_min_positives,
+            )
+        except ValueError:
+            return -float("inf")
 
     study = optuna.create_study(direction="maximize")
     study.optimize(objective, n_trials=n_trials, timeout=180, show_progress_bar=False)
@@ -556,6 +583,7 @@ def _train_catboost_sync(
             "recall": rec,
             "fpr": fpr,
             "n_trials": n_trials,
+            "trial_selection_objective": _trial_selection_objective,
             "best_trial_number": study.best_trial.number,
             "best_trial_value": study.best_trial.value,
             "val_samples": int(len(y_val)),

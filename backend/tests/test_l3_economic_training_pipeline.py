@@ -4,6 +4,7 @@ from backend.app.ml.feature_extractor import build_training_dataframe
 from backend.app.services.ml_challenger_service import (
     _filter_l3_barrier_contract,
     _stable_train_feature_indices,
+    _validation_selection_score,
 )
 
 
@@ -68,3 +69,19 @@ def test_l3_barrier_contract_rejects_mixed_payoff_policies():
     assert meta["barrier_contract_mode_mismatch"] == 1
     assert meta["barrier_contract_tp_mismatch"] == 1
     assert meta["barrier_contract_missing"] == 1
+
+
+def test_catboost_trial_selection_optimizes_validation_net_ev():
+    predictions = np.array([0.9, 0.8, 0.2, 0.1])
+    labels = np.array([1, 0, 1, 0])
+    returns = np.array([1.0, -0.2, 0.1, -1.0])
+
+    score = _validation_selection_score(
+        predictions,
+        labels,
+        returns,
+        grid_step=0.1,
+        min_positives=1,
+    )
+
+    assert score == 1.0
