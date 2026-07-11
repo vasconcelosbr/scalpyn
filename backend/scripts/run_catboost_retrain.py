@@ -34,10 +34,6 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "backend"))
 
-os.environ.setdefault(
-    "DATABASE_URL",
-    "postgresql+asyncpg://postgres:pfVYvunFISWEeWAytUNApAAbxtsNcEHM@zephyr.proxy.rlwy.net:23422/railway",
-)
 os.environ.setdefault("OPTUNA_VERBOSITY", "WARNING")
 
 logging.basicConfig(
@@ -54,14 +50,18 @@ WIN_THRESHOLD_S = 14400.0  # is_tp_4h_v2_sim_outcome
 
 # Treinar sobre L3_LAB (maior volume, 15.7% pos rate) — L3 tem 66% NULL profile_id
 # Para treinar sobre L3 estrito: mudar para ["L3"] (aplica L3_PROFILE_STRICT automaticamente)
-CATBOOST_SOURCES = ["L3_LAB"]
+CATBOOST_SOURCES = [s for s in os.getenv("CATBOOST_SOURCES", "L3").split(",") if s]
 
 
 async def main():
     from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
     from sqlalchemy.orm import sessionmaker
 
-    db_url = os.environ["DATABASE_URL"]
+    db_url = os.getenv("DATABASE_URL") or os.getenv("DATABASE_PUBLIC_URL")
+    if not db_url:
+        raise RuntimeError("missing_DATABASE_URL")
+    if db_url.startswith("postgresql://"):
+        db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
     engine = create_async_engine(db_url, pool_pre_ping=True)
     AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
