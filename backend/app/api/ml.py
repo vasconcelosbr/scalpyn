@@ -497,7 +497,7 @@ async def list_approved_intelligence_models(
         SELECT id, version, model_lane, label_version, metrics_json,
                decision_threshold, created_at
         FROM ml_models
-        WHERE model_lane = 'L3_INTELLIGENCE'
+        WHERE model_lane IN ('L3_INTELLIGENCE', 'L3_APPROVED_INTELLIGENCE')
           AND (metrics_json->'intelligence_gate'->>'status') = 'APPROVED'
           AND (metrics_json->'intelligence_gate'->>'execution_authority') = 'false'
         ORDER BY created_at DESC

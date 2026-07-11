@@ -219,7 +219,10 @@ export default function MlModelsPage() {
       {models.map((m) => {
         const isExpanded = expanded === m.id;
         const isActive = m.status === "active";
-        const isIntelligence = m.model_lane === "L3_INTELLIGENCE";
+        const isIntelligence = [
+          "L3_INTELLIGENCE",
+          "L3_APPROVED_INTELLIGENCE",
+        ].includes(m.model_lane ?? "");
         const isIntelligenceApproved =
           isIntelligence && m.metrics_json?.intelligence_gate?.status === "APPROVED";
         const actionableFindings = (m.metrics_json?.indicator_intelligence?.findings ?? [])

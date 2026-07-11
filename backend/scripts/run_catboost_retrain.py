@@ -51,6 +51,9 @@ WIN_THRESHOLD_S = 14400.0  # is_tp_4h_v2_sim_outcome
 # Treinar sobre L3_LAB (maior volume, 15.7% pos rate) — L3 tem 66% NULL profile_id
 # Para treinar sobre L3 estrito: mudar para ["L3"] (aplica L3_PROFILE_STRICT automaticamente)
 CATBOOST_SOURCES = [s for s in os.getenv("CATBOOST_SOURCES", "L3").split(",") if s]
+ADVISORY_INTELLIGENCE = os.getenv("ADVISORY_INTELLIGENCE", "false").strip().lower() in {
+    "1", "true", "yes", "on",
+}
 
 
 async def main():
@@ -66,8 +69,10 @@ async def main():
     AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     logger.info("DB: %s", db_url.split("@")[-1])
-    logger.info("DRY_RUN=%s  USER_ID=%s  WIN_THRESHOLD_S=%s  SOURCES=%s",
-                DRY_RUN, USER_ID, WIN_THRESHOLD_S, CATBOOST_SOURCES)
+    logger.info(
+        "DRY_RUN=%s  USER_ID=%s  WIN_THRESHOLD_S=%s  SOURCES=%s  ADVISORY_INTELLIGENCE=%s",
+        DRY_RUN, USER_ID, WIN_THRESHOLD_S, CATBOOST_SOURCES, ADVISORY_INTELLIGENCE,
+    )
 
     async with AsyncSessionLocal() as db:
         from backend.app.services.ml_challenger_service import MLChallengerService
@@ -96,6 +101,7 @@ async def main():
             enable_catboost=True,
             catboost_source_filter=CATBOOST_SOURCES,
             allow_mixed_source=False,
+            advisory_intelligence=ADVISORY_INTELLIGENCE,
             win_fast_threshold_s=WIN_THRESHOLD_S,
             lookback_days=90,
         )

@@ -90,6 +90,22 @@ def _snapshot_group_key(record: Dict[str, Any]) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+_BARRIER_MODE_ENCODING = {"FIXED": 0.0, "ATR_DYNAMIC": 1.0}
+
+
+def _economic_contract_features(
+    record: Dict[str, Any],
+    fee_roundtrip_pct: float,
+) -> tuple[float, float, float, float, float]:
+    """Point-in-time exit contract features for advisory L3 analysis."""
+    tp = float(record.get("tp_pct_applied") or 0.0)
+    sl = float(record.get("sl_pct_applied") or 0.0)
+    reward_risk = tp / sl if sl > 0 else float("nan")
+    break_even = (sl + fee_roundtrip_pct) / (tp + sl) if tp + sl > 0 else float("nan")
+    barrier = _BARRIER_MODE_ENCODING.get(str(record.get("barrier_mode") or "").upper(), 2.0)
+    return tp, sl, reward_risk, break_even, barrier
+
+
 def _json_default(obj):
     """JSON serializer for types not handled by the standard encoder (e.g. datetime)."""
     if hasattr(obj, "isoformat"):
@@ -836,6 +852,7 @@ class MLChallengerService:
         backfilled_feature_names: Optional[List[str]] = None,
         backfill_marker_key: Optional[str] = None,
         label_objective: str = "fast_tp",
+        fee_roundtrip_pct: float = 0.0,
     ):
         """Constrói dataset L3 para CatBoost com features categóricas adicionais.
 
@@ -907,9 +924,25 @@ class MLChallengerService:
             dtype=float,
         )
 
-        # Stack: base features + source_encoded + profile_id_encoded
-        X = np.column_stack([X_base, source_enc, profile_enc])
+        # Stack: base features + source/profile context.  The approved advisory
+        # lane also receives the immutable exit contract so historical FIXED
+        # and current ATR_DYNAMIC outcomes are not treated as the same target.
+        extra_columns = [source_enc, profile_enc]
         all_feature_names = available + ["source_encoded", "profile_id_encoded"]
+        if lane_name == "L3_APPROVED_INTELLIGENCE":
+            contract = np.asarray([
+                _economic_contract_features(r, fee_roundtrip_pct)
+                for r in valid_records
+            ], dtype=float)
+            extra_columns.extend(contract[:, index] for index in range(contract.shape[1]))
+            all_feature_names.extend([
+                "tp_pct_applied",
+                "sl_pct_applied",
+                "reward_risk_ratio",
+                "break_even_probability",
+                "barrier_mode_encoded",
+            ])
+        X = np.column_stack([X_base, *extra_columns])
 
         # Índices das colunas categóricas — usados por Pool(cat_features=...) no CatBoost.
         # Q3 (council 2026-06-29): profile_id_encoded removido de cat_features — permanece
@@ -1274,9 +1307,19 @@ class MLChallengerService:
             "dataset_query_cutoff": dataset_query_cutoff,
             "dataset_hash": dataset_hash,
         }
-        if model_lane == "L3_INTELLIGENCE":
-            from app.ml.intelligence_gate import evaluate_intelligence_gate
-            _intelligence_gate = evaluate_intelligence_gate(_metrics_json_dict, _ml_config)
+        if model_lane in {"L3_INTELLIGENCE", "L3_APPROVED_INTELLIGENCE"}:
+            from app.ml.intelligence_gate import (
+                evaluate_indicator_intelligence_gate,
+                evaluate_intelligence_gate,
+            )
+            if model_lane == "L3_APPROVED_INTELLIGENCE":
+                _intelligence_gate = evaluate_indicator_intelligence_gate(
+                    _metrics_json_dict, _ml_config
+                )
+            else:
+                _intelligence_gate = evaluate_intelligence_gate(
+                    _metrics_json_dict, _ml_config
+                )
             _metrics_json_dict["intelligence_gate"] = _intelligence_gate
             _gate_result = {
                 "status": "BLOCKED",
@@ -1422,10 +1465,13 @@ class MLChallengerService:
         return None
 
     @staticmethod
-    def _catboost_lane_for_sources(cb_sources: List[str]) -> str:
+    def _catboost_lane_for_sources(
+        cb_sources: List[str],
+        advisory_intelligence: bool = False,
+    ) -> str:
         """Return the persisted model_lane for a CatBoost source policy."""
         if cb_sources == ["L3"]:
-            return "L3_PROFILE"
+            return "L3_APPROVED_INTELLIGENCE" if advisory_intelligence else "L3_PROFILE"
         if cb_sources == ["L3_LAB"]:
             return "L3_LAB_PROFILE"
         if cb_sources == ["L3_REJECTED"]:
@@ -1433,10 +1479,13 @@ class MLChallengerService:
         return "L3_PROFILE"
 
     @staticmethod
-    def _catboost_dataset_policy_for_sources(cb_sources: List[str]) -> str:
+    def _catboost_dataset_policy_for_sources(
+        cb_sources: List[str],
+        advisory_intelligence: bool = False,
+    ) -> str:
         """Return the governance dataset_policy label for a CatBoost source policy."""
         if cb_sources == ["L3"]:
-            return "L3_ONLY"
+            return "L3_APPROVED_INTELLIGENCE" if advisory_intelligence else "L3_ONLY"
         if cb_sources == ["L3_LAB"]:
             return "L3_LAB_ONLY"
         if cb_sources == ["L3_REJECTED"]:
@@ -1458,6 +1507,7 @@ class MLChallengerService:
         catboost_source_filter: Optional[List[str]] = None,
         win_fast_threshold_s: float = 1800.0,
         allow_mixed_source: bool = False,
+        advisory_intelligence: bool = False,
     ) -> Dict[str, Any]:
         """
         Treina challengers habilitados e registra no banco.
@@ -1729,17 +1779,26 @@ class MLChallengerService:
             # L3_PROFILE_STRICT policy: load all records first for metadata, then filter.
             # L3 has 66%+ NULL profile_id — training without filter produces a "global/unknown"
             # model, defeating the purpose of the L3_PROFILE lane.
-            cb_lane = self._catboost_lane_for_sources(cb_sources)
-            cb_dataset_policy = self._catboost_dataset_policy_for_sources(cb_sources)
-            cb_dataset_valid_from = (
-                dataset_valid_from if cb_lane == "L3_INTELLIGENCE" else l3_dataset_valid_from
+            cb_lane = self._catboost_lane_for_sources(
+                cb_sources, advisory_intelligence=advisory_intelligence
             )
+            cb_dataset_policy = self._catboost_dataset_policy_for_sources(
+                cb_sources, advisory_intelligence=advisory_intelligence
+            )
+            if cb_lane == "L3_APPROVED_INTELLIGENCE":
+                cb_dataset_valid_from = parse_required_ml_dataset_valid_from({
+                    "ml_dataset_valid_from": ml_config["ml_l3_intelligence_valid_from"]
+                })
+            elif cb_lane == "L3_INTELLIGENCE":
+                cb_dataset_valid_from = dataset_valid_from
+            else:
+                cb_dataset_valid_from = l3_dataset_valid_from
             cb_all_records = await self._load_shadow_data(
                 db, user_id, lookback_days, cb_sources, dataset_valid_from=cb_dataset_valid_from
             )
             cb_profile_records = [r for r in cb_all_records if r.get("profile_id")]
             barrier_meta: Dict[str, Any] = {}
-            if cb_sources in (["L3"], ["L3_REJECTED"]):
+            if cb_sources in (["L3"], ["L3_REJECTED"]) and cb_lane != "L3_APPROVED_INTELLIGENCE":
                 if ml_config.get("shadow_barrier_mode") in (None, ""):
                     raise ValueError("missing_shadow_barrier_mode_for_l3_dataset_contract")
                 if ml_config.get("shadow_tp_pct") in (None, ""):
@@ -1753,6 +1812,7 @@ class MLChallengerService:
                 cb_records = cb_profile_records
             l3_meta = self._l3_strict_meta(cb_all_records, cb_profile_records, cb_sources)
             l3_meta.update(barrier_meta)
+            l3_meta["dataset_policy"] = cb_dataset_policy
             l3_meta["included_trade_count"] = len(cb_records)
             l3_meta["dataset_valid_from"] = cb_dataset_valid_from.isoformat()
             logger.info(
@@ -1787,6 +1847,7 @@ class MLChallengerService:
                         backfill_marker_key=backfill_marker_key,
                         lane_name=cb_lane,
                         label_objective=label_objective,
+                        fee_roundtrip_pct=float(ml_config["ml_fee_roundtrip_pct"]),
                     )
                     if len(y) < MIN_RECORDS:
                         results["catboost"] = {"status": "skipped", "reason": "insufficient_labeled"}
@@ -1804,7 +1865,9 @@ class MLChallengerService:
                         X_te, y_te = _cb_split["X_te"], _cb_split["y_te"]
                         ret_va = _cb_split["meta_va"][0]
                         ret_te = _cb_split["meta_te"][0] if _cb_split["has_test"] else None
-                        intelligence_lane = cb_lane == "L3_INTELLIGENCE"
+                        intelligence_lane = cb_lane in {
+                            "L3_INTELLIGENCE", "L3_APPROVED_INTELLIGENCE"
+                        }
                         train_weights = val_weights = test_weights = None
                         if intelligence_lane:
                             from app.ml.indicator_intelligence import inverse_group_frequency_weights
@@ -1865,6 +1928,7 @@ class MLChallengerService:
                                     min_abs_lift=float(
                                         ml_config["ml_intelligence_indicator_min_abs_lift"]
                                     ),
+                                    label=label_objective,
                                 )
                             model_id = await self._save_to_db(
                                 db, user_id=user_id,

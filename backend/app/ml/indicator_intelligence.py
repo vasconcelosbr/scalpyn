@@ -35,6 +35,7 @@ def build_indicator_intelligence_report(
     *,
     min_effective_cases: float,
     min_abs_lift: float,
+    label: str = "positive_net_return",
 ) -> dict[str, Any]:
     """Find stable feature buckets using train-only cut points and two holdouts."""
     X_train = np.asarray(X_train, dtype=float)
@@ -107,7 +108,7 @@ def build_indicator_intelligence_report(
     findings.sort(key=lambda item: abs(item["test"]["lift"]), reverse=True)
     return {
         "scope": "global_market_snapshot",
-        "label": "positive_net_return",
+        "label": label,
         "execution_authority": False,
         "baselines": baselines,
         "min_effective_cases": float(min_effective_cases),
