@@ -12,6 +12,14 @@ CAPTURE_CONTRACT = "point-in-time-v1"
 EXTRACTOR_VERSION = "feature-engine-v2"
 SCHEMA_VERSION = "entry_features_v2"
 CANARY_LIMIT = 50
+ALERT_RULES = {
+    "capture_rate_zero": ("total_native", "eq", 0),
+    "validity_rate_below_99_5": ("validity_rate", "lt", 0.995),
+    "hash_mismatch_gt_0": ("hash_mismatch", "gt", 0),
+    "lineage_incomplete_gt_0": ("lineage_incomplete", "gt", 0),
+    "future_timestamp_gt_0": ("future_timestamp", "gt", 0),
+    "legacy_row_in_official_dataset_gt_0": ("legacy_rows_in_official_dataset", "gt", 0),
+}
 
 LINEAGE_REQUIREMENTS = {
     "L1_SPECTRUM": {"profile_id": "OPTIONAL", "ranking_id": "OPTIONAL", "decision_id": "NOT_APPLICABLE"},

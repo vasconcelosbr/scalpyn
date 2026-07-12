@@ -4,7 +4,7 @@ import pytest
 
 from app.ml.feature_contract_v2 import snapshot_hash
 from app.ml.native_capture_governance import (
-    LANE_CONTRACT, approval_guard_reason, lineage_errors, official_row_errors,
+    ALERT_RULES, LANE_CONTRACT, approval_guard_reason, lineage_errors, official_row_errors,
 )
 
 def valid_row():
@@ -26,6 +26,7 @@ def test_lineage_and_lane_contracts_are_source_aware():
     assert lineage_errors({"source":"L3_LAB"}) == ["missing_profile_id"]
     assert LANE_CONTRACT["XGBOOST"]["sources"] == {"L1_SPECTRUM"}
     assert "L1_SPECTRUM" not in LANE_CONTRACT["LIGHTGBM"]["sources"]
+    assert ALERT_RULES["hash_mismatch_gt_0"] == ("hash_mismatch", "gt", 0)
 
 @pytest.mark.parametrize("metrics,reason", [({"unproven_temporality_rows":1},"UNPROVEN_TEMPORALITY_PRESENT"),({"hash_mismatch":1},"SNAPSHOT_HASH_MISMATCH"),({"proven_rows":4},"INSUFFICIENT_PROVEN_TEMPORAL_DATA")])
 def test_registry_approval_is_fail_closed(metrics, reason):
