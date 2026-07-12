@@ -1,6 +1,6 @@
 # T2 — Gate de decisão do contrato heterogêneo APPROVED
 
-Status: AGUARDANDO DECISÃO
+Status: CONCLUÍDA NO CÓDIGO — opção C aprovada; ativação aguarda configuração/deploy.
 
 Cutoff herdado de T0A: `2026-07-12T04:26:11.753960Z` [query]. Nenhum filtro de contrato foi alterado.
 
@@ -51,6 +51,25 @@ Manter contratos históricos, incluir as cinco features econômicas nas lanes AP
 
 Aplicar B agora e migrar para A quando o volume ATR_DYNAMIC homogêneo atingir o gate configurado. É a recomendação padrão do prompt e preserva informação enquanto a nova política acumula evidência.
 
+## Decisão e implementação
+
+O usuário escolheu C.
+
+- A lane APPROVED mantém todos os contratos enquanto `homogeneous_contract_rows < ml_l3_atr_dynamic_only_min_rows`.
+- Ao atingir o gate configurado, a mesma política migra para o contrato ativo `shadow_barrier_mode + shadow_tp_pct`.
+- As cinco features `tp_pct_applied`, `sl_pct_applied`, `reward_risk_ratio`, `break_even_probability` e `barrier_mode_encoded` agora entram em todas as lanes CatBoost, inclusive REJECTED.
+- Cada split recebe pesos inversos por `(barrier_mode, tp_pct_applied)`; nas lanes de inteligência, esses pesos são combinados com o peso por evento e reescalados para preservar o `effective_n` por evento.
+- `contract_distribution_by_split` é persistida nos metadados do modelo.
+- Ausência de `ml_l3_atr_dynamic_only_min_rows` falha fechado; nenhum valor foi hardcoded.
+
+## Critério de aceite
+
+- Features econômicas em APPROVED e REJECTED: ATENDIDO no builder compartilhado.
+- Balanceamento por contrato: ATENDIDO por pesos inversos dentro de cada split.
+- Distribuição por split persistida: ATENDIDO em `contract_distribution_by_split` quando o treino for executado.
+- Migração ATR_DYNAMIC condicionada a N: ATENDIDO por gate configurável.
+- Evidência runtime de treino: AGUARDANDO configuração/deploy; nenhum retreino é permitido antes de fechar P0.
+
 ## Ledger de Evidências
 
 | NÚMERO REPORTADO | ORIGEM | VALOR LITERAL DA FONTE |
@@ -61,4 +80,3 @@ Aplicar B agora e migrar para A quando o volume ATR_DYNAMIC homogêneo atingir o
 | déficit=2.519 | [calc] | `3000 - 481` |
 | ETA rápida=5,8176 dias | [calc] | `2519 / 433` |
 | ETA conservadora=10,4740 dias | [calc] | `2519 / 240.5` |
-

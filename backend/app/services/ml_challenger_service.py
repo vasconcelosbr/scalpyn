@@ -128,6 +128,36 @@ def _economic_contract_features(
     return tp, sl, reward_risk, break_even, barrier
 
 
+def _barrier_contract_key(record: Dict[str, Any]) -> str:
+    return (
+        f"{str(record.get('barrier_mode') or '<NULL>').upper()}|"
+        f"{record.get('tp_pct_applied') if record.get('tp_pct_applied') is not None else '<NULL>'}"
+    )
+
+
+def _hybrid_approved_contract_policy(
+    records: List[Dict[str, Any]],
+    *,
+    expected_mode: str,
+    expected_tp_pct: float,
+    atr_dynamic_only_min_rows: int,
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    if atr_dynamic_only_min_rows <= 0:
+        raise ValueError("invalid_ml_l3_atr_dynamic_only_min_rows")
+    homogeneous, filter_meta = _filter_l3_barrier_contract(
+        records,
+        expected_mode=expected_mode,
+        expected_tp_pct=expected_tp_pct,
+    )
+    migrate = len(homogeneous) >= atr_dynamic_only_min_rows
+    return (homogeneous if migrate else records), {
+        **filter_meta,
+        "contract_strategy": "ATR_DYNAMIC_ONLY" if migrate else "CONTRACT_AWARE_HYBRID",
+        "homogeneous_contract_rows": len(homogeneous),
+        "atr_dynamic_only_min_rows": atr_dynamic_only_min_rows,
+    }
+
+
 def _json_default(obj):
     """JSON serializer for types not handled by the standard encoder (e.g. datetime)."""
     if hasattr(obj, "isoformat"):
@@ -985,24 +1015,22 @@ class MLChallengerService:
             dtype=float,
         )
 
-        # Stack: base features + source/profile context.  The approved advisory
-        # lane also receives the immutable exit contract so historical FIXED
-        # and current ATR_DYNAMIC outcomes are not treated as the same target.
+        # Stack: base features + source/profile context + immutable exit contract.
+        # Every CatBoost lane receives the same economic contract vocabulary.
         extra_columns = [source_enc, profile_enc]
         all_feature_names = available + ["source_encoded", "profile_id_encoded"]
-        if lane_name in {"L3_APPROVED_INTELLIGENCE", "L3_CONTEXTUAL_INTELLIGENCE"}:
-            contract = np.asarray([
-                _economic_contract_features(r, fee_roundtrip_pct)
-                for r in valid_records
-            ], dtype=float)
-            extra_columns.extend(contract[:, index] for index in range(contract.shape[1]))
-            all_feature_names.extend([
-                "tp_pct_applied",
-                "sl_pct_applied",
-                "reward_risk_ratio",
-                "break_even_probability",
-                "barrier_mode_encoded",
-            ])
+        contract = np.asarray([
+            _economic_contract_features(r, fee_roundtrip_pct)
+            for r in valid_records
+        ], dtype=float)
+        extra_columns.extend(contract[:, index] for index in range(contract.shape[1]))
+        all_feature_names.extend([
+            "tp_pct_applied",
+            "sl_pct_applied",
+            "reward_risk_ratio",
+            "break_even_probability",
+            "barrier_mode_encoded",
+        ])
         X = np.column_stack([X_base, *extra_columns])
 
         # Índices das colunas categóricas — usados por Pool(cat_features=...) no CatBoost.
@@ -1024,9 +1052,10 @@ class MLChallengerService:
             else [0.0] * len(df)
         )
         snapshot_keys = [_snapshot_group_key(r) for r in valid_records]
+        contract_keys = [_barrier_contract_key(r) for r in valid_records]
         return (
             X, y, all_feature_names, cat_feature_indices, returns, created_at, ids,
-            holding_seconds, snapshot_keys,
+            holding_seconds, snapshot_keys, contract_keys,
         )
 
     @staticmethod
@@ -1957,7 +1986,22 @@ class MLChallengerService:
             )
             cb_profile_records = [r for r in cb_all_records if r.get("profile_id")]
             barrier_meta: Dict[str, Any] = {}
-            if cb_sources in (["L3"], ["L3_REJECTED"]) and cb_lane != "L3_APPROVED_INTELLIGENCE":
+            if cb_lane == "L3_APPROVED_INTELLIGENCE":
+                if ml_config.get("shadow_barrier_mode") in (None, ""):
+                    raise ValueError("missing_shadow_barrier_mode_for_l3_dataset_contract")
+                if ml_config.get("shadow_tp_pct") in (None, ""):
+                    raise ValueError("missing_shadow_tp_pct_for_l3_dataset_contract")
+                if ml_config.get("ml_l3_atr_dynamic_only_min_rows") in (None, ""):
+                    raise ValueError("missing_ml_l3_atr_dynamic_only_min_rows")
+                cb_records, barrier_meta = _hybrid_approved_contract_policy(
+                    cb_profile_records,
+                    expected_mode=str(ml_config["shadow_barrier_mode"]),
+                    expected_tp_pct=float(ml_config["shadow_tp_pct"]),
+                    atr_dynamic_only_min_rows=int(
+                        ml_config["ml_l3_atr_dynamic_only_min_rows"]
+                    ),
+                )
+            elif cb_sources in (["L3"], ["L3_REJECTED"]):
                 if ml_config.get("shadow_barrier_mode") in (None, ""):
                     raise ValueError("missing_shadow_barrier_mode_for_l3_dataset_contract")
                 if ml_config.get("shadow_tp_pct") in (None, ""):
@@ -2018,7 +2062,7 @@ class MLChallengerService:
                 try:
                     (
                         X, y, all_cols, cat_indices, returns, created_at, shadow_ids,
-                        holding_seconds, snapshot_keys,
+                        holding_seconds, snapshot_keys, contract_keys,
                     ) = self._build_l3_dataset(
                         cb_records, feature_columns, win_fast_threshold_s,
                         lane_contract=cb_lane_contract, feature_ranges=feature_ranges,
@@ -2033,7 +2077,7 @@ class MLChallengerService:
                     else:
                         _cb_split = self._chronological_split_with_embargo(
                             X, y,
-                            metadata=[returns, created_at, shadow_ids, snapshot_keys],
+                            metadata=[returns, created_at, shadow_ids, snapshot_keys, contract_keys],
                             created_at=created_at,
                             holding_seconds=holding_seconds,
                             val_fraction=VAL_FRACTION,
@@ -2050,12 +2094,41 @@ class MLChallengerService:
                             "L3_APPROVED_INTELLIGENCE",
                             "L3_CONTEXTUAL_INTELLIGENCE",
                         }
-                        train_weights = val_weights = test_weights = None
+                        from app.ml.indicator_intelligence import inverse_group_frequency_weights
+                        contract_train_weights = inverse_group_frequency_weights(_cb_split["meta_tr"][4])
+                        contract_val_weights = inverse_group_frequency_weights(_cb_split["meta_va"][4])
+                        contract_test_weights = inverse_group_frequency_weights(_cb_split["meta_te"][4])
+                        def _scale_weights(weights, target_sum):
+                            current = float(weights.sum())
+                            return weights * (float(target_sum) / current) if current > 0 else weights
+                        train_weights = _scale_weights(contract_train_weights, len(contract_train_weights))
+                        val_weights = _scale_weights(contract_val_weights, len(contract_val_weights))
+                        test_weights = _scale_weights(contract_test_weights, len(contract_test_weights))
                         if intelligence_lane:
-                            from app.ml.indicator_intelligence import inverse_group_frequency_weights
-                            train_weights = inverse_group_frequency_weights(_cb_split["meta_tr"][3])
-                            val_weights = inverse_group_frequency_weights(_cb_split["meta_va"][3])
-                            test_weights = inverse_group_frequency_weights(_cb_split["meta_te"][3])
+                            event_train_weights = inverse_group_frequency_weights(_cb_split["meta_tr"][3])
+                            event_val_weights = inverse_group_frequency_weights(_cb_split["meta_va"][3])
+                            event_test_weights = inverse_group_frequency_weights(_cb_split["meta_te"][3])
+                            train_weights = _scale_weights(
+                                event_train_weights * contract_train_weights,
+                                event_train_weights.sum(),
+                            )
+                            val_weights = _scale_weights(
+                                event_val_weights * contract_val_weights,
+                                event_val_weights.sum(),
+                            )
+                            test_weights = _scale_weights(
+                                event_test_weights * contract_test_weights,
+                                event_test_weights.sum(),
+                            )
+                        def _contract_distribution(keys):
+                            return {
+                                key: keys.count(key) for key in sorted(set(keys))
+                            }
+                        l3_meta["contract_distribution_by_split"] = {
+                            "train": _contract_distribution(_cb_split["meta_tr"][4]),
+                            "validation": _contract_distribution(_cb_split["meta_va"][4]),
+                            "test": _contract_distribution(_cb_split["meta_te"][4]),
+                        }
                         min_feature_coverage = float(ml_config.get("ml_feature_min_coverage_pct", 0.30))
                         l3_exclusions = [str(x) for x in (ml_config.get("ml_l3_feature_exclusions") or [])]
                         stable_indices = _stable_train_feature_indices(
