@@ -101,7 +101,7 @@ def _snapshot_group_key(record: Dict[str, Any]) -> str:
     if event_id:
         return f"event:{event_id}:{symbol}:{timeframe}:{exchange}"
 
-    captured_at = record.get("features_captured_at") or record.get("created_at")
+    captured_at = record.get("features_captured_at")
     if captured_at:
         if isinstance(captured_at, str):
             captured_at = datetime.fromisoformat(captured_at.replace("Z", "+00:00"))

@@ -30,22 +30,28 @@ def test_event_id_includes_market_context():
     assert _snapshot_group_key(base) != _snapshot_group_key({**base, "symbol": "ETH_USDT"})
 
 
-def test_historical_fallback_separates_distinct_minutes():
+def test_created_at_is_never_used_as_capture_fallback():
     first = _record(snapshot_id=None, event_id=None)
     later = _record(
         snapshot_id=None,
         event_id=None,
         created_at=datetime(2026, 7, 12, 4, 1, 10, tzinfo=timezone.utc),
     )
-    assert _snapshot_group_key(first) != _snapshot_group_key(later)
+    assert _snapshot_group_key(first) == _snapshot_group_key(later)
+    assert _snapshot_group_key(first).startswith("feature_only:")
 
 
 def test_historical_fallback_groups_profiles_in_same_event_minute():
-    first = _record(snapshot_id=None, event_id=None, profile_id="profile-1")
+    captured_at = datetime(2026, 7, 12, 4, 0, 10, tzinfo=timezone.utc)
+    first = _record(
+        snapshot_id=None, event_id=None, profile_id="profile-1",
+        features_captured_at=captured_at,
+    )
     second = _record(
         snapshot_id=None,
         event_id=None,
         profile_id="profile-2",
+        features_captured_at=captured_at,
         created_at=datetime(2026, 7, 12, 4, 0, 50, tzinfo=timezone.utc),
     )
     assert _snapshot_group_key(first) == _snapshot_group_key(second)
