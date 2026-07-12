@@ -21,7 +21,16 @@ Endpoint interno: `GET /api/system/internal/ml/native-capture/health`, protegido
 Os 83.982 registros do período informado permanecem fora do dataset oficial: 0 elegíveis comprovados, 80.498 research-only e 3.484 inválidos [prompt]. Treino e aprovação permanecem bloqueados.
 
 ## Testes
-Testes cobrem fail-closed, hash, não-finitos, lineage, lanes e registry guards. Evidência final deve ser anexada pelo commit de execução.
+Testes cobrem fail-closed, hash, não-finitos, lineage, lanes e registry guards. Suíte ampliada: `177 passed` [test]. Os quatro comandos foram executados contra produção em transação read-only e retornaram `DATA_COLLECTION_NOT_STARTED`, pois a fronteira ainda não está configurada [query]. Saídas JSON e Markdown foram validadas.
+
+## Commits
+- `799fd94` — canário, health, comandos e guards;
+- `a0f5756` — metodologia, contratos e runbook;
+- `063edea` — fronteiras point-in-time fail-closed;
+- `dd03dfa` — saídas completas e regras de alerta.
+
+## Decisão final
+`READY_FOR_T4F_CANARY_EXECUTION`. Produção permanece sem início oficial de coleta; nenhum deploy, migration, backfill, treino ou aprovação foi executado pelo T4L.
 
 ## Ledger
 | número | origem | valor literal |
@@ -29,3 +38,5 @@ Testes cobrem fail-closed, hash, não-finitos, lineage, lanes e registry guards.
 | limite canário | [prompt] | 50 |
 | histórico total | [prompt] | 83.982 |
 | histórico oficial comprovado | [prompt] | 0 |
+| testes aprovados | [test] | 177 |
+| falhas | [test] | 0 |
