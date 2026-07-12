@@ -1,6 +1,6 @@
 # T3 — Gate do `ml_dataset_valid_from`
 
-Status: AGUARDANDO DECISÃO — recomendação: manter `2026-07-01`.
+Status: CONCLUÍDA — usuário confirmou manter `2026-07-01`.
 
 Cutoff herdado de T0A: `2026-07-12T04:26:11.753960Z` [query].
 
@@ -59,6 +59,8 @@ Pelo gate definido no prompt, não há suporte para recuar cegamente a fronteira
 
 Nenhuma. `config_profiles` permaneceu intacta.
 
+Decisão do usuário: manter `ml_dataset_valid_from=2026-07-01T00:00:00+00:00` e tratar readiness em T9.
+
 ## Ledger de Evidências
 
 | NÚMERO REPORTADO | ORIGEM | VALOR LITERAL DA FONTE |
@@ -70,4 +72,3 @@ Nenhuma. `config_profiles` permaneceu intacta.
 | FIXED 0,8 na semana 08/jun=228 | [query] | `n=228` |
 | ATR_DYNAMIC na semana 08/jun=20 | [query] | `n=20` |
 | faixa de mediana=85–93 | [query] | `min=85; max=93` |
-
