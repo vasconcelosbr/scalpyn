@@ -1,10 +1,8 @@
-import asyncio
 from logging.config import fileConfig
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
-from sqlalchemy import pool
+from sqlalchemy import create_engine, pool
 from sqlalchemy.engine import Connection
-from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context
 
 from app.database import Base
@@ -65,37 +63,16 @@ def _resolve_db_url(url: str) -> tuple[str, dict]:
     return url, connect_args
 
 
-async def run_async_migrations() -> None:
-    db_url, connect_args = _resolve_db_url(settings.DATABASE_URL)
-    config.set_main_option("sqlalchemy.url", db_url)
-
-    connectable = async_engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-        connect_args={
-            **connect_args,
-            "timeout": 20,        # connection-establishment timeout (asyncpg)
-            # server_settings are applied by PostgreSQL at session start —
-            # guaranteed to be in effect before any transaction or DDL.
-            # This is more reliable than SET LOCAL inside do_run_migrations,
-            # which was silently inert in production (asyncpg + run_sync +
-            # SQLAlchemy 2.0 transaction lifecycle).
-            # Values are in milliseconds.
-            "server_settings": {
-                "lock_timeout": "10000",     # 10s: fail fast on lock contention
-                "statement_timeout": "60000", # 60s: cap runaway DDL
-            },
-        },
-    )
-
-    async with connectable.connect() as connection:
-        await connection.run_sync(do_run_migrations)
-    await connectable.dispose()
-
-
 def run_migrations_online() -> None:
-    asyncio.run(run_async_migrations())
+    db_url, connect_args = _resolve_db_url(settings.DATABASE_URL)
+    db_url = db_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
+    if db_url.startswith("postgresql://"):
+        db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+    connect_args["options"] = "-c lock_timeout=10000 -c statement_timeout=60000"
+    connectable = create_engine(db_url, poolclass=pool.NullPool, connect_args=connect_args)
+    with connectable.connect() as connection:
+        do_run_migrations(connection)
+    connectable.dispose()
 
 
 if context.is_offline_mode():

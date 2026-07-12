@@ -20,20 +20,27 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # Add contract columns to ml_models
-    op.add_column('ml_models', sa.Column('target_window_seconds', sa.Integer(), nullable=True))
-    op.add_column('ml_models', sa.Column('label_contract_id', postgresql.UUID(as_uuid=True), nullable=True))
-    op.add_column('ml_models', sa.Column('dataset_contract_id', postgresql.UUID(as_uuid=True), nullable=True))
-    op.add_column('ml_models', sa.Column('feature_contract_id', postgresql.UUID(as_uuid=True), nullable=True))
-    op.add_column('ml_models', sa.Column('tp_pct', sa.Numeric(), nullable=True))
-    op.add_column('ml_models', sa.Column('sl_pct', sa.Numeric(), nullable=True))
-    op.add_column('ml_models', sa.Column('fee_roundtrip_pct', sa.Numeric(), nullable=True))
-    op.add_column('ml_models', sa.Column('label_net_of_fees', sa.Boolean(), nullable=True))
-    op.add_column('ml_models', sa.Column('barrier_mode', sa.String(length=50), nullable=True))
-    op.add_column('ml_models', sa.Column('intrabar_policy', sa.String(length=50), nullable=True))
-    op.add_column('ml_models', sa.Column('ohlcv_timeframe', sa.String(length=10), nullable=True))
-    op.add_column('ml_models', sa.Column('maturity_policy', sa.String(length=50), nullable=True))
-    op.add_column('ml_models', sa.Column('macro_features_enabled', sa.Boolean(), nullable=True, server_default='false'))
-    op.add_column('ml_models', sa.Column('test_metrics_json', postgresql.JSONB(astext_type=sa.Text()), nullable=True))
+    existing_columns = {
+        column["name"] for column in sa.inspect(op.get_bind()).get_columns("ml_models")
+    }
+    def add_ml_model_column(column: sa.Column) -> None:
+        if column.name not in existing_columns:
+            op.add_column("ml_models", column)
+
+    add_ml_model_column(sa.Column('target_window_seconds', sa.Integer(), nullable=True))
+    add_ml_model_column(sa.Column('label_contract_id', postgresql.UUID(as_uuid=True), nullable=True))
+    add_ml_model_column(sa.Column('dataset_contract_id', postgresql.UUID(as_uuid=True), nullable=True))
+    add_ml_model_column(sa.Column('feature_contract_id', postgresql.UUID(as_uuid=True), nullable=True))
+    add_ml_model_column(sa.Column('tp_pct', sa.Numeric(), nullable=True))
+    add_ml_model_column(sa.Column('sl_pct', sa.Numeric(), nullable=True))
+    add_ml_model_column(sa.Column('fee_roundtrip_pct', sa.Numeric(), nullable=True))
+    add_ml_model_column(sa.Column('label_net_of_fees', sa.Boolean(), nullable=True))
+    add_ml_model_column(sa.Column('barrier_mode', sa.String(length=50), nullable=True))
+    add_ml_model_column(sa.Column('intrabar_policy', sa.String(length=50), nullable=True))
+    add_ml_model_column(sa.Column('ohlcv_timeframe', sa.String(length=10), nullable=True))
+    add_ml_model_column(sa.Column('maturity_policy', sa.String(length=50), nullable=True))
+    add_ml_model_column(sa.Column('macro_features_enabled', sa.Boolean(), nullable=True, server_default='false'))
+    add_ml_model_column(sa.Column('test_metrics_json', postgresql.JSONB(astext_type=sa.Text()), nullable=True))
 
     # Create ml_readiness_gate_runs table
     op.create_table('ml_readiness_gate_runs',
