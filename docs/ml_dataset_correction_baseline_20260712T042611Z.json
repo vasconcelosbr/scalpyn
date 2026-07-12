@@ -1,0 +1,61 @@
+{
+  "audit_run_id": "2fc54bb5-7a6e-4bb6-8c40-d213899516f5",
+  "query_cutoff_utc": "2026-07-12T04:26:11.753960Z",
+  "git_commit": "feb8ca156f7fc9a5d9392b1ad84d3dba2847dd49",
+  "alembic_revision": ["132_calibration_orchestration_v2"],
+  "config_profiles_sha256": "4d95aab39122a9fc1c2a9fc574e05147c7d6ce98c3d1ae81b9716bab36dd4f98",
+  "dataset_valid_from_by_lane": {
+    "ml_dataset_valid_from": "2026-07-01T00:00:00+00:00",
+    "ml_l3_dataset_valid_from": "2026-07-11T03:21:06+00:00"
+  },
+  "feature_flags": {
+    "auto_retrain_enabled": false,
+    "ml_enabled": true,
+    "ml_forward_scoring_enabled": false,
+    "shadow_capture_l1_enabled": true,
+    "shadow_capture_l3_simulated_enabled": true,
+    "shadow_skip_log_enabled": true,
+    "enable_anthropic_explanations": false,
+    "enable_association_rules": true,
+    "enable_catboost": true,
+    "enable_dynamic_combinations": true,
+    "enable_lightgbm": true,
+    "enable_optuna": false
+  },
+  "counts_by_source_outcome": {
+    "L1_SPECTRUM": {"NULL": 11, "SL_HIT": 2583, "TIMEOUT": 46, "TP_HIT": 1975},
+    "L3": {"NULL": 55, "SL_HIT": 11276, "TIMEOUT": 301, "TP_HIT": 7951},
+    "L3_LAB": {"NULL": 724, "SL_HIT": 3323, "TIMEOUT": 102, "TP_HIT": 3225},
+    "L3_REJECTED": {"NULL": 617, "SL_HIT": 45249, "TIMEOUT": 788, "TP_HIT": 29970},
+    "L3_SIMULATED": {"NULL": 8, "SL_HIT": 1364, "TIMEOUT": 36, "TP_HIT": 875}
+  },
+  "raw_n": 110479,
+  "effective_n": 38517,
+  "effective_n_contract": "count_distinct_sha256_features_snapshot_text",
+  "positive_count": 43996,
+  "positive_count_contract": "outcome IN (TP_HIT, WIN)",
+  "negative_count": 63795,
+  "negative_count_contract": "outcome IN (SL_HIT, LOSS)",
+  "distinct_profiles": 31,
+  "distinct_symbols": 60,
+  "barrier_contract_distribution": [
+    {"barrier_mode": "ATR_DYNAMIC", "tp_pct_applied": "1.5", "timeout_candles": "1440", "ttt_timeout_minutes": "180", "n": 93320},
+    {"barrier_mode": "FIXED", "tp_pct_applied": "0.6", "timeout_candles": "1440", "ttt_timeout_minutes": "180", "n": 1876},
+    {"barrier_mode": "FIXED", "tp_pct_applied": "0.8", "timeout_candles": "1440", "ttt_timeout_minutes": "180", "n": 5592},
+    {"barrier_mode": "FIXED", "tp_pct_applied": "1", "timeout_candles": "1440", "ttt_timeout_minutes": "180", "n": 8820},
+    {"barrier_mode": "FIXED", "tp_pct_applied": "1.5", "timeout_candles": "1440", "ttt_timeout_minutes": "180", "n": 730},
+    {"barrier_mode": null, "tp_pct_applied": null, "timeout_candles": "1440", "ttt_timeout_minutes": "180", "n": 141}
+  ],
+  "lineage_distribution": [
+    {"lineage_status": "EXACT", "eligible_for_training": true, "n": 3184},
+    {"lineage_status": "INVALID_FEATURES", "eligible_for_training": false, "n": 248},
+    {"lineage_status": null, "eligible_for_training": false, "n": 106995},
+    {"lineage_status": "VERSION_IDS_UNRESOLVED", "eligible_for_training": false, "n": 52}
+  ],
+  "reproducibility_contract": {
+    "transaction_isolation": "REPEATABLE READ",
+    "transaction_end": "ROLLBACK",
+    "all_shadow_trade_queries_use": "created_at <= query_cutoff_utc",
+    "required_training_metadata_D0_D8": ["dataset_hash", "split_hash", "feature_schema_version"]
+  }
+}
