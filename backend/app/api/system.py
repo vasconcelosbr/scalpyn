@@ -19,6 +19,19 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/system", tags=["System"])
 
 
+@router.get("/internal/ml/native-capture/health")
+async def native_capture_health(
+    authorization: Optional[str] = Header(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Token-gated, read-only health for the native ML capture contract."""
+    _require_diagnostics_bearer(authorization)
+    from ..ml.native_capture_governance import audit_native_capture
+    raw_start = os.environ.get("NATIVE_CAPTURE_START_AT", "").strip()
+    start_at = datetime.fromisoformat(raw_start.replace("Z", "+00:00")) if raw_start else None
+    return await audit_native_capture(db, start_at)
+
+
 # ── Celery diagnostics endpoint (Task #186) ──────────────────────────────────
 # Bearer-token-gated SRE channel that exposes in-process Celery + Redis
 # health: process inventory via psutil, ``inspect.active/registered/stats``,
