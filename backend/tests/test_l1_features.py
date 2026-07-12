@@ -62,7 +62,9 @@ async def test_l1_shadow_full_coverage():
 
     _created_metrics: list = []
 
-    async def _fake_create_from_decision(db, decision, skip_reason, user_config, *, source=None):
+    async def _fake_create_from_decision(
+        db, decision, skip_reason, user_config, *, source=None, lineage=None
+    ):
         _created_metrics.append(decision.metrics)
         return "fake-uuid-1"
 
@@ -90,11 +92,11 @@ async def test_l1_shadow_full_coverage():
 
     with (
         patch(
-            "backend.app.services.shadow_trade_service.CeleryAsyncSessionLocal",
+            "backend.app.database.CeleryAsyncSessionLocal",
             return_value=db_mock,
         ),
         patch(
-            "backend.app.services.shadow_trade_service.get_merged_indicators",
+            "backend.app.services.indicators_provider.get_merged_indicators",
             new=AsyncMock(return_value=merged_result),
         ),
         patch(
@@ -102,7 +104,7 @@ async def test_l1_shadow_full_coverage():
             new=AsyncMock(side_effect=_fake_create_from_decision),
         ),
         patch(
-            "backend.app.services.shadow_trade_service.SpotEngineConfig",
+            "backend.app.schemas.spot_engine_config.SpotEngineConfig",
         ),
     ):
         created = await create_l1_spectrum_shadows(
@@ -142,7 +144,9 @@ async def test_l1_shadow_no_indicators():
 
     _created_metrics: list = []
 
-    async def _fake_create_from_decision(db, decision, skip_reason, user_config, *, source=None):
+    async def _fake_create_from_decision(
+        db, decision, skip_reason, user_config, *, source=None, lineage=None
+    ):
         _created_metrics.append(decision.metrics)
         return "fake-uuid-2"
 
@@ -169,11 +173,11 @@ async def test_l1_shadow_no_indicators():
 
     with (
         patch(
-            "backend.app.services.shadow_trade_service.CeleryAsyncSessionLocal",
+            "backend.app.database.CeleryAsyncSessionLocal",
             return_value=db_mock,
         ),
         patch(
-            "backend.app.services.shadow_trade_service.get_merged_indicators",
+            "backend.app.services.indicators_provider.get_merged_indicators",
             new=AsyncMock(return_value=merged_result),
         ),
         patch(
@@ -181,7 +185,7 @@ async def test_l1_shadow_no_indicators():
             new=AsyncMock(side_effect=_fake_create_from_decision),
         ),
         patch(
-            "backend.app.services.shadow_trade_service.SpotEngineConfig",
+            "backend.app.schemas.spot_engine_config.SpotEngineConfig",
         ),
     ):
         created = await create_l1_spectrum_shadows(
@@ -212,7 +216,9 @@ async def test_l1_shadow_provider_exception():
 
     _created_metrics: list = []
 
-    async def _fake_create_from_decision(db, decision, skip_reason, user_config, *, source=None):
+    async def _fake_create_from_decision(
+        db, decision, skip_reason, user_config, *, source=None, lineage=None
+    ):
         _created_metrics.append(decision.metrics)
         return "fake-uuid-3"
 
@@ -242,11 +248,11 @@ async def test_l1_shadow_provider_exception():
 
     with (
         patch(
-            "backend.app.services.shadow_trade_service.CeleryAsyncSessionLocal",
+            "backend.app.database.CeleryAsyncSessionLocal",
             return_value=db_mock,
         ),
         patch(
-            "backend.app.services.shadow_trade_service.get_merged_indicators",
+            "backend.app.services.indicators_provider.get_merged_indicators",
             new=_exploding_get_merged,
         ),
         patch(
@@ -254,7 +260,7 @@ async def test_l1_shadow_provider_exception():
             new=AsyncMock(side_effect=_fake_create_from_decision),
         ),
         patch(
-            "backend.app.services.shadow_trade_service.SpotEngineConfig",
+            "backend.app.schemas.spot_engine_config.SpotEngineConfig",
         ),
     ):
         created = await create_l1_spectrum_shadows(
