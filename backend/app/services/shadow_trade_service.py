@@ -647,7 +647,9 @@ _INSERT_SHADOW_SQL = text("""
         CAST(:reason_codes AS JSONB), :ml_gate_enabled,
         CAST(:orchestrator_payload AS JSONB)
     )
-    ON CONFLICT DO NOTHING
+    ON CONFLICT (user_id, symbol, source)
+        WHERE profile_id IS NULL AND completed_at IS NULL
+    DO NOTHING
     RETURNING id
 """)
 
