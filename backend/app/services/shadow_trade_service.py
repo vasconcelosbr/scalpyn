@@ -23,12 +23,14 @@ Princípios:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -625,7 +627,14 @@ _INSERT_SHADOW_SQL = text("""
         lineage_confidence, lineage_source, lineage_resolved_at,
         ml_model_id, ml_probability, final_priority_score, model_lane, ranking_id,
         model_version, threshold_used, score_status, gate_action, reason_codes,
-        ml_gate_enabled, orchestrator_payload
+        ml_gate_enabled, orchestrator_payload,
+        event_id, snapshot_id, exchange, timeframe,
+        profile_version_id, score_engine_version_id,
+        feature_schema_version, feature_extractor_version, capture_contract_version,
+        label_contract_version, barrier_contract_version,
+        features_captured_at, features_coverage, feature_hash,
+        profile_config_hash, score_engine_config_hash,
+        lineage_status, eligible_for_training
     ) VALUES (
         gen_random_uuid(),
         :decision_id, :user_id, :symbol, :strategy, :direction,
@@ -645,7 +654,14 @@ _INSERT_SHADOW_SQL = text("""
         :model_lane, CAST(:ranking_id AS UUID),
         :model_version, :threshold_used, :score_status, :gate_action,
         CAST(:reason_codes AS JSONB), :ml_gate_enabled,
-        CAST(:orchestrator_payload AS JSONB)
+        CAST(:orchestrator_payload AS JSONB),
+        CAST(:event_id AS UUID), CAST(:snapshot_id AS UUID), :exchange, :timeframe,
+        CAST(:profile_version_id AS UUID), CAST(:score_engine_version_id AS UUID),
+        :feature_schema_version, :feature_extractor_version, :capture_contract_version,
+        :label_contract_version, :barrier_contract_version,
+        :features_captured_at, :features_coverage, :feature_hash,
+        :profile_config_hash, :score_engine_config_hash,
+        :lineage_status, :eligible_for_training
     )
     ON CONFLICT (user_id, symbol, source)
         WHERE profile_id IS NULL AND completed_at IS NULL
@@ -673,7 +689,11 @@ async def _create_from_decision(
     Caller deve estar dentro de uma sessão own-session (usar
     ``safe_create_*`` abaixo).
     """
-    import json
+    from app.ml.feature_contract_v2 import (
+        capture_native_snapshot,
+        coverage as feature_coverage,
+    )
+    from uuid import uuid4
 
     tp_pct = float(user_config.get("tp_pct") or 0.0)
     sl_pct = float(user_config.get("sl_pct") or 0.0)
@@ -743,7 +763,16 @@ async def _create_from_decision(
     # with gate labels after closure.
     if extra_config:
         config_snap.update(extra_config)
-    features_snap = _build_features_snapshot(decision)
+    native_capture = capture_native_snapshot(_build_features_snapshot(decision))
+    features_snap = native_capture.snapshot
+    feature_errors = list(native_capture.errors)
+    event_id = uuid4()
+    snapshot_id = uuid4()
+    config_hash = hashlib.sha256(
+        json.dumps(
+            config_snap, sort_keys=True, separators=(",", ":"), default=str
+        ).encode("utf-8")
+    ).hexdigest()
 
     # Task #303: ``decision.id`` é ``None`` para ``_SyntheticDecision``
     # (fallback "live_l3") — vira NULL na coluna após migration 057.
@@ -764,6 +793,43 @@ async def _create_from_decision(
         lineage.profile_version
         if lineage and lineage.profile_version
         else getattr(decision, "profile_version", None)
+    )
+    _lin_profile_version_id = (
+        getattr(lineage, "profile_version_id", None) if lineage else None
+    )
+    _lin_score_engine_version_id = (
+        getattr(lineage, "score_engine_version_id", None) if lineage else None
+    )
+    _lin_profile_config_hash = None
+    _lin_score_engine_config_hash = (
+        getattr(lineage, "score_engine_config_hash", None) if lineage else None
+    )
+    if _lin_profile_id and not (
+        _lin_profile_version_id and _lin_score_engine_version_id
+    ):
+        version_row = (await db.execute(text("""
+            SELECT pv.id, pv.score_engine_version_id, pv.config_hash,
+                   sev.config_hash AS score_engine_config_hash
+              FROM profile_versions pv
+              JOIN score_engine_versions sev ON sev.id = pv.score_engine_version_id
+             WHERE pv.profile_id = CAST(:profile_id AS UUID)
+               AND pv.status IN ('SHADOW', 'CHAMPION')
+             ORDER BY pv.version_number DESC
+             LIMIT 1
+        """), {"profile_id": str(_lin_profile_id)})).mappings().first()
+        if version_row:
+            _lin_profile_version_id = version_row["id"]
+            _lin_score_engine_version_id = version_row["score_engine_version_id"]
+            _lin_profile_config_hash = version_row["config_hash"]
+            _lin_score_engine_config_hash = version_row["score_engine_config_hash"]
+
+    lineage_complete = bool(
+        _lin_profile_version_id and _lin_score_engine_version_id
+    )
+    lineage_status = (
+        "INVALID_FEATURES" if feature_errors
+        else "EXACT" if lineage_complete
+        else "UNRESOLVED_VERSION"
     )
 
     res = await db.execute(
@@ -845,6 +911,28 @@ async def _create_from_decision(
             "orchestrator_payload": json.dumps(
                 getattr(lineage, "orchestrator_payload", None) or {}, default=str
             ),
+            "event_id": str(event_id),
+            "snapshot_id": str(snapshot_id),
+            "exchange": "gate",
+            "timeframe": "5m",
+            "profile_version_id": (
+                str(_lin_profile_version_id) if _lin_profile_version_id else None
+            ),
+            "score_engine_version_id": (
+                str(_lin_score_engine_version_id) if _lin_score_engine_version_id else None
+            ),
+            "feature_schema_version": native_capture.feature_schema_version,
+            "feature_extractor_version": native_capture.feature_extractor_version,
+            "capture_contract_version": native_capture.capture_contract_version,
+            "label_contract_version": "positive_net_return_v1",
+            "barrier_contract_version": f"shadow_{str(barrier_mode).lower()}_v1",
+            "features_captured_at": native_capture.captured_at,
+            "features_coverage": feature_coverage(features_snap),
+            "feature_hash": native_capture.snapshot_hash,
+            "profile_config_hash": _lin_profile_config_hash or config_hash,
+            "score_engine_config_hash": _lin_score_engine_config_hash,
+            "lineage_status": lineage_status,
+            "eligible_for_training": lineage_complete and not feature_errors,
         },
     )
     row = res.fetchone()
@@ -2838,6 +2926,70 @@ async def create_watchlist_spot_shadows(
 # Idempotency: bare ON CONFLICT DO NOTHING catches uq_shadow_lab_profile_symbol_bucket
 # (profile_id, symbol, source, hour_bucket) when the same profile rescans.
 
+
+async def _strategy_lab_snapshot_contract(
+    db: AsyncSession,
+    *,
+    profile_id: Optional[str],
+    features: Dict[str, Any],
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    from app.ml.feature_contract_v2 import (
+        capture_native_snapshot,
+        coverage as feature_coverage,
+    )
+
+    native_capture = capture_native_snapshot(features)
+    normalized = native_capture.snapshot
+    feature_errors = list(native_capture.errors)
+    version_row = None
+    if profile_id:
+        version_row = (await db.execute(text("""
+            SELECT pv.id AS profile_version_id, pv.config_hash,
+                   pv.score_engine_version_id, sev.config_hash AS score_config_hash
+              FROM profile_versions pv
+              JOIN score_engine_versions sev ON sev.id = pv.score_engine_version_id
+             WHERE pv.profile_id = CAST(:profile_id AS UUID)
+               AND pv.status IN ('SHADOW', 'CHAMPION')
+             ORDER BY pv.version_number DESC
+             LIMIT 1
+        """), {"profile_id": profile_id})).mappings().first()
+    lineage_complete = bool(
+        version_row
+        and version_row["profile_version_id"]
+        and version_row["score_engine_version_id"]
+    )
+    contract = {
+        "event_id": str(uuid4()),
+        "snapshot_id": str(uuid4()),
+        "exchange": "gate",
+        "timeframe": "5m",
+        "profile_version_id": (
+            str(version_row["profile_version_id"]) if version_row else None
+        ),
+        "score_engine_version_id": (
+            str(version_row["score_engine_version_id"]) if version_row else None
+        ),
+        "feature_schema_version": native_capture.feature_schema_version,
+        "feature_extractor_version": native_capture.feature_extractor_version,
+        "capture_contract_version": native_capture.capture_contract_version,
+        "label_contract_version": "positive_net_return_v1",
+        "barrier_contract_version": "shadow_fixed_v1",
+        "features_captured_at": native_capture.captured_at,
+        "features_coverage": feature_coverage(normalized),
+        "feature_hash": native_capture.snapshot_hash,
+        "profile_config_hash": version_row["config_hash"] if version_row else None,
+        "score_engine_config_hash": (
+            version_row["score_config_hash"] if version_row else None
+        ),
+        "lineage_status": (
+            "INVALID_FEATURES" if feature_errors
+            else "EXACT" if lineage_complete
+            else "UNRESOLVED_VERSION"
+        ),
+        "eligible_for_training": lineage_complete and not feature_errors,
+    }
+    return normalized, contract
+
 _INSERT_STRATEGY_LAB_SQL = text("""
     INSERT INTO shadow_trades (
         id,
@@ -2850,7 +3002,14 @@ _INSERT_STRATEGY_LAB_SQL = text("""
         barrier_mode, tp_pct_applied, sl_pct_applied,
         profile_id, profile_version, profile_name, strategy_type, rules_snapshot,
         watchlist_id, watchlist_name, watchlist_level, source_watchlist_id,
-        lineage_confidence, lineage_source, lineage_resolved_at
+        lineage_confidence, lineage_source, lineage_resolved_at,
+        event_id, snapshot_id, exchange, timeframe,
+        profile_version_id, score_engine_version_id,
+        feature_schema_version, feature_extractor_version, capture_contract_version,
+        label_contract_version, barrier_contract_version,
+        features_captured_at, features_coverage, feature_hash,
+        profile_config_hash, score_engine_config_hash,
+        lineage_status, eligible_for_training
     ) VALUES (
         gen_random_uuid(),
         NULL, :user_id, :symbol, :strategy, :direction,
@@ -2866,7 +3025,14 @@ _INSERT_STRATEGY_LAB_SQL = text("""
         :strategy_type, CAST(:rules_snapshot AS JSONB),
         CAST(:watchlist_id AS UUID), :watchlist_name, :watchlist_level,
         CAST(:source_watchlist_id AS UUID),
-        :lineage_confidence, :lineage_source, :lineage_resolved_at
+        :lineage_confidence, :lineage_source, :lineage_resolved_at,
+        CAST(:event_id AS UUID), CAST(:snapshot_id AS UUID), :exchange, :timeframe,
+        CAST(:profile_version_id AS UUID), CAST(:score_engine_version_id AS UUID),
+        :feature_schema_version, :feature_extractor_version, :capture_contract_version,
+        :label_contract_version, :barrier_contract_version,
+        :features_captured_at, :features_coverage, :feature_hash,
+        :profile_config_hash, :score_engine_config_hash,
+        :lineage_status, :eligible_for_training
     )
     ON CONFLICT DO NOTHING
     RETURNING id
@@ -2996,9 +3162,17 @@ async def create_strategy_lab_shadows(
         try:
             async with CeleryAsyncSessionLocal() as own_db:
                 async with own_db.begin():
+                    features_normalized, snapshot_contract = (
+                        await _strategy_lab_snapshot_contract(
+                            own_db,
+                            profile_id=profile_id_str,
+                            features=features_flat,
+                        )
+                    )
                     res = await own_db.execute(
                         _INSERT_STRATEGY_LAB_SQL,
                         {
+                            **snapshot_contract,
                             "user_id": user_id,
                             "symbol": symbol,
                             "strategy": d.get("strategy"),
@@ -3014,7 +3188,7 @@ async def create_strategy_lab_shadows(
                             "status": initial_status,
                             "source": SHADOW_SOURCE_L3_LAB,
                             "config_snapshot": _json.dumps(config_snap, default=str),
-                            "features_snapshot": _json.dumps(features_flat, default=str),
+                            "features_snapshot": _json.dumps(features_normalized, default=str),
                             "last_processed_time": promotion_at,
                             "ttt_enabled": ttt_enabled,
                             "ttt_tp_pct": ttt_tp_pct,
@@ -3175,9 +3349,17 @@ async def create_strategy_lab_rejected_shadows(
         try:
             async with CeleryAsyncSessionLocal() as own_db:
                 async with own_db.begin():
+                    features_normalized, snapshot_contract = (
+                        await _strategy_lab_snapshot_contract(
+                            own_db,
+                            profile_id=profile_id_str,
+                            features=features_flat,
+                        )
+                    )
                     res = await own_db.execute(
                         _INSERT_STRATEGY_LAB_SQL,
                         {
+                            **snapshot_contract,
                             "user_id": user_id,
                             "symbol": symbol,
                             "strategy": d.get("strategy"),
@@ -3193,7 +3375,7 @@ async def create_strategy_lab_rejected_shadows(
                             "status": initial_status,
                             "source": SHADOW_SOURCE_L3_LAB,
                             "config_snapshot": _json.dumps(config_snap, default=str),
-                            "features_snapshot": _json.dumps(features_flat, default=str),
+                            "features_snapshot": _json.dumps(features_normalized, default=str),
                             "last_processed_time": promotion_at,
                             "ttt_enabled": ttt_enabled,
                             "ttt_tp_pct": ttt_tp_pct,

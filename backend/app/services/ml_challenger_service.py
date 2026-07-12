@@ -806,6 +806,10 @@ class MLChallengerService:
               AND pnl_pct IS NOT NULL
               AND features_snapshot IS NOT NULL
               AND features_snapshot::text <> '{{}}'
+              AND capture_contract_version = 'point-in-time-v1'
+              AND feature_extractor_version IS NOT NULL
+              AND feature_schema_version IS NOT NULL
+              AND feature_hash IS NOT NULL
               AND created_at >= :cutoff
               AND COALESCE(label_resolved_at, completed_at) IS NOT NULL
               AND COALESCE(label_resolved_at, completed_at) <= :dataset_query_cutoff

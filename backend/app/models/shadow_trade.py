@@ -97,6 +97,30 @@ class ShadowTrade(Base):
     # Mesmo formato FLAT do entry (ver ``_build_features_snapshot``).
     features_snapshot_exit = Column(JSONB, nullable=True)
 
+    # Canonical immutable lineage (migration 131). Missing historical IDs are
+    # never inferred; such rows remain LEGACY_UNRESOLVED and train-ineligible.
+    event_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    snapshot_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    exchange = Column(String(32), nullable=True)
+    timeframe = Column(String(16), nullable=True)
+    profile_version_id = Column(UUID(as_uuid=True), nullable=True)
+    score_engine_version_id = Column(UUID(as_uuid=True), nullable=True)
+    feature_schema_version = Column(String(80), nullable=True)
+    feature_extractor_version = Column(String(80), nullable=True)
+    capture_contract_version = Column(String(80), nullable=True)
+    label_contract_version = Column(String(80), nullable=True)
+    barrier_contract_version = Column(String(80), nullable=True)
+    features_captured_at = Column(DateTime(timezone=True), nullable=True)
+    label_resolved_at = Column(DateTime(timezone=True), nullable=True)
+    features_coverage = Column(Numeric(7, 6), nullable=True)
+    oldest_indicator_age_s = Column(Integer, nullable=True)
+    market_data_confidence = Column(Numeric(7, 6), nullable=True)
+    feature_hash = Column(String(64), nullable=True)
+    profile_config_hash = Column(String(64), nullable=True)
+    score_engine_config_hash = Column(String(64), nullable=True)
+    lineage_status = Column(String(32), nullable=True)
+    eligible_for_training = Column(Boolean, nullable=False, default=False)
+
     last_processed_time = Column(DateTime(timezone=True), nullable=True)
 
     # Index on created_at is declared by migration 046 as DESC
