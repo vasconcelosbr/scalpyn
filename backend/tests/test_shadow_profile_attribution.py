@@ -64,9 +64,12 @@ async def test_create_from_decision_copies_profile_attribution():
         profile_name="generated-profile",
     )
 
+    lineage_result = SimpleNamespace(
+        mappings=lambda: SimpleNamespace(first=lambda: None)
+    )
     result = SimpleNamespace(fetchone=lambda: (uuid4(),))
     db = AsyncMock()
-    db.execute.return_value = result
+    db.execute.side_effect = [lineage_result, result]
 
     with (
         patch(
@@ -86,7 +89,7 @@ async def test_create_from_decision_copies_profile_attribution():
         )
 
     assert created_id is not None
-    params = db.execute.await_args.args[1]
+    params = db.execute.await_args_list[-1].args[1]
     assert params["profile_id"] == profile_id
     assert params["profile_version"] == profile_version
     assert params["profile_name"] == "generated-profile"
