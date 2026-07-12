@@ -715,7 +715,18 @@ class MLChallengerService:
         require_profile_id: bool = False,
         dataset_valid_from: Optional[Any] = None,
         require_canonical_lineage: bool = False,
+        dataset_query_cutoff: Optional[datetime] = None,
+        maturity_embargo_margin_minutes: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
+        if dataset_query_cutoff is None:
+            raise ValueError("missing_dataset_query_cutoff")
+        if maturity_embargo_margin_minutes is None:
+            raise ValueError(
+                "missing_ml_maturity_embargo_margin_minutes: gravar em "
+                "config_profiles(config_type='ml') antes do treino"
+            )
+        if int(maturity_embargo_margin_minutes) < 0:
+            raise ValueError("invalid_ml_maturity_embargo_margin_minutes")
         sources = source_filter if source_filter is not None else TRAIN_SOURCES
         # Build per-source placeholders to avoid any injection risk
         source_placeholders = ", ".join(f":src_{i}" for i in range(len(sources)))
@@ -755,7 +766,9 @@ class MLChallengerService:
                 snapshot_id::text AS snapshot_id,
                 profile_version_id::text AS profile_version_id,
                 score_engine_version_id::text AS score_engine_version_id,
-                label_resolved_at
+                label_resolved_at,
+                completed_at,
+                ttt_timeout_minutes
             FROM shadow_trades
             WHERE user_id = :uid
               AND source IN ({source_placeholders})
@@ -764,12 +777,19 @@ class MLChallengerService:
               AND features_snapshot IS NOT NULL
               AND features_snapshot::text <> '{{}}'
               AND created_at >= :cutoff
+              AND COALESCE(label_resolved_at, completed_at) IS NOT NULL
+              AND COALESCE(label_resolved_at, completed_at) <= :dataset_query_cutoff
+              AND created_at <= :dataset_query_cutoff - make_interval(
+                    mins => COALESCE(ttt_timeout_minutes, 0) + :maturity_embargo_margin_minutes
+                  )
               {valid_from_clause}
               {profile_clause}
               {lineage_clause}
               {cutoff_clause}
             ORDER BY created_at ASC
         """), {"uid": str(user_id), "cutoff": datetime.now(timezone.utc) - timedelta(days=lookback_days),
+               "dataset_query_cutoff": dataset_query_cutoff,
+               "maturity_embargo_margin_minutes": int(maturity_embargo_margin_minutes),
                **source_params, **valid_from_params, **cutoff_params})).fetchall()
         logger.info(
             "[MLChallenger] _load_shadow_data: sources=%s rows=%d require_profile_id=%s user=%s",
@@ -1693,6 +1713,10 @@ class MLChallengerService:
             return {"skipped": "feature_extractor_unavailable"}
 
         ml_config = await self._load_ml_config(db)
+        dataset_query_cutoff = datetime.now(timezone.utc)
+        maturity_embargo_margin_minutes = ml_config.get(
+            "ml_maturity_embargo_margin_minutes"
+        )
         if "ml_win_fast_threshold_seconds" in ml_config:
             win_fast_threshold_s = float(ml_config["ml_win_fast_threshold_seconds"])
         dataset_valid_from = parse_required_ml_dataset_valid_from(ml_config)
@@ -1748,6 +1772,8 @@ class MLChallengerService:
                 db, user_id, lookback_days, lgbm_sources,
                 dataset_valid_from=dataset_valid_from,
                 require_canonical_lineage=bool(ml_config.get("ml_predictive_gate_v2", False)),
+                dataset_query_cutoff=dataset_query_cutoff,
+                maturity_embargo_margin_minutes=maturity_embargo_margin_minutes,
             )
             logger.info(
                 "[MLChallenger] Lane1/LightGBM: sources=%s records=%d", lgbm_sources, len(lgbm_records),
@@ -1844,7 +1870,7 @@ class MLChallengerService:
                                     "train_sources": lgbm_sources,
                                     "train_from": min(_lgbm_at_tr) if _lgbm_at_tr else None,
                                     "train_to": max(_lgbm_at_tr) if _lgbm_at_tr else None,
-                                    "dataset_query_cutoff": datetime.now(timezone.utc),
+                                    "dataset_query_cutoff": dataset_query_cutoff,
                                     "dataset_hash": hashlib.sha256(
                                         "|".join(sorted(str(x) for x in shadow_ids if x)).encode()
                                     ).hexdigest(),
@@ -1926,6 +1952,8 @@ class MLChallengerService:
                 db, user_id, lookback_days, cb_sources,
                 dataset_valid_from=cb_dataset_valid_from,
                 require_canonical_lineage=bool(ml_config.get("ml_predictive_gate_v2", False)),
+                dataset_query_cutoff=dataset_query_cutoff,
+                maturity_embargo_margin_minutes=maturity_embargo_margin_minutes,
             )
             cb_profile_records = [r for r in cb_all_records if r.get("profile_id")]
             barrier_meta: Dict[str, Any] = {}
@@ -2099,7 +2127,7 @@ class MLChallengerService:
                                     "train_sources": cb_sources,
                                     "train_from": min(_cb_split["meta_tr"][1]) if _cb_split["meta_tr"][1] else None,
                                     "train_to": max(_cb_split["meta_tr"][1]) if _cb_split["meta_tr"][1] else None,
-                                    "dataset_query_cutoff": datetime.now(timezone.utc),
+                                    "dataset_query_cutoff": dataset_query_cutoff,
                                     "dataset_hash": hashlib.sha256(
                                         "|".join(sorted(str(x) for x in shadow_ids if x)).encode()
                                     ).hexdigest(),

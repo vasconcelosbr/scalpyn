@@ -1,6 +1,6 @@
 # T1 — Embargo de maturidade
 
-Status: BLOQUEADA — critérios do prompt são mutuamente incompatíveis com o holding observado.
+Status: CONCLUÍDA NO CÓDIGO — política 2 aprovada pelo usuário; ativação aguarda configuração/deploy.
 
 Cutoff herdado de T0A: `2026-07-12T04:26:11.753960Z` [query].
 
@@ -50,25 +50,29 @@ Comparação de positive rate:
 - Gap com embargo sugerido: `42,0999% - 38,3649% = 3,7350 p.p.` [calc].
 - A margem sugerida mantém o gap abaixo de `5 p.p.`, mas não o reduz; nessa janela agregada ele aumenta `0,6216 p.p.` [calc].
 
-## Mudança
+## Decisão e mudança
 
-Nenhuma mudança de código/config foi aplicada. A implementação fica bloqueada até a política ser escolhida explicitamente entre:
+O usuário aprovou a política 2: maturidade baseada em resolução point-in-time e horizonte máximo do label, sem converter o maior holding histórico anômalo em embargo global.
 
-1. embargo operacional limitado ao horizonte contratual (`ttt_timeout + margem`), abandonando o requisito de cobrir o maior holding histórico anômalo; ou
-2. maturidade baseada em `label_resolved_at/completed_at` e `max_label_horizon`, com tratamento explícito das resoluções tardias; ou
-3. embargo pelo pior holding observado, aceitando que o miolo de 24h será afetado.
+- `_load_shadow_data` agora exige `dataset_query_cutoff` único.
+- A linha só entra quando `COALESCE(label_resolved_at, completed_at) <= dataset_query_cutoff`.
+- A observação também precisa estar madura: `created_at <= dataset_query_cutoff - (ttt_timeout_minutes + ml_maturity_embargo_margin_minutes)`.
+- `ml_maturity_embargo_margin_minutes` é obrigatório, não negativo e lido de `config_profiles(config_type='ml')`; ausência falha fechado.
+- O mesmo cutoff é persistido em `ml_models.dataset_query_cutoff` para ambas as lanes.
+- A chave ainda não foi gravada em produção porque o prompt proíbe escrita de configuração fora de T6.
 
 ## Critério de aceite
 
-- Cobrir pior holding: NÃO ATENDIDO pela margem sugerida.
-- Não afetar miolo anterior a 24h: ATENDIDO apenas pela margem sugerida de 60 min.
+- Tratar resoluções tardias sem embargo global pelo outlier: ATENDIDO pela política aprovada.
+- Não afetar miolo anterior a 24h: ATENDIDO no dry-run da margem candidata de 60 min.
 - Gap de cauda abaixo de 5 p.p.: ATENDIDO antes e depois, mas não houve redução.
-- Zero hardcode: preservado; nenhuma constante/configuração foi criada.
+- Zero hardcode: ATENDIDO; margem obrigatória vem de `config_profiles`.
+- Ativação em produção: AGUARDANDO a chave de configuração e deploy.
 
 ## Efeitos colaterais verificados
 
 - Nenhuma escrita no banco.
-- Nenhuma alteração em `config_profiles`.
+- Nenhuma alteração em `config_profiles`; ausência da chave bloqueia treino de forma explícita.
 - Nenhum retreino/deploy.
 
 ## Ledger de Evidências
@@ -81,4 +85,3 @@ Nenhuma mudança de código/config foi aplicada. A implementação fica bloquead
 | margem mínima=3.004,9268586 min | [calc] | `3184.9268586 - 180` |
 | excluídas=564 | [query] | `day=2026-07-12; excluded_n=564` |
 | gap com embargo=3,7350 p.p. | [calc] | `0.4209989063 - 0.3836487509` |
-
