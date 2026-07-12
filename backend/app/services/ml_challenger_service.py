@@ -54,6 +54,7 @@ CATBOOST_TRAIN_SOURCES: List[str] = ["L3"]
 CATBOOST_L3_ONLY_SOURCES: List[str] = ["L3"]
 CATBOOST_L3_LAB_ONLY_SOURCES: List[str] = ["L3_LAB"]
 CATBOOST_L3_REJECTED_ONLY_SOURCES: List[str] = ["L3_REJECTED"]
+CATBOOST_CONTEXTUAL_INTELLIGENCE_SOURCES: List[str] = ["L3", "L3_REJECTED"]
 # Backwards-compat alias — callers that pass source_filter still work.
 TRAIN_SOURCES: List[str] = LGBM_TRAIN_SOURCES  # was ["L3", "L1_SPECTRUM"] — deprecated
 
@@ -62,6 +63,7 @@ MIXED_SOURCE_BLOCKED_REASON = "MIXED_SOURCE_DATASET_BLOCKED"
 
 
 _PROFILE_NULL_BUCKET = 9999  # reserved bucket for NULL profile_id
+SNAPSHOT_GROUPING_CONTRACT_VERSION = "market_event_v1"
 
 
 def _stable_profile_bucket(profile_id: Optional[str]) -> int:
@@ -80,14 +82,34 @@ def _stable_profile_bucket(profile_id: Optional[str]) -> int:
 
 
 def _snapshot_group_key(record: Dict[str, Any]) -> str:
-    """Stable identity for one market observation replicated across profiles."""
+    """Stable market-event identity shared by profiles evaluated in one cycle."""
     raw = json.dumps(
         record.get("features_snapshot") or {},
         sort_keys=True,
         separators=(",", ":"),
         default=str,
     )
-    return hashlib.sha256(raw.encode()).hexdigest()
+    feature_hash = hashlib.sha256(raw.encode()).hexdigest()
+    snapshot_id = record.get("snapshot_id")
+    if snapshot_id:
+        return f"snapshot:{snapshot_id}"
+
+    symbol = str(record.get("symbol") or "<NULL>")
+    timeframe = str(record.get("timeframe") or "<NULL>")
+    exchange = str(record.get("exchange") or "<NULL>")
+    event_id = record.get("event_id")
+    if event_id:
+        return f"event:{event_id}:{symbol}:{timeframe}:{exchange}"
+
+    captured_at = record.get("features_captured_at") or record.get("created_at")
+    if captured_at:
+        if isinstance(captured_at, str):
+            captured_at = datetime.fromisoformat(captured_at.replace("Z", "+00:00"))
+        captured_bucket = captured_at.replace(second=0, microsecond=0).isoformat()
+        return f"fallback:{symbol}:{timeframe}:{exchange}:{captured_bucket}:{feature_hash}"
+
+    # Diagnostic-only final fallback for malformed historical rows.
+    return f"feature_only:{feature_hash}"
 
 
 _BARRIER_MODE_ENCODING = {"FIXED": 0.0, "ATR_DYNAMIC": 1.0}
@@ -565,7 +587,11 @@ def _train_catboost_sync(
 
     study = None
     if fixed_params is None:
-        study = optuna.create_study(direction="maximize")
+        study = optuna.create_study(
+            direction="maximize",
+            sampler=optuna.samplers.TPESampler(seed=42),
+            pruner=optuna.pruners.MedianPruner(),
+        )
         study.optimize(objective, n_trials=n_trials, timeout=180, show_progress_bar=False)
         selected_params = study.best_params
     else:
@@ -641,6 +667,10 @@ def _train_catboost_sync(
             "trial_selection_objective": _trial_selection_objective,
             "best_trial_number": study.best_trial.number if study is not None else None,
             "best_trial_value": study.best_trial.value if study is not None else roc_auc,
+            "study_id": str(study.study_name) if study is not None else None,
+            "sampler": type(study.sampler).__name__ if study is not None else None,
+            "pruner": type(study.pruner).__name__ if study is not None else None,
+            "seeds": [42] if study is not None else [],
             "fixed_params": selected_params if study is None else None,
             "val_samples": int(len(y_val)),
             "train_samples": int(len(y_train)),
@@ -684,6 +714,7 @@ class MLChallengerService:
         source_filter: Optional[List[str]] = None,
         require_profile_id: bool = False,
         dataset_valid_from: Optional[Any] = None,
+        require_canonical_lineage: bool = False,
     ) -> List[Dict[str, Any]]:
         sources = source_filter if source_filter is not None else TRAIN_SOURCES
         # Build per-source placeholders to avoid any injection risk
@@ -692,6 +723,7 @@ class MLChallengerService:
         profile_clause = "AND profile_id IS NOT NULL" if require_profile_id else ""
         valid_from_clause = "AND created_at >= :valid_from" if dataset_valid_from else ""
         valid_from_params = {"valid_from": dataset_valid_from} if dataset_valid_from else {}
+        lineage_clause = "AND eligible_for_training = true" if require_canonical_lineage else ""
         cutoff_clause = ""
         cutoff_params: dict = {}
         if _TRAIN_CUTOFF_AT:
@@ -715,7 +747,15 @@ class MLChallengerService:
                 tp_pct_applied,
                 sl_pct_applied,
                 created_at,
-                profile_id::text  AS profile_id
+                features_captured_at,
+                timeframe,
+                exchange,
+                profile_id::text  AS profile_id,
+                event_id::text AS event_id,
+                snapshot_id::text AS snapshot_id,
+                profile_version_id::text AS profile_version_id,
+                score_engine_version_id::text AS score_engine_version_id,
+                label_resolved_at
             FROM shadow_trades
             WHERE user_id = :uid
               AND source IN ({source_placeholders})
@@ -726,6 +766,7 @@ class MLChallengerService:
               AND created_at >= :cutoff
               {valid_from_clause}
               {profile_clause}
+              {lineage_clause}
               {cutoff_clause}
             ORDER BY created_at ASC
         """), {"uid": str(user_id), "cutoff": datetime.now(timezone.utc) - timedelta(days=lookback_days),
@@ -929,7 +970,7 @@ class MLChallengerService:
         # and current ATR_DYNAMIC outcomes are not treated as the same target.
         extra_columns = [source_enc, profile_enc]
         all_feature_names = available + ["source_encoded", "profile_id_encoded"]
-        if lane_name == "L3_APPROVED_INTELLIGENCE":
+        if lane_name in {"L3_APPROVED_INTELLIGENCE", "L3_CONTEXTUAL_INTELLIGENCE"}:
             contract = np.asarray([
                 _economic_contract_features(r, fee_roundtrip_pct)
                 for r in valid_records
@@ -978,6 +1019,7 @@ class MLChallengerService:
         val_fraction: float = 0.20,
         test_fraction: float = 0.20,
         embargo_seconds: int = 0,
+        group_ids: Optional[list] = None,
     ) -> dict:
         """Temporal 60/20/20 split with purge (from train) and embargo (from val/test).
 
@@ -1021,6 +1063,8 @@ class MLChallengerService:
             te_mask[val_end:] = True
 
         n_purged = 0
+        n_purged_val_test = 0
+        n_group_purged = 0
         n_embargoed = 0
 
         if embargo_seconds > 0 and created_at and va_mask.sum() > 0:
@@ -1063,6 +1107,31 @@ class MLChallengerService:
                                     else:
                                         te_mask[i] = False
                                     n_embargoed += 1
+
+                # Independent second boundary: validation labels must be fully
+                # resolved before the untouched test begins.
+                test_times = [at_list[i] for i in range(n) if te_mask[i] and at_list[i] is not None]
+                if test_times:
+                    test_start = min(test_times)
+                    for i in range(n):
+                        if va_mask[i] and at_list[i] is not None:
+                            resolve_time = at_list[i] + pd.Timedelta(seconds=hs_list[i])
+                            if resolve_time >= test_start:
+                                va_mask[i] = False
+                                n_purged_val_test += 1
+
+                # A snapshot/event group belongs to its latest split. Earlier
+                # copies are purged so no group is counted independently twice.
+                if group_ids is not None:
+                    test_groups = {group_ids[i] for i in range(n) if te_mask[i]}
+                    val_groups = {group_ids[i] for i in range(n) if va_mask[i]}
+                    for i in range(n):
+                        if va_mask[i] and group_ids[i] in test_groups:
+                            va_mask[i] = False
+                            n_group_purged += 1
+                        elif tr_mask[i] and group_ids[i] in test_groups | val_groups:
+                            tr_mask[i] = False
+                            n_group_purged += 1
             except Exception as _emb_exc:
                 logger.warning(
                     "[MLChallenger] embargo calc failed — using raw index split: %s", _emb_exc
@@ -1084,6 +1153,8 @@ class MLChallengerService:
             "meta_va": [_apply(m, va_mask) for m in metadata],
             "meta_te": [_apply(m, te_mask) for m in metadata] if has_test else [None] * len(metadata),
             "n_purged": n_purged,
+            "n_purged_val_test": n_purged_val_test,
+            "n_group_purged": n_group_purged,
             "n_embargoed": n_embargoed,
             "has_test": has_test,
         }
@@ -1259,6 +1330,7 @@ class MLChallengerService:
         _metrics_json_dict = {
             "label_version": label_ver,
             "target_window_seconds": int(win_fast_threshold_s),
+            "grouping_contract_version": metrics.get("grouping_contract_version"),
             "validation": {
                 "precision": precision,
                 "recall": recall,
@@ -1307,20 +1379,31 @@ class MLChallengerService:
             "dataset_query_cutoff": dataset_query_cutoff,
             "dataset_hash": dataset_hash,
         }
-        if model_lane in {"L3_INTELLIGENCE", "L3_APPROVED_INTELLIGENCE"}:
+        if model_lane in {
+            "L3_INTELLIGENCE",
+            "L3_APPROVED_INTELLIGENCE",
+            "L3_CONTEXTUAL_INTELLIGENCE",
+        }:
             from app.ml.intelligence_gate import (
                 evaluate_indicator_intelligence_gate,
                 evaluate_intelligence_gate,
             )
-            if model_lane == "L3_APPROVED_INTELLIGENCE":
-                _intelligence_gate = evaluate_indicator_intelligence_gate(
-                    _metrics_json_dict, _ml_config
-                )
-            else:
-                _intelligence_gate = evaluate_intelligence_gate(
-                    _metrics_json_dict, _ml_config
-                )
-            _metrics_json_dict["intelligence_gate"] = _intelligence_gate
+            _descriptive_gate = evaluate_indicator_intelligence_gate(
+                _metrics_json_dict, _ml_config
+            )
+            _predictive_gate = evaluate_intelligence_gate(
+                _metrics_json_dict, _ml_config
+            )
+            from app.ml.model_governance import governance_from_gate
+            _governance_v2 = governance_from_gate(
+                descriptive_gate=_descriptive_gate,
+                predictive_gate=_predictive_gate,
+            )
+            # Compatibility key now represents predictive quality. Descriptive
+            # findings live under their own key and cannot grant authority.
+            _metrics_json_dict["intelligence_gate"] = _predictive_gate
+            _metrics_json_dict["descriptive_gate"] = _descriptive_gate
+            _metrics_json_dict["governance_v2"] = _governance_v2
             _gate_result = {
                 "status": "BLOCKED",
                 "evaluated_at": datetime.now(timezone.utc).isoformat(),
@@ -1354,7 +1437,10 @@ class MLChallengerService:
                 label_version, model_lane,
                 metrics_json, target_window_seconds,
                 source_filter, dataset_contract_id
-                , train_from, train_to, dataset_query_cutoff, dataset_hash
+                , train_from, train_to, dataset_query_cutoff, dataset_hash,
+                descriptive_status, predictive_status,
+                calibration_authority, rule_generation_authority,
+                autopilot_authority, execution_authority, governance_reason
             ) VALUES (
                 :id, :version, 'candidate',
                 :hyperparams, :n_train, :n_val, :n_test,
@@ -1367,7 +1453,10 @@ class MLChallengerService:
                 :label_version, :model_lane,
                 :metrics_json, :target_window_seconds,
                 :source_filter, :dataset_contract_id
-                , :train_from, :train_to, :dataset_query_cutoff, :dataset_hash
+                , :train_from, :train_to, :dataset_query_cutoff, :dataset_hash,
+                :descriptive_status, :predictive_status,
+                :calibration_authority, :rule_generation_authority,
+                false, false, CAST(:governance_reason AS JSONB)
             )
         """), {
             "id": str(model_uuid),
@@ -1401,6 +1490,14 @@ class MLChallengerService:
             ),
             "blob": model_blob,
             "label_version": label_ver,
+            "descriptive_status": (_metrics_json_dict.get("governance_v2") or {}).get("descriptive_status"),
+            "predictive_status": (_metrics_json_dict.get("governance_v2") or {}).get("predictive_status", "PREDICTIVE_REJECTED"),
+            "calibration_authority": bool((_metrics_json_dict.get("governance_v2") or {}).get("calibration_authority", False)),
+            "rule_generation_authority": bool((_metrics_json_dict.get("governance_v2") or {}).get("rule_generation_authority", False)),
+            "governance_reason": json.dumps({
+                "predictive_gate": _metrics_json_dict.get("intelligence_gate"),
+                "descriptive_gate": _metrics_json_dict.get("descriptive_gate"),
+            }, default=_json_default),
             "model_lane": model_lane,
             "scope": "profile" if profile_id else "global",
             "pid": str(profile_id) if profile_id else None,
@@ -1413,6 +1510,26 @@ class MLChallengerService:
             "dataset_query_cutoff": dataset_query_cutoff,
             "dataset_hash": dataset_hash,
         })
+
+        threshold_curve = metrics.get("threshold_curve") or []
+        for point in threshold_curve:
+            await db.execute(text("""
+                INSERT INTO ml_threshold_curve (
+                    model_id, threshold, n_positive, net_ev, coverage, is_selected
+                ) VALUES (
+                    :model_id, :threshold, :n_positive, :net_ev, :coverage, :is_selected
+                )
+            """), {
+                "model_id": str(model_uuid),
+                "threshold": point["threshold"],
+                "n_positive": point.get("positives"),
+                "net_ev": point.get("net_ev"),
+                "coverage": (
+                    float(point.get("positives", 0)) / float(n_val)
+                    if n_val else None
+                ),
+                "is_selected": abs(float(point["threshold"]) - float(threshold)) < 1e-9,
+            })
 
         # Registra em ml_model_registry (champion/challenger tracking)
         version_str = f"{model_type}_v{now.strftime('%Y%m%d_%H%M')}"
@@ -1476,6 +1593,11 @@ class MLChallengerService:
             return "L3_LAB_PROFILE"
         if cb_sources == ["L3_REJECTED"]:
             return "L3_INTELLIGENCE"
+        if (
+            advisory_intelligence
+            and set(cb_sources) == set(CATBOOST_CONTEXTUAL_INTELLIGENCE_SOURCES)
+        ):
+            return "L3_CONTEXTUAL_INTELLIGENCE"
         return "L3_PROFILE"
 
     @staticmethod
@@ -1490,6 +1612,11 @@ class MLChallengerService:
             return "L3_LAB_ONLY"
         if cb_sources == ["L3_REJECTED"]:
             return "L3_REJECTED_ONLY"
+        if (
+            advisory_intelligence
+            and set(cb_sources) == set(CATBOOST_CONTEXTUAL_INTELLIGENCE_SOURCES)
+        ):
+            return "ALL_CANDIDATES_CONTEXTUAL"
         return "L3_COMBINED"
 
     async def train_challengers(
@@ -1618,7 +1745,9 @@ class MLChallengerService:
         if enable_lightgbm:
             lgbm_sources = lgbm_source_filter or (source_filter if source_filter else LGBM_TRAIN_SOURCES)
             lgbm_records = await self._load_shadow_data(
-                db, user_id, lookback_days, lgbm_sources, dataset_valid_from=dataset_valid_from
+                db, user_id, lookback_days, lgbm_sources,
+                dataset_valid_from=dataset_valid_from,
+                require_canonical_lineage=bool(ml_config.get("ml_predictive_gate_v2", False)),
             )
             logger.info(
                 "[MLChallenger] Lane1/LightGBM: sources=%s records=%d", lgbm_sources, len(lgbm_records),
@@ -1794,7 +1923,9 @@ class MLChallengerService:
             else:
                 cb_dataset_valid_from = l3_dataset_valid_from
             cb_all_records = await self._load_shadow_data(
-                db, user_id, lookback_days, cb_sources, dataset_valid_from=cb_dataset_valid_from
+                db, user_id, lookback_days, cb_sources,
+                dataset_valid_from=cb_dataset_valid_from,
+                require_canonical_lineage=bool(ml_config.get("ml_predictive_gate_v2", False)),
             )
             cb_profile_records = [r for r in cb_all_records if r.get("profile_id")]
             barrier_meta: Dict[str, Any] = {}
@@ -1813,6 +1944,7 @@ class MLChallengerService:
             l3_meta = self._l3_strict_meta(cb_all_records, cb_profile_records, cb_sources)
             l3_meta.update(barrier_meta)
             l3_meta["dataset_policy"] = cb_dataset_policy
+            l3_meta["grouping_contract_version"] = SNAPSHOT_GROUPING_CONTRACT_VERSION
             l3_meta["included_trade_count"] = len(cb_records)
             l3_meta["dataset_valid_from"] = cb_dataset_valid_from.isoformat()
             logger.info(
@@ -1823,7 +1955,26 @@ class MLChallengerService:
                 l3_meta["distinct_profiles"],
                 l3_meta["unknown_profile_pct"],
             )
-            if len(cb_records) < MIN_RECORDS:
+            contextual_min_required = (
+                _require_positive_int_config(
+                    ml_config, "ml_retrain_min_eligible_rows"
+                )
+                if cb_lane == "L3_CONTEXTUAL_INTELLIGENCE"
+                else None
+            )
+            if (
+                contextual_min_required is not None
+                and len(cb_records) < contextual_min_required
+            ):
+                results["catboost"] = {
+                    "status": "skipped",
+                    "reason": "insufficient_retrain_eligible_rows",
+                    "records": len(cb_records),
+                    "min_required": contextual_min_required,
+                    "sources": cb_sources,
+                    "l3_strict_meta": l3_meta,
+                }
+            elif len(cb_records) < MIN_RECORDS:
                     results["catboost"] = {
                         "status": "skipped",
                         "reason": (
@@ -1859,6 +2010,7 @@ class MLChallengerService:
                             holding_seconds=holding_seconds,
                             val_fraction=VAL_FRACTION,
                             embargo_seconds=embargo_seconds,
+                            group_ids=snapshot_keys,
                         )
                         X_tr, y_tr = _cb_split["X_tr"], _cb_split["y_tr"]
                         X_va, y_va = _cb_split["X_va"], _cb_split["y_va"]
@@ -1866,7 +2018,9 @@ class MLChallengerService:
                         ret_va = _cb_split["meta_va"][0]
                         ret_te = _cb_split["meta_te"][0] if _cb_split["has_test"] else None
                         intelligence_lane = cb_lane in {
-                            "L3_INTELLIGENCE", "L3_APPROVED_INTELLIGENCE"
+                            "L3_INTELLIGENCE",
+                            "L3_APPROVED_INTELLIGENCE",
+                            "L3_CONTEXTUAL_INTELLIGENCE",
                         }
                         train_weights = val_weights = test_weights = None
                         if intelligence_lane:
@@ -1911,9 +2065,14 @@ class MLChallengerService:
                                 X_tr, y_tr, X_va, y_va, all_cols, n_trials_cb, cat_indices, X_te, y_te,
                                 ret_va, ret_te, threshold_grid_step, threshold_min_positives,
                                 train_weights, val_weights, test_weights,
-                                "weighted_roc_auc" if intelligence_lane else "net_ev",
-                                ml_config.get("ml_intelligence_catboost_params")
-                                if intelligence_lane else None,
+                                "net_ev",
+                                (
+                                    None
+                                    if intelligence_lane and bool(ml_config.get("ml_predictive_gate_v2", False))
+                                    else ml_config.get("ml_intelligence_catboost_params")
+                                    if intelligence_lane
+                                    else None
+                                ),
                             )
                             intelligence_report = None
                             if intelligence_lane:
