@@ -72,14 +72,22 @@ FROM pop WHERE holding_seconds < 0
 UNION ALL
 -- Fase 1.4 (P1 ação A): cobertura L3/L3_LAB via colunas dedicadas (o que o
 -- treino lê), não via config_snapshot. Invariante dedicado (não estende I04).
+-- Fase 1.5 (P1): + coerência de VALOR — ATR_DYNAMIC deve carregar o contrato
+-- ativo (:ACTIVE_CONTRACT_VERSION), não o carimbo v1 do artefato TP-fixo;
+-- tp/sl dentro dos clamps D4 (:CLAMP_MIN/:CLAMP_MAX). Tudo de config.
 SELECT 'I12_l3_economic_contract', COUNT(*),
        CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END
 FROM shadow_trades
 WHERE source IN ('L3', 'L3_LAB')
   AND eligible_for_training IS TRUE
-  AND entry_timestamp >= :W_FROM AND entry_timestamp < :W_TO
+  AND entry_timestamp >= :VALID_FROM
   AND (barrier_mode IS NULL OR tp_pct_applied IS NULL
-       OR sl_pct_applied IS NULL OR barrier_contract_version IS NULL);
+       OR sl_pct_applied IS NULL OR barrier_contract_version IS NULL
+       OR (barrier_mode = 'ATR_DYNAMIC'
+           AND barrier_contract_version IS DISTINCT FROM :ACTIVE_CONTRACT_VERSION)
+       OR tp_pct_applied <= 0 OR sl_pct_applied <= 0
+       OR tp_pct_applied < :CLAMP_MIN OR tp_pct_applied > :CLAMP_MAX
+       OR sl_pct_applied < :CLAMP_MIN OR sl_pct_applied > :CLAMP_MAX);
 
 -- Query cumulativa complementar (informativa, sem PASS/FAIL):
 -- elegíveis maturados pós-fronteira + projeção de dias para as metas de

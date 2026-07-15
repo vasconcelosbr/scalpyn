@@ -118,9 +118,23 @@ SELECT 'I12_l3_economic_contract',
 FROM shadow_trades
 WHERE source IN ('L3', 'L3_LAB')
   AND eligible_for_training IS TRUE
-  AND entry_timestamp >= :w_from AND entry_timestamp < :w_to
-  AND (barrier_mode IS NULL OR tp_pct_applied IS NULL
-       OR sl_pct_applied IS NULL OR barrier_contract_version IS NULL)
+  AND entry_timestamp >= :valid_from
+  AND (
+    -- (a) cobertura original: colunas dedicadas presentes.
+    barrier_mode IS NULL OR tp_pct_applied IS NULL
+    OR sl_pct_applied IS NULL OR barrier_contract_version IS NULL
+    -- (b) Fase 1.5 P1 — coerência de VALOR (não só NOT NULL): uma linha
+    -- ATR_DYNAMIC precisa carregar o contrato ATIVO (v2), não o carimbo v1
+    -- do artefato TP-fixo. O valor esperado vem da config
+    -- (ml_active_barrier_contract_version), nunca literal no SQL. Este é o
+    -- mecanismo do v77: colunas setadas, mas com o contrato errado.
+    OR (barrier_mode = 'ATR_DYNAMIC'
+        AND barrier_contract_version IS DISTINCT FROM :active_contract_version)
+    -- (c) sanidade física + clamps D4 (lidos de config, não literais).
+    OR tp_pct_applied <= 0 OR sl_pct_applied <= 0
+    OR tp_pct_applied < :clamp_min OR tp_pct_applied > :clamp_max
+    OR sl_pct_applied < :clamp_min OR sl_pct_applied > :clamp_max
+  )
 """)
 
 _CUMULATIVE_SQL = text("""
@@ -213,6 +227,26 @@ def _require_generation_floor(ml_config: Dict[str, Any]) -> int:
     return int(raw)
 
 
+def _require_str_config(ml_config: Dict[str, Any], key: str) -> str:
+    """Read a required non-empty string from the active ML config (fail-closed)."""
+    raw = ml_config.get(key)
+    if raw is None or str(raw).strip() == "":
+        raise RuntimeError(
+            f"missing_{key}: gravar em config_profiles(config_type='ml')"
+        )
+    return str(raw)
+
+
+def _require_float_config(ml_config: Dict[str, Any], key: str) -> float:
+    """Read a required float from the active ML config (fail-closed)."""
+    raw = ml_config.get(key)
+    if raw is None:
+        raise RuntimeError(
+            f"missing_{key}: gravar em config_profiles(config_type='ml')"
+        )
+    return float(raw)
+
+
 async def run_certification(
     db: AsyncSession,
     *,
@@ -246,6 +280,13 @@ async def run_certification(
         )
     milestone_rows = _require_positive_int_config(ml_config, "ml_readiness_milestone_rows")
     retrain_rows = _require_positive_int_config(ml_config, "ml_retrain_min_eligible_rows")
+    # Fase 1.5 P1 — I12 coerência de valor: contrato ativo esperado e clamps D4,
+    # todos lidos da config (fail-closed, nunca literal no SQL).
+    active_contract_version = _require_str_config(
+        ml_config, "ml_active_barrier_contract_version"
+    )
+    clamp_min = _require_float_config(ml_config, "shadow_barrier_min_pct")
+    clamp_max = _require_float_config(ml_config, "shadow_barrier_max_pct")
 
     base_params = {
         "src": CANONICAL_SOURCE,
@@ -257,6 +298,9 @@ async def run_certification(
         **base_params,
         "valid_from": valid_from,
         "piso_d3": piso_d3,
+        "active_contract_version": active_contract_version,
+        "clamp_min": clamp_min,
+        "clamp_max": clamp_max,
     })).fetchall()
     invariants: List[Dict[str, Any]] = [
         {

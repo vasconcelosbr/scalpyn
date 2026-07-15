@@ -338,6 +338,10 @@ _ML_CONFIG_ROW = {
     # Fase 1.3 — metas do readiness config-driven.
     "ml_readiness_milestone_rows": 1500,
     "ml_retrain_min_eligible_rows": 3000,
+    # Fase 1.5 P1 — I12 coerência de valor (contrato ativo + clamps D4).
+    "ml_active_barrier_contract_version": "shadow_atr_dynamic_v2",
+    "shadow_barrier_min_pct": 0.5,
+    "shadow_barrier_max_pct": 3.0,
 }
 
 _INVARIANT_NAMES = [
@@ -425,6 +429,53 @@ async def test_certification_i12_l3_contract_covered_and_fails_closed():
     )
     assert red["status"] == "RED"
     assert red["failed"] == ["I12_l3_economic_contract"]
+
+
+def _invariants_params(db):
+    """Params do execute() da query de invariantes (o 2º execute do fake)."""
+    for stmt, params in db.executed:
+        if "I12_l3_economic_contract" in stmt:
+            return params
+    raise AssertionError("query de invariantes não executada")
+
+
+@pytest.mark.asyncio
+async def test_i12_coherence_params_are_config_driven():
+    """Fase 1.5 P1 — o contrato ativo esperado e os clamps do I12 vêm da config
+    (nunca literais no SQL): mudar a config muda os params da query."""
+    from app.services.ml_data_certification_service import run_certification
+
+    db = _cert_session()
+    await run_certification(db, persist=False)
+    p = _invariants_params(db)
+    assert p["active_contract_version"] == "shadow_atr_dynamic_v2"
+    assert p["clamp_min"] == 0.5 and p["clamp_max"] == 3.0
+
+    cfg2 = dict(_ML_CONFIG_ROW,
+                ml_active_barrier_contract_version="shadow_atr_dynamic_v3",
+                shadow_barrier_min_pct=0.4, shadow_barrier_max_pct=2.5)
+    db2 = _FakeSession([
+        _FakeResult(rows=[(cfg2,)]),
+        _FakeResult(rows=_invariant_rows()),
+        _FakeResult(one_mapping=_cumulative_mapping()),
+        _FakeResult(scalar=0), _FakeResult(scalar=0), _FakeResult(rows=[]),
+    ])
+    await run_certification(db2, persist=False)
+    p2 = _invariants_params(db2)
+    assert p2["active_contract_version"] == "shadow_atr_dynamic_v3"
+    assert p2["clamp_min"] == 0.4 and p2["clamp_max"] == 2.5
+
+
+@pytest.mark.asyncio
+async def test_i12_fail_closed_without_active_contract_version():
+    """Fase 1.5 P1 — chave do contrato ativo ausente aborta (fail-closed, D3)."""
+    from app.services.ml_data_certification_service import run_certification
+
+    cfg = {k: v for k, v in _ML_CONFIG_ROW.items()
+           if k != "ml_active_barrier_contract_version"}
+    db = _FakeSession([_FakeResult(rows=[(cfg,)])])
+    with pytest.raises(RuntimeError, match="missing_ml_active_barrier_contract_version"):
+        await run_certification(db, persist=False)
 
 
 @pytest.mark.asyncio
