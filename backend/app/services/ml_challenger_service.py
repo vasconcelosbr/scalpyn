@@ -33,9 +33,17 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 try:
-    from app.ml.dataset_config import parse_required_ml_dataset_valid_from
+    from app.ml.dataset_config import (
+        BARRIER_CONTRACT_ATR_DYNAMIC_V2,
+        MLDatasetConfigError,
+        parse_required_ml_dataset_valid_from,
+    )
 except ModuleNotFoundError:
-    from backend.app.ml.dataset_config import parse_required_ml_dataset_valid_from
+    from backend.app.ml.dataset_config import (
+        BARRIER_CONTRACT_ATR_DYNAMIC_V2,
+        MLDatasetConfigError,
+        parse_required_ml_dataset_valid_from,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +179,15 @@ def _filter_l3_barrier_contract(
             continue
         if str(record_mode).upper() != mode:
             mismatched_mode += 1
+            continue
+        # Fase 1 (D1=A): sob shadow_atr_dynamic_v2 o TP é ATR-dinâmico por
+        # linha — a paridade econômica é dada pela versão do contrato de
+        # barreira, não pela igualdade com o TP do Strategies Module.
+        if (
+            mode == "ATR_DYNAMIC"
+            and record.get("barrier_contract_version") == BARRIER_CONTRACT_ATR_DYNAMIC_V2
+        ):
+            kept.append(record)
             continue
         if not math.isclose(float(record_tp), tp, rel_tol=0.0, abs_tol=1e-9):
             mismatched_tp += 1
@@ -740,13 +757,23 @@ class MLChallengerService:
             )
         if int(maturity_embargo_margin_minutes) < 0:
             raise ValueError("invalid_ml_maturity_embargo_margin_minutes")
+        # Fase 1 B.2 — a fronteira temporal é obrigatória em TODO caminho de
+        # montagem de dataset. Zero datas hardcoded; a chave vem da config
+        # (ml_dataset_valid_from) e é parseada pelo caller.
+        if dataset_valid_from is None:
+            raise MLDatasetConfigError(
+                "missing_dataset_valid_from: todo caminho de treino deve passar "
+                "a fronteira ml_dataset_valid_from lida da config"
+            )
         sources = source_filter if source_filter is not None else TRAIN_SOURCES
         # Build per-source placeholders to avoid any injection risk
         source_placeholders = ", ".join(f":src_{i}" for i in range(len(sources)))
         source_params = {f"src_{i}": s for i, s in enumerate(sources)}
         profile_clause = "AND profile_id IS NOT NULL" if require_profile_id else ""
-        valid_from_clause = "AND created_at >= :valid_from" if dataset_valid_from else ""
-        valid_from_params = {"valid_from": dataset_valid_from} if dataset_valid_from else {}
+        valid_from_clause = (
+            "AND entry_timestamp IS NOT NULL AND entry_timestamp >= :valid_from"
+        )
+        valid_from_params = {"valid_from": dataset_valid_from}
         cutoff_clause = ""
         cutoff_params: dict = {}
         if _TRAIN_CUTOFF_AT:
@@ -822,8 +849,10 @@ class MLChallengerService:
                 features_snapshot,
                 config_snapshot,
                 barrier_mode,
+                barrier_contract_version,
                 tp_pct_applied,
                 sl_pct_applied,
+                entry_timestamp,
                 created_at,
                 features_captured_at,
                 timeframe,
@@ -850,7 +879,19 @@ class MLChallengerService:
             "[MLChallenger] _load_shadow_data: sources=%s rows=%d require_profile_id=%s user=%s",
             sources, len(rows), require_profile_id, user_id,
         )
-        return [dict(r._mapping) for r in rows]
+        records = [dict(r._mapping) for r in rows]
+        # Fase 1 B.2 — guard de montagem: linha pré-fronteira presente no
+        # dataset é exceção dura; o treino aborta em vez de treinar contaminado.
+        _vf = dataset_valid_from
+        for record in records:
+            _ets = record.get("entry_timestamp")
+            if _ets is None or _ets < _vf:
+                raise MLDatasetConfigError(
+                    "dataset_row_before_valid_from: shadow_id="
+                    f"{record.get('shadow_id')} entry_timestamp={_ets} "
+                    f"valid_from={_vf.isoformat()}"
+                )
+        return records
 
     @staticmethod
     def _l3_strict_meta(
@@ -1576,8 +1617,15 @@ class MLChallengerService:
         cat_feature_indices: Optional[List[int]] = None,
         test_metrics: Optional[Dict[str, Any]] = None,
         win_fast_threshold_s: float = 1800.0,
+        dataset_stats: Optional[Dict[str, Any]] = None,
     ) -> UUID:
-        """Serializa e salva em ml_models + ml_model_registry. Retorna model_id."""
+        """Persistência transacional de um treino (Fase 1 B.4).
+
+        Grava, na MESMA transação do caller: ml_models + ml_model_registry +
+        ml_training_dataset + ml_promotion_gate_results. Contract_ids nulos ou
+        lane/source não registrados em ml_dataset_contracts são exceção dura —
+        ou tudo é gravado, ou nada é gravado (rollback no caller).
+        """
         import joblib as _joblib
 
         buf = io.BytesIO()
@@ -1672,6 +1720,29 @@ class MLChallengerService:
             ).hexdigest()[:32]
         else:
             dataset_contract_id = None
+
+        # Fase 1 B.4 — governança inviolável: nenhum modelo é persistido sem
+        # os três contract_ids (v80 nasceu com label/feature nulos e zero
+        # linhas em ml_training_dataset). Exceção dura ANTES de qualquer INSERT.
+        if not (label_contract_id and feature_contract_id and dataset_contract_id):
+            raise ValueError(
+                "ml_governance_contract_ids_required: label_contract_id="
+                f"{label_contract_id} feature_contract_id={feature_contract_id} "
+                f"dataset_contract_id={dataset_contract_id} — treino abortado"
+            )
+        # Lane/source restritos aos contratos registrados em ml_dataset_contracts.
+        # Lane nova exige contrato novo registrado antes (migration ou operador).
+        _lane_registered = (await db.execute(text("""
+            SELECT 1 FROM ml_dataset_contracts
+            WHERE model_lane = :lane AND source_filter = :sf
+            LIMIT 1
+        """), {"lane": model_lane, "sf": source_filter_str})).first()
+        if _lane_registered is None:
+            raise ValueError(
+                "training_lane_not_registered: lane="
+                f"{model_lane} source_filter={source_filter_str} — registrar "
+                "contrato em ml_dataset_contracts antes de treinar"
+            )
 
         # Feature importance — extracted from trained model object, persisted in
         # metrics_json for drift analysis and feature selection audits.
@@ -1918,6 +1989,56 @@ class MLChallengerService:
             "now": now,
         })
 
+        # Fase 1 B.4 — registro do dataset na MESMA transação. Sem linha em
+        # ml_training_dataset o treino não existe (atomicidade com ml_models).
+        if not dataset_stats:
+            raise ValueError(
+                "ml_training_dataset_stats_required: caller deve fornecer "
+                "n_samples/n_positive/n_negative/positive_rate do dataset treinado"
+            )
+        await db.execute(text("""
+            INSERT INTO ml_training_dataset (
+                id, model_id, dataset_contract_id, source_filter,
+                n_samples, n_positive, n_negative, positive_rate,
+                cutoff_at, train_from, train_to, win_threshold_s
+            ) VALUES (
+                gen_random_uuid(), :mid, :dcid, :sf,
+                :n_samples, :n_positive, :n_negative, :positive_rate,
+                :cutoff_at, :train_from, :train_to, :win_threshold_s
+            )
+        """), {
+            "mid": str(model_uuid),
+            "dcid": dataset_contract_id,
+            "sf": source_filter_str,
+            "n_samples": int(dataset_stats["n_samples"]),
+            "n_positive": int(dataset_stats["n_positive"]),
+            "n_negative": int(dataset_stats["n_negative"]),
+            "positive_rate": float(dataset_stats["positive_rate"]),
+            "cutoff_at": dataset_query_cutoff,
+            "train_from": train_from,
+            "train_to": train_to,
+            # B.3 — valor efetivamente usado, gravado também no registro de dataset.
+            "win_threshold_s": int(win_fast_threshold_s),
+        })
+
+        # Fase 1 B.4/E.4 — corrida do promotion gate persistida com reason legível
+        # (antes só existia dentro de metrics_json; ml_promotion_gate_results
+        # tinha zero linhas para qualquer modelo).
+        await db.execute(text("""
+            INSERT INTO ml_promotion_gate_results (
+                id, model_id, gate_version, status, reasons_json, input_json
+            ) VALUES (
+                gen_random_uuid(), :mid, :gate_version, :status,
+                CAST(:reasons AS JSONB), CAST(:input AS JSONB)
+            )
+        """), {
+            "mid": str(model_uuid),
+            "gate_version": str(_gate_result.get("gate_version") or "promotion_gate_v1"),
+            "status": str(_gate_result["status"]),
+            "reasons": json.dumps(_gate_result.get("reasons") or [], default=_json_default),
+            "input": json.dumps(_json_finite(_gate_input), default=_json_default),
+        })
+
         logger.info(
             "[MLChallenger] Registered %s model_id=%s roc_auc=%s version=%s",
             model_type,
@@ -2067,7 +2188,7 @@ class MLChallengerService:
         source_filter: Optional[List[str]] = None,
         lgbm_source_filter: Optional[List[str]] = None,
         catboost_source_filter: Optional[List[str]] = None,
-        win_fast_threshold_s: float = 1800.0,
+        win_fast_threshold_s: Optional[float] = None,
         allow_mixed_source: bool = False,
         advisory_intelligence: bool = False,
     ) -> Dict[str, Any]:
@@ -2133,8 +2254,25 @@ class MLChallengerService:
             "ml_maturity_embargo_margin_minutes"
         )
         strategy_tp_pct = await self._load_strategy_tp_pct(db, user_id)
-        if "ml_win_fast_threshold_seconds" in ml_config:
-            win_fast_threshold_s = float(ml_config["ml_win_fast_threshold_seconds"])
+        # Fase 1 B.3 — fonte única do win threshold: SEMPRE a config ativa.
+        # Chave ausente aborta o treino; parâmetro divergente passado por
+        # chamada é exceção dura (v80 treinou com 14400 vs contrato 1800).
+        if ml_config.get("ml_win_fast_threshold_seconds") in (None, ""):
+            raise MLDatasetConfigError(
+                "missing_ml_win_fast_threshold_seconds: gravar em "
+                "config_profiles(config_type='ml') antes do treino"
+            )
+        _cfg_win_threshold_s = float(ml_config["ml_win_fast_threshold_seconds"])
+        if (
+            win_fast_threshold_s is not None
+            and float(win_fast_threshold_s) != _cfg_win_threshold_s
+        ):
+            raise ValueError(
+                "win_fast_threshold_divergent: caller="
+                f"{win_fast_threshold_s} config={_cfg_win_threshold_s} — "
+                "a config ml_win_fast_threshold_seconds é a única fonte"
+            )
+        win_fast_threshold_s = _cfg_win_threshold_s
         dataset_valid_from = parse_required_ml_dataset_valid_from(ml_config)
         min_lgbm_retrain_eligible = (
             _require_positive_int_config(ml_config, "ml_retrain_min_eligible_rows")
@@ -2287,6 +2425,20 @@ class MLChallengerService:
                                 lgbm_search_space,
                             )
                             _lgbm_at_tr = _lgbm_split["meta_tr"][1]  # created_at post-purge train rows
+                            _lgbm_n = (
+                                len(y_tr) + len(y_va)
+                                + (len(y_te) if y_te is not None else 0)
+                            )
+                            _lgbm_pos = int(
+                                y_tr.sum() + y_va.sum()
+                                + (y_te.sum() if y_te is not None else 0)
+                            )
+                            lgbm_dataset_stats = {
+                                "n_samples": _lgbm_n,
+                                "n_positive": _lgbm_pos,
+                                "n_negative": _lgbm_n - _lgbm_pos,
+                                "positive_rate": (_lgbm_pos / _lgbm_n) if _lgbm_n else 0.0,
+                            }
                             model_id = await self._save_to_db(
                                 db, user_id=user_id,
                                 model_type="lightgbm",
@@ -2307,6 +2459,7 @@ class MLChallengerService:
                                 model_lane="L1_SPECTRUM",
                                 test_metrics=lgbm_result.get("test_metrics"),
                                 win_fast_threshold_s=win_fast_threshold_s,
+                                dataset_stats=lgbm_dataset_stats,
                             )
                             await db.commit()
                             results["lightgbm"] = {
@@ -2330,6 +2483,8 @@ class MLChallengerService:
                             )
                 except Exception as exc:
                     logger.exception("[MLChallenger] LightGBM falhou: %s", exc)
+                    # B.4 — rollback comprovado: persistência parcial nunca sobrevive.
+                    await db.rollback()
                     results["lightgbm"] = {"status": "failed", "error": str(exc)}
             else:
                 results["lightgbm"] = {"status": "not_installed"}
@@ -2523,6 +2678,20 @@ class MLChallengerService:
                                     ),
                                     label=label_objective,
                                 )
+                            _cb_n = (
+                                len(y_tr) + len(y_va)
+                                + (len(y_te) if y_te is not None else 0)
+                            )
+                            _cb_pos = int(
+                                y_tr.sum() + y_va.sum()
+                                + (y_te.sum() if y_te is not None else 0)
+                            )
+                            cb_dataset_stats = {
+                                "n_samples": _cb_n,
+                                "n_positive": _cb_pos,
+                                "n_negative": _cb_n - _cb_pos,
+                                "positive_rate": (_cb_pos / _cb_n) if _cb_n else 0.0,
+                            }
                             model_id = await self._save_to_db(
                                 db, user_id=user_id,
                                 model_type="catboost",
@@ -2550,6 +2719,7 @@ class MLChallengerService:
                                 cat_feature_indices=cat_indices,
                                 test_metrics=cb_result.get("test_metrics"),
                                 win_fast_threshold_s=win_fast_threshold_s,
+                                dataset_stats=cb_dataset_stats,
                             )
                             await db.commit()
                             results["catboost"] = {
@@ -2578,6 +2748,8 @@ class MLChallengerService:
                             )
                 except Exception as exc:
                     logger.exception("[MLChallenger] CatBoost falhou: %s", exc)
+                    # B.4 — rollback comprovado: persistência parcial nunca sobrevive.
+                    await db.rollback()
                     results["catboost"] = {"status": "failed", "error": str(exc)}
             else:
                 results["catboost"] = {"status": "not_installed"}

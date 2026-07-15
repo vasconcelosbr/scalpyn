@@ -83,18 +83,97 @@ _SHADOW_SL_PCT_OVERRIDE = float(os.environ.get("SHADOW_SL_PCT", "0.0"))
 
 
 def _apply_barrier_params(user_config: dict, ml_config: dict) -> dict:
-    """Merge ML-owned SL barrier parameters into the strategy config.
+    """Merge ML-owned barrier parameters into the strategy config.
 
     When shadow_barrier_mode='ATR_DYNAMIC', _create_from_decision overrides
-    sl_pct using per-asset atr_percent. TP remains owned by the Strategies
-    Module so every shadow source follows the GUI's take_profit_pct.
+    sl_pct using per-asset atr_percent. Fase 1 (D1=A, shadow_atr_dynamic_v2):
+    when shadow_atr_multiplier_tp is configured, tp_pct is ATR-scaled too,
+    under the same clamp [shadow_barrier_min_pct, shadow_barrier_max_pct].
+    Without that key the TP keeps following the Strategies Module (v1).
     """
     user_config["shadow_barrier_mode"] = ml_config.get("shadow_barrier_mode", "FIXED")
+    user_config["tp_atr_multiplier"]   = ml_config.get("shadow_atr_multiplier_tp")
     user_config["sl_atr_multiplier"]   = ml_config.get("shadow_atr_multiplier_sl", 1.5)
     user_config["sl_min_pct"]          = ml_config.get("shadow_barrier_min_pct", 0.5)
     user_config["sl_max_pct"]          = ml_config.get("shadow_barrier_max_pct", 3.0)
+    user_config["ml_win_fast_threshold_seconds"] = ml_config.get(
+        "ml_win_fast_threshold_seconds"
+    )
     user_config.pop("shadow_tp_pct", None)
     return user_config
+
+
+def _resolve_atr_barriers(
+    atr_pct: float, tp_pct: float, sl_pct: float, user_config: dict
+) -> tuple:
+    """Fase 1 (D1=A): barreiras ATR-dinâmicas sob clamp compartilhado.
+
+    SL é sempre ATR-escalado quando há ATR válido; TP só quando
+    tp_atr_multiplier está configurado (contrato shadow_atr_dynamic_v2).
+    ATR ausente/zero preserva os valores recebidos (v1 behaviour).
+    """
+    if atr_pct <= 0.0:
+        return tp_pct, sl_pct
+    _sl_mult = float(user_config.get("sl_atr_multiplier", 1.5))
+    _clamp_min = float(user_config.get("sl_min_pct", 0.5))
+    _clamp_max = float(user_config.get("sl_max_pct", 3.0))
+    sl_pct = max(_clamp_min, min(_clamp_max, atr_pct * _sl_mult))
+    _tp_mult = user_config.get("tp_atr_multiplier")
+    if _tp_mult is not None:
+        tp_pct = max(_clamp_min, min(_clamp_max, atr_pct * float(_tp_mult)))
+    return tp_pct, sl_pct
+
+
+def _resolve_barrier_contract_version(barrier_mode: str, tp_atr_mult) -> str:
+    """Carimbo do contrato de barreira gravado no INSERT (imutável depois).
+
+    v2 exige ATR_DYNAMIC com multiplicador de TP configurado; qualquer outra
+    combinação mantém o carimbo v1 do modo vigente.
+    """
+    if barrier_mode == "ATR_DYNAMIC" and tp_atr_mult is not None:
+        return BARRIER_CONTRACT_ATR_DYNAMIC_V2
+    return f"shadow_{str(barrier_mode).lower()}_v1"
+
+
+def _build_economic_config_snapshot(
+    *,
+    tp_pct,
+    sl_pct,
+    timeout_candles,
+    amount_usdt,
+    ttt_enabled,
+    ttt_tp_pct,
+    ttt_timeout_minutes,
+    user_config,
+    barrier_mode,
+    tp_atr_mult,
+    barrier_contract_version,
+    native_capture,
+) -> dict:
+    """Fase 1 B.1 — contrato econômico completo, cópia point-in-time da
+    config vigente na criação (nunca referência à config viva)."""
+    return {
+        "tp_pct": tp_pct,
+        "sl_pct": sl_pct,
+        "timeout_candles": timeout_candles,
+        "amount_usdt": amount_usdt,
+        # TTT policy snapshot (migration 065)
+        "ttt_enabled": ttt_enabled,
+        "ttt_tp_pct": ttt_tp_pct,
+        "ttt_timeout_minutes": ttt_timeout_minutes,
+        # ML fee key: monitor reads this to compute net_return_pct at close (B1 fix)
+        "ml_fee_roundtrip_pct": user_config.get("ml_fee_roundtrip_pct"),
+        "barrier_mode": barrier_mode,
+        "atr_multiplier_tp": tp_atr_mult,
+        "atr_multiplier_sl": user_config.get("sl_atr_multiplier"),
+        "clamp_min": user_config.get("sl_min_pct"),
+        "clamp_max": user_config.get("sl_max_pct"),
+        "win_fast_threshold_seconds": user_config.get("ml_win_fast_threshold_seconds"),
+        "feature_schema_version": native_capture.feature_schema_version,
+        "label_contract_version": LABEL_CONTRACT_VERSION,
+        "barrier_contract_version": barrier_contract_version,
+        "capture_contract_version": native_capture.capture_contract_version,
+    }
 
 
 def _merge_ml_shadow_config(user_config: dict, ml_config: dict) -> dict:
@@ -174,6 +253,21 @@ _VALID_SHADOW_SOURCES = (
     SHADOW_SOURCE_L3_LAB,
 )
 
+# ── Contract version stamps (Fase 1) — fonte única em app/ml/dataset_config.
+# BARRIER v2 é estampado apenas quando o multiplicador de TP está configurado;
+# linhas criadas sem shadow_atr_multiplier_tp mantêm o carimbo v1 (TP segue o
+# Strategies Module).
+try:
+    from ..ml.dataset_config import (
+        BARRIER_CONTRACT_ATR_DYNAMIC_V2,
+        LABEL_CONTRACT_VERSION,
+    )
+except ImportError:  # pragma: no cover
+    from backend.app.ml.dataset_config import (
+        BARRIER_CONTRACT_ATR_DYNAMIC_V2,
+        LABEL_CONTRACT_VERSION,
+    )
+
 _ACTIVE_PROFILE_SHADOW_STATUSES = ("RUNNING", "PENDING")
 _ACTIVE_PROFILE_SHADOW_EXISTS_SQL = text("""
     SELECT 1
@@ -205,14 +299,24 @@ def _integrity_error_constraint_name(exc: IntegrityError) -> Optional[str]:
         return str(name)
 
     message = str(orig or exc)
-    if "uq_shadow_lab_active_profile_symbol" in message:
-        return "uq_shadow_lab_active_profile_symbol"
+    for known in ("uq_shadow_lab_active_profile_symbol", "ux_shadow_l1_symbol_entry"):
+        if known in message:
+            return known
     return None
 
 
 def _is_active_profile_shadow_conflict(exc: IntegrityError) -> bool:
     """Return True when the partial unique active-profile dedup fired."""
     return _integrity_error_constraint_name(exc) == "uq_shadow_lab_active_profile_symbol"
+
+
+def _is_l1_duplicate_conflict(exc: IntegrityError) -> bool:
+    """Return True when the L1_SPECTRUM natural-key dedup index fired.
+
+    Fase 1.3 (I10): ux_shadow_l1_symbol_entry impede duas capturas do mesmo
+    (user_id, symbol, entry_timestamp) por scans consecutivos do pipeline_scan.
+    """
+    return _integrity_error_constraint_name(exc) == "ux_shadow_l1_symbol_entry"
 
 
 async def _has_active_profile_shadow(
@@ -775,17 +879,18 @@ async def _create_from_decision(
     # Fase 3 (migration 071) — barreira mode e pcts aplicados (snapshot na abertura).
     barrier_mode = user_config.get("shadow_barrier_mode", "FIXED")
 
-    # TP is resolved exclusively from the Strategies Module configuration.
-
     # P0-1: ATR_DYNAMIC — SL computed per-asset from atr_percent at entry.
+    # Fase 1 (D1=A): TP is ATR-scaled too when shadow_atr_multiplier_tp is
+    # configured (barrier contract shadow_atr_dynamic_v2). Without the key,
+    # TP keeps following the Strategies Module (v1 behaviour, unchanged).
+    _tp_atr_mult = user_config.get("tp_atr_multiplier")
     if barrier_mode == "ATR_DYNAMIC":
         _feats_early = _build_features_snapshot(decision)
         _atr_pct = float(_feats_early.get("atr_percent") or 0.0)
-        if _atr_pct > 0.0:
-            _sl_mult = float(user_config.get("sl_atr_multiplier", 1.5))
-            _min_sl  = float(user_config.get("sl_min_pct", 0.5))
-            _max_sl  = float(user_config.get("sl_max_pct", 3.0))
-            sl_pct = max(_min_sl, min(_max_sl, _atr_pct * _sl_mult))
+        tp_pct, sl_pct = _resolve_atr_barriers(_atr_pct, tp_pct, sl_pct, user_config)
+    _barrier_contract_version = _resolve_barrier_contract_version(
+        barrier_mode, _tp_atr_mult
+    )
 
     # Task #303: ``decision.id`` é ``None`` para ``_SyntheticDecision``
     # (fallback "live_l3") — vira NULL na coluna após migration 057.
@@ -848,26 +953,29 @@ async def _create_from_decision(
         tp_price = None
         sl_price = None
 
-    config_snap = {
-        "tp_pct": tp_pct,
-        "sl_pct": sl_pct,
-        "timeout_candles": timeout_candles,
-        "amount_usdt": SHADOW_TRADE_AMOUNT_USDT,
-        # TTT policy snapshot (migration 065)
-        "ttt_enabled": ttt_enabled,
-        "ttt_tp_pct": ttt_tp_pct,
-        "ttt_timeout_minutes": ttt_timeout_minutes,
-        # ML fee key: monitor reads this to compute net_return_pct at close (B1 fix)
-        "ml_fee_roundtrip_pct": user_config.get("ml_fee_roundtrip_pct"),
-    }
+    native_capture = capture_native_snapshot(_build_features_snapshot(decision))
+    features_snap = native_capture.snapshot
+    feature_errors = list(native_capture.errors)
+
+    config_snap = _build_economic_config_snapshot(
+        tp_pct=tp_pct,
+        sl_pct=sl_pct,
+        timeout_candles=timeout_candles,
+        amount_usdt=SHADOW_TRADE_AMOUNT_USDT,
+        ttt_enabled=ttt_enabled,
+        ttt_tp_pct=ttt_tp_pct,
+        ttt_timeout_minutes=ttt_timeout_minutes,
+        user_config=user_config,
+        barrier_mode=barrier_mode,
+        tp_atr_mult=_tp_atr_mult,
+        barrier_contract_version=_barrier_contract_version,
+        native_capture=native_capture,
+    )
     # Merge caller-provided metadata (e.g. l3_decision, l3_score, l3_reasons for
     # L3_REJECTED / L3_SIMULATED) into config_snapshot so outcomes can be correlated
     # with gate labels after closure.
     if extra_config:
         config_snap.update(extra_config)
-    native_capture = capture_native_snapshot(_build_features_snapshot(decision))
-    features_snap = native_capture.snapshot
-    feature_errors = list(native_capture.errors)
     config_hash = hashlib.sha256(
         json.dumps(
             config_snap, sort_keys=True, separators=(",", ":"), default=str
@@ -1007,8 +1115,8 @@ async def _create_from_decision(
                     "feature_schema_version": native_capture.feature_schema_version,
                     "feature_extractor_version": native_capture.feature_extractor_version,
                     "capture_contract_version": native_capture.capture_contract_version,
-                    "label_contract_version": "positive_net_return_v1",
-                    "barrier_contract_version": f"shadow_{str(barrier_mode).lower()}_v1",
+                    "label_contract_version": LABEL_CONTRACT_VERSION,
+                    "barrier_contract_version": _barrier_contract_version,
                     "features_captured_at": native_capture.captured_at,
                     "features_coverage": feature_coverage(features_snap),
                     "feature_hash": native_capture.snapshot_hash,
@@ -1025,6 +1133,16 @@ async def _create_from_decision(
                 _lin_profile_id,
                 decision.symbol,
                 normalized_source,
+            )
+            return None
+        # Fase 1.3 (I10) — captura L1 idempotente: um segundo scan que resolve o
+        # mesmo (symbol, entry_timestamp) colide no índice ux_shadow_l1_symbol_entry.
+        # Skip silencioso (a primeira captura já persistiu a oportunidade).
+        if _is_l1_duplicate_conflict(exc):
+            logger.info(
+                "[shadow] duplicate L1_SPECTRUM capture skipped symbol=%s entry=%s",
+                decision.symbol,
+                entry_ts,
             )
             return None
         raise

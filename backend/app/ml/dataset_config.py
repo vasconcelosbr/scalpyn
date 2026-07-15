@@ -10,6 +10,14 @@ class MLDatasetConfigError(RuntimeError):
     """Raised when the ML dataset temporal frontier is absent or invalid."""
 
 
+# ── Contract version stamps (Fase 1) ────────────────────────────────────────
+# LABEL: semantics of outcome→label mapping (positive net return).
+LABEL_CONTRACT_VERSION = "positive_net_return_v1"
+# BARRIER v2 (D1=A): TP and SL both ATR-scaled with independent multipliers
+# under a shared clamp [shadow_barrier_min_pct, shadow_barrier_max_pct].
+BARRIER_CONTRACT_ATR_DYNAMIC_V2 = "shadow_atr_dynamic_v2"
+
+
 def parse_required_ml_dataset_valid_from(config: Mapping[str, Any]) -> datetime:
     """Return the required ML dataset frontier as UTC-aware datetime."""
     raw = config.get("ml_dataset_valid_from") if config else None

@@ -790,6 +790,28 @@ async def promote_ml_model(
     }
 
 
+@router.get("/readiness/latest")
+async def readiness_latest(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """Fase 1 Bloco D — última execução do job de certificação de integridade.
+
+    Resposta permanente à pergunta "posso treinar? quanto falta?": status
+    GREEN/YELLOW/RED, invariantes I01–I11, WARNs e o cumulativo com dias
+    projetados para 1500/3000/5000 elegíveis.
+    """
+    from ..services.ml_data_certification_service import latest_certification
+
+    latest = await latest_certification(db)
+    if latest is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Nenhuma execução de certificação registrada ainda",
+        )
+    return latest
+
+
 @router.get("/catboost/readiness")
 async def catboost_readiness(
     source: str = "L3",

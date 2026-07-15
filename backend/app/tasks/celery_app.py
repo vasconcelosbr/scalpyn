@@ -100,6 +100,7 @@ celery_app = Celery(
         "app.tasks.profile_intelligence_job",
         "app.tasks.opportunity_snapshot_evaluator",
         "app.tasks.crypto_ev_score",
+        "app.tasks.ml_data_certification",
     ],
 )
 
@@ -205,6 +206,12 @@ TASK_ROUTES = {
     # Opportunity Snapshot Evaluator — populates future_outcome on snapshots.
     # Structural queue: DB-only work (ohlcv table + shadow_trades join), no latency req.
     "app.tasks.opportunity_snapshot_evaluator.evaluate": {"queue": QUEUE_STRUCTURAL},
+
+    # Fase 1 Bloco D — certificação de integridade do dataset ML a cada 2h.
+    # Compute queue: isolada dos workers de captura (micro/structural/execution);
+    # falha do job nunca afeta a captura. Read-only + INSERT em
+    # ml_data_certification_runs.
+    "app.tasks.ml_data_certification.run": {"queue": QUEUE_STRUCTURAL_COMPUTE},
 }
 
 # Static queue declarations so beat / dispatch never rely on an "implicit"
@@ -646,6 +653,14 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.opportunity_snapshot_evaluator.evaluate",
         "schedule": float(os.environ.get("OPP_EVAL_INTERVAL_S", 1800)),
         "options": {"queue": QUEUE_STRUCTURAL},
+    },
+
+    # Fase 1 Bloco D — certificação de integridade do dataset ML.
+    # Contrato: a cada 2h (0 */2 * * *), janela sobreposta de 26h.
+    "ml_data_certification": {
+        "task": "app.tasks.ml_data_certification.run",
+        "schedule": crontab(minute=0, hour="*/2"),
+        "options": {"queue": QUEUE_STRUCTURAL_COMPUTE},
     },
 }
 
