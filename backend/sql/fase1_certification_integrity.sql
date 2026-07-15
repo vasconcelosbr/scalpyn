@@ -68,11 +68,23 @@ FROM (SELECT symbol, entry_timestamp FROM pop
 UNION ALL
 SELECT 'I11_holding_negativo', COUNT(*),
        CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END
-FROM pop WHERE holding_seconds < 0;
+FROM pop WHERE holding_seconds < 0
+UNION ALL
+-- Fase 1.4 (P1 ação A): cobertura L3/L3_LAB via colunas dedicadas (o que o
+-- treino lê), não via config_snapshot. Invariante dedicado (não estende I04).
+SELECT 'I12_l3_economic_contract', COUNT(*),
+       CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END
+FROM shadow_trades
+WHERE source IN ('L3', 'L3_LAB')
+  AND eligible_for_training IS TRUE
+  AND entry_timestamp >= :W_FROM AND entry_timestamp < :W_TO
+  AND (barrier_mode IS NULL OR tp_pct_applied IS NULL
+       OR sl_pct_applied IS NULL OR barrier_contract_version IS NULL);
 
 -- Query cumulativa complementar (informativa, sem PASS/FAIL):
--- elegíveis maturados pós-fronteira + projeção de dias para 1500/3000/5000
--- pela mediana diária dos últimos 7 dias UTC completos.
+-- elegíveis maturados pós-fronteira + projeção de dias para as metas de
+-- readiness. Fase 1.3: metas config-driven (:MILESTONE_ROWS = milestone,
+-- :RETRAIN_ROWS = gate de retrain); a meta estendida (5000) saiu do display.
 WITH mediana AS (
   SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY n) AS med
   FROM (SELECT date_trunc('day', entry_timestamp) d, COUNT(*) n
@@ -85,9 +97,8 @@ WITH mediana AS (
 )
 SELECT COUNT(*) AS elegiveis_maturados_pos_boundary,
        (SELECT med FROM mediana) AS mediana_diaria_7d,
-       CEIL(1500.0 / GREATEST(1, (SELECT med FROM mediana))) AS dias_para_1500,
-       CEIL(3000.0 / GREATEST(1, (SELECT med FROM mediana))) AS dias_para_3000,
-       CEIL(5000.0 / GREATEST(1, (SELECT med FROM mediana))) AS dias_para_5000,
+       CEIL(:MILESTONE_ROWS::numeric / GREATEST(1, (SELECT med FROM mediana))) AS dias_para_milestone,
+       CEIL(:RETRAIN_ROWS::numeric / GREATEST(1, (SELECT med FROM mediana))) AS dias_para_retrain,
        now() AS calculado_em
 FROM shadow_trades
 WHERE source='L1_SPECTRUM' AND barrier_mode='ATR_DYNAMIC'
