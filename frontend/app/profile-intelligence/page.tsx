@@ -5,6 +5,7 @@ import {
   Brain, RefreshCw, Play, Settings, ChevronDown, ChevronRight,
   TrendingUp, TrendingDown, AlertTriangle, CheckCircle, Copy,
   ExternalLink, X, Zap, BarChart3, Eye, Users, Power, RotateCcw,
+  SlidersHorizontal,
 } from "lucide-react";
 import { apiGet, apiPost, apiPut } from "@/lib/api";
 
@@ -95,6 +96,20 @@ interface IndicatorStat {
   actionability_status?: string | null;
   target_section?: string | null;
   evidence_json?: any;
+  associated_profiles?: Array<{ id: string; name: string }>;
+  can_apply_shadow_adjustment?: boolean;
+  adjustment_blocked_reason?: string | null;
+}
+
+interface LiveIndicatorRow {
+  profile_id: string;
+  profile_name: string;
+  indicator_name: string;
+  bucket: string;
+  sample_count: number;
+  win_count: number;
+  loss_count: number;
+  win_rate?: number | null;
 }
 
 interface Combination {
@@ -239,6 +254,24 @@ interface PISettings {
   enable_dynamic_combinations?: boolean;
   enable_lightgbm?: boolean;
   enable_catboost?: boolean;
+  analysis_sources?: string[];
+  indicator_winning_lift?: number;
+  indicator_losing_winrate_ratio?: number;
+  validation_min_discovery_trades?: number;
+  validation_min_trades?: number;
+  validation_min_lift?: number;
+  validation_min_winrate_delta?: number;
+  validation_max_single_symbol_share?: number;
+  validation_max_single_day_share?: number;
+  validation_min_distinct_symbols?: number;
+  validation_min_distinct_days?: number;
+  validation_min_assoc_support?: number;
+  validation_min_assoc_confidence?: number;
+  validation_min_lift_retention?: number;
+  adjustment_min_profile_trades?: number;
+  adjustment_max_win_rate?: number;
+  adjustment_score_bump?: number;
+  adjustment_score_cap?: number;
 }
 
 interface AutopilotCandidate {
@@ -548,7 +581,8 @@ export default function ProfileIntelligencePage() {
   // Calibration Evolution state
   const [calSummary, setCalSummary] = useState<any>(null);
   const [calValidatedVersions, setCalValidatedVersions] = useState<any[]>([]);
-  const [applyingVersionId, setApplyingVersionId] = useState<string | null>(null);
+  const [calV2Overview, setCalV2Overview] = useState<any>(null);
+  const [calV2Proposals, setCalV2Proposals] = useState<any[]>([]);
   const [calAdjustments, setCalAdjustments] = useState<any[]>([]);
   const [calTimeline, setCalTimeline] = useState<any[]>([]);
   const [calIndicators, setCalIndicators] = useState<any[]>([]);
@@ -558,7 +592,6 @@ export default function ProfileIntelligencePage() {
   const [selectedCalAdjustment, setSelectedCalAdjustment] = useState<any>(null);
   const [calDetailLoading, setCalDetailLoading] = useState(false);
   const [calDetail, setCalDetail] = useState<any>(null);
-  const [applyingVersion, setApplyingVersion] = useState(false);
   const [calSubTab, setCalSubTab] = useState<"adjustments" | "indicators" | "timeline" | "ai">("adjustments");
   const [calFilterMinConf, setCalFilterMinConf] = useState<string>("");
 
@@ -569,6 +602,9 @@ export default function ProfileIntelligencePage() {
   // UI state
   const [indicatorSubTab, setIndicatorSubTab] = useState<"winners" | "losers">("winners");
   const [expandedIndicator, setExpandedIndicator] = useState<string | null>(null);
+  const [selectedIndicatorAdjustment, setSelectedIndicatorAdjustment] = useState<IndicatorStat | null>(null);
+  const [indicatorAdjustmentProfileIds, setIndicatorAdjustmentProfileIds] = useState<string[]>([]);
+  const [indicatorAdjustmentLoading, setIndicatorAdjustmentLoading] = useState(false);
   const [selectedCombination, setSelectedCombination] = useState<Combination | null>(null);
   const [selectedSuggestion, setSelectedSuggestion] = useState<Suggestion | null>(null);
   const [expandedAudit, setExpandedAudit] = useState<string | null>(null);
@@ -666,7 +702,7 @@ export default function ProfileIntelligencePage() {
         setLiveAiReview(aiReview);
         setLiveSafety(safety);
       } else if (tab === "Calibration Evolution") {
-        const [summary, adjustments, timeline, indicators, aiExpl, safety, validatedV] = await Promise.all([
+        const [summary, adjustments, timeline, indicators, aiExpl, safety, validatedV, v2Overview, v2Proposals] = await Promise.all([
           apiGet("/profile-intelligence/calibration-evolution/summary").catch(() => null),
           apiGet("/profile-intelligence/calibration-evolution/adjustments?limit=100").catch(() => ({ items: [], total: 0 })),
           apiGet("/profile-intelligence/calibration-evolution/timeline?hours=168&limit=100").catch(() => ({ items: [] })),
@@ -674,6 +710,8 @@ export default function ProfileIntelligencePage() {
           apiGet("/profile-intelligence/calibration-evolution/ai-explanations?limit=10").catch(() => ({ items: [] })),
           apiGet("/profile-intelligence/calibration-evolution/safety").catch(() => null),
           apiGet("/profile-intelligence/calibration/versions?status=VALIDATED&limit=50").catch(() => ({ versions: [] })),
+          apiGet("/calibration-evolution/v2/overview").catch(() => null),
+          apiGet("/calibration-evolution/v2/proposals?limit=25").catch(() => ({ items: [] })),
         ]);
         setCalSummary(summary);
         setCalAdjustments(adjustments?.items || []);
@@ -683,6 +721,8 @@ export default function ProfileIntelligencePage() {
         setCalAiExplanations(aiExpl?.items || []);
         setCalSafety(safety);
         setCalValidatedVersions(validatedV?.versions || []);
+        setCalV2Overview(v2Overview);
+        setCalV2Proposals(v2Proposals?.items || []);
       } else if (tab === "Auto-Pilot") {
         const [status, candidates, events] = await Promise.all([
           apiGet("/profile-intelligence/autopilot"),
@@ -795,6 +835,37 @@ export default function ProfileIntelligencePage() {
 
   const refreshAutopilot = async () => {
     await loadTab("Auto-Pilot");
+  };
+
+  const openIndicatorAdjustment = (stat: IndicatorStat) => {
+    setSelectedIndicatorAdjustment(stat);
+    setIndicatorAdjustmentProfileIds((stat.associated_profiles || []).map(profile => profile.id));
+  };
+
+  const handleIndicatorShadowAdjustment = async () => {
+    if (!selectedIndicatorAdjustment?.can_apply_shadow_adjustment || indicatorAdjustmentProfileIds.length === 0) {
+      return;
+    }
+    setIndicatorAdjustmentLoading(true);
+    try {
+      const result = await apiPost(
+        `/profile-intelligence/indicators/${selectedIndicatorAdjustment.id}/shadow-adjustment`,
+        { profile_ids: indicatorAdjustmentProfileIds },
+      );
+      const candidates = Array.isArray(result?.candidates)
+        ? result.candidates as Array<{ created?: boolean }>
+        : [];
+      const created = candidates.filter(candidate => candidate.created).length;
+      showToast(`${created} challenger(s) shadow preparado(s). Incumbentes preservados.`);
+      setSelectedIndicatorAdjustment(null);
+      setIndicatorAdjustmentProfileIds([]);
+      await loadTab("Auto-Pilot");
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      showToast(`Ajuste bloqueado: ${message}`, false);
+    } finally {
+      setIndicatorAdjustmentLoading(false);
+    }
   };
 
   const authenticatedUserId = () => {
@@ -987,21 +1058,6 @@ export default function ProfileIntelligencePage() {
       showToast(`Erro: ${e.message}`, false);
     } finally {
       setSavingSettings(false);
-    }
-  };
-
-  const handleApplyVersion = async () => {
-    if (!calDetail?.version?.id) return;
-    setApplyingVersion(true);
-    try {
-      const res = await apiPost(`/api/profile-intelligence/calibration/versions/${calDetail.version.id}/apply`, {});
-      showToast(`Calibração aplicada — buy_threshold → ${res.new_buy_threshold}`, true);
-      const d = await apiGet(`/profile-intelligence/calibration-evolution/adjustments/${selectedCalAdjustment.suggestion_id}`);
-      setCalDetail(d);
-    } catch (e: any) {
-      showToast(e?.message || "Erro ao aplicar calibração", false);
-    } finally {
-      setApplyingVersion(false);
     }
   };
 
@@ -1272,13 +1328,38 @@ export default function ProfileIntelligencePage() {
       {activeTab === "Calibration Evolution" && (
         <div className="space-y-4">
 
-          {/* Aprovações pendentes — versões VALIDATED aguardando confirmação humana */}
+          <div className="relative overflow-hidden rounded-xl border border-cyan-400/20 bg-[#071217] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,.04)]">
+            <div className="absolute inset-y-0 left-0 w-1 bg-gradient-to-b from-cyan-300 via-emerald-400 to-amber-300" />
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <div className="font-mono text-[10px] uppercase tracking-[0.28em] text-cyan-300">Calibration Evolution · Versioned rail</div>
+                <h3 className="mt-1 text-[15px] font-semibold text-slate-100">Evidence → Recommendation → Challenger Shadow</h3>
+                <p className="mt-1 max-w-2xl text-[11px] leading-relaxed text-slate-400">O campeão permanece imutável. Promoção live não ocorre nesta etapa; flags e aprovação humana continuam obrigatórias.</p>
+              </div>
+              <div className="grid grid-cols-3 gap-px overflow-hidden rounded-lg border border-white/10 bg-white/10">
+                {[["Recomendações", calV2Overview?.recommendations ?? "—"], ["Propostas", calV2Overview?.proposals ?? "—"], ["Shadow", calV2Overview?.shadow_canaries ?? "—"]].map(([label, value]) => (
+                  <div key={String(label)} className="min-w-[92px] bg-[#09181e] px-3 py-2 text-center">
+                    <div className="font-mono text-lg text-slate-100">{String(value)}</div>
+                    <div className="text-[9px] uppercase tracking-wider text-slate-500">{label}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {calV2Proposals.length > 0 && <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
+              {calV2Proposals.slice(0, 6).map((proposal: any) => <div key={proposal.id} className="min-w-[220px] rounded-lg border border-white/10 bg-white/[.025] p-3">
+                <div className="truncate text-[11px] font-medium text-slate-200">{proposal.profile_name}</div>
+                <div className="mt-1 flex items-center justify-between font-mono text-[9px] uppercase tracking-wider"><span className="text-cyan-300">{proposal.state}</span><span className="text-slate-500">n={proposal.observed_trades ?? 0}</span></div>
+              </div>)}
+            </div>}
+          </div>
+
+          {/* Legacy validations remain visible, but direct mutation is retired. */}
           {calValidatedVersions.length > 0 && (
-            <div className="card p-4 border-green-500/30 bg-green-500/5">
+            <div className="card p-4 border-amber-500/30 bg-amber-500/5">
               <div className="flex items-center gap-2 mb-3">
-                <CheckCircle className="w-4 h-4 text-green-400" />
-                <h3 className="text-[13px] font-semibold text-green-400">
-                  {calValidatedVersions.length} calibração{calValidatedVersions.length > 1 ? "ões" : ""} validada{calValidatedVersions.length > 1 ? "s" : ""} — aguardando aprovação humana
+                <AlertTriangle className="w-4 h-4 text-amber-400" />
+                <h3 className="text-[13px] font-semibold text-amber-400">
+                  {calValidatedVersions.length} validação(ões) legada(s) — aplicação direta bloqueada
                 </h3>
               </div>
               <div className="space-y-2">
@@ -1298,24 +1379,9 @@ export default function ProfileIntelligencePage() {
                         )}
                       </div>
                     </div>
-                    <button
-                      onClick={async () => {
-                        setApplyingVersionId(v.id);
-                        try {
-                          const res = await apiPost(`/api/profile-intelligence/calibration/versions/${v.id}/apply`, {});
-                          showToast(`Calibração aplicada — buy_threshold → ${res.new_buy_threshold}`, true);
-                          setCalValidatedVersions(prev => prev.filter(x => x.id !== v.id));
-                        } catch (e: any) {
-                          showToast(e?.message || "Erro ao aplicar calibração", false);
-                        } finally {
-                          setApplyingVersionId(null);
-                        }
-                      }}
-                      disabled={applyingVersionId === v.id}
-                      className="px-3 py-1.5 bg-green-700 hover:bg-green-600 disabled:opacity-50 rounded text-[11px] font-semibold text-white shrink-0 transition-colors"
-                    >
-                      {applyingVersionId === v.id ? "Aplicando..." : "Aplicar"}
-                    </button>
+                    <span className="shrink-0 rounded border border-amber-400/20 bg-amber-400/10 px-3 py-1.5 font-mono text-[9px] uppercase tracking-wider text-amber-300">
+                      Migrar para V2
+                    </span>
                   </div>
                 ))}
               </div>
@@ -1862,16 +1928,10 @@ export default function ProfileIntelligencePage() {
                     ))}
                   </div>
                   {calDetail.version.shadow_validation_status === "VALIDATED" && !calDetail.version.mutation_applied && (
-                    <div className="mt-3">
-                      <button
-                        onClick={handleApplyVersion}
-                        disabled={applyingVersion}
-                        className="w-full py-2 px-4 bg-green-700 hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed rounded text-[12px] font-semibold text-white transition-colors"
-                      >
-                        {applyingVersion ? "Aplicando..." : "Aplicar calibração no profile"}
-                      </button>
-                      <p className="text-[10px] text-[var(--text-tertiary)] mt-1">
-                        Atualiza scoring.thresholds.buy no profile com o valor validado pelo ciclo shadow.
+                    <div className="mt-3 rounded border border-amber-500/25 bg-amber-500/5 p-3">
+                      <p className="text-[11px] font-medium text-amber-300">Aplicação direta desativada</p>
+                      <p className="mt-1 text-[10px] text-[var(--text-tertiary)]">
+                        Reemita como Recommendation V2 para gerar um Challenger Shadow versionado sem alterar o campeão.
                       </p>
                     </div>
                   )}
@@ -2269,10 +2329,10 @@ export default function ProfileIntelligencePage() {
                   <thead>
                     <tr className="border-b border-[var(--border-subtle)]">
                       {indicatorSubTab === "winners"
-                        ? ["Indicador / Bucket", "Cases", "W/L", "Win Rate", "Lift vs Base", "Avg P&L", "TP ≤30m", "Avg MAE", "Confidence", "Role", ""].map(h => (
+                        ? ["Indicador / Bucket", "Profiles associados", "Cases", "W/L", "Win Rate", "Lift vs Base", "Avg P&L", "TP ≤30m", "Avg MAE", "Confidence", "Role", "", "Ajuste"].map(h => (
                           <th key={h} className="px-4 py-2 text-left text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider whitespace-nowrap">{h}</th>
                         ))
-                        : ["Indicador / Bucket", "Cases", "W/L", "Loss Rate", "Lift", "Avg P&L", "Confidence", "Ação Sugerida", ""].map(h => (
+                        : ["Indicador / Bucket", "Profiles associados", "Cases", "W/L", "Loss Rate", "Lift", "Avg P&L", "Confidence", "Ação Sugerida", "", "Ajuste"].map(h => (
                           <th key={h} className="px-4 py-2 text-left text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider whitespace-nowrap">{h}</th>
                         ))
                       }
@@ -2289,6 +2349,26 @@ export default function ProfileIntelligencePage() {
                           <td className="px-4 py-2.5">
                             <div className="font-medium text-[var(--text-primary)] font-mono">{stat.indicator}</div>
                             <div className="text-[10px] text-[var(--text-tertiary)]">{stat.bucket_label}</div>
+                          </td>
+                          <td className="px-4 py-2.5 min-w-[190px]">
+                            <div className="flex flex-wrap gap-1">
+                              {(stat.associated_profiles || []).slice(0, 2).map(profile => (
+                                <span
+                                  key={profile.id}
+                                  title={profile.id}
+                                  className="inline-flex max-w-[180px] items-center gap-1 rounded border border-cyan-400/20 bg-cyan-400/5 px-1.5 py-0.5 text-[10px] text-cyan-200"
+                                >
+                                  <Users className="h-3 w-3 shrink-0" />
+                                  <span className="truncate">{profile.name}</span>
+                                </span>
+                              ))}
+                              {(stat.associated_profiles || []).length > 2 && (
+                                <span className="text-[10px] text-[var(--text-tertiary)]">+{(stat.associated_profiles || []).length - 2}</span>
+                              )}
+                              {(stat.associated_profiles || []).length === 0 && (
+                                <span className="text-[10px] text-yellow-400">Sem associação</span>
+                              )}
+                            </div>
                           </td>
                           <td className="px-4 py-2.5 text-[var(--text-secondary)]">{stat.total_cases}</td>
                           <td className="px-4 py-2.5">
@@ -2319,6 +2399,16 @@ export default function ProfileIntelligencePage() {
                                   Evidence
                                 </button>
                               </td>
+                              <td className="px-4 py-2.5">
+                                <button
+                                  className="btn btn-secondary h-7 whitespace-nowrap px-2 text-[10px]"
+                                  onClick={(event) => { event.stopPropagation(); openIndicatorAdjustment(stat); }}
+                                  title={stat.can_apply_shadow_adjustment ? "Preparar challenger shadow" : "Revisar bloqueio de validação"}
+                                >
+                                  <SlidersHorizontal className="h-3 w-3" />
+                                  Ajustar
+                                </button>
+                              </td>
                             </>
                           ) : (
                             <>
@@ -2341,12 +2431,22 @@ export default function ProfileIntelligencePage() {
                                   Evidence
                                 </button>
                               </td>
+                              <td className="px-4 py-2.5">
+                                <button
+                                  className="btn btn-secondary h-7 whitespace-nowrap px-2 text-[10px]"
+                                  onClick={(event) => { event.stopPropagation(); openIndicatorAdjustment(stat); }}
+                                  title={stat.can_apply_shadow_adjustment ? "Preparar challenger shadow" : "Revisar bloqueio de validação"}
+                                >
+                                  <SlidersHorizontal className="h-3 w-3" />
+                                  Ajustar
+                                </button>
+                              </td>
                             </>
                           )}
                         </tr>
                         {expandedIndicator === stat.id && (
                           <tr key={`${stat.id}-expanded`}>
-                            <td colSpan={indicatorSubTab === "winners" ? 10 : 9} className="px-6 pb-4 pt-2 bg-[var(--bg-elevated)]">
+                            <td colSpan={indicatorSubTab === "winners" ? 13 : 11} className="px-6 pb-4 pt-2 bg-[var(--bg-elevated)]">
                               <div className="text-[11px] text-[var(--text-secondary)] space-y-2">
                                 <div className="font-semibold text-[var(--text-primary)] mb-1">Evidence — {stat.bucket_label}</div>
                                 <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
@@ -2371,6 +2471,9 @@ export default function ProfileIntelligencePage() {
                                     Source profiles: {Array.isArray(stat.source_profiles) ? stat.source_profiles.join(", ") : JSON.stringify(stat.source_profiles)}
                                   </div>
                                 )}
+                                <div className="text-[10px] text-[var(--text-tertiary)]">
+                                  Source: {stat.evidence_json?.source || "—"} · Profile: {stat.evidence_json?.profile_id || "source-level"} · Dataset: {stat.evidence_json?.dataset_version || "unversioned"} · Label: {stat.evidence_json?.label_version || "unversioned"}
+                                </div>
                                 <div className="text-[10px] text-[var(--text-tertiary)]">
                                   Validation: {stat.validation_status || "exploratory_only"} · Actionability: {stat.actionability_status || "exploratory_only"} · Target: {stat.target_section || "—"}
                                 </div>
@@ -2709,6 +2812,23 @@ export default function ProfileIntelligencePage() {
                   { key: "max_avg_holding_seconds", label: "Max Avg Holding (s)", step: 60 },
                   { key: "required_tp_30m_rate", label: "Required TP ≤30m Rate", step: 0.01 },
                   { key: "max_combinations_per_run", label: "Max Combinations per Run", step: 50 },
+                  { key: "indicator_winning_lift", label: "Winner Lift", step: 0.01 },
+                  { key: "indicator_losing_winrate_ratio", label: "Loser WR Ratio", step: 0.01 },
+                  { key: "validation_min_discovery_trades", label: "Discovery Min Trades", step: 1 },
+                  { key: "validation_min_trades", label: "Validation Min Trades", step: 1 },
+                  { key: "validation_min_lift", label: "Validation Min Lift", step: 0.01 },
+                  { key: "validation_min_winrate_delta", label: "Validation WR Delta", step: 0.01 },
+                  { key: "validation_max_single_symbol_share", label: "Max Symbol Share", step: 0.01 },
+                  { key: "validation_max_single_day_share", label: "Max Day Share", step: 0.01 },
+                  { key: "validation_min_distinct_symbols", label: "Min Distinct Symbols", step: 1 },
+                  { key: "validation_min_distinct_days", label: "Min Distinct Days", step: 1 },
+                  { key: "validation_min_assoc_support", label: "Association Min Support", step: 0.01 },
+                  { key: "validation_min_assoc_confidence", label: "Association Min Confidence", step: 0.01 },
+                  { key: "validation_min_lift_retention", label: "Min Lift Retention", step: 0.01 },
+                  { key: "adjustment_min_profile_trades", label: "Adjustment Min Trades", step: 1 },
+                  { key: "adjustment_max_win_rate", label: "Adjustment Max WR", step: 0.01 },
+                  { key: "adjustment_score_bump", label: "Score Bump", step: 1 },
+                  { key: "adjustment_score_cap", label: "Score Cap", step: 1 },
                 ].map(({ key, label, step }) => (
                   <div key={key}>
                     <label className="block text-[11px] font-medium text-[var(--text-tertiary)] uppercase tracking-wider mb-1">{label}</label>
@@ -2721,6 +2841,30 @@ export default function ProfileIntelligencePage() {
                     />
                   </div>
                 ))}
+              </div>
+
+              <div className="space-y-2 pt-2 border-t border-[var(--border-subtle)]">
+                <h3 className="text-[13px] font-semibold text-[var(--text-primary)]">Sources oficiais</h3>
+                <div className="flex flex-wrap gap-3">
+                  {(["L1_SPECTRUM", "L3", "L3_LAB"] as const).map(source => {
+                    const active = (settings.analysis_sources || []).includes(source);
+                    return (
+                      <label key={source} className="flex items-center gap-2 text-[12px] text-[var(--text-secondary)]">
+                        <input
+                          type="checkbox"
+                          checked={active}
+                          onChange={() => setSettings(current => ({
+                            ...current,
+                            analysis_sources: active
+                              ? (current.analysis_sources || []).filter(item => item !== source)
+                              : [...(current.analysis_sources || []), source],
+                          }))}
+                        />
+                        {source}
+                      </label>
+                    );
+                  })}
+                </div>
               </div>
 
               <div className="space-y-3 pt-2 border-t border-[var(--border-subtle)]">
@@ -3034,28 +3178,47 @@ export default function ProfileIntelligencePage() {
           {/* Indicator Performance */}
           {liveIndicators && (
             <div className="card p-4 space-y-3">
-              <div className="flex items-center gap-2">
-                <BarChart3 className="w-4 h-4 text-teal-400" />
-                <h3 className="text-[13px] font-semibold text-[var(--text-primary)]">Indicator Calibration</h3>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <BarChart3 className="w-4 h-4 text-teal-400" />
+                  <h3 className="text-[13px] font-semibold text-[var(--text-primary)]">Indicator Calibration</h3>
+                </div>
+                <div className="font-mono text-[9px] text-[var(--text-tertiary)]">
+                  run {liveIndicators.run_id ? `${liveIndicators.run_id.slice(0, 8)}…` : "—"} · min N {liveIndicators.minimum_cases ?? "—"}
+                </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <div className="text-[11px] font-semibold text-green-400 uppercase mb-2">Top Win Indicators</div>
-                  {liveIndicators.top_winners?.slice(0, 5).map((r: any, i: number) => (
-                    <div key={i} className="flex justify-between text-[11px] py-1 border-b border-[var(--border-subtle)]">
-                      <span className="text-[var(--text-secondary)]">{r.indicator_name}/{r.bucket}</span>
-                      <span className="text-green-400 font-medium">{r.win_rate != null ? `${(r.win_rate * 100).toFixed(1)}% wr` : "—"}</span>
+                  {liveIndicators.top_winners?.slice(0, 5).map((r: LiveIndicatorRow, i: number) => (
+                    <div key={`${r.profile_id}-${r.indicator_name}-${r.bucket}-${i}`} className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-b border-[var(--border-subtle)] py-1.5 text-[11px]">
+                      <div className="min-w-0">
+                        <div className="truncate font-mono text-[var(--text-secondary)]">{r.indicator_name}/{r.bucket}</div>
+                        <div className="truncate text-[9px] text-cyan-300/80" title={r.profile_id}>{r.profile_name}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-medium text-green-400">{r.win_rate != null ? `${(r.win_rate * 100).toFixed(1)}% WR` : "—"}</div>
+                        <div className="font-mono text-[9px] text-[var(--text-tertiary)]">N {r.sample_count} · {r.win_count}/{r.loss_count}</div>
+                      </div>
                     </div>
                   ))}
+                  {!liveIndicators.top_winners?.length && <div className="py-3 text-[10px] text-[var(--text-tertiary)]">Nenhum bucket positivo no ciclo atual.</div>}
                 </div>
                 <div>
                   <div className="text-[11px] font-semibold text-red-400 uppercase mb-2">Top Loss Indicators</div>
-                  {liveIndicators.top_losers?.slice(0, 5).map((r: any, i: number) => (
-                    <div key={i} className="flex justify-between text-[11px] py-1 border-b border-[var(--border-subtle)]">
-                      <span className="text-[var(--text-secondary)]">{r.indicator_name}/{r.bucket}</span>
-                      <span className="text-red-400 font-medium">{r.win_rate != null ? `${(r.win_rate * 100).toFixed(1)}% wr` : "—"}</span>
+                  {liveIndicators.top_losers?.slice(0, 5).map((r: LiveIndicatorRow, i: number) => (
+                    <div key={`${r.profile_id}-${r.indicator_name}-${r.bucket}-${i}`} className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-b border-[var(--border-subtle)] py-1.5 text-[11px]">
+                      <div className="min-w-0">
+                        <div className="truncate font-mono text-[var(--text-secondary)]">{r.indicator_name}/{r.bucket}</div>
+                        <div className="truncate text-[9px] text-cyan-300/80" title={r.profile_id}>{r.profile_name}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-medium text-red-400">{r.win_rate != null ? `${(r.win_rate * 100).toFixed(1)}% WR` : "—"}</div>
+                        <div className="font-mono text-[9px] text-[var(--text-tertiary)]">N {r.sample_count} · {r.win_count}/{r.loss_count}</div>
+                      </div>
                     </div>
                   ))}
+                  {!liveIndicators.top_losers?.length && <div className="py-3 text-[10px] text-[var(--text-tertiary)]">Nenhum bucket negativo no ciclo atual.</div>}
                 </div>
               </div>
             </div>
@@ -3653,6 +3816,105 @@ export default function ProfileIntelligencePage() {
             </a>
           </div>
         </Drawer>
+      )}
+
+      {selectedIndicatorAdjustment && (
+        <Modal
+          title="Ajuste de indicador em Shadow"
+          onClose={() => {
+            setSelectedIndicatorAdjustment(null);
+            setIndicatorAdjustmentProfileIds([]);
+          }}
+        >
+          <div className="space-y-4">
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-b border-[var(--border-subtle)] pb-3">
+              <div className="min-w-0">
+                <div className="font-mono text-[13px] font-semibold text-[var(--text-primary)]">{selectedIndicatorAdjustment.indicator}</div>
+                <div className="font-mono text-[10px] text-[var(--text-tertiary)]">{selectedIndicatorAdjustment.bucket_label}</div>
+              </div>
+              {statusBadge(selectedIndicatorAdjustment.validation_status)}
+            </div>
+
+            <div className="grid grid-cols-3 gap-px overflow-hidden rounded border border-[var(--border-default)] bg-[var(--border-default)]">
+              {[
+                ["Amostra", selectedIndicatorAdjustment.total_cases],
+                [selectedIndicatorAdjustment.role_detected === "losing_indicator" ? "Loss rate" : "Win rate", fmtPct(selectedIndicatorAdjustment.role_detected === "losing_indicator" ? selectedIndicatorAdjustment.loss_rate : selectedIndicatorAdjustment.win_rate)],
+                ["Lift", selectedIndicatorAdjustment.lift_vs_base != null ? `${selectedIndicatorAdjustment.lift_vs_base.toFixed(2)}x` : "—"],
+              ].map(([label, value]) => (
+                <div key={String(label)} className="bg-[var(--bg-surface)] px-3 py-2 text-center">
+                  <div className="text-[9px] uppercase text-[var(--text-tertiary)]">{label}</div>
+                  <div className="font-mono text-[13px] text-[var(--text-primary)]">{String(value)}</div>
+                </div>
+              ))}
+            </div>
+
+            <div>
+              <div className="mb-2 text-[10px] font-semibold uppercase text-[var(--text-tertiary)]">Profiles associados</div>
+              <div className="space-y-2">
+                {(selectedIndicatorAdjustment.associated_profiles || []).map(profile => (
+                  <label key={profile.id} className="flex cursor-pointer items-center gap-3 rounded border border-[var(--border-default)] bg-[var(--bg-surface)] px-3 py-2">
+                    <input
+                      type="checkbox"
+                      checked={indicatorAdjustmentProfileIds.includes(profile.id)}
+                      onChange={(event) => setIndicatorAdjustmentProfileIds(current => (
+                        event.target.checked
+                          ? [...new Set([...current, profile.id])]
+                          : current.filter(id => id !== profile.id)
+                      ))}
+                      className="h-4 w-4 rounded"
+                    />
+                    <Users className="h-4 w-4 text-cyan-300" />
+                    <div className="min-w-0">
+                      <div className="truncate text-[11px] font-medium text-[var(--text-primary)]">{profile.name}</div>
+                      <div className="truncate font-mono text-[9px] text-[var(--text-tertiary)]">{profile.id}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {!selectedIndicatorAdjustment.can_apply_shadow_adjustment && (
+              <div className="flex items-start gap-2 rounded border border-yellow-500/30 bg-yellow-500/5 p-3 text-[11px] text-yellow-300">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <div>
+                  <div className="font-semibold">Aguardando validação temporal</div>
+                  <div className="mt-0.5 text-yellow-200/70">{selectedIndicatorAdjustment.adjustment_blocked_reason || "exploratory_only"}</div>
+                </div>
+              </div>
+            )}
+
+            <div className="rounded border border-cyan-400/20 bg-cyan-400/5 p-3 text-[10px] text-cyan-100/80">
+              {selectedIndicatorAdjustment.role_detected === "losing_indicator"
+                ? "A penalidade será adicionada somente a um challenger shadow versionado."
+                : "A condição será substituída somente em um challenger shadow versionado."}
+              <span className="ml-1 font-semibold text-cyan-200">O profile incumbent não será alterado.</span>
+            </div>
+
+            <div className="flex gap-2 border-t border-[var(--border-subtle)] pt-3">
+              <button
+                className="btn btn-secondary flex-1 text-[11px]"
+                onClick={() => {
+                  setSelectedIndicatorAdjustment(null);
+                  setIndicatorAdjustmentProfileIds([]);
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                className="btn btn-primary flex flex-1 items-center justify-center gap-1.5 text-[11px]"
+                disabled={
+                  indicatorAdjustmentLoading
+                  || !selectedIndicatorAdjustment.can_apply_shadow_adjustment
+                  || indicatorAdjustmentProfileIds.length === 0
+                }
+                onClick={handleIndicatorShadowAdjustment}
+              >
+                <SlidersHorizontal className={`h-3.5 w-3.5 ${indicatorAdjustmentLoading ? "animate-pulse" : ""}`} />
+                {indicatorAdjustmentLoading ? "Preparando..." : "Criar challenger shadow"}
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {/* ── Run Analysis Modal ────────────────────────────────────────────────── */}

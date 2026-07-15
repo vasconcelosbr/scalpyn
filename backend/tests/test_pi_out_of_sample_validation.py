@@ -12,6 +12,22 @@ from app.services.profile_validation_service import (
     suggestion_actionable,
     temporal_split_valid,
 )
+from app.services.profile_intelligence_contract import PIValidationPolicy
+
+
+POLICY = PIValidationPolicy(
+    min_discovery_trades=30,
+    min_validation_trades=20,
+    min_validation_lift=1.15,
+    min_validation_winrate_delta=0.05,
+    max_single_symbol_share=0.40,
+    max_single_day_share=0.40,
+    min_distinct_symbols=3,
+    min_distinct_days=3,
+    min_assoc_support_validation=0.02,
+    min_assoc_confidence_validation=0.55,
+    min_validation_lift_retention=0.70,
+)
 
 
 def _windows():
@@ -54,6 +70,7 @@ def test_dynamic_without_validation_is_not_actionable():
         discovery_end=de,
         validation_start=vs,
         validation_end=ve,
+        policy=POLICY,
     )
 
     assert result["actionability_status"] == "exploratory_only"
@@ -72,6 +89,7 @@ def test_dynamic_bad_validation_lift_is_blocked():
         discovery_end=de,
         validation_start=vs,
         validation_end=ve,
+        policy=POLICY,
     )
 
     assert result["blocked_reason"] == "blocked_validation_lift"
@@ -93,6 +111,7 @@ def test_validated_dynamic_can_generate_candidate():
         discovery_end=de,
         validation_start=vs,
         validation_end=ve,
+        policy=POLICY,
     )
 
     assert result["validation_status"] == "validated"
@@ -169,5 +188,6 @@ def test_ui_does_not_offer_actionable_suggestion_without_validation():
 
     assert "EXPLORATÓRIO" in frontend
     assert "BLOQUEADO" in frontend
-    assert "Sugestão bloqueada por validation" in frontend
+    assert 'validation.validation_status !== "validated"' in frontend
+    assert "blockedReasonLabel(" in frontend
     assert "disabled={generatingSuggestion || !combinationIsActionable" in frontend

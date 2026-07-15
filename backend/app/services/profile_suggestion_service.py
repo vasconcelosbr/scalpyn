@@ -14,6 +14,8 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .profile_intelligence_contract import DATASET_VERSION, LABEL_VERSION
+
 from ..models.profile_intelligence import ProfileRuleCombination, ProfileSuggestion
 
 logger = logging.getLogger(__name__)
@@ -218,6 +220,8 @@ class ProfileSuggestionService:
                       AND champion_score >= :min_score
                       AND confidence_level IN ('MEDIUM', 'HIGH')
                       AND overfit_risk = FALSE
+                      AND source_profile_ids IS NOT NULL
+                      AND jsonb_array_length(source_profile_ids) > 0
                     ORDER BY champion_score DESC
                     LIMIT :limit
                 """),
@@ -444,9 +448,9 @@ class ProfileSuggestionService:
                         "action": "archive_generated_profile",
                         "source_combination_id": str(row.id),
                     },
-                    dataset_version=f"pi-run:{run_id}",
-                    feature_schema_version="shadow_features_snapshot:v1",
-                    label_version="shadow_outcome:v1",
+                    dataset_version=f"{DATASET_VERSION}:{run_id}",
+                    feature_schema_version="entry_features_v2",
+                    label_version=LABEL_VERSION,
                     status="validated",
                 )
                 db.add(sugg)

@@ -1,15 +1,15 @@
 """Tests for shadow calibration cycle (autonomous, non-mutating).
 
 Covers:
-1. requires_human_approval=false in new suggestions/actions
+1. requires_human_approval=true in new suggestions/actions
 2. Shadow calibration executor: correct before/after snapshot, version creation
 3. Dedup: only one version per profile suggestion
 4. Autopilot disabled → cycle skips
-5. Score cap enforcement (never exceeds PI_SCORE_CAP)
+5. Score policy comes from active DB-backed PI settings
 6. Failed profile does not block others
 7. Safety guard endpoint fields
 8. Forbids live-scope execution
-9. Score bump default = 5
+9. Score bump is not a module-level hardcode
 10. Updated_at set on suggestion/action update
 11. commit called after successful cycle
 """
@@ -75,33 +75,27 @@ def _make_row(profile_id=None, suggestion_id=None, buy=65, confidence=0.8, pname
 # Test 1: requires_human_approval=false in INSERT SQL
 # ---------------------------------------------------------------------------
 
-def test_requires_human_approval_false_in_suggestion_insert():
-    """The INSERT for profile_adjustment_suggestions must use false for shadow scope."""
+def test_requires_human_approval_true_in_suggestion_insert():
+    """The shadow suggestion INSERT must require human approval."""
     import inspect
     import app.services.profile_intelligence_live_service as svc
 
     source = inspect.getsource(svc)
 
-    # Both INSERTs should have requires_human_approval set to false (not true)
-    # We check the known-unique context around each INSERT
-    assert "'PENDING_SHADOW_VALIDATION',\n                     false, false," in source or \
-           "PENDING_SHADOW_VALIDATION',\n                     false, false" in source or \
-           "false, false, 'profile_intelligence'" in source, (
-        "requires_human_approval must be false for shadow suggestions INSERT"
+    assert "'PENDING_SHADOW_VALIDATION',\n                     false, true," in source, (
+        "shadow suggestions must require human approval"
     )
 
 
-def test_requires_human_approval_false_in_pending_action_insert():
-    """The INSERT for autopilot_pending_actions must use false for SHADOW scope."""
+def test_requires_human_approval_true_in_pending_action_insert():
+    """The SHADOW pending action INSERT must require human approval."""
     import inspect
     import app.services.profile_intelligence_live_service as svc
 
     source = inspect.getsource(svc)
 
-    # Look for the SHADOW insert
-    assert "'SHADOW',\n                     false, false, CAST" in source or \
-           "target_scope = 'SHADOW'" in source, (
-        "requires_human_approval must be false for SHADOW pending_actions INSERT"
+    assert "'SHADOW',\n                     false, true, CAST" in source, (
+        "SHADOW pending actions must require human approval"
     )
 
 
@@ -133,16 +127,15 @@ async def test_shadow_calibration_skips_when_autopilot_disabled():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_score_bump_default_is_5():
+async def test_score_bump_comes_from_active_policy():
     """Default bump: current_buy=65 → new_buy=70."""
+    import inspect
     import app.services.profile_intelligence_live_service as svc
 
-    bump = svc._SCORE_BUMP
-    assert bump == 5, f"Default _SCORE_BUMP expected 5, got {bump}"
-
-    current = 65
-    new = min(current + bump, svc._SCORE_CAP)
-    assert new == 70
+    source = inspect.getsource(svc.run_shadow_calibration_cycle)
+    assert 'policy = await load_pi_settings(db, row.user_id)' in source
+    assert 'policy["adjustment_score_bump"]' in source
+    assert not hasattr(svc, "_SCORE_BUMP")
 
 
 # ---------------------------------------------------------------------------
@@ -150,16 +143,14 @@ async def test_score_bump_default_is_5():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_score_cap_never_exceeded():
+async def test_score_cap_comes_from_active_policy():
     """Score must not exceed PI_SCORE_CAP (default 85) even with large current value."""
+    import inspect
     import app.services.profile_intelligence_live_service as svc
 
-    cap = svc._SCORE_CAP
-    bump = svc._SCORE_BUMP
-
-    for current in [81, 82, 83, 84, 85, 90]:
-        result = min(current + bump, cap)
-        assert result <= cap, f"Score cap violated: {result} > {cap} (current={current})"
+    source = inspect.getsource(svc.run_shadow_calibration_cycle)
+    assert 'min(current_buy + bump, int(policy["adjustment_score_cap"]))' in source
+    assert not hasattr(svc, "_SCORE_CAP")
 
 
 # ---------------------------------------------------------------------------

@@ -35,8 +35,15 @@ from ..schemas.profile_intelligence import (
     AutopilotSettingsUpdate,
     CandidateApprovalRequest,
     CandidateRejectionRequest,
+    IndicatorShadowAdjustmentRequest,
 )
 from ..services.profile_intelligence_audit_service import log_pi_event
+from ..services.profile_intelligence_contract import (
+    DATASET_VERSION,
+    LABEL_VERSION,
+    official_params,
+    official_where,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +64,24 @@ _DEFAULT_SETTINGS = {
     "enable_dynamic_combinations": True,
     "enable_lightgbm": False,
     "enable_catboost": False,
+    "analysis_sources": ["L1_SPECTRUM", "L3", "L3_LAB"],
+    "indicator_winning_lift": 1.15,
+    "indicator_losing_winrate_ratio": 0.85,
+    "validation_min_discovery_trades": 30,
+    "validation_min_trades": 20,
+    "validation_min_lift": 1.15,
+    "validation_min_winrate_delta": 0.05,
+    "validation_max_single_symbol_share": 0.40,
+    "validation_max_single_day_share": 0.40,
+    "validation_min_distinct_symbols": 3,
+    "validation_min_distinct_days": 3,
+    "validation_min_assoc_support": 0.02,
+    "validation_min_assoc_confidence": 0.55,
+    "validation_min_lift_retention": 0.70,
+    "adjustment_min_profile_trades": 50,
+    "adjustment_max_win_rate": 0.35,
+    "adjustment_score_bump": 5,
+    "adjustment_score_cap": 85,
 }
 
 _ML_CHALLENGER_FLAGS = {
@@ -124,31 +149,38 @@ async def get_overview(
     # Pending suggestions count
     pending_count = (await db.execute(text("""
         SELECT COUNT(*) FROM profile_suggestions
-        WHERE user_id = :uid AND status = 'pending_user_approval'
-    """), {"uid": uid_str})).scalar() or 0
+        WHERE user_id = :uid AND run_id = CAST(:run_id AS uuid)
+          AND status = 'pending_user_approval'
+    """), {"uid": uid_str, "run_id": str(last_run.id) if last_run else None})).scalar() or 0
 
     # High-confidence suggestions
     high_conf_count = (await db.execute(text("""
         SELECT COUNT(*) FROM profile_suggestions
-        WHERE user_id = :uid AND confidence_level = 'HIGH'
+        WHERE user_id = :uid AND run_id = CAST(:run_id AS uuid)
+          AND confidence_level = 'HIGH'
           AND status NOT IN ('rejected', 'archived')
-    """), {"uid": uid_str})).scalar() or 0
+    """), {"uid": uid_str, "run_id": str(last_run.id) if last_run else None})).scalar() or 0
 
     # Total combinations (all-time)
-    total_combos_count = (await db.execute(text(
-        "SELECT COUNT(*) FROM profile_rule_combinations WHERE user_id = :uid"
-    ), {"uid": uid_str})).scalar() or 0
+    total_combos_count = (await db.execute(text("""
+        SELECT COUNT(*) FROM profile_rule_combinations
+        WHERE user_id = :uid AND run_id = CAST(:run_id AS uuid)
+    """), {"uid": uid_str, "run_id": str(last_run.id) if last_run else None})).scalar() or 0
 
     # Combinations count (not yet shadow-tested)
     untested_count = (await db.execute(text("""
         SELECT COUNT(*) FROM profile_rule_combinations
-        WHERE user_id = :uid AND is_tested_live_shadow = false
-    """), {"uid": uid_str})).scalar() or 0
+        WHERE user_id = :uid AND run_id = CAST(:run_id AS uuid)
+          AND is_tested_live_shadow = false
+    """), {"uid": uid_str, "run_id": str(last_run.id) if last_run else None})).scalar() or 0
 
     # Best combination
     best_combo_result = await db.execute(
         select(ProfileRuleCombination)
-        .where(ProfileRuleCombination.user_id == user_id)
+        .where(
+            ProfileRuleCombination.user_id == user_id,
+            ProfileRuleCombination.run_id == (last_run.id if last_run else None),
+        )
         .order_by(ProfileRuleCombination.champion_score.desc().nullslast())
         .limit(1)
     )
@@ -441,11 +473,18 @@ async def get_profile_ranking(
         WHERE user_id = :uid
           AND created_at >= NOW() - INTERVAL '{lookback_days} days'
           AND profile_id IS NOT NULL
+          AND source IN ('L3', 'L3_LAB')
+          AND {official_where('shadow_trades')}
         GROUP BY profile_id, profile_name, source
         HAVING COUNT(*) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT','TIMEOUT')) >= :min_ct
         ORDER BY wins::float / GREATEST(COUNT(*) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT','TIMEOUT')),1) DESC
         LIMIT :limit
-    """), {"uid": str(user_id), "min_ct": min_closed_trades, "limit": limit})).fetchall()
+    """), {
+        "uid": str(user_id),
+        "min_ct": min_closed_trades,
+        "limit": limit,
+        **official_params(),
+    })).fetchall()
 
     profiles = []
     for r in rows:
@@ -470,7 +509,12 @@ async def get_profile_ranking(
             "confidence_level": confidence,
         })
 
-    return {"profiles": profiles, "lookback_days": lookback_days}
+    return {
+        "profiles": profiles,
+        "lookback_days": lookback_days,
+        "dataset_version": DATASET_VERSION,
+        "label_version": LABEL_VERSION,
+    }
 
 
 # ── 5 & 6. Top winners / losers ───────────────────────────────────────────────
@@ -513,7 +557,8 @@ async def _get_indicator_stats(db, user_id, role, run_id, min_cases, confidence_
             select(ProfileIntelligenceRun.id)
             .where(
                 ProfileIntelligenceRun.user_id == user_id,
-                ProfileIntelligenceRun.status.in_(("completed", "completed_with_errors")),
+                ProfileIntelligenceRun.status == "completed",
+                ProfileIntelligenceRun.engine_version == "2B.2-native-official",
             )
             .order_by(ProfileIntelligenceRun.run_at.desc())
             .limit(1)
@@ -528,16 +573,148 @@ async def _get_indicator_stats(db, user_id, role, run_id, min_cases, confidence_
         ProfileIndicatorStats.role_detected == role,
         ProfileIndicatorStats.total_cases >= min_cases,
     )
+    if role == "winning_indicator":
+        q = q.where(ProfileIndicatorStats.avg_pnl_pct > 0)
+    elif role == "losing_indicator":
+        q = q.where(ProfileIndicatorStats.avg_pnl_pct < 0)
     if confidence_level:
         q = q.where(ProfileIndicatorStats.confidence_level == confidence_level)
     if indicator:
         q = q.where(ProfileIndicatorStats.indicator == indicator)
-    q = q.order_by(ProfileIndicatorStats.lift_vs_base.desc().nullslast()).limit(limit)
+    if role == "losing_indicator":
+        q = q.order_by(
+            ProfileIndicatorStats.loss_rate.desc().nullslast(),
+            ProfileIndicatorStats.lift_vs_base.asc().nullslast(),
+        )
+    else:
+        q = q.order_by(ProfileIndicatorStats.lift_vs_base.desc().nullslast())
+    q = q.limit(limit)
     stats = (await db.execute(q)).scalars().all()
+    source_profile_ids = {
+        UUID(str(profile_id))
+        for stat in stats
+        for profile_id in (stat.source_profile_ids or [])
+        if profile_id
+    }
+    profile_names: dict[str, str] = {}
+    if source_profile_ids:
+        profile_rows = (await db.execute(
+            select(Profile.id, Profile.name).where(
+                Profile.user_id == user_id,
+                Profile.id.in_(source_profile_ids),
+            )
+        )).all()
+        profile_names = {str(row.id): row.name for row in profile_rows}
+
+    indicators = []
+    for stat in stats:
+        item = _ind_to_dict(stat)
+        item["associated_profiles"] = [
+            {"id": str(profile_id), "name": profile_names.get(str(profile_id), str(profile_id))}
+            for profile_id in (stat.source_profile_ids or [])
+            if str(profile_id) in profile_names
+        ]
+        actionable = (
+            stat.validation_status == "validated"
+            and stat.actionability_status in {"validated", "positive_signal_candidate"}
+            and bool(item["associated_profiles"])
+        )
+        item["can_apply_shadow_adjustment"] = actionable
+        item["adjustment_blocked_reason"] = None if actionable else (
+            stat.validation_status
+            or stat.actionability_status
+            or "missing_associated_profile"
+        )
+        indicators.append(item)
     return {
-        "indicators": [_ind_to_dict(s) for s in stats],
+        "indicators": indicators,
         "role": role,
         "run_id": str(selected_run_id),
+        "dataset_version": DATASET_VERSION,
+        "label_version": LABEL_VERSION,
+    }
+
+
+@router.post("/indicators/{indicator_stat_id}/shadow-adjustment", status_code=201)
+async def create_indicator_shadow_adjustment(
+    indicator_stat_id: str,
+    payload: IndicatorShadowAdjustmentRequest,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    try:
+        stat_id = UUID(indicator_stat_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid indicator_stat_id") from exc
+
+    indicator_stat = await db.scalar(
+        select(ProfileIndicatorStats).where(
+            ProfileIndicatorStats.id == stat_id,
+            ProfileIndicatorStats.user_id == user_id,
+        )
+    )
+    if indicator_stat is None:
+        raise HTTPException(status_code=404, detail="Indicator statistic not found")
+
+    latest_run_id = await db.scalar(
+        select(ProfileIntelligenceRun.id).where(
+            ProfileIntelligenceRun.user_id == user_id,
+            ProfileIntelligenceRun.engine_version == "2B.2-native-official",
+            ProfileIntelligenceRun.status.in_(("completed", "collection_in_progress")),
+        ).order_by(ProfileIntelligenceRun.run_at.desc()).limit(1)
+    )
+    if latest_run_id != indicator_stat.run_id:
+        raise HTTPException(status_code=409, detail="indicator_not_from_latest_official_run")
+
+    associated_ids = {UUID(str(value)) for value in (indicator_stat.source_profile_ids or [])}
+    requested_ids = set(payload.profile_ids)
+    if not requested_ids.issubset(associated_ids):
+        raise HTTPException(status_code=409, detail="profile_not_associated_with_indicator")
+
+    profiles = list((await db.execute(
+        select(Profile).where(
+            Profile.user_id == user_id,
+            Profile.id.in_(requested_ids),
+            Profile.is_active.is_(True),
+        )
+    )).scalars().all())
+    if {profile.id for profile in profiles} != requested_ids:
+        raise HTTPException(status_code=409, detail="profile_not_owned_or_inactive")
+
+    from ..services.profile_intelligence_autopilot_service import ProfileIntelligenceAutopilotService
+
+    service = ProfileIntelligenceAutopilotService()
+    results = []
+    try:
+        for profile in profiles:
+            candidate, created = await service.create_candidate_from_indicator_stat(
+                db,
+                user_id=user_id,
+                indicator_stat=indicator_stat,
+                base_profile=profile,
+            )
+            results.append({
+                "profile_id": str(profile.id),
+                "profile_name": profile.name,
+                "candidate_id": str(candidate.id),
+                "candidate_profile_id": str(candidate.profile_id),
+                "state": candidate.state,
+                "created": created,
+            })
+        await db.commit()
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception:
+        await db.rollback()
+        logger.exception("[PI API] indicator shadow adjustment failed stat=%s", indicator_stat_id)
+        raise
+
+    return {
+        "indicator_stat_id": indicator_stat_id,
+        "mode": "SHADOW_ONLY",
+        "incumbent_mutated": False,
+        "candidates": results,
     }
 
 
@@ -556,10 +733,29 @@ async def list_combinations(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ) -> Dict[str, Any]:
-    q = select(ProfileRuleCombination).where(ProfileRuleCombination.user_id == user_id)
+    selected_run_id: Optional[UUID]
     if run_id:
-        try: q = q.where(ProfileRuleCombination.run_id == UUID(run_id))
-        except ValueError: pass
+        try:
+            selected_run_id = UUID(run_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid run_id")
+    else:
+        selected_run_id = await db.scalar(
+            select(ProfileIntelligenceRun.id)
+            .where(
+                ProfileIntelligenceRun.user_id == user_id,
+                ProfileIntelligenceRun.status == "completed",
+                ProfileIntelligenceRun.engine_version == "2B.2-native-official",
+            )
+            .order_by(ProfileIntelligenceRun.run_at.desc())
+            .limit(1)
+        )
+    if selected_run_id is None:
+        return {"combinations": [], "run_id": None}
+    q = select(ProfileRuleCombination).where(
+        ProfileRuleCombination.user_id == user_id,
+        ProfileRuleCombination.run_id == selected_run_id,
+    )
     if confidence_level:
         q = q.where(ProfileRuleCombination.confidence_level == confidence_level)
     if combination_type:
@@ -574,7 +770,12 @@ async def list_combinations(
         q = q.where(ProfileRuleCombination.champion_score >= min_champion_score)
     q = q.order_by(ProfileRuleCombination.champion_score.desc().nullslast()).limit(limit)
     combos = (await db.execute(q)).scalars().all()
-    return {"combinations": [_combo_to_dict(c) for c in combos]}
+    return {
+        "combinations": [_combo_to_dict(c) for c in combos],
+        "run_id": str(selected_run_id),
+        "dataset_version": DATASET_VERSION,
+        "label_version": LABEL_VERSION,
+    }
 
 
 # ── 8. Combination detail ─────────────────────────────────────────────────────
@@ -635,6 +836,15 @@ async def create_suggestion_from_combination(
         combo.combination_type,
         validation_metrics,
     )
+    if validation_metrics.get("dataset_version") != DATASET_VERSION:
+        actionable = False
+        blocked_reason = "dataset_not_official_native"
+    if validation_metrics.get("label_version") != LABEL_VERSION:
+        actionable = False
+        blocked_reason = "label_contract_not_official"
+    if len(list(combo.source_profile_ids or [])) != 1:
+        actionable = False
+        blocked_reason = "ambiguous_profile_attribution"
     if not actionable:
         await log_pi_event(
             db,
@@ -803,9 +1013,9 @@ async def create_suggestion_from_combination(
             "action": "archive_generated_profile",
             "source_combination_id": str(cid),
         },
-        dataset_version=f"pi-run:{combo.run_id}",
-        feature_schema_version="shadow_features_snapshot:v1",
-        label_version="shadow_outcome:v1",
+        dataset_version=f"{DATASET_VERSION}:{combo.run_id}",
+        feature_schema_version="entry_features_v2",
+        label_version=LABEL_VERSION,
         status="validated",
     )
     db.add(sugg)
@@ -836,10 +1046,29 @@ async def list_suggestions(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ) -> Dict[str, Any]:
-    q = select(ProfileSuggestion).where(ProfileSuggestion.user_id == user_id)
+    selected_run_id: Optional[UUID]
     if run_id:
-        try: q = q.where(ProfileSuggestion.run_id == UUID(run_id))
-        except ValueError: pass
+        try:
+            selected_run_id = UUID(run_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid run_id")
+    else:
+        selected_run_id = await db.scalar(
+            select(ProfileIntelligenceRun.id)
+            .where(
+                ProfileIntelligenceRun.user_id == user_id,
+                ProfileIntelligenceRun.status == "completed",
+                ProfileIntelligenceRun.engine_version == "2B.2-native-official",
+            )
+            .order_by(ProfileIntelligenceRun.run_at.desc())
+            .limit(1)
+        )
+    if selected_run_id is None:
+        return {"suggestions": [], "run_id": None}
+    q = select(ProfileSuggestion).where(
+        ProfileSuggestion.user_id == user_id,
+        ProfileSuggestion.run_id == selected_run_id,
+    )
     if status:
         q = q.where(ProfileSuggestion.status == status)
     if confidence_level:
@@ -848,7 +1077,10 @@ async def list_suggestions(
         q = q.where(ProfileSuggestion.suggested_profile_family == family)
     q = q.order_by(ProfileSuggestion.confidence_score.desc().nullslast()).limit(limit)
     suggestions = (await db.execute(q)).scalars().all()
-    return {"suggestions": [_sugg_to_dict(s) for s in suggestions]}
+    return {
+        "suggestions": [_sugg_to_dict(s) for s in suggestions],
+        "run_id": str(selected_run_id),
+    }
 
 
 # ── 10. Suggestion detail ─────────────────────────────────────────────────────
@@ -1756,13 +1988,23 @@ async def apply_calibration_version(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ) -> Dict[str, Any]:
-    """One-click human approval: apply a VALIDATED calibration to the live profile config.
+    """Block the retired endpoint that mutated an incumbent in place.
 
-    Safety gates (all must pass):
-    - PAV must have shadow_validation_status = 'VALIDATED'
-    - Linked PAS must have requires_human_approval = true
-    - PAV must not already have mutation_applied = true
+    Calibration v2 creates an immutable challenger and promotes only a
+    versioned profile after shadow evidence and human approval.
     """
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "LEGACY_IN_PLACE_MUTATION_BLOCKED",
+            "message": "A versão validada deve seguir o fluxo versionado Recommendation → Proposal → Shadow.",
+            "next_endpoint": "/api/calibration-evolution/v2/recommendations",
+            "mutation_applied": False,
+        },
+    )
+
+    # Kept unreachable only for backwards-compatible source context during the
+    # transition; the guard above is fail-closed and performs no database write.
     # Load PAV
     pav_row = await db.execute(text("""
         SELECT v.id, v.suggestion_id, v.profile_id,

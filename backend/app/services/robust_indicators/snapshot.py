@@ -51,6 +51,7 @@ CREATE INDEX IF NOT EXISTS ix_indicator_snapshots_symbol_time
 
 
 _table_ready_lock = False  # in-process flag; per-worker is fine.
+_snapshot_columns: Optional[set[str]] = None
 
 
 async def ensure_snapshot_table(db: AsyncSession) -> None:
@@ -60,13 +61,25 @@ async def ensure_snapshot_table(db: AsyncSession) -> None:
     exists so dev / fresh DBs (where ``alembic upgrade head`` has not yet
     run for the new revision) still receive snapshots.
     """
-    global _table_ready_lock
-    if _table_ready_lock:
+    global _table_ready_lock, _snapshot_columns
+    if _table_ready_lock and _snapshot_columns is not None:
         return
     try:
         async with db.begin_nested():
             await db.execute(text(_TABLE_DDL))
             await db.execute(text(_INDEX_DDL))
+        async with db.begin_nested():
+            rows = (await db.execute(
+                text(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'indicator_snapshots'
+                    """
+                )
+            )).fetchall()
+        _snapshot_columns = {str(row[0]) for row in rows}
         _table_ready_lock = True
     except Exception as exc:
         logger.debug("[robust_indicators] snapshot table create failed: %s", exc)
@@ -82,7 +95,7 @@ async def persist_snapshot(
     user_id: Optional[uuid.UUID] = None,
     watchlist_id: Optional[uuid.UUID] = None,
     timestamp: Optional[datetime] = None,
-) -> Optional[uuid.UUID]:
+) -> Optional[object]:
     """Insert a single snapshot row. Returns the new row id (or None on error)."""
     await ensure_snapshot_table(db)
 
@@ -92,55 +105,57 @@ async def persist_snapshot(
         timestamp = timestamp.replace(tzinfo=timezone.utc)
 
     payload = {name: env.to_dict() for name, env in envelopes.items()}
-    new_id = uuid.uuid4()
+    base_columns = [
+        "symbol", "timestamp", "indicators_json", "global_confidence",
+        "valid_indicators", "total_indicators", "validation_passed",
+        "validation_errors", "score", "score_confidence", "can_trade",
+    ]
+    value_sql = [
+        ":symbol", ":timestamp", "CAST(:indicators_json AS jsonb)",
+        ":global_confidence", ":valid_indicators", ":total_indicators",
+        ":validation_passed", "CAST(:validation_errors AS jsonb)",
+        ":score", ":score_confidence", ":can_trade",
+    ]
+    params = {
+        "symbol": symbol,
+        "timestamp": timestamp,
+        "indicators_json": json.dumps(payload, default=str),
+        "global_confidence": float(score.global_confidence),
+        "valid_indicators": int(score.valid_indicators),
+        "total_indicators": int(score.total_indicators),
+        "validation_passed": bool(validation.passed),
+        "validation_errors": json.dumps(
+            {"errors": validation.errors, "warnings": validation.warnings}
+        ),
+        "score": float(score.score),
+        "score_confidence": float(score.score_confidence),
+        "can_trade": bool(score.can_trade),
+    }
+
+    available = _snapshot_columns or set()
+    optional_values = {
+        "rejection_reason": score.rejection_reason,
+        "user_id": user_id,
+        "watchlist_id": watchlist_id,
+    }
+    for column, value in optional_values.items():
+        if column in available:
+            base_columns.append(column)
+            value_sql.append(f":{column}")
+            params[column] = value
+
+    insert_sql = text(
+        f"""
+        INSERT INTO indicator_snapshots ({', '.join(base_columns)})
+        VALUES ({', '.join(value_sql)})
+        RETURNING id
+        """
+    )
 
     try:
         async with db.begin_nested():
-            await db.execute(
-                text(
-                    """
-                    INSERT INTO indicator_snapshots (
-                        id, symbol, timestamp,
-                        indicators_json, global_confidence,
-                        valid_indicators, total_indicators,
-                        validation_passed, validation_errors,
-                        score, score_confidence, can_trade,
-                        rejection_reason,
-                        user_id, watchlist_id
-                    ) VALUES (
-                        :id, :symbol, :timestamp,
-                        CAST(:indicators_json AS jsonb), :global_confidence,
-                        :valid_indicators, :total_indicators,
-                        :validation_passed, CAST(:validation_errors AS jsonb),
-                        :score, :score_confidence, :can_trade,
-                        :rejection_reason,
-                        :user_id, :watchlist_id
-                    )
-                    """
-                ),
-                {
-                    "id": new_id,
-                    "symbol": symbol,
-                    "timestamp": timestamp,
-                    "indicators_json": json.dumps(payload, default=str),
-                    "global_confidence": float(score.global_confidence),
-                    "valid_indicators": int(score.valid_indicators),
-                    "total_indicators": int(score.total_indicators),
-                    "validation_passed": bool(validation.passed),
-                    "validation_errors": json.dumps(
-                        {
-                            "errors": validation.errors,
-                            "warnings": validation.warnings,
-                        }
-                    ),
-                    "score": float(score.score),
-                    "score_confidence": float(score.score_confidence),
-                    "can_trade": bool(score.can_trade),
-                    "rejection_reason": score.rejection_reason,
-                    "user_id": user_id,
-                    "watchlist_id": watchlist_id,
-                },
-            )
+            result = await db.execute(insert_sql, params)
+            new_id = result.scalar_one()
         return new_id
     except Exception as exc:
         logger.debug(

@@ -7,11 +7,20 @@ never hit the exchange and never recompute PnL on the request path.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+
+def _number(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _resolve_window(
@@ -25,6 +34,7 @@ def _resolve_window(
     presets = {
         "1D": timedelta(days=1),
         "7D": timedelta(days=7),
+        "15D": timedelta(days=15),
         "30D": timedelta(days=30),
         "90D": timedelta(days=90),
         "MTD": None,
@@ -32,7 +42,10 @@ def _resolve_window(
         "ALL": timedelta(days=365 * 10),
     }
     key = (window or "30D").upper()
-    if key == "MTD":
+    if key == "1D":
+        local_now = now.astimezone(ZoneInfo("America/Sao_Paulo"))
+        start = local_now.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    elif key == "MTD":
         start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     elif key == "YTD":
         start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -43,6 +56,96 @@ def _resolve_window(
 
 
 class PerformanceService:
+
+    async def gate_account_today(self, db: AsyncSession, user_id: UUID) -> Dict[str, Any]:
+        """Reconcile Gate's today P&L as current equity minus start-of-day equity."""
+        from sqlalchemy import select
+
+        from ..exchange_adapters.gate_adapter import GateAdapter
+        from ..models.exchange_connection import ExchangeConnection
+        from .exchange_credentials import decrypt_credentials
+
+        connection = (await db.execute(
+            select(ExchangeConnection).where(
+                ExchangeConnection.user_id == user_id,
+                ExchangeConnection.is_active == True,  # noqa: E712
+            ).limit(1)
+        )).scalars().first()
+        if connection is None:
+            return {"available": False, "reason": "no_active_gate_connection"}
+
+        api_key, api_secret = decrypt_credentials(connection)
+        adapter = GateAdapter(api_key, api_secret)
+        now = datetime.now(timezone.utc)
+        local_now = now.astimezone(ZoneInfo("America/Sao_Paulo"))
+        start = local_now.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+
+        accounts = await adapter.get_spot_balance()
+        current_qty = {
+            str(item.get("currency", "")).upper():
+                _number(item.get("available")) + _number(item.get("locked"))
+            for item in accounts
+        }
+        fills = (await db.execute(text(
+            """
+            SELECT symbol, side, quantity, quote_quantity, fee, fee_currency
+            FROM exchange_executions
+            WHERE user_id = :uid AND exchange='gate' AND market_type='spot'
+              AND executed_at >= :start AND executed_at <= :end
+            ORDER BY executed_at
+            """
+        ), {"uid": str(user_id), "start": start, "end": now})).all()
+
+        quantity_delta: Dict[str, float] = defaultdict(float)
+        for fill in fills:
+            base, quote = str(fill.symbol).upper().split("_", 1)
+            qty = _number(fill.quantity)
+            quote_qty = _number(fill.quote_quantity)
+            if fill.side == "buy":
+                quantity_delta[base] += qty
+                quantity_delta[quote] -= quote_qty
+            else:
+                quantity_delta[base] -= qty
+                quantity_delta[quote] += quote_qty
+            quantity_delta[str(fill.fee_currency or "").upper()] -= _number(fill.fee)
+
+        start_qty = {
+            currency: current_qty.get(currency, 0.0) - quantity_delta.get(currency, 0.0)
+            for currency in current_qty.keys() | quantity_delta.keys()
+        }
+        start_equity = 0.0
+        unpriced_assets: List[str] = []
+        for currency, qty in start_qty.items():
+            if abs(qty) < 1e-12:
+                continue
+            if currency in {"USD", "USDC", "USDT"}:
+                price = 1.0
+            else:
+                try:
+                    candles = await adapter.get_klines(f"{currency}_USDT", "1h", 48, "spot")
+                    target = int(start.timestamp())
+                    price = min(candles, key=lambda candle: abs(candle["time"] - target))["open"]
+                except Exception:
+                    unpriced_assets.append(currency)
+                    continue
+            start_equity += qty * price
+
+        wallet = await adapter._request(
+            "GET", "/wallet/total_balance", params={"currency": "USDT"}
+        )
+        current_equity = _number((wallet.get("total") or {}).get("amount"))
+        pnl = current_equity - start_equity
+        return {
+            "available": True,
+            "source": "gate_api_equity_reconciliation",
+            "from": start.isoformat(),
+            "to": now.isoformat(),
+            "start_equity_usdt": round(start_equity, 8),
+            "current_equity_usdt": round(current_equity, 8),
+            "pnl_usdt": round(pnl, 8),
+            "pnl_pct": round((pnl / start_equity * 100.0) if start_equity else 0.0, 6),
+            "unpriced_assets": unpriced_assets,
+        }
 
     async def summary(
         self,
@@ -56,6 +159,17 @@ class PerformanceService:
         prev_start = start - (end - start)
 
         params = {"uid": str(user_id), "start": start, "end": end, "prev_start": prev_start}
+
+        execution_count = (await db.execute(text(
+            """
+            SELECT COUNT(DISTINCT COALESCE(NULLIF(order_id, ''), trade_id))::int
+              FROM exchange_executions
+             WHERE user_id = :uid
+               AND exchange = 'gate'
+               AND executed_at >= :start
+               AND executed_at < :end
+            """
+        ), params)).scalar_one()
 
         agg = (await db.execute(text(
             """
@@ -155,6 +269,7 @@ class PerformanceService:
                 "delta_vs_previous": round(float(agg.pnl_usdt or 0.0) - float(prev.pnl or 0.0), 2),
             },
             "stats": {
+                "executed_trades": int(execution_count or 0),
                 "total_trades": total_closed,
                 "wins": int(agg.wins or 0),
                 "losses": int(agg.losses or 0),
@@ -273,18 +388,48 @@ class PerformanceService:
         start, end = _resolve_window(window, from_dt, to_dt)
         rows = (await db.execute(text(
             """
+            WITH lot_rows AS (
+              SELECT
+                pl.*,
+                COALESCE(
+                  exit_fill.order_id,
+                  pl.exit_trade_ids ->> 0,
+                  'lifecycle:' || pl.id::text
+                ) AS close_order_id
+              FROM position_lifecycle pl
+              LEFT JOIN LATERAL (
+                SELECT ee.order_id
+                FROM exchange_executions ee
+                WHERE ee.user_id = pl.user_id
+                  AND ee.market_type = pl.market_type
+                  AND ee.symbol = pl.symbol
+                  AND ee.trade_id = pl.exit_trade_ids ->> 0
+                LIMIT 1
+              ) exit_fill ON TRUE
+              WHERE pl.user_id = :uid AND pl.status='closed'
+                AND pl.closed_at BETWEEN :start AND :end
+            ), order_results AS (
+              SELECT
+                symbol,
+                market_type,
+                close_order_id,
+                SUM(pnl_usdt) AS pnl_usdt,
+                SUM(invested_usdt) AS invested_usdt,
+                SUM(fees_total) AS fees_total,
+                MAX(holding_seconds) AS holding_seconds
+              FROM lot_rows
+              GROUP BY symbol, market_type, close_order_id
+            )
             SELECT
               symbol,
               market_type,
-              COUNT(*)::int                                                  AS trades,
-              COUNT(*) FILTER (WHERE pnl_usdt > 0)::int                      AS wins,
-              COALESCE(SUM(pnl_usdt), 0)::float                              AS pnl,
-              COALESCE(SUM(invested_usdt), 0)::float                         AS invested,
-              COALESCE(SUM(fees_total), 0)::float                            AS fees,
-              COALESCE(AVG(holding_seconds), 0)::float                       AS avg_holding
-            FROM position_lifecycle
-            WHERE user_id = :uid AND status='closed'
-              AND closed_at BETWEEN :start AND :end
+              COUNT(*)::int                                                   AS trades,
+              COUNT(*) FILTER (WHERE pnl_usdt > 0)::int                       AS wins,
+              COALESCE(SUM(pnl_usdt), 0)::float                               AS pnl,
+              COALESCE(SUM(invested_usdt), 0)::float                          AS invested,
+              COALESCE(SUM(fees_total), 0)::float                             AS fees,
+              COALESCE(AVG(holding_seconds), 0)::float                        AS avg_holding
+            FROM order_results
             GROUP BY symbol, market_type
             ORDER BY pnl DESC
             """

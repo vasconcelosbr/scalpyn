@@ -63,6 +63,9 @@ def _make_suggestion(
     s.profile_name = "Source Profile"
     s.validation_status = "validated"
     s.actionability_status = "validated"
+    s.dataset_version = "pi-native-point-in-time-v1:test-run"
+    s.feature_schema_version = "entry_features_v2"
+    s.label_version = "shadow_outcome-v1"
     s.diff_json = {"before": None, "after": {"profile": "shadow"}}
     s.rollback_payload = {"action": "archive_generated_profile"}
     s.status = status

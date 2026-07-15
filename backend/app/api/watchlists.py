@@ -2599,6 +2599,37 @@ async def get_watchlist_assets(
         )["conditions"]
 
     is_futures = getattr(wl, "market_mode", "spot") == "futures"
+    crypto_ev_map: Dict[str, Dict[str, Any]] = {}
+    if symbols:
+        try:
+            from ..services.config_service import config_service as _config_service
+
+            crypto_cfg = await _config_service.get_config(db, "crypto_ev", user_id)
+            crypto_view = ((crypto_cfg.get("views") or {}).get("operational_view") if crypto_cfg else None) or "spectrum"
+            if crypto_view not in {"executable", "spectrum"}:
+                crypto_view = "spectrum"
+            ev_rows = (await db.execute(
+                text("""
+                    SELECT symbol, score, state, n_trades, n_excluded_unreplayable, w, computed_at
+                      FROM crypto_ev_current
+                     WHERE view = :view
+                       AND symbol = ANY(:symbols)
+                """),
+                {"view": crypto_view, "symbols": list(symbols)},
+            )).mappings().all()
+            crypto_ev_map = {
+                row["symbol"]: {
+                    "score": float(row["score"]) if row["score"] is not None else None,
+                    "state": row["state"],
+                    "n_trades": int(row["n_trades"]),
+                    "n_excluded_unreplayable": int(row["n_excluded_unreplayable"]),
+                    "w": float(row["w"]) if row["w"] is not None else None,
+                    "computed_at": row["computed_at"].isoformat() if row["computed_at"] else None,
+                }
+                for row in ev_rows
+            }
+        except Exception as _exc:
+            logger.debug("[Pipeline] crypto_ev enrichment skipped: %s", _exc)
 
     enriched = []
     for a in assets:
@@ -2687,6 +2718,7 @@ async def get_watchlist_assets(
             enriched_asset["ml_base_score"]   = ml_pred["base_score"]
             enriched_asset["ml_final_score"]  = ml_pred["final_score"]
             enriched_asset["blocked_by_ml"]   = ml_pred["blocked_by_ml"]
+        enriched_asset["crypto_ev"] = crypto_ev_map.get(a.symbol)
 
         # Futures-mode fields — always present for futures watchlists, null for spot
         if is_futures:
@@ -2769,6 +2801,7 @@ async def get_watchlist_assets(
             normalized["ml_probability"]  = _ml.get("probability")
             normalized["ml_final_score"]  = _ml.get("final_score")
             normalized["blocked_by_ml"]   = _ml.get("blocked_by_ml")
+        normalized["crypto_ev"] = crypto_ev_map.get(asset.symbol)
         approved_items.append(normalized)
 
     return {
@@ -2798,13 +2831,14 @@ async def _get_watchlist_rejections_payload(
 
     if wl.auto_refresh:
         try:
-            await _auto_refresh_watchlist_assets_if_needed(
-                wl,
-                assets,
-                effective_level=effective_level,
-                user_id=user_id,
-                db=db,
-            )
+            async with db.begin_nested():
+                await _auto_refresh_watchlist_assets_if_needed(
+                    wl,
+                    assets,
+                    effective_level=effective_level,
+                    user_id=user_id,
+                    db=db,
+                )
         except Exception as exc:
             logger.warning("[Pipeline] Auto-refresh rejection snapshot failed for %s: %s", wl.id, exc)
 
@@ -2825,15 +2859,19 @@ async def _get_watchlist_rejections_payload(
     meta_map: Dict[str, Dict[str, Any]] = {}
     if rejection_symbols:
         try:
-            meta_rows = await db.execute(
-                text("""
-                    SELECT symbol, price, price_change_24h, volume_24h, market_cap,
-                           spread_pct, orderbook_depth_usdt
-                    FROM market_metadata
-                    WHERE symbol = ANY(:symbols)
-                """),
-                {"symbols": list(rejection_symbols)},
-            )
+            # Optional microstructure columns are absent on older schemas.  A
+            # failed SELECT aborts PostgreSQL's transaction, so isolate it in
+            # a savepoint before attempting the legacy-column fallback below.
+            async with db.begin_nested():
+                meta_rows = await db.execute(
+                    text("""
+                        SELECT symbol, price, price_change_24h, volume_24h, market_cap,
+                               spread_pct, orderbook_depth_usdt
+                        FROM market_metadata
+                        WHERE symbol = ANY(:symbols)
+                    """),
+                    {"symbols": list(rejection_symbols)},
+                )
             meta_map = {
                 r.symbol: {
                     "current_price":        float(r.price) if r.price is not None else None,

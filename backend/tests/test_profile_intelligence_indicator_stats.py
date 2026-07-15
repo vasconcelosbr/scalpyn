@@ -47,11 +47,15 @@ async def test_indicator_stats_default_to_latest_completed_run():
         "indicators": [],
         "role": "winning_indicator",
         "run_id": str(latest_run_id),
+        "dataset_version": "pi-native-point-in-time-v1",
+        "label_version": "shadow_outcome-v1",
     }
     assert len(db.scalar_statements) == 1
     assert len(db.execute_statements) == 1
     params = db.execute_statements[0].compile().params
     assert latest_run_id in params.values()
+    compiled = str(db.execute_statements[0].compile())
+    assert "avg_pnl_pct >" in compiled
 
 
 @pytest.mark.asyncio
@@ -68,6 +72,10 @@ async def test_indicator_stats_keep_explicit_run_without_latest_lookup():
     assert db.scalar_statements == []
     params = db.execute_statements[0].compile().params
     assert requested_run_id in params.values()
+    compiled = str(db.execute_statements[0].compile())
+    assert "loss_rate DESC" in compiled
+    assert "lift_vs_base ASC" in compiled
+    assert "avg_pnl_pct <" in compiled
 
 
 @pytest.mark.asyncio

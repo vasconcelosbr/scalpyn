@@ -724,7 +724,12 @@ class ProfileCreateService:
 
         # ── 12b. Granular audit events (signal / scoring / block) ─────────────
         signals = profile_config.get("signals", {}).get("conditions", [])
-        scoring_rules = profile_config.get("scoring", [])
+        scoring_section = profile_config.get("scoring", {})
+        scoring_rules = (
+            scoring_section.get("generated_rules", [])
+            if isinstance(scoring_section, dict)
+            else []
+        )
         block_rules = profile_config.get("block_rules", {}).get("blocks", [])
 
         for sig in signals:

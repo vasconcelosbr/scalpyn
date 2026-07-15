@@ -99,6 +99,7 @@ celery_app = Celery(
         "app.tasks.autopilot",
         "app.tasks.profile_intelligence_job",
         "app.tasks.opportunity_snapshot_evaluator",
+        "app.tasks.crypto_ev_score",
     ],
 )
 
@@ -128,6 +129,7 @@ TASK_ROUTES = {
     # every registered task. Remove after post-stabilisation clean-up.
     "app.tasks.compute_indicators.compute":              {"queue": QUEUE_STRUCTURAL_COMPUTE},
     "app.tasks.compute_scores.score":                    {"queue": QUEUE_STRUCTURAL_COMPUTE},
+    "app.tasks.crypto_ev_score.compute":                 {"queue": QUEUE_STRUCTURAL},
     # pipeline_scan.scan: structural per operator spec (cadence-locked
     # safety-net, must not compete with the bursty 5m chain).
     "app.tasks.pipeline_scan.scan":                      {"queue": QUEUE_STRUCTURAL},
@@ -174,8 +176,9 @@ TASK_ROUTES = {
     # Shadow Portfolio Fase 3 — beat-driven monitor de shadow trades.
     # Vive na execution queue: latência baixa preserva o objetivo de
     # acompanhar as oportunidades barradas perto do contexto financeiro
-    # real, e a carga é leve (batch ≤ SHADOW_MONITOR_BATCH_SIZE).
-    "app.tasks.shadow_trade_monitor.run":           {"queue": QUEUE_EXECUTION},
+    # Shadow labels are analytical/OHLCV work; isolate them on structural_compute
+    # so neither live execution nor pipeline scans can starve label closure.
+    "app.tasks.shadow_trade_monitor.run":           {"queue": QUEUE_STRUCTURAL_COMPUTE},
 
     # Shadow Timeout Analyzer (Fase Quant) — análise passiva pós-timeout.
     # Structural queue: carga moderada (OHLCV lookup por trade × batch),
@@ -191,9 +194,9 @@ TASK_ROUTES = {
     "app.tasks.autopilot.run":                      {"queue": QUEUE_STRUCTURAL},
 
     # Profile Intelligence Engine — indicator lift, rule mining, suggestions.
-    # Structural queue: heavy analysis but no latency requirement.
-    "app.tasks.profile_intelligence_job.run":       {"queue": QUEUE_STRUCTURAL},
-    "app.tasks.profile_intelligence_job.run_for_user": {"queue": QUEUE_STRUCTURAL},
+    # Keep heavy full-cohort analysis off the latency-sensitive structural queue.
+    "app.tasks.profile_intelligence_job.run":       {"queue": QUEUE_STRUCTURAL_COMPUTE},
+    "app.tasks.profile_intelligence_job.run_for_user": {"queue": QUEUE_STRUCTURAL_COMPUTE},
     "app.tasks.profile_intelligence_job.run_cycle_for_user": {"queue": QUEUE_STRUCTURAL},
     "app.tasks.profile_intelligence_job.monitor":        {"queue": QUEUE_STRUCTURAL},
     "app.tasks.profile_intelligence_job.feedback_loop": {"queue": QUEUE_STRUCTURAL_COMPUTE},
@@ -349,11 +352,12 @@ TASK_ANNOTATIONS = {
     # anti_liq force-close: never retry — duplicate close attempts are dangerous.
     "app.tasks.anti_liq_monitor.monitor":           {**_EXECUTION_GUARDS, "max_retries": 0},
 
-    # Shadow Portfolio monitor (Fase 3) — idempotente + beat-driven →
-    # opt-out de acks_late (gotcha #245). rate_limit alinhado com beat
-    # default de 5 min (12/h dá folga pra ad-hoc dispatch manual).
+    # Shadow Portfolio monitor (Fase 3) — bounded analytical/OHLCV work on
+    # structural_compute; never competes with live trading or pipeline scans.
     "app.tasks.shadow_trade_monitor.run":           {
         **_EXECUTION_GUARDS,
+        "time_limit": 300,
+        "soft_time_limit": 270,
         "rate_limit": "12/h",
         **_NO_REQUEUE_ON_WORKER_LOSS,
     },
@@ -400,7 +404,7 @@ TASK_ANNOTATIONS = {
     # User-triggered PI run: same budget as beat-driven run. acks_late=False
     # prevents the 18-task duplicate accumulation caused by worker restarts.
     "app.tasks.profile_intelligence_job.run_for_user": {
-        "queue": "structural",
+        "queue": QUEUE_STRUCTURAL_COMPUTE,
         "time_limit": 3600,
         "soft_time_limit": 3540,
         "max_retries": 0,
@@ -580,7 +584,7 @@ celery_app.conf.beat_schedule = {
     "shadow_trade_monitor": {
         "task": "app.tasks.shadow_trade_monitor.run",
         "schedule": float(os.environ.get("SHADOW_MONITOR_INTERVAL_S", 300)),
-        "options": {"queue": QUEUE_EXECUTION},
+        "options": {"queue": QUEUE_STRUCTURAL_COMPUTE},
     },
     # Shadow Timeout Analyzer (Fase Quant) — análise passiva pós-timeout.
     # Beat default 1h (override via SHADOW_ANALYZER_INTERVAL_S env).
@@ -599,6 +603,11 @@ celery_app.conf.beat_schedule = {
         "schedule": float(os.environ.get("TTT_ANALYZER_INTERVAL_S", 3600)),
         "options": {"queue": QUEUE_STRUCTURAL},
     },
+    "crypto_ev_score": {
+        "task": "app.tasks.crypto_ev_score.compute",
+        "schedule": float(os.environ.get("CRYPTO_EV_INTERVAL_S", 900)),
+        "options": {"queue": QUEUE_STRUCTURAL},
+    },
 
     # Auto-Pilot Engine — executa ciclo de mutação autônoma a cada 6h.
     # Itera todos os profiles com auto_pilot_enabled=True.
@@ -611,11 +620,11 @@ celery_app.conf.beat_schedule = {
 
     # Profile Intelligence Engine + Auto-Pilot Spot.
     # Beat default 24h (override via PROFILE_INTELLIGENCE_INTERVAL_S env).
-    # Structural queue: análise pesada, sem latência crítica.
+    # Full analysis runs on the dedicated compute queue.
     "profile_intelligence_engine": {
         "task": "app.tasks.profile_intelligence_job.run",
         "schedule": float(os.environ.get("PROFILE_INTELLIGENCE_INTERVAL_S", 86400)),
-        "options": {"queue": QUEUE_STRUCTURAL},
+        "options": {"queue": QUEUE_STRUCTURAL_COMPUTE},
     },
     "profile_intelligence_autopilot_monitor": {
         "task": "app.tasks.profile_intelligence_job.monitor",

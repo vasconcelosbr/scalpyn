@@ -10,6 +10,8 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .profile_intelligence_contract import PIValidationPolicy
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -53,6 +55,7 @@ class OptunaProfileSearchService:
         discovery_end: datetime,
         validation_start: datetime,
         validation_end: datetime,
+        validation_policy: PIValidationPolicy,
         n_trials: int = 200,
     ) -> List[dict]:
         """
@@ -233,6 +236,7 @@ class OptunaProfileSearchService:
                 validation_start=validation_start,
                 validation_end=validation_end,
                 missing_count=discovery_missing + validation_missing,
+                policy=validation_policy,
             )
             optuna_status = _optuna_validation_status(classification)
             base_validation_metrics = _window_metrics(

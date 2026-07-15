@@ -211,3 +211,4 @@ credentials.json
 backend/celerybeat-schedule
 backend/celerybeat-schedule.*
 .vercel
+.env*

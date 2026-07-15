@@ -26,6 +26,14 @@ from ..models.profile_intelligence import ProfileIntelligenceRun
 from ..models.profile_metrics import ProfileMetrics
 from ..models.rule_contribution import RuleContribution
 from .profile_intelligence_audit_service import log_pi_event
+from .profile_intelligence_contract import (
+    DATASET_VERSION,
+    LABEL_VERSION,
+    load_pi_settings,
+    official_params,
+    official_where,
+    validation_policy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +53,7 @@ class ProfilePerformanceAnalyzer:
         lookback_days: int,
         min_closed_trades: int,
         profile_ids: Optional[list] = None,
+        analysis_sources: Optional[list[str]] = None,
     ) -> List[dict]:
         """
         Load shadow trades grouped by profile, compute metrics, upsert into
@@ -80,10 +89,16 @@ class ProfilePerformanceAnalyzer:
             WHERE user_id = :uid
               AND created_at >= NOW() - INTERVAL '{lookback_days} days'
               AND profile_id IS NOT NULL
+              AND source = ANY(:analysis_sources)
+              AND {official_where('shadow_trades')}
             GROUP BY profile_id, profile_name, source
         """)
 
-        rows = (await db.execute(sql, {"uid": str(user_id)})).fetchall()
+        rows = (await db.execute(sql, {
+            "uid": str(user_id),
+            "analysis_sources": analysis_sources or [],
+            **official_params(),
+        })).fetchall()
 
         if not rows:
             logger.info("[PerfAnalyzer] No profile shadow trades found.")
@@ -270,6 +285,7 @@ class RuleContributionAnalyzer:
         user_id: UUID,
         run_id: UUID,
         lookback_days: int,
+        analysis_sources: Optional[list[str]] = None,
     ) -> List[dict]:
         logger.info(
             "[RuleContrib] Analyzing rule contributions for user=%s lookback=%d",
@@ -296,10 +312,16 @@ class RuleContributionAnalyzer:
                   AND profile_id IS NOT NULL
                   AND outcome IN ('TP_HIT', 'SL_HIT', 'TIMEOUT')
                   AND rules_snapshot IS NOT NULL
+                  AND source = ANY(:analysis_sources)
+                  AND {official_where('shadow_trades')}
                 ORDER BY created_at
                 LIMIT {batch_size} OFFSET {offset}
             """)
-            batch = (await db.execute(batch_sql, {"uid": str(user_id)})).fetchall()
+            batch = (await db.execute(batch_sql, {
+                "uid": str(user_id),
+                "analysis_sources": analysis_sources or [],
+                **official_params(),
+            })).fetchall()
             if not batch:
                 break
             for row in batch:
@@ -468,7 +490,7 @@ class ProfileIntelligenceService:
     return the run_id for polling / UI display.
     """
 
-    ENGINE_VERSION = "2B.1"
+    ENGINE_VERSION = "2B.2-native-official"
 
     async def run(
         self,
@@ -528,6 +550,40 @@ class ProfileIntelligenceService:
             await db.flush()
             run_id = pi_run.id
 
+        try:
+            pi_settings = await load_pi_settings(db, user_id, settings_override)
+        except Exception as exc:
+            await db.execute(
+                text("""
+                    UPDATE profile_intelligence_runs
+                    SET status = 'failed', error_message = :error, updated_at = :now
+                    WHERE id = :run_id
+                """),
+                {"error": str(exc), "now": now_utc, "run_id": str(run_id)},
+            )
+            await db.commit()
+            raise
+
+        analysis_sources = [str(value) for value in pi_settings["analysis_sources"]]
+        min_closed_trades = int(pi_settings["min_closed_trades"])
+        policy = validation_policy(pi_settings)
+        await db.execute(
+            text("""
+                UPDATE profile_intelligence_runs
+                SET settings_json = CAST(:settings AS jsonb), updated_at = :now
+                WHERE id = :run_id
+            """),
+            {
+                "settings": json.dumps({
+                    **pi_settings,
+                    "dataset_version": DATASET_VERSION,
+                    "label_version": LABEL_VERSION,
+                }),
+                "now": now_utc,
+                "run_id": str(run_id),
+            },
+        )
+
         logger.info("[PIEngine] Run started: user=%s run_id=%s", user_id, run_id)
 
         await log_pi_event(
@@ -546,7 +602,9 @@ class ProfileIntelligenceService:
         # ------------------------------------------------------------------
         error_message = None
         try:
-            base_metrics = await self.get_base_metrics(db, user_id, lookback_days)
+            base_metrics = await self.get_base_metrics(
+                db, user_id, lookback_days, analysis_sources
+            )
         except Exception as exc:
             logger.error("[PIEngine] get_base_metrics failed: %s", exc)
             base_metrics = {
@@ -615,14 +673,18 @@ class ProfileIntelligenceService:
         # haven't been collected for the full period yet.
         earliest_features = (
             await db.execute(
-                text("""
+                text(f"""
                     SELECT MIN(created_at)
                     FROM shadow_trades
                     WHERE user_id = :uid
-                      AND features_snapshot IS NOT NULL
-                      AND features_snapshot != '{}'::jsonb
+                      AND source = ANY(:analysis_sources)
+                      AND {official_where('shadow_trades')}
                 """),
-                {"uid": str(user_id)},
+                {
+                    "uid": str(user_id),
+                    "analysis_sources": analysis_sources,
+                    **official_params(),
+                },
             )
         ).scalar()
 
@@ -674,6 +736,7 @@ class ProfileIntelligenceService:
             profile_results = await analyzer.analyze(
                 db, user_id, run_id, lookback_days, min_closed_trades,
                 profile_ids=profiles_filter,
+                analysis_sources=analysis_sources,
             )
             await log_pi_event(
                 db, user_id, "perf_analyzer_completed",
@@ -718,6 +781,9 @@ class ProfileIntelligenceService:
                 base_avg_pnl_pct=base_avg_pnl_pct,
                 discovery_start=discovery_start,
                 discovery_end=discovery_end,
+                analysis_sources=analysis_sources,
+                winning_lift=float(pi_settings["indicator_winning_lift"]),
+                losing_winrate_ratio=float(pi_settings["indicator_losing_winrate_ratio"]),
             )
             await log_pi_event(
                 db, user_id, "indicator_lift_completed",
@@ -725,12 +791,12 @@ class ProfileIntelligenceService:
                 result_json={
                     "buckets_computed": len(indicator_stats),
                     "top_winning_buckets": [
-                        {"indicator": s.indicator, "bucket": s.bucket_label, "win_rate": float(s.win_rate) if s.win_rate else 0, "lift": float(s.lift_vs_base) if s.lift_vs_base else 0}
-                        for s in sorted([x for x in indicator_stats if x.role_detected == "winning_indicator"], key=lambda x: x.lift_vs_base or 0, reverse=True)[:10]
+                        {"indicator": s["indicator"], "bucket": s["bucket_label"], "win_rate": float(s["win_rate"] or 0), "lift": float(s["lift_vs_base"] or 0)}
+                        for s in sorted([x for x in indicator_stats if x["role_detected"] == "winning_indicator"], key=lambda x: x["lift_vs_base"] or 0, reverse=True)[:10]
                     ],
                     "top_losing_buckets": [
-                        {"indicator": s.indicator, "bucket": s.bucket_label, "win_rate": float(s.win_rate) if s.win_rate else 0, "lift": float(s.lift_vs_base) if s.lift_vs_base else 0}
-                        for s in sorted([x for x in indicator_stats if x.role_detected == "losing_indicator"], key=lambda x: x.lift_vs_base or 0)[:10]
+                        {"indicator": s["indicator"], "bucket": s["bucket_label"], "win_rate": float(s["win_rate"] or 0), "lift": float(s["lift_vs_base"] or 0)}
+                        for s in sorted([x for x in indicator_stats if x["role_detected"] == "losing_indicator"], key=lambda x: x["lift_vs_base"] or 0)[:10]
                     ],
                 },
             )
@@ -748,7 +814,9 @@ class ProfileIntelligenceService:
         # ------------------------------------------------------------------
         try:
             rule_analyzer = RuleContributionAnalyzer()
-            rule_results = await rule_analyzer.analyze(db, user_id, run_id, lookback_days)
+            rule_results = await rule_analyzer.analyze(
+                db, user_id, run_id, lookback_days, analysis_sources
+            )
             await log_pi_event(
                 db, user_id, "rule_contribution_completed",
                 run_id=run_id,
@@ -784,6 +852,8 @@ class ProfileIntelligenceService:
                     discovery_end=discovery_end,
                     validation_start=validation_start,
                     validation_end=validation_end,
+                    validation_policy=policy,
+                    analysis_sources=analysis_sources,
                 )
                 await log_pi_event(
                     db, user_id, "counterfactual_seeds_completed",
@@ -816,6 +886,8 @@ class ProfileIntelligenceService:
                     discovery_end=discovery_end,
                     validation_start=validation_start,
                     validation_end=validation_end,
+                    validation_policy=policy,
+                    analysis_sources=analysis_sources,
                     max_combinations=max_combinations,
                 )
                 await log_pi_event(
@@ -852,6 +924,8 @@ class ProfileIntelligenceService:
                         discovery_end=discovery_end,
                         validation_start=validation_start,
                         validation_end=validation_end,
+                        validation_policy=policy,
+                        analysis_sources=analysis_sources,
                     )
                 await log_pi_event(
                     db, user_id, "association_rules_completed",
@@ -886,6 +960,7 @@ class ProfileIntelligenceService:
                         discovery_end=discovery_end,
                         validation_start=validation_start,
                         validation_end=validation_end,
+                        validation_policy=policy,
                     )
                 await log_pi_event(
                     db, user_id, "optuna_completed",
@@ -958,7 +1033,13 @@ class ProfileIntelligenceService:
         # ------------------------------------------------------------------
         # 13. Update PIRun with final counts + status
         # ------------------------------------------------------------------
-        final_status = "completed" if not error_message else "completed_with_errors"
+        minimum_evidence = policy.min_discovery_trades + policy.min_validation_trades
+        if error_message:
+            final_status = "completed_with_errors"
+        elif total_closed_trades < minimum_evidence:
+            final_status = "collection_in_progress"
+        else:
+            final_status = "completed"
 
         await db.execute(
             text("""
@@ -1002,6 +1083,7 @@ class ProfileIntelligenceService:
         db: AsyncSession,
         user_id: UUID,
         lookback_days: int,
+        analysis_sources: list[str],
     ) -> dict:
         """
         Compute base win_rate, avg_pnl_pct, tp_30m_rate from ALL closed shadow
@@ -1017,8 +1099,14 @@ class ProfileIntelligenceService:
             FROM shadow_trades
             WHERE user_id = :uid
               AND created_at >= NOW() - INTERVAL '{lookback_days} days'
+              AND source = ANY(:analysis_sources)
+              AND {official_where('shadow_trades')}
         """)
-        row = (await db.execute(sql, {"uid": str(user_id)})).fetchone()
+        row = (await db.execute(sql, {
+            "uid": str(user_id),
+            "analysis_sources": analysis_sources,
+            **official_params(),
+        })).fetchone()
 
         total_shadow = int(row.total_shadow_trades or 0)
         total_closed = int(row.total_closed_trades or 0)

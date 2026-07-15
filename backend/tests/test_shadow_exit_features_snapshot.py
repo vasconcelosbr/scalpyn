@@ -207,7 +207,7 @@ async def test_capture_exit_features_writes_marker_on_provider_exception():
     assert shadow.features_snapshot_exit == {
         "_capture_failed": True,
         "_reason": "capture_exception",
-        "_error": "RuntimeError",
+        "_error": "RuntimeError: DB down",
     }
 
 
@@ -239,6 +239,7 @@ def _make_shadow_completed(*, entry_snap, exit_snap):
     return SimpleNamespace(
         id=uuid4(),
         symbol="BTC_USDT",
+        source="L3",
         outcome="TP_HIT",
         entry_price=100.0,
         tp_price=110.0,
@@ -248,9 +249,29 @@ def _make_shadow_completed(*, entry_snap, exit_snap):
         exit_timestamp=now,
         holding_seconds=600,
         decision_id=uuid4(),
+        pnl_pct=None,
         features_snapshot=entry_snap,
         features_snapshot_exit=exit_snap,
         config_snapshot={"tp": 0.10, "sl": 0.10},
+        mae_at=None,
+        mfe_at=None,
+        barrier_touched=None,
+        barrier_touched_at=None,
+        intrabar_convention=None,
+        final_return_pct=None,
+        net_return_pct=None,
+        fee_roundtrip_pct_applied=None,
+        barrier_mode=None,
+        tp_pct_applied=None,
+        sl_pct_applied=None,
+        atr_pct_at_entry=None,
+        min_price_post_entry=None,
+        max_price_post_entry=None,
+        max_drawdown_pct=None,
+        max_profit_pct=None,
+        mae_pct=None,
+        mfe_pct=None,
+        exit_metrics_json=None,
     )
 
 

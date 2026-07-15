@@ -10,6 +10,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
+from ..services.profile_intelligence_contract import DATASET_VERSION, LABEL_VERSION
+from ..services.profile_intelligence_service import load_pi_settings
 from .config import get_current_user_id
 
 router = APIRouter(prefix="/api/profile-intelligence/live", tags=["profile-intelligence-live"])
@@ -89,9 +91,11 @@ async def live_activity(
 async def live_shadow_summary(
     hours: int = 24,
     db: AsyncSession = Depends(get_db),
-    _uid: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_current_user_id),
 ):
     _h = min(hours, 168)
+    settings = await load_pi_settings(db, user_id)
+    min_profile_cases = int(settings["min_closed_trades"])
     row = await db.execute(text(f"""
         SELECT
             COUNT(*) AS total_trades,
@@ -103,12 +107,13 @@ async def live_shadow_summary(
                 COUNT(*) FILTER (WHERE pnl_pct > 0)::numeric / NULLIF(COUNT(*), 0),
             4) AS win_rate
         FROM shadow_trades
-        WHERE source IN ('L3','L3_LAB')
+        WHERE user_id = CAST(:uid AS uuid)
+          AND source IN ('L3','L3_LAB')
           AND status = 'COMPLETED'
           AND pnl_pct IS NOT NULL
           AND profile_id IS NOT NULL
           AND created_at >= now() - interval '{_h} hours'
-    """))
+    """), {"uid": str(user_id)})
     stats = row.fetchone()
 
     neg_row = await db.execute(text(f"""
@@ -116,21 +121,25 @@ async def live_shadow_summary(
         FROM (
             SELECT profile_id, AVG(pnl_pct) AS avg_pnl
             FROM shadow_trades
-            WHERE source IN ('L3','L3_LAB')
+            WHERE user_id = CAST(:uid AS uuid)
+              AND source IN ('L3','L3_LAB')
               AND status = 'COMPLETED'
               AND profile_id IS NOT NULL
               AND created_at >= now() - interval '{_h} hours'
             GROUP BY profile_id
-            HAVING COUNT(*) >= 5
+            HAVING COUNT(*) >= :min_profile_cases
         ) t
         WHERE avg_pnl < 0
-    """))
+    """), {"uid": str(user_id), "min_profile_cases": min_profile_cases})
     neg = neg_row.scalar_one_or_none() or 0
 
     hn_row = await db.execute(text(f"""
-        SELECT COUNT(*) FROM profile_hard_negative_patterns
-        WHERE created_at >= now() - interval '{_h} hours'
-    """))
+        SELECT COUNT(*)
+        FROM profile_hard_negative_patterns h
+        JOIN profiles p ON p.id = h.profile_id
+        WHERE p.user_id = CAST(:uid AS uuid)
+          AND h.created_at >= now() - interval '{_h} hours'
+    """), {"uid": str(user_id)})
     hard_negs = hn_row.scalar_one_or_none() or 0
 
     total_trades = int(stats.total_trades or 0)
@@ -143,12 +152,13 @@ async def live_shadow_summary(
             SELECT COUNT(*) AS total_trades,
                    COUNT(DISTINCT profile_id) AS total_profiles
             FROM shadow_trades
-            WHERE source IN ('L3','L3_LAB')
+            WHERE user_id = CAST(:uid AS uuid)
+              AND source IN ('L3','L3_LAB')
               AND status = 'COMPLETED'
               AND pnl_pct IS NOT NULL
               AND profile_id IS NOT NULL
               AND created_at >= now() - interval '7 days'
-        """))
+        """), {"uid": str(user_id)})
         fb_stats = fb.fetchone()
         fallback_total_trades = int(fb_stats.total_trades or 0)
         fallback_total_profiles = int(fb_stats.total_profiles or 0)
@@ -181,25 +191,65 @@ async def live_shadow_summary(
 async def live_indicator_performance(
     limit: int = 30,
     db: AsyncSession = Depends(get_db),
-    _uid: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_current_user_id),
 ):
-    top_win = await db.execute(text("""
-        SELECT profile_id, profile_name, indicator_name, bucket,
-               sample_count, win_rate, avg_pnl_pct, lift_vs_profile, created_at
-        FROM profile_indicator_performance
-        WHERE win_rate IS NOT NULL AND sample_count >= 5
-        ORDER BY lift_vs_profile DESC NULLS LAST, created_at DESC
+    settings = await load_pi_settings(db, user_id)
+    min_cases = int(settings["min_closed_trades"])
+    params = {
+        "uid": str(user_id),
+        "min_cases": min_cases,
+        "limit": min(limit, 100),
+        "dataset_version": DATASET_VERSION,
+        "label_version": LABEL_VERSION,
+    }
+    latest_run_sql = """
+        SELECT pip.run_id
+        FROM profile_indicator_performance pip
+        JOIN profiles p ON p.id = pip.profile_id
+        WHERE p.user_id = CAST(:uid AS uuid)
+          AND pip.metadata->>'dataset_version' = :dataset_version
+          AND pip.metadata->>'label_version' = :label_version
+        GROUP BY pip.run_id
+        ORDER BY MAX(pip.created_at) DESC
+        LIMIT 1
+    """
+    top_win = await db.execute(text(f"""
+        WITH latest_run AS ({latest_run_sql})
+        SELECT pip.profile_id, p.name AS profile_name, pip.indicator_name, pip.bucket,
+               pip.sample_count, pip.win_count, pip.loss_count, pip.win_rate,
+               pip.avg_pnl_pct, pip.lift_vs_profile, pip.created_at, pip.run_id
+        FROM profile_indicator_performance pip
+        JOIN profiles p ON p.id = pip.profile_id
+        JOIN latest_run lr ON lr.run_id = pip.run_id
+        WHERE p.user_id = CAST(:uid AS uuid)
+          AND pip.win_rate IS NOT NULL
+          AND pip.metadata->>'dataset_version' = :dataset_version
+          AND pip.metadata->>'label_version' = :label_version
+          AND pip.sample_count >= :min_cases
+          AND pip.lift_vs_profile > 0
+          AND pip.avg_pnl_pct > 0
+        ORDER BY pip.lift_vs_profile DESC, pip.created_at DESC
         LIMIT :limit
-    """), {"limit": min(limit, 100)})
+    """), params)
 
-    top_loss = await db.execute(text("""
-        SELECT profile_id, profile_name, indicator_name, bucket,
-               sample_count, win_rate, avg_pnl_pct, lift_vs_profile, created_at
-        FROM profile_indicator_performance
-        WHERE win_rate IS NOT NULL AND sample_count >= 5
-        ORDER BY lift_vs_profile ASC NULLS LAST, created_at DESC
+    top_loss = await db.execute(text(f"""
+        WITH latest_run AS ({latest_run_sql})
+        SELECT pip.profile_id, p.name AS profile_name, pip.indicator_name, pip.bucket,
+               pip.sample_count, pip.win_count, pip.loss_count, pip.win_rate,
+               pip.avg_pnl_pct, pip.lift_vs_profile, pip.created_at, pip.run_id
+        FROM profile_indicator_performance pip
+        JOIN profiles p ON p.id = pip.profile_id
+        JOIN latest_run lr ON lr.run_id = pip.run_id
+        WHERE p.user_id = CAST(:uid AS uuid)
+          AND pip.win_rate IS NOT NULL
+          AND pip.metadata->>'dataset_version' = :dataset_version
+          AND pip.metadata->>'label_version' = :label_version
+          AND pip.sample_count >= :min_cases
+          AND pip.lift_vs_profile < 0
+          AND pip.avg_pnl_pct < 0
+        ORDER BY pip.lift_vs_profile ASC, pip.created_at DESC
         LIMIT :limit
-    """), {"limit": min(limit, 100)})
+    """), params)
 
     def _row(r):
         return {
@@ -208,14 +258,24 @@ async def live_indicator_performance(
             "indicator_name": r.indicator_name,
             "bucket": r.bucket,
             "sample_count": r.sample_count,
+            "win_count": r.win_count,
+            "loss_count": r.loss_count,
             "win_rate": float(r.win_rate) if r.win_rate is not None else None,
             "avg_pnl_pct": float(r.avg_pnl_pct) if r.avg_pnl_pct is not None else None,
             "lift_vs_profile": float(r.lift_vs_profile) if r.lift_vs_profile is not None else None,
+            "run_id": str(r.run_id),
+            "created_at": r.created_at.isoformat() if r.created_at else None,
         }
 
+    winners = [_row(r) for r in top_win.fetchall()]
+    losers = [_row(r) for r in top_loss.fetchall()]
     return {
-        "top_winners": [_row(r) for r in top_win.fetchall()],
-        "top_losers": [_row(r) for r in top_loss.fetchall()],
+        "top_winners": winners,
+        "top_losers": losers,
+        "run_id": (winners or losers or [{}])[0].get("run_id"),
+        "minimum_cases": min_cases,
+        "dataset_version": DATASET_VERSION,
+        "label_version": LABEL_VERSION,
     }
 
 
@@ -224,7 +284,7 @@ async def live_adjustment_suggestions(
     status: str | None = None,
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
-    _uid: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_current_user_id),
 ):
     if status:
         rows = await db.execute(text("""
@@ -234,10 +294,10 @@ async def live_adjustment_suggestions(
                    s.confidence, s.reason, s.created_at
             FROM profile_adjustment_suggestions s
             LEFT JOIN profiles p ON p.id = s.profile_id
-            WHERE s.status = :status
+            WHERE p.user_id = CAST(:uid AS uuid) AND s.status = :status
             ORDER BY s.created_at DESC
             LIMIT :limit
-        """), {"status": status, "limit": min(limit, 200)})
+        """), {"uid": str(user_id), "status": status, "limit": min(limit, 200)})
     else:
         rows = await db.execute(text("""
             SELECT s.id, s.profile_id, p.name AS profile_name,
@@ -246,9 +306,10 @@ async def live_adjustment_suggestions(
                    s.confidence, s.reason, s.created_at
             FROM profile_adjustment_suggestions s
             LEFT JOIN profiles p ON p.id = s.profile_id
+            WHERE p.user_id = CAST(:uid AS uuid)
             ORDER BY s.created_at DESC
             LIMIT :limit
-        """), {"limit": min(limit, 200)})
+        """), {"uid": str(user_id), "limit": min(limit, 200)})
 
     items = [
         {

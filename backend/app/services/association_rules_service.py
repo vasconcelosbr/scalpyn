@@ -11,6 +11,14 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .profile_intelligence_contract import (
+    OFFICIAL_CAPTURE_COLUMNS,
+    PIValidationPolicy,
+    filter_hash_valid_rows,
+    official_params,
+    official_where,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -142,24 +150,37 @@ class AssociationRulesEngine:
         discovery_end: datetime,
         validation_start: datetime,
         validation_end: datetime,
+        validation_policy: PIValidationPolicy,
+        analysis_sources: list[str],
     ) -> List[dict]:
         """
         Run association rules analysis. Returns list of discovered combinations.
         Saves qualifying rules to profile_rule_combinations.
         """
         async def load_transactions(start, end):
-            rows = (await db.execute(text("""
-            SELECT profile_id, profile_name, symbol, created_at, outcome,
-                   holding_seconds, features_snapshot
+            rows = (await db.execute(text(f"""
+            SELECT profile_id, profile_name, source, symbol, created_at, outcome,
+                   holding_seconds, features_snapshot,
+                   {OFFICIAL_CAPTURE_COLUMNS.format(alias='shadow_trades')}
             FROM shadow_trades
             WHERE user_id = :uid
               AND created_at >= :start
               AND created_at < :end
               AND outcome IN ('TP_HIT','SL_HIT','TIMEOUT')
-              AND features_snapshot IS NOT NULL
+              AND source = ANY(:analysis_sources)
+              AND {official_where('shadow_trades')}
             ORDER BY created_at
             LIMIT 30000
-            """), {"uid": str(user_id), "start": start, "end": end})).fetchall()
+            """), {
+                "uid": str(user_id),
+                "start": start,
+                "end": end,
+                "analysis_sources": analysis_sources,
+                **official_params(),
+            })).fetchall()
+            rows, invalid_count = filter_hash_valid_rows(rows)
+            if invalid_count:
+                logger.error("[AssociationRules] excluded %d invalid official rows", invalid_count)
             loaded = []
             for row in rows:
                 features = row.features_snapshot
@@ -351,6 +372,7 @@ class AssociationRulesEngine:
                 validation_start=validation_start,
                 validation_end=validation_end,
                 association_rule=True,
+                policy=validation_policy,
             )
             val_metrics.update({
                 "start": validation_start.isoformat(),
@@ -444,6 +466,7 @@ class AssociationRulesEngine:
                 validation_start=validation_start,
                 validation_end=validation_end,
                 association_rule=True,
+                policy=validation_policy,
             )
             val_metrics.update({
                 "start": validation_start.isoformat(),

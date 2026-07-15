@@ -90,7 +90,11 @@ async def _query_window(db, minutes: int) -> Optional[dict]:
             SELECT
                 COUNT(*)                                    AS total,
                 AVG(global_confidence)                      AS avg_conf,
-                SUM(CASE WHEN rejection_reason IS NOT NULL THEN 1 ELSE 0 END) AS rejected,
+                SUM(CASE
+                    WHEN (to_jsonb(indicator_snapshots)->>'rejection_reason') IS NOT NULL
+                      OR can_trade IS FALSE
+                    THEN 1 ELSE 0
+                END) AS rejected,
                 MAX(extract(epoch from (now() - timestamp))) AS max_age,
                 MIN(extract(epoch from (now() - timestamp))) AS min_age
             FROM indicator_snapshots

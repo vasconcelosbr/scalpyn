@@ -31,6 +31,15 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .ai_review_safety_service import completed_review_contract_is_valid
+from .profile_intelligence_contract import (
+    DATASET_VERSION,
+    LABEL_VERSION,
+    OFFICIAL_CAPTURE_COLUMNS,
+    filter_hash_valid_rows,
+    load_pi_settings,
+    official_params,
+    official_where,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -283,29 +292,42 @@ async def run_medium_cycle(db: AsyncSession) -> dict:
 
     rows = await db.execute(text(f"""
         SELECT
+            st.user_id,
             st.profile_id,
+            st.source,
             p.name AS profile_name,
             st.features_snapshot,
-            st.pnl_pct
+            st.pnl_pct,
+            st.outcome,
+            {OFFICIAL_CAPTURE_COLUMNS.format(alias='st')}
         FROM shadow_trades st
         JOIN profiles p ON p.id = st.profile_id
         WHERE st.source IN ('L3','L3_LAB')
           AND st.status = 'COMPLETED'
           AND st.pnl_pct IS NOT NULL
           AND st.profile_id IS NOT NULL
-          AND st.features_snapshot IS NOT NULL
           AND st.created_at >= now() - interval '{_LOOKBACK_HOURS} hours'
+          AND {official_where('st')}
+        ORDER BY st.created_at, st.id
         LIMIT 5000
-    """))
-    trades = rows.fetchall()
+    """), official_params())
+    trades, invalid_count = filter_hash_valid_rows(rows.fetchall())
+    if invalid_count:
+        logger.error("[PI Live] excluded %d invalid official rows", invalid_count)
+
+    settings_by_user: dict[str, dict[str, Any]] = {}
+    for user_id in {str(t.user_id) for t in trades}:
+        settings_by_user[user_id] = await load_pi_settings(db, uuid.UUID(user_id))
 
     suggestions_generated = 0
     profiles_seen: dict[str, str] = {}
-    indicator_stats: dict[tuple, list[float]] = {}
+    profile_users: dict[str, str] = {}
+    indicator_stats: dict[tuple, list[tuple[str, float]]] = {}
 
     for t in trades:
         pid = str(t.profile_id)
         profiles_seen[pid] = t.profile_name or pid
+        profile_users[pid] = str(t.user_id)
         snap = t.features_snapshot or {}
         pnl = float(t.pnl_pct)
         for ind in _INDICATOR_NAMES:
@@ -317,26 +339,33 @@ async def run_medium_cycle(db: AsyncSession) -> dict:
             except (TypeError, ValueError):
                 continue
             bucket = _bucket(ind, fval)
-            key = (pid, ind, bucket)
-            indicator_stats.setdefault(key, []).append(pnl)
+            key = (str(t.user_id), pid, ind, bucket)
+            indicator_stats.setdefault(key, []).append((str(t.outcome), pnl))
 
-    for (pid, ind, bucket), pnls in indicator_stats.items():
-        if len(pnls) < 5:
+    for (user_id, pid, ind, bucket), observations in indicator_stats.items():
+        policy = settings_by_user[user_id]
+        min_cases = int(policy["min_closed_trades"])
+        if len(observations) < min_cases:
             continue
-        wins = sum(1 for p in pnls if p > 0)
-        losses = len(pnls) - wins
+        pnls = [pnl for _, pnl in observations]
+        wins = sum(1 for outcome, _ in observations if outcome == "TP_HIT")
+        losses = sum(1 for outcome, _ in observations if outcome == "SL_HIT")
         avg_pnl = sum(pnls) / len(pnls)
         win_rate = wins / len(pnls) if pnls else None
-        lift = win_rate  # simplified lift vs 0.5 baseline
+        profile_observations = [t for t in trades if str(t.profile_id) == pid]
+        profile_win_rate = (
+            sum(1 for t in profile_observations if t.outcome == "TP_HIT")
+            / max(len(profile_observations), 1)
+        )
         await db.execute(text("""
             INSERT INTO profile_indicator_performance
                 (id, run_id, profile_id, profile_name, indicator_name, bucket,
                  sample_count, win_count, loss_count, win_rate, avg_pnl_pct, ev_pct,
-                 lift_vs_profile, created_at)
+                 lift_vs_profile, metadata, created_at)
             VALUES
                 (:id, :run_id, :profile_id, :profile_name, :indicator_name, :bucket,
                  :sample_count, :win_count, :loss_count, :win_rate, :avg_pnl_pct, :ev_pct,
-                 :lift_vs_profile, now())
+                 :lift_vs_profile, CAST(:metadata AS jsonb), now())
         """), {
             "id": str(uuid.uuid4()),
             "run_id": str(run_id),
@@ -350,7 +379,14 @@ async def run_medium_cycle(db: AsyncSession) -> dict:
             "win_rate": float(round(win_rate, 4)) if win_rate is not None else None,
             "avg_pnl_pct": float(round(avg_pnl, 6)),
             "ev_pct": float(round(avg_pnl, 6)),
-            "lift_vs_profile": float(round((win_rate or 0) - 0.5, 4)),
+            "lift_vs_profile": float(round((win_rate or 0) - profile_win_rate, 4)),
+            "metadata": json.dumps({
+                "dataset_version": DATASET_VERSION,
+                "label_version": LABEL_VERSION,
+                "source_profile_id": pid,
+                "source_user_id": user_id,
+                "official_capture_only": True,
+            }),
         })
 
     await _log_activity(db, run_id=run_id, event_type="MINING_HARD_NEGATIVES",
@@ -358,22 +394,28 @@ async def run_medium_cycle(db: AsyncSession) -> dict:
 
     hard_neg_rows = await db.execute(text(f"""
         SELECT
+            st.user_id,
             st.profile_id,
+            st.source,
             p.name AS profile_name,
             st.features_snapshot,
             st.pnl_pct,
-            st.outcome
+            st.outcome,
+            {OFFICIAL_CAPTURE_COLUMNS.format(alias='st')}
         FROM shadow_trades st
         JOIN profiles p ON p.id = st.profile_id
         WHERE st.source IN ('L3','L3_LAB')
           AND st.status = 'COMPLETED'
           AND st.profile_id IS NOT NULL
-          AND st.features_snapshot IS NOT NULL
-          AND (st.pnl_pct <= 0 OR st.outcome = 'SL_HIT')
+          AND st.outcome = 'SL_HIT'
           AND st.created_at >= now() - interval '{_LOOKBACK_HOURS} hours'
+          AND {official_where('st')}
+        ORDER BY st.created_at, st.id
         LIMIT 2000
-    """))
-    hard_negs = hard_neg_rows.fetchall()
+    """), official_params())
+    hard_negs, hard_neg_invalid = filter_hash_valid_rows(hard_neg_rows.fetchall())
+    if hard_neg_invalid:
+        logger.error("[PI Live] excluded %d invalid hard-negative rows", hard_neg_invalid)
 
     pattern_buckets: dict[tuple, list[float]] = {}
     for t in hard_negs:
@@ -382,11 +424,11 @@ async def run_medium_cycle(db: AsyncSession) -> dict:
         pnl = float(t.pnl_pct)
         rsi_b = _bucket("rsi", snap.get("rsi", 50))
         adx_b = _bucket("adx", snap.get("adx", 20))
-        key = (pid, t.profile_name or pid, f"rsi={rsi_b},adx={adx_b}")
+        key = (str(t.user_id), pid, t.profile_name or pid, f"rsi={rsi_b},adx={adx_b}")
         pattern_buckets.setdefault(key, []).append(pnl)
 
-    for (pid, pname, pat_key), pnls in pattern_buckets.items():
-        if len(pnls) < 3:
+    for (user_id, pid, pname, pat_key), pnls in pattern_buckets.items():
+        if len(pnls) < int(settings_by_user[user_id]["min_closed_trades"]):
             continue
         await db.execute(text("""
             INSERT INTO profile_hard_negative_patterns
@@ -411,26 +453,77 @@ async def run_medium_cycle(db: AsyncSession) -> dict:
     await _log_activity(db, run_id=run_id, event_type="GENERATING_ADJUSTMENT_SUGGESTIONS",
                         phase="medium", message="Gerando sugestões de ajuste para profiles existentes")
 
+    losing_indicators_by_profile: dict[str, list[dict[str, Any]]] = {}
+    for (user_id, pid, indicator, bucket), observations in indicator_stats.items():
+        policy = settings_by_user[user_id]
+        if len(observations) < int(policy["min_closed_trades"]):
+            continue
+        profile_observations = [t for t in trades if str(t.profile_id) == pid]
+        profile_win_rate = (
+            sum(1 for t in profile_observations if t.outcome == "TP_HIT")
+            / max(len(profile_observations), 1)
+        )
+        bucket_win_rate = (
+            sum(1 for outcome, _ in observations if outcome == "TP_HIT")
+            / len(observations)
+        )
+        if bucket_win_rate >= profile_win_rate * float(policy["indicator_losing_winrate_ratio"]):
+            continue
+        losing_indicators_by_profile.setdefault(pid, []).append({
+            "indicator": indicator,
+            "bucket": bucket,
+            "sample_count": len(observations),
+            "win_rate": round(bucket_win_rate, 4),
+            "loss_rate": round(
+                sum(1 for outcome, _ in observations if outcome == "SL_HIT")
+                / len(observations),
+                4,
+            ),
+            "lift_vs_profile": round(bucket_win_rate - profile_win_rate, 4),
+        })
+
     for pid, pname in profiles_seen.items():
         profile_trades = [t for t in trades if str(t.profile_id) == pid]
-        if len(profile_trades) < 10:
+        policy = settings_by_user[profile_users[pid]]
+        if len(profile_trades) < int(policy["adjustment_min_profile_trades"]):
             continue
         total_pnls = [float(t.pnl_pct) for t in profile_trades]
-        win_rate = sum(1 for p in total_pnls if p > 0) / len(total_pnls)
-        if win_rate < 0.35:
+        win_rate = (
+            sum(1 for t in profile_trades if t.outcome == "TP_HIT")
+            / len(profile_trades)
+        )
+        if win_rate < float(policy["adjustment_max_win_rate"]):
+            losing_evidence = sorted(
+                losing_indicators_by_profile.get(pid, []),
+                key=lambda item: (item["loss_rate"], -item["win_rate"]),
+                reverse=True,
+            )[:5]
+            if not losing_evidence:
+                continue
             _ensure_no_forbidden("REDUCE_RISK")
             sugg_id = uuid.uuid4()
 
             # Read actual current minimum_score so current_value is never null
             cfg_row = await db.execute(text("""
-                SELECT config->'scoring'->>'minimum_score' AS min_score
+                SELECT COALESCE(
+                    config->'scoring'->'thresholds'->>'buy',
+                    config->'scoring'->>'minimum_score',
+                    config->>'buy_threshold'
+                ) AS min_score
                 FROM profiles WHERE id = CAST(:pid AS uuid)
             """), {"pid": pid})
             raw_min_score = cfg_row.scalar()
-            current_min_json = (
-                json.dumps({"minimum_score": int(float(raw_min_score))})
-                if raw_min_score is not None else None
+            if raw_min_score is None:
+                logger.error("[PI Live] profile %s has no resolvable score threshold", pid)
+                continue
+            current_score = int(float(raw_min_score))
+            suggested_score = min(
+                current_score + int(policy["adjustment_score_bump"]),
+                int(policy["adjustment_score_cap"]),
             )
+            if suggested_score <= current_score:
+                continue
+            current_min_json = json.dumps({"minimum_score": current_score})
 
             await db.execute(text("""
                 INSERT INTO profile_adjustment_suggestions
@@ -443,21 +536,35 @@ async def run_medium_cycle(db: AsyncSession) -> dict:
                      'scoring', 'minimum_score', CAST(:current_value AS jsonb),
                      CAST(:suggested AS jsonb),
                      :reason, CAST(:evidence AS jsonb), :confidence, 'PENDING_SHADOW_VALIDATION',
-                     false, false, 'profile_intelligence', now())
+                     false, true, 'profile_intelligence', now())
             """), {
                 "id": str(sugg_id),
                 "run_id": str(run_id),
                 "profile_id": pid,
                 "profile_name": pname,
                 "current_value": current_min_json,
-                "suggested": json.dumps({"action": "increase_minimum_score", "reason": "low_win_rate"}),
-                "reason": f"win_rate={win_rate:.2%} < 35% threshold — suggest raising minimum score",
+                "suggested": json.dumps({
+                    "action": "increase_minimum_score",
+                    "value": suggested_score,
+                    "reason": "low_official_win_rate",
+                }),
+                "reason": (
+                    f"win_rate={win_rate:.2%} below configured threshold="
+                    f"{float(policy['adjustment_max_win_rate']):.2%}"
+                ),
                 "evidence": json.dumps({
                     "sample_count": len(total_pnls),
                     "win_rate": round(win_rate, 4),
                     "avg_pnl_pct": round(sum(total_pnls) / len(total_pnls), 6),
+                    "dataset_version": DATASET_VERSION,
+                    "label_version": LABEL_VERSION,
+                    "profile_id": pid,
+                    "losing_indicators": losing_evidence,
                 }),
-                "confidence": round(min(len(total_pnls) / 50, 1.0), 4),
+                "confidence": round(min(
+                    len(total_pnls) / int(policy["adjustment_min_profile_trades"]),
+                    1.0,
+                ), 4),
             })
 
             await db.execute(text("""
@@ -466,7 +573,7 @@ async def run_medium_cycle(db: AsyncSession) -> dict:
                      mutation_applied, requires_human_approval, payload, created_at)
                 VALUES
                     (:id, :suggestion_id, :profile_id, 'ADJUST_MINIMUM_SCORE', 'PENDING', 'SHADOW',
-                     false, false, CAST(:payload AS jsonb), now())
+                     false, true, CAST(:payload AS jsonb), now())
             """), {
                 "id": str(uuid.uuid4()),
                 "suggestion_id": str(sugg_id),
@@ -502,8 +609,6 @@ async def run_medium_cycle(db: AsyncSession) -> dict:
 
 
 _SHADOW_CALIBRATION_BATCH = int(os.environ.get("PI_SHADOW_CALIBRATION_BATCH", "20"))
-_SCORE_BUMP = int(os.environ.get("PI_SCORE_BUMP", "5"))
-_SCORE_CAP = int(os.environ.get("PI_SCORE_CAP", "85"))
 
 
 async def _is_autopilot_enabled(db: AsyncSession) -> bool:
@@ -541,6 +646,7 @@ async def run_shadow_calibration_cycle(db: AsyncSession) -> dict:
         SELECT DISTINCT ON (s.profile_id)
                s.id AS suggestion_id, s.profile_id, s.profile_name,
                s.target_section, s.target_field, s.confidence,
+               p.user_id,
                p.config->'scoring' AS scoring_config
         FROM profile_adjustment_suggestions s
         JOIN profiles p ON p.id = s.profile_id
@@ -567,32 +673,14 @@ async def run_shadow_calibration_cycle(db: AsyncSession) -> dict:
             pname = row.profile_name or "unknown"
             scoring = row.scoring_config or {}
             thresholds = scoring.get("thresholds", {})
-            current_buy = int(thresholds.get("buy", 65))
+            current_buy_raw = thresholds.get("buy")
+            if current_buy_raw is None:
+                raise ValueError("missing_profile_buy_threshold")
+            current_buy = int(current_buy_raw)
+            policy = await load_pi_settings(db, row.user_id)
 
-            # Per-profile bump based on actual shadow trade win_rate severity
-            wr_row = await db.execute(text("""
-                SELECT
-                    COUNT(*) FILTER (WHERE outcome = 'TP_HIT') AS tp,
-                    COUNT(*) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT','TIMEOUT')) AS total
-                FROM shadow_trades
-                WHERE profile_id = CAST(:pid AS uuid)
-                  AND status = 'COMPLETED'
-                  AND outcome IS NOT NULL
-                  AND created_at >= now() - interval '14 days'
-            """), {"pid": pid})
-            wr = wr_row.fetchone()
-            win_rate_now = (wr.tp / wr.total) if (wr and wr.total >= 5) else None
-
-            if win_rate_now is not None and win_rate_now < 0.25:
-                bump = 15
-            elif win_rate_now is not None and win_rate_now < 0.30:
-                bump = 10
-            elif win_rate_now is not None and win_rate_now < 0.35:
-                bump = 7
-            else:
-                bump = _SCORE_BUMP
-
-            new_buy = min(current_buy + bump, _SCORE_CAP)
+            bump = int(policy["adjustment_score_bump"])
+            new_buy = min(current_buy + bump, int(policy["adjustment_score_cap"]))
 
             before_snap = {"scoring": {"thresholds": {"buy": current_buy}}}
             after_snap = {"scoring": {"thresholds": {"buy": new_buy}}}
@@ -676,8 +764,6 @@ async def run_shadow_calibration_cycle(db: AsyncSession) -> dict:
     }
 
 
-_SHADOW_VALIDATION_MIN_TRADES = int(os.environ.get("PI_SHADOW_VALIDATION_MIN_TRADES", "10"))
-_SHADOW_VALIDATION_WIN_RATE_GATE = float(os.environ.get("PI_SHADOW_VALIDATION_WIN_RATE_GATE", "0.40"))
 _SHADOW_VALIDATION_BATCH = int(os.environ.get("PI_SHADOW_VALIDATION_BATCH", "10"))
 
 
@@ -719,8 +805,11 @@ async def run_shadow_validation_cycle(db: AsyncSession) -> dict:
     for row in rows:
         pid = str(row.profile_id)
         pav_created = row.pav_created
+        policy = await load_pi_settings(db, row.user_id)
+        validation_min_trades = int(policy["validation_min_trades"])
+        validation_win_rate_gate = float(policy["min_win_rate"])
 
-        before_row = await db.execute(text("""
+        before_row = await db.execute(text(f"""
             SELECT
                 COUNT(*) FILTER (WHERE outcome = 'TP_HIT') AS tp,
                 COUNT(*) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT','TIMEOUT')) AS total
@@ -730,11 +819,16 @@ async def run_shadow_validation_cycle(db: AsyncSession) -> dict:
               AND outcome IS NOT NULL
               AND created_at >= :pav_created - interval '14 days'
               AND created_at <  :pav_created
-        """), {"pid": pid, "pav_created": pav_created})
+              AND {official_where('shadow_trades')}
+        """), {
+            "pid": pid,
+            "pav_created": pav_created,
+            **official_params(),
+        })
         b = before_row.fetchone()
         win_rate_before = float(b.tp / b.total) if (b and b.total >= 5) else None
 
-        after_row = await db.execute(text("""
+        after_row = await db.execute(text(f"""
             SELECT
                 COUNT(*) FILTER (WHERE outcome = 'TP_HIT') AS tp,
                 COUNT(*) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT','TIMEOUT')) AS total
@@ -743,11 +837,16 @@ async def run_shadow_validation_cycle(db: AsyncSession) -> dict:
               AND status = 'COMPLETED'
               AND outcome IS NOT NULL
               AND created_at >= :pav_created
-        """), {"pid": pid, "pav_created": pav_created})
+              AND {official_where('shadow_trades')}
+        """), {
+            "pid": pid,
+            "pav_created": pav_created,
+            **official_params(),
+        })
         a = after_row.fetchone()
         after_total = a.total if a else 0
 
-        if a is None or after_total < _SHADOW_VALIDATION_MIN_TRADES:
+        if a is None or after_total < validation_min_trades:
             await db.execute(text("""
                 UPDATE profile_adjustment_versions
                 SET shadow_validation_status = 'INSUFFICIENT_SAMPLE',
@@ -757,119 +856,48 @@ async def run_shadow_validation_cycle(db: AsyncSession) -> dict:
             """), {
                 "vid": str(row.version_id),
                 "wb": win_rate_before,
-                "reason": f"trades_after={after_total} < min={_SHADOW_VALIDATION_MIN_TRADES}",
+                "reason": f"trades_after={after_total} < min={validation_min_trades}",
             })
             insufficient += 1
             continue
 
         win_rate_after = float(a.tp / a.total)
 
-        if win_rate_after >= _SHADOW_VALIDATION_WIN_RATE_GATE:
-            # Check if autopilot is enabled to auto-apply
-            ap_row = await db.execute(text("""
-                SELECT enabled FROM profile_intelligence_autopilot_settings WHERE user_id = :uid
-            """), {"uid": str(row.user_id)})
-            ap_settings = ap_row.fetchone()
-            auto_apply = bool(ap_settings and ap_settings.enabled)
-
-            if auto_apply:
-                # Auto-apply the mutation to live profile config
-                new_buy = row.after_snapshot.get("scoring", {}).get("thresholds", {}).get("buy")
-                
-                # Fetch previous config for audit
-                prof_row = await db.execute(text("SELECT config FROM profiles WHERE id = :pid"), {"pid": str(row.profile_id)})
-                prof_data = prof_row.fetchone()
-                prev_config = prof_data.config if prof_data else {}
-                
-                new_config = dict(prev_config)
-                if new_buy is not None:
-                    if "scoring" not in new_config: new_config["scoring"] = {}
-                    if "thresholds" not in new_config["scoring"]: new_config["scoring"]["thresholds"] = {}
-                    new_config["scoring"]["thresholds"]["buy"] = new_buy
-                
-                # Update live profile
-                await db.execute(text("""
-                    UPDATE profiles
-                    SET config = jsonb_set(config, '{scoring,thresholds,buy}', :new_buy::jsonb, true)
-                    WHERE id = :pid
-                """), {"new_buy": str(new_buy), "pid": str(row.profile_id)})
-                
-                # Insert audit trail
-                action_detail = f"Auto-applied shadow validation mutation to profile '{row.profile_name}'. Buy threshold changed to {new_buy}."
-                await db.execute(text("""
-                    INSERT INTO profile_audit_log (id, user_id, profile_id, changed_by, change_source, change_description, previous_config, new_config, created_at)
-                    VALUES (:id, :uid, :pid, NULL, 'Auto-Pilot Calibration', :desc, :prev, :new_c, now())
-                """), {
-                    "id": str(uuid.uuid4()),
-                    "uid": str(row.user_id),
-                    "pid": str(row.profile_id),
-                    "desc": action_detail,
-                    "prev": json.dumps(prev_config),
-                    "new_c": json.dumps(new_config)
-                })
-
-                # Update PAV
-                await db.execute(text("""
-                    UPDATE profile_adjustment_versions
-                    SET shadow_validation_status = 'VALIDATED',
-                        win_rate_before          = :wb,
-                        win_rate_after           = :wa,
-                        validated_at             = now(),
-                        validation_reason        = :reason,
-                        mutation_applied         = true,
-                        applied_at               = now(),
-                        applied_by               = 'system:auto-pilot'
-                    WHERE id = :vid
-                """), {
-                    "vid": str(row.version_id),
-                    "wb": win_rate_before,
-                    "wa": win_rate_after,
-                    "reason": f"win_rate_after={win_rate_after:.2%} >= gate={_SHADOW_VALIDATION_WIN_RATE_GATE:.0%} (Auto-applied)"
-                })
-                
-                # Update PAS
-                await db.execute(text("""
-                    UPDATE profile_adjustment_suggestions
-                    SET status = 'APPLIED', mutation_applied = true, updated_at = now()
-                    WHERE id = :sid
-                """), {"sid": str(row.sugg_rec_id)})
-                
-                # Update APA
-                await db.execute(text("""
-                    UPDATE autopilot_pending_actions
-                    SET mutation_applied = true, action_status = 'COMPLETED', updated_at = now()
-                    WHERE suggestion_id = :sid AND action_status = 'PROCESSING'
-                """), {"sid": str(row.sugg_rec_id)})
-                validated += 1
-            else:
-                await db.execute(text("""
-                    UPDATE profile_adjustment_versions
-                    SET shadow_validation_status = 'VALIDATED',
-                        win_rate_before          = :wb,
-                        win_rate_after           = :wa,
-                        validated_at             = now(),
-                        validation_reason        = :reason
-                    WHERE id = :vid
-                """), {
-                    "vid": str(row.version_id),
-                    "wb": win_rate_before,
-                    "wa": win_rate_after,
-                    "reason": (
-                        f"win_rate_after={win_rate_after:.2%} "
-                        f">= gate={_SHADOW_VALIDATION_WIN_RATE_GATE:.0%}"
-                    ),
-                })
-                await db.execute(text("""
-                    UPDATE profile_adjustment_suggestions
-                    SET requires_human_approval = true, status = 'VALIDATED', updated_at = now()
-                    WHERE id = :sid
-                """), {"sid": str(row.sugg_rec_id)})
-                await db.execute(text("""
-                    UPDATE autopilot_pending_actions
-                    SET requires_human_approval = true, updated_at = now()
-                    WHERE suggestion_id = :sid AND action_status = 'PROCESSING'
-                """), {"sid": str(row.sugg_rec_id)})
-                validated += 1
+        if win_rate_after >= validation_win_rate_gate:
+            await db.execute(text("""
+                UPDATE profile_adjustment_versions
+                SET shadow_validation_status = 'VALIDATED',
+                    win_rate_before          = :wb,
+                    win_rate_after           = :wa,
+                    validated_at             = now(),
+                    validation_reason        = :reason,
+                    mutation_applied         = false
+                WHERE id = :vid
+            """), {
+                "vid": str(row.version_id),
+                "wb": win_rate_before,
+                "wa": win_rate_after,
+                "reason": (
+                    f"win_rate_after={win_rate_after:.2%} "
+                    f">= gate={validation_win_rate_gate:.0%}; human approval required"
+                ),
+            })
+            await db.execute(text("""
+                UPDATE profile_adjustment_suggestions
+                SET requires_human_approval = true,
+                    mutation_applied = false,
+                    status = 'VALIDATED',
+                    updated_at = now()
+                WHERE id = :sid
+            """), {"sid": str(row.sugg_rec_id)})
+            await db.execute(text("""
+                UPDATE autopilot_pending_actions
+                SET requires_human_approval = true,
+                    mutation_applied = false,
+                    updated_at = now()
+                WHERE suggestion_id = :sid AND action_status = 'PROCESSING'
+            """), {"sid": str(row.sugg_rec_id)})
+            validated += 1
         else:
             await db.execute(text("""
                 UPDATE profile_adjustment_versions
@@ -884,7 +912,7 @@ async def run_shadow_validation_cycle(db: AsyncSession) -> dict:
                 "wa": win_rate_after,
                 "reason": (
                     f"win_rate_after={win_rate_after:.2%} "
-                    f"< gate={_SHADOW_VALIDATION_WIN_RATE_GATE:.0%}"
+                    f"< gate={validation_win_rate_gate:.0%}"
                 ),
             })
             await db.execute(text("""

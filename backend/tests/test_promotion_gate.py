@@ -29,12 +29,28 @@ from backend.app.ml.promotion_gate import (
 )
 
 
+PROMOTION_CONFIG = {
+    "ml_promotion_min_test_auc": 0.55,
+    "ml_promotion_min_test_samples": 300,
+    "ml_promotion_max_val_test_gap": 0.15,
+    "ml_promotion_max_test_fpr": 0.55,
+    "ml_promotion_require_positive_net_ev": True,
+}
+
+
+def _evaluate(row, **config_overrides):
+    return evaluate_promotion_gate(
+        row,
+        promotion_config={**PROMOTION_CONFIG, **config_overrides},
+    )
+
+
 def _well_formed_row(**overrides):
     base = {
         "metrics_json": {
             "label_version": "is_tp_4h_v1",
             "validation": {"roc_auc": 0.70, "precision": 0.40, "fpr": 0.30},
-            "test": {"roc_auc": 0.62, "precision": 0.38, "fpr": 0.32, "samples": 300},
+            "test": {"roc_auc": 0.62, "precision": 0.38, "fpr": 0.32, "samples": 300, "net_ev": 0.1},
         },
         "roc_auc": 0.70,
         "test_samples": 300,
@@ -43,6 +59,12 @@ def _well_formed_row(**overrides):
         "model_lane": "L1_SPECTRUM",
         "source_filter": "L1_SPECTRUM",
         "dataset_contract_id": "abc123",
+        "label_contract_id": "label123",
+        "feature_contract_id": "feature123",
+        "train_from": "2026-07-01T00:00:00+00:00",
+        "train_to": "2026-07-10T00:00:00+00:00",
+        "dataset_query_cutoff": "2026-07-14T00:00:00+00:00",
+        "dataset_hash": "abc123",
     }
     base.update(overrides)
     return base
@@ -57,7 +79,7 @@ class TestAbsoluteFloorRule13:
             "validation": {"roc_auc": 0.70},
             "test": {"roc_auc": 0.49, "samples": 300, "fpr": 0.30},
         })
-        result = evaluate_promotion_gate(row)
+        result = _evaluate(row)
         assert result["status"] == REJECTED
         assert any("absolute_floor" in r for r in result["reasons"])
 
@@ -68,7 +90,7 @@ class TestAbsoluteFloorRule13:
             "validation": {"roc_auc": 0.70},
             "test": {"roc_auc": 0.50, "samples": 300, "fpr": 0.30},
         })
-        result = evaluate_promotion_gate(row)
+        result = _evaluate(row)
         assert result["status"] == REJECTED
         assert any("below_min_threshold" in r for r in result["reasons"])
 
@@ -78,7 +100,22 @@ class TestAbsoluteFloorRule13:
             "validation": {"roc_auc": 0.70},
             "test": {"samples": 300},
         })
-        result = evaluate_promotion_gate(row)
+        result = _evaluate(row)
+        assert result["status"] == REJECTED
+        assert "missing_test_roc_auc" in result["reasons"]
+
+    def test_nan_auc_is_treated_as_missing(self):
+        row = _well_formed_row(metrics_json={
+            "label_version": "is_tp_4h_v1",
+            "validation": {"roc_auc": float("nan")},
+            "test": {
+                "roc_auc": float("nan"),
+                "samples": 300,
+                "fpr": 0.30,
+                "net_ev": 0.1,
+            },
+        })
+        result = _evaluate(row)
         assert result["status"] == REJECTED
         assert "missing_test_roc_auc" in result["reasons"]
 
@@ -106,7 +143,7 @@ class TestRealProductionModelsV44V46:
             "source_filter": None,  # confirmed NULL in production for v46
             "dataset_contract_id": None,  # confirmed NULL in production for v46
         }
-        result = evaluate_promotion_gate(row)
+        result = _evaluate(row)
         assert result["status"] == REJECTED
         assert any("absolute_floor" in r or "below_min_threshold" in r for r in result["reasons"])
 
@@ -128,7 +165,7 @@ class TestRealProductionModelsV44V46:
             "source_filter": None,
             "dataset_contract_id": None,
         }
-        result = evaluate_promotion_gate(row)
+        result = _evaluate(row)
         assert result["status"] == REJECTED
         assert any("absolute_floor" in r or "below_min_threshold" in r for r in result["reasons"])
         # also fails on test FPR (0.6576 > 0.55 default ceiling)
@@ -144,7 +181,7 @@ class TestGeneralizationGap:
             "validation": {"roc_auc": 0.85},
             "test": {"roc_auc": 0.60, "samples": 300, "fpr": 0.30},
         })
-        result = evaluate_promotion_gate(row)
+        result = _evaluate(row)
         assert result["status"] == REJECTED
         assert any("generalization_gap_exceeded" in r for r in result["reasons"])
 
@@ -154,7 +191,7 @@ class TestGeneralizationGap:
             "validation": {"roc_auc": 0.65},
             "test": {"roc_auc": 0.60, "samples": 300, "fpr": 0.30},
         })
-        result = evaluate_promotion_gate(row)
+        result = _evaluate(row)
         assert not any("generalization_gap_exceeded" in r for r in result["reasons"])
 
 
@@ -165,7 +202,7 @@ class TestSampleSizeRule:
             "validation": {"roc_auc": 0.65},
             "test": {"roc_auc": 0.60, "samples": 50, "fpr": 0.30},
         }, test_samples=50)
-        result = evaluate_promotion_gate(row)
+        result = _evaluate(row)
         assert result["status"] == REJECTED
         assert any("test_samples_below_minimum" in r for r in result["reasons"])
 
@@ -177,7 +214,7 @@ class TestFprCeiling:
             "validation": {"roc_auc": 0.65},
             "test": {"roc_auc": 0.60, "samples": 300, "fpr": 0.90},
         })
-        result = evaluate_promotion_gate(row)
+        result = _evaluate(row)
         assert result["status"] == REJECTED
         assert any("test_fpr_exceeded" in r for r in result["reasons"])
 
@@ -185,32 +222,32 @@ class TestFprCeiling:
 class TestMissingLineageMetadataBlocks:
     def test_missing_model_lane_blocks_good_model(self):
         row = _well_formed_row(model_lane=None)
-        result = evaluate_promotion_gate(row)
+        result = _evaluate(row)
         assert result["status"] == BLOCKED
         assert "missing_model_lane" in result["reasons"]
 
     def test_missing_label_version_blocks_good_model(self):
         row = _well_formed_row(label_version=None)
         row["metrics_json"] = {**row["metrics_json"], "label_version": None}
-        result = evaluate_promotion_gate(row)
+        result = _evaluate(row)
         assert result["status"] == BLOCKED
         assert "missing_label_version" in result["reasons"]
 
     def test_missing_dataset_contract_id_blocks_good_model(self):
         row = _well_formed_row(dataset_contract_id=None)
-        result = evaluate_promotion_gate(row)
+        result = _evaluate(row)
         assert result["status"] == BLOCKED
         assert "missing_dataset_policy" in result["reasons"]
 
     def test_missing_source_filter_blocks_good_model(self):
         row = _well_formed_row(source_filter=None)
-        result = evaluate_promotion_gate(row)
+        result = _evaluate(row)
         assert result["status"] == BLOCKED
         assert "missing_train_sources" in result["reasons"]
 
     def test_missing_feature_count_blocks_good_model(self):
         row = _well_formed_row(feature_count=0)
-        result = evaluate_promotion_gate(row)
+        result = _evaluate(row)
         assert result["status"] == BLOCKED
         assert "missing_feature_count" in result["reasons"]
 
@@ -225,18 +262,20 @@ class TestMissingLineageMetadataBlocks:
                 "test": {"roc_auc": 0.40, "samples": 300, "fpr": 0.30},
             },
         )
-        result = evaluate_promotion_gate(row)
+        result = _evaluate(row)
         assert result["status"] == REJECTED
 
 
 class TestApprovedPath:
     def test_well_formed_good_model_is_approved(self):
-        result = evaluate_promotion_gate(_well_formed_row())
+        result = _evaluate(_well_formed_row())
         assert result["status"] == APPROVED
         assert result["reasons"] == []
 
     def test_is_eligible_helper_true_for_approved(self):
-        assert is_eligible(_well_formed_row()) is True
+        assert is_eligible(
+            _well_formed_row(), promotion_config=PROMOTION_CONFIG
+        ) is True
 
     def test_is_eligible_helper_false_for_rejected(self):
         row = _well_formed_row(metrics_json={
@@ -244,16 +283,18 @@ class TestApprovedPath:
             "validation": {"roc_auc": 0.70},
             "test": {"roc_auc": 0.40, "samples": 300, "fpr": 0.30},
         })
-        assert is_eligible(row) is False
+        assert is_eligible(row, promotion_config=PROMOTION_CONFIG) is False
 
 
 class TestResultShape:
     def test_result_has_required_keys(self):
-        result = evaluate_promotion_gate(_well_formed_row())
+        result = _evaluate(_well_formed_row())
         assert set(result.keys()) == {"status", "evaluated_at", "reasons", "thresholds", "metrics"}
 
     def test_thresholds_are_echoed_in_result(self):
-        result = evaluate_promotion_gate(_well_formed_row(), min_test_auc=0.60)
+        result = _evaluate(
+            _well_formed_row(), ml_promotion_min_test_auc=0.60
+        )
         assert result["thresholds"]["min_test_auc"] == 0.60
 
     def test_absolute_floor_is_always_0_5_even_if_min_test_auc_overridden_lower(self):
@@ -263,7 +304,7 @@ class TestResultShape:
             "validation": {"roc_auc": 0.70},
             "test": {"roc_auc": 0.45, "samples": 300, "fpr": 0.30},
         })
-        result = evaluate_promotion_gate(row, min_test_auc=0.30)
+        result = _evaluate(row, ml_promotion_min_test_auc=0.30)
         assert result["status"] == REJECTED
         assert any("absolute_floor" in r for r in result["reasons"])
 

@@ -169,7 +169,22 @@ async def _run_ml_challengers_if_enabled(db, user_id) -> None:
             catboost_source_filter = [catboost_source_filter]
         if not isinstance(catboost_source_filter, list):
             catboost_source_filter = None
-        from ..services.ml_challenger_service import MLChallengerService
+        ml_row = (await db.execute(_text("""
+            SELECT config_json FROM config_profiles
+            WHERE user_id = :uid AND config_type = 'ml' AND is_active = TRUE
+            LIMIT 1
+        """), {"uid": str(user_id)})).fetchone()
+        ml_cfg = (
+            _json.loads(ml_row[0]) if ml_row and isinstance(ml_row[0], str)
+            else (ml_row[0] if ml_row else {}) or {}
+        )
+        advisory_intelligence = bool(ml_cfg.get("ml_predictive_gate_v2", False))
+        from ..services.ml_challenger_service import (
+            CATBOOST_CONTEXTUAL_INTELLIGENCE_SOURCES,
+            MLChallengerService,
+        )
+        if advisory_intelligence and catboost_source_filter is None:
+            catboost_source_filter = list(CATBOOST_CONTEXTUAL_INTELLIGENCE_SOURCES)
         result = await MLChallengerService().train_challengers(
             db=db,
             user_id=user_id,
@@ -177,6 +192,7 @@ async def _run_ml_challengers_if_enabled(db, user_id) -> None:
             enable_catboost=enable_cb,
             win_fast_threshold_s=win_threshold_s,
             catboost_source_filter=catboost_source_filter,
+            advisory_intelligence=advisory_intelligence,
         )
         logger.info("[PIJob] ML challengers result for user %s: %s", user_id, result)
     except Exception as exc:
@@ -190,7 +206,11 @@ def run(self):
     _run_async(_run_pi_job())
 
 
-async def _run_for_user(user_id, force_autopilot: bool = False):
+async def _run_for_user(
+    user_id,
+    force_autopilot: bool = False,
+    include_ml_challengers: bool = True,
+):
     from uuid import UUID
     from ..database import CeleryAsyncSessionLocal
     from ..services.profile_intelligence_service import ProfileIntelligenceService
@@ -224,15 +244,28 @@ async def _run_for_user(user_id, force_autopilot: bool = False):
             else:
                 logger.info("[PIJob] Candidate cycle disabled for user %s — calibration-only mode", uid)
                 result = {"status": "skipped", "reason": "candidate_cycle_disabled"}
-            await _run_ml_challengers_if_enabled(db, uid)
+            if include_ml_challengers:
+                await _run_ml_challengers_if_enabled(db, uid)
+            else:
+                logger.info(
+                    "[PIJob] ML challengers skipped explicitly for user %s",
+                    uid,
+                )
             return result
     finally:
         _release_pi_lock(redis_client, lock_key)
 
 
 @celery_app.task(name="app.tasks.profile_intelligence_job.run_for_user", bind=True)
-def run_for_user(self, user_id: str, force_autopilot: bool = False):
-    return _run_async(_run_for_user(user_id, force_autopilot))
+def run_for_user(
+    self,
+    user_id: str,
+    force_autopilot: bool = False,
+    include_ml_challengers: bool = True,
+):
+    return _run_async(
+        _run_for_user(user_id, force_autopilot, include_ml_challengers)
+    )
 
 
 async def _run_ml_challengers_only(user_id):

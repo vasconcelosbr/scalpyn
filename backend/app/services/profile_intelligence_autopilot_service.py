@@ -26,6 +26,7 @@ from ..models.pipeline_watchlist import PipelineWatchlist
 from ..models.profile import Profile
 from ..models.profile_audit_log import ProfileAuditLog
 from ..models.profile_intelligence import (
+    ProfileIndicatorMutationLink,
     ProfileIndicatorStats,
     ProfileIntelligenceRun,
     ProfileRuleCombination,
@@ -46,6 +47,7 @@ from .profile_create_service import (
     ensure_master_scoring_rules,
 )
 from .profile_intelligence_audit_service import log_pi_event
+from .profile_versioning_v2 import create_shadow_profile_version
 
 
 logger = logging.getLogger("scalpyn.services.profile_intelligence_autopilot")
@@ -74,7 +76,7 @@ DEFAULT_AUTOPILOT_SETTINGS = {
     "review_trade_target": 100,
     "review_min_trades": 50,
     "review_after_hours": 36,
-    "promotion_min_win_rate": 0.55,
+    "promotion_min_win_rate": 0.80,
     "promotion_min_avg_pnl_pct": 0.005,
     "rollback_relative_floor": 0.80,
     "negative_rule_penalty": -10.0,
@@ -299,9 +301,7 @@ def promotion_decision(
     if win_rate < float(settings["promotion_min_win_rate"]) or avg_pnl_pct < float(settings["promotion_min_avg_pnl_pct"]):
         return "REJECT", "O candidato não atingiu os mínimos obrigatórios de Win Rate e P&L."
     if incumbent_exists and (incumbent_win_rate is None or incumbent_avg_pnl_pct is None):
-        # Fallback to hard minimum settings if incumbent lacks valid metrics
-        incumbent_win_rate = float(settings["promotion_min_win_rate"])
-        incumbent_avg_pnl_pct = float(settings["promotion_min_avg_pnl_pct"])
+        return "INSUFFICIENT_EVIDENCE", "Métricas comparáveis do incumbent estão ausentes."
     if incumbent_exists:
         improves_one = win_rate > incumbent_win_rate or avg_pnl_pct > incumbent_avg_pnl_pct
         degrades_other = win_rate < incumbent_win_rate or avg_pnl_pct < incumbent_avg_pnl_pct
@@ -343,18 +343,21 @@ def indicator_stat_to_condition(stat: ProfileIndicatorStats) -> Optional[dict]:
         "bucket_label": stat.bucket_label,
     }
     minimum, maximum = _float(stat.range_min), _float(stat.range_max)
+    bucket_identity = f"{indicator}:{stat.bucket_label or stat.value_text or 'condition'}"
+    condition_id = f"pi_{indicator}_{hashlib.sha256(bucket_identity.encode()).hexdigest()[:12]}"
+    base = {"condition_id": condition_id, "field": indicator, "required": True, "evidence": evidence}
     if minimum is not None and maximum is not None:
-        return {"field": indicator, "operator": "between", "min": minimum, "max": maximum, "required": True, "evidence": evidence}
+        return {**base, "operator": "between", "min": minimum, "max": maximum}
     if minimum is not None:
-        return {"field": indicator, "operator": ">=", "value": minimum, "required": True, "evidence": evidence}
+        return {**base, "operator": ">=", "value": minimum}
     if maximum is not None:
-        return {"field": indicator, "operator": "<", "value": maximum, "required": True, "evidence": evidence}
+        return {**base, "operator": "<", "value": maximum}
     value_text = str(stat.value_text or "").strip().lower()
     match = re.match(r"^(>=|<=|>|<|=|!=)\s*(-?\d+(?:\.\d+)?)$", value_text)
     if match:
-        return {"field": indicator, "operator": match.group(1), "value": float(match.group(2)), "required": True, "evidence": evidence}
+        return {**base, "operator": match.group(1), "value": float(match.group(2))}
     if value_text in {"true", "false"}:
-        return {"field": indicator, "operator": "=", "value": value_text == "true", "required": True, "evidence": evidence}
+        return {**base, "operator": "=", "value": value_text == "true"}
     return None
 
 
@@ -1365,12 +1368,20 @@ class ProfileIntelligenceAutopilotService:
     ) -> list[ProfileIndicatorStats]:
         if run_id is None:
             return []
+        ordering = (
+            (
+                ProfileIndicatorStats.loss_rate.desc().nullslast(),
+                ProfileIndicatorStats.lift_vs_base.asc().nullslast(),
+            )
+            if role == "losing_indicator"
+            else (ProfileIndicatorStats.lift_vs_base.desc().nullslast(),)
+        )
         return list((await db.execute(
             select(ProfileIndicatorStats).where(
                 ProfileIndicatorStats.user_id == user_id,
                 ProfileIndicatorStats.run_id == run_id,
                 ProfileIndicatorStats.role_detected == role,
-            ).order_by(ProfileIndicatorStats.lift_vs_base.desc().nullslast()).limit(limit)
+            ).order_by(*ordering).limit(limit)
         )).scalars().all())
 
     async def _calibrate_l3_profiles(self, db, user_id, cycle, settings, metrics):
@@ -1471,56 +1482,24 @@ class ProfileIntelligenceAutopilotService:
             "top_losers": [rule["evidence"] for rule in negative_requirements],
             "origin_profile_version": profile.profile_version.isoformat() if profile.profile_version else None,
         }
-        now = utcnow()
-        previous_config = profile.config
-        previous_version = profile.profile_version
-
-        # In-Place Update
-        profile.config = config
-        profile.profile_version = now
-        db.add(profile)
-
-        # Audit Log (Source of truth for versions)
-        db.add(ProfileAuditLog(
-            id=uuid4(),
-            user_id=user_id,
-            profile_id=profile.id,
-            changed_by=user_id,
-            change_source="profile_intelligence_autopilot",
-            change_description=f"Auto-Pilot in-place mutation (v{version}).",
-            previous_config=previous_config,
-            new_config=config,
-            previous_profile_version=previous_version,
-            new_profile_version=now,
-            evidence_json=evidence,
-        ))
-        
         candidate_name = f"{profile.name} · Auto-Pilot v{version}"
-
-        await log_pi_event(
-            db, user_id,
-            event_type="PROFILE_MUTATED_IN_PLACE",
-            event_description=f"Mutação in-place aplicada: {candidate_name}",
-            run_id=cycle.analysis_run_id,
-            profile_name=profile.name,
-            source_run_id=cycle.analysis_run_id,
-            after_json={
-                "origin_profile_id": str(profile.id),
-                "origin_profile_name": profile.name,
-                "version": version,
-                "signals_added": len(injected_fields),
-                "score_penalties_added": len(negative_requirements),
-                "winner_conditions": [c.get("evidence", c) for c in winner_conditions if c.get("field") in injected_fields],
-                "loser_penalties": [r.get("evidence", r.get("name", "")) for r in negative_requirements],
-                "config_signals_count": len(config.get("signals", {}).get("conditions", [])),
-                "config": config,
-            },
-            diff_json={
-                "added_signals": len(winner_conditions),
-                "added_score_penalties": len(negative_requirements),
-                "origin": str(profile.id),
-            },
+        candidate = await self._create_candidate(
+            db,
+            user_id,
+            cycle,
+            settings,
+            metrics,
+            name=candidate_name,
+            description=f"Challenger shadow de {profile.name}; incumbent preservado.",
+            config=config,
+            origin_profile_id=profile.id,
+            previous_profile_id=profile.id,
+            target_watchlist_id=target_watchlist.id,
+            version_number=version,
+            evidence=evidence,
         )
+        if candidate is not None:
+            metrics["created"] += 1
 
     async def _create_discovered_candidates(self, db, user_id, cycle, settings, metrics):
         if cycle.analysis_run_id is None:
@@ -1628,6 +1607,235 @@ class ProfileIntelligenceAutopilotService:
                 },
             )
 
+    async def create_candidate_from_calibration_proposal(
+        self,
+        db: AsyncSession,
+        *,
+        user_id: UUID,
+        cycle: ProfileIntelligenceAutopilotCycle,
+        settings: dict[str, Any],
+        metrics: dict[str, Any],
+        base_profile: Profile,
+        config: dict[str, Any],
+        evidence: dict[str, Any],
+    ) -> ProfileIntelligenceAutopilotCandidate | None:
+        """Create an immutable challenger for one evidence-backed proposal.
+
+        Semantic equality with the incumbent is expected except for the bounded
+        patch, so the generic duplicate guard must not compare this challenger
+        against its own base profile. Cooldown and shadow-capacity controls are
+        still enforced.
+        """
+        version_number = int(await db.scalar(text("""
+            SELECT COALESCE(MAX(version_number), 0) + 1
+              FROM profile_intelligence_autopilot_candidates
+             WHERE origin_profile_id = :profile_id
+        """), {"profile_id": str(base_profile.id)}) or 1)
+        target_watchlist_id = await db.scalar(text("""
+            SELECT id
+              FROM pipeline_watchlists
+             WHERE user_id = :user_id
+               AND profile_id = :profile_id
+               AND upper(level) = 'L3'
+             ORDER BY updated_at DESC NULLS LAST, created_at DESC
+             LIMIT 1
+        """), {
+            "user_id": str(user_id),
+            "profile_id": str(base_profile.id),
+        })
+        return await self._create_candidate(
+            db, user_id, cycle, settings, metrics,
+            name=f"{base_profile.name} · Calibration v{version_number}",
+            description="Challenger versionado de calibração; campeão preservado.",
+            config=config,
+            origin_profile_id=base_profile.id,
+            previous_profile_id=base_profile.id,
+            target_watchlist_id=target_watchlist_id,
+            version_number=version_number,
+            evidence=evidence,
+            skip_semantic_duplicate=True,
+        )
+
+    async def create_candidate_from_indicator_stat(
+        self,
+        db: AsyncSession,
+        *,
+        user_id: UUID,
+        indicator_stat: ProfileIndicatorStats,
+        base_profile: Profile,
+    ) -> tuple[ProfileIntelligenceAutopilotCandidate, bool]:
+        """Create an immutable shadow challenger for one validated indicator."""
+        if indicator_stat.validation_status != "validated" or indicator_stat.actionability_status not in {
+            "validated",
+            "positive_signal_candidate",
+        }:
+            raise ValueError(
+                "indicator_not_actionable:"
+                f"{indicator_stat.validation_status or 'missing_validation'}:"
+                f"{indicator_stat.actionability_status or 'missing_actionability'}"
+            )
+        if indicator_stat.role_detected not in {"winning_indicator", "losing_indicator"}:
+            raise ValueError("indicator_role_not_adjustable")
+        avg_pnl_pct = (
+            float(indicator_stat.avg_pnl_pct)
+            if indicator_stat.avg_pnl_pct is not None
+            else None
+        )
+        if indicator_stat.role_detected == "winning_indicator" and (
+            avg_pnl_pct is None or avg_pnl_pct <= 0
+        ):
+            raise ValueError("indicator_winner_has_non_positive_pnl")
+        if indicator_stat.role_detected == "losing_indicator" and (
+            avg_pnl_pct is None or avg_pnl_pct >= 0
+        ):
+            raise ValueError("indicator_loser_has_non_negative_pnl")
+        if base_profile.user_id != user_id or not base_profile.is_active:
+            raise ValueError("profile_not_owned_or_inactive")
+
+        associated_ids = {str(value) for value in (indicator_stat.source_profile_ids or [])}
+        evidence_profile_id = str((_json(indicator_stat.evidence_json) or {}).get("profile_id") or "")
+        if evidence_profile_id:
+            associated_ids.add(evidence_profile_id)
+        if str(base_profile.id) not in associated_ids:
+            raise ValueError("profile_not_associated_with_indicator")
+
+        condition = indicator_stat_to_condition(indicator_stat)
+        if condition is None:
+            raise ValueError("indicator_bucket_cannot_be_converted_to_rule")
+
+        idempotency_key = f"manual-indicator:{indicator_stat.id}:{base_profile.id}"
+        existing_cycle = await db.scalar(
+            select(ProfileIntelligenceAutopilotCycle).where(
+                ProfileIntelligenceAutopilotCycle.idempotency_key == idempotency_key
+            )
+        )
+        if existing_cycle is not None:
+            existing_candidate = await db.scalar(
+                select(ProfileIntelligenceAutopilotCandidate).where(
+                    ProfileIntelligenceAutopilotCandidate.cycle_id == existing_cycle.id,
+                    ProfileIntelligenceAutopilotCandidate.origin_profile_id == base_profile.id,
+                )
+            )
+            if existing_candidate is not None:
+                return existing_candidate, False
+
+        _, settings = await self.get_settings(db, user_id)
+        config = deepcopy(_json(base_profile.config) or {})
+        before_config = deepcopy(config)
+        action: str
+
+        if indicator_stat.role_detected == "winning_indicator":
+            signals = config.setdefault("signals", {"logic": "AND", "conditions": []})
+            conditions = signals.setdefault("conditions", [])
+            conditions[:] = [
+                item for item in conditions
+                if not (isinstance(item, dict) and normalize_indicator(item.get("field")) == condition["field"])
+            ]
+            conditions.append(condition)
+            config["entry_triggers"] = deepcopy(signals)
+            action = "REPLACE_SIGNAL_CONDITION"
+        else:
+            negative_requirement = {
+                "indicator": condition["field"],
+                "operator": condition["operator"],
+                "value": condition.get("value"),
+                "min": condition.get("min"),
+                "max": condition.get("max"),
+                "points": float(settings["negative_rule_penalty"]),
+                "category": "signal",
+                "name": f"PI shadow penalty: {indicator_stat.bucket_label}",
+                "description": "Top Loser validado convertido em penalidade shadow.",
+                "evidence": condition["evidence"],
+            }
+            master = await ensure_master_scoring_rules(
+                db, user_id, [negative_requirement], create_missing=True
+            )
+            scoring = config.setdefault("scoring", {})
+            scoring["selected_rule_ids"] = list(dict.fromkeys([
+                *(scoring.get("selected_rule_ids") or []),
+                *master["selected_ids"],
+            ]))
+            generated = [item for item in (scoring.get("generated_rules") or []) if isinstance(item, dict)]
+            by_id = {str(item.get("id")): item for item in generated}
+            for rule in master["created"] + master["reused"]:
+                by_id[str(rule.get("id"))] = rule
+            scoring["generated_rules"] = list(by_id.values())
+            scoring["negative_score_max_impact"] = float(settings["negative_score_max_impact"])
+            scoring["source"] = "profile_intelligence_manual_shadow"
+            action = "ADD_SCORE_PENALTY"
+
+        now = utcnow()
+        cycle = existing_cycle or ProfileIntelligenceAutopilotCycle(
+            id=uuid4(),
+            user_id=user_id,
+            window_start=now,
+            idempotency_key=idempotency_key,
+            status="MANUAL_SHADOW_PREPARING",
+            checkpoint="INDICATOR_ADJUSTMENT",
+            analysis_run_id=indicator_stat.run_id,
+            metrics_json={},
+            errors_json=[],
+            started_at=now,
+        )
+        if existing_cycle is None:
+            db.add(cycle)
+            await db.flush()
+
+        metrics = {
+            "created": 0,
+            "cooldown_blocked": 0,
+            "deduplicated": 0,
+            "disabled_for_capacity": 0,
+        }
+        evidence = {
+            "trigger_source": "profile_intelligence_ui",
+            "indicator_stat_id": str(indicator_stat.id),
+            "analysis_run_id": str(indicator_stat.run_id),
+            "incumbent_profile_id": str(base_profile.id),
+            "indicator": indicator_stat.indicator,
+            "bucket": indicator_stat.bucket_label,
+            "role": indicator_stat.role_detected,
+            "validation_status": indicator_stat.validation_status,
+            "actionability_status": indicator_stat.actionability_status,
+            "action": action,
+            "condition": condition,
+        }
+        candidate = await self.create_candidate_from_calibration_proposal(
+            db,
+            user_id=user_id,
+            cycle=cycle,
+            settings=settings,
+            metrics=metrics,
+            base_profile=base_profile,
+            config=config,
+            evidence=evidence,
+        )
+        if candidate is None:
+            cycle.status = "BLOCKED"
+            cycle.completed_at = now
+            cycle.metrics_json = metrics
+            raise ValueError(f"indicator_shadow_candidate_not_created:{json.dumps(metrics, sort_keys=True)}")
+
+        cycle.status = "COMPLETED"
+        cycle.completed_at = now
+        cycle.metrics_json = metrics
+        db.add(ProfileIndicatorMutationLink(
+            indicator_performance_id=indicator_stat.id,
+            profile_id=base_profile.id,
+            profile_name=base_profile.name,
+            indicator_name=indicator_stat.indicator,
+            bucket=indicator_stat.bucket_label,
+            run_id=indicator_stat.run_id,
+            mutation_action=action,
+            mutation_status="SHADOW_COLLECTING",
+            mutation_applied=False,
+            dry_run=False,
+            evidence_json=evidence,
+            diff_json={"before": before_config, "after": config},
+        ))
+        await db.flush()
+        return candidate, True
+
     async def _create_candidate(
         self,
         db,
@@ -1646,6 +1854,7 @@ class ProfileIntelligenceAutopilotService:
         source_combination_id=None,
         version_number=1,
         evidence=None,
+        skip_semantic_duplicate=False,
     ):
         canonical = extract_profile_rules(config)
         signature = canonical_signature(canonical)
@@ -1663,7 +1872,9 @@ class ProfileIntelligenceAutopilotService:
             )
             return None
 
-        duplicate = await self._find_duplicate(db, user_id, canonical, tolerance)
+        duplicate = None if skip_semantic_duplicate else await self._find_duplicate(
+            db, user_id, canonical, tolerance
+        )
         if duplicate:
             metrics["deduplicated"] += 1
             await self._audit(
@@ -1711,6 +1922,13 @@ class ProfileIntelligenceAutopilotService:
         )
         db.add(profile)
         await db.flush()
+        profile_version_id = await create_shadow_profile_version(
+            db,
+            profile_id=profile.id,
+            config=config,
+            cycle_id=cycle.id,
+            origin_profile_id=origin_profile_id,
+        )
         watchlist = PipelineWatchlist(
             id=uuid4(),
             user_id=user_id,
@@ -1737,7 +1955,8 @@ class ProfileIntelligenceAutopilotService:
                 "source_watchlist_id": str(l2.id),
                 "auto_refresh": True,
             },
-            "reference_versions": [],
+            "profile_version_id": str(profile_version_id),
+            "reference_versions": [str(profile_version_id)],
         }
         candidate = ProfileIntelligenceAutopilotCandidate(
             id=candidate_id,
@@ -2012,22 +2231,8 @@ class ProfileIntelligenceAutopilotService:
                 gates_passed=safe,
             )
             
-            # Auto-approve and activate immediately since Autopilot is enabled and automation is requested
-            await self.approve_candidate_for_live(
-                db,
-                user_id,
-                candidate.id,
-                approved_by=user_id,
-                approval_reason="Auto-approved by Autopilot calibration settings",
-                approval_source="AUTOPILOT_AUTO_APPLY",
-                confirm_risk=True,
-            )
-            await self.activate_approved_candidate(
-                db,
-                user_id,
-                candidate.id,
-                activated_by=user_id,
-            )
+            # Fail closed: the automated cycle ends at human approval. Live
+            # activation remains an explicit authenticated operator action.
             metrics["waiting_live"] += 1
 
     async def _reconcile_manual_changes(self, db, user_id, cycle, candidate) -> bool:

@@ -80,7 +80,7 @@ def evaluate_intelligence_gate(metrics: Dict[str, Any], config: Dict[str, Any]) 
 def evaluate_indicator_intelligence_gate(
     metrics: Dict[str, Any], config: Dict[str, Any]
 ) -> Dict[str, Any]:
-    """Approve replicated descriptive findings, never execution authority.
+    """Validate replicated descriptive findings, never predictive authority.
 
     This lane answers which entry-time indicator buckets repeat their direction
     in validation and test.  It deliberately does not claim that the aggregate
@@ -90,6 +90,7 @@ def evaluate_indicator_intelligence_gate(
     if missing:
         return {
             "status": "BLOCKED",
+            "gate_type": "DESCRIPTIVE",
             "reasons": [f"missing_approved_intelligence_config:{','.join(missing)}"],
             "evaluated_at": datetime.now(timezone.utc).isoformat(),
             "execution_authority": False,
@@ -124,10 +125,14 @@ def evaluate_indicator_intelligence_gate(
         reasons.append("block_findings_below_minimum")
     return {
         "status": "REJECTED" if reasons else "APPROVED",
+        "gate_type": "DESCRIPTIVE",
         "reasons": reasons,
         "evaluated_at": datetime.now(timezone.utc).isoformat(),
         "execution_authority": False,
         "basis": "replicated_indicator_findings",
+        "predictive_authority": False,
+        "calibration_authority": False,
+        "rule_generation_authority": False,
         "thresholds": {
             "min_effective_test_snapshots": minimum_effective,
             "min_replicated_findings": minimum_findings,

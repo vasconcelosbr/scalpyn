@@ -24,6 +24,7 @@ Knobs (env)
 -----------
 * ``SHADOW_MONITOR_INTERVAL_S`` (default 300) — beat schedule.
 * ``SHADOW_MONITOR_BATCH_SIZE`` (default 50).
+* ``SHADOW_FAST_SCAN_BATCH_SIZE`` (default 20).
 * ``SHADOW_MONITOR_MAX_CANDLES_PER_RUN`` (default 720).
 """
 
@@ -33,6 +34,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -54,7 +56,11 @@ def _env_int(name: str, default: int) -> int:
 
 
 SHADOW_MONITOR_BATCH_SIZE = _env_int("SHADOW_MONITOR_BATCH_SIZE", 50)
+SHADOW_FAST_SCAN_BATCH_SIZE = _env_int("SHADOW_FAST_SCAN_BATCH_SIZE", 20)
 SHADOW_MONITOR_MAX_CANDLES_PER_RUN = _env_int("SHADOW_MONITOR_MAX_CANDLES_PER_RUN", 720)
+SHADOW_MONITOR_POST_COMMIT_BUDGET_SECONDS = _env_int(
+    "SHADOW_MONITOR_POST_COMMIT_BUDGET_SECONDS", 45
+)
 
 # Sources elegíveis para fechamento automático por barreira TP/SL.
 # Centralizado aqui — não usar allowlist incompleta dispersa no código.
@@ -75,6 +81,38 @@ SHADOW_BARRIER_STALE_SECONDS = _env_int("SHADOW_BARRIER_STALE_SECONDS", 300)
 # Period/timeframe via env so they are changeable without a deploy.
 _SHADOW_ATR_PERIOD = _env_int("SHADOW_ATR_PERIOD", 14)
 _SHADOW_ATR_TIMEFRAME = os.environ.get("SHADOW_ATR_TIMEFRAME", "5m")
+
+
+def _new_post_commit_deadline() -> float:
+    return time.monotonic() + max(SHADOW_MONITOR_POST_COMMIT_BUDGET_SECONDS, 1)
+
+
+async def _run_best_effort_budgeted(
+    items,
+    worker,
+    *,
+    deadline: float,
+    item_label: str,
+) -> tuple[int, int]:
+    """Drain best-effort work until the per-run post-commit budget expires."""
+    processed = 0
+    skipped = 0
+    total = len(items)
+    for item in items:
+        if time.monotonic() >= deadline:
+            skipped = total - processed
+            logger.warning(
+                "[shadow-monitor] post-commit budget exhausted for %s: "
+                "processed=%d skipped=%d budget_s=%d",
+                item_label,
+                processed,
+                skipped,
+                SHADOW_MONITOR_POST_COMMIT_BUDGET_SECONDS,
+            )
+            break
+        await worker(item)
+        processed += 1
+    return processed, skipped
 
 
 async def _load_shadow_force_close_policy(db) -> Dict[str, Any]:
@@ -496,6 +534,7 @@ def _finalize_outcome(
     shadow.outcome = outcome
     shadow.exit_price = exit_price
     shadow.exit_timestamp = exit_ts
+    shadow.label_resolved_at = exit_ts
     if entry_price > 0 and exit_price is not None:
         pnl_pct = (exit_price - entry_price) / entry_price * 100.0
         shadow.pnl_pct = pnl_pct
@@ -907,6 +946,7 @@ async def _advance_shadow(
         )
         shadow.status = "ERROR"
         shadow.completed_at = datetime.now(timezone.utc)
+        shadow.label_resolved_at = shadow.exit_timestamp or shadow.completed_at
         return "completed"
 
     tp = float(shadow.tp_price)
@@ -1305,7 +1345,7 @@ async def _advance_shadow(
 
 
 async def _fast_barrier_scan_async(run_id: str) -> Dict[str, Any]:
-    """Fast-scan de barreira: fecha TODOS os trades com TP/SL rompido no tick atual.
+    """Fast-scan de barreira: fecha um lote limitado de TP/SL rompidos por tick.
 
     Roda ANTES do batch regular. Garante que qualquer trade com
     ``market_metadata.price <= sl_price`` ou ``>= tp_price`` seja fechado
@@ -1331,7 +1371,7 @@ async def _fast_barrier_scan_async(run_id: str) -> Dict[str, Any]:
     source_counts: Dict[str, int] = {}
 
     try:
-        # Phase 1: identify breached IDs via JOIN read-only (no lock yet)
+        # Phase 1: identify a bounded breached-ID batch (no lock yet).
         async with CeleryAsyncSessionLocal() as db_scan:
             stale_cutoff = datetime.now(timezone.utc) - timedelta(
                 seconds=SHADOW_BARRIER_STALE_SECONDS
@@ -1347,8 +1387,12 @@ async def _fast_barrier_scan_async(run_id: str) -> Dict[str, Any]:
                       AND (mm.price <= st.sl_price OR mm.price >= st.tp_price)
                       AND (mm.last_updated IS NULL OR mm.last_updated >= :stale_cutoff)
                     ORDER BY st.id
+                    LIMIT :fast_scan_batch_size
                 """),
-                {"stale_cutoff": stale_cutoff},
+                {
+                    "stale_cutoff": stale_cutoff,
+                    "fast_scan_batch_size": SHADOW_FAST_SCAN_BATCH_SIZE,
+                },
             )
             breached_ids = [row[0] for row in res.fetchall()]
 
@@ -1481,19 +1525,30 @@ async def _fast_barrier_scan_async(run_id: str) -> Dict[str, Any]:
         }
 
     # best-effort sim/capture (post-commit, isolated sessions)
-    for shadow_id in sim_targets:
-        await _record_simulation_one_async(shadow_id)
+    _, deferred_sim = await _run_best_effort_budgeted(
+        sim_targets,
+        _record_simulation_one_async,
+        deadline=_new_post_commit_deadline(),
+        item_label="fast_scan_simulations",
+    )
 
     total_closed = closed_tp + closed_sl
     logger.info(
         "[shadow-closer] fast-scan run_id=%s closed_tp=%d closed_sl=%d "
-        "source_breakdown=%s skipped_stale=%d errors=%d",
-        run_id, closed_tp, closed_sl, source_counts, skipped_stale, errors,
+        "source_breakdown=%s skipped_stale=%d deferred_sim=%d errors=%d",
+        run_id,
+        closed_tp,
+        closed_sl,
+        source_counts,
+        skipped_stale,
+        deferred_sim,
+        errors,
     )
     return {
         "fast_scan_closed_tp": closed_tp,
         "fast_scan_closed_sl": closed_sl,
         "fast_scan_skipped_stale": skipped_stale,
+        "fast_scan_deferred_simulations": deferred_sim,
         "fast_scan_errors": errors,
     }
 
@@ -1505,10 +1560,9 @@ async def _monitor_async() -> Dict[str, Any]:
 
     run_id = str(_uuid_mod.uuid4())
 
-    # ── Fast-scan: fecha TODOS os trades com barreira rompida antes do batch ──
-    # Garante latência máxima de 1 tick (5 min) para qualquer trade que cruzou
-    # TP/SL, independentemente do tamanho do batch (que cobre até BATCH_SIZE
-    # trades por rotação, potencialmente 100+ min para 1000+ trades abertos).
+    # ── Fast-scan: fecha lote limitado de barreiras rompidas antes do batch ──
+    # O limite impede que gravações pós-fechamento monopolizem o worker; o beat
+    # continua drenando o backlog nos ticks seguintes.
     fast_scan_result = await _fast_barrier_scan_async(run_id)
 
     summary: Dict[str, Any] = {
@@ -1588,18 +1642,33 @@ async def _monitor_async() -> Dict[str, Any]:
     # Simulação ML best-effort — tx isolada por shadow (FIX D1, 2026-05-15).
     # record_as_simulation + _capture_exit_features usam db_sim próprio;
     # UndefinedColumnError ou lock em trade_simulations não aborta fechamentos.
-    for shadow_id in sim_targets:
-        await _record_simulation_one_async(shadow_id)
+    post_commit_deadline = _new_post_commit_deadline()
+    _, deferred_sim = await _run_best_effort_budgeted(
+        sim_targets,
+        _record_simulation_one_async,
+        deadline=post_commit_deadline,
+        item_label="shadow_simulations",
+    )
 
     # Enriquecimento ML best-effort — tx isolada por shadow (FIX C3, 2026-05-15).
-    for t in enrich_targets:
-        if t["needs_fill"]:
-            await _enrich_one_async(
-                t["shadow_id"],
-                t["symbol"],
-                t["entry_timestamp"],
-                t["decision_id"],
-            )
+    enrich_work = [t for t in enrich_targets if t["needs_fill"]]
+
+    async def _run_enrich_target(target: Dict[str, Any]) -> None:
+        await _enrich_one_async(
+            target["shadow_id"],
+            target["symbol"],
+            target["entry_timestamp"],
+            target["decision_id"],
+        )
+
+    _, deferred_enrich = await _run_best_effort_budgeted(
+        enrich_work,
+        _run_enrich_target,
+        deadline=post_commit_deadline,
+        item_label="shadow_enrichment",
+    )
+    summary["deferred_simulations"] = deferred_sim
+    summary["deferred_enrichment"] = deferred_enrich
 
     # Reativa edge trigger L3_REJECTED no Redis para shadows que completaram.
     # Remove o símbolo de prior_rejected_visibility para que o próximo ciclo
@@ -1684,7 +1753,6 @@ async def _create_watchlist_spot_shadows_for_all_users() -> int:
         TTT_ENABLED_DEFAULT,
         TTT_TP_PCT_DEFAULT,
         TTT_TIMEOUT_MINUTES_DEFAULT,
-        _SHADOW_TP_PCT_OVERRIDE,
         _SHADOW_SL_PCT_OVERRIDE,
     )
     from sqlalchemy import select
@@ -1717,7 +1785,7 @@ async def _create_watchlist_spot_shadows_for_all_users() -> int:
             try:
                 se_cfg = SpotEngineConfig.from_config_json(cfg_row.config_json)
                 user_config = {
-                    "tp_pct": _SHADOW_TP_PCT_OVERRIDE or float(se_cfg.selling.take_profit_pct),
+                    "tp_pct": float(se_cfg.selling.take_profit_pct),
                     "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
                         se_cfg.sell_flow.kill_switch.max_drawdown_from_hwm_pct
                     ),

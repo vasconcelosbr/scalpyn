@@ -19,6 +19,7 @@ import {
   usePerformanceEquity,
   usePerformanceExecutions,
   usePerformanceSummary,
+  useGateAccountToday,
 } from "@/hooks/usePerformance";
 
 // ── theme ────────────────────────────────────────────────────────────────────
@@ -38,7 +39,19 @@ const C = {
   amber: "#F2A33A",
 } as const;
 
-const WINDOWS: WindowKey[] = ["1D", "7D", "30D", "MTD", "YTD", "ALL"];
+const WINDOWS: { key: WindowKey; label: string }[] = [
+  { key: "1D", label: "Hoje" },
+  { key: "7D", label: "7d" },
+  { key: "15D", label: "15d" },
+  { key: "30D", label: "30d" },
+  { key: "90D", label: "90d" },
+];
+
+const dateBoundary = (value: string, nextDay = false) => {
+  const date = new Date(`${value}T00:00:00`);
+  if (nextDay) date.setDate(date.getDate() + 1);
+  return date.toISOString();
+};
 
 const fmtUsd = (n: number | null | undefined, dp = 2) =>
   n === null || n === undefined || Number.isNaN(n)
@@ -57,6 +70,12 @@ const fmtSec = (s: number | null | undefined) => {
 };
 const num = (n: number | null | undefined, dp = 4) =>
   n === null || n === undefined ? "—" : n.toLocaleString("en-US", { maximumFractionDigits: dp });
+
+const dateInputStyle: React.CSSProperties = {
+  colorScheme: "dark", background: C.elevated, color: C.text,
+  border: `1px solid ${C.borderStrong}`, borderRadius: 6,
+  padding: "5px 8px", fontSize: 11.5,
+};
 
 // ── tiny UI helpers ──────────────────────────────────────────────────────────
 function StatCard({
@@ -114,10 +133,10 @@ function FilterBar({
       gap: 12, flexWrap: "wrap",
     }}>
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        {WINDOWS.map(w => {
-          const active = filter.window === w;
+        {WINDOWS.map(({ key, label }) => {
+          const active = filter.window === key && !filter.from;
           return (
-            <button key={w} onClick={() => onChange({ ...filter, window: w, from: undefined, to: undefined })}
+            <button key={key} onClick={() => onChange({ ...filter, window: key, from: undefined, to: undefined })}
               style={{
                 background: active ? C.elevated : "transparent",
                 color: active ? C.text : C.muted,
@@ -125,10 +144,25 @@ function FilterBar({
                 borderRadius: 6, padding: "5px 10px", fontSize: 11.5, cursor: "pointer",
                 letterSpacing: 0.4,
               }}>
-              {w}
+              {label}
             </button>
           );
         })}
+        <input type="date" aria-label="Data inicial"
+          value={filter.from ? filter.from.slice(0, 10) : ""}
+          onChange={e => e.target.value && onChange({
+            ...filter, from: dateBoundary(e.target.value),
+            to: filter.to ?? dateBoundary(e.target.value, true),
+          })}
+          style={dateInputStyle} />
+        <span style={{ color: C.dim, fontSize: 11 }}>até</span>
+        <input type="date" aria-label="Data final"
+          value={filter.to ? new Date(new Date(filter.to).getTime() - 1).toISOString().slice(0, 10) : ""}
+          min={filter.from?.slice(0, 10)}
+          onChange={e => e.target.value && onChange({
+            ...filter, to: dateBoundary(e.target.value, true),
+          })}
+          style={dateInputStyle} />
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.muted, fontSize: 11.5 }}>
         <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
@@ -157,6 +191,7 @@ function FilterBar({
 // ── flash cards cluster ──────────────────────────────────────────────────────
 function FlashCards({ filter }: { filter: PerformanceFilter }) {
   const { data, isLoading, error } = usePerformanceSummary(filter);
+  const { data: gateToday, isLoading: gateLoading } = useGateAccountToday(filter.autoRefresh);
 
   if (error) return (
     <div style={{ background: C.surface, border: `1px solid ${C.red}55`, borderRadius: 10, padding: 14, color: C.red, fontSize: 12 }}>
@@ -171,13 +206,19 @@ function FlashCards({ filter }: { filter: PerformanceFilter }) {
   const deltaColor = s && s.pnl.delta_vs_previous >= 0 ? "green" : "red";
 
   return (
+    <>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
+      <StatCard label="Ordens executadas na Gate" value={placeholder ? "—" : String(s.stats.executed_trades)} hint="Ordens concluídas únicas · Spot + Futures · fonte Gate API" />
+      <StatCard label="PnL de hoje na Gate" value={gateLoading || !gateToday?.available ? "—" : fmtPct(gateToday.pnl_pct)} accent={(gateToday?.pnl_usdt ?? 0) >= 0 ? "green" : "red"} hint="Variação patrimonial desde 00:00 · fonte Gate API" />
+      <StatCard label="Valor ganho hoje na Gate" value={gateLoading || !gateToday?.available ? "—" : `${(gateToday.pnl_usdt ?? 0) >= 0 ? "+" : ""}$${fmtUsd(gateToday.pnl_usdt)}`} accent={(gateToday?.pnl_usdt ?? 0) >= 0 ? "green" : "red"} hint={`Capital atual $${fmtUsd(gateToday?.current_equity_usdt)} · inicial $${fmtUsd(gateToday?.start_equity_usdt)}`} />
+    </div>
     <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
       {/* Capital cluster */}
       <div>
         <SectionTitle icon={<Wallet size={13} />} label="Capital" />
         <div style={{ display: "grid", gap: 8 }}>
-          <StatCard label="Investido (período)" value={placeholder ? "—" : `$${fmtUsd(s.capital.invested_usdt)}`} sub={`Spot PnL $${fmtUsd(s?.capital.spot_pnl_usdt)} · Fut PnL $${fmtUsd(s?.capital.futures_pnl_usdt)}`} />
-          <StatCard label="Posições abertas" value={placeholder ? "—" : String(s.capital.open_positions)} hint="lots ainda não fechados" />
+          <StatCard label="Giro executado (período)" value={placeholder ? "—" : `$${fmtUsd(s.capital.invested_usdt)}`} sub="Soma do capital aplicado nos fechamentos; pode reutilizar o mesmo saldo" />
+          <StatCard label="Lotes FIFO em aberto" value={placeholder ? "—" : String(s.capital.open_positions)} hint="Projeção histórica; não representa o saldo atual da Gate" />
         </div>
       </div>
 
@@ -185,7 +226,7 @@ function FlashCards({ filter }: { filter: PerformanceFilter }) {
       <div>
         <SectionTitle icon={<TrendingUp size={13} />} label="PnL" />
         <div style={{ display: "grid", gap: 8 }}>
-          <StatCard label="Lucro acumulado USDT" value={placeholder ? "—" : `$${fmtUsd(s.pnl.total_usdt)}`} accent={pnlColor as "green" | "red"} sub={`ROI ${fmtPct(s?.pnl.roi_pct)}`} />
+          <StatCard label="PnL realizado FIFO" value={placeholder ? "—" : `$${fmtUsd(s.pnl.total_usdt)}`} accent={pnlColor as "green" | "red"} sub={`ROI sobre lotes fechados ${fmtPct(s?.pnl.roi_pct)} · não é o PnL patrimonial Gate`} />
           <StatCard label="Δ vs período anterior" value={placeholder ? "—" : `${s.pnl.delta_vs_previous >= 0 ? "+" : ""}$${fmtUsd(s.pnl.delta_vs_previous)}`} accent={deltaColor as "green" | "red"} hint={`Taxas pagas $${fmtUsd(s?.pnl.fees_usdt, 4)}`} />
         </div>
       </div>
@@ -195,7 +236,7 @@ function FlashCards({ filter }: { filter: PerformanceFilter }) {
         <SectionTitle icon={<Layers size={13} />} label="Estatísticas" />
         <div style={{ display: "grid", gap: 8 }}>
           <StatCard
-            label="Trades · Win Rate"
+            label="Lotes fechados · Win Rate"
             value={placeholder ? "—" : `${s.stats.total_trades} · ${fmtPct(s.stats.win_rate_pct, 1)}`}
             sub={`W ${s?.stats.wins ?? 0} · L ${s?.stats.losses ?? 0} · PF ${s?.stats.profit_factor ?? "—"}`}
           />
@@ -225,6 +266,7 @@ function FlashCards({ filter }: { filter: PerformanceFilter }) {
         </div>
       </div>
     </div>
+    </>
   );
 }
 
@@ -314,7 +356,7 @@ function DistributionPanel({ filter }: { filter: PerformanceFilter }) {
     { type: "Long", n: counts.longs }, { type: "Short", n: counts.shorts },
   ] : [], [counts]);
   return (
-    <ChartCard title="Distribuição de Trades" height={260}>
+    <ChartCard title="Distribuição de lotes FIFO" height={260}>
       {!data ? (
         <div style={{ color: C.muted, fontSize: 12 }}>Carregando…</div>
       ) : (

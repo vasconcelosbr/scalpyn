@@ -1,6 +1,6 @@
 """Standalone CatBoost retrain script — usa URL pública do banco.
 
-Treina Lane 2 (CatBoost / L3_PROFILE / is_tp_4h_v1) e persiste em ml_models.
+Treina Lane 2 (CatBoost / L3_PROFILE / is_tp_4h_v2_sim_outcome) e persiste em ml_models.
 Não requer rede interna Railway. Não promove modelo automaticamente.
 Não altera outcomes, shadow trades, estratégias ou Auto-Pilot.
 
@@ -27,6 +27,7 @@ import asyncio
 import logging
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
 
@@ -56,6 +57,54 @@ ADVISORY_INTELLIGENCE = os.getenv("ADVISORY_INTELLIGENCE", "false").strip().lowe
 }
 
 
+def _dry_run_gate_payload(
+    *,
+    records: int,
+    min_required: int,
+    dataset_query_cutoff: datetime,
+    maturity_margin: int,
+    sources,
+    gate_meta,
+    split_readiness=None,
+):
+    diagnostics = gate_meta["maturity_diagnostics"]
+    barrier = gate_meta["barrier_contract"]
+    split_readiness = split_readiness or {}
+    holdout_ready = split_readiness.get("has_test", True)
+    records_ready = records >= min_required
+    reason = None
+    if not records_ready:
+        reason = "insufficient_retrain_eligible_rows"
+    elif not holdout_ready:
+        reason = (
+            split_readiness.get("diagnostics", {}).get("block_reason")
+            or "insufficient_promotion_holdout"
+        )
+    return {
+        "dry_run": True,
+        "status": "ready" if records_ready and holdout_ready else "skipped",
+        "reason": reason,
+        "sources": sources,
+        "dataset_query_cutoff": dataset_query_cutoff.isoformat(),
+        "maturity_embargo_margin_minutes": maturity_margin,
+        "official_candidates": diagnostics.get("official_candidates", 0),
+        "labels_unresolved_at_cutoff": diagnostics.get(
+            "labels_unresolved_at_cutoff", 0
+        ),
+        "observations_immature_at_cutoff": diagnostics.get(
+            "observations_immature_at_cutoff", 0
+        ),
+        "records_mature": diagnostics.get("records_mature", 0),
+        "records_with_profile": gate_meta["records_with_profile"],
+        **barrier,
+        "records": records,
+        "min_required": min_required,
+        "deficit": max(0, min_required - records),
+        "split_readiness": split_readiness or None,
+        "l3_strict_meta": gate_meta["l3_strict_meta"],
+    }
+
+
 async def main():
     from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
     from sqlalchemy.orm import sessionmaker
@@ -75,23 +124,95 @@ async def main():
     )
 
     async with AsyncSessionLocal() as db:
-        from backend.app.services.ml_challenger_service import MLChallengerService
+        from backend.app.services.ml_challenger_service import (
+            MLChallengerService,
+            _require_positive_int_config,
+        )
 
         svc = MLChallengerService()
 
         if DRY_RUN:
             logger.info("[DRY-RUN] Carregando dataset L3_PROFILE apenas — sem treino nem persistencia")
-            all_records = await svc._load_shadow_data(db, USER_ID, lookback_days=90, source_filter=CATBOOST_SOURCES)
-            eligible = [r for r in all_records if r.get("profile_id")]
-            logger.info("[DRY-RUN] Records: total=%d com_profile=%d", len(all_records), len(eligible))
-
+            ml_config = await svc._load_ml_config(db)
+            min_required = _require_positive_int_config(
+                ml_config, "ml_catboost_retrain_min_eligible_rows"
+            )
+            dataset_query_cutoff = datetime.now(timezone.utc)
+            maturity_margin = ml_config.get("ml_maturity_embargo_margin_minutes")
+            blocked_reason = svc._check_mixed_source_gate(CATBOOST_SOURCES)
+            if blocked_reason:
+                return {
+                    "dry_run": True,
+                    "status": "blocked",
+                    "reason": blocked_reason,
+                    "sources": CATBOOST_SOURCES,
+                    "dataset_query_cutoff": dataset_query_cutoff.isoformat(),
+                }
+            records, gate_meta = await svc._prepare_catboost_gate_records(
+                db,
+                USER_ID,
+                lookback_days=90,
+                cb_sources=CATBOOST_SOURCES,
+                dataset_query_cutoff=dataset_query_cutoff,
+                ml_config=ml_config,
+                advisory_intelligence=ADVISORY_INTELLIGENCE,
+                collect_diagnostics=True,
+            )
+            logger.info(
+                "[DRY-RUN] Records apos contrato: %d (min_required=%d)",
+                len(records), min_required,
+            )
             from backend.app.ml.feature_extractor import FEATURE_COLUMNS
-            X, y, cols, cat_idx, *_ = svc._build_l3_dataset(eligible, list(FEATURE_COLUMNS), WIN_THRESHOLD_S)
-            pos_rate = float(y.mean()) if len(y) else 0
-            logger.info("[DRY-RUN] Dataset: rows=%d features=%d cat_idx=%s positive_rate=%.2f%%",
-                        len(y), len(cols), cat_idx, pos_rate * 100)
-            return {"dry_run": True, "eligible": len(eligible), "rows": len(y),
-                    "features": len(cols), "pos_rate": round(pos_rate, 4)}
+
+            label_objective = str(ml_config.get("ml_label_objective") or "fast_tp")
+            feature_contract = ml_config.get("ml_feature_contract", {}).get(
+                gate_meta["lane"]
+            )
+            built = svc._build_l3_dataset(
+                records,
+                list(FEATURE_COLUMNS),
+                WIN_THRESHOLD_S,
+                lane_name=gate_meta["lane"],
+                lane_contract=feature_contract,
+                feature_ranges=ml_config.get("ml_feature_ranges"),
+                backfilled_feature_names=ml_config.get("ml_backfilled_feature_names"),
+                backfill_marker_key=ml_config.get("ml_backfill_marker_key"),
+                label_objective=label_objective,
+                fee_roundtrip_pct=float(ml_config["ml_fee_roundtrip_pct"]),
+            )
+            X, y = built[0], built[1]
+            split = svc._chronological_split_with_embargo(
+                X,
+                y,
+                metadata=[built[4], built[5], built[6], built[8]],
+                created_at=built[5],
+                holding_seconds=built[7],
+                group_ids=built[8],
+                embargo_seconds=int(ml_config["ml_split_embargo_seconds"]),
+                min_train_size=min_required,
+                min_validation_size=_require_positive_int_config(
+                    ml_config, "ml_threshold_min_positives"
+                ),
+                min_test_size=_require_positive_int_config(
+                    ml_config, "ml_promotion_min_test_samples"
+                ),
+            )
+            split_readiness = {
+                "has_test": split["has_test"],
+                "train_samples": len(split["y_tr"]),
+                "validation_samples": len(split["y_va"]),
+                "test_samples": len(split["y_te"]) if split["y_te"] is not None else 0,
+                "diagnostics": split["split_diagnostics"],
+            }
+            return _dry_run_gate_payload(
+                records=len(records),
+                min_required=min_required,
+                dataset_query_cutoff=dataset_query_cutoff,
+                maturity_margin=maturity_margin,
+                sources=CATBOOST_SOURCES,
+                gate_meta=gate_meta,
+                split_readiness=split_readiness,
+            )
 
         logger.info("Iniciando train_challengers (CatBoost only)...")
         result = await svc.train_challengers(

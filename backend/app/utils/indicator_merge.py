@@ -472,6 +472,21 @@ def merge_indicator_rows(
     return result
 
 
+async def _run_read_isolated(db, fn):
+    """Run an optional read inside a savepoint when the session supports it.
+
+    Some callers execute merge reads inside a larger transaction. If a probe
+    query fails there, asyncpg poisons the outer transaction and the next
+    fallback SELECT raises InFailedSQLTransactionError. Wrapping optional reads
+    in begin_nested() keeps the fallback path usable.
+    """
+    begin_nested = getattr(db, "begin_nested", None)
+    if callable(begin_nested):
+        async with begin_nested():
+            return await fn()
+    return await fn()
+
+
 async def fetch_merged_indicators(
     db,
     symbols: List[str],
@@ -504,13 +519,33 @@ async def fetch_merged_indicators(
 
     # ── Try dual-scheduler query (requires scheduler_group column) ────────────
     try:
-        dual_rows = (await db.execute(text("""
-            SELECT DISTINCT ON (symbol, scheduler_group)
-                symbol, scheduler_group, time, indicators_json
-            FROM   indicators
-            WHERE  symbol = ANY(:syms)
-            ORDER  BY symbol, scheduler_group, time DESC
-        """), {"syms": symbols})).fetchall()
+        async def _fetch_dual_rows():
+            await db.execute(
+                text("SET LOCAL max_parallel_workers_per_gather = 0"), {}
+            )
+            return (await db.execute(text("""
+                WITH requested(symbol) AS (
+                    SELECT unnest(CAST(:syms AS text[]))
+                ), scheduler_groups(scheduler_group) AS (
+                    VALUES ('structural'), ('microstructure')
+                )
+                SELECT req.symbol,
+                       grp.scheduler_group,
+                       latest.time,
+                       latest.indicators_json
+                FROM requested req
+                CROSS JOIN scheduler_groups grp
+                CROSS JOIN LATERAL (
+                    SELECT i.time, i.indicators_json
+                    FROM indicators i
+                    WHERE i.symbol = req.symbol
+                      AND i.scheduler_group = grp.scheduler_group
+                    ORDER BY i.time DESC
+                    LIMIT 1
+                ) latest
+            """), {"syms": symbols})).fetchall()
+
+        dual_rows = await _run_read_isolated(db, _fetch_dual_rows)
 
         from collections import defaultdict
         by_sym: Dict[str, List] = defaultdict(list)
@@ -536,7 +571,12 @@ async def fetch_merged_indicators(
         # Legacy fallback for symbols still missing
         missing = [s for s in symbols if s not in merged]
         if missing:
-            _add_legacy_rows(merged, await _fetch_legacy(db, missing), now, include_stale=include_stale)
+            _add_legacy_rows(
+                merged,
+                await _fetch_legacy(db, missing),
+                now,
+                include_stale=include_stale,
+            )
 
         return merged
 
@@ -562,13 +602,28 @@ async def _fetch_legacy(db, symbols: List[str]) -> List:
     if not symbols:
         return []
     try:
-        rows = (await db.execute(text("""
-            SELECT symbol, time, indicators_json
-            FROM   indicators
-            WHERE  symbol = ANY(:syms)
-              AND  time > now() - interval '2 hours'
-            ORDER  BY symbol, time DESC
-        """), {"syms": symbols})).fetchall()
+        async def _fetch_rows():
+            await db.execute(
+                text("SET LOCAL max_parallel_workers_per_gather = 0"), {}
+            )
+            return (await db.execute(text("""
+                WITH requested(symbol) AS (
+                    SELECT unnest(CAST(:syms AS text[]))
+                )
+                SELECT latest.symbol, latest.time, latest.indicators_json
+                FROM requested req
+                CROSS JOIN LATERAL (
+                    SELECT i.symbol, i.time, i.indicators_json
+                    FROM indicators i
+                    WHERE i.symbol = req.symbol
+                      AND i.time > now() - interval '2 hours'
+                    ORDER BY i.time DESC
+                    LIMIT 3
+                ) latest
+                ORDER BY latest.symbol, latest.time DESC
+            """), {"syms": symbols})).fetchall()
+
+        rows = await _run_read_isolated(db, _fetch_rows)
         return list(rows)
     except Exception as exc:
         logger.warning("[merge] legacy indicator fetch failed: %s", exc)

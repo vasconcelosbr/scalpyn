@@ -19,6 +19,15 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.profile_intelligence import ProfileRuleCombination
+from .profile_intelligence_contract import (
+    DATASET_VERSION,
+    LABEL_VERSION,
+    OFFICIAL_CAPTURE_COLUMNS,
+    PIValidationPolicy,
+    filter_hash_valid_rows,
+    official_params,
+    official_where,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -290,14 +299,16 @@ async def _load_trades_for_window(
     user_id: UUID,
     start: datetime,
     end: datetime,
+    analysis_sources: list[str],
 ) -> list:
     """Load closed shadow trades with features_snapshot for a given window."""
     rows = (
         await db.execute(
-            text("""
+            text(f"""
                 SELECT
                     profile_id,
                     profile_name,
+                    source,
                     symbol,
                     created_at,
                     outcome,
@@ -305,19 +316,30 @@ async def _load_trades_for_window(
                     mae_pct,
                     mfe_pct,
                     holding_seconds,
-                    features_snapshot
+                    features_snapshot,
+                    {OFFICIAL_CAPTURE_COLUMNS.format(alias='shadow_trades')}
                 FROM shadow_trades
                 WHERE user_id = :uid
                   AND created_at >= :start
                   AND created_at < :end
                   AND outcome IN ('TP_HIT', 'SL_HIT', 'TIMEOUT')
-                  AND features_snapshot IS NOT NULL
+                  AND source = ANY(:analysis_sources)
+                  AND {official_where('shadow_trades')}
                 ORDER BY created_at
                 LIMIT 50000
             """),
-            {"uid": str(user_id), "start": start, "end": end},
+            {
+                "uid": str(user_id),
+                "start": start,
+                "end": end,
+                "analysis_sources": analysis_sources,
+                **official_params(),
+            },
         )
     ).fetchall()
+    rows, invalid_count = filter_hash_valid_rows(rows)
+    if invalid_count:
+        logger.error("[PI dataset] excluded %d hash/contract-invalid rows", invalid_count)
 
     trades = []
     for row in rows:
@@ -333,6 +355,7 @@ async def _load_trades_for_window(
         trades.append({
             "profile_id": row.profile_id,
             "profile_name": row.profile_name,
+            "source": row.source,
             "symbol": row.symbol,
             "created_at": row.created_at,
             "outcome": outcome,
@@ -445,14 +468,20 @@ class CounterfactualCombinationMiner:
         discovery_end: datetime,
         validation_start: datetime,
         validation_end: datetime,
+        validation_policy: PIValidationPolicy,
+        analysis_sources: list[str],
     ) -> List[dict]:
         logger.info(
             "[CFMiner] Starting seed mining for user=%s run=%s", user_id, run_id
         )
 
         # Load discovery and validation trades once
-        disc_trades = await _load_trades_for_window(db, user_id, discovery_start, discovery_end)
-        val_trades = await _load_trades_for_window(db, user_id, validation_start, validation_end)
+        disc_trades = await _load_trades_for_window(
+            db, user_id, discovery_start, discovery_end, analysis_sources
+        )
+        val_trades = await _load_trades_for_window(
+            db, user_id, validation_start, validation_end, analysis_sources
+        )
 
         base_win_rate = base_metrics.get("base_win_rate", 0.0)
         safe_base_wr = max(base_win_rate, 0.001)
@@ -466,11 +495,17 @@ class CounterfactualCombinationMiner:
 
                 # Discovery window evaluation
                 disc_matching = [t for t in disc_trades if _evaluate_rules(t["features"], rules)]
-                disc_m = _compute_metrics_from_trades(disc_matching)
+                disc_missing = sum(_missing_features_count(t["features"], rules) for t in disc_trades)
+                disc_m = _window_metrics(
+                    disc_matching, disc_trades, discovery_start, discovery_end, disc_missing
+                )
 
                 # Validation window evaluation
                 val_matching = [t for t in val_trades if _evaluate_rules(t["features"], rules)]
-                val_m = _compute_metrics_from_trades(val_matching)
+                val_missing = sum(_missing_features_count(t["features"], rules) for t in val_trades)
+                val_m = _window_metrics(
+                    val_matching, val_trades, validation_start, validation_end, val_missing
+                )
 
                 # Overall (disc + val combined for champion_score)
                 all_matching = disc_matching + val_matching
@@ -505,6 +540,18 @@ class CounterfactualCombinationMiner:
                 )
 
                 confidence_level = _confidence_level_from_count(overall_m["total_cases"])
+                from .profile_validation_service import classify_validation
+                classification = classify_validation(
+                    discovery_metrics=disc_m,
+                    validation_metrics=val_m,
+                    discovery_start=discovery_start,
+                    discovery_end=discovery_end,
+                    validation_start=validation_start,
+                    validation_end=validation_end,
+                    missing_count=disc_missing + val_missing,
+                    policy=validation_policy,
+                )
+                val_m.update(classification)
 
                 comb = ProfileRuleCombination(
                     user_id=user_id,
@@ -542,14 +589,11 @@ class CounterfactualCombinationMiner:
                         "tp_30m_rate": disc_m["tp_30m_rate"],
                     },
                     validation_metrics_json={
-                        "total_cases": val_m["total_cases"],
-                        "wins": val_m["wins"],
-                        "losses": val_m["losses"],
-                        "win_rate": val_m["win_rate"],
-                        "avg_pnl_pct": val_m["avg_pnl_pct"],
-                        "tp_30m_rate": val_m["tp_30m_rate"],
+                        **val_m,
+                        "dataset_version": DATASET_VERSION,
+                        "label_version": LABEL_VERSION,
                     },
-                    status="discovered",
+                    status=classification["actionability_status"],
                 )
                 db.add(comb)
                 await db.flush()
@@ -563,6 +607,7 @@ class CounterfactualCombinationMiner:
                     "champion_score": champion_score,
                     "confidence_level": confidence_level,
                     "overfit_risk": overfit_risk,
+                    **classification,
                     **overall_m,
                 }
                 results.append(result_dict)
@@ -593,6 +638,8 @@ class DynamicCombinationGenerator:
         discovery_end: datetime,
         validation_start: datetime,
         validation_end: datetime,
+        validation_policy: PIValidationPolicy,
+        analysis_sources: list[str],
         max_combinations: int = 500,
     ) -> List[dict]:
         logger.info(
@@ -616,8 +663,12 @@ class DynamicCombinationGenerator:
         top_winning = winning[:20]
 
         # Load discovery trades
-        disc_trades = await _load_trades_for_window(db, user_id, discovery_start, discovery_end)
-        val_trades = await _load_trades_for_window(db, user_id, validation_start, validation_end)
+        disc_trades = await _load_trades_for_window(
+            db, user_id, discovery_start, discovery_end, analysis_sources
+        )
+        val_trades = await _load_trades_for_window(
+            db, user_id, validation_start, validation_end, analysis_sources
+        )
 
         base_win_rate = base_metrics.get("base_win_rate", 0.0)
         safe_base_wr = max(base_win_rate, 0.001)
@@ -637,6 +688,37 @@ class DynamicCombinationGenerator:
                 if saved >= max_combinations:
                     break
 
+                scopes = {
+                    (
+                        (bucket.get("evidence_json") or {}).get("source"),
+                        (bucket.get("evidence_json") or {}).get("profile_id"),
+                    )
+                    for bucket in combo
+                }
+                if len(scopes) != 1:
+                    continue
+                scope_source, scope_profile_id = next(iter(scopes))
+                if not scope_source:
+                    continue
+                scoped_disc_trades = [
+                    trade for trade in disc_trades
+                    if trade.get("source") == scope_source
+                    and (
+                        scope_profile_id is None
+                        or str(trade.get("profile_id")) == str(scope_profile_id)
+                    )
+                ]
+                scoped_val_trades = [
+                    trade for trade in val_trades
+                    if trade.get("source") == scope_source
+                    and (
+                        scope_profile_id is None
+                        or str(trade.get("profile_id")) == str(scope_profile_id)
+                    )
+                ]
+                if not scoped_disc_trades:
+                    continue
+
                 # Check for contradictions
                 if _has_contradictions(combo):
                     continue
@@ -650,15 +732,18 @@ class DynamicCombinationGenerator:
 
                 combo_name = "_AND_".join(b["bucket_label"] for b in combo)
                 # Canonical hash: stable across runs, based on sorted+normalised rules
-                combination_hash = _build_canonical_rules_hash(rules, user_id)
+                canonical_hash = _build_canonical_rules_hash(rules, user_id)
+                combination_hash = hashlib.sha256(
+                    f"{canonical_hash}|{scope_source}|{scope_profile_id}".encode()
+                ).hexdigest()[:32]
                 if combination_hash in _seen_hashes:
                     continue
                 _seen_hashes.add(combination_hash)
 
-                matching, disc_missing = _match_trades(disc_trades, rules)
+                matching, disc_missing = _match_trades(scoped_disc_trades, rules)
                 m = _window_metrics(
                     matching,
-                    disc_trades,
+                    scoped_disc_trades,
                     discovery_start,
                     discovery_end,
                     disc_missing,
@@ -667,11 +752,12 @@ class DynamicCombinationGenerator:
                 if m["total_cases"] < 5:
                     continue
 
-                lift_vs_base = m["win_rate"] / safe_base_wr
-                val_matching, val_missing = _match_trades(val_trades, rules)
+                scope_base_win_rate = _compute_metrics_from_trades(scoped_disc_trades)["win_rate"]
+                lift_vs_base = m["win_rate"] / max(scope_base_win_rate, 0.001)
+                val_matching, val_missing = _match_trades(scoped_val_trades, rules)
                 val_m = _window_metrics(
                     val_matching,
-                    val_trades,
+                    scoped_val_trades,
                     validation_start,
                     validation_end,
                     val_missing,
@@ -685,8 +771,21 @@ class DynamicCombinationGenerator:
                     validation_start=validation_start,
                     validation_end=validation_end,
                     missing_count=disc_missing + val_missing,
+                    policy=validation_policy,
                 )
                 val_m.update(validation)
+                m.update({
+                    "dataset_version": DATASET_VERSION,
+                    "label_version": LABEL_VERSION,
+                    "source": scope_source,
+                    "profile_id": scope_profile_id,
+                })
+                val_m.update({
+                    "dataset_version": DATASET_VERSION,
+                    "label_version": LABEL_VERSION,
+                    "source": scope_source,
+                    "profile_id": scope_profile_id,
+                })
                 from .algorithm_governance_service import source_profile_attribution
                 source_profiles, source_profile_ids = source_profile_attribution(
                     matching + val_matching

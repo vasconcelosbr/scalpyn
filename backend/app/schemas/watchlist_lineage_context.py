@@ -26,6 +26,9 @@ class WatchlistLineageContext:
     profile_id: Optional[str] = None
     profile_name: Optional[str] = None
     profile_version: Optional[datetime] = None
+    profile_version_id: Optional[str] = None
+    score_engine_version_id: Optional[str] = None
+    score_engine_config_hash: Optional[str] = None
     lineage_confidence: str = "EXACT"
     lineage_source: str = "pipeline_scan"
     lineage_resolved_at: Optional[datetime] = field(

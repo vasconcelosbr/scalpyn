@@ -4041,6 +4041,9 @@ async def _run_pipeline_scan():
                                 watchlist_name=wl.name,
                                 watchlist_level=wl.level,
                                 source_watchlist_id=str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
+                                profile_id=str(wl.profile_id) if wl.profile_id else None,
+                                profile_name=_wl_profile_name,
+                                profile_version=_wl_profile_version,
                             )
                         except Exception as _l3sim_exc:
                             logger.warning(

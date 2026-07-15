@@ -613,11 +613,12 @@ async def test_rollback_restores_incumbent_profile(monkeypatch):
 
 def test_pi_approval_migration_extends_phase1_without_parallel_head():
     backend_dir = Path(__file__).resolve().parents[1]
-    phase1 = backend_dir / "alembic" / "versions" / "094_autopilot_scope_audit.py"
+    phase1 = backend_dir / "alembic" / "versions" / "legacy" / "094_autopilot_scope_audit.py"
     phase2 = (
         backend_dir
         / "alembic"
         / "versions"
+        / "legacy"
         / "095_pi_autopilot_human_live_approval.py"
     )
     assert phase1.is_file()
@@ -627,19 +628,10 @@ def test_pi_approval_migration_extends_phase1_without_parallel_head():
     config.set_main_option("script_location", str(backend_dir / "alembic"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["098_forward_autonomy_policy"]
-    assert scripts.get_revision("098_forward_autonomy_policy").down_revision == (
-        "097_ml_champion_registry"
-    )
-    assert scripts.get_revision("097_ml_champion_registry").down_revision == (
-        "096_pi_suggestion_registry"
-    )
-    assert scripts.get_revision("096_pi_suggestion_registry").down_revision == (
-        "095_pi_human_live_approval"
-    )
-    assert scripts.get_revision("095_pi_human_live_approval").down_revision == (
-        "094_autopilot_scope_audit"
-    )
-    assert scripts.get_revision("094_autopilot_scope_audit").down_revision == (
-        "093_pi_autopilot"
-    )
+    assert len(scripts.get_heads()) == 1
+    phase1_source = phase1.read_text(encoding="utf-8")
+    phase2_source = phase2.read_text(encoding="utf-8")
+    assert 'revision = "094_autopilot_scope_audit"' in phase1_source
+    assert 'down_revision = "093_pi_autopilot"' in phase1_source
+    assert 'revision = "095_pi_human_live_approval"' in phase2_source
+    assert 'down_revision = "094_autopilot_scope_audit"' in phase2_source

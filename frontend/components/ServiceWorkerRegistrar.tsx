@@ -12,6 +12,7 @@ export function ServiceWorkerRegistrar() {
     ) {
       navigator.serviceWorker
         .register("/sw.js", { scope: "/" })
+        .then((registration) => registration.update().catch(() => {}))
         .catch(() => {/* SW registration failure is non-fatal */});
     }
   }, []);

@@ -16,6 +16,7 @@ isolation. DB persistence of the result lives in:
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import math
 from typing import Any, Dict, Optional
 
 # Thresholds — tunable, but never bypassable for the absolute rule (#13 below).
@@ -30,6 +31,14 @@ REQUIRED_CONFIG_KEYS = (
 APPROVED = "APPROVED"
 REJECTED = "REJECTED"
 BLOCKED = "BLOCKED"
+ABSOLUTE_MIN_TEST_AUC = 0.5
+
+
+def _finite_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    parsed = float(value)
+    return parsed if math.isfinite(parsed) else None
 
 
 def evaluate_promotion_gate(
@@ -43,7 +52,8 @@ def evaluate_promotion_gate(
         model_row: dict with at least the keys produced by a `SELECT *` (or the
             equivalent subset) of `ml_models` — specifically: `metrics_json`,
             `roc_auc`, `test_samples`, `feature_count`, `label_version`,
-            `model_lane`, `source_filter`, `dataset_contract_id`.
+            `model_lane`, `source_filter`, `dataset_contract_id`,
+            `label_contract_id`, and `feature_contract_id`.
 
     Returns:
         {
@@ -81,10 +91,14 @@ def evaluate_promotion_gate(
     test = metrics_json.get("test") or {}
     validation = metrics_json.get("validation") or {}
 
-    test_auc = test.get("roc_auc")
+    test_auc = _finite_float(test.get("roc_auc"))
     test_samples = test.get("samples") if test.get("samples") is not None else model_row.get("test_samples")
-    test_fpr = test.get("fpr")
-    val_auc = validation.get("roc_auc") if validation.get("roc_auc") is not None else model_row.get("roc_auc")
+    test_fpr = _finite_float(test.get("fpr"))
+    val_auc = _finite_float(
+        validation.get("roc_auc")
+        if validation.get("roc_auc") is not None
+        else model_row.get("roc_auc")
+    )
 
     reasons: list[str] = []
     rejected = False
@@ -94,6 +108,12 @@ def evaluate_promotion_gate(
     if test_auc is None:
         rejected = True
         reasons.append("missing_test_roc_auc")
+    elif test_auc < ABSOLUTE_MIN_TEST_AUC:
+        rejected = True
+        reasons.append(
+            f"test_roc_auc_below_absolute_floor:{test_auc:.4f}<"
+            f"{ABSOLUTE_MIN_TEST_AUC}"
+        )
     elif test_auc < min_test_auc:
         rejected = True
         reasons.append(f"test_roc_auc_below_min_threshold:{test_auc:.4f}<{min_test_auc}")
@@ -125,6 +145,7 @@ def evaluate_promotion_gate(
     test_net_ev = test.get("net_ev") if isinstance(test, dict) else None
     if test_net_ev is None:
         test_net_ev = metrics_json.get("test_net_ev")
+    test_net_ev = _finite_float(test_net_ev)
     if require_positive_net_ev:
         if test_net_ev is None:
             rejected = True
@@ -158,6 +179,14 @@ def evaluate_promotion_gate(
     if not dataset_contract_id:
         blocked = True
         reasons.append("missing_dataset_policy")
+
+    if not model_row.get("label_contract_id"):
+        blocked = True
+        reasons.append("missing_label_contract_id")
+
+    if not model_row.get("feature_contract_id"):
+        blocked = True
+        reasons.append("missing_feature_contract_id")
 
     for key in ("train_from", "train_to", "dataset_query_cutoff", "dataset_hash"):
         if not model_row.get(key):

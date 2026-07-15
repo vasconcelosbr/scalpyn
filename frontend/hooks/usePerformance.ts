@@ -3,7 +3,7 @@
 import useSWR from "swr";
 import { apiGet } from "@/lib/api";
 
-export type WindowKey = "1D" | "7D" | "30D" | "90D" | "MTD" | "YTD" | "ALL";
+export type WindowKey = "1D" | "7D" | "15D" | "30D" | "90D" | "MTD" | "YTD" | "ALL";
 
 export interface PerformanceFilter {
   window: WindowKey;
@@ -30,7 +30,7 @@ export interface SummaryResp {
   capital: { invested_usdt: number; spot_pnl_usdt: number; futures_pnl_usdt: number; open_positions: number };
   pnl: { total_usdt: number; roi_pct: number; fees_usdt: number; delta_vs_previous: number };
   stats: {
-    total_trades: number; wins: number; losses: number; win_rate_pct: number;
+    executed_trades: number; total_trades: number; wins: number; losses: number; win_rate_pct: number;
     profit_factor: number | null; sharpe: number | null;
     avg_win_usdt: number; avg_loss_usdt: number;
     biggest_win_usdt: number; biggest_loss_usdt: number;
@@ -44,6 +44,24 @@ export function usePerformanceSummary(filter: PerformanceFilter) {
     `/api/performance/summary?${qs(filter)}`,
     fetcher,
     { refreshInterval: filter.autoRefresh ? 30_000 : 0, revalidateOnFocus: false }
+  );
+}
+
+export interface GateAccountTodayResp {
+  available: boolean;
+  source?: string;
+  start_equity_usdt?: number;
+  current_equity_usdt?: number;
+  pnl_usdt?: number;
+  pnl_pct?: number;
+  unpriced_assets?: string[];
+}
+
+export function useGateAccountToday(autoRefresh: boolean) {
+  return useSWR<GateAccountTodayResp>(
+    "/api/performance/gate-account-today",
+    fetcher,
+    { refreshInterval: autoRefresh ? 30_000 : 0, revalidateOnFocus: false }
   );
 }
 

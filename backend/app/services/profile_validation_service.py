@@ -4,20 +4,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Iterable
 
-
-PI_MIN_DISCOVERY_TRADES = 30
-PI_MIN_VALIDATION_TRADES = 20
-PI_MIN_VALIDATION_LIFT = 1.15
-PI_MIN_VALIDATION_WINRATE_DELTA = 0.05
-PI_MAX_SINGLE_SYMBOL_SHARE = 0.40
-PI_MAX_SINGLE_DAY_SHARE = 0.40
-PI_MIN_DISTINCT_SYMBOLS = 3
-PI_MIN_DISTINCT_DAYS = 3
-PI_MIN_ASSOC_SUPPORT_VALIDATION = 0.02
-PI_MIN_ASSOC_CONFIDENCE_VALIDATION = 0.55
-PI_MIN_VALIDATION_LIFT_RETENTION = 0.70
+from .profile_intelligence_contract import PIValidationPolicy
 
 VALIDATED_SOURCE_TYPES = {
+    "counterfactual_seed",
     "counterfactual_dynamic",
     "association_rule",
     "optuna",
@@ -74,6 +64,7 @@ def classify_validation(
     validation_end: datetime,
     missing_count: int = 0,
     association_rule: bool = False,
+    policy: PIValidationPolicy,
 ) -> dict[str, Any]:
     discovery_count = int(discovery_metrics.get("total_cases", 0) or 0)
     validation_count = int(validation_metrics.get("total_cases", 0) or 0)
@@ -99,40 +90,40 @@ def classify_validation(
         validation_end,
     ):
         blocked_reason = "blocked_no_validation"
-    elif discovery_count < PI_MIN_DISCOVERY_TRADES:
+    elif discovery_count < policy.min_discovery_trades:
         blocked_reason = "blocked_low_discovery_support"
     elif validation_count == 0:
         blocked_reason = "blocked_no_validation"
-    elif validation_count < PI_MIN_VALIDATION_TRADES:
+    elif validation_count < policy.min_validation_trades:
         blocked_reason = "blocked_low_validation_support"
     elif missing_count > 0:
         blocked_reason = "blocked_missing_feature"
-    elif validation_lift < PI_MIN_VALIDATION_LIFT:
+    elif validation_lift < policy.min_validation_lift:
         blocked_reason = "blocked_validation_lift"
     elif (
         float(discovery_metrics.get("lift", 0) or 0) > 0
         and validation_lift
         / float(discovery_metrics.get("lift", 0) or 1)
-        < PI_MIN_VALIDATION_LIFT_RETENTION
+        < policy.min_validation_lift_retention
     ):
         blocked_reason = "blocked_validation_lift"
-    elif validation_win_rate < validation_base + PI_MIN_VALIDATION_WINRATE_DELTA:
+    elif validation_win_rate < validation_base + policy.min_validation_winrate_delta:
         blocked_reason = "blocked_validation_winrate"
     elif (
-        diversity["distinct_symbols"] < PI_MIN_DISTINCT_SYMBOLS
-        or diversity["max_single_symbol_share"] > PI_MAX_SINGLE_SYMBOL_SHARE
+        diversity["distinct_symbols"] < policy.min_distinct_symbols
+        or diversity["max_single_symbol_share"] > policy.max_single_symbol_share
     ):
         blocked_reason = "blocked_single_symbol_dependency"
     elif (
-        diversity["distinct_days"] < PI_MIN_DISTINCT_DAYS
-        or diversity["max_single_day_share"] > PI_MAX_SINGLE_DAY_SHARE
+        diversity["distinct_days"] < policy.min_distinct_days
+        or diversity["max_single_day_share"] > policy.max_single_day_share
     ):
         blocked_reason = "blocked_single_day_dependency"
     elif association_rule and (
         float(validation_metrics.get("support", 0) or 0)
-        < PI_MIN_ASSOC_SUPPORT_VALIDATION
+        < policy.min_assoc_support_validation
         or float(validation_metrics.get("confidence", 0) or 0)
-        < PI_MIN_ASSOC_CONFIDENCE_VALIDATION
+        < policy.min_assoc_confidence_validation
     ):
         blocked_reason = "blocked_low_validation_support"
 
@@ -149,12 +140,12 @@ def classify_validation(
         ),
         "no_missing_feature_pass": missing_count == 0,
         "no_single_symbol_dependency": (
-            diversity["distinct_symbols"] >= PI_MIN_DISTINCT_SYMBOLS
-            and diversity["max_single_symbol_share"] <= PI_MAX_SINGLE_SYMBOL_SHARE
+            diversity["distinct_symbols"] >= policy.min_distinct_symbols
+            and diversity["max_single_symbol_share"] <= policy.max_single_symbol_share
         ),
         "no_single_day_dependency": (
-            diversity["distinct_days"] >= PI_MIN_DISTINCT_DAYS
-            and diversity["max_single_day_share"] <= PI_MAX_SINGLE_DAY_SHARE
+            diversity["distinct_days"] >= policy.min_distinct_days
+            and diversity["max_single_day_share"] <= policy.max_single_day_share
         ),
     }
 

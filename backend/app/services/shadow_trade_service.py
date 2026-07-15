@@ -23,14 +23,17 @@ Princípios:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.backoffice import DecisionLog
@@ -74,32 +77,23 @@ class _SyntheticDecision:
 SHADOW_TRADE_AMOUNT_USDT = float(os.environ.get("SHADOW_TRADE_AMOUNT_USDT", "1000.0"))
 SHADOW_TIMEOUT_CANDLES = int(os.environ.get("SHADOW_TIMEOUT_CANDLES", "1440"))  # 24h de 1m
 SHADOW_LOOKBACK_MINUTES = int(os.environ.get("SHADOW_LOOKBACK_MINUTES", "10"))
-# ── Shadow-specific TP/SL overrides (Zero Hardcode) ──────────────────────────
-# When set, these override the spot engine profile's take_profit_pct /
-# max_drawdown_from_hwm_pct for shadow trade simulations. This decouples
-# the simulation band from the production config — e.g. SHADOW_TP_PCT=1.0
-# and SHADOW_SL_PCT=1.0 create a symmetric ±1% band for ML training while
-# the real profile can use different TP/SL targets.
-# 0.0 means "not overridden; fall back to spot engine config value".
-_SHADOW_TP_PCT_OVERRIDE = float(os.environ.get("SHADOW_TP_PCT", "0.0"))
+# Shadow SL may keep a dedicated safety override. TP always follows the active
+# Strategies Module configuration so simulated and strategy economics match.
 _SHADOW_SL_PCT_OVERRIDE = float(os.environ.get("SHADOW_SL_PCT", "0.0"))
 
 
 def _apply_barrier_params(user_config: dict, ml_config: dict) -> dict:
-    """Merge ATR barrier parameters from ml_config into user_config.
+    """Merge ML-owned SL barrier parameters into the strategy config.
 
     When shadow_barrier_mode='ATR_DYNAMIC', _create_from_decision overrides
-    sl_pct using per-asset atr_percent. shadow_tp_pct is an independent ML
-    policy and overrides tp_pct in every barrier mode.
+    sl_pct using per-asset atr_percent. TP remains owned by the Strategies
+    Module so every shadow source follows the GUI's take_profit_pct.
     """
     user_config["shadow_barrier_mode"] = ml_config.get("shadow_barrier_mode", "FIXED")
     user_config["sl_atr_multiplier"]   = ml_config.get("shadow_atr_multiplier_sl", 1.5)
     user_config["sl_min_pct"]          = ml_config.get("shadow_barrier_min_pct", 0.5)
     user_config["sl_max_pct"]          = ml_config.get("shadow_barrier_max_pct", 3.0)
-    # shadow_tp_pct: when set, overrides tp_pct for all modes (P0-1 fix: 1.5)
-    _tp_override = ml_config.get("shadow_tp_pct")
-    if _tp_override:
-        user_config["shadow_tp_pct"] = float(_tp_override)
+    user_config.pop("shadow_tp_pct", None)
     return user_config
 
 
@@ -111,12 +105,18 @@ def _merge_ml_shadow_config(user_config: dict, ml_config: dict) -> dict:
     return merged
 
 
+def _resolve_shadow_tp_pct(user_config: Dict[str, Any]) -> float:
+    """Resolve TP exclusively from the active Strategies Module payload."""
+    return float(user_config.get("tp_pct") or 0.0)
+
+
 async def _load_ml_shadow_config(user_id, user_config: dict) -> dict:
     """Load the active ML config for legacy execution-gate shadow writers.
 
     execute_buy passes the spot-engine barrier to safe_create_from_symbol_skip
     and safe_bulk_create_from_user_skip.  Without this merge those canonical
-    L3 writers silently ignore shadow_tp_pct/shadow_barrier_mode.
+    L3 writers receive the ML-owned SL barrier policy while preserving the
+    Strategies Module TP.
     """
     from ..database import CeleryAsyncSessionLocal
     from ..models.config_profile import ConfigProfile
@@ -174,8 +174,83 @@ _VALID_SHADOW_SOURCES = (
     SHADOW_SOURCE_L3_LAB,
 )
 
+_ACTIVE_PROFILE_SHADOW_STATUSES = ("RUNNING", "PENDING")
+_ACTIVE_PROFILE_SHADOW_EXISTS_SQL = text("""
+    SELECT 1
+      FROM shadow_trades
+     WHERE profile_id = CAST(:profile_id AS UUID)
+       AND symbol = :symbol
+       AND source = :source
+       AND status IN ('RUNNING', 'PENDING')
+     LIMIT 1
+""")
+_ACTIVE_PROFILE_SHADOW_SYMBOLS_SQL = text("""
+    SELECT DISTINCT symbol
+      FROM shadow_trades
+     WHERE profile_id = CAST(:profile_id AS UUID)
+       AND source = :source
+       AND status IN ('RUNNING', 'PENDING')
+""")
+
 
 # ── helpers internos ─────────────────────────────────────────────────────────
+
+
+def _integrity_error_constraint_name(exc: IntegrityError) -> Optional[str]:
+    """Best-effort extraction of the PostgreSQL constraint/index name."""
+    orig = getattr(exc, "orig", None)
+    diag = getattr(orig, "diag", None)
+    name = getattr(diag, "constraint_name", None)
+    if name:
+        return str(name)
+
+    message = str(orig or exc)
+    if "uq_shadow_lab_active_profile_symbol" in message:
+        return "uq_shadow_lab_active_profile_symbol"
+    return None
+
+
+def _is_active_profile_shadow_conflict(exc: IntegrityError) -> bool:
+    """Return True when the partial unique active-profile dedup fired."""
+    return _integrity_error_constraint_name(exc) == "uq_shadow_lab_active_profile_symbol"
+
+
+async def _has_active_profile_shadow(
+    db: AsyncSession,
+    profile_id: Any,
+    symbol: str,
+    source: str,
+) -> bool:
+    """Fast preflight for active profile-attributed shadows."""
+    if not profile_id or not symbol or not source:
+        return False
+    result = await db.execute(
+        _ACTIVE_PROFILE_SHADOW_EXISTS_SQL,
+        {
+            "profile_id": str(profile_id),
+            "symbol": symbol,
+            "source": source,
+        },
+    )
+    return result.first() is not None
+
+
+async def _load_active_profile_shadow_symbols(
+    db: AsyncSession,
+    profile_id: Any,
+    source: str,
+) -> set[str]:
+    """Load currently active symbols for one profile/source pair."""
+    if not profile_id or not source:
+        return set()
+    result = await db.execute(
+        _ACTIVE_PROFILE_SHADOW_SYMBOLS_SQL,
+        {
+            "profile_id": str(profile_id),
+            "source": source,
+        },
+    )
+    return {row.symbol for row in result.fetchall()}
 
 
 def _validate_temporal_param(
@@ -625,7 +700,14 @@ _INSERT_SHADOW_SQL = text("""
         lineage_confidence, lineage_source, lineage_resolved_at,
         ml_model_id, ml_probability, final_priority_score, model_lane, ranking_id,
         model_version, threshold_used, score_status, gate_action, reason_codes,
-        ml_gate_enabled, orchestrator_payload
+        ml_gate_enabled, orchestrator_payload,
+        event_id, snapshot_id, exchange, timeframe,
+        profile_version_id, score_engine_version_id,
+        feature_schema_version, feature_extractor_version, capture_contract_version,
+        label_contract_version, barrier_contract_version,
+        features_captured_at, features_coverage, feature_hash,
+        profile_config_hash, score_engine_config_hash,
+        lineage_status, eligible_for_training
     ) VALUES (
         gen_random_uuid(),
         :decision_id, :user_id, :symbol, :strategy, :direction,
@@ -645,7 +727,14 @@ _INSERT_SHADOW_SQL = text("""
         :model_lane, CAST(:ranking_id AS UUID),
         :model_version, :threshold_used, :score_status, :gate_action,
         CAST(:reason_codes AS JSONB), :ml_gate_enabled,
-        CAST(:orchestrator_payload AS JSONB)
+        CAST(:orchestrator_payload AS JSONB),
+        CAST(:event_id AS UUID), CAST(:snapshot_id AS UUID), :exchange, :timeframe,
+        CAST(:profile_version_id AS UUID), CAST(:score_engine_version_id AS UUID),
+        :feature_schema_version, :feature_extractor_version, :capture_contract_version,
+        :label_contract_version, :barrier_contract_version,
+        :features_captured_at, :features_coverage, :feature_hash,
+        :profile_config_hash, :score_engine_config_hash,
+        :lineage_status, :eligible_for_training
     )
     ON CONFLICT DO NOTHING
     RETURNING id
@@ -671,9 +760,12 @@ async def _create_from_decision(
     Caller deve estar dentro de uma sessão own-session (usar
     ``safe_create_*`` abaixo).
     """
-    import json
+    from ..ml.feature_contract_v2 import (
+        capture_native_snapshot,
+        coverage as feature_coverage,
+    )
 
-    tp_pct = float(user_config.get("tp_pct") or 0.0)
+    tp_pct = _resolve_shadow_tp_pct(user_config)
     sl_pct = float(user_config.get("sl_pct") or 0.0)
     timeout_candles = int(user_config.get("timeout_candles") or SHADOW_TIMEOUT_CANDLES)
     # TTT policy snapshot — lê do user_config (propagado do caller) ou usa defaults.
@@ -683,13 +775,7 @@ async def _create_from_decision(
     # Fase 3 (migration 071) — barreira mode e pcts aplicados (snapshot na abertura).
     barrier_mode = user_config.get("shadow_barrier_mode", "FIXED")
 
-    # shadow_tp_pct is the ML dataset's economic contract. It must not depend
-    # on the production spot barrier mode; otherwise a spot-engine TP edit
-    # silently changes the supervised population while ml.shadow_tp_pct stays
-    # unchanged.
-    _shadow_tp = user_config.get("shadow_tp_pct")
-    if _shadow_tp:
-        tp_pct = float(_shadow_tp)
+    # TP is resolved exclusively from the Strategies Module configuration.
 
     # P0-1: ATR_DYNAMIC — SL computed per-asset from atr_percent at entry.
     if barrier_mode == "ATR_DYNAMIC":
@@ -700,6 +786,44 @@ async def _create_from_decision(
             _min_sl  = float(user_config.get("sl_min_pct", 0.5))
             _max_sl  = float(user_config.get("sl_max_pct", 3.0))
             sl_pct = max(_min_sl, min(_max_sl, _atr_pct * _sl_mult))
+
+    # Task #303: ``decision.id`` é ``None`` para ``_SyntheticDecision``
+    # (fallback "live_l3") — vira NULL na coluna após migration 057.
+    # Lineage resolution: prefer explicit lineage over decision attributes.
+    # For canonical L3, decision.profile_id is NULL but lineage.profile_id
+    # carries wl.profile_id — fills the gap without touching existing L3_LAB logic.
+    _lin_profile_id = (
+        lineage.profile_id
+        if lineage and lineage.profile_id
+        else getattr(decision, "profile_id", None)
+    )
+    _lin_profile_name = (
+        lineage.profile_name
+        if lineage and lineage.profile_name
+        else getattr(decision, "profile_name", None)
+    )
+    _lin_profile_version = (
+        lineage.profile_version
+        if lineage and lineage.profile_version
+        else getattr(decision, "profile_version", None)
+    )
+    normalized_source = (
+        source if source in _VALID_SHADOW_SOURCES else SHADOW_SOURCE_L3
+    )
+
+    if _lin_profile_id and await _has_active_profile_shadow(
+        db,
+        _lin_profile_id,
+        decision.symbol,
+        normalized_source,
+    ):
+        logger.debug(
+            "[shadow] active profile shadow already open profile_id=%s symbol=%s source=%s",
+            _lin_profile_id,
+            decision.symbol,
+            normalized_source,
+        )
+        return None
 
     # Entry-at-decision-time (Task 2026-05-13): preço corrente no
     # instante da decisão ALLOW vira entry_price imediatamente.
@@ -741,110 +865,170 @@ async def _create_from_decision(
     # with gate labels after closure.
     if extra_config:
         config_snap.update(extra_config)
-    features_snap = _build_features_snapshot(decision)
+    native_capture = capture_native_snapshot(_build_features_snapshot(decision))
+    features_snap = native_capture.snapshot
+    feature_errors = list(native_capture.errors)
+    config_hash = hashlib.sha256(
+        json.dumps(
+            config_snap, sort_keys=True, separators=(",", ":"), default=str
+        ).encode("utf-8")
+    ).hexdigest()
 
-    # Task #303: ``decision.id`` é ``None`` para ``_SyntheticDecision``
-    # (fallback "live_l3") — vira NULL na coluna após migration 057.
-    # Lineage resolution: prefer explicit lineage over decision attributes.
-    # For canonical L3, decision.profile_id is NULL but lineage.profile_id
-    # carries wl.profile_id — fills the gap without touching existing L3_LAB logic.
-    _lin_profile_id = (
-        lineage.profile_id
-        if lineage and lineage.profile_id
-        else getattr(decision, "profile_id", None)
+    _lin_profile_version_id = (
+        getattr(lineage, "profile_version_id", None) if lineage else None
     )
-    _lin_profile_name = (
-        lineage.profile_name
-        if lineage and lineage.profile_name
-        else getattr(decision, "profile_name", None)
+    _lin_score_engine_version_id = (
+        getattr(lineage, "score_engine_version_id", None) if lineage else None
     )
-    _lin_profile_version = (
-        lineage.profile_version
-        if lineage and lineage.profile_version
-        else getattr(decision, "profile_version", None)
+    _lin_profile_config_hash = None
+    _lin_score_engine_config_hash = (
+        getattr(lineage, "score_engine_config_hash", None) if lineage else None
+    )
+    if _lin_profile_id and not (
+        _lin_profile_version_id and _lin_score_engine_version_id
+    ):
+        version_row = (await db.execute(text("""
+            SELECT pv.id, pv.score_engine_version_id, pv.config_hash,
+                   sev.config_hash AS score_engine_config_hash
+              FROM profile_versions pv
+              JOIN score_engine_versions sev ON sev.id = pv.score_engine_version_id
+             WHERE pv.profile_id = CAST(:profile_id AS UUID)
+               AND pv.status IN ('SHADOW', 'CHAMPION')
+             ORDER BY pv.version_number DESC
+             LIMIT 1
+        """), {"profile_id": str(_lin_profile_id)})).mappings().first()
+        if version_row:
+            _lin_profile_version_id = version_row["id"]
+            _lin_score_engine_version_id = version_row["score_engine_version_id"]
+            _lin_profile_config_hash = version_row["config_hash"]
+            _lin_score_engine_config_hash = version_row["score_engine_config_hash"]
+
+    lineage_complete = bool(
+        _lin_profile_version_id and _lin_score_engine_version_id
+    )
+    lineage_status = (
+        "INVALID_FEATURES" if feature_errors
+        else "EXACT" if lineage_complete
+        else "UNRESOLVED_VERSION"
     )
 
-    res = await db.execute(
-        _INSERT_SHADOW_SQL,
-        {
-            "decision_id": getattr(decision, "id", None),
-            "user_id": decision.user_id,
-            "symbol": decision.symbol,
-            "strategy": decision.strategy,
-            # Vocabulário canônico (Task #292): UPPERCASE
-            # 'SPOT' | 'LONG' | 'SHORT' | 'NEUTRAL'. Herda de
-            # ``decisions_log.direction`` quando presente; fallback
-            # para 'SPOT' (shadow é spot-only por enquanto, e os 515
-            # registros antigos com direction=NULL no decisions_log
-            # eram todos spot — ver migration 049).
-            "direction": (getattr(decision, "direction", None) or "SPOT"),
-            "amount_usdt": SHADOW_TRADE_AMOUNT_USDT,
-            "entry_price": entry_price,
-            "entry_timestamp": entry_ts,
-            "tp_price": tp_price,
-            "sl_price": sl_price,
-            "tp_pct": tp_pct or None,
-            "sl_pct": sl_pct or None,
-            "timeout_candles": timeout_candles,
-            # TTT policy snapshot (migration 065)
-            "ttt_enabled": ttt_enabled,
-            "ttt_tp_pct": ttt_tp_pct,
-            "ttt_timeout_minutes": ttt_timeout_minutes,
-            # Fase 3 barrier metadata (migration 071)
-            "barrier_mode": barrier_mode,
-            "tp_pct_applied": tp_pct or None,
-            "sl_pct_applied": sl_pct or None,
-            # Profile attribution: lineage overrides decision attrs for canonical L3.
-            "profile_id": _lin_profile_id,
-            "profile_version": _lin_profile_version,
-            "profile_name": _lin_profile_name,
-            "strategy_type": (
-                "PROFILE_L3" if _lin_profile_id else None
-            ),
-            "status": initial_status,
-            # skip_reason intencionalmente NULL: textos como NOT_TRADABLE/COOLDOWN
-            # poluem o dataset do XGBoost (categórica de alta cardinalidade e
-            # correlacionada ao desfecho de forma espúria — pré-execução, não pós).
-            # Mantemos a coluna para compat de schema; o motivo do skip continua
-            # logado em decisions_log/INFO logs para debugging operacional.
-            "skip_reason": None,
-            # Task #321: origem da promoção (L3 canônico vs ArrowL1
-            # custom). Default 'L3' preserva back-compat com os
-            # callers existentes (``safe_create_from_symbol_skip``,
-            # ``safe_bulk_create_from_user_skip``).
-            "source": source if source in _VALID_SHADOW_SOURCES else SHADOW_SOURCE_L3,
-            "config_snapshot": json.dumps(config_snap, default=str),
-            "features_snapshot": json.dumps(features_snap, default=str),
-            # Bookmark do monitor: começa em entry_ts para que a
-            # primeira janela de candles avaliada seja "tudo após a
-            # entrada" (e não tudo desde sempre).
-            "last_processed_time": entry_ts,
-            # Watchlist lineage (migration 103)
-            "watchlist_id": lineage.watchlist_id if lineage else None,
-            "watchlist_name": lineage.watchlist_name if lineage else None,
-            "watchlist_level": lineage.watchlist_level if lineage else None,
-            "source_watchlist_id": lineage.source_watchlist_id if lineage else None,
-            "lineage_confidence": lineage.lineage_confidence if lineage else None,
-            "lineage_source": lineage.lineage_source if lineage else None,
-            "lineage_resolved_at": lineage.lineage_resolved_at if lineage else None,
-            # ML lineage (migration 106, Fase 8) — only set when the caller
-            # actually computed a score for this decision; never inferred.
-            "ml_model_id": getattr(lineage, "ml_model_id", None) if lineage else None,
-            "ml_probability": getattr(lineage, "ml_probability", None) if lineage else None,
-            "final_priority_score": getattr(lineage, "final_priority_score", None) if lineage else None,
-            "model_lane": getattr(lineage, "model_lane", None) if lineage else None,
-            "ranking_id": getattr(lineage, "ranking_id", None) if lineage else None,
-            "model_version": getattr(lineage, "model_version", None) if lineage else None,
-            "threshold_used": getattr(lineage, "threshold_used", None) if lineage else None,
-            "score_status": getattr(lineage, "score_status", None) if lineage else None,
-            "gate_action": getattr(lineage, "gate_action", None) if lineage else None,
-            "reason_codes": json.dumps(getattr(lineage, "reason_codes", None) or [], default=str),
-            "ml_gate_enabled": bool(getattr(lineage, "ml_gate_enabled", False)) if lineage else False,
-            "orchestrator_payload": json.dumps(
-                getattr(lineage, "orchestrator_payload", None) or {}, default=str
-            ),
-        },
-    )
+    try:
+        async with db.begin_nested():
+            res = await db.execute(
+                _INSERT_SHADOW_SQL,
+                {
+                    "decision_id": getattr(decision, "id", None),
+                    "user_id": decision.user_id,
+                    "symbol": decision.symbol,
+                    "strategy": decision.strategy,
+                    # Vocabulário canônico (Task #292): UPPERCASE
+                    # 'SPOT' | 'LONG' | 'SHORT' | 'NEUTRAL'. Herda de
+                    # ``decisions_log.direction`` quando presente; fallback
+                    # para 'SPOT' (shadow é spot-only por enquanto, e os 515
+                    # registros antigos com direction=NULL no decisions_log
+                    # eram todos spot — ver migration 049).
+                    "direction": (getattr(decision, "direction", None) or "SPOT"),
+                    "amount_usdt": SHADOW_TRADE_AMOUNT_USDT,
+                    "entry_price": entry_price,
+                    "entry_timestamp": entry_ts,
+                    "tp_price": tp_price,
+                    "sl_price": sl_price,
+                    "tp_pct": tp_pct or None,
+                    "sl_pct": sl_pct or None,
+                    "timeout_candles": timeout_candles,
+                    # TTT policy snapshot (migration 065)
+                    "ttt_enabled": ttt_enabled,
+                    "ttt_tp_pct": ttt_tp_pct,
+                    "ttt_timeout_minutes": ttt_timeout_minutes,
+                    # Fase 3 barrier metadata (migration 071)
+                    "barrier_mode": barrier_mode,
+                    "tp_pct_applied": tp_pct or None,
+                    "sl_pct_applied": sl_pct or None,
+                    # Profile attribution: lineage overrides decision attrs for canonical L3.
+                    "profile_id": _lin_profile_id,
+                    "profile_version": _lin_profile_version,
+                    "profile_name": _lin_profile_name,
+                    "strategy_type": (
+                        "PROFILE_L3" if _lin_profile_id else None
+                    ),
+                    "status": initial_status,
+                    # skip_reason intencionalmente NULL: textos como NOT_TRADABLE/COOLDOWN
+                    # poluem o dataset do XGBoost (categórica de alta cardinalidade e
+                    # correlacionada ao desfecho de forma espúria — pré-execução, não pós).
+                    # Mantemos a coluna para compat de schema; o motivo do skip continua
+                    # logado em decisions_log/INFO logs para debugging operacional.
+                    "skip_reason": None,
+                    # Task #321: origem da promoção (L3 canônico vs ArrowL1
+                    # custom). Default 'L3' preserva back-compat com os
+                    # callers existentes (``safe_create_from_symbol_skip``,
+                    # ``safe_bulk_create_from_user_skip``).
+                    "source": normalized_source,
+                    "config_snapshot": json.dumps(config_snap, default=str),
+                    "features_snapshot": json.dumps(features_snap, default=str),
+                    # Bookmark do monitor: começa em entry_ts para que a
+                    # primeira janela de candles avaliada seja "tudo após a
+                    # entrada" (e não tudo desde sempre).
+                    "last_processed_time": entry_ts,
+                    # Watchlist lineage (migration 103)
+                    "watchlist_id": lineage.watchlist_id if lineage else None,
+                    "watchlist_name": lineage.watchlist_name if lineage else None,
+                    "watchlist_level": lineage.watchlist_level if lineage else None,
+                    "source_watchlist_id": lineage.source_watchlist_id if lineage else None,
+                    "lineage_confidence": lineage.lineage_confidence if lineage else None,
+                    "lineage_source": lineage.lineage_source if lineage else None,
+                    "lineage_resolved_at": lineage.lineage_resolved_at if lineage else None,
+                    # ML lineage (migration 106, Fase 8) — only set when the caller
+                    # actually computed a score for this decision; never inferred.
+                    "ml_model_id": getattr(lineage, "ml_model_id", None) if lineage else None,
+                    "ml_probability": getattr(lineage, "ml_probability", None) if lineage else None,
+                    "final_priority_score": getattr(lineage, "final_priority_score", None) if lineage else None,
+                    "model_lane": getattr(lineage, "model_lane", None) if lineage else None,
+                    "ranking_id": getattr(lineage, "ranking_id", None) if lineage else None,
+                    "model_version": getattr(lineage, "model_version", None) if lineage else None,
+                    "threshold_used": getattr(lineage, "threshold_used", None) if lineage else None,
+                    "score_status": getattr(lineage, "score_status", None) if lineage else None,
+                    "gate_action": getattr(lineage, "gate_action", None) if lineage else None,
+                    "reason_codes": json.dumps(getattr(lineage, "reason_codes", None) or [], default=str),
+                    "ml_gate_enabled": bool(getattr(lineage, "ml_gate_enabled", False)) if lineage else False,
+                    "orchestrator_payload": json.dumps(
+                        getattr(lineage, "orchestrator_payload", None) or {}, default=str
+                    ),
+                    "event_id": str(uuid4()),
+                    "snapshot_id": str(uuid4()),
+                    "exchange": "gate",
+                    "timeframe": "5m",
+                    "profile_version_id": (
+                        str(_lin_profile_version_id) if _lin_profile_version_id else None
+                    ),
+                    "score_engine_version_id": (
+                        str(_lin_score_engine_version_id)
+                        if _lin_score_engine_version_id else None
+                    ),
+                    "feature_schema_version": native_capture.feature_schema_version,
+                    "feature_extractor_version": native_capture.feature_extractor_version,
+                    "capture_contract_version": native_capture.capture_contract_version,
+                    "label_contract_version": "positive_net_return_v1",
+                    "barrier_contract_version": f"shadow_{str(barrier_mode).lower()}_v1",
+                    "features_captured_at": native_capture.captured_at,
+                    "features_coverage": feature_coverage(features_snap),
+                    "feature_hash": native_capture.snapshot_hash,
+                    "profile_config_hash": _lin_profile_config_hash or config_hash,
+                    "score_engine_config_hash": _lin_score_engine_config_hash,
+                    "lineage_status": lineage_status,
+                    "eligible_for_training": lineage_complete and not feature_errors,
+                },
+            )
+    except IntegrityError as exc:
+        if _lin_profile_id and _is_active_profile_shadow_conflict(exc):
+            logger.info(
+                "[shadow] duplicate active profile shadow skipped profile_id=%s symbol=%s source=%s",
+                _lin_profile_id,
+                decision.symbol,
+                normalized_source,
+            )
+            return None
+        raise
+
     row = res.fetchone()
     return row[0] if row is not None else None
 
@@ -1187,7 +1371,7 @@ async def create_shadows_for_new_decisions(
             if cfg_row:
                 se_cfg = SpotEngineConfig.from_config_json(cfg_row.config_json)
                 user_config = {
-                    "tp_pct": _SHADOW_TP_PCT_OVERRIDE or float(se_cfg.selling.take_profit_pct),
+                    "tp_pct": float(se_cfg.selling.take_profit_pct),
                     "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
                         se_cfg.sell_flow.kill_switch.max_drawdown_from_hwm_pct
                     ),
@@ -1213,7 +1397,7 @@ async def create_shadows_for_new_decisions(
     if not user_config:
         _se_defaults = SpotEngineConfig()
         user_config = {
-            "tp_pct": _SHADOW_TP_PCT_OVERRIDE or float(_se_defaults.selling.take_profit_pct),
+            "tp_pct": float(_se_defaults.selling.take_profit_pct),
             "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
                 _se_defaults.sell_flow.kill_switch.max_drawdown_from_hwm_pct
             ),
@@ -1350,7 +1534,7 @@ async def create_shadows_for_rejected_decisions(user_id, decision_ids: List[int]
             if cfg_row:
                 se_cfg = SpotEngineConfig.from_config_json(cfg_row.config_json)
                 user_config = {
-                    "tp_pct": _SHADOW_TP_PCT_OVERRIDE or float(se_cfg.selling.take_profit_pct),
+                    "tp_pct": float(se_cfg.selling.take_profit_pct),
                     "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
                         se_cfg.sell_flow.kill_switch.max_drawdown_from_hwm_pct
                     ),
@@ -1376,7 +1560,7 @@ async def create_shadows_for_rejected_decisions(user_id, decision_ids: List[int]
     if not user_config:
         _se_defaults = SpotEngineConfig()
         user_config = {
-            "tp_pct": _SHADOW_TP_PCT_OVERRIDE or float(_se_defaults.selling.take_profit_pct),
+            "tp_pct": float(_se_defaults.selling.take_profit_pct),
             "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
                 _se_defaults.sell_flow.kill_switch.max_drawdown_from_hwm_pct
             ),
@@ -1494,7 +1678,7 @@ async def create_l3_rejected_inline_shadows(
             if se_row:
                 _se = SpotEngineConfig.from_config_json(se_row.config_json)
                 user_config = {
-                    "tp_pct": _SHADOW_TP_PCT_OVERRIDE or float(_se.selling.take_profit_pct),
+                    "tp_pct": float(_se.selling.take_profit_pct),
                     "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
                         _se.sell_flow.kill_switch.max_drawdown_from_hwm_pct
                     ),
@@ -1509,7 +1693,7 @@ async def create_l3_rejected_inline_shadows(
     if not user_config:
         _se_defaults = SpotEngineConfig()
         user_config = {
-            "tp_pct": _SHADOW_TP_PCT_OVERRIDE or float(_se_defaults.selling.take_profit_pct),
+            "tp_pct": float(_se_defaults.selling.take_profit_pct),
             "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
                 _se_defaults.sell_flow.kill_switch.max_drawdown_from_hwm_pct
             ),
@@ -1556,6 +1740,9 @@ async def create_l3_rejected_inline_shadows(
 
     created = 0
     rate_limited = 0
+    rejected_features = await _load_strategy_lab_features_by_symbol(
+        [str(d.get("symbol")) for d in decisions if d.get("symbol")]
+    )
 
     for d in decisions:
         if shadows_last_hour + created >= max_per_hour:
@@ -1572,6 +1759,9 @@ async def create_l3_rejected_inline_shadows(
         metrics["l3_reasons"] = d.get("reasons")
         metrics["source"] = "l3_rejected_inline"
         metrics["execution_id"] = execution_id
+        canonical_features = rejected_features.get(symbol)
+        if canonical_features:
+            metrics["indicators_snapshot"] = dict(canonical_features)
         _asset = d.get("_asset") or {}
         if isinstance(_asset, dict):
             _price = _asset.get("current_price") or _asset.get("price")
@@ -1682,7 +1872,7 @@ async def create_l1_spectrum_shadows(
             if se_row:
                 _se = SpotEngineConfig.from_config_json(se_row.config_json)
                 user_config = {
-                    "tp_pct": _SHADOW_TP_PCT_OVERRIDE or float(_se.selling.take_profit_pct),
+                    "tp_pct": float(_se.selling.take_profit_pct),
                     "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
                         _se.sell_flow.kill_switch.max_drawdown_from_hwm_pct
                     ),
@@ -1705,7 +1895,7 @@ async def create_l1_spectrum_shadows(
     if not user_config:
         _se_defaults = SpotEngineConfig()
         user_config = {
-            "tp_pct": _SHADOW_TP_PCT_OVERRIDE or float(_se_defaults.selling.take_profit_pct),
+            "tp_pct": float(_se_defaults.selling.take_profit_pct),
             "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
                 _se_defaults.sell_flow.kill_switch.max_drawdown_from_hwm_pct
             ),
@@ -2003,7 +2193,7 @@ async def create_l3_simulated_shadows(
             if se_row:
                 _se = SpotEngineConfig.from_config_json(se_row.config_json)
                 user_config = {
-                    "tp_pct": _SHADOW_TP_PCT_OVERRIDE or float(_se.selling.take_profit_pct),
+                    "tp_pct": float(_se.selling.take_profit_pct),
                     "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
                         _se.sell_flow.kill_switch.max_drawdown_from_hwm_pct
                     ),
@@ -2021,7 +2211,7 @@ async def create_l3_simulated_shadows(
     if not user_config:
         _se_defaults = SpotEngineConfig()
         user_config = {
-            "tp_pct": _SHADOW_TP_PCT_OVERRIDE or float(_se_defaults.selling.take_profit_pct),
+            "tp_pct": float(_se_defaults.selling.take_profit_pct),
             "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
                 _se_defaults.sell_flow.kill_switch.max_drawdown_from_hwm_pct
             ),
@@ -2029,6 +2219,10 @@ async def create_l3_simulated_shadows(
         }
     _apply_barrier_params(user_config, ml_config)
     user_config["ml_fee_roundtrip_pct"] = ml_config.get("ml_fee_roundtrip_pct")
+
+    simulated_features = await _load_strategy_lab_features_by_symbol(
+        [str(d.get("symbol")) for d in decisions if d.get("symbol")]
+    )
 
     from ..schemas.watchlist_lineage_context import WatchlistLineageContext
     from datetime import datetime as _dt, timezone as _tz
@@ -2039,6 +2233,9 @@ async def create_l3_simulated_shadows(
             watchlist_name=watchlist_name,
             watchlist_level=watchlist_level,
             source_watchlist_id=source_watchlist_id,
+            profile_id=str(profile_id) if profile_id else None,
+            profile_name=profile_name,
+            profile_version=profile_version,
             lineage_confidence="EXACT",
             lineage_source="pipeline_scan",
             lineage_resolved_at=_dt.now(_tz.utc),
@@ -2081,6 +2278,9 @@ async def create_l3_simulated_shadows(
         metrics["l3_score"] = d.get("score")
         metrics["source"] = "l3_simulated_inline"
         metrics["execution_id"] = execution_id
+        canonical_features = simulated_features.get(symbol)
+        if canonical_features:
+            metrics["indicators_snapshot"] = dict(canonical_features)
         _asset = d.get("_asset") or {}
         if isinstance(_asset, dict):
             _price = _asset.get("current_price") or _asset.get("price")
@@ -2833,8 +3033,116 @@ async def create_watchlist_spot_shadows(
 # source='L3_LAB' keeps lab shadows separate from canonical L3 so that
 # ux_shadow_running_user_source (profile_id IS NULL partial) never fires.
 # Multiple profiles can shadow the same symbol simultaneously.
-# Idempotency: bare ON CONFLICT DO NOTHING catches uq_shadow_lab_profile_symbol_bucket
-# (profile_id, symbol, source, hour_bucket) when the same profile rescans.
+# Idempotency is two-layered:
+# 1. preflight skip for an already active (profile_id, symbol, source)
+# 2. bare ON CONFLICT DO NOTHING for residual same-hour rescans/races
+#    caught by uq_shadow_lab_profile_symbol_bucket.
+
+
+async def _strategy_lab_snapshot_contract(
+    db: AsyncSession,
+    *,
+    profile_id: Optional[str],
+    features: Dict[str, Any],
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    from ..ml.feature_contract_v2 import (
+        capture_native_snapshot,
+        coverage as feature_coverage,
+    )
+
+    native_capture = capture_native_snapshot(features)
+    normalized = native_capture.snapshot
+    feature_errors = list(native_capture.errors)
+    version_row = None
+    if profile_id:
+        version_row = (await db.execute(text("""
+            SELECT pv.id AS profile_version_id, pv.config_hash,
+                   pv.score_engine_version_id, sev.config_hash AS score_config_hash
+              FROM profile_versions pv
+              JOIN score_engine_versions sev ON sev.id = pv.score_engine_version_id
+             WHERE pv.profile_id = CAST(:profile_id AS UUID)
+               AND pv.status IN ('SHADOW', 'CHAMPION')
+             ORDER BY pv.version_number DESC
+             LIMIT 1
+        """), {"profile_id": profile_id})).mappings().first()
+    lineage_complete = bool(
+        version_row
+        and version_row["profile_version_id"]
+        and version_row["score_engine_version_id"]
+    )
+    contract = {
+        "event_id": str(uuid4()),
+        "snapshot_id": str(uuid4()),
+        "exchange": "gate",
+        "timeframe": "5m",
+        "profile_version_id": (
+            str(version_row["profile_version_id"]) if version_row else None
+        ),
+        "score_engine_version_id": (
+            str(version_row["score_engine_version_id"]) if version_row else None
+        ),
+        "feature_schema_version": native_capture.feature_schema_version,
+        "feature_extractor_version": native_capture.feature_extractor_version,
+        "capture_contract_version": native_capture.capture_contract_version,
+        "label_contract_version": "positive_net_return_v1",
+        "barrier_contract_version": "shadow_fixed_v1",
+        "features_captured_at": native_capture.captured_at,
+        "features_coverage": feature_coverage(normalized),
+        "feature_hash": native_capture.snapshot_hash,
+        "profile_config_hash": version_row["config_hash"] if version_row else None,
+        "score_engine_config_hash": (
+            version_row["score_config_hash"] if version_row else None
+        ),
+        "lineage_status": (
+            "INVALID_FEATURES" if feature_errors
+            else "EXACT" if lineage_complete
+            else "UNRESOLVED_VERSION"
+        ),
+        "eligible_for_training": lineage_complete and not feature_errors,
+    }
+    return normalized, contract
+
+
+def _flatten_indicator_snapshot_values(snapshot: Any) -> Dict[str, Any]:
+    """Flatten a nested ``indicators_snapshot`` payload into scalar features."""
+    if not isinstance(snapshot, dict):
+        return {}
+    flat: Dict[str, Any] = {}
+    for key, entry in snapshot.items():
+        if isinstance(entry, dict) and "value" in entry:
+            flat[key] = entry.get("value")
+        else:
+            flat[key] = entry
+    return flat
+
+
+async def _load_strategy_lab_features_by_symbol(
+    symbols: List[str],
+) -> Dict[str, Dict[str, Any]]:
+    """Load the canonical merged-indicator feature set for Strategy Lab symbols."""
+    unique_symbols = sorted({symbol for symbol in symbols if symbol})
+    if not unique_symbols:
+        return {}
+
+    from ..database import CeleryAsyncSessionLocal
+    from .indicators_provider import get_merged_indicators
+
+    try:
+        async with CeleryAsyncSessionLocal() as ind_db:
+            merged = await get_merged_indicators(ind_db, unique_symbols)
+            features_by_symbol: Dict[str, Dict[str, Any]] = {}
+            for sym, merged_item in merged.items():
+                flat = merged_item.as_flat_dict()
+                if isinstance(flat, dict) and flat:
+                    features_by_symbol[sym] = flat
+            return features_by_symbol
+    except Exception:
+        logger.exception(
+            "[StrategyLab] merged indicators fetch failed symbols=%d",
+            len(unique_symbols),
+        )
+        return {}
+
 
 _INSERT_STRATEGY_LAB_SQL = text("""
     INSERT INTO shadow_trades (
@@ -2848,7 +3156,14 @@ _INSERT_STRATEGY_LAB_SQL = text("""
         barrier_mode, tp_pct_applied, sl_pct_applied,
         profile_id, profile_version, profile_name, strategy_type, rules_snapshot,
         watchlist_id, watchlist_name, watchlist_level, source_watchlist_id,
-        lineage_confidence, lineage_source, lineage_resolved_at
+        lineage_confidence, lineage_source, lineage_resolved_at,
+        event_id, snapshot_id, exchange, timeframe,
+        profile_version_id, score_engine_version_id,
+        feature_schema_version, feature_extractor_version, capture_contract_version,
+        label_contract_version, barrier_contract_version,
+        features_captured_at, features_coverage, feature_hash,
+        profile_config_hash, score_engine_config_hash,
+        lineage_status, eligible_for_training
     ) VALUES (
         gen_random_uuid(),
         NULL, :user_id, :symbol, :strategy, :direction,
@@ -2864,7 +3179,14 @@ _INSERT_STRATEGY_LAB_SQL = text("""
         :strategy_type, CAST(:rules_snapshot AS JSONB),
         CAST(:watchlist_id AS UUID), :watchlist_name, :watchlist_level,
         CAST(:source_watchlist_id AS UUID),
-        :lineage_confidence, :lineage_source, :lineage_resolved_at
+        :lineage_confidence, :lineage_source, :lineage_resolved_at,
+        CAST(:event_id AS UUID), CAST(:snapshot_id AS UUID), :exchange, :timeframe,
+        CAST(:profile_version_id AS UUID), CAST(:score_engine_version_id AS UUID),
+        :feature_schema_version, :feature_extractor_version, :capture_contract_version,
+        :label_contract_version, :barrier_contract_version,
+        :features_captured_at, :features_coverage, :feature_hash,
+        :profile_config_hash, :score_engine_config_hash,
+        :lineage_status, :eligible_for_training
     )
     ON CONFLICT DO NOTHING
     RETURNING id
@@ -2894,7 +3216,8 @@ async def create_strategy_lab_shadows(
     - decision_id = NULL always (bypasses _persist_decision_logs deduplication)
     - source = 'L3_LAB' (distinct from canonical L3; monitor tracks by status, not source)
     - profile_id set (distinguishes Strategy Lab from canonical L3)
-    - ON CONFLICT DO NOTHING (catches uq_shadow_lab_profile_symbol_bucket per-hour dedup)
+    - preflight skip for existing active profile+symbol+source
+    - ON CONFLICT DO NOTHING as residual same-hour/race dedup
     - Fire-and-forget pattern: logs errors, never raises
 
     Returns count of new shadow rows inserted.
@@ -2929,7 +3252,7 @@ async def create_strategy_lab_shadows(
             if se_row:
                 try:
                     _se = SpotEngineConfig.from_config_json(se_row.config_json)
-                    tp_pct = _SHADOW_TP_PCT_OVERRIDE or float(_se.selling.take_profit_pct)
+                    tp_pct = float(_se.selling.take_profit_pct)
                     sl_pct = _SHADOW_SL_PCT_OVERRIDE or float(
                         _se.sell_flow.kill_switch.max_drawdown_from_hwm_pct
                     )
@@ -2941,10 +3264,35 @@ async def create_strategy_lab_shadows(
     created = 0
     profile_id_str = str(profile_id) if profile_id is not None else None
     rules_json = _json.dumps(rules_snapshot, default=str) if rules_snapshot else None
+    strategy_lab_features = await _load_strategy_lab_features_by_symbol(
+        [str(d.get("symbol")) for d in allow_decisions if d.get("symbol")]
+    )
+    active_symbols: set[str] = set()
+
+    if profile_id_str:
+        try:
+            async with CeleryAsyncSessionLocal() as active_db:
+                active_symbols = await _load_active_profile_shadow_symbols(
+                    active_db,
+                    profile_id_str,
+                    SHADOW_SOURCE_L3_LAB,
+                )
+        except Exception:
+            logger.debug(
+                "[StrategyLab-allow] active shadow preflight load failed profile=%s",
+                profile_name,
+            )
 
     for d in allow_decisions:
         symbol = d.get("symbol")
         if not symbol:
+            continue
+        if symbol in active_symbols:
+            logger.debug(
+                "[StrategyLab-allow] active shadow already open symbol=%s profile=%s",
+                symbol,
+                profile_name,
+            )
             continue
 
         # Get current market price from asset dict
@@ -2969,14 +3317,10 @@ async def create_strategy_lab_shadows(
 
         # Build features snapshot from decision metrics
         _metrics = d.get("metrics") or {}
-        _snap = _metrics.get("indicators_snapshot") or {}
-        features_flat: Dict[str, Any] = {}
-        if isinstance(_snap, dict):
-            for key, entry in _snap.items():
-                if isinstance(entry, dict) and "value" in entry:
-                    features_flat[key] = entry.get("value")
-                else:
-                    features_flat[key] = entry
+        features_flat = dict(strategy_lab_features.get(symbol) or {})
+        if not features_flat:
+            _snap = _metrics.get("indicators_snapshot") or {}
+            features_flat = _flatten_indicator_snapshot_values(_snap)
 
         config_snap = {
             "tp_pct": tp_pct,
@@ -2994,49 +3338,70 @@ async def create_strategy_lab_shadows(
         try:
             async with CeleryAsyncSessionLocal() as own_db:
                 async with own_db.begin():
-                    res = await own_db.execute(
-                        _INSERT_STRATEGY_LAB_SQL,
-                        {
-                            "user_id": user_id,
-                            "symbol": symbol,
-                            "strategy": d.get("strategy"),
-                            "direction": d.get("direction", "SPOT"),
-                            "amount_usdt": SHADOW_TRADE_AMOUNT_USDT,
-                            "entry_price": entry_price,
-                            "entry_timestamp": promotion_at,
-                            "tp_price": tp_price,
-                            "sl_price": sl_price,
-                            "tp_pct": tp_pct or None,
-                            "sl_pct": sl_pct or None,
-                            "timeout_candles": timeout_candles,
-                            "status": initial_status,
-                            "source": SHADOW_SOURCE_L3_LAB,
-                            "config_snapshot": _json.dumps(config_snap, default=str),
-                            "features_snapshot": _json.dumps(features_flat, default=str),
-                            "last_processed_time": promotion_at,
-                            "ttt_enabled": ttt_enabled,
-                            "ttt_tp_pct": ttt_tp_pct,
-                            "ttt_timeout_minutes": ttt_timeout_minutes,
-                            "barrier_mode": "FIXED",
-                            "tp_pct_applied": tp_pct or None,
-                            "sl_pct_applied": sl_pct or None,
-                            "profile_id": profile_id_str,
-                            "profile_version": profile_version,
-                            "profile_name": profile_name,
-                            "strategy_type": strategy_type,
-                            "rules_snapshot": rules_json,
-                            "watchlist_id": watchlist_id,
-                            "watchlist_name": watchlist_name,
-                            "watchlist_level": watchlist_level,
-                            "source_watchlist_id": source_watchlist_id,
-                            "lineage_confidence": "EXACT" if watchlist_id else None,
-                            "lineage_source": "pipeline_scan" if watchlist_id else None,
-                            "lineage_resolved_at": promotion_at if watchlist_id else None,
-                        },
+                    features_normalized, snapshot_contract = (
+                        await _strategy_lab_snapshot_contract(
+                            own_db,
+                            profile_id=profile_id_str,
+                            features=features_flat,
+                        )
                     )
+                    try:
+                        async with own_db.begin_nested():
+                            res = await own_db.execute(
+                                _INSERT_STRATEGY_LAB_SQL,
+                                {
+                                    **snapshot_contract,
+                                    "user_id": user_id,
+                                    "symbol": symbol,
+                                    "strategy": d.get("strategy"),
+                                    "direction": d.get("direction", "SPOT"),
+                                    "amount_usdt": SHADOW_TRADE_AMOUNT_USDT,
+                                    "entry_price": entry_price,
+                                    "entry_timestamp": promotion_at,
+                                    "tp_price": tp_price,
+                                    "sl_price": sl_price,
+                                    "tp_pct": tp_pct or None,
+                                    "sl_pct": sl_pct or None,
+                                    "timeout_candles": timeout_candles,
+                                    "status": initial_status,
+                                    "source": SHADOW_SOURCE_L3_LAB,
+                                    "config_snapshot": _json.dumps(config_snap, default=str),
+                                    "features_snapshot": _json.dumps(features_normalized, default=str),
+                                    "last_processed_time": promotion_at,
+                                    "ttt_enabled": ttt_enabled,
+                                    "ttt_tp_pct": ttt_tp_pct,
+                                    "ttt_timeout_minutes": ttt_timeout_minutes,
+                                    "barrier_mode": "FIXED",
+                                    "tp_pct_applied": tp_pct or None,
+                                    "sl_pct_applied": sl_pct or None,
+                                    "profile_id": profile_id_str,
+                                    "profile_version": profile_version,
+                                    "profile_name": profile_name,
+                                    "strategy_type": strategy_type,
+                                    "rules_snapshot": rules_json,
+                                    "watchlist_id": watchlist_id,
+                                    "watchlist_name": watchlist_name,
+                                    "watchlist_level": watchlist_level,
+                                    "source_watchlist_id": source_watchlist_id,
+                                    "lineage_confidence": "EXACT" if watchlist_id else None,
+                                    "lineage_source": "pipeline_scan" if watchlist_id else None,
+                                    "lineage_resolved_at": promotion_at if watchlist_id else None,
+                                },
+                            )
+                    except IntegrityError as exc:
+                        if _is_active_profile_shadow_conflict(exc):
+                            logger.info(
+                                "[StrategyLab-allow] duplicate active shadow skipped symbol=%s profile=%s",
+                                symbol,
+                                profile_name,
+                            )
+                            active_symbols.add(symbol)
+                            continue
+                        raise
                     row = res.fetchone()
                     if row is not None:
                         created += 1
+                        active_symbols.add(symbol)
                         logger.debug(
                             "[StrategyLab-allow] created id=%s symbol=%s profile=%s",
                             row[0], symbol, profile_name,
@@ -3076,7 +3441,7 @@ async def create_strategy_lab_rejected_shadows(
 
     Same design as create_strategy_lab_shadows but for BLOCK decisions.
     source='L3_LAB' — monitor tracks by status, not source.
-    Uses uq_shadow_lab_profile_symbol_bucket for idempotency.
+    Uses active-symbol preflight plus ON CONFLICT for residual dedup/races.
     Fire-and-forget: logs errors, never raises.
     """
     import json as _json
@@ -3108,7 +3473,7 @@ async def create_strategy_lab_rejected_shadows(
             if se_row:
                 try:
                     _se = SpotEngineConfig.from_config_json(se_row.config_json)
-                    tp_pct = _SHADOW_TP_PCT_OVERRIDE or float(_se.selling.take_profit_pct)
+                    tp_pct = float(_se.selling.take_profit_pct)
                     sl_pct = _SHADOW_SL_PCT_OVERRIDE or float(
                         _se.sell_flow.kill_switch.max_drawdown_from_hwm_pct
                     )
@@ -3120,10 +3485,35 @@ async def create_strategy_lab_rejected_shadows(
     created = 0
     profile_id_str = str(profile_id) if profile_id is not None else None
     rules_json = _json.dumps(rules_snapshot, default=str) if rules_snapshot else None
+    strategy_lab_features = await _load_strategy_lab_features_by_symbol(
+        [str(d.get("symbol")) for d in block_decisions if d.get("symbol")]
+    )
+    active_symbols: set[str] = set()
+
+    if profile_id_str:
+        try:
+            async with CeleryAsyncSessionLocal() as active_db:
+                active_symbols = await _load_active_profile_shadow_symbols(
+                    active_db,
+                    profile_id_str,
+                    SHADOW_SOURCE_L3_LAB,
+                )
+        except Exception:
+            logger.debug(
+                "[StrategyLab-block] active shadow preflight load failed profile=%s",
+                profile_name,
+            )
 
     for d in block_decisions:
         symbol = d.get("symbol")
         if not symbol:
+            continue
+        if symbol in active_symbols:
+            logger.debug(
+                "[StrategyLab-block] active shadow already open symbol=%s profile=%s",
+                symbol,
+                profile_name,
+            )
             continue
 
         _asset = assets_by_symbol.get(symbol) or d.get("_asset") or {}
@@ -3146,14 +3536,10 @@ async def create_strategy_lab_rejected_shadows(
             initial_status = "PENDING"
 
         _metrics = d.get("metrics") or {}
-        _snap = _metrics.get("indicators_snapshot") or {}
-        features_flat: Dict[str, Any] = {}
-        if isinstance(_snap, dict):
-            for key, entry in _snap.items():
-                if isinstance(entry, dict) and "value" in entry:
-                    features_flat[key] = entry.get("value")
-                else:
-                    features_flat[key] = entry
+        features_flat = dict(strategy_lab_features.get(symbol) or {})
+        if not features_flat:
+            _snap = _metrics.get("indicators_snapshot") or {}
+            features_flat = _flatten_indicator_snapshot_values(_snap)
 
         config_snap = {
             "tp_pct": tp_pct,
@@ -3173,49 +3559,70 @@ async def create_strategy_lab_rejected_shadows(
         try:
             async with CeleryAsyncSessionLocal() as own_db:
                 async with own_db.begin():
-                    res = await own_db.execute(
-                        _INSERT_STRATEGY_LAB_SQL,
-                        {
-                            "user_id": user_id,
-                            "symbol": symbol,
-                            "strategy": d.get("strategy"),
-                            "direction": d.get("direction", "SPOT"),
-                            "amount_usdt": SHADOW_TRADE_AMOUNT_USDT,
-                            "entry_price": entry_price,
-                            "entry_timestamp": promotion_at,
-                            "tp_price": tp_price,
-                            "sl_price": sl_price,
-                            "tp_pct": tp_pct or None,
-                            "sl_pct": sl_pct or None,
-                            "timeout_candles": timeout_candles,
-                            "status": initial_status,
-                            "source": SHADOW_SOURCE_L3_LAB,
-                            "config_snapshot": _json.dumps(config_snap, default=str),
-                            "features_snapshot": _json.dumps(features_flat, default=str),
-                            "last_processed_time": promotion_at,
-                            "ttt_enabled": ttt_enabled,
-                            "ttt_tp_pct": ttt_tp_pct,
-                            "ttt_timeout_minutes": ttt_timeout_minutes,
-                            "barrier_mode": "FIXED",
-                            "tp_pct_applied": tp_pct or None,
-                            "sl_pct_applied": sl_pct or None,
-                            "profile_id": profile_id_str,
-                            "profile_version": profile_version,
-                            "profile_name": profile_name,
-                            "strategy_type": strategy_type,
-                            "rules_snapshot": rules_json,
-                            "watchlist_id": watchlist_id,
-                            "watchlist_name": watchlist_name,
-                            "watchlist_level": watchlist_level,
-                            "source_watchlist_id": source_watchlist_id,
-                            "lineage_confidence": "EXACT" if watchlist_id else None,
-                            "lineage_source": "pipeline_scan" if watchlist_id else None,
-                            "lineage_resolved_at": promotion_at if watchlist_id else None,
-                        },
+                    features_normalized, snapshot_contract = (
+                        await _strategy_lab_snapshot_contract(
+                            own_db,
+                            profile_id=profile_id_str,
+                            features=features_flat,
+                        )
                     )
+                    try:
+                        async with own_db.begin_nested():
+                            res = await own_db.execute(
+                                _INSERT_STRATEGY_LAB_SQL,
+                                {
+                                    **snapshot_contract,
+                                    "user_id": user_id,
+                                    "symbol": symbol,
+                                    "strategy": d.get("strategy"),
+                                    "direction": d.get("direction", "SPOT"),
+                                    "amount_usdt": SHADOW_TRADE_AMOUNT_USDT,
+                                    "entry_price": entry_price,
+                                    "entry_timestamp": promotion_at,
+                                    "tp_price": tp_price,
+                                    "sl_price": sl_price,
+                                    "tp_pct": tp_pct or None,
+                                    "sl_pct": sl_pct or None,
+                                    "timeout_candles": timeout_candles,
+                                    "status": initial_status,
+                                    "source": SHADOW_SOURCE_L3_LAB,
+                                    "config_snapshot": _json.dumps(config_snap, default=str),
+                                    "features_snapshot": _json.dumps(features_normalized, default=str),
+                                    "last_processed_time": promotion_at,
+                                    "ttt_enabled": ttt_enabled,
+                                    "ttt_tp_pct": ttt_tp_pct,
+                                    "ttt_timeout_minutes": ttt_timeout_minutes,
+                                    "barrier_mode": "FIXED",
+                                    "tp_pct_applied": tp_pct or None,
+                                    "sl_pct_applied": sl_pct or None,
+                                    "profile_id": profile_id_str,
+                                    "profile_version": profile_version,
+                                    "profile_name": profile_name,
+                                    "strategy_type": strategy_type,
+                                    "rules_snapshot": rules_json,
+                                    "watchlist_id": watchlist_id,
+                                    "watchlist_name": watchlist_name,
+                                    "watchlist_level": watchlist_level,
+                                    "source_watchlist_id": source_watchlist_id,
+                                    "lineage_confidence": "EXACT" if watchlist_id else None,
+                                    "lineage_source": "pipeline_scan" if watchlist_id else None,
+                                    "lineage_resolved_at": promotion_at if watchlist_id else None,
+                                },
+                            )
+                    except IntegrityError as exc:
+                        if _is_active_profile_shadow_conflict(exc):
+                            logger.info(
+                                "[StrategyLab-block] duplicate active shadow skipped symbol=%s profile=%s",
+                                symbol,
+                                profile_name,
+                            )
+                            active_symbols.add(symbol)
+                            continue
+                        raise
                     row = res.fetchone()
                     if row is not None:
                         created += 1
+                        active_symbols.add(symbol)
                         logger.debug(
                             "[StrategyLab-block] created id=%s symbol=%s profile=%s",
                             row[0], symbol, profile_name,

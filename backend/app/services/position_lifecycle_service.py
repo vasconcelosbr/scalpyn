@@ -55,6 +55,25 @@ def _f(v: Any) -> float:
         return 0.0
 
 
+def _fee_in_quote(fee: Any, fee_currency: Any, symbol: str, price: float) -> float:
+    """Return a Gate fee in the symbol's quote currency.
+
+    Spot buy fees are commonly charged in the purchased base asset. Gate's
+    payload reports that asset quantity, so it must be multiplied by the fill
+    price before it can participate in USDT P&L.
+    """
+    amount = _f(fee)
+    currency = str(fee_currency or "").upper()
+    parts = symbol.upper().replace("-", "_").split("_")
+    base = parts[0] if parts else ""
+    quote = parts[-1] if len(parts) > 1 else ""
+    if not amount or not currency or currency == quote:
+        return amount
+    if currency == base:
+        return amount * price
+    return 0.0
+
+
 class _Lot:
     __slots__ = ("qty_open", "qty_total", "price", "fee_total", "trade_id",
                  "order_id", "ts", "role")
@@ -153,7 +172,7 @@ class PositionLifecycleService:
             if qty <= 0:
                 continue
             price = _f(fill.price)
-            fee = _f(fill.fee)
+            fee = _fee_in_quote(fill.fee, fill.fee_currency, symbol, price)
             ts = fill.executed_at if isinstance(fill.executed_at, datetime) else None
             if ts is None:
                 continue

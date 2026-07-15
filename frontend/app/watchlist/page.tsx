@@ -639,6 +639,15 @@ interface FuturesComponents {
   order_flow_short?: number;
 }
 
+interface CryptoEVSummary {
+  score: number | null;
+  state: string;
+  n_trades: number;
+  n_excluded_unreplayable?: number | null;
+  w?: number | null;
+  computed_at?: string | null;
+}
+
 interface FuturesAsset {
   symbol: string;
   score_long: number | null;
@@ -661,6 +670,7 @@ interface FuturesAsset {
   ml_probability?: number | null;
   ml_final_score?: number | null;
   blocked_by_ml?: boolean | null;
+  crypto_ev?: CryptoEVSummary | null;
 }
 
 function ScorePill({ value, color }: { value: number | null; color: string }) {
@@ -675,6 +685,34 @@ function ScorePill({ value, color }: { value: number | null; color: string }) {
       </div>
       <span className="text-[10px] text-[#94A3B8] tabular-nums w-7 text-right">{value.toFixed(0)}</span>
     </div>
+  );
+}
+
+function cryptoEvClass(state: string | null | undefined): string {
+  if (state === 'FAVORABLE') return 'bg-[#34D399]/10 text-[#34D399] border-[#34D399]/20';
+  if (state === 'RISKY') return 'bg-[#FBBF24]/10 text-[#FBBF24] border-[#FBBF24]/20';
+  if (state === 'AVOID') return 'bg-[#F87171]/10 text-[#F87171] border-[#F87171]/20';
+  if (state === 'NEUTRAL') return 'bg-[#1E2433] text-[#94A3B8] border-[#334155]';
+  return 'bg-[#0A0C14] text-[#4B5563] border-[#1A2035]';
+}
+
+function CryptoEVBadge({ value }: { value?: CryptoEVSummary | null }) {
+  if (!value || value.score == null) return <span className="text-[#4B5563]">-</span>;
+  const tip = [
+    `Crypto EV: ${Number(value.score).toFixed(1)}`,
+    value.state ? `state ${value.state}` : null,
+    `N=${value.n_trades ?? 0}`,
+    value.n_excluded_unreplayable != null ? `unreplayable=${value.n_excluded_unreplayable}` : null,
+    value.w != null ? `w=${Number(value.w).toFixed(2)}` : null,
+    value.computed_at ? `as of ${value.computed_at}` : null,
+  ].filter(Boolean).join(' | ');
+  return (
+    <span
+      className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border tabular-nums ${cryptoEvClass(value.state)}`}
+      title={tip}
+    >
+      {Number(value.score).toFixed(0)}
+    </span>
   );
 }
 
@@ -835,7 +873,7 @@ function FuturesAssetTable({
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full text-xs min-w-[700px]">
+          <table className="w-full text-xs min-w-[760px]">
             <thead>
               <tr className="border-b border-[#1A2035] bg-[#060810]">
                 <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium w-6"></th>
@@ -846,6 +884,7 @@ function FuturesAssetTable({
                 <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium min-w-[110px]">Score SHORT</th>
                 <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium min-w-[110px]">Confidence</th>
                 <th className="px-3 py-2.5 text-center text-[#4B5563] font-medium">ML</th>
+                <th className="px-3 py-2.5 text-center text-[#4B5563] font-medium">EV</th>
                 <th className="px-3 py-2.5 text-center text-[#4B5563] font-medium">Entry Long</th>
                 <th className="px-3 py-2.5 text-center text-[#4B5563] font-medium">Entry Short</th>
                 <th className="px-3 py-2.5 text-right text-[#4B5563] font-medium">Preço</th>
@@ -912,6 +951,9 @@ function FuturesAssetTable({
                         )}
                       </td>
                       <td className="px-3 py-2.5 text-center">
+                        <CryptoEVBadge value={asset.crypto_ev} />
+                      </td>
+                      <td className="px-3 py-2.5 text-center">
                         <span className={`text-[9px] font-medium ${asset.entry_long_blocked ? 'text-red-400' : 'text-emerald-400'}`}>
                           {asset.entry_long_blocked ? '🔒 Bloq.' : '✓ Open'}
                         </span>
@@ -930,7 +972,7 @@ function FuturesAssetTable({
                     </tr>
                     {isOpen && (
                       <tr key={`${asset.symbol}-drilldown`} className="border-b border-[#1A2035]/60">
-                        <td colSpan={12} className="p-0">
+                        <td colSpan={13} className="p-0">
                           <FuturesDrilldown asset={asset} />
                         </td>
                       </tr>

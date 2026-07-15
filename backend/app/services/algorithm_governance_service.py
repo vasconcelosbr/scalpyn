@@ -51,6 +51,13 @@ def suggestion_registry_block_reasons(suggestion: Any) -> list[str]:
         "not_actionable",
     }:
         reasons.append("suggestion_not_actionable")
+    dataset_version = str(getattr(suggestion, "dataset_version", None) or "")
+    if not dataset_version.startswith("pi-native-point-in-time-v1:"):
+        reasons.append("dataset_not_official_native")
+    if getattr(suggestion, "feature_schema_version", None) != "entry_features_v2":
+        reasons.append("feature_schema_not_official")
+    if getattr(suggestion, "label_version", None) != "shadow_outcome-v1":
+        reasons.append("label_contract_not_official")
     return reasons
 
 

@@ -3,9 +3,9 @@ import numpy as np
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
-from app.ml.feature_extractor import FEATURE_COLUMNS, ML_EXCLUDED_FIELDS, extract_features
-from app.ml.gcs_model_loader import get_model, NoEligibleModelError
-from app.ml.prediction_probability import predict_positive_probability
+from .feature_extractor import FEATURE_COLUMNS, ML_EXCLUDED_FIELDS, extract_features
+from .gcs_model_loader import get_model, NoEligibleModelError
+from .prediction_probability import predict_positive_probability
 
 logger = logging.getLogger(__name__)
 

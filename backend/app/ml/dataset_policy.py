@@ -643,6 +643,9 @@ def governance_flags_for_model(model_row: Dict[str, Any]) -> Dict[str, Any]:
     test_n   = model_row.get("test_samples")
     fc_json  = model_row.get("feature_columns_json")
     metrics  = model_row.get("metrics_json") or {}
+    predictive_status = model_row.get("predictive_status")
+    calibration_authority = model_row.get("calibration_authority") is True
+    rule_generation_authority = model_row.get("rule_generation_authority") is True
 
     test_auc  = (metrics.get("test") or {}).get("roc_auc")
     test_prec = (metrics.get("test") or {}).get("precision")
@@ -684,6 +687,18 @@ def governance_flags_for_model(model_row: Dict[str, Any]) -> Dict[str, Any]:
     # can explain what to avoid, but must never drive production ALLOW/BLOCK.
     if lane == "L3_REJECTED_PROFILE":
         blocked.append("REJECTED_SOURCE_DIAGNOSTIC_ONLY")
+
+    if lane in {
+        "L3_INTELLIGENCE",
+        "L3_APPROVED_INTELLIGENCE",
+        "L3_CONTEXTUAL_INTELLIGENCE",
+    }:
+        if predictive_status != "PREDICTIVE_APPROVED_FOR_INTELLIGENCE":
+            blocked.append("PREDICTIVE_INTELLIGENCE_NOT_APPROVED")
+        if not calibration_authority:
+            blocked.append("CALIBRATION_AUTHORITY_DENIED")
+        if not rule_generation_authority:
+            blocked.append("RULE_GENERATION_AUTHORITY_DENIED")
 
     # Determine allowed_usage
     if blocked:

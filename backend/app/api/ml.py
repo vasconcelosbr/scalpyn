@@ -18,6 +18,7 @@ import jwt as pyjwt
 from ..config import settings
 from ..database import get_db
 from ..services.config_service import config_service
+from ..services.crypto_ev_score_service import crypto_ev_score_service
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +168,23 @@ async def train_model(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Training failed: {str(e)}",
         )
+
+
+@router.get("/models/health")
+async def get_ml_models_health(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    crypto_ev_config = await config_service.get_config(db, "crypto_ev", user_id)
+    if not crypto_ev_config:
+        return {
+            "crypto_ev_ml_component": {
+                "healthy": False,
+                "reason": "crypto_ev_config_missing",
+            }
+        }
+    health = await crypto_ev_score_service.ml_component_health(db, crypto_ev_config)
+    return {"crypto_ev_ml_component": health}
 
 
 @router.post("/evaluate")
@@ -379,7 +397,11 @@ async def list_ml_models(
             feature_count, feature_schema_version,
             dataset_query_cutoff,
             label_version, metrics_json, target_window_seconds,
-            model_lane, source_filter
+            model_lane, source_filter,
+            dataset_contract_id, label_contract_id, feature_contract_id,
+            descriptive_status, predictive_status,
+            calibration_authority, rule_generation_authority,
+            autopilot_authority, execution_authority, governance_reason
         FROM ml_models
         ORDER BY version DESC
     """))
@@ -396,6 +418,9 @@ async def list_ml_models(
             "feature_columns_json": r["feature_columns_json"],
             "metrics_json":        mj,
             "hyperparams":         hp,
+            "predictive_status":   r["predictive_status"],
+            "calibration_authority": bool(r["calibration_authority"]),
+            "rule_generation_authority": bool(r["rule_generation_authority"]),
         })
         models.append({
             "id":                   str(r["id"]),
@@ -426,6 +451,9 @@ async def list_ml_models(
             "notes":                r["notes"],
             "model_lane":           r["model_lane"],
             "source_filter":        r["source_filter"],
+            "dataset_contract_id":  str(r["dataset_contract_id"]) if r["dataset_contract_id"] else None,
+            "label_contract_id":    str(r["label_contract_id"]) if r["label_contract_id"] else None,
+            "feature_contract_id":  str(r["feature_contract_id"]) if r["feature_contract_id"] else None,
             "feature_columns_json":  r["feature_columns_json"],
             "feature_columns_hash":  r["feature_columns_hash"],
             "feature_count":         r["feature_count"],
@@ -434,6 +462,13 @@ async def list_ml_models(
             "label_version":         r["label_version"],
             "metrics_json":          mj,
             "target_window_seconds": r["target_window_seconds"],
+            "descriptive_status":    r["descriptive_status"],
+            "predictive_status":     r["predictive_status"],
+            "calibration_authority": bool(r["calibration_authority"]),
+            "rule_generation_authority": bool(r["rule_generation_authority"]),
+            "autopilot_authority":   bool(r["autopilot_authority"]),
+            "execution_authority":   bool(r["execution_authority"]),
+            "governance_reason":     r["governance_reason"] or {},
         })
     return {"models": models}
 
@@ -497,9 +532,15 @@ async def list_approved_intelligence_models(
         SELECT id, version, model_lane, label_version, metrics_json,
                decision_threshold, created_at
         FROM ml_models
-        WHERE model_lane IN ('L3_INTELLIGENCE', 'L3_APPROVED_INTELLIGENCE')
-          AND (metrics_json->'intelligence_gate'->>'status') = 'APPROVED'
-          AND (metrics_json->'intelligence_gate'->>'execution_authority') = 'false'
+        WHERE model_lane IN (
+            'L3_INTELLIGENCE',
+            'L3_APPROVED_INTELLIGENCE',
+            'L3_CONTEXTUAL_INTELLIGENCE'
+        )
+          AND predictive_status = 'PREDICTIVE_APPROVED_FOR_INTELLIGENCE'
+          AND calibration_authority = true
+          AND rule_generation_authority = true
+          AND execution_authority = false
         ORDER BY created_at DESC
     """))
     models = []
@@ -536,6 +577,7 @@ async def evaluate_model_promotion_gate(
 
     row = (await db.execute(sa_text("""
         SELECT id, model_lane, label_version, source_filter, dataset_contract_id,
+               label_contract_id, feature_contract_id,
                feature_count, test_samples, roc_auc, metrics_json,
                train_from, train_to, dataset_query_cutoff, dataset_hash
         FROM ml_models WHERE id = :id
@@ -572,6 +614,180 @@ async def evaluate_model_promotion_gate(
     await db.commit()
 
     return {"model_id": str(model_id), "promotion_gate": gate_result}
+
+
+@router.post("/models/{model_id}/promote")
+async def promote_ml_model(
+    model_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """Promote one candidate only after a fresh, fail-closed gate evaluation."""
+    import json
+    from sqlalchemy import text as sa_text
+
+    from ..ml.model_governance import governance_from_gate
+    from ..ml.promotion_gate import (
+        APPROVED,
+        evaluate_promotion_gate,
+        merge_promotion_gate_into_metrics_json,
+    )
+    from ..services.profile_intelligence_audit_service import log_pi_event
+
+    row = (await db.execute(sa_text("""
+        SELECT id, status, model_lane, model_scope, profile_id,
+               label_version, source_filter,
+               dataset_contract_id, label_contract_id, feature_contract_id,
+               feature_count, test_samples, roc_auc, metrics_json,
+               train_from, train_to, dataset_query_cutoff, dataset_hash,
+               predictive_status, calibration_authority,
+               rule_generation_authority, execution_authority
+        FROM ml_models
+        WHERE id = :id
+        FOR UPDATE
+    """), {"id": str(model_id)})).mappings().first()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Modelo nao encontrado",
+        )
+    if row["model_lane"] not in {"L1_SPECTRUM", "L3_PROFILE"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Lane nao promovivel: {row['model_lane']}",
+        )
+
+    cfg_row = (await db.execute(sa_text("""
+        SELECT config_json FROM config_profiles
+        WHERE config_type = 'ml' AND is_active = true
+        LIMIT 1
+    """))).first()
+    promotion_config = cfg_row[0] if cfg_row and cfg_row[0] else {}
+    before = json.loads(json.dumps(dict(row), default=str))
+    gate_result = evaluate_promotion_gate(
+        dict(row), promotion_config=promotion_config
+    )
+    metrics_json = merge_promotion_gate_into_metrics_json(
+        row["metrics_json"], gate_result
+    )
+    governance = governance_from_gate(
+        descriptive_gate=None,
+        predictive_gate=gate_result,
+    )
+    governance_reason = {
+        "promotion_gate_status": gate_result["status"],
+        "promotion_gate_reasons": gate_result["reasons"],
+    }
+    await db.execute(sa_text("""
+        UPDATE ml_models
+        SET metrics_json = :metrics_json,
+            descriptive_status = :descriptive_status,
+            predictive_status = :predictive_status,
+            calibration_authority = :calibration_authority,
+            rule_generation_authority = :rule_generation_authority,
+            autopilot_authority = :autopilot_authority,
+            execution_authority = :execution_authority,
+            governance_reason = :governance_reason
+        WHERE id = :id
+    """), {
+        "id": str(model_id),
+        "metrics_json": json.dumps(metrics_json),
+        "governance_reason": json.dumps(governance_reason),
+        **governance,
+    })
+
+    if gate_result["status"] != APPROVED:
+        await log_pi_event(
+            db,
+            user_id,
+            event_type="ML_MODEL_PROMOTION_BLOCKED",
+            event_description=(
+                f"model_id={model_id} gate={gate_result['status']}"
+            ),
+            before_json=before,
+            after_json={"status": row["status"], **governance},
+            diff_json={"promotion_gate": gate_result},
+            actor_user_id=user_id,
+        )
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "MODEL_PROMOTION_GATE_NOT_APPROVED",
+                "promotion_gate": gate_result,
+            },
+        )
+
+    if row["status"] == "active":
+        await db.commit()
+        return {
+            "model_id": str(model_id),
+            "status": "active",
+            "promotion_gate": gate_result,
+            "retired_models": 0,
+            "idempotent": True,
+        }
+    if row["status"] != "candidate":
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Status nao promovivel: {row['status']}",
+        )
+
+    retired = await db.execute(sa_text("""
+        UPDATE ml_models
+        SET status = 'retired', retired_at = now()
+        WHERE model_lane = :lane
+          AND status = 'active'
+          AND id <> :id
+          AND COALESCE(model_scope, 'global') = COALESCE(:model_scope, 'global')
+          AND profile_id IS NOT DISTINCT FROM CAST(:profile_id AS uuid)
+        RETURNING id
+    """), {
+        "lane": row["model_lane"],
+        "id": str(model_id),
+        "model_scope": row["model_scope"],
+        "profile_id": str(row["profile_id"]) if row["profile_id"] else None,
+    })
+    retired_ids = [str(item[0]) for item in retired.fetchall()]
+    if retired_ids:
+        await db.execute(sa_text("""
+            UPDATE ml_model_registry
+            SET status = 'retired', updated_at = now()
+            WHERE source_ml_model_id = ANY(CAST(:retired_ids AS uuid[]))
+        """), {"retired_ids": retired_ids})
+
+    await db.execute(sa_text("""
+        UPDATE ml_models
+        SET status = 'active', activated_at = now(), retired_at = NULL
+        WHERE id = :id
+    """), {"id": str(model_id)})
+    await db.execute(sa_text("""
+        UPDATE ml_model_registry
+        SET status = 'champion', updated_at = now()
+        WHERE source_ml_model_id = :id
+    """), {"id": str(model_id)})
+    await log_pi_event(
+        db,
+        user_id,
+        event_type="ML_MODEL_PROMOTED",
+        event_description=f"model_id={model_id} lane={row['model_lane']}",
+        before_json=before,
+        after_json={"status": "active", **governance},
+        diff_json={
+            "promotion_gate": gate_result,
+            "retired_model_ids": retired_ids,
+        },
+        actor_user_id=user_id,
+    )
+    await db.commit()
+    return {
+        "model_id": str(model_id),
+        "status": "active",
+        "promotion_gate": gate_result,
+        "retired_models": len(retired_ids),
+        "idempotent": False,
+    }
 
 
 @router.get("/catboost/readiness")

@@ -25,6 +25,16 @@ def test_l3_source_can_be_routed_to_approved_advisory_lane():
     ) == "L3_PROFILE"
 
 
+def test_approved_and_rejected_sources_use_contextual_intelligence_lane():
+    sources = ["L3", "L3_REJECTED"]
+    assert MLChallengerService._catboost_lane_for_sources(
+        sources, advisory_intelligence=True
+    ) == "L3_CONTEXTUAL_INTELLIGENCE"
+    assert MLChallengerService._catboost_dataset_policy_for_sources(
+        sources, advisory_intelligence=True
+    ) == "ALL_CANDIDATES_CONTEXTUAL"
+
+
 def test_economic_contract_features_distinguish_historical_exit_policies():
     fixed = _economic_contract_features({
         "tp_pct_applied": 1.0,

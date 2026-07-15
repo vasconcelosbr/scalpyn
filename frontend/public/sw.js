@@ -3,11 +3,10 @@
  * Strategy: network-first for API calls, cache-first for static assets.
  */
 
-const CACHE_NAME = 'scalpyn-v1';
+const CACHE_NAME = 'scalpyn-v2-crypto-ev-20260708';
 const OFFLINE_URL = '/offline.html';
 
 const PRECACHE_URLS = [
-  '/',
   '/manifest.json',
   '/icon-192.svg',
   '/icon-512.svg',
@@ -38,32 +37,23 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // Skip non-GET, cross-origin, and API requests (always network-first)
+  // Skip non-GET, cross-origin, API requests, and Next.js deploy assets.
   if (
     request.method !== 'GET' ||
     url.origin !== location.origin ||
-    url.pathname.startsWith('/api/')
+    url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/_next/')
   ) {
     return;
   }
 
   event.respondWith(
     fetch(request)
-      .then((response) => {
-        // Cache successful navigation responses
-        if (response.ok && request.mode === 'navigate') {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
-        }
-        return response;
-      })
+      .then((response) => response)
       .catch(async () => {
-        // Offline: try cache, then show offline page
-        const cached = await caches.match(request);
-        if (cached) return cached;
         if (request.mode === 'navigate') {
           return (
-            (await caches.match('/')) ||
+            (await caches.match(OFFLINE_URL)) ||
             new Response(
               `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Scalpyn — Offline</title>
               <meta name="viewport" content="width=device-width,initial-scale=1">

@@ -9,6 +9,7 @@ import jwt as pyjwt
 from ..config import settings
 from ..database import get_db
 from ..services.config_service import config_service
+from ..services.crypto_ev_config import default_crypto_ev_config
 
 security = HTTPBearer()
 
@@ -59,6 +60,23 @@ async def signal_config_gone():
         status_code=status.HTTP_410_GONE,
         detail=_GONE_DETAIL,
     )
+
+
+@router.post("/crypto_ev/reset")
+async def reset_crypto_ev_config(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    data = default_crypto_ev_config()
+    updated = await config_service.update_config(
+        db=db,
+        config_type="crypto_ev",
+        user_id=user_id,
+        new_json=data,
+        changed_by=user_id,
+        change_description="Reset crypto_ev config to default schema",
+    )
+    return {"status": "success", "config_type": "crypto_ev", "data": updated}
 
 
 @router.get("/{config_type}")

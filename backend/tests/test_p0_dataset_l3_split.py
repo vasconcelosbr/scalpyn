@@ -15,13 +15,14 @@ Validates:
   GOV-3:    governance_flags_for_model blocks when no operational edge
   GOV-4:    v42-equivalent model receives MIXED_SOURCE_L3_L3LAB + TEST_AUC_ANTI_PREDICTIVE
   GOV-5:    model without blocked reasons returns ranking_shadow_only + forward_validation_candidate
-  LABEL-3:  label_version remains is_tp_4h_v1 through the policy flow
+  LABEL-3:  label_version remains is_tp_4h_v2_sim_outcome through the policy flow
   POLICY-1: POLICY_SOURCES maps each policy to the correct source list
   POLICY-2: check_source_drift detects > 25 pp drift between train and test
 """
 
 import asyncio
 import sys
+import types
 from pathlib import Path
 from typing import Dict, List, Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -126,6 +127,44 @@ class TestTrainChallengersGate:
         svc = MLChallengerService()
         gate_reason = svc._check_mixed_source_gate(CATBOOST_L3_ONLY_SOURCES)
         assert gate_reason is None, "Default L3_ONLY sources must not trigger the gate"
+
+    def test_lightgbm_respects_configured_retrain_minimum(self):
+        """L1 retrain must stop at the configured marco, not the low legacy MIN_RECORDS."""
+        async def _run():
+            svc = MLChallengerService()
+            svc._load_ml_config = AsyncMock(return_value={
+                "ml_dataset_valid_from": "2026-06-14T21:33:10+00:00",
+                "ml_retrain_min_eligible_rows": 4,
+                "ml_maturity_embargo_margin_minutes": 60,
+                "shadow_barrier_mode": "ATR_DYNAMIC",
+            })
+            svc._load_strategy_tp_pct = AsyncMock(return_value=0.6)
+            svc._load_shadow_data = AsyncMock(return_value=[{
+                "shadow_id": "a",
+                "barrier_mode": "ATR_DYNAMIC",
+                "tp_pct_applied": 0.6,
+            }] * 3)
+            db = AsyncMock()
+            feature_module = types.ModuleType("app.ml.feature_extractor")
+            feature_module.FEATURE_COLUMNS = ["rsi"]
+            with patch.dict(sys.modules, {
+                "app": types.ModuleType("app"),
+                "app.ml": types.ModuleType("app.ml"),
+                "app.ml.feature_extractor": feature_module,
+            }):
+                return await svc.train_challengers(
+                    db=db,
+                    user_id="00000000-0000-0000-0000-000000000001",
+                    enable_lightgbm=True,
+                    enable_catboost=False,
+                )
+
+        result = asyncio.run(_run())
+
+        assert result["lightgbm"]["status"] == "skipped"
+        assert result["lightgbm"]["reason"] == "insufficient_retrain_eligible_rows"
+        assert result["lightgbm"]["records"] == 3
+        assert result["lightgbm"]["min_required"] == 4
 
 
 # ---------------------------------------------------------------------------
@@ -342,13 +381,13 @@ class TestGovernanceFlags:
 
 
 # ---------------------------------------------------------------------------
-# LABEL-3: label_version must be is_tp_4h_v1 through the new policy flow
+# LABEL-3: label_version must be is_tp_4h_v2_sim_outcome through the new policy flow
 # ---------------------------------------------------------------------------
 
 class TestLabelVersion:
     def test_label_version_registry(self):
         from backend.app.ml.feature_extractor import label_version_for_threshold
-        assert label_version_for_threshold(14400.0) == "is_tp_4h_v1"
+        assert label_version_for_threshold(14400.0) == "is_tp_4h_v2_sim_outcome"
         assert label_version_for_threshold(1800.0) == "is_win_fast_v1"
 
     def test_dataset_policy_does_not_override_label(self):

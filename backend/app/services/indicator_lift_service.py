@@ -15,6 +15,14 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.profile_intelligence import ProfileIndicatorStats
+from .profile_intelligence_contract import (
+    DATASET_VERSION,
+    LABEL_VERSION,
+    OFFICIAL_CAPTURE_COLUMNS,
+    filter_hash_valid_rows,
+    official_params,
+    official_where,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +129,9 @@ class IndicatorLiftAnalyzer:
         base_avg_pnl_pct: float,
         discovery_start: datetime,
         discovery_end: datetime,
+        analysis_sources: list[str],
+        winning_lift: float,
+        losing_winrate_ratio: float,
     ) -> List[dict]:
         """
         Load closed shadow trades in the discovery window, compute bucket stats,
@@ -137,23 +148,25 @@ class IndicatorLiftAnalyzer:
         # ------------------------------------------------------------------
         rows = (
             await db.execute(
-                text("""
+                text(f"""
                     SELECT
                         profile_id,
                         profile_name,
+                        source,
                         outcome,
                         pnl_pct,
                         mae_pct,
                         mfe_pct,
                         holding_seconds,
-                        features_snapshot
+                        features_snapshot,
+                        {OFFICIAL_CAPTURE_COLUMNS.format(alias='shadow_trades')}
                     FROM shadow_trades
                     WHERE user_id = :uid
                       AND created_at >= :disc_start
                       AND created_at < :disc_end
                       AND outcome IN ('TP_HIT', 'SL_HIT', 'TIMEOUT')
-                      AND features_snapshot IS NOT NULL
-                      AND features_snapshot != '{}'::jsonb
+                      AND source = ANY(:analysis_sources)
+                      AND {official_where('shadow_trades')}
                     ORDER BY created_at
                     LIMIT 50000
                 """),
@@ -161,9 +174,14 @@ class IndicatorLiftAnalyzer:
                     "uid": str(user_id),
                     "disc_start": discovery_start,
                     "disc_end": discovery_end,
+                    "analysis_sources": analysis_sources,
+                    **official_params(),
                 },
             )
         ).fetchall()
+        rows, invalid_count = filter_hash_valid_rows(rows)
+        if invalid_count:
+            logger.error("[IndicatorLift] Excluded %d invalid official rows", invalid_count)
 
         if not rows:
             logger.info("[IndicatorLift] No trades found in discovery window.")
@@ -173,8 +191,7 @@ class IndicatorLiftAnalyzer:
         # 2. Pre-process trades into Python dicts
         # ------------------------------------------------------------------
         trades = []
-        global_wins = 0
-        global_losses = 0
+        scope_totals: Dict[tuple, dict] = {}
         for row in rows:
             features = row.features_snapshot
             if isinstance(features, str):
@@ -189,14 +206,22 @@ class IndicatorLiftAnalyzer:
             is_win = outcome == "TP_HIT"
             is_loss = outcome == "SL_HIT"
             is_timeout = outcome == "TIMEOUT"
+            scope = (str(row.source), str(row.profile_id) if row.profile_id else None)
+            totals = scope_totals.setdefault(
+                scope, {"wins": 0, "losses": 0, "closed": 0, "pnl_sum": 0.0}
+            )
+            totals["closed"] += 1
+            totals["pnl_sum"] += float(row.pnl_pct or 0.0)
             if is_win:
-                global_wins += 1
+                totals["wins"] += 1
             elif is_loss:
-                global_losses += 1
+                totals["losses"] += 1
 
             trades.append({
                 "profile_id": row.profile_id,
                 "profile_name": row.profile_name,
+                "source": row.source,
+                "scope": scope,
                 "outcome": outcome,
                 "is_win": is_win,
                 "is_loss": is_loss,
@@ -211,7 +236,9 @@ class IndicatorLiftAnalyzer:
         total_trades = len(trades)
         logger.info(
             "[IndicatorLift] Loaded %d trades (wins=%d losses=%d)",
-            total_trades, global_wins, global_losses,
+            total_trades,
+            sum(v["wins"] for v in scope_totals.values()),
+            sum(v["losses"] for v in scope_totals.values()),
         )
 
         # ------------------------------------------------------------------
@@ -219,28 +246,8 @@ class IndicatorLiftAnalyzer:
         # ------------------------------------------------------------------
         buckets = _get_indicator_buckets()
 
-        # bucket_key = (indicator, bucket_label)
+        # bucket_key = (source, profile_id, indicator, bucket_label)
         bucket_data: Dict[tuple, dict] = {}
-
-        for bdef in buckets:
-            key = (bdef["indicator"], bdef["bucket_label"])
-            bucket_data[key] = {
-                "bucket_def": bdef,
-                "total": 0,
-                "wins": 0,
-                "losses": 0,
-                "timeouts": 0,
-                "pnl_sum": 0.0,
-                "pnl_count": 0,
-                "mae_sum": 0.0,
-                "mfe_sum": 0.0,
-                "holding_sum": 0,
-                "winner_holding_sum": 0,
-                "tp15": 0,
-                "tp30": 0,
-                "tp60": 0,
-                "source_profiles": {},
-            }
 
         for trade in trades:
             feat = trade["features"]
@@ -266,8 +273,25 @@ class IndicatorLiftAnalyzer:
                 if not passes:
                     continue
 
-                key = (ind, bdef["bucket_label"])
-                bd = bucket_data[key]
+                source, profile_id = trade["scope"]
+                key = (source, profile_id, ind, bdef["bucket_label"])
+                bd = bucket_data.setdefault(key, {
+                    "bucket_def": bdef,
+                    "total": 0,
+                    "wins": 0,
+                    "losses": 0,
+                    "timeouts": 0,
+                    "pnl_sum": 0.0,
+                    "pnl_count": 0,
+                    "mae_sum": 0.0,
+                    "mfe_sum": 0.0,
+                    "holding_sum": 0,
+                    "winner_holding_sum": 0,
+                    "tp15": 0,
+                    "tp30": 0,
+                    "tp60": 0,
+                    "source_profiles": {},
+                })
                 if trade["profile_id"]:
                     bd["source_profiles"][str(trade["profile_id"])] = (
                         trade["profile_name"] or str(trade["profile_id"])
@@ -297,11 +321,13 @@ class IndicatorLiftAnalyzer:
         # ------------------------------------------------------------------
         # 4. Compute derived metrics and build result rows
         # ------------------------------------------------------------------
-        safe_base_wr = max(base_win_rate, 0.001)
         results = []
 
         for key, bd in bucket_data.items():
-            indicator, bucket_label = key
+            source, profile_id, indicator, bucket_label = key
+            scope = scope_totals[(source, profile_id)]
+            safe_base_wr = max(scope["wins"] / max(scope["closed"], 1), 0.001)
+            scope_avg_pnl = scope["pnl_sum"] / max(scope["closed"], 1)
             total = bd["total"]
             wins = bd["wins"]
             losses = bd["losses"]
@@ -322,10 +348,10 @@ class IndicatorLiftAnalyzer:
             tp30_rate = bd["tp30"] / max(closed, 1)
             tp60_rate = bd["tp60"] / max(closed, 1)
             lift_vs_base = win_rate / safe_base_wr
-            pnl_lift = avg_pnl_pct / base_avg_pnl_pct if base_avg_pnl_pct != 0 else 1.0
+            pnl_lift = avg_pnl_pct / scope_avg_pnl if scope_avg_pnl != 0 else 1.0
 
-            winner_presence_pct = (wins / global_wins * 100) if global_wins > 0 else 0.0
-            loser_presence_pct = (losses / global_losses * 100) if global_losses > 0 else 0.0
+            winner_presence_pct = (wins / scope["wins"] * 100) if scope["wins"] > 0 else 0.0
+            loser_presence_pct = (losses / scope["losses"] * 100) if scope["losses"] > 0 else 0.0
 
             raw_confidence = min(1.0, total / 100.0) * lift_vs_base
             confidence_score = raw_confidence * 100.0
@@ -339,11 +365,20 @@ class IndicatorLiftAnalyzer:
             else:
                 confidence_level = "HIGH"
 
-            if total >= min_closed_trades and lift_vs_base >= 1.15 and avg_pnl_pct > base_avg_pnl_pct:
+            if (
+                total >= min_closed_trades
+                and lift_vs_base >= winning_lift
+                and avg_pnl_pct > 0
+                and avg_pnl_pct > scope_avg_pnl
+            ):
                 role_detected = "winning_indicator"
-            elif total >= min_closed_trades and (
-                win_rate < safe_base_wr * 0.85
-                or avg_pnl_pct < base_avg_pnl_pct * 0.85
+            elif (
+                total >= min_closed_trades
+                and avg_pnl_pct < 0
+                and (
+                    win_rate < safe_base_wr * losing_winrate_ratio
+                    or avg_pnl_pct < scope_avg_pnl * losing_winrate_ratio
+                )
             ):
                 role_detected = "losing_indicator"
             elif total < min_closed_trades:
@@ -385,12 +420,20 @@ class IndicatorLiftAnalyzer:
                     key=lambda value: value.lower(),
                 ),
                 "source_profile_ids": sorted(bd["source_profiles"].keys()),
+                "evidence_json": {
+                    "dataset_version": DATASET_VERSION,
+                    "label_version": LABEL_VERSION,
+                    "source": source,
+                    "profile_id": profile_id,
+                    "base_win_rate": safe_base_wr,
+                    "base_avg_pnl_pct": scope_avg_pnl,
+                },
                 "validation_status": "exploratory_only",
                 "actionability_status": "exploratory_only",
                 "target_section": (
                     "signals"
                     if role_detected == "winning_indicator"
-                    else "block_rules"
+                    else "scoring"
                     if role_detected == "losing_indicator"
                     else None
                 ),
@@ -436,6 +479,7 @@ class IndicatorLiftAnalyzer:
                 validation_status=r["validation_status"],
                 actionability_status=r["actionability_status"],
                 target_section=r["target_section"],
+                evidence_json=r["evidence_json"],
             )
             db.add(row_obj)
 

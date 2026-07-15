@@ -93,7 +93,8 @@ class TestMigration108:
     def _migration_source(self) -> str:
         path = (
             Path(__file__).resolve().parents[2]
-            / "backend" / "alembic" / "versions" / "108_suggestion_shadow_feedback.py"
+            / "backend" / "alembic" / "versions" / "legacy"
+            / "108_suggestion_shadow_feedback.py"
         )
         return path.read_text(encoding="utf-8")
 

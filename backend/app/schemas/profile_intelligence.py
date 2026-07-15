@@ -33,6 +33,24 @@ class PISettingsUpdate(BaseModel):
     max_avg_holding_seconds: Optional[float] = None
     required_tp_30m_rate: Optional[float] = None
     max_combinations_per_run: Optional[int] = None
+    analysis_sources: Optional[List[str]] = None
+    indicator_winning_lift: Optional[float] = None
+    indicator_losing_winrate_ratio: Optional[float] = None
+    validation_min_discovery_trades: Optional[int] = None
+    validation_min_trades: Optional[int] = None
+    validation_min_lift: Optional[float] = None
+    validation_min_winrate_delta: Optional[float] = None
+    validation_max_single_symbol_share: Optional[float] = None
+    validation_max_single_day_share: Optional[float] = None
+    validation_min_distinct_symbols: Optional[int] = None
+    validation_min_distinct_days: Optional[int] = None
+    validation_min_assoc_support: Optional[float] = None
+    validation_min_assoc_confidence: Optional[float] = None
+    validation_min_lift_retention: Optional[float] = None
+    adjustment_min_profile_trades: Optional[int] = None
+    adjustment_max_win_rate: Optional[float] = None
+    adjustment_score_bump: Optional[int] = None
+    adjustment_score_cap: Optional[int] = None
     enable_anthropic_explanations: Optional[bool] = None
     enable_optuna: Optional[bool] = None
     enable_association_rules: Optional[bool] = None
@@ -57,6 +75,10 @@ class CreateProfileRequest(BaseModel):
     reuse_existing_master_rules: bool = True
     assign_to_watchlist_id: Optional[str] = None
     dry_run: bool = False
+
+
+class IndicatorShadowAdjustmentRequest(BaseModel):
+    profile_ids: List[UUID] = Field(min_length=1, max_length=20)
 
 
 class AutopilotSettingsUpdate(BaseModel):

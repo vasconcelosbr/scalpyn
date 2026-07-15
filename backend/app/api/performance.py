@@ -46,6 +46,14 @@ async def get_summary(
     )
 
 
+@router.get("/gate-account-today")
+async def get_gate_account_today(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    return await performance_service.gate_account_today(db, user_id)
+
+
 @router.get("/equity")
 async def get_equity(
     window: Optional[str] = Query("30D"),

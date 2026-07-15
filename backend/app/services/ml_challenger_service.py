@@ -54,6 +54,7 @@ CATBOOST_TRAIN_SOURCES: List[str] = ["L3"]
 CATBOOST_L3_ONLY_SOURCES: List[str] = ["L3"]
 CATBOOST_L3_LAB_ONLY_SOURCES: List[str] = ["L3_LAB"]
 CATBOOST_L3_REJECTED_ONLY_SOURCES: List[str] = ["L3_REJECTED"]
+CATBOOST_CONTEXTUAL_INTELLIGENCE_SOURCES: List[str] = ["L3", "L3_REJECTED"]
 # Backwards-compat alias — callers that pass source_filter still work.
 TRAIN_SOURCES: List[str] = LGBM_TRAIN_SOURCES  # was ["L3", "L1_SPECTRUM"] — deprecated
 
@@ -113,12 +114,32 @@ def _json_default(obj):
     return str(obj)
 
 
+def _json_finite(value: Any) -> Any:
+    """Replace non-finite numeric values before PostgreSQL JSONB serialization."""
+    if isinstance(value, dict):
+        return {key: _json_finite(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_finite(item) for item in value]
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
+def _finite_metric(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    parsed = float(value)
+    return parsed if math.isfinite(parsed) else None
+
+
 def _require_positive_int_config(config: Dict[str, Any], key: str) -> int:
     """Read a required positive integer from config_profiles JSONB."""
     raw_value = config.get(key)
     if raw_value is None:
         raise ValueError(f"missing_{key}: gravar em config_profiles(config_type='ml') antes do treino")
-    value = int(raw_value)
+    if isinstance(raw_value, bool) or not isinstance(raw_value, int):
+        raise ValueError(f"invalid_{key}: expected positive integer, got {raw_value!r}")
+    value = raw_value
     if value <= 0:
         raise ValueError(f"invalid_{key}: expected positive integer, got {raw_value!r}")
     return value
@@ -676,6 +697,26 @@ class MLChallengerService:
             return {}
         return row[0] if isinstance(row[0], dict) else json.loads(row[0])
 
+    async def _load_strategy_tp_pct(self, db: AsyncSession, user_id: UUID) -> float:
+        """Read the active Strategies Module TP for dataset-contract parity."""
+        row = (await db.execute(text("""
+            SELECT config_json
+            FROM config_profiles
+            WHERE user_id = :uid
+              AND config_type = 'spot_engine'
+              AND is_active = true
+            ORDER BY updated_at DESC
+            LIMIT 1
+        """), {"uid": str(user_id)})).fetchone()
+        if not row or not row[0]:
+            raise ValueError("missing_spot_engine_config_for_dataset_contract")
+        payload = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+        selling = payload.get("selling") or {}
+        value = selling.get("take_profit_pct")
+        if value in (None, ""):
+            raise ValueError("missing_strategy_take_profit_pct_for_dataset_contract")
+        return float(value)
+
     async def _load_shadow_data(
         self,
         db: AsyncSession,
@@ -684,7 +725,21 @@ class MLChallengerService:
         source_filter: Optional[List[str]] = None,
         require_profile_id: bool = False,
         dataset_valid_from: Optional[Any] = None,
+        dataset_query_cutoff: Optional[datetime] = None,
+        maturity_embargo_margin_minutes: Optional[int] = None,
+        collect_diagnostics: bool = False,
     ) -> List[Dict[str, Any]]:
+        if dataset_query_cutoff is None:
+            raise ValueError("missing_dataset_query_cutoff")
+        if dataset_query_cutoff.tzinfo is None:
+            raise ValueError("invalid_dataset_query_cutoff_timezone")
+        if maturity_embargo_margin_minutes is None:
+            raise ValueError(
+                "missing_ml_maturity_embargo_margin_minutes: gravar em "
+                "config_profiles(config_type='ml') antes do treino"
+            )
+        if int(maturity_embargo_margin_minutes) < 0:
+            raise ValueError("invalid_ml_maturity_embargo_margin_minutes")
         sources = source_filter if source_filter is not None else TRAIN_SOURCES
         # Build per-source placeholders to avoid any injection risk
         source_placeholders = ", ".join(f":src_{i}" for i in range(len(sources)))
@@ -700,6 +755,61 @@ class MLChallengerService:
             cutoff_clause = "AND completed_at < :train_cutoff_at"
             cutoff_params = {"train_cutoff_at": _cutoff_dt}
             logger.info("[MLChallenger] _load_shadow_data cutoff: completed_at < %s", _TRAIN_CUTOFF_AT)
+        params = {
+            "uid": str(user_id),
+            "cutoff": dataset_query_cutoff - timedelta(days=lookback_days),
+            "dataset_query_cutoff": dataset_query_cutoff,
+            "maturity_embargo_margin_minutes": int(maturity_embargo_margin_minutes),
+            **source_params,
+            **valid_from_params,
+            **cutoff_params,
+        }
+        base_where = f"""
+            user_id = :uid
+              AND source IN ({source_placeholders})
+              AND outcome IN ('TP_HIT', 'SL_HIT', 'TIMEOUT')
+              AND pnl_pct IS NOT NULL
+              AND features_snapshot IS NOT NULL
+              AND features_snapshot::text <> '{{}}'
+              AND capture_contract_version = 'point-in-time-v1'
+              AND features_captured_at IS NOT NULL
+              AND feature_extractor_version IS NOT NULL
+              AND feature_schema_version IS NOT NULL
+              AND feature_hash IS NOT NULL
+              AND lineage_status = 'EXACT'
+              AND eligible_for_training IS TRUE
+              AND created_at >= :cutoff
+              {valid_from_clause}
+              {profile_clause}
+              {cutoff_clause}
+        """
+        self._last_shadow_load_diagnostics = {}
+        if collect_diagnostics:
+            diagnostic = (await db.execute(text(f"""
+                SELECT
+                    COUNT(*)::int AS official_candidates,
+                    COUNT(*) FILTER (
+                        WHERE COALESCE(label_resolved_at, completed_at) IS NULL
+                           OR COALESCE(label_resolved_at, completed_at) > :dataset_query_cutoff
+                    )::int AS labels_unresolved_at_cutoff,
+                    COUNT(*) FILTER (
+                        WHERE COALESCE(label_resolved_at, completed_at) <= :dataset_query_cutoff
+                          AND created_at > :dataset_query_cutoff - make_interval(
+                                mins => COALESCE(ttt_timeout_minutes, 0)
+                                      + :maturity_embargo_margin_minutes
+                              )
+                    )::int AS observations_immature_at_cutoff,
+                    COUNT(*) FILTER (
+                        WHERE COALESCE(label_resolved_at, completed_at) <= :dataset_query_cutoff
+                          AND created_at <= :dataset_query_cutoff - make_interval(
+                                mins => COALESCE(ttt_timeout_minutes, 0)
+                                      + :maturity_embargo_margin_minutes
+                              )
+                    )::int AS records_mature
+                FROM shadow_trades
+                WHERE {base_where}
+            """), params)).mappings().one()
+            self._last_shadow_load_diagnostics = dict(diagnostic)
         rows = (await db.execute(text(f"""
             SELECT
                 id::text          AS shadow_id,
@@ -715,21 +825,27 @@ class MLChallengerService:
                 tp_pct_applied,
                 sl_pct_applied,
                 created_at,
-                profile_id::text  AS profile_id
+                features_captured_at,
+                timeframe,
+                exchange,
+                profile_id::text AS profile_id,
+                event_id::text AS event_id,
+                snapshot_id::text AS snapshot_id,
+                profile_version_id::text AS profile_version_id,
+                score_engine_version_id::text AS score_engine_version_id,
+                label_resolved_at,
+                completed_at,
+                ttt_timeout_minutes
             FROM shadow_trades
-            WHERE user_id = :uid
-              AND source IN ({source_placeholders})
-              AND outcome IN ('TP_HIT', 'SL_HIT', 'TIMEOUT')
-              AND pnl_pct IS NOT NULL
-              AND features_snapshot IS NOT NULL
-              AND features_snapshot::text <> '{{}}'
-              AND created_at >= :cutoff
-              {valid_from_clause}
-              {profile_clause}
-              {cutoff_clause}
+            WHERE {base_where}
+              AND COALESCE(label_resolved_at, completed_at) IS NOT NULL
+              AND COALESCE(label_resolved_at, completed_at) <= :dataset_query_cutoff
+              AND created_at <= :dataset_query_cutoff - make_interval(
+                    mins => COALESCE(ttt_timeout_minutes, 0)
+                          + :maturity_embargo_margin_minutes
+                  )
             ORDER BY created_at ASC
-        """), {"uid": str(user_id), "cutoff": datetime.now(timezone.utc) - timedelta(days=lookback_days),
-               **source_params, **valid_from_params, **cutoff_params})).fetchall()
+        """), params)).fetchall()
         logger.info(
             "[MLChallenger] _load_shadow_data: sources=%s rows=%d require_profile_id=%s user=%s",
             sources, len(rows), require_profile_id, user_id,
@@ -975,9 +1091,14 @@ class MLChallengerService:
         metadata: list,
         created_at: Optional[list] = None,
         holding_seconds: Optional[list] = None,
+        group_ids: Optional[list] = None,
         val_fraction: float = 0.20,
         test_fraction: float = 0.20,
         embargo_seconds: int = 0,
+        min_train_size: int = 1,
+        min_validation_size: int = 1,
+        min_test_size: int = 1,
+        max_boundary_candidates: Optional[int] = None,
     ) -> dict:
         """Temporal 60/20/20 split with purge (from train) and embargo (from val/test).
 
@@ -1003,6 +1124,303 @@ class MLChallengerService:
 
         MIN_SET_SIZE = 5
         n = len(y)
+
+        if group_ids is not None:
+            from datetime import timedelta
+
+            from app.ml.grouped_purged_split import (
+                TemporalObservation,
+                grouped_purged_split,
+            )
+
+            if len(group_ids) != n or not created_at or len(created_at) != n:
+                raise ValueError("invalid_grouped_split_metadata")
+
+            hs_list = [
+                float(value) if value is not None else 0.0
+                for value in (holding_seconds or [0.0] * n)
+            ]
+            observed_at = [pd.Timestamp(value).to_pydatetime() for value in created_at]
+            observations = [
+                TemporalObservation(
+                    row_id=index,
+                    group_id=group_ids[index],
+                    observed_at=observed_at[index],
+                    label_resolved_at=(
+                        observed_at[index] + timedelta(seconds=hs_list[index])
+                    ),
+                )
+                for index in range(n)
+            ]
+            unique_times = sorted(set(observed_at))
+            all_candidate_positions = list(range(1, len(unique_times) - 1))
+            if (
+                max_boundary_candidates is not None
+                and max_boundary_candidates > 0
+                and len(all_candidate_positions) > max_boundary_candidates
+            ):
+                candidate_positions = sorted(set(
+                    np.linspace(
+                        1,
+                        len(unique_times) - 2,
+                        num=max(3, int(max_boundary_candidates)),
+                        dtype=int,
+                    ).tolist()
+                ))
+            else:
+                candidate_positions = all_candidate_positions
+
+            target_fractions = (
+                1.0 - val_fraction - test_fraction,
+                val_fraction,
+                test_fraction,
+            )
+            embargo_delta = timedelta(seconds=embargo_seconds)
+            ranked_boundaries = []
+            for offset, validation_position in enumerate(candidate_positions[:-1]):
+                for test_position in candidate_positions[offset + 1:]:
+                    validation_boundary = unique_times[validation_position]
+                    test_boundary = unique_times[test_position]
+                    raw_counts = (
+                        sum(value < validation_boundary for value in observed_at),
+                        sum(
+                            validation_boundary <= value < test_boundary
+                            for value in observed_at
+                        ),
+                        sum(
+                            value >= test_boundary + embargo_delta
+                            for value in observed_at
+                        ),
+                    )
+                    if (
+                        raw_counts[0] < min_train_size
+                        or raw_counts[1] < min_validation_size
+                        or raw_counts[2] < min_test_size
+                    ):
+                        continue
+                    fraction_error = sum(
+                        abs((count / n) - target)
+                        for count, target in zip(raw_counts, target_fractions)
+                    )
+                    rank = (
+                        fraction_error,
+                        -min(raw_counts[1], raw_counts[2]),
+                        -sum(raw_counts),
+                        -raw_counts[2],
+                        validation_boundary,
+                        test_boundary,
+                    )
+                    ranked_boundaries.append(
+                        (rank, validation_boundary, test_boundary, raw_counts)
+                    )
+
+            best = None
+            best_available_counts = (0, 0, 0)
+            single_class_candidates = 0
+            size_feasible_candidates = 0
+            max_minority_labels = [0, 0, 0]
+            for rank, validation_boundary, test_boundary, raw_counts in sorted(
+                ranked_boundaries
+            ):
+                candidate = grouped_purged_split(
+                    observations,
+                    validation_start=validation_boundary,
+                    test_start=test_boundary,
+                    label_horizon=embargo_delta,
+                    embargo=embargo_delta,
+                )
+                counts = (
+                    len(candidate.train),
+                    len(candidate.validation),
+                    len(candidate.test),
+                )
+                label_sets = tuple(
+                    {
+                        int(y[row.row_id])
+                        for row in partition
+                    }
+                    for partition in (
+                        candidate.train,
+                        candidate.validation,
+                        candidate.test,
+                    )
+                )
+                has_class_diversity = all(
+                    len(labels) >= 2 for labels in label_sets
+                )
+                sizes_are_feasible = (
+                    counts[0] >= min_train_size
+                    and counts[1] >= min_validation_size
+                    and counts[2] >= min_test_size
+                )
+                if sizes_are_feasible:
+                    size_feasible_candidates += 1
+                    for index, (partition, labels) in enumerate(
+                        zip(
+                            (
+                                candidate.train,
+                                candidate.validation,
+                                candidate.test,
+                            ),
+                            label_sets,
+                        )
+                    ):
+                        if len(labels) >= 2:
+                            label_counts = {
+                                label: sum(
+                                    int(y[row.row_id]) == label
+                                    for row in partition
+                                )
+                                for label in labels
+                            }
+                            max_minority_labels[index] = max(
+                                max_minority_labels[index],
+                                min(label_counts.values()),
+                            )
+                if (
+                    counts[0] >= min_train_size
+                    and counts[1] >= min_validation_size
+                    and counts[2] > best_available_counts[2]
+                ):
+                    best_available_counts = counts
+                if not has_class_diversity:
+                    single_class_candidates += 1
+                if sizes_are_feasible and has_class_diversity:
+                    best = (
+                        rank,
+                        candidate,
+                        validation_boundary,
+                        test_boundary,
+                        raw_counts,
+                    )
+                    break
+
+            def _apply_grouped(arr, mask):
+                if isinstance(arr, np.ndarray):
+                    return arr[mask]
+                return [value for value, keep in zip(arr, mask) if keep]
+
+            if best is None:
+                tr_mask = np.ones(n, dtype=bool)
+                va_mask = np.zeros(n, dtype=bool)
+                te_mask = np.zeros(n, dtype=bool)
+                split_diagnostics = {
+                    "split_strategy": "grouped_purged_no_feasible_boundaries",
+                    "boundary_candidates": len(candidate_positions),
+                    "evaluated_boundary_pairs": len(ranked_boundaries),
+                    "required_train_samples": min_train_size,
+                    "required_validation_samples": min_validation_size,
+                    "required_test_samples": min_test_size,
+                    "max_candidate_train_samples": best_available_counts[0],
+                    "max_candidate_validation_samples": best_available_counts[1],
+                    "max_candidate_test_samples": best_available_counts[2],
+                    "test_sample_deficit": max(
+                        0, min_test_size - best_available_counts[2]
+                    ),
+                    "single_class_candidates": single_class_candidates,
+                    "size_feasible_candidates": size_feasible_candidates,
+                    "max_train_minority_labels": max_minority_labels[0],
+                    "max_validation_minority_labels": max_minority_labels[1],
+                    "max_test_minority_labels": max_minority_labels[2],
+                    "requires_class_diversity": True,
+                    "block_reason": (
+                        "single_class_partition"
+                        if size_feasible_candidates > 0
+                        else "insufficient_partition_samples"
+                    ),
+                }
+                has_test = False
+            else:
+                selected = best[1]
+                train_ids = {row.row_id for row in selected.train}
+                validation_ids = {row.row_id for row in selected.validation}
+                test_ids = {row.row_id for row in selected.test}
+                tr_mask = np.asarray([index in train_ids for index in range(n)])
+                va_mask = np.asarray([index in validation_ids for index in range(n)])
+                te_mask = np.asarray([index in test_ids for index in range(n)])
+                split_diagnostics = {
+                    **selected.diagnostics,
+                    "split_strategy": "grouped_purged_temporal_search",
+                    "boundary_candidates": len(candidate_positions),
+                    "evaluated_boundary_pairs": len(ranked_boundaries),
+                    "raw_fraction_error": best[0][0],
+                    "raw_train": best[4][0],
+                    "raw_validation": best[4][1],
+                    "raw_test": best[4][2],
+                    "validation_boundary": best[2].isoformat(),
+                    "test_boundary": best[3].isoformat(),
+                    "test_effective_start": (best[3] + embargo_delta).isoformat(),
+                    "required_train_samples": min_train_size,
+                    "required_validation_samples": min_validation_size,
+                    "required_test_samples": min_test_size,
+                    "test_sample_deficit": 0,
+                    "requires_class_diversity": True,
+                }
+                has_test = bool(te_mask.any())
+
+            def _mask_window(mask):
+                values = [
+                    observed_at[index]
+                    for index, keep in enumerate(mask)
+                    if bool(keep)
+                ]
+                if not values:
+                    return None, None
+                return min(values).isoformat(), max(values).isoformat()
+
+            dataset_from = min(observed_at).isoformat() if observed_at else None
+            dataset_to = max(observed_at).isoformat() if observed_at else None
+            if has_test:
+                train_from, train_to = _mask_window(tr_mask)
+                validation_from, validation_to = _mask_window(va_mask)
+                test_from, test_to = _mask_window(te_mask)
+            else:
+                train_from = train_to = None
+                validation_from = validation_to = None
+                test_from = test_to = None
+            split_diagnostics.update({
+                "dataset_rows": n,
+                "dataset_from": dataset_from,
+                "dataset_to": dataset_to,
+                "train_from": train_from,
+                "train_to": train_to,
+                "validation_from": validation_from,
+                "validation_to": validation_to,
+                "test_from": test_from,
+                "test_to": test_to,
+                "effective_train_samples": int(tr_mask.sum()) if has_test else 0,
+                "effective_validation_samples": int(va_mask.sum()) if has_test else 0,
+                "effective_test_samples": int(te_mask.sum()) if has_test else 0,
+                "excluded_from_effective_split": (
+                    n - int(tr_mask.sum()) - int(va_mask.sum()) - int(te_mask.sum())
+                    if has_test else n
+                ),
+            })
+
+            return {
+                "X_tr": X[tr_mask], "y_tr": y[tr_mask],
+                "X_va": X[va_mask], "y_va": y[va_mask],
+                "X_te": X[te_mask] if has_test else None,
+                "y_te": y[te_mask] if has_test else None,
+                "meta_tr": [_apply_grouped(item, tr_mask) for item in metadata],
+                "meta_va": [_apply_grouped(item, va_mask) for item in metadata],
+                "meta_te": (
+                    [_apply_grouped(item, te_mask) for item in metadata]
+                    if has_test else [None] * len(metadata)
+                ),
+                "n_purged": split_diagnostics.get("label_purged_train", 0),
+                "n_purged_val_test": split_diagnostics.get(
+                    "label_purged_validation", 0
+                ),
+                "n_group_purged": (
+                    split_diagnostics.get("group_purged_train", 0)
+                    + split_diagnostics.get("group_purged_validation", 0)
+                ),
+                "n_embargoed": split_diagnostics.get("embargoed_test", 0),
+                "has_test": has_test,
+                "split_diagnostics": split_diagnostics,
+            }
+
         train_end = max(1, int(n * (1.0 - val_fraction - test_fraction)))
         val_end = max(train_end + MIN_SET_SIZE, int(n * (1.0 - test_fraction)))
         val_end = min(val_end, n - MIN_SET_SIZE)
@@ -1084,8 +1502,15 @@ class MLChallengerService:
             "meta_va": [_apply(m, va_mask) for m in metadata],
             "meta_te": [_apply(m, te_mask) for m in metadata] if has_test else [None] * len(metadata),
             "n_purged": n_purged,
+            "n_purged_val_test": 0,
+            "n_group_purged": 0,
             "n_embargoed": n_embargoed,
             "has_test": has_test,
+            "split_diagnostics": {
+                "split_strategy": "legacy_index_train_boundary_only",
+                "purged_train": n_purged,
+                "embargoed_validation_or_test": n_embargoed,
+            },
         }
 
     def _chronological_split(self, X, y, val_fraction: float = 0.20):
@@ -1176,11 +1601,11 @@ class MLChallengerService:
         now = datetime.now(timezone.utc)
         version = await self._next_version(db)
 
-        roc_auc = metrics.get("roc_auc", 0.0)
-        f1 = metrics.get("f1", 0.0)
-        precision = metrics.get("precision", None)
-        recall = metrics.get("recall", None)
-        fpr = metrics.get("fpr", None)
+        roc_auc = _finite_metric(metrics.get("roc_auc"))
+        f1 = _finite_metric(metrics.get("f1"))
+        precision = _finite_metric(metrics.get("precision"))
+        recall = _finite_metric(metrics.get("recall"))
+        fpr = _finite_metric(metrics.get("fpr"))
         n_train = metrics.get("train_samples", 0)
         n_val = metrics.get("val_samples", 0)
         n_test = (test_metrics or {}).get("samples", 0)
@@ -1191,9 +1616,9 @@ class MLChallengerService:
         if not all([train_from, train_to, dataset_query_cutoff, dataset_hash]):
             raise ValueError("missing_required_model_provenance")
         # Full hyperparams blob: val metrics + test metrics side-by-side
-        hyperparams_full = {**metrics}
+        hyperparams_full = _json_finite({**metrics})
         if test_metrics:
-            hyperparams_full["test_metrics"] = test_metrics
+            hyperparams_full["test_metrics"] = _json_finite(test_metrics)
 
         # Infere lane a partir do model_type se não fornecida explicitamente
         if model_lane is None:
@@ -1228,6 +1653,19 @@ class MLChallengerService:
         source_filter_str = ",".join(sorted(_train_sources)) if _train_sources else None
 
         import hashlib as _hashlib
+        label_objective = str(metrics.get("label_objective") or "")
+        label_contract_id = (
+            _hashlib.sha256(
+                f"{label_ver}|{int(win_fast_threshold_s)}|{label_objective}".encode()
+            ).hexdigest()[:32]
+            if label_ver and label_objective
+            else None
+        )
+        feature_contract_id = (
+            _hashlib.sha256(f"{fc_schema_ver}|{fc_hash}".encode()).hexdigest()[:32]
+            if fc_schema_ver and fc_hash
+            else None
+        )
         if source_filter_str and label_ver and model_lane and fc_hash:
             dataset_contract_id = _hashlib.sha256(
                 f"{label_ver}|{model_lane}|{source_filter_str}|{fc_hash}".encode()
@@ -1302,6 +1740,8 @@ class MLChallengerService:
             "model_lane": model_lane,
             "source_filter": source_filter_str,
             "dataset_contract_id": dataset_contract_id,
+            "label_contract_id": label_contract_id,
+            "feature_contract_id": feature_contract_id,
             "train_from": train_from,
             "train_to": train_to,
             "dataset_query_cutoff": dataset_query_cutoff,
@@ -1334,7 +1774,25 @@ class MLChallengerService:
         else:
             _gate_result = evaluate_promotion_gate(_gate_input, promotion_config=_ml_config)
             _metrics_json_dict = merge_promotion_gate_into_metrics_json(_metrics_json_dict, _gate_result)
-        _metrics_json = json.dumps(_metrics_json_dict, default=_json_default)
+        from app.ml.model_governance import governance_from_gate
+        _governance = governance_from_gate(
+            descriptive_gate=(
+                _metrics_json_dict.get("intelligence_gate")
+                if model_lane in {"L3_INTELLIGENCE", "L3_APPROVED_INTELLIGENCE"}
+                else None
+            ),
+            predictive_gate=_gate_result,
+        )
+        _governance_reason = {
+            "promotion_gate_status": _gate_result["status"],
+            "promotion_gate_reasons": _gate_result["reasons"],
+        }
+        _metrics_json_dict = _json_finite(_metrics_json_dict)
+        _metrics_json = json.dumps(
+            _metrics_json_dict,
+            default=_json_default,
+            allow_nan=False,
+        )
         logger.info(
             "[MLChallenger] PromotionGate model_type=%s lane=%s status=%s reasons=%s",
             model_type, model_lane, _gate_result["status"], _gate_result["reasons"],
@@ -1353,8 +1811,12 @@ class MLChallengerService:
                 model_scope, profile_id,
                 label_version, model_lane,
                 metrics_json, target_window_seconds,
-                source_filter, dataset_contract_id
-                , train_from, train_to, dataset_query_cutoff, dataset_hash
+                source_filter, dataset_contract_id,
+                label_contract_id, feature_contract_id,
+                train_from, train_to, dataset_query_cutoff, dataset_hash,
+                descriptive_status, predictive_status,
+                calibration_authority, rule_generation_authority,
+                autopilot_authority, execution_authority, governance_reason
             ) VALUES (
                 :id, :version, 'candidate',
                 :hyperparams, :n_train, :n_val, :n_test,
@@ -1366,13 +1828,21 @@ class MLChallengerService:
                 :scope, :pid,
                 :label_version, :model_lane,
                 :metrics_json, :target_window_seconds,
-                :source_filter, :dataset_contract_id
-                , :train_from, :train_to, :dataset_query_cutoff, :dataset_hash
+                :source_filter, :dataset_contract_id,
+                :label_contract_id, :feature_contract_id,
+                :train_from, :train_to, :dataset_query_cutoff, :dataset_hash,
+                :descriptive_status, :predictive_status,
+                :calibration_authority, :rule_generation_authority,
+                :autopilot_authority, :execution_authority, :governance_reason
             )
         """), {
             "id": str(model_uuid),
             "version": version,
-            "hyperparams": json.dumps(hyperparams_full, default=_json_default),
+            "hyperparams": json.dumps(
+                hyperparams_full,
+                default=_json_default,
+                allow_nan=False,
+            ),
             "n_train": n_train,
             "n_val": n_val,
             "n_test": n_test or None,
@@ -1390,7 +1860,7 @@ class MLChallengerService:
             "notes": (
                 f"Challenger {model_type} | lane={model_lane} | user_id={user_id} | "
                 f"label={label_ver} | win_threshold_s={int(win_fast_threshold_s)} | "
-                f"roc_auc={roc_auc:.4f} | "
+                f"roc_auc={f'{roc_auc:.4f}' if roc_auc is not None else 'N/A'} | "
                 f"prec={f'{precision:.4f}' if precision is not None else 'N/A'} | "
                 f"rec={f'{recall:.4f}' if recall is not None else 'N/A'} | "
                 f"fpr={f'{fpr:.4f}' if fpr is not None else 'N/A'} | "
@@ -1408,10 +1878,14 @@ class MLChallengerService:
             "target_window_seconds": int(win_fast_threshold_s),
             "source_filter": source_filter_str,
             "dataset_contract_id": dataset_contract_id,
+            "label_contract_id": label_contract_id,
+            "feature_contract_id": feature_contract_id,
             "train_from": train_from,
             "train_to": train_to,
             "dataset_query_cutoff": dataset_query_cutoff,
             "dataset_hash": dataset_hash,
+            **_governance,
+            "governance_reason": json.dumps(_governance_reason),
         })
 
         # Registra em ml_model_registry (champion/challenger tracking)
@@ -1445,8 +1919,11 @@ class MLChallengerService:
         })
 
         logger.info(
-            "[MLChallenger] Registered %s model_id=%s roc_auc=%.4f version=%s",
-            model_type, model_uuid, roc_auc, version_str,
+            "[MLChallenger] Registered %s model_id=%s roc_auc=%s version=%s",
+            model_type,
+            model_uuid,
+            f"{roc_auc:.4f}" if roc_auc is not None else "N/A",
+            version_str,
         )
         return model_uuid
 
@@ -1470,6 +1947,8 @@ class MLChallengerService:
         advisory_intelligence: bool = False,
     ) -> str:
         """Return the persisted model_lane for a CatBoost source policy."""
+        if advisory_intelligence and set(cb_sources) == {"L3", "L3_REJECTED"}:
+            return "L3_CONTEXTUAL_INTELLIGENCE"
         if cb_sources == ["L3"]:
             return "L3_APPROVED_INTELLIGENCE" if advisory_intelligence else "L3_PROFILE"
         if cb_sources == ["L3_LAB"]:
@@ -1484,6 +1963,8 @@ class MLChallengerService:
         advisory_intelligence: bool = False,
     ) -> str:
         """Return the governance dataset_policy label for a CatBoost source policy."""
+        if advisory_intelligence and set(cb_sources) == {"L3", "L3_REJECTED"}:
+            return "ALL_CANDIDATES_CONTEXTUAL"
         if cb_sources == ["L3"]:
             return "L3_APPROVED_INTELLIGENCE" if advisory_intelligence else "L3_ONLY"
         if cb_sources == ["L3_LAB"]:
@@ -1491,6 +1972,87 @@ class MLChallengerService:
         if cb_sources == ["L3_REJECTED"]:
             return "L3_REJECTED_ONLY"
         return "L3_COMBINED"
+
+    async def _prepare_catboost_gate_records(
+        self,
+        db: AsyncSession,
+        user_id: UUID,
+        *,
+        lookback_days: int,
+        cb_sources: List[str],
+        dataset_query_cutoff: datetime,
+        ml_config: Dict[str, Any],
+        advisory_intelligence: bool = False,
+        strategy_tp_pct: Optional[float] = None,
+        collect_diagnostics: bool = False,
+    ) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """Prepare the exact CatBoost gate population for train and dry-run."""
+        cb_lane = self._catboost_lane_for_sources(
+            cb_sources, advisory_intelligence=advisory_intelligence
+        )
+        cb_dataset_policy = self._catboost_dataset_policy_for_sources(
+            cb_sources, advisory_intelligence=advisory_intelligence
+        )
+        dataset_valid_from = parse_required_ml_dataset_valid_from(ml_config)
+        l3_dataset_valid_from = dataset_valid_from
+        if ml_config.get("ml_l3_dataset_valid_from") not in (None, ""):
+            l3_dataset_valid_from = parse_required_ml_dataset_valid_from({
+                "ml_dataset_valid_from": ml_config["ml_l3_dataset_valid_from"]
+            })
+        if cb_lane == "L3_APPROVED_INTELLIGENCE":
+            cb_dataset_valid_from = parse_required_ml_dataset_valid_from({
+                "ml_dataset_valid_from": ml_config["ml_l3_intelligence_valid_from"]
+            })
+        elif cb_lane == "L3_INTELLIGENCE":
+            cb_dataset_valid_from = dataset_valid_from
+        else:
+            cb_dataset_valid_from = l3_dataset_valid_from
+
+        cb_all_records = await self._load_shadow_data(
+            db,
+            user_id,
+            lookback_days,
+            cb_sources,
+            dataset_valid_from=cb_dataset_valid_from,
+            dataset_query_cutoff=dataset_query_cutoff,
+            maturity_embargo_margin_minutes=ml_config.get(
+                "ml_maturity_embargo_margin_minutes"
+            ),
+            collect_diagnostics=collect_diagnostics,
+        )
+        maturity_diagnostics = dict(self._last_shadow_load_diagnostics)
+        cb_profile_records = [r for r in cb_all_records if r.get("profile_id")]
+        barrier_meta: Dict[str, Any] = {}
+        if cb_sources in (["L3"], ["L3_REJECTED"]) and cb_lane != "L3_APPROVED_INTELLIGENCE":
+            if ml_config.get("shadow_barrier_mode") in (None, ""):
+                raise ValueError("missing_shadow_barrier_mode_for_l3_dataset_contract")
+            if strategy_tp_pct is None:
+                strategy_tp_pct = await self._load_strategy_tp_pct(db, user_id)
+            cb_records, barrier_meta = _filter_l3_barrier_contract(
+                cb_profile_records,
+                expected_mode=str(ml_config["shadow_barrier_mode"]),
+                expected_tp_pct=strategy_tp_pct,
+            )
+        else:
+            cb_records = cb_profile_records
+
+        l3_meta = self._l3_strict_meta(
+            cb_all_records, cb_profile_records, cb_sources
+        )
+        l3_meta.update(barrier_meta)
+        l3_meta["dataset_policy"] = cb_dataset_policy
+        l3_meta["included_trade_count"] = len(cb_records)
+        l3_meta["dataset_valid_from"] = cb_dataset_valid_from.isoformat()
+        return cb_records, {
+            "lane": cb_lane,
+            "dataset_policy": cb_dataset_policy,
+            "dataset_valid_from": cb_dataset_valid_from,
+            "all_record_count": len(cb_all_records),
+            "records_with_profile": len(cb_profile_records),
+            "maturity_diagnostics": maturity_diagnostics,
+            "barrier_contract": barrier_meta,
+            "l3_strict_meta": l3_meta,
+        }
 
     async def train_challengers(
         self,
@@ -1566,20 +2128,27 @@ class MLChallengerService:
             return {"skipped": "feature_extractor_unavailable"}
 
         ml_config = await self._load_ml_config(db)
+        dataset_query_cutoff = datetime.now(timezone.utc)
+        maturity_embargo_margin_minutes = ml_config.get(
+            "ml_maturity_embargo_margin_minutes"
+        )
+        strategy_tp_pct = await self._load_strategy_tp_pct(db, user_id)
         if "ml_win_fast_threshold_seconds" in ml_config:
             win_fast_threshold_s = float(ml_config["ml_win_fast_threshold_seconds"])
         dataset_valid_from = parse_required_ml_dataset_valid_from(ml_config)
-        l3_dataset_valid_from = dataset_valid_from
-        if ml_config.get("ml_l3_dataset_valid_from") not in (None, ""):
-            l3_dataset_valid_from = parse_required_ml_dataset_valid_from({
-                "ml_dataset_valid_from": ml_config["ml_l3_dataset_valid_from"]
-            })
         min_lgbm_retrain_eligible = (
             _require_positive_int_config(ml_config, "ml_retrain_min_eligible_rows")
             if enable_lightgbm else None
         )
         threshold_grid_step = float(ml_config.get("ml_threshold_grid_step", 0.01))
         threshold_min_positives = int(ml_config.get("ml_threshold_min_positives", 10))
+        promotion_min_test_samples = (
+            _require_positive_int_config(
+                ml_config, "ml_promotion_min_test_samples"
+            )
+            if enable_catboost
+            else None
+        )
         label_objective = str(ml_config.get("ml_label_objective") or "fast_tp")
         if label_objective not in {"fast_tp", "positive_net_return"}:
             raise ValueError(f"unsupported_ml_label_objective:{label_objective}")
@@ -1618,8 +2187,18 @@ class MLChallengerService:
         if enable_lightgbm:
             lgbm_sources = lgbm_source_filter or (source_filter if source_filter else LGBM_TRAIN_SOURCES)
             lgbm_records = await self._load_shadow_data(
-                db, user_id, lookback_days, lgbm_sources, dataset_valid_from=dataset_valid_from
+                db, user_id, lookback_days, lgbm_sources,
+                dataset_valid_from=dataset_valid_from,
+                dataset_query_cutoff=dataset_query_cutoff,
+                maturity_embargo_margin_minutes=maturity_embargo_margin_minutes,
             )
+            lgbm_barrier_meta: Dict[str, Any] = {}
+            if lgbm_sources == ["L1_SPECTRUM"]:
+                lgbm_records, lgbm_barrier_meta = _filter_l3_barrier_contract(
+                    lgbm_records,
+                    expected_mode=str(ml_config.get("shadow_barrier_mode") or "FIXED"),
+                    expected_tp_pct=strategy_tp_pct,
+                )
             logger.info(
                 "[MLChallenger] Lane1/LightGBM: sources=%s records=%d", lgbm_sources, len(lgbm_records),
             )
@@ -1632,6 +2211,9 @@ class MLChallengerService:
                     "sources": lgbm_sources,
                     "dataset_valid_from": dataset_valid_from.isoformat()
                     if hasattr(dataset_valid_from, "isoformat") else str(dataset_valid_from),
+                    "dataset_query_cutoff": dataset_query_cutoff.isoformat(),
+                    "maturity_embargo_margin_minutes": maturity_embargo_margin_minutes,
+                    "barrier_contract": lgbm_barrier_meta,
                 }
             elif len(lgbm_records) < MIN_RECORDS:
                 results["lightgbm"] = {
@@ -1715,7 +2297,7 @@ class MLChallengerService:
                                     "train_sources": lgbm_sources,
                                     "train_from": min(_lgbm_at_tr) if _lgbm_at_tr else None,
                                     "train_to": max(_lgbm_at_tr) if _lgbm_at_tr else None,
-                                    "dataset_query_cutoff": datetime.now(timezone.utc),
+                                    "dataset_query_cutoff": dataset_query_cutoff,
                                     "dataset_hash": hashlib.sha256(
                                         "|".join(sorted(str(x) for x in shadow_ids if x)).encode()
                                     ).hexdigest(),
@@ -1776,63 +2358,49 @@ class MLChallengerService:
                         blocked_reason, cb_sources, user_id,
                     )
                     return results  # skip further processing
+            min_catboost_retrain_eligible = _require_positive_int_config(
+                ml_config, "ml_catboost_retrain_min_eligible_rows"
+            )
             # L3_PROFILE_STRICT policy: load all records first for metadata, then filter.
             # L3 has 66%+ NULL profile_id — training without filter produces a "global/unknown"
             # model, defeating the purpose of the L3_PROFILE lane.
-            cb_lane = self._catboost_lane_for_sources(
-                cb_sources, advisory_intelligence=advisory_intelligence
+            cb_records, cb_gate_meta = await self._prepare_catboost_gate_records(
+                db,
+                user_id,
+                lookback_days=lookback_days,
+                cb_sources=cb_sources,
+                dataset_query_cutoff=dataset_query_cutoff,
+                ml_config=ml_config,
+                advisory_intelligence=advisory_intelligence,
+                strategy_tp_pct=strategy_tp_pct,
             )
-            cb_dataset_policy = self._catboost_dataset_policy_for_sources(
-                cb_sources, advisory_intelligence=advisory_intelligence
-            )
-            if cb_lane == "L3_APPROVED_INTELLIGENCE":
-                cb_dataset_valid_from = parse_required_ml_dataset_valid_from({
-                    "ml_dataset_valid_from": ml_config["ml_l3_intelligence_valid_from"]
-                })
-            elif cb_lane == "L3_INTELLIGENCE":
-                cb_dataset_valid_from = dataset_valid_from
-            else:
-                cb_dataset_valid_from = l3_dataset_valid_from
-            cb_all_records = await self._load_shadow_data(
-                db, user_id, lookback_days, cb_sources, dataset_valid_from=cb_dataset_valid_from
-            )
-            cb_profile_records = [r for r in cb_all_records if r.get("profile_id")]
-            barrier_meta: Dict[str, Any] = {}
-            if cb_sources in (["L3"], ["L3_REJECTED"]) and cb_lane != "L3_APPROVED_INTELLIGENCE":
-                if ml_config.get("shadow_barrier_mode") in (None, ""):
-                    raise ValueError("missing_shadow_barrier_mode_for_l3_dataset_contract")
-                if ml_config.get("shadow_tp_pct") in (None, ""):
-                    raise ValueError("missing_shadow_tp_pct_for_l3_dataset_contract")
-                cb_records, barrier_meta = _filter_l3_barrier_contract(
-                    cb_profile_records,
-                    expected_mode=str(ml_config["shadow_barrier_mode"]),
-                    expected_tp_pct=float(ml_config["shadow_tp_pct"]),
-                )
-            else:
-                cb_records = cb_profile_records
-            l3_meta = self._l3_strict_meta(cb_all_records, cb_profile_records, cb_sources)
-            l3_meta.update(barrier_meta)
-            l3_meta["dataset_policy"] = cb_dataset_policy
-            l3_meta["included_trade_count"] = len(cb_records)
-            l3_meta["dataset_valid_from"] = cb_dataset_valid_from.isoformat()
+            cb_lane = cb_gate_meta["lane"]
+            cb_dataset_policy = cb_gate_meta["dataset_policy"]
+            barrier_meta = cb_gate_meta["barrier_contract"]
+            l3_meta = cb_gate_meta["l3_strict_meta"]
             logger.info(
                 "[MLChallenger] Lane2/CatBoost: sources=%s all=%d strict=%d excluded_null=%d "
                 "distinct_profiles=%d unknown_pct=%.1f%%",
-                cb_sources, len(cb_all_records), len(cb_records),
+                cb_sources, cb_gate_meta["all_record_count"], len(cb_records),
                 l3_meta["excluded_null_profile_id"],
                 l3_meta["distinct_profiles"],
                 l3_meta["unknown_profile_pct"],
             )
-            if len(cb_records) < MIN_RECORDS:
-                    results["catboost"] = {
-                        "status": "skipped",
-                        "reason": (
-                            "insufficient_barrier_contract_data"
-                            if barrier_meta else "insufficient_data"
-                        ),
+            if (
+                min_catboost_retrain_eligible is not None
+                and len(cb_records) < min_catboost_retrain_eligible
+            ):
+                results["catboost"] = {
+                    "status": "skipped",
+                    "reason": "insufficient_retrain_eligible_rows",
                     "records": len(cb_records),
-                    "min_required": MIN_RECORDS,
+                    "min_required": min_catboost_retrain_eligible,
+                    "deficit": min_catboost_retrain_eligible - len(cb_records),
                     "sources": cb_sources,
+                    "dataset_query_cutoff": dataset_query_cutoff.isoformat(),
+                    "maturity_embargo_margin_minutes": maturity_embargo_margin_minutes,
+                    "maturity_diagnostics": cb_gate_meta["maturity_diagnostics"],
+                    "barrier_contract": barrier_meta,
                     "l3_strict_meta": l3_meta,
                 }
             elif _is_installed("catboost"):
@@ -1849,16 +2417,25 @@ class MLChallengerService:
                         label_objective=label_objective,
                         fee_roundtrip_pct=float(ml_config["ml_fee_roundtrip_pct"]),
                     )
-                    if len(y) < MIN_RECORDS:
-                        results["catboost"] = {"status": "skipped", "reason": "insufficient_labeled"}
+                    if len(y) < min_catboost_retrain_eligible:
+                        results["catboost"] = {
+                            "status": "skipped",
+                            "reason": "insufficient_labeled",
+                            "records": len(y),
+                            "min_required": min_catboost_retrain_eligible,
+                        }
                     else:
                         _cb_split = self._chronological_split_with_embargo(
                             X, y,
                             metadata=[returns, created_at, shadow_ids, snapshot_keys],
                             created_at=created_at,
                             holding_seconds=holding_seconds,
+                            group_ids=snapshot_keys,
                             val_fraction=VAL_FRACTION,
                             embargo_seconds=embargo_seconds,
+                            min_train_size=min_catboost_retrain_eligible,
+                            min_validation_size=threshold_min_positives,
+                            min_test_size=promotion_min_test_samples,
                         )
                         X_tr, y_tr = _cb_split["X_tr"], _cb_split["y_tr"]
                         X_va, y_va = _cb_split["X_va"], _cb_split["y_va"]
@@ -1892,13 +2469,29 @@ class MLChallengerService:
                         ]
                         logger.info(
                             "[MLChallenger] CatBoost split: train=%d val=%d test=%d "
-                            "purged=%d embargoed=%d embargo_s=%d",
+                            "purged_train=%d purged_validation=%d group_purged=%d "
+                            "embargoed_test=%d embargo_s=%d strategy=%s",
                             len(y_tr), len(y_va),
                             len(y_te) if y_te is not None else 0,
-                            _cb_split["n_purged"], _cb_split["n_embargoed"],
+                            _cb_split["n_purged"],
+                            _cb_split["n_purged_val_test"],
+                            _cb_split["n_group_purged"],
+                            _cb_split["n_embargoed"],
                             embargo_seconds,
+                            _cb_split["split_diagnostics"]["split_strategy"],
                         )
-                        if len(y_va) < 10:
+                        if not _cb_split["has_test"]:
+                            results["catboost"] = {
+                                "status": "skipped",
+                                "reason": _cb_split["split_diagnostics"].get(
+                                    "block_reason",
+                                    "insufficient_promotion_holdout",
+                                ),
+                                "records": len(y),
+                                "min_test_samples": promotion_min_test_samples,
+                                "split_diagnostics": _cb_split["split_diagnostics"],
+                            }
+                        elif len(y_va) < threshold_min_positives:
                             results["catboost"] = {"status": "skipped", "reason": "val_too_small"}
                         else:
                             logger.info(
@@ -1940,10 +2533,11 @@ class MLChallengerService:
                                     "train_sources": cb_sources,
                                     "train_from": min(_cb_split["meta_tr"][1]) if _cb_split["meta_tr"][1] else None,
                                     "train_to": max(_cb_split["meta_tr"][1]) if _cb_split["meta_tr"][1] else None,
-                                    "dataset_query_cutoff": datetime.now(timezone.utc),
+                                    "dataset_query_cutoff": dataset_query_cutoff,
                                     "dataset_hash": hashlib.sha256(
                                         "|".join(sorted(str(x) for x in shadow_ids if x)).encode()
                                     ).hexdigest(),
+                                    "split_diagnostics": _cb_split["split_diagnostics"],
                                     "dataset_policy": cb_dataset_policy,
                                     "cat_features": [all_cols[i] for i in cat_indices],
                                     "label_objective": label_objective,

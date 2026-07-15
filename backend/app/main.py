@@ -31,6 +31,7 @@ from .api import (
     debug_indicators,
     simulations,
     ml,
+    crypto_ev,
     spot_engine,
     futures_engine,
     system,
@@ -420,6 +421,7 @@ app.include_router(live_log_stream.router)
 
 # Machine Learning
 app.include_router(ml.router)
+app.include_router(crypto_ev.router)
 
 # Notifications
 app.include_router(notifications.router)
@@ -475,6 +477,10 @@ app.include_router(pi_live_api.router)
 # Calibration Evolution — read-only audit/governance dashboard.
 from .api import calibration_evolution as calibration_evolution_api  # noqa: E402
 app.include_router(calibration_evolution_api.router)
+
+# Calibration Evolution v2 — immutable Recommendation → Proposal → Shadow.
+from .api import calibration_evolution_v2 as calibration_evolution_v2_api  # noqa: E402
+app.include_router(calibration_evolution_v2_api.router)
 
 # Operational Co-Pilot - read-only analysis, human-approved shadow candidates.
 from .copilot import router as copilot_api  # noqa: E402
