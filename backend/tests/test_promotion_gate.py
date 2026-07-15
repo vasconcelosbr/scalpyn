@@ -35,6 +35,11 @@ PROMOTION_CONFIG = {
     "ml_promotion_max_val_test_gap": 0.15,
     "ml_promotion_max_test_fpr": 0.55,
     "ml_promotion_require_positive_net_ev": True,
+    # Fase 1.5 P3 — gates estatísticos DESLIGADOS aqui (False/0): esta suíte
+    # cobre os gates originais; os novos têm cobertura própria em
+    # test_fase15_approval_gates.py. As chaves precisam existir (REQUIRED).
+    "ml_approval_test_auc_ci_excludes_half": False,
+    "ml_approval_min_distinct_days": 0,
 }
 
 

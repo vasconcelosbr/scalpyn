@@ -26,6 +26,10 @@ REQUIRED_CONFIG_KEYS = (
     "ml_promotion_max_val_test_gap",
     "ml_promotion_max_test_fpr",
     "ml_promotion_require_positive_net_ev",
+    # Fase 1.5 P3 — gates estatísticos de aprovação (opção degradada explícita:
+    # split único leak-free + gate duro no test em vez de CV walk-forward).
+    "ml_approval_test_auc_ci_excludes_half",
+    "ml_approval_min_distinct_days",
 )
 
 APPROVED = "APPROVED"
@@ -86,6 +90,8 @@ def evaluate_promotion_gate(
     max_generalization_gap = float(cfg["ml_promotion_max_val_test_gap"])
     max_test_fpr = float(cfg["ml_promotion_max_test_fpr"])
     require_positive_net_ev = bool(cfg["ml_promotion_require_positive_net_ev"])
+    ci_excludes_half = bool(cfg["ml_approval_test_auc_ci_excludes_half"])
+    min_distinct_days = int(cfg["ml_approval_min_distinct_days"])
 
     metrics_json = model_row.get("metrics_json") or {}
     test = metrics_json.get("test") or {}
@@ -141,6 +147,37 @@ def evaluate_promotion_gate(
     if test_fpr is not None and test_fpr > max_test_fpr:
         rejected = True
         reasons.append(f"test_fpr_exceeded:{test_fpr:.4f}>{max_test_fpr}")
+
+    # ---- Fase 1.5 P3 — CI bootstrap do test AUC exclui 0.5 --------------------
+    # Rede de segurança para a seleção em val fixo (Caso B): o AUC de teste
+    # precisa ser estatisticamente > 0.5 (limite inferior do IC bootstrap
+    # acima de 0.5), não só o ponto. Pega o v80 (ponto alto, IC largo/ambíguo).
+    if ci_excludes_half:
+        test_auc_ci_low = _finite_float(test.get("roc_auc_ci_low"))
+        if test_auc_ci_low is None:
+            rejected = True
+            reasons.append("missing_test_roc_auc_ci_low")
+        elif test_auc_ci_low <= ABSOLUTE_MIN_TEST_AUC:
+            rejected = True
+            reasons.append(
+                f"test_auc_ci_includes_half:ci_low={test_auc_ci_low:.4f}"
+                f"<={ABSOLUTE_MIN_TEST_AUC}"
+            )
+
+    # ---- Fase 1.5 P3 — cobertura temporal mínima do test ---------------------
+    # min_distinct_days == 0 desliga o gate (semântica explícita de "sem
+    # requisito de cobertura temporal").
+    if min_distinct_days > 0:
+        test_distinct_days = test.get("distinct_days")
+        if test_distinct_days is None:
+            rejected = True
+            reasons.append("missing_test_distinct_days")
+        elif int(test_distinct_days) < min_distinct_days:
+            rejected = True
+            reasons.append(
+                f"test_distinct_days_below_minimum:{int(test_distinct_days)}"
+                f"<{min_distinct_days}"
+            )
 
     test_net_ev = test.get("net_ev") if isinstance(test, dict) else None
     if test_net_ev is None:
@@ -221,6 +258,8 @@ def evaluate_promotion_gate(
             "max_generalization_gap": max_generalization_gap,
             "max_test_fpr": max_test_fpr,
             "require_positive_net_ev": require_positive_net_ev,
+            "ci_excludes_half": ci_excludes_half,
+            "min_distinct_days": min_distinct_days,
         },
         "metrics": {
             "test_roc_auc": test_auc,
@@ -228,6 +267,8 @@ def evaluate_promotion_gate(
             "test_samples": test_samples,
             "test_fpr": test_fpr,
             "test_net_ev": test_net_ev,
+            "test_roc_auc_ci_low": _finite_float(test.get("roc_auc_ci_low")),
+            "test_distinct_days": test.get("distinct_days"),
         },
     }
 

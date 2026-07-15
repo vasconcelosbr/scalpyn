@@ -397,6 +397,38 @@ def _suggest_params_from_space(trial, search_space: Dict[str, Any]) -> Dict[str,
     return params
 
 
+def _bootstrap_auc_ci_low(
+    y_true, y_pred, level: float, n_boot: int, seed: int
+) -> Optional[float]:
+    """Limite inferior do IC bootstrap (percentil) do ROC AUC de teste.
+
+    Fase 1.5 P3 — rede de segurança da seleção em val fixo (Caso B): reamostra
+    (y_true, y_pred) com reposição n_boot vezes, recalcula o AUC, e devolve o
+    percentil inferior do IC bilateral no nível `level`. Determinístico (seed).
+    Retorna None se não houver as duas classes (AUC indefinido).
+    """
+    import numpy as np
+    from sklearn.metrics import roc_auc_score
+
+    y_true = np.asarray(y_true)
+    y_pred = np.asarray(y_pred)
+    n = len(y_true)
+    if n < 2 or len(np.unique(y_true)) < 2:
+        return None
+    rng = np.random.default_rng(int(seed))
+    aucs: list[float] = []
+    for _ in range(int(n_boot)):
+        idx = rng.integers(0, n, size=n)
+        yt = y_true[idx]
+        if len(np.unique(yt)) < 2:
+            continue
+        aucs.append(float(roc_auc_score(yt, y_pred[idx])))
+    if not aucs:
+        return None
+    lower_pct = (1.0 - float(level)) / 2.0 * 100.0
+    return float(np.percentile(aucs, lower_pct))
+
+
 def _train_lgbm_sync(
     X_train, y_train, X_val, y_val,
     n_trials: int = 30,
@@ -405,6 +437,10 @@ def _train_lgbm_sync(
     threshold_grid_step: float = 0.01,
     threshold_min_positives: int = 10,
     search_space: Optional[Dict[str, Any]] = None,
+    seed: int = 42,
+    optuna_timeout_s: int = 180,
+    auc_ci_level: float = 0.95,
+    bootstrap_iterations: int = 2000,
 ) -> Dict[str, Any]:
     import lightgbm as lgb
     import numpy as np
@@ -432,6 +468,12 @@ def _train_lgbm_sync(
         "verbosity": -1,
         "boosting_type": "gbdt",
         "feature_pre_filter": False,
+        # Fase 1.5 P3 — determinismo: seed em todas as fontes de aleatoriedade
+        # do LightGBM para tornar a seleção/treino reproduzíveis.
+        "seed": int(seed),
+        "bagging_seed": int(seed),
+        "feature_fraction_seed": int(seed),
+        "deterministic": True,
     }
     _trial_selection_objective = "net_ev" if val_returns is not None else "roc_auc"
 
@@ -456,8 +498,16 @@ def _train_lgbm_sync(
                 return -float("inf")
         return float(roc_auc_score(y_val, preds))
 
-    study = optuna.create_study(direction="maximize")
-    study.optimize(objective, n_trials=n_trials, timeout=180, show_progress_bar=False)
+    # Fase 1.5 P3 — sampler com seed: a seleção de hiperparâmetros passa a ser
+    # reproduzível (antes create_study() sem seed → TPE aleatório por execução).
+    study = optuna.create_study(
+        direction="maximize",
+        sampler=optuna.samplers.TPESampler(seed=int(seed)),
+    )
+    study.optimize(
+        objective, n_trials=n_trials,
+        timeout=int(optuna_timeout_s), show_progress_bar=False,
+    )
 
     best_params = {
         **study.best_params,
@@ -498,6 +548,12 @@ def _train_lgbm_sync(
             "samples": int(len(y_test)),
             "positive_rate": float(np.asarray(y_test).mean()),
             "net_ev": float(np.nanmean(np.asarray(test_returns)[t_bin == 1])) if test_returns is not None and int(t_bin.sum()) > 0 else None,
+            # Fase 1.5 P3 — limite inferior do IC bootstrap do AUC de teste
+            # (gate ml_approval_test_auc_ci_excludes_half): o AUC precisa ser
+            # estatisticamente > 0.5, não só no ponto.
+            "roc_auc_ci_low": _bootstrap_auc_ci_low(
+                y_test, t_preds, auc_ci_level, bootstrap_iterations, seed
+            ),
         }
 
     return {
@@ -1790,6 +1846,9 @@ class MLChallengerService:
                 "weighted_roc_auc": (test_metrics or {}).get("weighted_roc_auc"),
                 "weighted_brier": (test_metrics or {}).get("weighted_brier"),
                 "effective_snapshots": (test_metrics or {}).get("effective_snapshots"),
+                # Fase 1.5 P3 — gates estatísticos de aprovação.
+                "roc_auc_ci_low": (test_metrics or {}).get("roc_auc_ci_low"),
+                "distinct_days": (test_metrics or {}).get("distinct_days"),
             } if test_metrics else None,
             "feature_importance": _feature_importance or None,
         }
@@ -2373,6 +2432,16 @@ class MLChallengerService:
                             "(config_type='ml') antes do treino"
                         )
                     n_trials_lgbm = int(_raw_optuna_trials)
+                    # Fase 1.5 P3 — determinismo + gates estatísticos, tudo de
+                    # config (fail-closed). Reutiliza o helper do gate.
+                    _train_seed = _require_positive_int_config(ml_config, "ml_training_seed")
+                    _bootstrap_iters = _require_positive_int_config(
+                        ml_config, "ml_approval_bootstrap_iterations"
+                    )
+                    if ml_config.get("ml_approval_auc_ci_level") is None:
+                        raise ValueError("missing_ml_approval_auc_ci_level")
+                    _auc_ci_level = float(ml_config["ml_approval_auc_ci_level"])
+                    _optuna_timeout = int(ml_config.get("ml_optuna_timeout_seconds", 180))
                     lgbm_search_space = (
                         ml_config.get("ml_optuna_search_space") or {}
                     ).get("lightgbm")
@@ -2423,7 +2492,22 @@ class MLChallengerService:
                                 X_tr, y_tr, X_va, y_va, n_trials_lgbm, X_te, y_te,
                                 ret_va, ret_te, threshold_grid_step, threshold_min_positives,
                                 lgbm_search_space,
+                                seed=_train_seed,
+                                optuna_timeout_s=_optuna_timeout,
+                                auc_ci_level=_auc_ci_level,
+                                bootstrap_iterations=_bootstrap_iters,
                             )
+                            # Fase 1.5 P3 — cobertura temporal do test (gate
+                            # ml_approval_min_distinct_days): dias UTC distintos
+                            # entre os created_at do split de teste.
+                            _lgbm_at_te = (
+                                _lgbm_split["meta_te"][1]
+                                if _lgbm_split.get("has_test") else None
+                            )
+                            if lgbm_result.get("test_metrics") and _lgbm_at_te:
+                                lgbm_result["test_metrics"]["distinct_days"] = len({
+                                    _ts.date() for _ts in _lgbm_at_te if _ts is not None
+                                })
                             _lgbm_at_tr = _lgbm_split["meta_tr"][1]  # created_at post-purge train rows
                             _lgbm_n = (
                                 len(y_tr) + len(y_va)
