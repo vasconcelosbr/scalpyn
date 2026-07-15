@@ -198,6 +198,8 @@ drift_net   = +30   (shadow_trades tem 30 a mais com net_return)
 
 ### [12] Config ML ✅
 
+> ⚠️ SUPERSEDED (2026-07-15): o valor canônico de `ml_win_fast_threshold_seconds` é **14400** (`is_tp_4h_v1`), decisão formal do operador na Fase 1.2 (P2), coerente com o contrato D1=A / TP ATR-dinâmico 240 min. O `1800 [OK]` abaixo reflete estado anterior ao contrato `shadow_atr_dynamic_v2`. Ver `RELATORIO_FASE1_2_DEPLOY_CALIBRACAO_2026-07-15.md`.
+
 ```
 ml_fee_roundtrip_pct          = 0.20   [OK]
 ml_label_net_of_fees          = true   [OK]

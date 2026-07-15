@@ -218,6 +218,8 @@ Correcao B6: remover `source_encoded` quando constante e nao usar `profile_id_en
 
 Veredito: drift operacional.
 
+> ⚠️ SUPERSEDED (2026-07-15): o valor canônico de `ml_win_fast_threshold_seconds` é **14400** (`is_tp_4h_v1`), decisão formal do operador na Fase 1.2 (P2), coerente com o contrato D1=A / TP ATR-dinâmico 240 min. O `win_threshold_s=1800` do v50 abaixo reflete estado anterior ao contrato `shadow_atr_dynamic_v2` — o "drift" documentado aqui foi formalmente resolvido a favor de 14400. Ver `RELATORIO_FASE1_2_DEPLOY_CALIBRACAO_2026-07-15.md`.
+
 Evidencia:
 
 - Config ativa `config_type='ml'`: `ml_win_fast_threshold_seconds=14400`, `ml_dataset_valid_from=2026-06-14 21:33:10.277143+00`.
