@@ -126,3 +126,77 @@ def test_bootstrap_auc_ci_low_none_on_single_class():
     y = np.ones(50, dtype=int)
     p = np.random.default_rng(1).random(50)
     assert _bootstrap_auc_ci_low(y, p, 0.95, 200, 42) is None
+
+
+# ── P4 — capture (win_fast_capture_rate) persistido pelo path atual ──────────
+
+class _AnyResult:
+    def fetchone(self):
+        return ("00000000-0000-0000-0000-000000000009",)
+
+    def first(self):
+        return (1,)  # contrato de lane registrado
+
+    def scalar(self):
+        return 0
+
+    def scalar_one(self):
+        return 0
+
+
+class _PermissiveSession:
+    def __init__(self):
+        self.executed = []
+
+    async def execute(self, statement, params=None):
+        self.executed.append((str(statement), params or {}))
+        return _AnyResult()
+
+    async def commit(self):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_save_to_db_persists_capture_as_test_recall(monkeypatch):
+    """P4 — MLChallengerService grava win_fast_capture_rate = recall do test
+    (antes ficava NULL; card mostrava capture=—)."""
+    from uuid import uuid4
+    from datetime import datetime, timezone
+    from app.services.ml_challenger_service import MLChallengerService
+
+    svc = MLChallengerService()
+
+    async def _ver(db):
+        return 999
+
+    async def _cfg(db):
+        return {}
+
+    monkeypatch.setattr(svc, "_next_version", _ver)
+    monkeypatch.setattr(svc, "_load_ml_config", _cfg)
+
+    now = datetime.now(timezone.utc)
+    metrics = {
+        "roc_auc": 0.7, "f1": 0.5, "precision": 0.5, "recall": 0.4, "fpr": 0.1,
+        "train_samples": 400, "val_samples": 120,
+        "train_from": now.isoformat(), "train_to": now.isoformat(),
+        "dataset_query_cutoff": now.isoformat(), "dataset_hash": "deadbeef",
+        "label_objective": "positive_net_return", "train_sources": ["L1_SPECTRUM"],
+    }
+    # recall do TEST = 0.6234 → deve virar win_fast_capture_rate
+    test_metrics = {"roc_auc": 0.66, "recall": 0.6234, "precision": 0.5,
+                    "fpr": 0.2, "samples": 400, "net_ev": 0.3}
+    db = _PermissiveSession()
+    await svc._save_to_db(
+        db, model_type="lightgbm", model_obj={"stub": True},
+        feature_columns=["rsi", "adx"], metrics=metrics, threshold=0.5,
+        profile_id=None, user_id=uuid4(), model_lane="L1_SPECTRUM",
+        test_metrics=test_metrics, win_fast_threshold_s=14400.0,
+        dataset_stats={"n_samples": 520, "n_positive": 160,
+                       "n_negative": 360, "positive_rate": 0.3077},
+    )
+    ml_insert = next(
+        (p for stmt, p in db.executed if "INSERT INTO ml_models" in stmt), None
+    )
+    assert ml_insert is not None, "INSERT em ml_models não ocorreu"
+    assert ml_insert["win_fast_capture_rate"] == 0.6234

@@ -1934,6 +1934,7 @@ class MLChallengerService:
                 id, version, status,
                 hyperparams, train_samples, val_samples, test_samples,
                 f1_score, roc_auc, precision_score, recall_score, false_positive_rate,
+                win_fast_capture_rate,
                 feature_columns_json, feature_count,
                 feature_columns_hash, feature_schema_version,
                 model_path, decision_threshold,
@@ -1951,6 +1952,7 @@ class MLChallengerService:
                 :id, :version, 'candidate',
                 :hyperparams, :n_train, :n_val, :n_test,
                 :f1, :roc_auc, :precision, :recall, :fpr,
+                :win_fast_capture_rate,
                 :feature_columns_json, :feature_count,
                 :feature_columns_hash, :feature_schema_version,
                 :model_path, :threshold,
@@ -1981,6 +1983,10 @@ class MLChallengerService:
             "precision": precision,
             "recall": recall,
             "fpr": fpr,
+            # Fase 1.5 P4 — capture = win_fast_capture_rate = recall do positivo
+            # no test (mesma definição do trainer legado). Valor já computado;
+            # antes não era persistido pelo MLChallengerService (NULL em v74-v81).
+            "win_fast_capture_rate": (test_metrics or {}).get("recall"),
             "feature_columns_json": json.dumps(feature_columns),
             "feature_count": len(feature_columns),
             "feature_columns_hash": fc_hash,
