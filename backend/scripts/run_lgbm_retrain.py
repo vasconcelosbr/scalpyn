@@ -40,7 +40,9 @@ logger = logging.getLogger("lgbm_retrain")
 DRY_RUN = "--dry-run" in sys.argv
 
 USER_ID = UUID("8080110c-ee9d-4a2b-a53f-6bef86dd8867")
-WIN_THRESHOLD_S = 14400.0  # is_tp_4h_v2_sim_outcome
+# Fase 1 B.3 — win threshold vem EXCLUSIVAMENTE da config ml ativa
+# (ml_win_fast_threshold_seconds). Valor hardcoded aqui causou o v80 (14400
+# contra contrato canônico 1800).
 LOOKBACK_DAYS = int(os.getenv("ML_CHALLENGER_LOOKBACK_DAYS", "60"))
 
 
@@ -64,7 +66,7 @@ async def main():
     AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     logger.info("Connecting to DB: %s", db_url.split("@")[-1])
-    logger.info("DRY_RUN=%s  USER_ID=%s  WIN_THRESHOLD_S=%s", DRY_RUN, USER_ID, WIN_THRESHOLD_S)
+    logger.info("DRY_RUN=%s  USER_ID=%s  (win threshold: config ml_win_fast_threshold_seconds)", DRY_RUN, USER_ID)
 
     async with AsyncSessionLocal() as db:
         from backend.app.services.ml_challenger_service import (
@@ -116,7 +118,8 @@ async def main():
                     "barrier_contract": barrier_meta,
                 }
             from backend.app.ml.feature_extractor import FEATURE_COLUMNS
-            X, y, cols, *_ = svc._build_dataset(records, list(FEATURE_COLUMNS), WIN_THRESHOLD_S)
+            _win_threshold_s = float(ml_config["ml_win_fast_threshold_seconds"])
+            X, y, cols, *_ = svc._build_dataset(records, list(FEATURE_COLUMNS), _win_threshold_s)
             pos_rate = float(y.mean()) if len(y) else 0
             logger.info("[DRY-RUN] Dataset: rows=%d features=%d positive_rate=%.2f%%", len(y), len(cols), pos_rate * 100)
             return {
@@ -136,7 +139,6 @@ async def main():
             user_id=USER_ID,
             enable_lightgbm=True,
             enable_catboost=False,
-            win_fast_threshold_s=WIN_THRESHOLD_S,
         )
 
         logger.info("Resultado: %s", result)

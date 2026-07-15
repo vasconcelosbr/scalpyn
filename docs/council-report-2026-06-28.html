@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LLM Council — Phase 3 Profile Intelligence · 2026-06-28</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #f9f9f8;
+    color: #1a1a1a;
+    font-size: 15px;
+    line-height: 1.65;
+    padding: 32px 16px 80px;
+  }
+  .container { max-width: 860px; margin: 0 auto; }
+
+  /* Header */
+  .header { border-bottom: 2px solid #1a1a1a; padding-bottom: 20px; margin-bottom: 32px; }
+  .header-label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px;
+    color: #666; font-weight: 600; margin-bottom: 8px;
+  }
+  .header-title { font-size: 24px; font-weight: 700; line-height: 1.3; margin-bottom: 12px; }
+  .header-meta { font-size: 13px; color: #555; }
+
+  /* Question box */
+  .question-box {
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-left: 4px solid #1a1a1a;
+    border-radius: 4px;
+    padding: 16px 20px;
+    margin-bottom: 32px;
+    font-size: 14px;
+    color: #333;
+  }
+  .question-box strong { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #888; margin-bottom: 6px; }
+
+  /* Verdict */
+  .verdict { background: #fff; border: 1px solid #e0e0e0; border-radius: 6px; padding: 28px; margin-bottom: 32px; }
+  .verdict-label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px;
+    color: #888; font-weight: 600; margin-bottom: 18px;
+  }
+  .verdict h2 {
+    font-size: 16px; font-weight: 700; margin: 24px 0 10px;
+    padding-bottom: 6px; border-bottom: 1px solid #eee;
+    color: #1a1a1a;
+  }
+  .verdict h2:first-of-type { margin-top: 0; }
+  .verdict p { margin-bottom: 12px; color: #333; }
+  .verdict ul { padding-left: 20px; margin-bottom: 12px; }
+  .verdict li { margin-bottom: 6px; color: #333; }
+  .verdict strong { color: #1a1a1a; }
+
+  /* Recommendation box */
+  .recommendation-box {
+    background: #f0f7ff;
+    border: 1px solid #c8dff7;
+    border-radius: 6px;
+    padding: 20px 24px;
+    margin: 16px 0;
+  }
+  .recommendation-box p { color: #1a3a5c; }
+
+  /* First action box */
+  .first-action {
+    background: #1a1a1a;
+    color: #fff;
+    border-radius: 6px;
+    padding: 20px 24px;
+    margin: 20px 0 0;
+  }
+  .first-action .label { font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: #aaa; margin-bottom: 8px; font-weight: 600; }
+  .first-action p { color: #f0f0f0; font-size: 15px; font-weight: 500; }
+
+  /* Advisor alignment grid */
+  .alignment-section { margin-bottom: 32px; }
+  .alignment-title {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px;
+    color: #888; font-weight: 600; margin-bottom: 12px;
+  }
+  .advisor-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+  .advisor-card {
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    padding: 12px 10px;
+    text-align: center;
+    background: #fff;
+  }
+  .advisor-card .name { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+  .advisor-card .position {
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 12px;
+    display: inline-block;
+    font-weight: 600;
+  }
+  .pos-d { background: #fef3c7; color: #92400e; }
+  .pos-c { background: #d1fae5; color: #065f46; }
+  .pos-b { background: #dbeafe; color: #1e40af; }
+
+  /* Collapsibles */
+  details { margin-bottom: 8px; }
+  summary {
+    cursor: pointer;
+    padding: 12px 16px;
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 600;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    list-style: none;
+  }
+  summary::-webkit-details-marker { display: none; }
+  summary::before {
+    content: "▶";
+    font-size: 10px;
+    color: #888;
+    transition: transform 0.2s;
+    flex-shrink: 0;
+  }
+  details[open] summary::before { transform: rotate(90deg); }
+  details[open] summary { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+  .detail-body {
+    border: 1px solid #e0e0e0;
+    border-top: none;
+    border-bottom-left-radius: 4px;
+    border-bottom-right-radius: 4px;
+    padding: 16px 20px;
+    background: #fff;
+    font-size: 14px;
+    color: #333;
+    line-height: 1.7;
+  }
+  .detail-body p { margin-bottom: 10px; }
+  .detail-body p:last-child { margin-bottom: 0; }
+  .detail-body strong { color: #1a1a1a; }
+  .detail-body ol, .detail-body ul { padding-left: 20px; margin-bottom: 10px; }
+  .detail-body li { margin-bottom: 5px; }
+
+  /* Advisor color accents */
+  .contrarian summary { border-left: 3px solid #dc2626; }
+  .first-principles summary { border-left: 3px solid #7c3aed; }
+  .expansionist summary { border-left: 3px solid #0891b2; }
+  .outsider summary { border-left: 3px solid #d97706; }
+  .executor summary { border-left: 3px solid #16a34a; }
+
+  .badge {
+    font-size: 10px; padding: 2px 8px; border-radius: 10px;
+    font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+    margin-left: auto;
+  }
+  .badge-danger { background: #fee2e2; color: #991b1b; }
+  .badge-success { background: #d1fae5; color: #065f46; }
+  .badge-neutral { background: #f3f4f6; color: #4b5563; }
+  .badge-warning { background: #fef3c7; color: #92400e; }
+
+  /* Peer review section */
+  .peer-section { margin-bottom: 32px; }
+
+  /* Footer */
+  footer {
+    margin-top: 48px;
+    padding-top: 20px;
+    border-top: 1px solid #e0e0e0;
+    font-size: 12px;
+    color: #888;
+    text-align: center;
+  }
+
+  /* Section headers */
+  .section-header {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px;
+    color: #888; font-weight: 600; margin-bottom: 12px; margin-top: 32px;
+  }
+  .section-header:first-child { margin-top: 0; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-label">LLM Council · Scalpyn / Profile Intelligence</div>
+    <div class="header-title">Phase 3: Como implementar o pipeline de calibração de profiles?</div>
+    <div class="header-meta">2026-06-28 &nbsp;·&nbsp; 5 advisors &nbsp;·&nbsp; 5 reviewers &nbsp;·&nbsp; Chairman synthesis</div>
+  </div>
+
+  <!-- Question -->
+  <div class="question-box">
+    <strong>Questão submetida ao conselho</strong>
+    O audit confirmou que Phase 3 do pipeline Profile Intelligence (shadow validation → aplicar calibração ao config do profile) <strong>nunca foi implementada</strong>. 1.784 ajustes stuck em PENDING_VALIDATION; constraint do banco bloqueia auto-apply; <code>current_value=null</code> em 100% das sugestões; todos os diffs idênticos (buy threshold 65→70, default +5). Qual das 4 opções (A: UI manual, B: ciclo automático, C: híbrido, D: repensar primeiro) é a abordagem correta para implementar Phase 3?
+  </div>
+
+  <!-- Chairman Verdict -->
+  <div class="verdict">
+    <div class="verdict-label">Veredicto do Chairman</div>
+
+    <h2>Onde o conselho concorda</h2>
+    <p>Todos os advisors que analisaram a evidência chegaram ao mesmo diagnóstico: os 1.784 registros <strong>não são um backlog a processar — são artefatos de um sistema que nunca funcionou corretamente</strong>. Dois bugs os tornam irrecuperáveis no estado atual: <code>current_value=null</code> significa que não existe baseline, e o diff uniforme de +5 significa que nenhuma análise foi executada. Opções A, B e C pressupõem inputs que não existem. D não é uma opção — é um pré-requisito.</p>
+    <p>O Executor foi eleito o mais forte por todos os 5 revisores porque foi o único que tratou D como precondição e então nomeou o que construir <em>depois</em>. O Expansionista foi eleito o mais perigoso por todos os 5 porque "construção concorrente" é uma corrida contra uma fundação quebrada.</p>
+
+    <h2>Onde o conselho diverge</h2>
+    <p><strong>Sequenciamento vs. paralelismo.</strong> O Expansionista argumenta que corrigir o sinal e construir o ciclo de auto-apply podem ocorrer em paralelo. Todos os outros advisors — e todos os 5 revisores — discordam. A dependência é estrutural: <code>run_apply_cycle()</code> não pode executar um gate de win_rate quando a baseline é null.</p>
+    <p><strong>Option C vs. parar no D.</strong> Contrarian e First Principles dizem que D é a resposta completa — não arquitetar Phase 3 até que sinal válido exista. O Executor diz que C é o destino correto após os dois bugs serem corrigidos. O desempate vem do insight da constraint do banco: Option C <em>já está arquitetada no schema</em> (<code>mutation_applied=false OR requires_human_approval=true</code>). Option B requer uma migração para alterar essa constraint. O schema resolveu este debate antes do conselho se reunir.</p>
+    <p><strong>Destino dos 1.784 registros corrompidos.</strong> Nenhum advisor endereçou isso explicitamente. Os revisores identificaram. É uma questão operacional live que deve ser resolvida antes de re-executar a análise.</p>
+
+    <h2>Blind spots que o conselho capturou</h2>
+    <p>Três gaps, todos identificados pelos revisores, todos mais urgentes do que o debate arquitetural:</p>
+    <p><strong>1. O generator ainda está rodando (crítico).</strong> Ninguém perguntou se o INSERT quebrado está gerando novos registros corrompidos agora. Se o ciclo de sugestões está ativo, o número 1.784 está crescendo. Cada etapa "aguardar próximo ciclo" em qualquer plano popula com dados novos inválidos. Isto deve ser a primeira ação.</p>
+    <p><strong>2. Volume de shadow trades por profile é desconhecido.</strong> 32 profiles, nenhum live. Se cada profile tem poucos shadow completions, nenhum gate estatístico pode atingir significância independentemente da qualidade do sinal. Toda a viabilidade do win_rate gate depende desse número.</p>
+    <p><strong>3. Shadow monitor estava quebrado até 2026-06-27 (crítico de domínio).</strong> Zero completions de shadow trades de 25/06 a 27/06 por causa de um <code>NoReferencedTableError</code> em <code>ml_opportunity_rankings</code>. Mesmo após corrigir os dois bugs, pode não haver shadow trades fechados suficientes para qualquer gate estatístico durante semanas. O repair do shadow monitor em 27/06 inicia o relógio — não o zera.</p>
+
+    <h2>A Recomendação</h2>
+    <div class="recommendation-box">
+      <p><strong>Construir Option C, em sequência estrita, começando com um stop.</strong></p>
+      <p>O destino arquitetural é Option C: validar automaticamente um gate de performance, então exigir confirmação humana de um clique antes de escrever no profile config. As razões são concretas:</p>
+      <p>• A constraint do banco já está pré-configurada para Option C. Construir Option B requer migração de schema e remove uma camada de segurança deliberadamente projetada.<br>
+      • Option A escala para 32 profiles agora mas falha com 300. Option B remove supervisão humana antes que o sistema tenha demonstrado que funciona.<br>
+      • Option C dá ao sistema um ciclo correto sob supervisão humana antes de ganhar autonomia. Esse é o prior correto dado que Phase 3 nunca foi entregue.</p>
+      <p>Mas Option C não pode ser iniciada até que quatro condições sejam verdadeiras: (1) o job de geração de sugestões está pausado; (2) o bug INSERT está corrigido; (3) o diff generator produz deltas por-profile a partir de performance real; (4) os 1.784 registros corrompidos estão explicitamente tombstoned ou purgados.</p>
+      <p>Após essas quatro condições: deixe o ciclo shadow rodar com lógica correta. Antes de implementar <code>run_apply_cycle()</code>, verifique se shadow trades fechados com outcome suficientes existem por profile. Dado que o shadow monitor só voltou em 27/06, a espera honesta pode ser 2–4 semanas. Isso é aceitável — os 32 profiles não são live. Não há emergência que justifique construir Phase 3 sobre inputs quebrados.</p>
+    </div>
+
+    <div class="first-action">
+      <div class="label">A única coisa a fazer primeiro</div>
+      <p>Pausar o job de geração de sugestões. Não corrigir o bug INSERT. Não projetar a UI de aprovação. Não purgar os 1.784 registros. Parar o sangramento primeiro. Toda ação subsequente — correções de bugs, arquitetura, acumulação de dados — é comprometida se o ciclo quebrado continua escrevendo registros uniform-diff, null-baseline em PENDING_VALIDATION enquanto você trabalha.</p>
+    </div>
+  </div>
+
+  <!-- Advisor Alignment -->
+  <div class="alignment-section">
+    <div class="alignment-title">Posições dos advisors</div>
+    <div class="advisor-grid">
+      <div class="advisor-card">
+        <div class="name" style="color:#dc2626;">Contrarian</div>
+        <div class="position pos-d">Fix First</div>
+        <div style="font-size:11px;color:#666;margin-top:6px;">Signal is absent, not weak. Purge + rebuild.</div>
+      </div>
+      <div class="advisor-card">
+        <div class="name" style="color:#7c3aed;">First Principles</div>
+        <div class="position pos-d">Fix First</div>
+        <div style="font-size:11px;color:#666;margin-top:6px;">Phase 3 can't be specified without valid signal.</div>
+      </div>
+      <div class="advisor-card">
+        <div class="name" style="color:#0891b2;">Expansionist</div>
+        <div class="position pos-b">Option B*</div>
+        <div style="font-size:11px;color:#666;margin-top:6px;">Build concurrent. Flywheel upside. *Rejected by all reviewers.</div>
+      </div>
+      <div class="advisor-card">
+        <div class="name" style="color:#d97706;">Outsider</div>
+        <div class="position pos-d">Fix First</div>
+        <div style="font-size:11px;color:#666;margin-top:6px;">"Approve what, exactly?" — data integrity problem, not architecture.</div>
+      </div>
+      <div class="advisor-card">
+        <div class="name" style="color:#16a34a;">Executor</div>
+        <div class="position pos-c">Option C ✓</div>
+        <div style="font-size:11px;color:#666;margin-top:6px;">Fix bugs → Option C. DB constraint already pre-wired. Strongest.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Advisor responses -->
+  <div class="section-header">Respostas dos advisors</div>
+
+  <details class="contrarian">
+    <summary>
+      <span style="color:#dc2626;">■</span> The Contrarian
+      <span class="badge badge-neutral">Fix First</span>
+    </summary>
+    <div class="detail-body">
+      <p>Options A, B, and C all share the same fatal assumption: that the 1,784 pending suggestions contain signal worth acting on. They don't. They're uniform noise from a broken generator.</p>
+      <p>Every single diff is buy threshold 65→70. Not "most" — all 1,784. That's not a calibration result, that's a hardcoded default masquerading as analysis. And <code>current_value=null</code> means you don't even have a real baseline — you can't compute a diff you don't have.</p>
+      <p>The specific danger with Option B (auto-apply): you build a statistical gate comparing win_rate before/after, but the "after" configuration is "buy threshold was bumped +5 uniformly." If win_rate improves, is that the calibration working or market conditions shifting? You cannot answer that question because the intervention wasn't personalized — it was noise.</p>
+      <p>Option D is the only honest answer, but the framing is too gentle. "Rethink first" implies the signal is weak. The reality is the signal is absent. You're not choosing between implementation approaches — you're choosing whether to build on concrete or on sand.</p>
+      <p>Fix the INSERT bug. Fix the diff generator to produce profile-specific deltas. Purge or tombstone the corrupt 1,784 rows. Then design Phase 3. In that order, no exceptions.</p>
+    </div>
+  </details>
+
+  <details class="first-principles">
+    <summary>
+      <span style="color:#7c3aed;">■</span> The First Principles Thinker
+      <span class="badge badge-neutral">Fix First</span>
+    </summary>
+    <div class="detail-body">
+      <p>The question "how to implement Phase 3" contains a fatal embedded assumption: that Phase 1 and 2 produced valid signal worth applying. They didn't.</p>
+      <p><strong>1. Uniform diffs.</strong> 1,784 records, 32 distinct profiles, zero variation in the recommendation. A calibration system that produces identical output regardless of input isn't calibrating — it's broadcasting a hardcoded guess. The analysis isn't broken in a subtle way; it never ran.</p>
+      <p><strong>2. <code>current_value=null</code>.</strong> The diff comparison requires knowing the current value to compute a meaningful delta. It was never read. Every suggestion is a diff between null and a constant. This isn't a minor bug — it means no suggestion in the database reflects actual profile state.</p>
+      <p>Given this, Options A, B, and C are all wrong. They disagree only on who pulls the trigger on garbage data. Option C (hybrid) is the most dangerous because it creates the illusion of rigor — a statistical gate passing recommendations that were never computed correctly.</p>
+      <p>The real first-principles question: <strong>What does a profile miscalibration actually look like in this system?</strong> What observable metric signals that a threshold is wrong, and by how much? Until that's defined and the analysis actually computes it per-profile, Phase 3 has no inputs.</p>
+      <p>Invalidate the 1,784 records. Rebuild the analysis from the measurement question. Phase 3 is premature.</p>
+    </div>
+  </details>
+
+  <details class="expansionist">
+    <summary>
+      <span style="color:#0891b2;">■</span> The Expansionist
+      <span class="badge badge-danger">Rejected by peer review</span>
+    </summary>
+    <div class="detail-body">
+      <p>Option D is a trap disguised as prudence. Fixing the signal first means Phase 3 never ships — it becomes the permanent excuse. Meanwhile 32 profiles sit uncalibrated indefinitely.</p>
+      <p>Here's what everyone is undervaluing: the 1,784 stuck records aren't just a bug backlog — they're a labeled dataset. Each pending adjustment has a corresponding shadow trade history. That's a retrospective ground truth you can mine right now to validate whether the calibration logic even moves the needle.</p>
+      <p>Push for Option B, with proper signal computation from day one. The real upside: if <code>run_apply_cycle()</code> auto-calibrates 32 profiles and shadow performance measurably improves, you have proof-of-concept for a self-tuning system — every live profile continuously recalibrated against its own shadow twin.</p>
+      <p>Option C is the right political answer, wrong product answer. Build B with a 30-day kill switch instead.</p>
+      <p><em>Note from peer review: The "labeled dataset" framing collapses because <code>current_value=null</code> means no "before" state exists. The statistical gate cannot execute. All 5 reviewers rated this response as having the biggest blind spot.</em></p>
+    </div>
+  </details>
+
+  <details class="outsider">
+    <summary>
+      <span style="color:#d97706;">■</span> The Outsider
+      <span class="badge badge-neutral">Fix First</span>
+    </summary>
+    <div class="detail-body">
+      <p>Stop. Before any implementation debate, look at what you actually have: 1,784 records where <code>current_value=null</code> and every single diff is identical. You don't have a Phase 3 problem. You have a data integrity problem dressed up as an architecture decision.</p>
+      <p>The builders are asking "how do we build the approval system?" when the honest question is "approve what, exactly?" You cannot validate performance of an adjustment you cannot measure — because you don't know what value you started from. And if every diff is +5 regardless of profile, the algorithm isn't analyzing profiles at all; it's applying a hardcoded constant masquerading as intelligence.</p>
+      <p>This is the curse of knowledge in action: everyone in the room knows what the system <em>should</em> be doing, so they're debating the next step. A newcomer reads the evidence and asks: has this system ever worked?</p>
+      <p>The correct sequence: fix the INSERT bug, let the system generate real diffs across profiles (they should differ), then verify the analysis logic actually produces differentiated recommendations before choosing an approval model.</p>
+    </div>
+  </details>
+
+  <details class="executor">
+    <summary>
+      <span style="color:#16a34a;">■</span> The Executor
+      <span class="badge badge-success">Strongest — rated by all 5 reviewers</span>
+    </summary>
+    <div class="detail-body">
+      <p>Option D isn't a choice — it's a prerequisite. But frame it right: it's two bug fixes, not a rethink.</p>
+      <p><strong>Monday morning, do these two things first:</strong></p>
+      <ol>
+        <li>Find the hardcoded INSERT that sets <code>current_value=null</code> and fix it. This is a single line change. Without it, you cannot calculate any before/after delta.</li>
+        <li>Find where the uniform <code>65→70</code> bump is generated and fix the analysis to derive per-profile diffs from actual shadow performance data.</li>
+      </ol>
+      <p><strong>After those two fixes, implement Option C.</strong> Here's why it's the fastest path: your DB constraint (<code>mutation_applied=false OR requires_human_approval=true</code>) is already pre-wired for Option C. Implementing Option B requires a schema migration to drop or modify that constraint. Option C just needs: a <code>run_apply_cycle()</code> that sets <code>requires_human_approval=true</code> on records that clear the performance gate, plus a minimal approval UI — one table, one button per row, one POST endpoint.</p>
+      <p><strong>Concrete sequence:</strong></p>
+      <ol>
+        <li>Fix <code>current_value=null</code> bug (today)</li>
+        <li>Fix uniform-diff analysis (today/tomorrow)</li>
+        <li>Let shadow data regenerate with correct diffs (wait for next cycle)</li>
+        <li>Implement <code>run_apply_cycle()</code> with win_rate gate</li>
+        <li>Build minimal one-click approval UI</li>
+      </ol>
+      <p>Total: 3–4 days of actual build work, preceded by data accumulation. Acceptable cost versus shipping Phase 3 on broken signal data.</p>
+    </div>
+  </details>
+
+  <!-- Peer review highlights -->
+  <div class="section-header" style="margin-top:32px;">Destaques do peer review</div>
+
+  <details>
+    <summary>
+      Blind spots críticos identificados pelos revisores
+      <span class="badge badge-warning">3 gaps não endereçados</span>
+    </summary>
+    <div class="detail-body">
+      <p><strong>1. O generator ainda está rodando (Reviewer 3 — mais urgente).</strong> Nenhum advisor perguntou se o INSERT quebrado está gerando novos registros corrompidos agora. Se o ciclo de sugestões está ativo, 1.784 está crescendo. Primeiro: pause o job.</p>
+      <p><strong>2. Volume de shadow trades por profile desconhecido (Reviewers 1 e 4).</strong> 32 profiles, nenhum live. Se cada profile tem poucos shadow completions, nenhum gate estatístico pode atingir significância. Antes de arquitetar qualquer validation cycle, perguntar: quantos shadow trades fechados existem por profile?</p>
+      <p><strong>3. Shadow monitor quebrado até 2026-06-27 (Reviewer 5 — crítico de domínio).</strong> Zero completions de 25/06 a 27/06 por <code>NoReferencedTableError</code>. Mesmo após corrigir os dois bugs, pode não haver outcome data suficiente para qualquer gate estatístico durante semanas. O repair de 27/06 inicia o relógio — não o zera.</p>
+      <p><strong>4. Destino dos 1.784 registros após correção (Reviewer 2).</strong> Ninguém disse: tombstone ou purge explicitamente, então re-execute. Se corrigir os bugs sem purgar, registros corrompidos permanecem em PENDING_VALIDATION indefinidamente, contaminando lógica de deduplicação futura.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>Consenso do peer review: qual advisor foi mais forte</summary>
+    <div class="detail-body">
+      <p>Todos os 5 revisores independentemente elegeram o <strong>Executor (Response C)</strong> como mais forte, pelo mesmo motivo: foi o único que converteu diagnóstico correto em plano de execução concreto, E que identificou o insight crítico da constraint do banco (Option C pré-configurada; Option B requer migração).</p>
+      <p>Todos os 5 revisores elegeram o <strong>Expansionista (Response A)</strong> como tendo o maior blind spot: o argumento do "labeled dataset" colapsa porque <code>current_value=null</code> significa que não existe estado "before". O gate estatístico não pode executar com null como input.</p>
+    </div>
+  </details>
+
+  <!-- Footer -->
+  <footer>
+    LLM Council · Metodologia por Andrej Karpathy &nbsp;·&nbsp; Claude Code adaptation &nbsp;·&nbsp; 2026-06-28 · Scalpyn Profile Intelligence Phase 3
+  </footer>
+
+</div>
+</body>
+</html>

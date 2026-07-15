@@ -212,3 +212,31 @@ backend/celerybeat-schedule
 backend/celerybeat-schedule.*
 .vercel
 .env*
+
+# ── Fase 1.4 Passo 2.3 — regularização: scratch/build/agent dirs ─────────────
+.codex/
+.codex_tmp/
+graphify-out/
+backend/graphify-out/
+backend/app/graphify-out/
+.vercel-deploy-staging/
+# scratch/debug de sessão (não são código de produção)
+/=
+/logs.txt
+/fix_db.py
+/query_db.py
+/run_trainer.py
+/test_db.py
+/invalidate_v50.sql
+/council-*.html
+/council-*.md
+/ml-audit-report-*.html
+/ml-audit-report-*.md
+backend/check_*.py
+backend/clean_db*.py
+backend/execute_*.py
+backend/fix_*.py
+backend/force_*.py
+backend/hourly_monitor.py
+backend/trigger_celery.py
+backend/update_cycle_hours.py

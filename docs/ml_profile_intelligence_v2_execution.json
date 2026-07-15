@@ -1,0 +1,100 @@
+{
+  "execution_id": "ml-profile-intelligence-v2-2026-07-11",
+  "status": "CONDITIONAL_GO_SHADOW_V2",
+  "implemented": [
+    "explicit_model_authorities",
+    "v77_fail_closed_reclassification_migration",
+    "canonical_feature_contract_v2",
+    "immutable_snapshot_lineage_dual_write",
+    "grouped_purged_split_both_boundaries",
+    "economic_target_contracts",
+    "economic_threshold_curve_persistence",
+    "authorized_evidence_registry",
+    "immutable_profile_and_score_versions",
+    "stable_condition_ids",
+    "challenger_shadow_without_incumbent_mutation",
+    "human_only_live_activation",
+    "honest_ml_frontend_status",
+    "calibration_recommendation_proposal_state_machine",
+    "stable_id_bounded_patches",
+    "contextual_profile_version_ev",
+    "legacy_incumbent_mutation_blocked"
+  ],
+  "tests": {
+    "focused_backend": {"status": "PASS", "passed": 18, "failed": 0, "scope": "calibration_v2_and_governance_regression"},
+    "full_backend": {"status": "BLOCKED_AT_COLLECTION", "reason": "legacy_test_references_missing_active_migration_023"},
+    "autopilot_regression_subset": {"status": "PARTIAL", "passed": 43, "failed": 2},
+    "frontend_typescript": {"status": "PASS"},
+    "frontend_eslint_ml_models": {"status": "PASS"},
+    "python_compile": {"status": "PASS"},
+    "migration_offline_render": {"status": "PASS"},
+    "migration_online": {"status": "PASS_PRODUCTION", "revision": "131_ml_governance_v2"},
+    "future_holdout_e2e": {
+      "status": "BLOCKED",
+      "reason": "canonical_outcomes_not_yet_resolved",
+      "canonical_rows_observed": 93,
+      "trainable_rows_observed": 0,
+      "min_required": 2800,
+      "observed_at": "2026-07-11T17:42:15.021554+00:00"
+    }
+  },
+  "migrations": ["131_ml_governance_v2", "132_calibration_orchestration_v2"],
+  "feature_flags": {
+    "ml_predictive_gate_v2": false,
+    "profile_versioning_v2": false,
+    "calibration_evidence_registry_v1": false,
+    "calibration_orchestrator_v1": false,
+    "autopilot_calibration_v1": false,
+    "counterfactual_outcomes_v1": false,
+    "ev_score_v2": false,
+    "ml_frontend_status_v2": false
+  },
+  "remaining_blockers": [
+    "future_holdout_collection",
+    "full_producer_cutover_to_evidence_registry",
+    "paired_shadow_ab_outcomes",
+    "preexisting_legacy_migration_test_inconsistencies"
+  ],
+  "production_rollout": {
+    "profile_versions_seeded": 33,
+    "profile_versions_seed_errors": 0,
+    "canonical_collection_verified": true,
+    "canonical_collection_cutoff": "2026-07-11T17:29:40+00:00",
+    "api_deployment": "86003159-82c0-4687-b1f7-aac8cdd762f1",
+    "compute_deployment": "6f21f2e7-b5a9-4a3a-bfca-c49cf44f8af0",
+    "beat_deployment": "8c0b9f73-4b31-47d9-bf28-fc3d02772c00",
+    "frontend_deployment": "dpl_HkfFkRcYc1DrJ5XmCG7uG2n3AKW6",
+    "calibration_v2_migration": {
+      "revision": "132_calibration_orchestration_v2",
+      "tables_verified": 6,
+      "recommendations": 0,
+      "proposals": 0,
+      "state_events": 0,
+      "profile_ev_rows": 0,
+      "crypto_profile_ev_rows": 0
+    },
+    "calibration_v2_frontend_deployment": "dpl_5jz1EBaUbovmRAFQuV7WMjjM5c7U",
+    "calibration_v2_api_deployment": "cd05a8b5-a0ae-466f-a08c-deb02be30aa6",
+    "calibration_v2_live_verification": {
+      "overview_http": 200,
+      "legacy_apply_http": 409,
+      "orchestrator_flag_http": 409,
+      "frontend_final_http": 200,
+      "frontend_redirects": 2
+    },
+    "shadow_monitor_first_isolated_tick": {
+      "task_id": "a4a18685-7450-4310-b574-3c90f402a78e",
+      "status": "SUCCESS",
+      "processed": 50,
+      "completed": 0,
+      "errors": 0,
+      "runtime_seconds": 61.011776647530496
+    },
+    "all_candidates_contextual_lane": "L3_CONTEXTUAL_INTELLIGENCE",
+    "contextual_dataset_policy": "ALL_CANDIDATES_CONTEXTUAL"
+  },
+  "artifacts": [
+    "docs/ML_PROFILE_INTELLIGENCE_V2_IMPLEMENTATION.md",
+    "docs/ml_profile_intelligence_v2_execution.json"
+  ]
+}

@@ -163,7 +163,9 @@ async def _run_ml_challengers_if_enabled(db, user_id) -> None:
         enable_cb   = bool(cfg.get("enable_catboost", False))
         if not enable_lgbm and not enable_cb:
             return
-        win_threshold_s = float(cfg.get("ml_win_fast_threshold_seconds", 1800.0))
+        # Fase 1 B.3 — fonte única: train_challengers lê o threshold da config
+        # ml ativa; passar valor por chamada aqui (lido de outra config, com
+        # default) era exatamente o vetor de divergência do v80.
         catboost_source_filter = cfg.get("catboost_source_filter")
         if isinstance(catboost_source_filter, str):
             catboost_source_filter = [catboost_source_filter]
@@ -190,7 +192,6 @@ async def _run_ml_challengers_if_enabled(db, user_id) -> None:
             user_id=user_id,
             enable_lightgbm=enable_lgbm,
             enable_catboost=enable_cb,
-            win_fast_threshold_s=win_threshold_s,
             catboost_source_filter=catboost_source_filter,
             advisory_intelligence=advisory_intelligence,
         )

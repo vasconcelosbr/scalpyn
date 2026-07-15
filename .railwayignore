@@ -1,0 +1,6 @@
+graphify-out/
+.codex/
+.codex_tmp/
+frontend/.next/
+frontend/node_modules/
+node_modules/

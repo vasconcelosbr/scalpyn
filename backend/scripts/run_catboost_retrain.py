@@ -47,7 +47,8 @@ logger = logging.getLogger("catboost_retrain")
 DRY_RUN = "--dry-run" in sys.argv
 
 USER_ID = UUID("8080110c-ee9d-4a2b-a53f-6bef86dd8867")
-WIN_THRESHOLD_S = 14400.0  # is_tp_4h_v2_sim_outcome
+# Fase 1 B.3 — win threshold vem EXCLUSIVAMENTE da config ml ativa
+# (ml_win_fast_threshold_seconds). O hardcode 14400.0 daqui gerou o v80.
 
 # Treinar sobre L3_LAB (maior volume, 15.7% pos rate) — L3 tem 66% NULL profile_id
 # Para treinar sobre L3 estrito: mudar para ["L3"] (aplica L3_PROFILE_STRICT automaticamente)
@@ -119,8 +120,9 @@ async def main():
 
     logger.info("DB: %s", db_url.split("@")[-1])
     logger.info(
-        "DRY_RUN=%s  USER_ID=%s  WIN_THRESHOLD_S=%s  SOURCES=%s  ADVISORY_INTELLIGENCE=%s",
-        DRY_RUN, USER_ID, WIN_THRESHOLD_S, CATBOOST_SOURCES, ADVISORY_INTELLIGENCE,
+        "DRY_RUN=%s  USER_ID=%s  SOURCES=%s  ADVISORY_INTELLIGENCE=%s "
+        "(win threshold: config ml_win_fast_threshold_seconds)",
+        DRY_RUN, USER_ID, CATBOOST_SOURCES, ADVISORY_INTELLIGENCE,
     )
 
     async with AsyncSessionLocal() as db:
@@ -171,7 +173,7 @@ async def main():
             built = svc._build_l3_dataset(
                 records,
                 list(FEATURE_COLUMNS),
-                WIN_THRESHOLD_S,
+                float(ml_config["ml_win_fast_threshold_seconds"]),
                 lane_name=gate_meta["lane"],
                 lane_contract=feature_contract,
                 feature_ranges=ml_config.get("ml_feature_ranges"),
@@ -223,7 +225,6 @@ async def main():
             catboost_source_filter=CATBOOST_SOURCES,
             allow_mixed_source=False,
             advisory_intelligence=ADVISORY_INTELLIGENCE,
-            win_fast_threshold_s=WIN_THRESHOLD_S,
             lookback_days=90,
         )
 
