@@ -105,6 +105,22 @@ UNION ALL
 SELECT 'I11_holding_negativo', COUNT(*),
        CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END
 FROM pop WHERE holding_seconds < 0
+UNION ALL
+-- Fase 1.4 (P1, cenário VERDE, ação A): cobertura da lane L3/L3_LAB.
+-- Invariante DEDICADO (não estende o I04) para preservar a série histórica
+-- do I04, que permanece L1_SPECTRUM+ATR_DYNAMIC sobre config_snapshot.
+-- I12 checa as COLUNAS DEDICADAS que o treino realmente lê
+-- (_filter_l3_barrier_contract/_economic_contract_features), não o JSONB
+-- config_snapshot (que o builder ignora — ml_challenger_service.py:850).
+SELECT 'I12_l3_economic_contract',
+       COUNT(*),
+       CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END
+FROM shadow_trades
+WHERE source IN ('L3', 'L3_LAB')
+  AND eligible_for_training IS TRUE
+  AND entry_timestamp >= :w_from AND entry_timestamp < :w_to
+  AND (barrier_mode IS NULL OR tp_pct_applied IS NULL
+       OR sl_pct_applied IS NULL OR barrier_contract_version IS NULL)
 """)
 
 _CUMULATIVE_SQL = text("""

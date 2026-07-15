@@ -346,7 +346,7 @@ _INVARIANT_NAMES = [
     "I05_flag_x_lineage_divergente", "I06_coverage_baixa_em_elegiveis",
     "I07_tp_hit_pnl_negativo", "I08_atr_nulo_em_completed_acima_de_meio_pct",
     "I09_geracao_abaixo_do_piso", "I10_duplicidade_elegivel",
-    "I11_holding_negativo",
+    "I11_holding_negativo", "I12_l3_economic_contract",
 ]
 
 
@@ -408,6 +408,23 @@ async def test_certification_any_fail_is_red_with_named_invariants():
     assert result["status"] == "RED"
     assert result["failed"] == ["I04_snapshot_incompleto"]
     assert result["alerted"] is True
+
+
+@pytest.mark.asyncio
+async def test_certification_i12_l3_contract_covered_and_fails_closed():
+    """Fase 1.4 (P1 ação A): I12 cobre a lane L3/L3_LAB e vira RED quando uma
+    coluna econômica dedicada falta."""
+    from app.services.ml_data_certification_service import run_certification
+
+    ok = await run_certification(_cert_session(), persist=False)
+    names = [inv["invariante"] for inv in ok["invariants"]]
+    assert "I12_l3_economic_contract" in names  # cobertura L3 presente
+
+    red = await run_certification(
+        _cert_session(failures={"I12_l3_economic_contract"}), persist=False
+    )
+    assert red["status"] == "RED"
+    assert red["failed"] == ["I12_l3_economic_contract"]
 
 
 @pytest.mark.asyncio
