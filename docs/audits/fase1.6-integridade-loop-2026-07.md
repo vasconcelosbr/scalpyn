@@ -16,7 +16,7 @@ Branch `feat/fase1-integridade-monitoracao`. Evidência DB via `DATABASE_PUBLIC_
 **Chaves prod verificadas** `[query]` (todas presentes → deploy não derruba criação de shadows):
 `ml_active_barrier_contract_version=shadow_atr_dynamic_v2`, `shadow_barrier_mode=ATR_DYNAMIC`, `shadow_atr_multiplier_tp=1.5`, `shadow_atr_multiplier_sl=1.5`, `shadow_barrier_min_pct=0.5`, `shadow_barrier_max_pct=3.0`.
 
-**Deploy (1.5): 🛑 BLOQUEADO por infra.** Operador escolheu "merge main + push (auto-deploy)". Push rejeitado pelo GitHub: `graphify-out/graph.json` = **167 MB** > limite 100 MB (tracked no commit `610e04e`, apesar de `graphify-out/` estar no `.gitignore`). Esse é o motivo estrutural de toda a fase ter deployado via `railway up`. Estado atual: `141d917`/`b340700` locais, **remoto intacto**, git limpo. **Sem urgência** (prod já produz v2 correto; chaves presentes; o P1 é rede de segurança + drop de ~1,66% linhas atr==0). Pós-verificação de linhas v2 pós-deploy: **pendente do deploy**. Baseline pré-deploy registrado `[query]`: 107 shadows / 95 v2 nos últimos 30min (03:38 UTC).
+**Deploy (1.5): ✅ FEITO via `railway up` no `scalpyn-worker-structural`.** (Rota GitHub bloqueada: `graphify-out/graph.json`=167 MB > 100 MB, tracked em `610e04e` — motivo estrutural de a fase deployar por `railway up`; `.railwayignore`+`.gitignore` excluem graph.json do upload.) Build OK (imagem `2026-07-16T04:08:49Z`, HEAD `79f6d02`), worker subiu limpo ("Application startup complete", sem erro). **Pós-verificação `[query]`**: baseline pré-deploy 107 shadows/95 v2 em 30min (03:38 UTC); pós-deploy primeiras linhas novas às 04:13:11 = **4/4 carimbadas `shadow_atr_dynamic_v2`** → criação v2 retomada normal. Logs mostram o fail-closed operando: `barrier_v2_atr_unavailable symbol=PEPE_USDT atr_pct=0.0 — linha NÃO criada` (esperado; **zero** `barrier_v2_missing_*` de config → prod completa). **Observação**: símbolos ultra-low-price com atr→0 (ex. PEPE_USDT) são agora excluídos todo ciclo, gerando exceção recorrente no log (correto funcionalmente; opção de refino: rebaixar o caso atr==0 de exceção para skip WARNING, já que é condição de dado, não erro de config).
 
 ## P2 — Furo A: consumo do modelo em decisão
 
@@ -68,7 +68,7 @@ Commitado (`b340700`): `docs/PROTOCOLO_PRIMEIRO_RETRAIN_CANONICO.md`. Pré-condi
 
 ## STOPs / [NÃO VERIFICADO]
 
-1. **P1.5 deploy** — bloqueado por `graphify-out/graph.json` (167 MB) no histórico. Opções: (a) `railway up` só no structural; (b) purgar graph.json do histórico (`git filter-repo` + force-push, reescreve 20 commits) para liberar o GitHub. Aguarda decisão.
+1. **P1.5 deploy** — ✅ RESOLVIDO via `railway up` no structural (pós-verif. 4/4 v2). Pendência residual: rota GitHub segue bloqueada por `graph.json` (167 MB) — outros serviços seguem no código antigo (sem degradação, chaves presentes); considerar purgar graph.json do histórico para regularizar main. Opção de refino: atr==0 fail-closed como WARNING em vez de exceção (reduz ruído de log em símbolos ultra-low-price).
 2. **P2 wiring** — CONSOME PARCIAL; conectar campeão→decisão é mudança de comportamento (decisão do operador). Não implementado.
 3. **P4 análise** — desenho da comparação L1×L3 (símbolo-nível) é decisão do operador.
 4. **P5 hold-out** — `ml_max_candidates_per_holdout=3` aguarda confirmação.
@@ -76,4 +76,4 @@ Commitado (`b340700`): `docs/PROTOCOLO_PRIMEIRO_RETRAIN_CANONICO.md`. Pré-condi
 
 ## DECLARAÇÃO
 
-Escritas restritas a: `shadow_trade_service.py` (fail-closed), `test_shadow_barrier_v2_fail_closed.py`, `docs/PROTOCOLO_PRIMEIRO_RETRAIN_CANONICO.md`, este relatório. `shadow_trades` **READ-ONLY** (só SELECT). **NENHUM retrain disparado. Nenhum modelo promovido/demovido.** Nenhum backfill. Commits locais com `git status` limpo `[literal: git status --porcelain vazio]`; **nenhum deploy efetuado** (push bloqueado).
+Escritas restritas a: `shadow_trade_service.py` (fail-closed), `test_shadow_barrier_v2_fail_closed.py`, `docs/PROTOCOLO_PRIMEIRO_RETRAIN_CANONICO.md`, este relatório. `shadow_trades` **READ-ONLY** (só SELECT). **NENHUM retrain disparado. Nenhum modelo promovido/demovido.** Nenhum backfill. Commits locais com `git status` limpo `[literal: git status --porcelain vazio]` antes do `railway up` (Regra 6). **Deploy do P1 efetuado via `railway up` no structural** (pós-verificação 4/4 v2); nenhum push ao GitHub (bloqueado).
