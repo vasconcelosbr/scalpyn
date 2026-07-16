@@ -91,11 +91,26 @@ def _apply_barrier_params(user_config: dict, ml_config: dict) -> dict:
     under the same clamp [shadow_barrier_min_pct, shadow_barrier_max_pct].
     Without that key the TP keeps following the Strategies Module (v1).
     """
+    ml_config = ml_config or {}
+    active_contract = ml_config.get("ml_active_barrier_contract_version")
+    # Carimbo do contrato ativo propagado para o write path — _create_from_decision
+    # usa isto para exigir fail-closed as chaves do contrato v2 (P1 Fase 1.6).
+    user_config["ml_active_barrier_contract_version"] = active_contract
     user_config["shadow_barrier_mode"] = ml_config.get("shadow_barrier_mode", "FIXED")
     user_config["tp_atr_multiplier"]   = ml_config.get("shadow_atr_multiplier_tp")
-    user_config["sl_atr_multiplier"]   = ml_config.get("shadow_atr_multiplier_sl", 1.5)
-    user_config["sl_min_pct"]          = ml_config.get("shadow_barrier_min_pct", 0.5)
-    user_config["sl_max_pct"]          = ml_config.get("shadow_barrier_max_pct", 3.0)
+    if active_contract == BARRIER_CONTRACT_ATR_DYNAMIC_V2:
+        # Fail-closed: sob o contrato ATR-dinâmico v2 NENHUM default silencioso é
+        # aplicado. Chave ausente permanece None e é validada (raise) em
+        # _create_from_decision — a linha NÃO é criada, em vez de degradar
+        # silenciosamente para uma barreira fixa (v1) carimbada como v2.
+        user_config["sl_atr_multiplier"] = ml_config.get("shadow_atr_multiplier_sl")
+        user_config["sl_min_pct"]        = ml_config.get("shadow_barrier_min_pct")
+        user_config["sl_max_pct"]        = ml_config.get("shadow_barrier_max_pct")
+    else:
+        # v1/legacy — comportamento inalterado (defaults silenciosos preservados).
+        user_config["sl_atr_multiplier"] = ml_config.get("shadow_atr_multiplier_sl", 1.5)
+        user_config["sl_min_pct"]        = ml_config.get("shadow_barrier_min_pct", 0.5)
+        user_config["sl_max_pct"]        = ml_config.get("shadow_barrier_max_pct", 3.0)
     user_config["ml_win_fast_threshold_seconds"] = ml_config.get(
         "ml_win_fast_threshold_seconds"
     )
@@ -133,6 +148,38 @@ def _resolve_barrier_contract_version(barrier_mode: str, tp_atr_mult) -> str:
     if barrier_mode == "ATR_DYNAMIC" and tp_atr_mult is not None:
         return BARRIER_CONTRACT_ATR_DYNAMIC_V2
     return f"shadow_{str(barrier_mode).lower()}_v1"
+
+
+def _require_v2_barrier_config(user_config: dict, symbol: str) -> None:
+    """Fail-closed do contrato de barreira ATR-dinâmico v2 (P1 Fase 1.6).
+
+    Quando o contrato ATIVO declarado em config é ``shadow_atr_dynamic_v2``,
+    TODAS as chaves de barreira devem estar presentes e numéricas e o modo deve
+    ser ``ATR_DYNAMIC``. Chave ausente/inválida levanta ``ValueError`` — a linha
+    NÃO é criada, em vez de degradar silenciosamente para uma barreira fixa.
+    Mesmo padrão fail-closed dos helpers ``_require_*_config`` da Fase 1.5.
+    """
+    required = (
+        ("shadow_atr_multiplier_tp", user_config.get("tp_atr_multiplier")),
+        ("shadow_atr_multiplier_sl", user_config.get("sl_atr_multiplier")),
+        ("shadow_barrier_min_pct", user_config.get("sl_min_pct")),
+        ("shadow_barrier_max_pct", user_config.get("sl_max_pct")),
+    )
+    for cfg_key, value in required:
+        if value is None or isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(
+                f"barrier_v2_missing_{cfg_key}: contrato ativo "
+                f"{BARRIER_CONTRACT_ATR_DYNAMIC_V2} exige {cfg_key} numérico em "
+                f"config_profiles(config_type='ml'); symbol={symbol} "
+                f"value={value!r} — linha NÃO criada"
+            )
+    mode = user_config.get("shadow_barrier_mode")
+    if mode != "ATR_DYNAMIC":
+        raise ValueError(
+            f"barrier_v2_mode_mismatch: contrato ativo "
+            f"{BARRIER_CONTRACT_ATR_DYNAMIC_V2} exige shadow_barrier_mode="
+            f"ATR_DYNAMIC, got {mode!r}; symbol={symbol} — linha NÃO criada"
+        )
 
 
 def _build_economic_config_snapshot(
@@ -884,13 +931,37 @@ async def _create_from_decision(
     # configured (barrier contract shadow_atr_dynamic_v2). Without the key,
     # TP keeps following the Strategies Module (v1 behaviour, unchanged).
     _tp_atr_mult = user_config.get("tp_atr_multiplier")
+    # P1 Fase 1.6 — fail-closed do contrato de barreira. Quando o contrato ATIVO
+    # declarado em config é v2, toda chave de barreira deve existir/ser válida e o
+    # ATR do símbolo deve ser > 0; caso contrário a linha NÃO é criada (nunca
+    # degradar de contrato). O raise vive aqui, dentro da cobertura try/except do
+    # caller (safe_*_create), garantindo blast radius de uma única linha.
+    _active_barrier_contract = user_config.get("ml_active_barrier_contract_version")
+    _barrier_v2_active = _active_barrier_contract == BARRIER_CONTRACT_ATR_DYNAMIC_V2
+    if _barrier_v2_active:
+        _require_v2_barrier_config(user_config, decision.symbol)
     if barrier_mode == "ATR_DYNAMIC":
         _feats_early = _build_features_snapshot(decision)
         _atr_pct = float(_feats_early.get("atr_percent") or 0.0)
+        if _barrier_v2_active and _atr_pct <= 0.0:
+            raise ValueError(
+                f"barrier_v2_atr_unavailable: contrato "
+                f"{BARRIER_CONTRACT_ATR_DYNAMIC_V2} exige atr>0 para escalar a "
+                f"barreira; symbol={decision.symbol} atr_pct={_atr_pct} — "
+                f"linha NÃO criada"
+            )
         tp_pct, sl_pct = _resolve_atr_barriers(_atr_pct, tp_pct, sl_pct, user_config)
     _barrier_contract_version = _resolve_barrier_contract_version(
         barrier_mode, _tp_atr_mult
     )
+    if _barrier_v2_active and _barrier_contract_version != BARRIER_CONTRACT_ATR_DYNAMIC_V2:
+        # Defensivo: após a validação acima isto não deve ocorrer. Se ocorrer, o
+        # contrato produzido divergiu do ativo — aborta antes de persistir.
+        raise ValueError(
+            f"barrier_contract_degraded: active={_active_barrier_contract} "
+            f"produced={_barrier_contract_version} symbol={decision.symbol} — "
+            f"linha NÃO criada"
+        )
 
     # Task #303: ``decision.id`` é ``None`` para ``_SyntheticDecision``
     # (fallback "live_l3") — vira NULL na coluna após migration 057.
