@@ -152,8 +152,8 @@ SELECT COUNT(*) AS elegiveis_maturados_pos_boundary,
        (SELECT med FROM mediana) AS mediana_diaria_7d,
        -- Fase 1.3: metas config-driven (Zero Hardcode). milestone e retrain_gate
        -- vêm de config_profiles; a meta estendida saiu do display (decisão operador).
-       CEIL(:milestone_rows::numeric / GREATEST(1, (SELECT med FROM mediana))) AS dias_para_milestone,
-       CEIL(:retrain_rows::numeric / GREATEST(1, (SELECT med FROM mediana))) AS dias_para_retrain,
+       CEIL(CAST(:milestone_rows AS numeric) / GREATEST(1, (SELECT med FROM mediana))) AS dias_para_milestone,
+       CEIL(CAST(:retrain_rows AS numeric) / GREATEST(1, (SELECT med FROM mediana))) AS dias_para_retrain,
        now() AS calculado_em
 FROM shadow_trades
 WHERE source = :src AND barrier_mode = :bmode
