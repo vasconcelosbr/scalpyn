@@ -58,6 +58,17 @@ Período cego = **2026-07-15 14:00:00 → 2026-07-16 18:20:53 = 28,35h** `[calc]
 3. **[NÃO VERIFICADO]** run natural pelo beat (próxima 20:00 UTC) — a prova de vida foi via trigger manual (aprovado); a run natural usa o mesmo código corrigido.
 4. **[NÃO VERIFICADO]** endpoint `/ml/readiness/latest` chamado com auth em runtime — lógica coberta por unit test + chave presente + deploy SUCCESS; a run atual (<3h) retornaria `status_effective=RED, is_stale=false`.
 
+## ADENDO — pós-relatório (backlog + RED tratados) 2026-07-16 ~23:00 UTC
+
+**Backlog de filas (incidente separado, investigado a pedido):** diagnóstico invertido do alarme inicial — **não é executor cego**. Workers vivos e processando (trade_monitor fechando trades às 21:59; shadows fecham 200-647/h, 0 abertos >24h); **`live_trading_enabled=0`** em todos os 33 profiles; 57 posições "open" são stale (desde mar/2026, 0 tocadas em 48h). As filas `structural`=143k + `execution`=88k eram **relíquia estável** (+0,7 e +2,3/min ≈ flat) de tasks idempotentes acumuladas em downtimes passados; ~227MB Redis (sem maxmemory). **Purgadas** (DEL → 231M→3,8M; pós-purga fila fica em 0-2, confirmando que os workers acompanham a produção). **Guard** (commit `1d7498a`): `expires=max(3×intervalo,60)` em todo schedule numérico do beat → backlog não cresce indefinidamente em downtime futuro.
+
+**RED da run (I03/I12) tratado** (commit `8d747a9`, deployado; decisões do operador):
+- **I03** redefinido para a janela `[w_from, valid_from)` (não todo o histórico) — legado pré-boundary é filtrado pelo loader, não contamina. Prod: 39161→**0**.
+- **I12** (a) loader `_filter_l3_barrier_contract` exclui ATR_DYNAMIC não-v2 (degradadas, TP fixo pré-fix); (b) invariante espelha o loader. Prod: 368→**0**. As 368 eram L3 v1 de 20:25→11:25 (cessou no deploy-geral ~11:44). 2 testes atualizados; 4 falhas catboost restantes são pré-existentes.
+- **Prova:** cert nova 22:59:59 = **YELLOW, `failed=[]`** (só warn transitório ATR_NULL_IN_RUNNING). RED permanente destravado; GREEN alcançável.
+
+**Chaves gravadas** (config_profiles, idempotente): `ml_readiness_staleness_threshold_hours=3`, `ml_max_candidates_per_holdout=3`.
+
 ## DECLARAÇÃO
 
 Escritas: código (`ml_data_certification_service.py`, `ml_data_certification.py`) + 3 arquivos de teste + protocolo + este relatório; config key `ml_readiness_staleness_threshold_hours=3` em `config_profiles` (idempotente, guard NOT-exists). `shadow_trades` **READ-ONLY**. **Zero INSERT manual em `ml_data_certification_runs`** — a run nova foi gravada pela execução legítima do job (trigger via `send_task`); os JOB_ERROR só o próprio job grava ao falhar. **Nenhum retrain; nenhum modelo promovido/demovido.** Deploys via push→auto-deploy com `git status` limpo `[literal: git status --porcelain vazio]`. Commits: `128fe00` (fix), `d65b968` (guardas), `db552f6` (protocolo).
