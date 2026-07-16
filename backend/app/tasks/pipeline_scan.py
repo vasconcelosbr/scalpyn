@@ -47,6 +47,22 @@ _DEFAULT_STALENESS_MINUTES: int = int(
 )
 
 
+def _ml_gate_should_block(ml_result: dict | None) -> bool:
+    """P2 (Fase 1.6): o ML gate só rebaixa um L3 ALLOW → BLOCK quando um modelo
+    ACTIVE emitiu um veredito real de rejeição.
+
+    - modelo aprovou               → não bloqueia (ALLOW mantido).
+    - sem modelo elegível (SKIPPED)→ NÃO bloqueia o sinal real (alinha com o
+      contrato do prediction_service: "SKIPPED não bloqueia por si só").
+    - modelo rejeitou (OK, not approved) ou falha de infra com modelo presente
+      (ML_EXCEPTION_FAIL_CLOSED) → bloqueia (fail-closed preservado).
+    """
+    ml_result = ml_result or {}
+    if bool(ml_result.get("model_approved", False)):
+        return False
+    return ml_result.get("score_status") != "SKIPPED"
+
+
 def _ml_gate_audit_payload(
     ml_result: dict | None,
     *,
@@ -65,14 +81,17 @@ def _ml_gate_audit_payload(
         fallback_policy = "DISABLED_FOR_L3_WHEN_GATE_ENABLED"
     else:
         fallback_policy = "NOT_USED"
-    gate_action = "ALLOW" if model_approved else "BLOCK"
+    # gate_action reflete a AÇÃO EFETIVA do gate sobre a decisão (decision_after_ml),
+    # não o veredito cru do modelo. P2 fix (Fase 1.6): sem modelo (SKIPPED) o gate
+    # não rebaixa o ALLOW, então gate_action=ALLOW mesmo com model_approved=False.
+    gate_action = decision_after_ml
     score_status = ml_result.get("score_status") or ("OK" if model_approved else "SKIPPED")
     reason_codes = []
     if reason_code:
         reason_codes.append(reason_code)
     if score_status == "ML_EXCEPTION_FAIL_CLOSED":
         reason_codes.append("ML_PROBABILITY_INVALID")
-    if not model_approved:
+    if decision_after_ml == "BLOCK":
         reason_codes.append("ML_GATE_BLOCKED")
     else:
         reason_codes.append("ML_GATE_ALLOWED")
@@ -3265,7 +3284,7 @@ async def _run_pipeline_scan():
                                                 ),
                                                 "reason_code": ml_result.get("reason_code"),
                                                 "threshold_used": ml_result.get("threshold_used"),
-                                                "gate_action": "ALLOW" if ml_result.get("model_approved") else "BLOCK",
+                                                "gate_action": ml_result.get("effective_gate_action") or ("ALLOW" if ml_result.get("model_approved") else "BLOCK"),
                                                 "p_l1_win": ml_result.get("p_l1_win"),
                                                 "rank_position": ml_result.get("l1_rank_position"),
                                                 "rank_percentile": ml_result.get("l1_rank_percentile"),
@@ -3301,7 +3320,7 @@ async def _run_pipeline_scan():
                                                     "score_status": ml_result.get("score_status") or (
                                                         "OK" if ml_result.get("model_id") else "SKIPPED"
                                                     ),
-                                                    "gate_action": "ALLOW" if ml_result.get("model_approved") else "BLOCK",
+                                                    "gate_action": ml_result.get("effective_gate_action") or ("ALLOW" if ml_result.get("model_approved") else "BLOCK"),
                                                 }),
                                                 "features_snapshot": __import__("json").dumps(
                                                     ml_result.get("features_snapshot") or {}
@@ -3414,8 +3433,12 @@ async def _run_pipeline_scan():
                                     _ml.update(_l1_rank)
                                     _prob = _ml.get("win_fast_probability")
                                     _approved = bool(_ml.get("model_approved", False))
+                                    # P2 fix (Fase 1.6): rebaixa ALLOW→BLOCK só quando o gate tem
+                                    # veredito real de rejeição; sem modelo (SKIPPED) passa direto.
+                                    _ml_rejects = _ml_gate_should_block(_ml)
+                                    _decision_after_ml = "BLOCK" if _ml_rejects else "ALLOW"
+                                    _ml["effective_gate_action"] = _decision_after_ml
                                     _ranking_id = await _record_ml_opportunity_ranking(_d, _ml)
-                                    _decision_after_ml = "ALLOW" if _approved else "BLOCK"
                                     _gate_payload = _ml_gate_audit_payload(
                                         _ml,
                                         decision_before_ml="ALLOW",
@@ -3498,7 +3521,7 @@ async def _run_pipeline_scan():
                                     _reasons["fallback_used"] = _gate_payload["fallback_used"]
                                     _reasons["fallback_policy"] = _gate_payload["fallback_policy"]
                                     _reasons["ml_gate_payload"] = _gate_payload
-                                    if not _approved:
+                                    if _ml_rejects:
                                         _d["decision"] = "BLOCK"
                                         _d["l3_pass"] = False
                                         _ml_blocked_count += 1
