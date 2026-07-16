@@ -59,10 +59,19 @@ FROM pop WHERE eligible_for_training IS TRUE
   AND (feature_schema_version IS NULL OR label_contract_version IS NULL
        OR barrier_contract_version IS NULL OR capture_contract_version IS NULL)
 UNION ALL
+-- Fase 1.7: I03 avalia a fronteira apenas na população da JANELA de certificação
+-- [w_from, valid_from), não em todo o histórico. Linhas elegíveis legadas muito
+-- anteriores ao boundary são filtradas pelo loader (que corta por valid_from) e
+-- não contaminam o treino — contá-las mantinha o painel RED para sempre e travava
+-- o gate GREEN. Aqui I03 só falha se surgir, na janela recente, uma linha elegível
+-- ANTES do boundary (bug ativo). Quando w_from passa de valid_from, o intervalo é
+-- vazio → PASS permanente (esperado).
 SELECT 'I03_elegivel_pre_valid_from', COUNT(*),
        CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END
 FROM shadow_trades
-WHERE eligible_for_training IS TRUE AND entry_timestamp < :valid_from
+WHERE eligible_for_training IS TRUE
+  AND entry_timestamp >= :w_from
+  AND entry_timestamp < :valid_from
 UNION ALL
 SELECT 'I04_snapshot_incompleto', COUNT(*),
        CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END
@@ -119,18 +128,22 @@ FROM shadow_trades
 WHERE source IN ('L3', 'L3_LAB')
   AND eligible_for_training IS TRUE
   AND entry_timestamp >= :valid_from
+  -- Fase 1.7 (I12): o invariante ESPELHA o loader de treino. Uma linha
+  -- ATR_DYNAMIC que não carrega o contrato ATIVO (v2) é EXCLUÍDA do dataset
+  -- por _filter_l3_barrier_contract (degradada, TP fixo pré-fix P1 disfarçado)
+  -- — logo NÃO é violação do contrato TREINADO e sai do escopo aqui. Antes,
+  -- contá-la mantinha o painel RED para sempre por dívida legada já cessada e
+  -- já excluída do treino. A visibilidade dessas linhas vem do meta do loader
+  -- (barrier_contract_atr_non_v2_excluded), não deste gate GREEN.
+  AND NOT (barrier_mode = 'ATR_DYNAMIC'
+           AND barrier_contract_version IS DISTINCT FROM :active_contract_version)
   AND (
     -- (a) cobertura original: colunas dedicadas presentes.
     barrier_mode IS NULL OR tp_pct_applied IS NULL
     OR sl_pct_applied IS NULL OR barrier_contract_version IS NULL
-    -- (b) Fase 1.5 P1 — coerência de VALOR (não só NOT NULL): uma linha
-    -- ATR_DYNAMIC precisa carregar o contrato ATIVO (v2), não o carimbo v1
-    -- do artefato TP-fixo. O valor esperado vem da config
-    -- (ml_active_barrier_contract_version), nunca literal no SQL. Este é o
-    -- mecanismo do v77: colunas setadas, mas com o contrato errado.
-    OR (barrier_mode = 'ATR_DYNAMIC'
-        AND barrier_contract_version IS DISTINCT FROM :active_contract_version)
-    -- (c) sanidade física + clamps D4 (lidos de config, não literais).
+    -- (c) sanidade física + clamps D4 (lidos de config, não literais). Nota:
+    -- entre as linhas MANTIDAS pelo loader, uma ATR_DYNAMIC já é v2 por
+    -- construção — o check de coerência de valor (v77) vive agora no loader.
     OR tp_pct_applied <= 0 OR sl_pct_applied <= 0
     OR tp_pct_applied < :clamp_min OR tp_pct_applied > :clamp_max
     OR sl_pct_applied < :clamp_min OR sl_pct_applied > :clamp_max

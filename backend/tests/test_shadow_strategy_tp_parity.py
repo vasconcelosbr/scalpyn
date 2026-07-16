@@ -32,16 +32,33 @@ def test_ml_barrier_merge_removes_legacy_tp_override():
     assert merged["shadow_barrier_mode"] == "ATR_DYNAMIC"
 
 
-def test_training_contract_keeps_only_strategy_tp_rows():
+def test_training_contract_atr_dynamic_keeps_only_v2():
+    # Fase 1.7 (I12): sob ATR_DYNAMIC só o carimbo v2 treina; uma linha ATR_DYNAMIC
+    # não-v2 (TP fixo pré-fix disfarçado) é excluída como degradada — antes entrava
+    # via match de TP e contaminava o dataset L3/CatBoost.
     rows = [
-        {"barrier_mode": "ATR_DYNAMIC", "tp_pct_applied": 1.5, "id": "legacy"},
-        {"barrier_mode": "ATR_DYNAMIC", "tp_pct_applied": 0.6, "id": "current"},
+        {"barrier_mode": "ATR_DYNAMIC", "tp_pct_applied": 0.6, "id": "degraded_v1"},
+        {"barrier_mode": "ATR_DYNAMIC", "tp_pct_applied": 1.5,
+         "barrier_contract_version": "shadow_atr_dynamic_v2", "id": "v2"},
     ]
 
     kept, meta = _filter_l3_barrier_contract(
-        rows,
-        expected_mode="ATR_DYNAMIC",
-        expected_tp_pct=0.6,
+        rows, expected_mode="ATR_DYNAMIC", expected_tp_pct=0.6,
+    )
+
+    assert [row["id"] for row in kept] == ["v2"]
+    assert meta["barrier_contract_atr_non_v2_excluded"] == 1
+
+
+def test_training_contract_non_atr_uses_tp_parity():
+    # Modos NÃO-ATR_DYNAMIC ainda filtram por paridade de TP com o Strategies Module.
+    rows = [
+        {"barrier_mode": "FIXED", "tp_pct_applied": 1.5, "id": "legacy"},
+        {"barrier_mode": "FIXED", "tp_pct_applied": 0.6, "id": "current"},
+    ]
+
+    kept, meta = _filter_l3_barrier_contract(
+        rows, expected_mode="FIXED", expected_tp_pct=0.6,
     )
 
     assert [row["id"] for row in kept] == ["current"]

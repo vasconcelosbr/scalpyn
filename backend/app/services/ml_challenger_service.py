@@ -171,6 +171,7 @@ def _filter_l3_barrier_contract(
     mismatched_mode = 0
     mismatched_tp = 0
     missing_contract = 0
+    atr_non_v2_excluded = 0
     for record in records:
         record_mode = record.get("barrier_mode")
         record_tp = record.get("tp_pct_applied")
@@ -180,14 +181,19 @@ def _filter_l3_barrier_contract(
         if str(record_mode).upper() != mode:
             mismatched_mode += 1
             continue
-        # Fase 1 (D1=A): sob shadow_atr_dynamic_v2 o TP é ATR-dinâmico por
-        # linha — a paridade econômica é dada pela versão do contrato de
-        # barreira, não pela igualdade com o TP do Strategies Module.
-        if (
-            mode == "ATR_DYNAMIC"
-            and record.get("barrier_contract_version") == BARRIER_CONTRACT_ATR_DYNAMIC_V2
-        ):
-            kept.append(record)
+        # Fase 1 (D1=A) + Fase 1.7 (I12): sob shadow_atr_dynamic_v2 o TP é
+        # ATR-dinâmico por linha — a paridade econômica é dada pela VERSÃO DO
+        # CONTRATO, não pela igualdade com o TP do Strategies Module. Uma linha
+        # ATR_DYNAMIC precisa carregar o carimbo v2 para treinar; se carrega um
+        # contrato não-v2 (ex.: shadow_atr_dynamic_v1, TP fixo pré-fix P1) é
+        # degradada e é EXCLUÍDA — antes caía no match de TP abaixo e contaminava
+        # o dataset com economia fixa disfarçada de ATR-dinâmica. A regime-2 de
+        # TP-match agora só vale para modos NÃO-ATR_DYNAMIC.
+        if mode == "ATR_DYNAMIC":
+            if record.get("barrier_contract_version") == BARRIER_CONTRACT_ATR_DYNAMIC_V2:
+                kept.append(record)
+            else:
+                atr_non_v2_excluded += 1
             continue
         if not math.isclose(float(record_tp), tp, rel_tol=0.0, abs_tol=1e-9):
             mismatched_tp += 1
@@ -200,6 +206,7 @@ def _filter_l3_barrier_contract(
         "barrier_contract_missing": missing_contract,
         "barrier_contract_mode_mismatch": mismatched_mode,
         "barrier_contract_tp_mismatch": mismatched_tp,
+        "barrier_contract_atr_non_v2_excluded": atr_non_v2_excluded,
     }
 
 

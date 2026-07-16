@@ -52,6 +52,8 @@ def test_shared_catboost_preparation_applies_profile_and_barrier_contract():
                 "profile_id": "profile-a",
                 "barrier_mode": "ATR_DYNAMIC",
                 "tp_pct_applied": 0.6,
+                # Fase 1.7 (I12): linha válida precisa do carimbo v2 para treinar.
+                "barrier_contract_version": "shadow_atr_dynamic_v2",
             },
             {
                 "source": "L3",
@@ -60,6 +62,7 @@ def test_shared_catboost_preparation_applies_profile_and_barrier_contract():
                 "tp_pct_applied": 0.6,
             },
             {
+                # ATR_DYNAMIC sem carimbo v2 (degradada) → excluída (não tp-mismatch).
                 "source": "L3",
                 "profile_id": "profile-a",
                 "barrier_mode": "ATR_DYNAMIC",
@@ -96,7 +99,10 @@ def test_shared_catboost_preparation_applies_profile_and_barrier_contract():
     assert meta["records_with_profile"] == 3
     assert meta["barrier_contract"]["barrier_contract_included"] == 1
     assert meta["barrier_contract"]["barrier_contract_mode_mismatch"] == 1
-    assert meta["barrier_contract"]["barrier_contract_tp_mismatch"] == 1
+    # Fase 1.7 (I12): a linha ATR_DYNAMIC sem carimbo v2 é excluída como
+    # degradada (não mais tp-mismatch).
+    assert meta["barrier_contract"]["barrier_contract_tp_mismatch"] == 0
+    assert meta["barrier_contract"]["barrier_contract_atr_non_v2_excluded"] == 1
     assert meta["l3_strict_meta"]["excluded_null_profile_id"] == 1
     load_kwargs = svc._load_shadow_data.await_args.kwargs
     assert load_kwargs["dataset_query_cutoff"] == cutoff
