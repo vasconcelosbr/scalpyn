@@ -16,7 +16,7 @@ Cada item tem o comando de checagem. Se qualquer um falhar → **não executar**
 | # | Pré-condição | Comando de checagem | Passa quando |
 |---|---|---|---|
 | PC1 | Marco de elegíveis atingido | `python backend/scripts/run_lgbm_retrain.py --dry-run` | `records >= ml_retrain_min_eligible_rows` (**3000** `[query]`); dry-run retorna `status != "skipped"` |
-| PC2 | Certificação GREEN na última run | `SELECT status, run_at FROM ml_data_certification_runs ORDER BY run_at DESC LIMIT 1;` | `status = 'GREEN'` (hoje: **RED** `[query]` — bloqueado) |
+| PC2 | Certificação GREEN **e recente** na última run | `SELECT status, run_at, EXTRACT(EPOCH FROM (now()-run_at))/3600 AS idade_h FROM ml_data_certification_runs ORDER BY run_at DESC LIMIT 1;` OU `GET /api/ml/readiness/latest` | `status='GREEN'` **E** `status_effective != 'STALE'` (idade < `ml_readiness_staleness_threshold_hours`=**3** `[query]`). Job morto/velho ⇒ STALE/JOB_ERROR ⇒ **bloqueado** (Fase 1.7). Nunca usar uma run velha como "atual". |
 | PC3 | I12 = 0 violações de contrato de barreira | inspecionar `invariants->'I12'` da última cert run | `I12` sem violações (0 linhas de contrato divergente na janela) |
 | PC4 | Chaves de aprovação presentes | query PC4 abaixo | as 8 chaves presentes (todas `[query]` presentes hoje) |
 | PC5 | Seed determinística confirmada | `SELECT config_json->'ml_training_seed' ...` | `ml_training_seed = 42` `[query]` |
