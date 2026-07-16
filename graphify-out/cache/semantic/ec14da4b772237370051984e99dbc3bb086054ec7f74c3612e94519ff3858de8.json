@@ -1,1 +1,0 @@
-{"nodes": [{"id": "indicator_validator", "label": "Indicator Validator", "file_type": "code", "source_file": "backend/app/services/indicator_validator.py", "source_location": null, "source_url": null, "captured_at": null, "author": null, "contributor": null}], "edges": [], "hyperedges": []}
