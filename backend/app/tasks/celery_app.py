@@ -664,6 +664,21 @@ celery_app.conf.beat_schedule = {
     },
 }
 
+# ── Backlog guard (2026-07-16) — expires em tasks periódicas idempotentes ─────
+# Uma relíquia de 143k(structural)+88k(execution) mensagens (~227MB Redis) foi
+# observada: tasks agendadas de alta frequência acumulam no broker quando um
+# worker fica fora por horas (beat continua enfileirando enquanto o worker está
+# down). ``expires`` faz a mensagem ser descartada se não consumida a tempo,
+# limitando o backlog. Só schedules NUMÉRICOS (alta freq) — crontab/chains ficam
+# de fora. Em operação normal a fila fica em ~0-2, então expires nunca dispara;
+# ele só corta backlog real (mensagem parada > 3× o intervalo). setdefault não
+# sobrescreve um expires já definido manualmente.
+for _sched_name, _sched_entry in celery_app.conf.beat_schedule.items():
+    _sched_interval = _sched_entry.get("schedule")
+    if isinstance(_sched_interval, (int, float)) and not isinstance(_sched_interval, bool):
+        _sched_opts = _sched_entry.setdefault("options", {})
+        _sched_opts.setdefault("expires", max(float(_sched_interval) * 3.0, 60.0))
+
 # ── Wire dedup-release signal (Task #216 invariant #3) ───────────────────────
 # Must happen at module import so any worker process that imports
 # ``app.tasks.celery_app`` registers the postrun handler exactly once.
