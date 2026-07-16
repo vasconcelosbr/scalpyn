@@ -68,7 +68,7 @@ Commitado (`b340700`): `docs/PROTOCOLO_PRIMEIRO_RETRAIN_CANONICO.md`. Pré-condi
 
 ## STOPs / [NÃO VERIFICADO]
 
-1. **P1.5 deploy** — ✅ RESOLVIDO via `railway up` no structural (pós-verif. 4/4 v2). Pendência residual: rota GitHub segue bloqueada por `graph.json` (167 MB) — outros serviços seguem no código antigo (sem degradação, chaves presentes); considerar purgar graph.json do histórico para regularizar main. Opção de refino: atr==0 fail-closed como WARNING em vez de exceção (reduz ruído de log em símbolos ultra-low-price).
+1. **P1.5 deploy** — ✅ RESOLVIDO (railway up structural, pós-verif 4/4 v2) **+ regularização GitHub concluída** (opção 4): `graph.json` purgado do histórico via BFG (`--strip-blobs-bigger-than 100M --no-blob-protection`; blobs 167MB+133MB removidos; `.git` 322MB→42MB; `graphify-out` destrackeado em commit dedicado). feat e main pushados (history reescrita, 1755 commits); auto-deploy GitHub de `329c1e4` **SUCCESS** no structural → serviços alinhados com o código atual. Backup: bundle `fase1.6-fullrepo-backup.bundle` (scratchpad). Opção de refino remanescente: atr==0 fail-closed como WARNING em vez de exceção (reduz ruído de log em símbolos ultra-low-price como PEPE).
 2. **P2 wiring** — CONSOME PARCIAL; conectar campeão→decisão é mudança de comportamento (decisão do operador). Não implementado.
 3. **P4 análise** — desenho da comparação L1×L3 (símbolo-nível) é decisão do operador.
 4. **P5 hold-out** — `ml_max_candidates_per_holdout=3` aguarda confirmação.
