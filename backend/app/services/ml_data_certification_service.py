@@ -441,6 +441,42 @@ async def run_certification(
     return result
 
 
+def _resolve_staleness_threshold_hours(ml_config: Dict[str, Any]) -> Optional[int]:
+    """P3 Fase 1.7 — threshold de staleness do readiness (Zero Hardcode).
+
+    Lê ``ml_readiness_staleness_threshold_hours`` da config ML ativa. Retorna
+    ``None`` se ausente/inválido — o caller trata None como STALE (fail-closed:
+    sem threshold confiável, NÃO se pode afirmar que a run é atual).
+    """
+    raw = (ml_config or {}).get("ml_readiness_staleness_threshold_hours")
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def compute_readiness_staleness(
+    run_at: datetime, status: str, threshold_hours: Optional[int], *, now: datetime
+) -> Dict[str, Any]:
+    """Deriva o status efetivo do readiness aplicando o guard de staleness.
+
+    STALE quando ``now - run_at`` excede o threshold OU quando não há threshold
+    configurado. Preserva o ``status`` original da run num campo separado — o
+    painel nunca serve dado velho como atual (P3 Fase 1.7).
+    """
+    age_hours = (now - run_at).total_seconds() / 3600.0
+    is_stale = threshold_hours is None or age_hours > threshold_hours
+    return {
+        "run_age_hours": round(age_hours, 2),
+        "staleness_threshold_hours": threshold_hours,
+        "is_stale": is_stale,
+        "status_effective": "STALE" if is_stale else status,
+    }
+
+
 async def latest_certification(db: AsyncSession) -> Optional[Dict[str, Any]]:
     """Última execução persistida — payload do endpoint /ml/readiness/latest."""
     row = (await db.execute(text("""
@@ -457,12 +493,28 @@ async def latest_certification(db: AsyncSession) -> Optional[Dict[str, Any]]:
         invariants = json.loads(invariants)
     if isinstance(cumulative, str):
         cumulative = json.loads(cumulative)
+    # P3 Fase 1.7 — staleness guard (o job pode morrer em silêncio; o painel não
+    # pode servir a última run como "atual" quando ela está velha).
+    try:
+        ml_config = await _load_active_ml_config(db)
+    except Exception:
+        ml_config = {}
+    staleness = compute_readiness_staleness(
+        row.run_at,
+        row.status,
+        _resolve_staleness_threshold_hours(ml_config),
+        now=datetime.now(timezone.utc),
+    )
     return {
         "run_id": str(row.id),
         "run_at": row.run_at.isoformat(),
         "window_from": row.window_from.isoformat(),
         "window_to": row.window_to.isoformat(),
         "status": row.status,
+        "status_effective": staleness["status_effective"],
+        "is_stale": staleness["is_stale"],
+        "run_age_hours": staleness["run_age_hours"],
+        "staleness_threshold_hours": staleness["staleness_threshold_hours"],
         "invariants": (invariants or {}).get("invariants"),
         "warns": (invariants or {}).get("warns"),
         "failed": (invariants or {}).get("failed"),

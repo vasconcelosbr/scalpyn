@@ -19,11 +19,54 @@ Regras vinculantes (PROMPT_FASE1, Bloco D):
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 
 from .celery_app import celery_app
 
 logger = logging.getLogger(__name__)
+
+
+def _summarize_exc(exc: BaseException) -> str:
+    return f"{type(exc).__name__}: {exc}"[:1000]
+
+
+async def _persist_job_error(summary: str) -> None:
+    """P3 Fase 1.7 (b) — rastro PERSISTENTE quando a task de certificação falha.
+
+    Grava uma linha ``status='JOB_ERROR'`` em ``ml_data_certification_runs`` com
+    o erro resumido em ``invariants`` para que a falha fique VISÍVEL na hora
+    (última run = JOB_ERROR) em vez de só no log do worker. Best-effort: qualquer
+    falha aqui é engolida — nunca afeta a captura, nunca re-raise. Escrita pela
+    própria execução do job (não é INSERT manual para "destravar" o painel).
+    """
+    from datetime import datetime, timezone
+
+    from sqlalchemy import text
+
+    from ..database import get_celery_session
+
+    now = datetime.now(timezone.utc)
+    async with get_celery_session() as db:
+        await db.execute(
+            text(
+                """
+                INSERT INTO ml_data_certification_runs (
+                    id, run_at, window_from, window_to, status, invariants, cumulative
+                ) VALUES (
+                    gen_random_uuid(), now(), :wf, :wt, 'JOB_ERROR',
+                    CAST(:inv AS JSONB), CAST(:cum AS JSONB)
+                )
+                """
+            ),
+            {
+                "wf": now,
+                "wt": now,
+                "inv": json.dumps({"job_error": summary}),
+                "cum": json.dumps({}),
+            },
+        )
+        await db.commit()
 
 
 def _run_async(coro):
@@ -109,7 +152,13 @@ def run() -> None:
             "[ml-certification] run status=%s failed=%s run_id=%s",
             result.get("status"), result.get("failed"), result.get("run_id"),
         )
-    except Exception:
+    except Exception as exc:
         # Falha do job NUNCA pode afetar a captura: não re-raise para o beat
         # não acumular retries; o erro fica no log do worker.
         logger.exception("[ml-certification] execução falhou")
+        # P3 Fase 1.7 (b) — além do log, deixa rastro persistente na tabela de
+        # runs (JOB_ERROR) para a falha ser visível na hora. Best-effort.
+        try:
+            _run_async(_persist_job_error(_summarize_exc(exc)))
+        except Exception:
+            logger.exception("[ml-certification] persist JOB_ERROR falhou")
