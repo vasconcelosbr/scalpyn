@@ -232,6 +232,8 @@ _DECISION_CONTEXT_SNAPSHOT_FIELDS = (
     "market_structure_score",
     "momentum_score",
     "signal_score",
+    "atr_percent",
+    "spread_pct",
     "di_trend",
 )
 # Janela do agregado live em segundos. Tempo curto → mais sensível ao

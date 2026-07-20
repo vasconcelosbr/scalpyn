@@ -12,6 +12,7 @@ Covers:
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -25,6 +26,7 @@ from app.services.robust_indicators.score import (
     calculate_score_with_confidence,
 )
 from app.services.robust_indicators.asset_score import compute_asset_score
+from app.services.shadow_trade_service import _build_features_snapshot
 from app.tasks.pipeline_scan import _decision_metrics
 
 
@@ -129,8 +131,10 @@ class TestL3DecisionMetrics:
             "price": 1.25,
             "indicators": {
                 "adx": 31.0,
+                "atr_percent": 0.75,
                 "volume_delta": 120.0,
             },
+            "spread_pct": 0.031,
             "_score_components": {
                 "component_fields": {
                     "liquidity_score": 87.5,
@@ -161,7 +165,22 @@ class TestL3DecisionMetrics:
         assert snap["market_structure_score"]["value"] == 62.5
         assert snap["momentum_score"]["value"] == 75.0
         assert snap["signal_score"]["value"] == 50.0
+        assert snap["atr_percent"]["value"] == 0.75
+        assert snap["spread_pct"]["value"] == 0.031
         assert snap["di_trend"]["value"] is True
+
+    def test_shadow_feature_snapshot_recovers_root_spread_pct(self):
+        metrics = {
+            "spread_pct": 0.0265,
+            "indicators_snapshot": {
+                "rsi": {"value": 55.0, "source_group": "gate_candles"},
+            },
+        }
+
+        features = _build_features_snapshot(SimpleNamespace(metrics=metrics))
+
+        assert features["rsi"] == 55.0
+        assert features["spread_pct"] == 0.0265
 
 
 class TestConfidenceGateSoftened:

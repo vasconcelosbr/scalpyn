@@ -633,6 +633,22 @@ def _build_features_snapshot(decision: DecisionLog) -> Dict[str, Any]:
         else:
             # Defensive: se um caller futuro persistir flat direto, mantém.
             flat[key] = entry
+    # Older decisions can lack atr_percent in the compact snapshot while the
+    # same decision-time value remains at metrics root. Reuse only that
+    # persisted value; when absent, the ATR v2 fail-closed guard still applies.
+    if flat.get("atr_percent") is None:
+        atr_percent = metrics.get("atr_percent")
+        if atr_percent is None:
+            atr_percent = metrics.get("atr_pct")
+        if atr_percent is not None:
+            flat["atr_percent"] = atr_percent
+    # L3 decision logs persist market spread at metrics root. Keep creating a
+    # complete native feature snapshot even when compact indicators_snapshot
+    # was produced before spread_pct joined the decision-context fields.
+    if flat.get("spread_pct") is None:
+        spread_pct = metrics.get("spread_pct")
+        if spread_pct is not None:
+            flat["spread_pct"] = spread_pct
     return flat
 
 
