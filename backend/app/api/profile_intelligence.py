@@ -36,8 +36,16 @@ from ..schemas.profile_intelligence import (
     CandidateApprovalRequest,
     CandidateRejectionRequest,
     IndicatorShadowAdjustmentRequest,
+    ManualAdjustmentCreateRequest,
+    ManualAdjustmentUpdateRequest,
+    ManualAdjustmentApprovalRequest,
+    ManualAdjustmentRollbackRequest,
 )
 from ..services.profile_intelligence_audit_service import log_pi_event
+from ..services.profile_intelligence_manual_service import (
+    profile_intelligence_manual_service,
+    public_manual_adjustment,
+)
 from ..services.profile_intelligence_contract import (
     DATASET_VERSION,
     LABEL_VERSION,
@@ -48,6 +56,17 @@ from ..services.profile_intelligence_contract import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/profile-intelligence", tags=["profile-intelligence"])
+
+
+_MANUAL_CONFLICTS = {
+    "base_version_changed", "preview_hash_mismatch", "stale_profile_version",
+    "rollback_current_version_changed", "profile_and_champion_config_mismatch",
+}
+
+
+def _manual_http_error(exc: ValueError) -> HTTPException:
+    code = str(exc)
+    return HTTPException(status_code=409 if code in _MANUAL_CONFLICTS else 422, detail=code)
 
 _DEFAULT_SETTINGS = {
     "min_support": 0.05,
@@ -122,6 +141,150 @@ def _ml_challenger_status() -> Dict[str, Dict[str, Any]]:
         return {"lightgbm": dict(status), "catboost": dict(status)}
 
 
+# ── Manual, versioned adjustments ────────────────────────────────────────────
+
+@router.get("/manual-adjustments/eligible-profiles")
+async def list_manual_adjustment_profiles(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    """Existing operator-owned L3 profiles only; never generated/shadow profiles."""
+    return {"items": await profile_intelligence_manual_service.eligible_profiles(db, user_id)}
+
+
+@router.post("/manual-adjustments", status_code=201)
+async def create_manual_adjustment(
+    request: ManualAdjustmentCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    try:
+        result = await profile_intelligence_manual_service.create(db, user_id, request.model_dump())
+        await db.commit()
+        return result
+    except ValueError as exc:
+        await db.rollback()
+        raise _manual_http_error(exc) from exc
+
+
+@router.get("/manual-adjustments")
+async def list_manual_adjustments(
+    state: Optional[str] = Query(default=None, max_length=40),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    items = await profile_intelligence_manual_service.list(db, user_id, state, limit)
+    return {"items": items, "total": len(items)}
+
+
+@router.get("/manual-adjustments/{adjustment_id}")
+async def get_manual_adjustment(
+    adjustment_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    try:
+        row = await profile_intelligence_manual_service.get(db, user_id, adjustment_id)
+        return public_manual_adjustment(row)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.put("/manual-adjustments/{adjustment_id}")
+async def update_manual_adjustment(
+    adjustment_id: UUID,
+    request: ManualAdjustmentUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    try:
+        result = await profile_intelligence_manual_service.update(
+            db, user_id, adjustment_id, request.model_dump(exclude_unset=True),
+        )
+        await db.commit()
+        return result
+    except ValueError as exc:
+        await db.rollback()
+        raise _manual_http_error(exc) from exc
+
+
+@router.post("/manual-adjustments/{adjustment_id}/preview")
+async def preview_manual_adjustment(
+    adjustment_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    try:
+        result = await profile_intelligence_manual_service.preview(db, user_id, adjustment_id)
+        await db.commit()
+        return result
+    except ValueError as exc:
+        # Preserve an explicit CONFLICTED state/event, if the service set one.
+        if str(exc) in _MANUAL_CONFLICTS:
+            await db.commit()
+        else:
+            await db.rollback()
+        raise _manual_http_error(exc) from exc
+
+
+@router.post("/manual-adjustments/{adjustment_id}/approve-and-apply")
+async def approve_and_apply_manual_adjustment(
+    adjustment_id: UUID,
+    request: ManualAdjustmentApprovalRequest,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    try:
+        result = await profile_intelligence_manual_service.approve_and_apply(
+            db, user_id, adjustment_id, preview_hash=request.preview_hash,
+            justification=request.justification, confirm_risk=request.confirm_risk,
+        )
+        await db.commit()
+        return result
+    except ValueError as exc:
+        if str(exc) in _MANUAL_CONFLICTS:
+            await db.commit()
+        else:
+            await db.rollback()
+        raise _manual_http_error(exc) from exc
+
+
+@router.post("/manual-adjustments/{adjustment_id}/reject")
+async def reject_manual_adjustment(
+    adjustment_id: UUID,
+    request: ManualAdjustmentRollbackRequest,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    try:
+        result = await profile_intelligence_manual_service.reject(db, user_id, adjustment_id, request.reason)
+        await db.commit()
+        return result
+    except ValueError as exc:
+        await db.rollback()
+        raise _manual_http_error(exc) from exc
+
+
+@router.post("/manual-adjustments/{adjustment_id}/rollback")
+async def rollback_manual_adjustment(
+    adjustment_id: UUID,
+    request: ManualAdjustmentRollbackRequest,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    try:
+        result = await profile_intelligence_manual_service.rollback(db, user_id, adjustment_id, request.reason)
+        await db.commit()
+        return result
+    except ValueError as exc:
+        if str(exc) in _MANUAL_CONFLICTS:
+            await db.commit()
+        else:
+            await db.rollback()
+        raise _manual_http_error(exc) from exc
+
+
 # ── 1. Overview ──────────────────────────────────────────────────────────────
 
 @router.get("/overview")
@@ -145,6 +308,14 @@ async def get_overview(
     total_runs_count = (await db.execute(text(
         "SELECT COUNT(*) FROM profile_intelligence_runs WHERE user_id = :uid"
     ), {"uid": uid_str})).scalar() or 0
+
+    manual_counts = (await db.execute(text("""
+        SELECT COUNT(*) FILTER (WHERE state IN ('MANUAL_DRAFT','PENDING_MANUAL_APPROVAL')) AS pending,
+               COUNT(*) FILTER (WHERE state = 'APPLIED') AS applied,
+               COUNT(*) FILTER (WHERE state = 'ROLLED_BACK') AS rolled_back
+          FROM profile_intelligence_manual_adjustments
+         WHERE user_id = :uid
+    """), {"uid": uid_str})).mappings().one()
 
     # Pending suggestions count
     pending_count = (await db.execute(text("""
@@ -230,6 +401,9 @@ async def get_overview(
         "total_combinations": total_combos_count,
         "total_suggestions_pending": pending_count,
         "total_suggestions_high_confidence": high_conf_count,
+        "manual_adjustments_pending": int(manual_counts["pending"] or 0),
+        "manual_adjustments_applied": int(manual_counts["applied"] or 0),
+        "manual_adjustments_rolled_back": int(manual_counts["rolled_back"] or 0),
         "base_win_rate": float(last_run.base_win_rate or 0) if last_run else None,
         "best_profile_name": best_profile_row.profile_name if best_profile_row else None,
         "best_profile_win_rate": round(best_profile_wr, 4) if best_profile_wr is not None else None,

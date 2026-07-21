@@ -81,6 +81,38 @@ class IndicatorShadowAdjustmentRequest(BaseModel):
     profile_ids: List[UUID] = Field(min_length=1, max_length=20)
 
 
+class ManualAdjustmentCreateRequest(BaseModel):
+    profile_id: UUID
+    action_type: str = Field(min_length=3, max_length=50)
+    target_path: Optional[str] = Field(default=None, max_length=500)
+    current_value: Any = None
+    proposed_value: Any = None
+    run_id: Optional[UUID] = None
+    indicator_stat_id: Optional[UUID] = None
+    evidence_json: Dict[str, Any] = Field(default_factory=dict)
+    statistical_warnings: List[Dict[str, Any]] = Field(default_factory=list)
+    idempotency_key: str = Field(min_length=12, max_length=160)
+
+
+class ManualAdjustmentUpdateRequest(BaseModel):
+    action_type: Optional[str] = Field(default=None, min_length=3, max_length=50)
+    target_path: Optional[str] = Field(default=None, max_length=500)
+    current_value: Any = None
+    proposed_value: Any = None
+    evidence_json: Optional[Dict[str, Any]] = None
+    statistical_warnings: Optional[List[Dict[str, Any]]] = None
+
+
+class ManualAdjustmentApprovalRequest(BaseModel):
+    preview_hash: str = Field(min_length=64, max_length=64)
+    justification: str = Field(min_length=10, max_length=4000)
+    confirm_risk: bool
+
+
+class ManualAdjustmentRollbackRequest(BaseModel):
+    reason: str = Field(min_length=10, max_length=4000)
+
+
 class AutopilotSettingsUpdate(BaseModel):
     enabled: bool
     settings: Optional[Dict[str, Any]] = None

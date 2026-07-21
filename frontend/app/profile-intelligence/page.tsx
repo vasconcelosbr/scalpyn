@@ -8,6 +8,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import { apiGet, apiPost, apiPut } from "@/lib/api";
+import ManualAdjustmentPanel from "./ManualAdjustmentPanel";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -21,6 +22,9 @@ interface PIOverview {
   total_combinations?: number;
   total_suggestions_pending?: number;
   total_suggestions_high_confidence?: number;
+  manual_adjustments_pending?: number;
+  manual_adjustments_applied?: number;
+  manual_adjustments_rolled_back?: number;
   base_win_rate?: number | null;
   best_profile_name?: string | null;
   best_profile_win_rate?: number | null;
@@ -1287,6 +1291,7 @@ export default function ProfileIntelligencePage() {
                   { label: "Sugestões do Run", value: overview?.total_suggestions_pending ?? "—", sub: "profile_suggestions · legada", hint: "profile_suggestions com status='pending_user_approval' (tabela legada do PI Engine). DIFERENTE de profile_adjustment_suggestions do Calibration Evolution." },
                   { label: "Alta Confiança (PI)", value: overview?.total_suggestions_high_confidence ?? "—", sub: "profile_suggestions", hint: "profile_suggestions com confidence_level='HIGH' (string). DIFERENTE de profile_adjustment_suggestions com confidence ≥ 0.80 (numérico) do Calibration Evolution." },
                   { label: "Total de Runs", value: overview?.total_runs ?? "—", hint: "Execuções do PI Engine (profile_intelligence_runs, all-time)." },
+                  { label: "Ajustes Manuais", value: overview?.manual_adjustments_pending ?? "—", sub: `${overview?.manual_adjustments_applied ?? 0} applied · ${overview?.manual_adjustments_rolled_back ?? 0} rollback`, hint: "Fluxo manual versionado: rascunhos/pendentes, aplicados e revertidos. Não inclui Auto-Pilot." },
                   { label: "Status", value: overview?.last_run_status ? overview.last_run_status.toUpperCase() : "—", hint: "Status da última execução do PI Engine." },
                 ].map((card, i) => (
                   <div key={i} className="card p-3 space-y-1" title={card.hint}>
@@ -3851,13 +3856,20 @@ export default function ProfileIntelligencePage() {
 
       {selectedIndicatorAdjustment && (
         <Modal
-          title="Ajuste de indicador em Shadow"
+          title="Ajuste manual, versionado e auditável"
           onClose={() => {
             setSelectedIndicatorAdjustment(null);
             setIndicatorAdjustmentProfileIds([]);
           }}
         >
-          <div className="space-y-4">
+          <ManualAdjustmentPanel
+            stat={selectedIndicatorAdjustment}
+            onClose={() => {
+              setSelectedIndicatorAdjustment(null);
+              setIndicatorAdjustmentProfileIds([]);
+            }}
+          />
+          <div className="hidden">
             <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-b border-[var(--border-subtle)] pb-3">
               <div className="min-w-0">
                 <div className="font-mono text-[13px] font-semibold text-[var(--text-primary)]">{selectedIndicatorAdjustment.indicator}</div>

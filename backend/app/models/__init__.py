@@ -43,6 +43,10 @@ from .profile_intelligence_autopilot import (
     ProfileIntelligenceAutopilotCompensation,
     ProfileIntelligenceAutopilotAudit,
 )
+from .profile_intelligence_manual import (
+    ProfileIntelligenceManualAdjustment,
+    ProfileIntelligenceManualAdjustmentEvent,
+)
 
 __all__ = [
     "User",
@@ -95,4 +99,6 @@ __all__ = [
     "ProfileIntelligenceAutopilotReport",
     "ProfileIntelligenceAutopilotCompensation",
     "ProfileIntelligenceAutopilotAudit",
+    "ProfileIntelligenceManualAdjustment",
+    "ProfileIntelligenceManualAdjustmentEvent",
 ]
