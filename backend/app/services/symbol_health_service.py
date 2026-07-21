@@ -197,8 +197,14 @@ async def _load_ws_universe() -> set:
     from .gate_ws_leader import _resolve_spot_symbols
 
     live = live_subscribed_spot_symbols()
-    if live is not None:
+    if live:
         return {GateAdapter._normalize_symbol(s) for s in live if s}
+
+    # Celery audit tasks run in a different process from the elected WS
+    # leader. A process-local client may therefore exist without owning any
+    # subscriptions; treating that empty set as cluster truth marks the whole
+    # resolved universe NOT_SUBSCRIBED. Fall back to the shared DB resolver and
+    # let the Redis-buffer probes identify symbols that are actually silent.
 
     try:
         syms = await _resolve_spot_symbols()

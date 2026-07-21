@@ -63,23 +63,20 @@ def test_classify_ok_when_everything_is_healthy():
     assert rec.has_taker_ratio is True
 
 
-def test_classify_not_approved_takes_priority_over_everything():
+def test_classify_inactive_ingestion_takes_priority_over_everything():
     rec = _classify_with_defaults(
-        pool={"is_approved": False, "is_active": True, "exists": True},
+        pool={"is_approved": True, "is_active": False, "exists": True},
     )
     assert rec.status == STATUS_NOT_APPROVED
 
 
-def test_classify_inactive_row_routes_to_ok():
-    """Inactive rows are operator-disabled, not a pool inconsistency,
-    and must not be flagged as NOT_APPROVED. Map them to STATUS_OK to
-    keep the public 5-status taxonomy intact.
-    """
+def test_classify_legacy_disapproval_does_not_block_active_ingestion():
+    """The ingestion gate is is_active; legacy is_approved is informational."""
     rec = _classify_with_defaults(
-        pool={"is_approved": True, "is_active": False, "exists": True},
+        pool={"is_approved": False, "is_active": True, "exists": True},
     )
     assert rec.status == STATUS_OK
-    assert rec.is_approved is False
+    assert rec.is_approved is True
 
 
 def test_classify_not_subscribed_when_approved_but_missing_from_ws():
@@ -686,6 +683,23 @@ def test_load_ws_universe_uses_live_subscribed_state(monkeypatch):
 
     universe = asyncio.run(svc._load_ws_universe())
     assert universe == {"BTC_USDT"}
+
+
+def test_load_ws_universe_falls_back_when_local_live_set_is_empty(monkeypatch):
+    """An empty process-local client is not cluster-wide subscription truth."""
+    from app.services import symbol_health_service as svc
+    from app.websocket import gate_ws_client as wsmod
+    from app.services import gate_ws_leader as leader_mod
+
+    monkeypatch.setattr(wsmod, "live_subscribed_spot_symbols", lambda: set())
+
+    async def resolved_symbols():
+        return ["BTC_USDT", "ETH_USDT"]
+
+    monkeypatch.setattr(leader_mod, "_resolve_spot_symbols", resolved_symbols)
+
+    universe = asyncio.run(svc._load_ws_universe())
+    assert universe == {"BTC_USDT", "ETH_USDT"}
 
 
 def test_remediator_only_recomputes_for_post_refresh_confirmed(monkeypatch):
