@@ -182,7 +182,9 @@ async def _load_pool_state(db) -> Dict[str, Dict[str, bool]]:
     return out
 
 
-async def _load_ws_universe() -> set:
+async def _load_ws_universe(
+    fallback_symbols: Optional[Iterable[str]] = None,
+) -> set:
     """Snapshot of the WS leader's actual spot subscription set.
 
     Prefers the *live* subscription state held by the in-process
@@ -205,6 +207,13 @@ async def _load_ws_universe() -> set:
     # subscriptions; treating that empty set as cluster truth marks the whole
     # resolved universe NOT_SUBSCRIBED. Fall back to the shared DB resolver and
     # let the Redis-buffer probes identify symbols that are actually silent.
+
+    if fallback_symbols is not None:
+        return {
+            GateAdapter._normalize_symbol(s)
+            for s in fallback_symbols
+            if s
+        }
 
     try:
         syms = await _resolve_spot_symbols()
@@ -536,9 +545,11 @@ class SymbolHealthService:
 
         redis = await get_async_redis()
         async with AsyncSessionLocal() as db:
-            pool_state, ws_universe = await asyncio.gather(
-                _load_pool_state(db),
-                _load_ws_universe(),
+            pool_state = await _load_pool_state(db)
+            ws_universe = await _load_ws_universe(
+                symbol
+                for symbol, state in pool_state.items()
+                if state.get("is_active")
             )
 
             if symbols is None:

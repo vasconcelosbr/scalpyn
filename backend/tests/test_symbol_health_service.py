@@ -685,20 +685,16 @@ def test_load_ws_universe_uses_live_subscribed_state(monkeypatch):
     assert universe == {"BTC_USDT"}
 
 
-def test_load_ws_universe_falls_back_when_local_live_set_is_empty(monkeypatch):
+def test_load_ws_universe_uses_shared_fallback_when_local_live_set_is_empty(monkeypatch):
     """An empty process-local client is not cluster-wide subscription truth."""
     from app.services import symbol_health_service as svc
     from app.websocket import gate_ws_client as wsmod
-    from app.services import gate_ws_leader as leader_mod
 
     monkeypatch.setattr(wsmod, "live_subscribed_spot_symbols", lambda: set())
 
-    async def resolved_symbols():
-        return ["BTC_USDT", "ETH_USDT"]
-
-    monkeypatch.setattr(leader_mod, "_resolve_spot_symbols", resolved_symbols)
-
-    universe = asyncio.run(svc._load_ws_universe())
+    universe = asyncio.run(
+        svc._load_ws_universe(["BTC_USDT", "ETH_USDT"])
+    )
     assert universe == {"BTC_USDT", "ETH_USDT"}
 
 
