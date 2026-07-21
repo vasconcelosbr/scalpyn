@@ -66,7 +66,14 @@ async def test_ai_review_missing_key_does_not_complete():
     from app.services.profile_intelligence_live_service import run_ai_review_cycle
 
     with patch.dict("os.environ", {}, clear=False):
-        with patch("os.environ.get", side_effect=lambda k, d="": "" if k == "ANTHROPIC_API_KEY" else d):
+        with patch(
+            "os.environ.get",
+            side_effect=lambda k, d="": (
+                "" if k == "ANTHROPIC_API_KEY"
+                else "2026-07-12T18:21:57Z" if k == "NATIVE_CAPTURE_START_AT"
+                else d
+            ),
+        ):
             db = AsyncMock()
             db.execute = AsyncMock(return_value=MagicMock())
             # Patch _log_activity and DB queries
@@ -162,8 +169,8 @@ async def test_ai_review_api_failure_does_not_complete():
 
 
 @pytest.mark.asyncio
-async def test_ai_review_prefers_env_key_when_present():
-    """ANTHROPIC_API_KEY env var is used directly, DB not queried for key."""
+async def test_ai_review_prefers_validated_user_key_over_env_fallback():
+    """A validated per-user key wins over a potentially stale environment fallback."""
     from app.services.profile_intelligence_live_service import run_ai_review_cycle
 
     real_response = _make_anthropic_response()
@@ -179,14 +186,18 @@ async def test_ai_review_prefers_env_key_when_present():
         db.execute = AsyncMock(return_value=MagicMock())
         db.execute.return_value.fetchone.return_value = (5, 3, 0.01, 0.6)
         db.execute.return_value.fetchall.return_value = [("REDUCE_RISK", 10)]
+        db.execute.return_value.scalar_one_or_none.return_value = b"encrypted_blob"
 
         with patch("app.services.profile_intelligence_live_service._log_activity", AsyncMock()):
             with patch("anthropic.AsyncAnthropic") as mock_client:
                 mock_client.return_value.messages.create = AsyncMock(return_value=real_response)
-                # Track if ai_keys_service.decrypt_value is called (it shouldn't be)
-                with patch("app.services.ai_keys_service.decrypt_value") as mock_decrypt:
+                with patch(
+                    "app.services.ai_keys_service.decrypt_value",
+                    return_value="sk-ant-user-db-key",
+                ) as mock_decrypt:
                     result = await run_ai_review_cycle(db)
-                    assert not mock_decrypt.called, "decrypt_value should not be called when env key present"
+                    assert mock_decrypt.called
+                    mock_client.assert_called_with(api_key="sk-ant-user-db-key")
 
     assert result["status"] == "COMPLETED"
 

@@ -1247,24 +1247,32 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
                                  "context_payload_hash": context_payload_hash})
 
     # ── Key resolution ─────────────────────────────────────────────────────────
-    ai_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    key_source = "env" if ai_key else None
+    ai_key = ""
+    key_source = None
+    try:
+        from .ai_keys_service import decrypt_value
+        key_row = await db.execute(text("""
+            SELECT api_key_encrypted FROM ai_provider_keys
+            WHERE user_id = :user_id
+              AND provider = 'anthropic'
+              AND is_active = true
+              AND is_validated = true
+            ORDER BY last_tested_at DESC NULLS LAST
+            LIMIT 1
+        """), {"user_id": str(review_user_id)})
+        enc = key_row.scalar_one_or_none()
+        if enc:
+            ai_key = decrypt_value(bytes(enc) if not isinstance(enc, bytes) else enc)
+            key_source = "user_db"
+            logger.info(
+                "[PILive] AI key source=user_db decrypt=success len_gt20=%s",
+                len(ai_key) > 20,
+            )
+    except Exception as _exc:
+        logger.warning("[PILive] Could not load user Anthropic key from DB: %s", _exc)
     if not ai_key:
-        try:
-            from .ai_keys_service import decrypt_value
-            key_row = await db.execute(text("""
-                SELECT api_key_encrypted FROM ai_provider_keys
-                WHERE provider = 'anthropic' AND is_active = true AND is_validated = true
-                ORDER BY last_tested_at DESC NULLS LAST
-                LIMIT 1
-            """))
-            enc = key_row.scalar_one_or_none()
-            if enc:
-                ai_key = decrypt_value(bytes(enc) if not isinstance(enc, bytes) else enc)
-                key_source = "db"
-                logger.info("[PILive] AI key source=db decrypt=success len_gt20=%s", len(ai_key) > 20)
-        except Exception as _exc:
-            logger.warning("[PILive] Could not load Anthropic key from DB: %s", _exc)
+        ai_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        key_source = "env_fallback" if ai_key else None
 
     summary = None
     findings: dict = {}
