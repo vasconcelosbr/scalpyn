@@ -567,7 +567,19 @@ class FeatureEngine:
         tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
         atr = tr.rolling(window=period).mean()
         val = atr.iloc[-1]
-        return {"atr": round(float(val), 8) if pd.notna(val) else None}
+        if not pd.notna(val):
+            return {"atr": None}
+        raw_atr = float(val)
+        rounded_atr = round(raw_atr, 8)
+        # Micro-priced assets can have a valid positive ATR below 5e-9.
+        # Rounding that value to eight decimal places turns it into zero,
+        # which then invalidates ATR_DYNAMIC barriers and drops an otherwise
+        # valid native capture. Preserve the old rounded value for every ATR
+        # that remains representable; retain full precision only when rounding
+        # would destroy a positive measurement.
+        if raw_atr > 0.0 and rounded_atr == 0.0:
+            rounded_atr = raw_atr
+        return {"atr": rounded_atr}
 
     def _calc_macd(self, df: pd.DataFrame) -> Dict[str, Any]:
         cfg = self.config["macd"]
