@@ -312,6 +312,8 @@ async def get_overview(
     manual_counts = (await db.execute(text("""
         SELECT COUNT(*) FILTER (WHERE state IN ('MANUAL_DRAFT','PENDING_MANUAL_APPROVAL')) AS pending,
                COUNT(*) FILTER (WHERE state = 'APPLIED') AS applied,
+               COUNT(*) FILTER (WHERE runtime_status = 'RUNTIME_REFRESH_PENDING') AS runtime_pending,
+               COUNT(*) FILTER (WHERE runtime_status = 'RUNTIME_CONFIRMED') AS runtime_confirmed,
                COUNT(*) FILTER (WHERE state = 'ROLLED_BACK') AS rolled_back
           FROM profile_intelligence_manual_adjustments
          WHERE user_id = :uid
@@ -403,6 +405,8 @@ async def get_overview(
         "total_suggestions_high_confidence": high_conf_count,
         "manual_adjustments_pending": int(manual_counts["pending"] or 0),
         "manual_adjustments_applied": int(manual_counts["applied"] or 0),
+        "manual_adjustments_runtime_pending": int(manual_counts["runtime_pending"] or 0),
+        "manual_adjustments_runtime_confirmed": int(manual_counts["runtime_confirmed"] or 0),
         "manual_adjustments_rolled_back": int(manual_counts["rolled_back"] or 0),
         "base_win_rate": float(last_run.base_win_rate or 0) if last_run else None,
         "best_profile_name": best_profile_row.profile_name if best_profile_row else None,

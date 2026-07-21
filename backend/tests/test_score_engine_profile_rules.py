@@ -33,6 +33,7 @@ from app.services.score_engine import (
     merge_score_config,
     resolve_rule_category,
 )
+from app.services.profile_engine import ProfileEngine
 
 
 # ── compute_score now routes through compute_asset_score ──────────────────────
@@ -79,6 +80,53 @@ def test_compute_score_routes_through_robust_adapter():
     assert result["matched_rules"] == ["rsi_1"]
     # category_summaries deliberately empty under the robust adapter.
     assert result["category_summaries"] == {}
+
+
+def test_manual_weighting_scales_rule_points_only_when_explicitly_enabled():
+    rule = {
+        "id": "manual-rsi", "indicator": "rsi", "operator": "<=",
+        "value": 30, "points": 20, "category": "momentum",
+        "manual_profile_intelligence": True,
+    }
+    indicators = {"rsi": 25, "symbol": "BTC_USDT"}
+
+    with patch(
+        "app.services.robust_indicators.compute_asset_score",
+        return_value={"score": 50, "score_confidence": 1, "global_confidence": 1, "matched_rules": []},
+    ) as scorer:
+        ScoreEngine({"scoring_rules": [rule], "weights": {"momentum": 50}}).compute_score(indicators)
+        assert scorer.call_args.args[2][0]["points"] == 20
+
+    with patch(
+        "app.services.robust_indicators.compute_asset_score",
+        return_value={"score": 50, "score_confidence": 1, "global_confidence": 1, "matched_rules": []},
+    ) as scorer:
+        ScoreEngine({
+            "scoring_rules": [rule], "weights": {"momentum": 50},
+            "manual_weighting_enabled": True,
+        }).compute_score(indicators)
+        assert scorer.call_args.args[2][0]["points"] == 10
+
+
+def test_profile_engine_consumes_only_explicit_manual_generated_rules():
+    engine = object.__new__(ProfileEngine)
+    engine.scoring_config = {
+        "rules": [{"id": "base", "indicator": "rsi", "points": 10}],
+        "generated_rules": [
+            {"id": "legacy-generated", "indicator": "adx", "points": 5},
+            {
+                "id": "manual-generated", "indicator": "volume_spike", "points": 7,
+                "manual_profile_intelligence": True,
+            },
+        ],
+    }
+    engine.signals_config = {}
+    engine.block_rules_config = {}
+    engine.entry_triggers_config = {}
+
+    engine._init_engines()
+
+    assert [rule["id"] for rule in engine.score_engine.rules] == ["base", "manual-generated"]
 
 
 def test_compute_score_classification_uses_thresholds():

@@ -296,12 +296,15 @@ CELERY_LOGLEVEL="${CELERY_LOGLEVEL:-info}"
 # confirmed root cause of 26 concurrent DB lock waits in May 2026.
 # K_SERVICE is injected automatically by Cloud Run; absent locally so the
 # dev single-container default ("all queues") is preserved unchanged.
-if [ "${K_SERVICE:-}" = "scalpyn-beat" ] && [ -z "${WORKER_QUEUES+x}" ]; then
-    echo "==> [queue] K_SERVICE=scalpyn-beat + WORKER_QUEUES unset — defaulting to empty (beat-only, no worker)"
-    WORKER_QUEUES=""
-else
-    WORKER_QUEUES="${WORKER_QUEUES-microstructure,structural,execution}"
-fi
+case "${K_SERVICE:-}" in
+    scalpyn|scalpyn-beat)
+        if [ -z "${WORKER_QUEUES+x}" ]; then
+            echo "==> [queue] K_SERVICE=${K_SERVICE} + WORKER_QUEUES unset — defaulting to empty (API/beat role, no worker)"
+            WORKER_QUEUES=""
+        fi
+        ;;
+esac
+WORKER_QUEUES="${WORKER_QUEUES-microstructure,structural,execution}"
 RUN_BEAT="${RUN_BEAT:-1}"
 
 # ── Safe concurrency defaults per Cloud Run service (Task #216 follow-up) ────

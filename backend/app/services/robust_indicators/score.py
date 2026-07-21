@@ -272,12 +272,15 @@ def calculate_score_with_confidence(
         if not name:
             continue
         try:
-            points = float(rule.get("points") or 0)
+            points = float(rule.get("points", rule.get("score", 0)) or 0)
         except (TypeError, ValueError):
             points = 0.0
-        if points <= 0:
+        if points < 0 and rule.get("manual_profile_intelligence") is not True:
             continue
-        points_denominator += points
+        if points == 0:
+            continue
+        if points > 0:
+            points_denominator += points
 
         category = _resolve_category(rule)
         resolved_name = _OPERATOR_ENVELOPE_REMAP.get(rule_operator, name)

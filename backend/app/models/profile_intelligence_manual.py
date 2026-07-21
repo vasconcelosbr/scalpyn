@@ -21,10 +21,20 @@ class ProfileIntelligenceManualAdjustment(Base):
     user_id = Column(UUID(as_uuid=True), nullable=False)
     run_id = Column(UUID(as_uuid=True), nullable=True)
     indicator_stat_id = Column(UUID(as_uuid=True), nullable=True)
-    profile_id = Column(UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="RESTRICT"), nullable=False)
-    base_profile_version_id = Column(UUID(as_uuid=True), ForeignKey("profile_versions.id", ondelete="RESTRICT"), nullable=False)
-    applied_profile_version_id = Column(UUID(as_uuid=True), ForeignKey("profile_versions.id", ondelete="RESTRICT"), nullable=True)
-    rollback_profile_version_id = Column(UUID(as_uuid=True), ForeignKey("profile_versions.id", ondelete="RESTRICT"), nullable=True)
+    # The database migration owns the external RESTRICT foreign keys.  Profiles,
+    # profile_versions and score_engine_versions are SQL-managed tables without
+    # complete ORM mappings in this metadata, so declaring those ForeignKey
+    # objects here makes a real flush depend on accidental model import order.
+    profile_id = Column(UUID(as_uuid=True), nullable=False)
+    base_profile_version_id = Column(UUID(as_uuid=True), nullable=False)
+    applied_profile_version_id = Column(UUID(as_uuid=True), nullable=True)
+    rollback_profile_version_id = Column(UUID(as_uuid=True), nullable=True)
+    runtime_target_profile_version_id = Column(UUID(as_uuid=True), nullable=True)
+    runtime_target_score_engine_version_id = Column(UUID(as_uuid=True), nullable=True)
+    runtime_target_config_hash = Column(String(64), nullable=True)
+    runtime_status = Column(String(40), nullable=False, default="NOT_APPLICABLE")
+    runtime_confirmation_source = Column(String(80), nullable=True)
+    runtime_error = Column(Text, nullable=True)
     action_type = Column(String(50), nullable=False)
     target_path = Column(Text, nullable=True)
     current_value = Column(JSONB, nullable=True)
@@ -53,6 +63,7 @@ class ProfileIntelligenceManualAdjustment(Base):
     approved_at = Column(TIMESTAMP(timezone=True), nullable=True)
     applied_at = Column(TIMESTAMP(timezone=True), nullable=True)
     rolled_back_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    runtime_confirmed_at = Column(TIMESTAMP(timezone=True), nullable=True)
 
 
 class ProfileIntelligenceManualAdjustmentEvent(Base):

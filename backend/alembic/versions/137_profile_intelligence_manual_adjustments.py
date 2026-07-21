@@ -30,6 +30,12 @@ def upgrade() -> None:
         sa.Column("base_profile_version_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("applied_profile_version_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("rollback_profile_version_id", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column("runtime_target_profile_version_id", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column("runtime_target_score_engine_version_id", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column("runtime_target_config_hash", sa.String(64), nullable=True),
+        sa.Column("runtime_status", sa.String(40), nullable=False, server_default=sa.text("'NOT_APPLICABLE'")),
+        sa.Column("runtime_confirmation_source", sa.String(80), nullable=True),
+        sa.Column("runtime_error", sa.Text(), nullable=True),
         sa.Column("action_type", sa.String(50), nullable=False),
         sa.Column("target_path", sa.Text(), nullable=True),
         sa.Column("current_value", postgresql.JSONB(), nullable=True),
@@ -58,10 +64,13 @@ def upgrade() -> None:
         sa.Column("approved_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("applied_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("rolled_back_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("runtime_confirmed_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["profile_id"], ["profiles.id"], ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(["base_profile_version_id"], ["profile_versions.id"], ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(["applied_profile_version_id"], ["profile_versions.id"], ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(["rollback_profile_version_id"], ["profile_versions.id"], ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(["runtime_target_profile_version_id"], ["profile_versions.id"], ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(["runtime_target_score_engine_version_id"], ["score_engine_versions.id"], ondelete="RESTRICT"),
         sa.UniqueConstraint("user_id", "idempotency_key", name="uq_pi_manual_adjustment_idempotency"),
         sa.CheckConstraint(
             "state IN ('MANUAL_DRAFT','PENDING_MANUAL_APPROVAL','MANUALLY_APPROVED','APPLIED','REJECTED','ROLLED_BACK','CONFLICTED')",
@@ -70,6 +79,10 @@ def upgrade() -> None:
         sa.CheckConstraint("autopilot_applied = false", name="ck_pi_manual_no_autopilot"),
         sa.CheckConstraint("ml_training_mutated = false", name="ck_pi_manual_no_training"),
         sa.CheckConstraint("historical_dataset_mutated = false", name="ck_pi_manual_no_history"),
+        sa.CheckConstraint(
+            "runtime_status IN ('NOT_APPLICABLE','APPLIED_DB','RUNTIME_REFRESH_PENDING','RUNTIME_CONFIRMED','RUNTIME_REFRESH_FAILED')",
+            name="ck_pi_manual_runtime_status",
+        ),
     )
     op.create_index("idx_pi_manual_user_state", "profile_intelligence_manual_adjustments", ["user_id", "state", "created_at"])
     op.create_index("idx_pi_manual_profile", "profile_intelligence_manual_adjustments", ["profile_id", "created_at"])

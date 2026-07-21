@@ -185,6 +185,10 @@ class ProfileEngine:
         """Initialize Score, Signal, and Block engines with profile config."""
         # Build score config from profile weights — use "scoring_rules" key for ScoreEngine
         weights = self.scoring_config.get("weights", DEFAULT_WEIGHTS)
+        manual_generated_rules = [
+            rule for rule in (self.scoring_config.get("generated_rules") or [])
+            if isinstance(rule, dict) and rule.get("manual_profile_intelligence") is True
+        ]
         score_config = {
             "weights": weights,
             # Profile stores scoring rules under "rules" — ScoreEngine accepts both keys
@@ -197,8 +201,10 @@ class ProfileEngine:
                 "strong_buy": 80,
                 "buy": 65,
                 "neutral": 40
-            })
+            }),
+            "manual_weighting_enabled": self.scoring_config.get("manual_weighting_enabled") is True,
         }
+        score_config["scoring_rules"] = [*score_config["scoring_rules"], *manual_generated_rules]
         self.score_engine = ScoreEngine(score_config)
 
         # Build signal config from profile

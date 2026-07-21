@@ -72,8 +72,12 @@ def _validate_bucket(
     ]
     matched = [row for row in scope_rows if _matches_bucket(row, bucket_def)]
     scope_wins = sum(1 for row in scope_rows if row.outcome == "TP_HIT")
+    scope_losses = sum(1 for row in scope_rows if row.outcome == "SL_HIT")
+    scope_timeouts = sum(1 for row in scope_rows if row.outcome == "TIMEOUT")
     scope_win_rate = scope_wins / max(len(scope_rows), 1)
     wins = sum(1 for row in matched if row.outcome == "TP_HIT")
+    losses = sum(1 for row in matched if row.outcome == "SL_HIT")
+    timeouts = sum(1 for row in matched if row.outcome == "TIMEOUT")
     win_rate = wins / max(len(matched), 1)
     avg_pnl = sum(float(row.pnl_pct or 0) for row in matched) / max(len(matched), 1)
     positive_lift = win_rate / max(scope_win_rate, 0.001)
@@ -123,6 +127,12 @@ def _validate_bucket(
     evidence = {
         "cases": len(matched),
         "wins": wins,
+        "losses": losses,
+        "timeouts": timeouts,
+        "scope_cases": len(scope_rows),
+        "scope_wins": scope_wins,
+        "scope_losses": scope_losses,
+        "scope_timeouts": scope_timeouts,
         "win_rate": win_rate,
         "base_win_rate": scope_win_rate,
         "avg_pnl_pct": avg_pnl,
@@ -589,6 +599,11 @@ class IndicatorLiftAnalyzer:
                     "profile_id": profile_id,
                     "base_win_rate": safe_base_wr,
                     "base_avg_pnl_pct": scope_avg_pnl,
+                    "requested_window": {
+                        "start": discovery_start.isoformat(),
+                        "end": validation_end.isoformat(),
+                        "lookback_days": lookback_days,
+                    },
                     "discovery_window": {
                         "start": discovery_start.isoformat(),
                         "end": discovery_end.isoformat(),

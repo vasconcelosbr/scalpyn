@@ -1010,7 +1010,7 @@ class ProfileIntelligenceAutopilotService:
             return {"status": "blocked", "reason": "missing_rollback_payload"}
 
         safe, gate_details = await self.gate_evaluator.evaluate(db, user_id)
-        if False:  # ML gating disabled by user order
+        if not safe:
             await self._audit(
                 db,
                 user_id=user_id,

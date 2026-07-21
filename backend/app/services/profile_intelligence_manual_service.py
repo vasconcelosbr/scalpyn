@@ -109,10 +109,22 @@ def apply_manual_action(
         target = resolve_stable_path(result, target_path)
         if not isinstance(target, list) or not isinstance(proposed_value, Mapping):
             raise ValueError("add_target_must_be_list_and_payload_object")
-        stable_id = _stable_id(proposed_value)
+        proposed_item = deepcopy(dict(proposed_value))
+        if action_type in {"ADD_SCORE_BONUS", "ADD_SCORE_PENALTY"}:
+            points = proposed_item.pop("score", proposed_item.get("points"))
+            if not isinstance(points, (int, float)) or isinstance(points, bool):
+                raise ValueError("manual_score_rule_requires_numeric_points")
+            if action_type == "ADD_SCORE_BONUS" and points <= 0:
+                raise ValueError("manual_score_bonus_must_be_positive")
+            if action_type == "ADD_SCORE_PENALTY" and points >= 0:
+                raise ValueError("manual_score_penalty_must_be_negative")
+            proposed_item["points"] = float(points)
+            proposed_item["manual_profile_intelligence"] = True
+            proposed_item.setdefault("id", _stable_id(proposed_item))
+        stable_id = _stable_id(proposed_item)
         if any(_stable_id(item) == stable_id for item in target):
             raise ValueError("stable_id_already_exists")
-        target.append(deepcopy(dict(proposed_value)))
+        target.append(proposed_item)
         return result
     if action_type in REMOVE_ACTIONS:
         parts = target_path.strip("/").split("/")
@@ -139,6 +151,8 @@ def apply_manual_action(
     if not isinstance(parent, dict) or parts[-1] not in parent:
         raise ValueError("target_path_not_found")
     parent[parts[-1]] = deepcopy(proposed_value)
+    if action_type == "UPDATE_SCORE_WEIGHT":
+        result.setdefault("scoring", {})["manual_weighting_enabled"] = True
     return result
 
 
@@ -151,6 +165,12 @@ def _public(row: ProfileIntelligenceManualAdjustment) -> dict[str, Any]:
         "base_profile_version_id": str(row.base_profile_version_id),
         "applied_profile_version_id": str(row.applied_profile_version_id) if row.applied_profile_version_id else None,
         "rollback_profile_version_id": str(row.rollback_profile_version_id) if row.rollback_profile_version_id else None,
+        "runtime_target_profile_version_id": str(row.runtime_target_profile_version_id) if row.runtime_target_profile_version_id else None,
+        "runtime_target_score_engine_version_id": str(row.runtime_target_score_engine_version_id) if row.runtime_target_score_engine_version_id else None,
+        "runtime_target_config_hash": row.runtime_target_config_hash,
+        "runtime_status": row.runtime_status,
+        "runtime_confirmation_source": row.runtime_confirmation_source,
+        "runtime_error": row.runtime_error,
         "action_type": row.action_type, "target_path": row.target_path,
         "current_value": row.current_value, "proposed_value": row.proposed_value,
         "before_config": row.before_config, "after_config": row.after_config, "diff": row.diff,
@@ -169,6 +189,7 @@ def _public(row: ProfileIntelligenceManualAdjustment) -> dict[str, Any]:
         "approved_at": row.approved_at.isoformat() if row.approved_at else None,
         "applied_at": row.applied_at.isoformat() if row.applied_at else None,
         "rolled_back_at": row.rolled_back_at.isoformat() if row.rolled_back_at else None,
+        "runtime_confirmed_at": row.runtime_confirmed_at.isoformat() if row.runtime_confirmed_at else None,
     }
 
 
@@ -311,7 +332,7 @@ class ProfileIntelligenceManualService:
         await _event(db, row, "REJECTED", {"reason": reason})
         await db.flush(); return _public(row)
 
-    async def _new_champion_version(self, db: AsyncSession, row: ProfileIntelligenceManualAdjustment, config: dict[str, Any], parent_id: UUID, reason: str, rollback_to: UUID | None = None) -> UUID:
+    async def _new_champion_version(self, db: AsyncSession, row: ProfileIntelligenceManualAdjustment, config: dict[str, Any], parent_id: UUID, reason: str, rollback_to: UUID | None = None) -> tuple[UUID, UUID]:
         score = score_payload_from_profile(config); score_hash = content_hash(score)
         score_id = (await db.execute(text("""
             INSERT INTO score_engine_versions (config_hash,rules,weights,thresholds,selected_rule_ids,status)
@@ -326,7 +347,7 @@ class ProfileIntelligenceManualService:
             VALUES (:id,:profile_id,:number,CAST(:config AS JSONB),:reason,true,:parent,:hash,:score_id,'CHAMPION',now(),'[]'::jsonb,:rollback_to,:key)
         """), {"id": str(version_id), "profile_id": str(row.profile_id), "number": number, "config": json.dumps(config), "reason": reason, "parent": str(parent_id), "hash": content_hash(config), "score_id": str(score_id), "rollback_to": str(rollback_to) if rollback_to else None, "key": f"pi-manual:{row.id}:{reason}:{content_hash(config)}"})
         await db.execute(text("UPDATE profiles SET config=CAST(:config AS JSONB),profile_version=now(),updated_at=now() WHERE id=:id AND user_id=:user_id"), {"config": json.dumps(config), "id": str(row.profile_id), "user_id": str(row.user_id)})
-        return version_id
+        return version_id, score_id
 
     async def approve_and_apply(self, db: AsyncSession, user_id: UUID, adjustment_id: UUID, *, preview_hash: str, justification: str, confirm_risk: bool) -> dict[str, Any]:
         await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:id))"), {"id": str(adjustment_id)})
@@ -351,14 +372,24 @@ class ProfileIntelligenceManualService:
         await _event(db, row, "APPROVED", {"justification": justification, "risk_confirmed": True})
         if row.action_type == "OBSERVE_ONLY":
             row.applied_profile_version_id = row.base_profile_version_id
+            row.runtime_status = "NOT_APPLICABLE"
+            row.runtime_confirmation_source = "observe_only_no_mutation"
         else:
-            row.applied_profile_version_id = await self._new_champion_version(db, row, row.after_config or {}, row.base_profile_version_id, "manual_profile_intelligence_apply")
+            version_id, score_id = await self._new_champion_version(db, row, row.after_config or {}, row.base_profile_version_id, "manual_profile_intelligence_apply")
+            row.applied_profile_version_id = version_id
+            row.runtime_target_profile_version_id = version_id
+            row.runtime_target_score_engine_version_id = score_id
+            row.runtime_target_config_hash = row.config_hash_after
+            row.runtime_status = "RUNTIME_REFRESH_PENDING"
+            row.runtime_confirmation_source = None
+            row.runtime_error = None
+            row.runtime_confirmed_at = None
             await db.execute(text("""
                 INSERT INTO profile_audit_log (id,user_id,profile_id,changed_by,change_source,change_description,previous_config,new_config,previous_profile_version,new_profile_version,created_at)
                 VALUES (:id,:user_id,:profile_id,:user_id,'MANUAL_PROFILE_INTELLIGENCE',:description,CAST(:before AS JSONB),CAST(:after AS JSONB),:previous_profile_version,now(),now())
             """), {"id": str(uuid4()), "user_id": str(user_id), "profile_id": str(row.profile_id), "description": f"manual adjustment {row.id}: {justification}", "before": json.dumps(row.before_config), "after": json.dumps(row.after_config), "previous_profile_version": version["profile_version"]})
         row.state, row.applied_at, row.updated_at = "APPLIED", _now(), _now()
-        await _event(db, row, "APPLIED", {"profile_version_id": str(row.applied_profile_version_id), "mutation_source": row.mutation_source, "autopilot_applied": False, "ml_training_mutated": False, "historical_dataset_mutated": False})
+        await _event(db, row, "APPLIED_DB", {"profile_version_id": str(row.applied_profile_version_id), "score_engine_version_id": str(row.runtime_target_score_engine_version_id) if row.runtime_target_score_engine_version_id else None, "runtime_status": row.runtime_status, "mutation_source": row.mutation_source, "autopilot_applied": False, "ml_training_mutated": False, "historical_dataset_mutated": False})
         await db.flush(); return _public(row)
 
     async def rollback(self, db: AsyncSession, user_id: UUID, adjustment_id: UUID, reason: str) -> dict[str, Any]:
@@ -368,18 +399,82 @@ class ProfileIntelligenceManualService:
             return _public(row)
         if row.state != "APPLIED" or not row.applied_profile_version_id:
             raise ValueError("only_applied_adjustment_can_rollback")
+        if row.action_type != "OBSERVE_ONLY" and row.runtime_status != "RUNTIME_CONFIRMED":
+            raise ValueError("runtime_confirmation_required_before_rollback")
         current = await _eligible_version(db, user_id, row.profile_id, for_update=True)
         if current["version_id"] != row.applied_profile_version_id:
             row.state = "CONFLICTED"; await _event(db, row, "CONFLICTED", {"reason": "rollback_current_version_changed"}); await db.flush()
             raise ValueError("rollback_current_version_changed")
         if row.action_type == "OBSERVE_ONLY":
             rollback_id = row.base_profile_version_id
+            rollback_score_id = None
         else:
-            rollback_id = await self._new_champion_version(db, row, row.before_config or {}, row.applied_profile_version_id, "manual_profile_intelligence_rollback", row.base_profile_version_id)
+            rollback_id, rollback_score_id = await self._new_champion_version(db, row, row.before_config or {}, row.applied_profile_version_id, "manual_profile_intelligence_rollback", row.base_profile_version_id)
+            row.runtime_target_profile_version_id = rollback_id
+            row.runtime_target_score_engine_version_id = rollback_score_id
+            row.runtime_target_config_hash = row.config_hash_before
+            row.runtime_status = "RUNTIME_REFRESH_PENDING"
+            row.runtime_confirmation_source = None
+            row.runtime_error = None
+            row.runtime_confirmed_at = None
         row.rollback_profile_version_id, row.rollback_reason = rollback_id, reason
         row.state, row.rolled_back_at, row.updated_at = "ROLLED_BACK", _now(), _now()
         await _event(db, row, "ROLLED_BACK", {"rollback_profile_version_id": str(rollback_id), "reason": reason})
         await db.flush(); return _public(row)
+
+
+async def confirm_manual_runtime_profiles(
+    db: AsyncSession,
+    runtime_snapshots: Mapping[UUID, Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Confirm only versions/configs actually loaded by the production L3 scanner.
+
+    The scanner calls this immediately after its profile snapshot query.  This
+    never changes a profile, watchlist, score rule, dataset, or cache.
+    """
+    if not runtime_snapshots:
+        return []
+    rows: list[Mapping[str, Any]] = []
+    for profile_id, snapshot in runtime_snapshots.items():
+        profile_version_id = snapshot.get("profile_version_id")
+        score_engine_version_id = snapshot.get("score_engine_version_id")
+        config_hash = snapshot.get("config_hash")
+        if not profile_version_id or not score_engine_version_id or not config_hash:
+            continue
+        if content_hash(snapshot.get("config") or {}) != config_hash:
+            continue
+        confirmed = (await db.execute(text("""
+            UPDATE profile_intelligence_manual_adjustments
+               SET runtime_status = 'RUNTIME_CONFIRMED',
+                   runtime_confirmed_at = now(),
+                   runtime_confirmation_source = 'pipeline_scan_profile_snapshot',
+                   runtime_error = NULL,
+                   updated_at = now()
+             WHERE profile_id = CAST(:profile_id AS UUID)
+               AND runtime_status = 'RUNTIME_REFRESH_PENDING'
+               AND runtime_target_profile_version_id = CAST(:profile_version_id AS UUID)
+               AND runtime_target_score_engine_version_id = CAST(:score_engine_version_id AS UUID)
+               AND runtime_target_config_hash = :config_hash
+            RETURNING id, profile_id, runtime_target_profile_version_id AS profile_version_id,
+                      runtime_target_score_engine_version_id AS score_engine_version_id,
+                      runtime_target_config_hash AS config_hash
+        """), {
+            "profile_id": str(profile_id),
+            "profile_version_id": str(profile_version_id),
+            "score_engine_version_id": str(score_engine_version_id),
+            "config_hash": config_hash,
+        })).mappings().all()
+        rows.extend(confirmed)
+    for item in rows:
+        adjustment = await db.get(ProfileIntelligenceManualAdjustment, item["id"])
+        if adjustment:
+            await _event(db, adjustment, "RUNTIME_CONFIRMED", {
+                "source": "pipeline_scan_profile_snapshot",
+                "profile_version_id": str(item["profile_version_id"]),
+                "score_engine_version_id": str(item["score_engine_version_id"]),
+                "config_hash": item["config_hash"],
+            })
+    return [dict(item) for item in rows]
 
 
 profile_intelligence_manual_service = ProfileIntelligenceManualService()

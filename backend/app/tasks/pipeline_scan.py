@@ -2571,17 +2571,64 @@ async def _run_pipeline_scan():
         profile_config_map = {}
         profile_meta_map: dict = {}
         if profile_ids:
-            profile_rows = (await db.execute(
-                select(Profile).where(Profile.id.in_(profile_ids))
-            )).scalars().all()
-            profile_config_map = {row.id: row.config for row in profile_rows}
+            profile_rows = (await db.execute(text("""
+                SELECT p.id, p.name, p.config, p.profile_version,
+                       pv.id AS profile_version_id,
+                       pv.score_engine_version_id,
+                       pv.config_hash,
+                       sev.config_hash AS score_engine_config_hash
+                  FROM profiles p
+                  LEFT JOIN profile_versions pv
+                    ON pv.profile_id = p.id
+                   AND pv.status = 'CHAMPION'
+                   AND pv.is_active IS TRUE
+                  LEFT JOIN score_engine_versions sev ON sev.id = pv.score_engine_version_id
+                 WHERE p.id = ANY(CAST(:profile_ids AS UUID[]))
+            """), {"profile_ids": [str(value) for value in sorted(profile_ids, key=str)]})).mappings().all()
+            profile_config_map = {row["id"]: row["config"] for row in profile_rows}
             profile_meta_map   = {
-                row.id: {
-                    "name":    row.name,
-                    "version": getattr(row, "profile_version", None),
+                row["id"]: {
+                    "name":    row["name"],
+                    "version": row["profile_version"],
+                    "profile_version_id": row["profile_version_id"],
+                    "score_engine_version_id": row["score_engine_version_id"],
+                    "config_hash": row["config_hash"],
+                    "score_engine_config_hash": row["score_engine_config_hash"],
                 }
                 for row in profile_rows
             }
+            # Manual PI changes are not operationally complete at DB commit.
+            # Confirm the exact profile/score versions only after this scanner
+            # has loaded the snapshot it will use for the current L3 cycle.
+            try:
+                from ..services.profile_intelligence_manual_service import (
+                    confirm_manual_runtime_profiles,
+                )
+                async with db.begin_nested():
+                    confirmed = await confirm_manual_runtime_profiles(
+                        db,
+                        {
+                            row["id"]: {
+                                "config": row["config"],
+                                "profile_version_id": row["profile_version_id"],
+                                "score_engine_version_id": row["score_engine_version_id"],
+                                "config_hash": row["config_hash"],
+                                "score_engine_config_hash": row["score_engine_config_hash"],
+                            }
+                            for row in profile_rows
+                        },
+                    )
+                if confirmed:
+                    logger.info(
+                        "[PipelineScan] confirmed %d manual Profile Intelligence runtime version(s)",
+                        len(confirmed),
+                    )
+            except Exception as runtime_confirmation_exc:
+                logger.error(
+                    "[PipelineScan] manual Profile Intelligence runtime confirmation failed: %s",
+                    runtime_confirmation_exc,
+                    exc_info=True,
+                )
 
         wl_snapshots.sort(
             key=lambda wl: (
@@ -3063,6 +3110,10 @@ async def _run_pipeline_scan():
                                     profile_id=str(wl.profile_id) if wl.profile_id else None,
                                     profile_name=_l1_profile_meta.get("name"),
                                     profile_version=_l1_profile_meta.get("version"),
+                                    profile_version_id=str(_l1_profile_meta.get("profile_version_id")) if _l1_profile_meta.get("profile_version_id") else None,
+                                    score_engine_version_id=str(_l1_profile_meta.get("score_engine_version_id")) if _l1_profile_meta.get("score_engine_version_id") else None,
+                                    profile_config_hash=_l1_profile_meta.get("config_hash"),
+                                    score_engine_config_hash=_l1_profile_meta.get("score_engine_config_hash"),
                                 )
                             except Exception as _l1cap_exc:
                                 logger.warning(
@@ -3823,6 +3874,10 @@ async def _run_pipeline_scan():
                                 profile_id=str(wl.profile_id) if wl.profile_id else None,
                                 profile_name=_wl_profile_name,
                                 profile_version=_wl_profile_version,
+                                profile_version_id=str((_wl_prof_meta or {}).get("profile_version_id")) if (_wl_prof_meta or {}).get("profile_version_id") else None,
+                                score_engine_version_id=str((_wl_prof_meta or {}).get("score_engine_version_id")) if (_wl_prof_meta or {}).get("score_engine_version_id") else None,
+                                profile_config_hash=(_wl_prof_meta or {}).get("config_hash"),
+                                score_engine_config_hash=(_wl_prof_meta or {}).get("score_engine_config_hash"),
                                 # Fase 8 (audit 2026-06-24): thread the L3 ML
                                 # gate score computed above straight into the
                                 # shadow row at creation time instead of
@@ -4052,6 +4107,10 @@ async def _run_pipeline_scan():
                                 profile_id=str(wl.profile_id) if wl.profile_id else None,
                                 profile_name=_wl_profile_name,
                                 profile_version=_wl_profile_version,
+                                profile_version_id=str((_wl_prof_meta or {}).get("profile_version_id")) if (_wl_prof_meta or {}).get("profile_version_id") else None,
+                                score_engine_version_id=str((_wl_prof_meta or {}).get("score_engine_version_id")) if (_wl_prof_meta or {}).get("score_engine_version_id") else None,
+                                profile_config_hash=(_wl_prof_meta or {}).get("config_hash"),
+                                score_engine_config_hash=(_wl_prof_meta or {}).get("score_engine_config_hash"),
                             )
                         except Exception as _l3rej_exc:
                             logger.warning(
@@ -4079,6 +4138,10 @@ async def _run_pipeline_scan():
                                 profile_id=str(wl.profile_id) if wl.profile_id else None,
                                 profile_name=_wl_profile_name,
                                 profile_version=_wl_profile_version,
+                                profile_version_id=str((_wl_prof_meta or {}).get("profile_version_id")) if (_wl_prof_meta or {}).get("profile_version_id") else None,
+                                score_engine_version_id=str((_wl_prof_meta or {}).get("score_engine_version_id")) if (_wl_prof_meta or {}).get("score_engine_version_id") else None,
+                                profile_config_hash=(_wl_prof_meta or {}).get("config_hash"),
+                                score_engine_config_hash=(_wl_prof_meta or {}).get("score_engine_config_hash"),
                             )
                         except Exception as _l3sim_exc:
                             logger.warning(

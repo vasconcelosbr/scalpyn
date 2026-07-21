@@ -312,10 +312,22 @@ class ScoreEngine:
             if isinstance(indicators, dict) else None
         )
         try:
+            rules = self.rules
+            if self.config.get("manual_weighting_enabled") is True:
+                rules = []
+                for rule in self.rules:
+                    adjusted = dict(rule)
+                    try:
+                        weight = float(self.weights.get(resolve_rule_category(rule), 0.0))
+                        points = float(rule.get("points", rule.get("score", 0.0)) or 0.0)
+                        adjusted["points"] = points * max(weight, 0.0) / 100.0
+                    except (TypeError, ValueError):
+                        pass
+                    rules.append(adjusted)
             return compute_asset_score(
                 symbol,
                 indicators,
-                self.rules,
+                rules,
                 is_futures=False,
                 flow_source_hint=flow_hint,
             )

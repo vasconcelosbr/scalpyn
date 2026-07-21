@@ -1075,7 +1075,9 @@ async def _create_from_decision(
     _lin_score_engine_version_id = (
         getattr(lineage, "score_engine_version_id", None) if lineage else None
     )
-    _lin_profile_config_hash = None
+    _lin_profile_config_hash = (
+        getattr(lineage, "profile_config_hash", None) if lineage else None
+    )
     _lin_score_engine_config_hash = (
         getattr(lineage, "score_engine_config_hash", None) if lineage else None
     )
@@ -1527,6 +1529,10 @@ async def create_shadows_for_new_decisions(
     profile_id: Optional[str] = None,
     profile_name: Optional[str] = None,
     profile_version: Optional[datetime] = None,
+    profile_version_id: Optional[str] = None,
+    score_engine_version_id: Optional[str] = None,
+    profile_config_hash: Optional[str] = None,
+    score_engine_config_hash: Optional[str] = None,
     ml_scores_by_symbol: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> int:
     """Inline shadow creation triggered by pipeline_scan immediately after
@@ -1628,6 +1634,10 @@ async def create_shadows_for_new_decisions(
             profile_id=profile_id,
             profile_name=profile_name,
             profile_version=profile_version,
+            profile_version_id=profile_version_id,
+            score_engine_version_id=score_engine_version_id,
+            profile_config_hash=profile_config_hash,
+            score_engine_config_hash=score_engine_config_hash,
             lineage_confidence="EXACT",
             lineage_source="pipeline_scan",
             lineage_resolved_at=_dt.now(_tz.utc),
@@ -1830,6 +1840,10 @@ async def create_l3_rejected_inline_shadows(
     watchlist_name: Optional[str] = None,
     watchlist_level: Optional[str] = None,
     source_watchlist_id: Optional[str] = None,
+    profile_version_id: Optional[str] = None,
+    score_engine_version_id: Optional[str] = None,
+    profile_config_hash: Optional[str] = None,
+    score_engine_config_hash: Optional[str] = None,
 ) -> int:
     """L3_REJECTED inline capture: shadow para TODOS os ativos com decision=BLOCK no ciclo L3.
 
@@ -1919,6 +1933,10 @@ async def create_l3_rejected_inline_shadows(
             profile_id=str(profile_id) if profile_id is not None else None,
             profile_name=profile_name,
             profile_version=profile_version,
+            profile_version_id=profile_version_id,
+            score_engine_version_id=score_engine_version_id,
+            profile_config_hash=profile_config_hash,
+            score_engine_config_hash=score_engine_config_hash,
             lineage_confidence="EXACT",
             lineage_source="pipeline_scan",
             lineage_resolved_at=_dt.now(_tz.utc),
@@ -2028,6 +2046,10 @@ async def create_l1_spectrum_shadows(
     profile_id: Optional[str] = None,
     profile_name: Optional[str] = None,
     profile_version: Optional[datetime] = None,
+    profile_version_id: Optional[str] = None,
+    score_engine_version_id: Optional[str] = None,
+    profile_config_hash: Optional[str] = None,
+    score_engine_config_hash: Optional[str] = None,
 ) -> int:
     """L1_SPECTRUM capture: create sampled shadow trades from L1 stage promotions.
 
@@ -2121,6 +2143,10 @@ async def create_l1_spectrum_shadows(
             profile_id=profile_id,
             profile_name=profile_name,
             profile_version=profile_version,
+            profile_version_id=profile_version_id,
+            score_engine_version_id=score_engine_version_id,
+            profile_config_hash=profile_config_hash,
+            score_engine_config_hash=score_engine_config_hash,
             lineage_confidence="EXACT",
             lineage_source="pipeline_scan",
             lineage_resolved_at=_dt.now(_tz.utc),
@@ -2348,6 +2374,10 @@ async def create_l3_simulated_shadows(
     watchlist_name: Optional[str] = None,
     watchlist_level: Optional[str] = None,
     source_watchlist_id: Optional[str] = None,
+    profile_version_id: Optional[str] = None,
+    score_engine_version_id: Optional[str] = None,
+    profile_config_hash: Optional[str] = None,
+    score_engine_config_hash: Optional[str] = None,
 ) -> int:
     """L3_SIMULATED capture: camada contrafactual para TODOS os ativos avaliados no gate L3.
 
@@ -2441,6 +2471,10 @@ async def create_l3_simulated_shadows(
             profile_id=str(profile_id) if profile_id else None,
             profile_name=profile_name,
             profile_version=profile_version,
+            profile_version_id=profile_version_id,
+            score_engine_version_id=score_engine_version_id,
+            profile_config_hash=profile_config_hash,
+            score_engine_config_hash=score_engine_config_hash,
             lineage_confidence="EXACT",
             lineage_source="pipeline_scan",
             lineage_resolved_at=_dt.now(_tz.utc),

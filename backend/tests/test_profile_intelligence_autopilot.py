@@ -502,6 +502,38 @@ async def test_approved_candidate_activation_changes_live_association(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_live_activation_fails_closed_when_operational_gate_is_unsafe(monkeypatch):
+    service = ProfileIntelligenceAutopilotService(
+        gate_evaluator=SimpleNamespace(evaluate=AsyncMock(return_value=(False, {"reasons": ["healthcheck_failed"]})))
+    )
+    candidate = _candidate("APPROVED_FOR_LIVE")
+    candidate.approval_status = "approved"
+    candidate.approved_by = candidate.user_id
+    candidate.approved_at = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+    candidate.approval_reason = "Aprovação humana explícita."
+    candidate.rollback_payload = {"watchlist_id": str(candidate.target_watchlist_id)}
+    db = _ActionDB()
+    audit = AsyncMock()
+    build_plan = AsyncMock()
+    monkeypatch.setattr(service, "_candidate_for_user", AsyncMock(return_value=candidate))
+    monkeypatch.setattr(service, "_build_live_change_plan", build_plan)
+    monkeypatch.setattr(service, "_audit", audit)
+
+    result = await service.activate_approved_candidate(
+        db, candidate.user_id, candidate.id, activated_by=candidate.user_id,
+    )
+
+    assert result == {
+        "status": "blocked",
+        "reason": "operational_gates_failed",
+        "gates": {"reasons": ["healthcheck_failed"]},
+    }
+    build_plan.assert_not_awaited()
+    assert audit.await_args.kwargs["event_type"] == "LIVE_ACTIVATION_BLOCKED_OPERATIONAL_GATES"
+    assert audit.await_args.kwargs["result"]["mutation_applied"] is False
+
+
+@pytest.mark.asyncio
 async def test_live_activation_without_rollback_is_blocked(monkeypatch):
     service = ProfileIntelligenceAutopilotService()
     candidate = _candidate("APPROVED_FOR_LIVE")

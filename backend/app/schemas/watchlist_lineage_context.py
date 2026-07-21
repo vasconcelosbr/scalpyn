@@ -28,6 +28,7 @@ class WatchlistLineageContext:
     profile_version: Optional[datetime] = None
     profile_version_id: Optional[str] = None
     score_engine_version_id: Optional[str] = None
+    profile_config_hash: Optional[str] = None
     score_engine_config_hash: Optional[str] = None
     lineage_confidence: str = "EXACT"
     lineage_source: str = "pipeline_scan"
