@@ -79,18 +79,12 @@ async def get_async_redis():
         # Celery sync tasks use asyncio.run(), which creates and closes one
         # loop per invocation. A redis.asyncio pool cannot be reused by the
         # next invocation, so discard the stale loop-owned client first.
-        stale_client = _async_client
         _async_client = None
         _async_client_loop = None
-        try:
-            closer = getattr(stale_client, "aclose", None) or getattr(
-                stale_client, "close"
-            )
-            await closer()
-        except Exception as exc:
-            logger.debug(
-                "[redis] stale cross-loop client close failed: %s", exc
-            )
+        # Do not await stale_client.aclose() from the new loop: redis-py's
+        # close path may itself wait on futures owned by the closed loop and
+        # hang the task. The old loop already closed its transports; normal
+        # same-loop shutdown is still handled by reset_async_redis().
     now = time.monotonic()
     if now < _init_retry_after:
         return None

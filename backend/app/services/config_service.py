@@ -36,8 +36,17 @@ def _make_redis_client():
 
 
 class ConfigService:
-    def __init__(self):
-        self.redis = _make_redis_client()
+    def __init__(self, redis=None):
+        # Optional explicit client is retained for tests. Production resolves
+        # the shared client lazily so Celery never retains a pool from a
+        # previous asyncio.run() event loop.
+        self.redis = redis
+
+    async def _get_redis(self):
+        if self.redis is not None:
+            return self.redis
+        from .redis_client import get_async_redis
+        return await get_async_redis()
 
     def _get_cache_key(self, config_type: str, user_id: UUID, pool_id: Optional[UUID] = None) -> str:
         if pool_id:
@@ -46,10 +55,11 @@ class ConfigService:
 
     async def get_config(self, db: AsyncSession, config_type: str, user_id: UUID, pool_id: Optional[UUID] = None) -> Dict[str, Any]:
         cache_key = self._get_cache_key(config_type, user_id, pool_id)
+        redis = await self._get_redis()
 
-        if self.redis:
+        if redis:
             try:
-                cached_config = await self.redis.get(cache_key)
+                cached_config = await redis.get(cache_key)
                 if cached_config:
                     return json.loads(cached_config)
             except Exception as e:
@@ -64,9 +74,9 @@ class ConfigService:
         profile = result.scalars().first()
 
         if profile:
-            if self.redis:
+            if redis:
                 try:
-                    await self.redis.set(cache_key, json.dumps(profile.config_json), ex=3600)
+                    await redis.set(cache_key, json.dumps(profile.config_json), ex=3600)
                 except Exception as e:
                     logger.warning("Redis cache write failed (skipping cache): %s", e)
             return profile.config_json
@@ -109,9 +119,10 @@ class ConfigService:
         await db.commit()
 
         cache_key = self._get_cache_key(config_type, user_id, pool_id)
-        if self.redis:
+        redis = await self._get_redis()
+        if redis:
             try:
-                await self.redis.delete(cache_key)
+                await redis.delete(cache_key)
             except Exception as e:
                 logger.warning("Redis cache invalidation failed (skipping): %s", e)
 
@@ -119,11 +130,12 @@ class ConfigService:
 
     async def invalidate_cache(self, config_type: str, user_id: UUID, pool_id: Optional[UUID] = None) -> None:
         """Invalidate Redis cache for a config key. Call after ORM direct writes that bypass update_config."""
-        if not self.redis:
+        redis = await self._get_redis()
+        if not redis:
             return
         cache_key = self._get_cache_key(config_type, user_id, pool_id)
         try:
-            await self.redis.delete(cache_key)
+            await redis.delete(cache_key)
         except Exception as e:
             logger.warning("Redis cache invalidation failed (config will expire on TTL): %s", e)
 
