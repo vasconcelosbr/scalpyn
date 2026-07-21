@@ -310,7 +310,7 @@ async def _evaluate_rejected(db, snap: Dict[str, Any]) -> Optional[Dict[str, Any
 
 async def _run_evaluator() -> None:
     """Main async logic: batch-evaluates pending opportunity_snapshots."""
-    from ..database import AsyncSessionLocal
+    from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
 
     logger.info("[OppEval] Starting evaluation pass (batch=%d lookback=%dd)", BATCH_SIZE, LOOKBACK_DAYS)
 
