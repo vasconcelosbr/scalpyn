@@ -320,7 +320,12 @@ TASK_ANNOTATIONS = {
     "app.tasks.auto_discover_assets.discover":           {**_STRUCTURAL_GUARDS, "rate_limit": "2/h"},
     "app.tasks.fetch_market_caps.fetch_market_caps":     {**_STRUCTURAL_GUARDS, "rate_limit": "4/h"},
     "app.tasks.macro_regime_update.update":              {**_STRUCTURAL_GUARDS, "rate_limit": "4/h"},
-    "app.tasks.symbol_health_audit.monitor_only":        {**_STRUCTURAL_GUARDS, "rate_limit": "12/h"},
+    # The beat cadence is 5 minutes. A matching 12/h token bucket leaves no
+    # recovery capacity after a rolling-deploy duplicate: the reserved task
+    # waits five minutes and starves the single-concurrency structural worker.
+    # The task itself takes ~25s and the worker serializes executions, so 3/m
+    # drains finite overlap/backlog without allowing concurrent audits.
+    "app.tasks.symbol_health_audit.monitor_only":        {**_STRUCTURAL_GUARDS, "rate_limit": "3/m"},
     "app.tasks.symbol_health_audit.run_repair":          {**_STRUCTURAL_GUARDS, "rate_limit": "6/h"},
     "app.tasks.simulation.run_simulation_batch":         {**_STRUCTURAL_GUARDS, "rate_limit": "6/h"},
     "app.tasks.simulation.run_trade_simulation":         {**_STRUCTURAL_GUARDS, "rate_limit": "60/m"},

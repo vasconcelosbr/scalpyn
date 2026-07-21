@@ -196,6 +196,15 @@ def test_dedup_redis_unreachable_fails_open(monkeypatch, caplog):
     assert len(fake.sent) == 1
 
 
+def test_symbol_health_audit_has_backlog_recovery_capacity():
+    from app.tasks.celery_app import celery_app
+
+    annotation = celery_app.conf.task_annotations[
+        "app.tasks.symbol_health_audit.monitor_only"
+    ]
+    assert annotation["rate_limit"] == "3/m"
+
+
 # ── Group 2: status endpoint payload shape ─────────────────────────────────
 
 class _MiniSyncRedis:
