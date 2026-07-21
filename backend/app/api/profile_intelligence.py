@@ -620,9 +620,14 @@ async def _get_indicator_stats(db, user_id, role, run_id, min_cases, confidence_
             and bool(item["associated_profiles"])
         )
         item["can_apply_shadow_adjustment"] = actionable
+        item["can_request_ai_review"] = (
+            stat.validation_status == "validated"
+            and stat.actionability_status == "ai_review_pending"
+            and bool(item["associated_profiles"])
+        )
         item["adjustment_blocked_reason"] = None if actionable else (
-            stat.validation_status
-            or stat.actionability_status
+            stat.actionability_status
+            or stat.validation_status
             or "missing_associated_profile"
         )
         indicators.append(item)
@@ -632,6 +637,83 @@ async def _get_indicator_stats(db, user_id, role, run_id, min_cases, confidence_
         "run_id": str(selected_run_id),
         "dataset_version": DATASET_VERSION,
         "label_version": LABEL_VERSION,
+    }
+
+
+@router.post("/indicators/{indicator_stat_id}/ai-review")
+async def review_indicator_adjustment_with_ai(
+    indicator_stat_id: str,
+    payload: IndicatorShadowAdjustmentRequest,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    try:
+        stat_id = UUID(indicator_stat_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid indicator_stat_id") from exc
+
+    indicator_stat = await db.scalar(select(ProfileIndicatorStats).where(
+        ProfileIndicatorStats.id == stat_id,
+        ProfileIndicatorStats.user_id == user_id,
+    ))
+    if indicator_stat is None:
+        raise HTTPException(status_code=404, detail="Indicator statistic not found")
+
+    latest_run_id = await db.scalar(select(ProfileIntelligenceRun.id).where(
+        ProfileIntelligenceRun.user_id == user_id,
+        ProfileIntelligenceRun.engine_version == "2B.2-native-official",
+        ProfileIntelligenceRun.status.in_(("completed", "collection_in_progress")),
+    ).order_by(ProfileIntelligenceRun.run_at.desc()).limit(1))
+    if latest_run_id != indicator_stat.run_id:
+        raise HTTPException(status_code=409, detail="indicator_not_from_latest_official_run")
+
+    associated_ids = {UUID(str(value)) for value in (indicator_stat.source_profile_ids or [])}
+    requested_ids = set(payload.profile_ids)
+    if not requested_ids or not requested_ids.issubset(associated_ids):
+        raise HTTPException(status_code=409, detail="profile_not_associated_with_indicator")
+    profiles = list((await db.execute(select(Profile).where(
+        Profile.user_id == user_id,
+        Profile.id.in_(requested_ids),
+        Profile.is_active.is_(True),
+    ))).scalars().all())
+    if {profile.id for profile in profiles} != requested_ids:
+        raise HTTPException(status_code=409, detail="profile_not_owned_or_inactive")
+
+    from ..services.profile_indicator_ai_review_service import review_indicator_adjustment
+    try:
+        review = await review_indicator_adjustment(
+            db,
+            user_id=user_id,
+            indicator_stat=indicator_stat,
+            profiles=profiles,
+        )
+        await log_pi_event(
+            db,
+            user_id,
+            "indicator_ai_review_completed",
+            run_id=indicator_stat.run_id,
+            result_json={
+                "indicator_stat_id": indicator_stat_id,
+                "verdict": review["verdict"],
+                "context_hash": review["context_hash"],
+                "incumbent_mutated": False,
+                "training_dataset_mutated": False,
+            },
+        )
+        await db.commit()
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception:
+        await db.rollback()
+        logger.exception("[PI API] indicator AI review failed stat=%s", indicator_stat_id)
+        raise
+    return {
+        "indicator_stat_id": indicator_stat_id,
+        "actionability_status": indicator_stat.actionability_status,
+        "review": review,
+        "incumbent_mutated": False,
+        "training_dataset_mutated": False,
     }
 
 

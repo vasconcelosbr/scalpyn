@@ -98,6 +98,7 @@ interface IndicatorStat {
   evidence_json?: any;
   associated_profiles?: Array<{ id: string; name: string }>;
   can_apply_shadow_adjustment?: boolean;
+  can_request_ai_review?: boolean;
   adjustment_blocked_reason?: string | null;
 }
 
@@ -863,6 +864,36 @@ export default function ProfileIntelligencePage() {
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       showToast(`Ajuste bloqueado: ${message}`, false);
+    } finally {
+      setIndicatorAdjustmentLoading(false);
+    }
+  };
+
+  const handleIndicatorAiReview = async () => {
+    if (!selectedIndicatorAdjustment?.can_request_ai_review || indicatorAdjustmentProfileIds.length === 0) {
+      return;
+    }
+    setIndicatorAdjustmentLoading(true);
+    try {
+      const result = await apiPost(
+        `/profile-intelligence/indicators/${selectedIndicatorAdjustment.id}/ai-review`,
+        { profile_ids: indicatorAdjustmentProfileIds },
+      );
+      const approved = result?.actionability_status === "validated";
+      setSelectedIndicatorAdjustment(current => current ? {
+        ...current,
+        actionability_status: result?.actionability_status,
+        can_request_ai_review: false,
+        can_apply_shadow_adjustment: approved,
+        adjustment_blocked_reason: approved ? null : result?.actionability_status,
+        evidence_json: { ...(current.evidence_json || {}), ai_review: result?.review },
+      } : current);
+      showToast(approved
+        ? "IA aprovou o ajuste limitado a challenger shadow."
+        : "IA rejeitou o ajuste; nenhum profile foi alterado.", approved);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      showToast(`Revisão da IA bloqueada: ${message}`, false);
     } finally {
       setIndicatorAdjustmentLoading(false);
     }
@@ -3877,9 +3908,20 @@ export default function ProfileIntelligencePage() {
               <div className="flex items-start gap-2 rounded border border-yellow-500/30 bg-yellow-500/5 p-3 text-[11px] text-yellow-300">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                 <div>
-                  <div className="font-semibold">Aguardando validação temporal</div>
+                  <div className="font-semibold">
+                    {selectedIndicatorAdjustment.can_request_ai_review
+                      ? "Validação temporal concluída · revisão da IA pendente"
+                      : "Ajuste bloqueado pelo gate de validação"}
+                  </div>
                   <div className="mt-0.5 text-yellow-200/70">{selectedIndicatorAdjustment.adjustment_blocked_reason || "exploratory_only"}</div>
                 </div>
+              </div>
+            )}
+
+            {selectedIndicatorAdjustment.evidence_json?.ai_review?.rationale && (
+              <div className="rounded border border-violet-400/20 bg-violet-400/5 p-3 text-[10px] text-violet-100/80">
+                <div className="mb-1 font-semibold uppercase text-violet-300">Análise da IA</div>
+                {selectedIndicatorAdjustment.evidence_json.ai_review.rationale}
               </div>
             )}
 
@@ -3904,13 +3946,22 @@ export default function ProfileIntelligencePage() {
                 className="btn btn-primary flex flex-1 items-center justify-center gap-1.5 text-[11px]"
                 disabled={
                   indicatorAdjustmentLoading
-                  || !selectedIndicatorAdjustment.can_apply_shadow_adjustment
+                  || (!selectedIndicatorAdjustment.can_apply_shadow_adjustment
+                    && !selectedIndicatorAdjustment.can_request_ai_review)
                   || indicatorAdjustmentProfileIds.length === 0
                 }
-                onClick={handleIndicatorShadowAdjustment}
+                onClick={selectedIndicatorAdjustment.can_request_ai_review
+                  ? handleIndicatorAiReview
+                  : handleIndicatorShadowAdjustment}
               >
                 <SlidersHorizontal className={`h-3.5 w-3.5 ${indicatorAdjustmentLoading ? "animate-pulse" : ""}`} />
-                {indicatorAdjustmentLoading ? "Preparando..." : "Criar challenger shadow"}
+                {indicatorAdjustmentLoading
+                  ? "Processando..."
+                  : selectedIndicatorAdjustment.can_request_ai_review
+                    ? "Analisar ajuste com IA"
+                    : selectedIndicatorAdjustment.role_detected === "losing_indicator"
+                      ? "Criar Score Penalty em shadow"
+                      : "Criar challenger shadow"}
               </button>
             </div>
           </div>

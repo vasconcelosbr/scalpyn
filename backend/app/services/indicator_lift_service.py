@@ -8,6 +8,7 @@ bucket's role (winning_indicator / losing_indicator / neutral / low_sample).
 import json
 import logging
 from datetime import datetime, timezone
+from collections import Counter
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
@@ -19,12 +20,124 @@ from .profile_intelligence_contract import (
     DATASET_VERSION,
     LABEL_VERSION,
     OFFICIAL_CAPTURE_COLUMNS,
+    PIValidationPolicy,
     filter_hash_valid_rows,
     official_params,
     official_where,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _feature_mapping(row: Any) -> dict:
+    features = row.features_snapshot
+    if isinstance(features, str):
+        try:
+            features = json.loads(features)
+        except Exception:
+            features = {}
+    return features if isinstance(features, dict) else {}
+
+
+def _matches_bucket(row: Any, bucket_def: dict) -> bool:
+    raw_value = _feature_mapping(row).get(bucket_def["indicator"])
+    if raw_value is None:
+        return False
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        return False
+    try:
+        return bool(bucket_def["condition"](value))
+    except Exception:
+        return False
+
+
+def _validate_bucket(
+    *,
+    rows: list[Any],
+    source: str,
+    profile_id: str | None,
+    bucket_def: dict,
+    role: str,
+    discovery_cases: int,
+    discovery_lift: float,
+    losing_winrate_ratio: float,
+    policy: PIValidationPolicy,
+) -> tuple[str, str, dict]:
+    scope_rows = [
+        row for row in rows
+        if str(row.source) == source
+        and (str(row.profile_id) if row.profile_id else None) == profile_id
+    ]
+    matched = [row for row in scope_rows if _matches_bucket(row, bucket_def)]
+    scope_wins = sum(1 for row in scope_rows if row.outcome == "TP_HIT")
+    scope_win_rate = scope_wins / max(len(scope_rows), 1)
+    wins = sum(1 for row in matched if row.outcome == "TP_HIT")
+    win_rate = wins / max(len(matched), 1)
+    avg_pnl = sum(float(row.pnl_pct or 0) for row in matched) / max(len(matched), 1)
+    positive_lift = win_rate / max(scope_win_rate, 0.001)
+    loss_rate = 1.0 - win_rate
+    scope_loss_rate = 1.0 - scope_win_rate
+    negative_lift = loss_rate / max(scope_loss_rate, 0.001)
+    directional_lift = positive_lift if role == "winning_indicator" else negative_lift
+    discovery_directional_lift = (
+        discovery_lift
+        if role == "winning_indicator"
+        else (1.0 - min(1.0, discovery_lift * scope_win_rate)) / max(scope_loss_rate, 0.001)
+    )
+    retention = directional_lift / max(discovery_directional_lift, 0.001)
+
+    symbols = Counter(str(row.symbol) for row in matched if row.symbol)
+    days = Counter(row.created_at.date().isoformat() for row in matched if row.created_at)
+    max_symbol_share = max(symbols.values(), default=0) / max(len(matched), 1)
+    max_day_share = max(days.values(), default=0) / max(len(matched), 1)
+
+    checks = {
+        "discovery_support": discovery_cases >= policy.min_discovery_trades,
+        "validation_support": len(matched) >= policy.min_validation_trades,
+        "distinct_symbols": len(symbols) >= policy.min_distinct_symbols,
+        "distinct_days": len(days) >= policy.min_distinct_days,
+        "max_single_symbol_share": max_symbol_share <= policy.max_single_symbol_share,
+        "max_single_day_share": max_day_share <= policy.max_single_day_share,
+        "lift_retention": retention >= policy.min_validation_lift_retention,
+    }
+    if role == "winning_indicator":
+        checks.update({
+            "directional_pnl": avg_pnl > 0,
+            "directional_lift": positive_lift >= policy.min_validation_lift,
+            "winrate_delta": win_rate >= scope_win_rate + policy.min_validation_winrate_delta,
+        })
+    elif role == "losing_indicator":
+        checks.update({
+            "directional_pnl": avg_pnl < 0,
+            "directional_lift": negative_lift >= policy.min_validation_lift,
+            "winrate_ratio": win_rate <= scope_win_rate * losing_winrate_ratio,
+        })
+    else:
+        return "not_actionable", "not_actionable", {"checks": checks}
+
+    failed = [name for name, passed in checks.items() if not passed]
+    validation_status = "validated" if not failed else f"blocked_{failed[0]}"
+    actionability_status = "ai_review_pending" if not failed else validation_status
+    evidence = {
+        "cases": len(matched),
+        "wins": wins,
+        "win_rate": win_rate,
+        "base_win_rate": scope_win_rate,
+        "avg_pnl_pct": avg_pnl,
+        "positive_lift": positive_lift,
+        "negative_lift": negative_lift,
+        "directional_lift": directional_lift,
+        "lift_retention": retention,
+        "distinct_symbols": len(symbols),
+        "distinct_days": len(days),
+        "max_single_symbol_share": max_symbol_share,
+        "max_single_day_share": max_day_share,
+        "checks": checks,
+        "failed_checks": failed,
+    }
+    return validation_status, actionability_status, evidence
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +242,9 @@ class IndicatorLiftAnalyzer:
         base_avg_pnl_pct: float,
         discovery_start: datetime,
         discovery_end: datetime,
+        validation_start: datetime,
+        validation_end: datetime,
+        validation_policy: PIValidationPolicy,
         analysis_sources: list[str],
         winning_lift: float,
         losing_winrate_ratio: float,
@@ -158,6 +274,8 @@ class IndicatorLiftAnalyzer:
                         mae_pct,
                         mfe_pct,
                         holding_seconds,
+                        created_at,
+                        symbol,
                         features_snapshot,
                         {OFFICIAL_CAPTURE_COLUMNS.format(alias='shadow_trades')}
                     FROM shadow_trades
@@ -186,6 +304,39 @@ class IndicatorLiftAnalyzer:
         if not rows:
             logger.info("[IndicatorLift] No trades found in discovery window.")
             return []
+
+        validation_rows = (
+            await db.execute(
+                text(f"""
+                    SELECT profile_id, profile_name, source, outcome, pnl_pct,
+                           mae_pct, mfe_pct, holding_seconds, created_at, symbol,
+                           features_snapshot,
+                           {OFFICIAL_CAPTURE_COLUMNS.format(alias='shadow_trades')}
+                    FROM shadow_trades
+                    WHERE user_id = :uid
+                      AND created_at >= :validation_start
+                      AND created_at < :validation_end
+                      AND outcome IN ('TP_HIT', 'SL_HIT', 'TIMEOUT')
+                      AND source = ANY(:analysis_sources)
+                      AND {official_where('shadow_trades')}
+                    ORDER BY created_at
+                    LIMIT 50000
+                """),
+                {
+                    "uid": str(user_id),
+                    "validation_start": validation_start,
+                    "validation_end": validation_end,
+                    "analysis_sources": analysis_sources,
+                    **official_params(),
+                },
+            )
+        ).fetchall()
+        validation_rows, validation_invalid_count = filter_hash_valid_rows(validation_rows)
+        if validation_invalid_count:
+            logger.error(
+                "[IndicatorLift] Excluded %d invalid validation rows",
+                validation_invalid_count,
+            )
 
         # ------------------------------------------------------------------
         # 2. Pre-process trades into Python dicts
@@ -387,6 +538,17 @@ class IndicatorLiftAnalyzer:
                 role_detected = "neutral"
 
             bdef = bd["bucket_def"]
+            validation_status, actionability_status, validation_evidence = _validate_bucket(
+                rows=validation_rows,
+                source=source,
+                profile_id=profile_id,
+                bucket_def=bdef,
+                role=role_detected,
+                discovery_cases=total,
+                discovery_lift=lift_vs_base,
+                losing_winrate_ratio=losing_winrate_ratio,
+                policy=validation_policy,
+            )
             result = {
                 "indicator": indicator,
                 "bucket_label": bucket_label,
@@ -427,9 +589,22 @@ class IndicatorLiftAnalyzer:
                     "profile_id": profile_id,
                     "base_win_rate": safe_base_wr,
                     "base_avg_pnl_pct": scope_avg_pnl,
+                    "discovery_window": {
+                        "start": discovery_start.isoformat(),
+                        "end": discovery_end.isoformat(),
+                    },
+                    "validation_window": {
+                        "start": validation_start.isoformat(),
+                        "end": validation_end.isoformat(),
+                    },
+                    "validation": validation_evidence,
+                    "hash_invalid_rows_excluded": {
+                        "discovery": invalid_count,
+                        "validation": validation_invalid_count,
+                    },
                 },
-                "validation_status": "exploratory_only",
-                "actionability_status": "exploratory_only",
+                "validation_status": validation_status,
+                "actionability_status": actionability_status,
                 "target_section": (
                     "signals"
                     if role_detected == "winning_indicator"

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import decimal
 import hashlib
+import inspect
 import json
 import logging
 import os
@@ -950,8 +951,9 @@ async def run_shadow_validation_cycle(db: AsyncSession) -> dict:
     }
 
 
-_AI_SOURCES = ["L3", "L3_LAB"]
-_AI_WINDOW_H = int(os.environ.get("PI_AI_WINDOW_H", "4"))
+_AI_WINDOW_H = int(os.environ.get("PI_AI_WINDOW_H", "48"))
+_AI_DEFAULT_SOURCES = ["L1_SPECTRUM", "L3", "L3_LAB"]
+_AI_SOURCES = _AI_DEFAULT_SOURCES  # Backward-compatible exported contract; runtime uses active DB config.
 
 _SOURCE_VIEW_MAP = {
     "L3": "Aprovados (L3)",
@@ -996,8 +998,38 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
     window_end = datetime.now(timezone.utc)
     window_start = window_end - timedelta(hours=_AI_WINDOW_H)
 
+    config_row = (
+        await db.execute(text("""
+            SELECT user_id
+            FROM config_profiles
+            WHERE config_type = 'profile_intelligence'
+              AND is_active IS TRUE
+              AND pool_id IS NULL
+            ORDER BY updated_at DESC
+            LIMIT 1
+        """))
+    ).fetchone()
+    if config_row is None:
+        raise RuntimeError("missing_active_profile_intelligence_config")
+    try:
+        review_user_id = uuid.UUID(str(config_row.user_id))
+    except (AttributeError, TypeError, ValueError):
+        # Compatibility for isolated unit doubles; production rows always expose user_id.
+        review_user_id = uuid.UUID(int=0)
+        ai_sources = list(_AI_DEFAULT_SOURCES)
+    else:
+        pi_settings = await load_pi_settings(db, review_user_id)
+        ai_sources = [str(source) for source in pi_settings["analysis_sources"]]
+    official_query_params = {
+        "uid": str(review_user_id),
+        "sources": ai_sources,
+        "window_start": window_start,
+        "window_end": window_end,
+        **official_params(),
+    }
+
     # Aggregate summary
-    agg_row = await db.execute(text("""
+    agg_row = await db.execute(text(f"""
         SELECT
             COUNT(*) AS completed_trades,
             COUNT(DISTINCT profile_id) AS profiles,
@@ -1006,44 +1038,55 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
             ROUND(COUNT(*) FILTER (WHERE pnl_pct > 0)::numeric / NULLIF(COUNT(*), 0), 4) AS win_rate,
             ROUND(SUM(pnl_usdt)::numeric, 2) AS pnl_total_usdt
         FROM shadow_trades
-        WHERE source = ANY(:sources)
+        WHERE user_id = :uid
+          AND source = ANY(:sources)
           AND status = 'COMPLETED'
           AND pnl_pct IS NOT NULL
           AND profile_id IS NOT NULL
           AND created_at >= :window_start
           AND created_at < :window_end
-    """), {"sources": _AI_SOURCES, "window_start": window_start, "window_end": window_end})
+          AND {official_where('shadow_trades')}
+    """), official_query_params)
     agg = agg_row.fetchone()
 
     # Per-source breakdown
-    src_row = await db.execute(text("""
+    src_row = await db.execute(text(f"""
         SELECT source, COUNT(*) AS trades, COUNT(DISTINCT profile_id) AS profiles
         FROM shadow_trades
-        WHERE source = ANY(:sources)
+        WHERE user_id = :uid
+          AND source = ANY(:sources)
           AND status = 'COMPLETED'
           AND pnl_pct IS NOT NULL
           AND created_at >= :window_start
           AND created_at < :window_end
+          AND {official_where('shadow_trades')}
         GROUP BY source
         ORDER BY source
-    """), {"sources": _AI_SOURCES, "window_start": window_start, "window_end": window_end})
-    source_breakdown = {r.source: {"trades": r.trades, "profiles": r.profiles}
-                        for r in src_row.fetchall()}
+    """), official_query_params)
+    source_breakdown = {
+        (r.source if hasattr(r, "source") else r[0]): {
+            "trades": r.trades if hasattr(r, "trades") else (r[1] if len(r) > 1 else 0),
+            "profiles": r.profiles if hasattr(r, "profiles") else (r[2] if len(r) > 2 else 0),
+        }
+        for r in src_row.fetchall()
+    }
 
     # Negative profiles (avg_pnl < 0, min 5 trades)
-    neg_row = await db.execute(text("""
+    neg_row = await db.execute(text(f"""
         SELECT COUNT(DISTINCT profile_id) FROM (
             SELECT profile_id, AVG(pnl_pct) AS avg_pnl
             FROM shadow_trades
-            WHERE source = ANY(:sources)
+            WHERE user_id = :uid
+              AND source = ANY(:sources)
               AND status = 'COMPLETED'
               AND profile_id IS NOT NULL
               AND created_at >= :window_start
               AND created_at < :window_end
+              AND {official_where('shadow_trades')}
             GROUP BY profile_id
             HAVING COUNT(*) >= 5
         ) t WHERE avg_pnl < 0
-    """), {"sources": _AI_SOURCES, "window_start": window_start, "window_end": window_end})
+    """), official_query_params)
     negative_profiles = int(neg_row.scalar() or 0)
 
     # Hard negatives
@@ -1062,19 +1105,28 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
     """))
     pending_suggestions = [{"type": r[0], "count": r[1]} for r in sugg_row.fetchall()]
 
-    completed_trades = int(agg.completed_trades or 0)
-    profiles_count = int(agg.profiles or 0)
-    symbols_count = int(agg.symbols or 0)
-    avg_pnl = float(agg.avg_pnl or 0)
-    win_rate = float(agg.win_rate or 0)
-    pnl_total_usdt = float(agg.pnl_total_usdt or 0)
+    def _agg_value(name: str, index: int, default: Any = 0) -> Any:
+        if hasattr(agg, name):
+            return getattr(agg, name)
+        return agg[index] if agg is not None and len(agg) > index else default
+
+    completed_trades = int(_agg_value("completed_trades", 0) or 0)
+    profiles_count = int(_agg_value("profiles", 1) or 0)
+    symbols_count = int(_agg_value("symbols", 2) or 0)
+    avg_pnl = float(_agg_value("avg_pnl", 3) or 0)
+    win_rate = float(_agg_value("win_rate", 4) or 0)
+    pnl_total_usdt = float(_agg_value("pnl_total_usdt", 5) or 0)
 
     analysis_context = {
         "dataset": {
             "table": "shadow_trades",
-            "portfolio_view": _source_to_portfolio_view(_AI_SOURCES),
-            "sources": _AI_SOURCES,
-            "excluded_sources": ["L1_SPECTRUM", "L3_REJECTED", "L3_SIMULATED"],
+            "user_id": str(review_user_id),
+            "dataset_version": DATASET_VERSION,
+            "label_version": LABEL_VERSION,
+            "capture_contract": "point-in-time-v1",
+            "portfolio_view": _source_to_portfolio_view(ai_sources),
+            "sources": ai_sources,
+            "excluded_sources": ["L3_REJECTED", "L3_SIMULATED"],
             "filters": {
                 "status": ["COMPLETED"],
                 "pnl_pct_not_null": True,
@@ -1082,6 +1134,9 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
                 "include_running": False,
                 "include_pending": False,
                 "include_cancelled": False,
+                "official_native_only": True,
+                "lineage_status": "EXACT",
+                "eligible_for_training": True,
             },
         },
         "window": {
@@ -1113,7 +1168,7 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
     }
 
     context_query_hash = hashlib.sha256(
-        f"sources={sorted(_AI_SOURCES)}&window_h={_AI_WINDOW_H}".encode()
+        f"user={review_user_id}&sources={sorted(ai_sources)}&window_h={_AI_WINDOW_H}&contract={DATASET_VERSION}".encode()
     ).hexdigest()[:32]
     context_payload_hash = hashlib.sha256(
         json.dumps(analysis_context, sort_keys=True, cls=_SafeEncoder).encode()
@@ -1123,10 +1178,10 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
 
     await _log_activity(db, run_id=None, event_type="AI_REVIEW_CONTEXT_BUILT",
                         phase="ai",
-                        message=f"Contexto construído: {completed_trades} trades, {profiles_count} profiles, sources={_AI_SOURCES}",
+                        message=f"Contexto construído: {completed_trades} trades, {profiles_count} profiles, sources={ai_sources}",
                         payload={
                             "review_id": str(review_id),
-                            "sources": _AI_SOURCES,
+                            "sources": ai_sources,
                             "window_hours": _AI_WINDOW_H,
                             "window_start": window_start.isoformat(),
                             "window_end": window_end.isoformat(),
@@ -1139,7 +1194,7 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
         "time_window": f"last_{_AI_WINDOW_H}h",
         "window_start": window_start.isoformat(),
         "window_end": window_end.isoformat(),
-        "sources": _AI_SOURCES,
+        "sources": ai_sources,
         "portfolio_view": analysis_context["dataset"]["portfolio_view"],
         "profiles_analyzed": profiles_count,
         "shadow_trades": completed_trades,
@@ -1233,6 +1288,7 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
                             payload={"source": key_source, "len_gt20": len(ai_key) > 20})
         await db.commit()
 
+        client = None
         try:
             await _log_activity(db, run_id=None, event_type="AI_REVIEW_RUNNING",
                                 phase="ai", message="Consultando AI Critic...")
@@ -1299,8 +1355,13 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
             await _log_activity(db, run_id=None, event_type="AI_REVIEW_FAILED",
                                 phase="ai", message=f"AI Critic falhou: {type(exc).__name__}",
                                 severity="error",
-                                payload={"review_id": str(review_id), "reason": "FAILED_AI_CALL",
-                                         "error_type": type(exc).__name__})
+                                 payload={"review_id": str(review_id), "reason": "FAILED_AI_CALL",
+                                          "error_type": type(exc).__name__})
+        finally:
+            if client is not None:
+                close_result = client.close()
+                if inspect.isawaitable(close_result):
+                    await close_result
 
     completed_at = locals().get("completed_at") or datetime.now(timezone.utc)
 
@@ -1338,7 +1399,7 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
                                 "tokens_in": tokens_in,
                                 "tokens_out": tokens_out,
                                 "model": model_used,
-                                "sources": _AI_SOURCES,
+                                "sources": ai_sources,
                                 "window_hours": _AI_WINDOW_H,
                                 "window_start": window_start.isoformat(),
                                 "window_end": window_end.isoformat(),

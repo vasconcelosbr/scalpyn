@@ -333,7 +333,7 @@ async def live_adjustment_suggestions(
 @router.get("/ai-review")
 async def live_ai_review(
     db: AsyncSession = Depends(get_db),
-    _uid: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_current_user_id),
 ):
     row = await db.execute(text("""
         SELECT id, status, requested_at, completed_at, next_review_at,
@@ -341,9 +341,10 @@ async def live_ai_review(
                summary, findings, recommendations, risk_flags,
                analysis_context, context_payload_hash, context_query_hash
         FROM profile_ai_reviews
+        WHERE analysis_context->'dataset'->>'user_id' = :user_id
         ORDER BY requested_at DESC
         LIMIT 1
-    """))
+    """), {"user_id": str(user_id)})
     review = row.fetchone()
     if review is None:
         next_at = datetime.now(timezone.utc) + timedelta(

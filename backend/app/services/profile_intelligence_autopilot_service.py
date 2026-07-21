@@ -1699,6 +1699,21 @@ class ProfileIntelligenceAutopilotService:
         if str(base_profile.id) not in associated_ids:
             raise ValueError("profile_not_associated_with_indicator")
 
+        ai_review = (_json(getattr(indicator_stat, "evidence_json", None)) or {}).get("ai_review") or {}
+        if (
+            ai_review.get("verdict") != "APPROVE_SHADOW"
+            or not ai_review.get("context_hash")
+            or ai_review.get("training_dataset_mutated") is not False
+            or ai_review.get("incumbent_mutated") is not False
+        ):
+            raise ValueError("indicator_ai_review_not_approved")
+        approved_config_hash = (ai_review.get("profile_config_hashes") or {}).get(str(base_profile.id))
+        current_config_hash = hashlib.sha256(
+            json.dumps(_json(base_profile.config) or {}, sort_keys=True, default=str).encode()
+        ).hexdigest()
+        if not approved_config_hash or approved_config_hash != current_config_hash:
+            raise ValueError("indicator_ai_review_stale_profile_config")
+
         condition = indicator_stat_to_condition(indicator_stat)
         if condition is None:
             raise ValueError("indicator_bucket_cannot_be_converted_to_rule")
