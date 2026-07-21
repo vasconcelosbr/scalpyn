@@ -35,6 +35,7 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Optional
@@ -43,6 +44,7 @@ logger = logging.getLogger(__name__)
 
 
 _async_client = None  # type: ignore[var-annotated]
+_async_client_loop = None  # type: ignore[var-annotated]
 # Cooldown timestamp (monotonic seconds) — until this point in time we
 # do *not* retry init.  Avoids a hot-loop hammering ``from_url`` while a
 # transient outage is in progress, but unlike a permanent flag it lets
@@ -63,10 +65,32 @@ async def get_async_redis():
     Call :func:`reset_async_redis` to clear the cooldown and the cached
     client (used by tests and by the lifespan shutdown).
     """
-    global _async_client, _init_retry_after
+    global _async_client, _async_client_loop, _init_retry_after
 
     if _async_client is not None:
-        return _async_client
+        current_loop = asyncio.get_running_loop()
+        if _async_client_loop is None:
+            # Test-injected clients may be installed outside a running loop.
+            _async_client_loop = current_loop
+            return _async_client
+        if _async_client_loop is current_loop:
+            return _async_client
+
+        # Celery sync tasks use asyncio.run(), which creates and closes one
+        # loop per invocation. A redis.asyncio pool cannot be reused by the
+        # next invocation, so discard the stale loop-owned client first.
+        stale_client = _async_client
+        _async_client = None
+        _async_client_loop = None
+        try:
+            closer = getattr(stale_client, "aclose", None) or getattr(
+                stale_client, "close"
+            )
+            await closer()
+        except Exception as exc:
+            logger.debug(
+                "[redis] stale cross-loop client close failed: %s", exc
+            )
     now = time.monotonic()
     if now < _init_retry_after:
         return None
@@ -84,6 +108,7 @@ async def get_async_redis():
             health_check_interval=30,
         )
         _async_client = client
+        _async_client_loop = asyncio.get_running_loop()
         _init_retry_after = 0.0
         logger.info("[redis] async client initialised (url=%s)", _redacted_url(settings.REDIS_URL))
         return _async_client
@@ -102,9 +127,10 @@ async def reset_async_redis() -> None:
     Used by tests and by the lifespan shutdown so the next process boot
     or test case starts from a clean slate.
     """
-    global _async_client, _init_retry_after
+    global _async_client, _async_client_loop, _init_retry_after
     client = _async_client
     _async_client = None
+    _async_client_loop = None
     _init_retry_after = 0.0
     if client is not None:
         try:
@@ -118,8 +144,12 @@ async def reset_async_redis() -> None:
 
 def set_async_redis(client) -> None:
     """Inject a client (used by tests with ``fakeredis.aioredis``)."""
-    global _async_client, _init_retry_after
+    global _async_client, _async_client_loop, _init_retry_after
     _async_client = client
+    try:
+        _async_client_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        _async_client_loop = None
     _init_retry_after = 0.0
 
 
