@@ -1091,18 +1091,28 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
 
     # Hard negatives
     hn_row = await db.execute(text("""
-        SELECT COUNT(*) FROM profile_hard_negative_patterns
-        WHERE created_at >= :window_start AND created_at < :window_end
-    """), {"window_start": window_start, "window_end": window_end})
+        SELECT COUNT(*)
+        FROM profile_hard_negative_patterns hn
+        JOIN profiles p ON p.id = hn.profile_id
+        WHERE p.user_id = :uid
+          AND hn.created_at >= :window_start
+          AND hn.created_at < :window_end
+    """), {
+        "uid": str(review_user_id),
+        "window_start": window_start,
+        "window_end": window_end,
+    })
     hard_negatives = int(hn_row.scalar() or 0)
 
     # Pending suggestions
     sugg_row = await db.execute(text("""
         SELECT suggestion_type, COUNT(*) AS cnt
-        FROM profile_adjustment_suggestions
-        WHERE status = 'PENDING_SHADOW_VALIDATION'
-        GROUP BY suggestion_type ORDER BY cnt DESC LIMIT 5
-    """))
+        FROM profile_adjustment_suggestions s
+        JOIN profiles p ON p.id = s.profile_id
+        WHERE p.user_id = :uid
+          AND s.status = 'PENDING_SHADOW_VALIDATION'
+        GROUP BY s.suggestion_type ORDER BY cnt DESC LIMIT 5
+    """), {"uid": str(review_user_id)})
     pending_suggestions = [{"type": r[0], "count": r[1]} for r in sugg_row.fetchall()]
 
     def _agg_value(name: str, index: int, default: Any = 0) -> Any:
@@ -1154,11 +1164,17 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
             "source_breakdown": source_breakdown,
         },
         "metrics": {
+            "units": {
+                "win_rate": "ratio_0_to_1",
+                "avg_pnl_pct": "percentage_points",
+                "pnl_total_usdt": "USDT",
+                "hard_negative_patterns": "pattern_rows_not_trades",
+            },
             "win_rate": win_rate,
             "avg_pnl_pct": avg_pnl,
             "pnl_total_usdt": pnl_total_usdt,
             "negative_profiles": negative_profiles,
-            "hard_negatives": hard_negatives,
+            "hard_negative_patterns": hard_negatives,
         },
         "links": {
             "review_id": str(review_id),
@@ -1199,16 +1215,16 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
         "profiles_analyzed": profiles_count,
         "shadow_trades": completed_trades,
         "symbols": symbols_count,
-        "avg_pnl_pct": avg_pnl,
+        "avg_pnl_pct_points": avg_pnl,
         "win_rate": win_rate,
         "pnl_total_usdt": pnl_total_usdt,
         "negative_profiles": negative_profiles,
-        "hard_negatives": hard_negatives,
+        "hard_negative_patterns": hard_negatives,
         "source_breakdown": source_breakdown,
         "pending_adjustment_suggestions": pending_suggestions,
-        "ml_status": {
-            "l1": "ranker_only_pending_stable_regime",
-            "l3": "rejected_no_operating_point",
+        "scope_limits": {
+            "ml_readiness_evaluated": False,
+            "hard_negative_patterns_are_trade_count": False,
         },
         "safety": {
             "live_trading": False,
@@ -1311,6 +1327,8 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
                 f"Data: {json.dumps(payload, indent=2, cls=_SafeEncoder)}\n\n"
                 "Provide a brief analysis with: summary (1-2 sentences), 2-3 findings, "
                 "2-3 recommendations (calibration only, no new profiles), any contradictions, "
+                "Use metric units exactly as declared. Do not infer ML readiness because it is not evaluated here, "
+                "and do not treat hard-negative pattern rows as trades. "
                 "and risk flags. Format as JSON with keys: summary, findings, recommendations, "
                 "contradictions, risk_flags. Return ONLY the JSON, no markdown code blocks."
             )

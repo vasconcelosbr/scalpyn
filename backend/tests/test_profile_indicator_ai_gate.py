@@ -139,3 +139,8 @@ def test_ai_critic_defaults_to_48h_and_official_l1_l3_sources():
 
     assert live._AI_WINDOW_H == 48
     assert live._AI_DEFAULT_SOURCES == ["L1_SPECTRUM", "L3", "L3_LAB"]
+    source = __import__("inspect").getsource(live.run_ai_review_cycle)
+    assert "rejected_no_operating_point" not in source
+    assert "ranker_only_pending_stable_regime" not in source
+    assert '"ml_readiness_evaluated": False' in source
+    assert '"hard_negative_patterns": "pattern_rows_not_trades"' in source
