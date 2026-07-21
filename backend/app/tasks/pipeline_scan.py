@@ -35,6 +35,10 @@ from ..utils.pipeline_profile_filters import (
 logger = logging.getLogger(__name__)
 
 _REDIS_PREFIX = "spe:pipeline:"   # Redis key prefix per watchlist
+_LAST_SUCCESS_KEY = "scalpyn:pipeline_scan:last_success_at"
+_SAFETY_STALE_SECONDS = int(
+    os.environ.get("PIPELINE_SCAN_SAFETY_STALE_SECONDS", "420")
+)
 
 # Default staleness threshold (minutes).  Assets not re-confirmed within this
 # window are automatically marked 'down'.  Override per-watchlist via
@@ -4228,12 +4232,92 @@ async def _run_pipeline_scan():
 
 # ─── Celery task ──────────────────────────────────────────────────────────────
 
+def _sync_redis_client():
+    try:
+        import redis
+        from ..config import settings
+
+        return redis.from_url(
+            settings.REDIS_URL,
+            socket_connect_timeout=2,
+            socket_timeout=2,
+            decode_responses=True,
+        )
+    except Exception as exc:
+        logger.warning("[PipelineScan] Redis marker unavailable: %s", exc)
+        return None
+
+
+def _record_success_marker() -> None:
+    client = _sync_redis_client()
+    if client is None:
+        return
+    try:
+        client.set(_LAST_SUCCESS_KEY, datetime.now(timezone.utc).isoformat())
+    except Exception as exc:
+        logger.warning("[PipelineScan] Could not persist success marker: %s", exc)
+
+
+def _last_success_age_seconds() -> Optional[float]:
+    client = _sync_redis_client()
+    if client is None:
+        return None
+    try:
+        raw = client.get(_LAST_SUCCESS_KEY)
+        if not raw:
+            return None
+        recorded_at = datetime.fromisoformat(raw)
+        if recorded_at.tzinfo is None:
+            recorded_at = recorded_at.replace(tzinfo=timezone.utc)
+        return max(
+            0.0,
+            (datetime.now(timezone.utc) - recorded_at).total_seconds(),
+        )
+    except Exception as exc:
+        logger.warning("[PipelineScan] Could not read success marker: %s", exc)
+        return None
+
+
+@celery_app.task(name="app.tasks.pipeline_scan.safety_net", max_retries=0)
+def safety_net():
+    """Enqueue a scan only when the canonical 5-minute chain is stale."""
+    age_seconds = _last_success_age_seconds()
+    if age_seconds is not None and age_seconds < _SAFETY_STALE_SECONDS:
+        logger.info(
+            "[PipelineScan] Safety net skipped: last success %.2fs ago",
+            age_seconds,
+        )
+        return {"status": "skipped", "last_success_age_seconds": age_seconds}
+
+    from . import task_dispatch
+
+    task_id = task_dispatch.enqueue(
+        "app.tasks.pipeline_scan.scan",
+        dedup_key="pipeline_scan",
+        ttl_seconds=660,
+    )
+    status = "enqueued" if task_id else "dedup_skipped"
+    logger.info(
+        "[PipelineScan] Safety net %s: last_success_age_seconds=%s task_id=%s",
+        status,
+        age_seconds,
+        task_id,
+    )
+    return {
+        "status": status,
+        "last_success_age_seconds": age_seconds,
+        "task_id": task_id,
+    }
+
+
 @celery_app.task(name="app.tasks.pipeline_scan.scan", bind=True, max_retries=0)
 def scan(self):
     """Periodic pipeline scan — L1 filter → L2 ranking → L3 signals (5 min)."""
     logger.info("[PipelineScan] Starting pipeline scan…")
     try:
         result = _run_async(_run_pipeline_scan())
+        if int(result.get("errors", 0)) == 0:
+            _record_success_marker()
         logger.info("[PipelineScan] Result: %s", result)
         return result
     except Exception as exc:

@@ -204,10 +204,10 @@ def test_no_routes_for_unknown_tasks() -> None:
 def test_no_silent_default_queue_fallback() -> None:
     """Operator spec part 4: there must be NO declared default queue an
     unrouted task can silently land on. The defaults are pinned to a
-    sentinel name that is never declared in ``task_queues``, and
-    ``task_create_missing_queues=False`` so an attempted dispatch of a
-    task missing from ``TASK_ROUTES`` raises immediately rather than
-    creating a ghost queue with no consumer."""
+    sentinel queue that no worker consumes. Celery 5.6 requires the queue to
+    be declared so producer construction can resolve the default route;
+    ``task_create_missing_queues=False`` still prevents any other implicit
+    queue from being created."""
     from app.tasks.celery_app import celery_app, ALL_QUEUES
 
     conf = celery_app.conf
@@ -225,12 +225,13 @@ def test_no_silent_default_queue_fallback() -> None:
         "contract."
     )
     declared = {q.name for q in conf.task_queues}
-    assert sentinel not in declared, (
-        f"Sentinel {sentinel!r} must not be a declared queue."
+    assert sentinel in declared, (
+        f"Celery 5.6 requires sentinel {sentinel!r} to be declared."
     )
-    assert declared == set(ALL_QUEUES), (
-        f"Declared queues drifted from ALL_QUEUES: {declared} != "
-        f"{set(ALL_QUEUES)}"
+    expected = set(ALL_QUEUES) | {sentinel}
+    assert declared == expected, (
+        f"Declared queues drifted from the routed queues plus sentinel: "
+        f"{declared} != {expected}"
     )
 
 

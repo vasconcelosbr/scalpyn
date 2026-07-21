@@ -931,12 +931,14 @@ async def _compute_5m_async():
 def compute_5m():
     count = _run_async(_compute_5m_async())
     # Chain: fresh 5m indicators → pipeline scan (microstructure queue).
-    # TTL = pipeline_scan time_limit (180s) + 30s margin.
+    # TTL = pipeline_scan time_limit (600s) + 60s margin. Keeping the lock
+    # through the real task budget prevents the beat safety-net from adding a
+    # second expensive scan while one is queued or running.
     from . import task_dispatch
     task_dispatch.enqueue(
         "app.tasks.pipeline_scan.scan",
         dedup_key="pipeline_scan",
-        ttl_seconds=210,
+        ttl_seconds=660,
     )
     return f"Computed 5m indicators for {count} symbols"
 

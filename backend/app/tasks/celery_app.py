@@ -134,6 +134,7 @@ TASK_ROUTES = {
     # pipeline_scan.scan: structural per operator spec (cadence-locked
     # safety-net, must not compete with the bursty 5m chain).
     "app.tasks.pipeline_scan.scan":                      {"queue": QUEUE_STRUCTURAL},
+    "app.tasks.pipeline_scan.safety_net":                {"queue": QUEUE_STRUCTURAL},
     "app.tasks.auto_discover_assets.discover":           {"queue": QUEUE_STRUCTURAL},
     "app.tasks.fetch_market_caps.fetch_market_caps":     {"queue": QUEUE_STRUCTURAL},
     "app.tasks.macro_regime_update.update":              {"queue": QUEUE_STRUCTURAL},
@@ -309,6 +310,13 @@ TASK_ANNOTATIONS = {
     # pipeline_scan.scan: structural cadence (5-min safety-net scan,
     # but heavier than the 5m TA chain — uses structural cost guards).
     "app.tasks.pipeline_scan.scan":                      {**_STRUCTURAL_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.pipeline_scan.safety_net":                {
+        "time_limit": 30,
+        "soft_time_limit": 20,
+        "rate_limit": "4/m",
+        "max_retries": 0,
+        **_NO_REQUEUE_ON_WORKER_LOSS,
+    },
     "app.tasks.auto_discover_assets.discover":           {**_STRUCTURAL_GUARDS, "rate_limit": "2/h"},
     "app.tasks.fetch_market_caps.fetch_market_caps":     {**_STRUCTURAL_GUARDS, "rate_limit": "4/h"},
     "app.tasks.macro_regime_update.update":              {**_STRUCTURAL_GUARDS, "rate_limit": "4/h"},
@@ -518,9 +526,10 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.collect_market_data.collect_5m",
         "schedule": 300.0,
     },
-    # Pipeline scan safety-net every 5 minutes
-    "pipeline_scan": {
-        "task": "app.tasks.pipeline_scan.scan",
+    # Lightweight safety-net every 5 minutes. The canonical compute_5m chain
+    # dispatches the real scan; this probe only recovers a stale chain.
+    "pipeline_scan_safety_net": {
+        "task": "app.tasks.pipeline_scan.safety_net",
         "schedule": 300.0,
     },
     # Run simulation batch every 10 minutes
