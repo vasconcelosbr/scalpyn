@@ -380,7 +380,7 @@ def test_envelope_inactive_rows_are_ok_not_pendente():
     assert inactive["ação_aplicada"] == "nenhuma"
 
 
-def test_streaming_health_alert_filters_to_strict_zcard_zero():
+def test_streaming_health_alert_filters_to_strict_zcard_zero(monkeypatch):
     """Rule-2 must fire only on ZCARD==0 + is_approved (not on stale buffer)."""
     import fakeredis.aioredis
     from app.services.symbol_health_service import (
@@ -389,10 +389,16 @@ def test_streaming_health_alert_filters_to_strict_zcard_zero():
         SymbolHealthReport,
         STATUS_PRIORITY,
     )
+    from app.tasks import symbol_health_audit as task_mod
     from app.tasks.symbol_health_audit import (
         _evaluate_streaming_health,
         _WS_NOT_STREAMING_GRACE_SECONDS,
     )
+
+    async def fake_recent_trade(symbol):
+        return True
+
+    monkeypatch.setattr(task_mod, "_gate_has_recent_trade", fake_recent_trade)
 
     counts = {s: 0 for s in STATUS_PRIORITY}
 
@@ -438,6 +444,53 @@ def test_streaming_health_alert_filters_to_strict_zcard_zero():
 
     # Only EMPTY_USDT (ZCARD=0 + approved) should trigger.
     assert asyncio.run(_drive()) == 1
+
+
+def test_streaming_health_suppresses_illiquid_pair_false_positive(monkeypatch):
+    """No recent Gate trade means an empty buffer is not WS-failure proof."""
+    import fakeredis.aioredis
+    from app.services.symbol_health_service import (
+        STATUS_NO_REDIS_DATA,
+        STATUS_PRIORITY,
+        SymbolHealth,
+        SymbolHealthReport,
+    )
+    from app.tasks import symbol_health_audit as task_mod
+
+    counts = {status: 0 for status in STATUS_PRIORITY}
+    counts[STATUS_NO_REDIS_DATA] = 1
+    report = SymbolHealthReport(
+        checked_at="2026-05-03T00:00:00+00:00",
+        total=1,
+        counts=counts,
+        symbols=[
+            SymbolHealth(
+                symbol="ILLIQUID_USDT",
+                status=STATUS_NO_REDIS_DATA,
+                is_approved=True,
+                buffer_member_count=0,
+            )
+        ],
+    )
+
+    async def fake_no_recent_trade(symbol):
+        return False
+
+    monkeypatch.setattr(
+        task_mod, "_gate_has_recent_trade", fake_no_recent_trade
+    )
+
+    async def drive():
+        redis = fakeredis.aioredis.FakeRedis()
+        old = int((time.time() - 300) * 1000)
+        await redis.set(
+            b"audit:ws:first_empty:ILLIQUID_USDT",
+            str(old).encode(),
+            ex=86400,
+        )
+        return await task_mod._evaluate_streaming_health(redis, report)
+
+    assert asyncio.run(drive()) == 0
 
 
 def test_audit_task_resets_async_redis_after_failure(monkeypatch):

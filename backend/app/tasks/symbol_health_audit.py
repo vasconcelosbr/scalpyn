@@ -55,6 +55,46 @@ async def _alert_dedup(redis, key: bytes, ttl: int) -> bool:
         return True
 
 
+async def _gate_has_recent_trade(symbol: str) -> bool:
+    """Return whether Gate reports a trade recent enough to expect in Redis.
+
+    An empty buffer alone is ambiguous for illiquid pairs. Alert only when the
+    independent REST feed proves a trade occurred inside the buffer freshness
+    window and therefore should still be present.
+    """
+    from ..exchange_adapters.gate_adapter import GateAdapter
+    from ..services.symbol_health_service import (
+        DEFAULT_BUFFER_NEWEST_MAX_AGE_SECONDS,
+    )
+
+    try:
+        adapter = GateAdapter(api_key="", api_secret="")
+        trades = await asyncio.wait_for(
+            adapter.get_spot_trades(symbol, limit=1),
+            timeout=5.0,
+        )
+        if not trades:
+            return False
+        latest = trades[0]
+        raw_ms = latest.get("create_time_ms")
+        raw_s = latest.get("create_time")
+        if raw_ms not in (None, ""):
+            trade_ts = float(raw_ms) / 1000.0
+        elif raw_s not in (None, ""):
+            trade_ts = float(raw_s)
+        else:
+            return False
+        return (time.time() - trade_ts) <= DEFAULT_BUFFER_NEWEST_MAX_AGE_SECONDS
+    except Exception as exc:
+        logger.info(
+            "[WS-AUDIT] Gate recency probe unavailable for %s; "
+            "suppressing ambiguous not-streaming alert: %s",
+            symbol,
+            exc,
+        )
+        return False
+
+
 async def _evaluate_streaming_health(redis, report) -> int:
     """Emit one CRITICAL alert per symbol whose buffer has been empty > 120 s.
 
@@ -104,6 +144,13 @@ async def _evaluate_streaming_health(redis, report) -> int:
             logger.debug("[symbol-audit] first_empty read failed for %s: %s", rec.symbol, exc)
             continue
         if (now_ms - first_ms) < _WS_NOT_STREAMING_GRACE_SECONDS * 1000:
+            continue
+        if not await _gate_has_recent_trade(rec.symbol):
+            logger.debug(
+                "[WS-AUDIT] suppressing not-streaming alert for %s: "
+                "no independent recent Gate trade",
+                rec.symbol,
+            )
             continue
         # Past the 120-s grace; alert with per-symbol dedup.
         dedup_key = _KEY_NOT_STREAMING_DEDUP + sym_bytes
