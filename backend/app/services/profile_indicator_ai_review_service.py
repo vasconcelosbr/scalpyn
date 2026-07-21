@@ -90,7 +90,7 @@ async def review_indicator_adjustment(
     try:
         response = await client.messages.create(
             model=os.environ.get("PI_AI_MODEL", "claude-haiku-4-5-20251001"),
-            max_tokens=700,
+            max_tokens=1000,
             messages=[{
                 "role": "user",
                 "content": (
@@ -104,7 +104,8 @@ async def review_indicator_adjustment(
                     "the sample. Do not invent stricter sample, day, lift, or confidence thresholds. Reject only "
                     "for contradiction in the supplied evidence or a concrete conflict with the target profile. "
                     "Return JSON only with verdict APPROVE_SHADOW or REJECT, "
-                    "bounded_action exactly as supplied, rationale, risks, and safeguards.\n\n"
+                    "bounded_action exactly as supplied, rationale (maximum 80 words), risks (maximum 3 short "
+                    "items), and safeguards (maximum 3 short items). Keep the complete JSON under 700 tokens.\n\n"
                     + json.dumps(context, default=str)
                 ),
             }],
