@@ -15,9 +15,8 @@ Dedup contract:
       key is already held, we INFO-log ``DEDUP_SKIP`` and return
       ``None`` — the duplicate is dropped silently and the queue
       cannot pile up.
-    * If we get the lock, we send the task with the dedup key in
-      headers; ``task_postrun`` releases the lock so legitimate retries
-      and the next cycle are not blocked.
+    * If we get the lock, we send the task with the dedup key and ownership
+      token in headers; ``task_postrun`` atomically releases only its own lock.
     * Redis-unreachable: fail-open. We log a WARNING and enqueue the
       task anyway — the operator runbook explicitly requires that we
       never silently drop work when the dedup store is the failure mode.
@@ -37,11 +36,19 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
 _DEDUP_PREFIX = "celery:dedup:"
 _DEDUP_HEADER = "x-scalpyn-dedup-key"
+_DEDUP_TOKEN_HEADER = "x-scalpyn-dedup-token"
+_COMPARE_AND_DELETE = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('del', KEYS[1])
+end
+return 0
+"""
 # Operator-spec acceptance criterion C: ``oldest_task_age_seconds`` in
 # ``/api/system/celery-status`` MUST be non-null when the queue has
 # pending work. Celery's stock envelope is best-effort about
@@ -101,6 +108,7 @@ def enqueue(
         the duplicate was suppressed.
     """
     full_key = f"{_DEDUP_PREFIX}{dedup_key}"
+    lock_token = uuid4().hex
     safe_ttl = int(max(ttl_seconds, 5))
     safe_expires = (
         int(max(expires_seconds, 5)) if expires_seconds is not None else None
@@ -109,7 +117,9 @@ def enqueue(
     redis_client = _redis_client()
     if redis_client is not None:
         try:
-            acquired = redis_client.set(full_key, "1", nx=True, ex=safe_ttl)
+            acquired = redis_client.set(
+                full_key, lock_token, nx=True, ex=safe_ttl
+            )
             if not acquired:
                 logger.info(
                     "[dispatch] DEDUP_SKIP task=%s key=%s ttl=%ss",
@@ -125,6 +135,7 @@ def enqueue(
     from .celery_app import celery_app
     headers = {
         _DEDUP_HEADER: full_key,
+        _DEDUP_TOKEN_HEADER: lock_token,
         # Stamped at dispatch time (UTC, ISO-8601) so the status
         # endpoint can compute oldest_task_age_seconds even when the
         # underlying Celery serializer omits ``properties.timestamp``.
@@ -146,13 +157,19 @@ def _release_dedup_lock(headers: Optional[dict]) -> None:
     if not headers:
         return
     full_key = headers.get(_DEDUP_HEADER)
-    if not full_key:
+    lock_token = headers.get(_DEDUP_TOKEN_HEADER)
+    if not full_key or not lock_token:
         return
     redis_client = _redis_client()
     if redis_client is None:
         return
     try:
-        redis_client.delete(full_key)
+        redis_client.eval(
+            _COMPARE_AND_DELETE,
+            1,
+            full_key,
+            lock_token,
+        )
     except Exception as exc:
         logger.debug("[dispatch] DEL %s failed: %s", full_key, exc)
 

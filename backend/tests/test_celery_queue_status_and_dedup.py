@@ -71,6 +71,12 @@ def _patch_redis(monkeypatch, store: dict[str, Any]) -> None:
         def delete(self, key):
             store.pop(key, None)
 
+        def eval(self, _script, _numkeys, key, expected):
+            if store.get(key) != expected:
+                return 0
+            store.pop(key, None)
+            return 1
+
         def get(self, key):
             return store.get(key)
 
@@ -147,6 +153,30 @@ def test_dedup_postrun_signal_releases_lock(monkeypatch):
                         dedup_key="compute_5m:ETH", ttl_seconds=60)
     assert second == "fake-async-id"
     assert len(fake.sent) == 2
+
+
+def test_stale_postrun_cannot_release_newer_lock(monkeypatch):
+    from app.tasks import celery_app as celery_mod
+    from app.tasks import task_dispatch as td
+
+    store: dict[str, Any] = {}
+    _patch_redis(monkeypatch, store)
+    fake = _FakeCelery()
+    monkeypatch.setattr(celery_mod, "celery_app", fake)
+
+    td.enqueue("task.a", dedup_key="pipeline_scan", ttl_seconds=60)
+    stale_headers = fake.sent[0][1]
+    lock_key = next(key for key in store if key.endswith("pipeline_scan"))
+
+    store.pop(lock_key)
+    td.enqueue("task.b", dedup_key="pipeline_scan", ttl_seconds=60)
+    newer_token = store[lock_key]
+
+    stale_task = MagicMock()
+    stale_task.request.headers = stale_headers
+    td._on_task_postrun(task=stale_task)
+
+    assert store[lock_key] == newer_token
 
 
 def test_dedup_redis_unreachable_fails_open(monkeypatch, caplog):
