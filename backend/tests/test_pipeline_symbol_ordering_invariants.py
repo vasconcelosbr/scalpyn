@@ -65,6 +65,7 @@ _PIPELINE_FILES = (
     "app/tasks/collect_structural_30m.py",
     "app/tasks/compute_indicators.py",
     "app/tasks/compute_scores.py",
+    "app/tasks/fetch_market_caps.py",
     "app/tasks/pipeline_scan.py",
     # Task #310 (2026-05-20): bisect novo apontou
     # ``evaluate_signals`` + ``execute_buy`` iterando ``merged_by_sym``
@@ -103,6 +104,8 @@ _SYMBOL_LIKE_NAMES = frozenset({
     "all_symbols",
     "missing_meta",
     "missing_symbols",
+    "mm_symbols",
+    "pwa_symbols",
     "scored_rows",
     "assets",
     "candidates",
@@ -453,6 +456,16 @@ _REQUIRED_MARKERS: tuple[tuple[str, str, str], ...] = (
         "app/tasks/compute_scores.py",
         "ORDER BY pwa.symbol",
         "_detect_level_transitions SELECT must ORDER BY symbol so per-row UPDATEs lock deterministically",
+    ),
+    (
+        "app/tasks/fetch_market_caps.py",
+        'mm_symbols = sorted(await _get_distinct_symbols(db, "market_metadata"))',
+        "fetch_market_caps UPDATEs market_metadata in the same deterministic order as compute_5m",
+    ),
+    (
+        "app/tasks/fetch_market_caps.py",
+        "pwa_symbols = sorted(",
+        "fetch_market_caps UPDATEs pipeline_watchlist_assets while holding outer-transaction row locks",
     ),
     (
         "app/tasks/pipeline_scan.py",

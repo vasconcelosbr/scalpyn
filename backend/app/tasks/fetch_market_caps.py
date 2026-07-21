@@ -139,8 +139,13 @@ async def _fetch_market_caps_async() -> dict:
             "warning": None,
         }
 
-        mm_symbols = await _get_distinct_symbols(db, "market_metadata")
-        pwa_symbols = await _get_distinct_symbols(db, "pipeline_watchlist_assets")
+        # Both loops hold row locks until run_db_task commits the outer
+        # transaction. Keep the shared alphabetical lock order used by every
+        # other hot-table writer to prevent cross-worker deadlocks.
+        mm_symbols = sorted(await _get_distinct_symbols(db, "market_metadata"))
+        pwa_symbols = sorted(
+            await _get_distinct_symbols(db, "pipeline_watchlist_assets")
+        )
         all_pairs = set(mm_symbols) | set(pwa_symbols)
         requested_bases = list({_base_from_pair(s) for s in all_pairs if s})
         used_cmc = False
