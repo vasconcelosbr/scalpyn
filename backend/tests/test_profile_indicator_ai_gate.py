@@ -132,6 +132,9 @@ async def test_ai_review_approves_shadow_only_without_mutating_profile_or_datase
     assert review["training_dataset_mutated"] is False
     assert stat.actionability_status == "validated"
     client.close.assert_awaited_once()
+    prompt = client.messages.create.await_args.kwargs["messages"][0]["content"]
+    assert "ADD_SCORE_PENALTY reduces the score only" in prompt
+    assert "Do not invent stricter sample" in prompt
 
 
 def test_ai_critic_defaults_to_48h_and_official_l1_l3_sources():

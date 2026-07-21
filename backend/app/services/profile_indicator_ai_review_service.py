@@ -97,7 +97,13 @@ async def review_indicator_adjustment(
                     "Review this temporally validated indicator adjustment. "
                     "Approve only if the validation evidence supports the bounded action and it does not "
                     "weaken the current profile contract. You cannot change parameters, train/promote a model, "
-                    "or mutate an incumbent. Return JSON only with verdict APPROVE_SHADOW or REJECT, "
+                    "or mutate an incumbent. Economic semantics are mandatory: REPLACE_SIGNAL_CONDITION favors "
+                    "a validated winning bucket; ADD_SCORE_PENALTY reduces the score only when a validated losing "
+                    "bucket occurs, so persistently lower win rate and negative PnL support (not contradict) that "
+                    "penalty. The configured temporal/diversity checks in validation.checks have already gated "
+                    "the sample. Do not invent stricter sample, day, lift, or confidence thresholds. Reject only "
+                    "for contradiction in the supplied evidence or a concrete conflict with the target profile. "
+                    "Return JSON only with verdict APPROVE_SHADOW or REJECT, "
                     "bounded_action exactly as supplied, rationale, risks, and safeguards.\n\n"
                     + json.dumps(context, default=str)
                 ),
