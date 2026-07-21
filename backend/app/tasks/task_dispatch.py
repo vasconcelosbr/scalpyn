@@ -73,6 +73,7 @@ def enqueue(
     *,
     dedup_key: str,
     ttl_seconds: int,
+    expires_seconds: Optional[int] = None,
     queue: Optional[str] = None,
     args: tuple = (),
     kwargs: Optional[dict] = None,
@@ -89,6 +90,7 @@ def enqueue(
         ttl_seconds: Safety upper bound — the task's expected wall-clock
             plus a small margin. Prevents a crashed worker from
             blocking the queue forever.
+        expires_seconds: Optional Celery message expiry for cadence-bound work.
         queue: Explicit queue override. Normally left ``None`` —
             ``celery_app.conf.task_routes`` resolves the queue from
             the task name.
@@ -100,6 +102,9 @@ def enqueue(
     """
     full_key = f"{_DEDUP_PREFIX}{dedup_key}"
     safe_ttl = int(max(ttl_seconds, 5))
+    safe_expires = (
+        int(max(expires_seconds, 5)) if expires_seconds is not None else None
+    )
 
     redis_client = _redis_client()
     if redis_client is not None:
@@ -131,6 +136,7 @@ def enqueue(
         kwargs=kwargs or {},
         queue=queue,
         headers=headers,
+        expires=safe_expires,
     )
     return async_result.id
 

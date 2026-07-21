@@ -40,4 +40,19 @@ def test_safety_net_enqueues_stale_scan_with_full_budget_lock():
         "app.tasks.pipeline_scan.scan",
         dedup_key="pipeline_scan",
         ttl_seconds=660,
+        expires_seconds=600,
     )
+
+
+def test_scan_coalesces_stale_duplicate_after_recent_success():
+    with (
+        patch.object(pipeline_scan, "_last_success_age_seconds", return_value=30.0),
+        patch.object(pipeline_scan, "_run_async") as run_async,
+    ):
+        result = pipeline_scan.scan.run()
+
+    assert result == {
+        "status": "skipped_recent_success",
+        "last_success_age_seconds": 30.0,
+    }
+    run_async.assert_not_called()

@@ -39,6 +39,12 @@ _LAST_SUCCESS_KEY = "scalpyn:pipeline_scan:last_success_at"
 _SAFETY_STALE_SECONDS = int(
     os.environ.get("PIPELINE_SCAN_SAFETY_STALE_SECONDS", "420")
 )
+_SCAN_COALESCE_SECONDS = int(
+    os.environ.get("PIPELINE_SCAN_COALESCE_SECONDS", "240")
+)
+_SCAN_MESSAGE_EXPIRES_SECONDS = int(
+    os.environ.get("PIPELINE_SCAN_MESSAGE_EXPIRES_SECONDS", "600")
+)
 
 # Default staleness threshold (minutes).  Assets not re-confirmed within this
 # window are automatically marked 'down'.  Override per-watchlist via
@@ -4295,6 +4301,7 @@ def safety_net():
         "app.tasks.pipeline_scan.scan",
         dedup_key="pipeline_scan",
         ttl_seconds=660,
+        expires_seconds=_SCAN_MESSAGE_EXPIRES_SECONDS,
     )
     status = "enqueued" if task_id else "dedup_skipped"
     logger.info(
@@ -4313,6 +4320,16 @@ def safety_net():
 @celery_app.task(name="app.tasks.pipeline_scan.scan", bind=True, max_retries=0)
 def scan(self):
     """Periodic pipeline scan — L1 filter → L2 ranking → L3 signals (5 min)."""
+    age_seconds = _last_success_age_seconds()
+    if age_seconds is not None and age_seconds < _SCAN_COALESCE_SECONDS:
+        logger.info(
+            "[PipelineScan] Coalesced stale duplicate: last success %.2fs ago",
+            age_seconds,
+        )
+        return {
+            "status": "skipped_recent_success",
+            "last_success_age_seconds": age_seconds,
+        }
     logger.info("[PipelineScan] Starting pipeline scan…")
     try:
         result = _run_async(_run_pipeline_scan())

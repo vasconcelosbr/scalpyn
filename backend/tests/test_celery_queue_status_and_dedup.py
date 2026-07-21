@@ -39,9 +39,21 @@ class _FakeAsyncResult:
 class _FakeCelery:
     def __init__(self) -> None:
         self.sent: list[tuple[str, dict, dict]] = []
+        self.options: list[dict] = []
 
-    def send_task(self, name, *_, args=(), kwargs=None, queue=None, headers=None, **__):
+    def send_task(
+        self,
+        name,
+        *_,
+        args=(),
+        kwargs=None,
+        queue=None,
+        headers=None,
+        expires=None,
+        **__,
+    ):
         self.sent.append((name, dict(headers or {}), dict(kwargs or {})))
+        self.options.append({"queue": queue, "expires": expires})
         return _FakeAsyncResult()
 
 
@@ -86,6 +98,25 @@ def test_dedup_second_enqueue_is_dropped(monkeypatch, caplog):
     assert b is None
     assert len(fake.sent) == 1
     assert any("DEDUP_SKIP" in r.message for r in caplog.records)
+
+
+def test_enqueue_forwards_message_expiry(monkeypatch):
+    from app.tasks import celery_app as celery_mod
+    from app.tasks import task_dispatch as td
+
+    store: dict[str, Any] = {}
+    _patch_redis(monkeypatch, store)
+    fake = _FakeCelery()
+    monkeypatch.setattr(celery_mod, "celery_app", fake)
+
+    td.enqueue(
+        "app.tasks.pipeline_scan.scan",
+        dedup_key="pipeline_scan",
+        ttl_seconds=660,
+        expires_seconds=600,
+    )
+
+    assert fake.options == [{"queue": None, "expires": 600}]
 
 
 def test_dedup_postrun_signal_releases_lock(monkeypatch):

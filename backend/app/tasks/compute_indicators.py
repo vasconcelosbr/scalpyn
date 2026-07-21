@@ -16,6 +16,9 @@ from ..utils.indicator_merge import envelop_results, _ORDER_FLOW_KEYS, _ORDER_FL
 
 logger = logging.getLogger(__name__)
 _STOCHASTIC_WARMUP_OVERLAP = 2
+_PIPELINE_SCAN_MESSAGE_EXPIRES_SECONDS = int(
+    os.environ.get("PIPELINE_SCAN_MESSAGE_EXPIRES_SECONDS", "600")
+)
 
 
 def _compute_score_fields(results: dict) -> dict:
@@ -939,6 +942,7 @@ def compute_5m():
         "app.tasks.pipeline_scan.scan",
         dedup_key="pipeline_scan",
         ttl_seconds=660,
+        expires_seconds=_PIPELINE_SCAN_MESSAGE_EXPIRES_SECONDS,
     )
     return f"Computed 5m indicators for {count} symbols"
 
