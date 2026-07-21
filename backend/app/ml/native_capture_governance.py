@@ -13,6 +13,7 @@ CAPTURE_CONTRACT = "point-in-time-v1"
 EXTRACTOR_VERSION = "feature-engine-v2"
 SCHEMA_VERSION = "entry_features_v2"
 CANARY_LIMIT = 50
+FULL_WINDOW_BATCH_SIZE = 2_000
 
 ALERT_RULES = {
     "capture_rate_zero": ("total_native", "eq", 0),
@@ -101,11 +102,16 @@ def official_row_errors(
     if isinstance(snapshot, Mapping) and snapshot.get("atr_pct") is None:
         errors.append("missing_atr_pct")
     if snapshot is not None and row.get("feature_hash"):
-        try:
-            if snapshot_hash(snapshot) != row["feature_hash"]:
+        precomputed_hash_match = row.get("_feature_hash_matches")
+        if precomputed_hash_match is not None:
+            if not precomputed_hash_match:
                 errors.append("hash_mismatch")
-        except (TypeError, ValueError):
-            errors.append("invalid_snapshot_json")
+        else:
+            try:
+                if snapshot_hash(snapshot) != row["feature_hash"]:
+                    errors.append("hash_mismatch")
+            except (TypeError, ValueError):
+                errors.append("invalid_snapshot_json")
     return errors
 
 
@@ -146,7 +152,9 @@ async def audit_native_capture(
     full_window: bool = False,
     audit_query_cutoff: datetime | None = None,
 ) -> dict[str, Any]:
-    await db.execute(text("SET TRANSACTION READ ONLY"))
+    await db.execute(
+        text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+    )
     if start_at is None:
         return {
             "status": "DATA_COLLECTION_NOT_STARTED",
@@ -167,34 +175,148 @@ async def audit_native_capture(
     if audit_query_cutoff.tzinfo is None:
         raise ValueError("invalid_audit_query_cutoff_timezone")
 
-    limit_clause = "" if full_window else "LIMIT :limit"
     params: dict[str, Any] = {
         "start": start_at,
         "audit_query_cutoff": audit_query_cutoff,
+        "capture_contract": CAPTURE_CONTRACT,
     }
-    if not full_window:
-        params["limit"] = min(max(limit, 1), CANARY_LIMIT)
-    rows = (
-        await db.execute(
-            text(
-                f"""
-                SELECT id, source, profile_id, ranking_id, decision_id,
-                       profile_version_id, score_engine_version_id,
-                       features_snapshot, features_captured_at, feature_hash,
-                       feature_extractor_version, feature_schema_version,
-                       capture_contract_version, lineage_status,
-                       eligible_for_training, created_at, completed_at
-                FROM shadow_trades
-                WHERE created_at >= :start
-                  AND created_at <= :audit_query_cutoff
-                  AND capture_contract_version = :capture_contract
-                ORDER BY created_at DESC, id DESC
-                {limit_clause}
-                """
-            ),
-            {**params, "capture_contract": CAPTURE_CONTRACT},
-        )
-    ).mappings().all()
+    rows: list[Mapping[str, Any]] = []
+    cursor_created_at = None
+    cursor_id = None
+    page_limit = (
+        FULL_WINDOW_BATCH_SIZE
+        if full_window
+        else min(max(limit, 1), CANARY_LIMIT)
+    )
+    while True:
+        cursor_clause = ""
+        page_params = {**params, "page_limit": page_limit}
+        if cursor_created_at is not None:
+            cursor_clause = """
+              AND (
+                    created_at < :cursor_created_at
+                 OR (created_at = :cursor_created_at AND id < :cursor_id)
+              )
+            """
+            page_params.update(
+                {
+                    "cursor_created_at": cursor_created_at,
+                    "cursor_id": cursor_id,
+                }
+            )
+        if full_window:
+            query = f"""
+                    WITH native_page AS (
+                    SELECT id, source, profile_id, ranking_id, decision_id,
+                           profile_version_id, score_engine_version_id,
+                           features_snapshot, features_captured_at, feature_hash,
+                           feature_extractor_version, feature_schema_version,
+                           capture_contract_version, lineage_status,
+                           eligible_for_training, created_at, completed_at
+                    FROM shadow_trades
+                    WHERE created_at >= :start
+                      AND created_at <= :audit_query_cutoff
+                      AND capture_contract_version = :capture_contract
+                      {cursor_clause}
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT :page_limit
+                    ), canonicalized AS (
+                        SELECT native_page.*,
+                               canonical.has_nested_snapshot,
+                               canonical.payload
+                        FROM native_page
+                        LEFT JOIN LATERAL (
+                            SELECT
+                                COALESCE(
+                                    bool_or(
+                                        jsonb_typeof(item.value)
+                                        IN ('object', 'array')
+                                    ),
+                                    FALSE
+                                ) AS has_nested_snapshot,
+                                COALESCE(
+                                    '{{' || string_agg(
+                                        to_jsonb(item.key)::text || ':' ||
+                                        CASE
+                                            WHEN jsonb_typeof(item.value) = 'number'
+                                             AND item.value::text::numeric <> 0
+                                             AND (
+                                                    abs(item.value::text::numeric) < 0.0001
+                                                 OR abs(item.value::text::numeric) >= 1e16
+                                             )
+                                            THEN (item.value::text::double precision)::text
+                                            ELSE item.value::text
+                                        END,
+                                        ',' ORDER BY item.key COLLATE "C"
+                                    ) || '}}',
+                                    '{{}}'
+                                ) AS payload
+                            FROM jsonb_each(
+                                CASE
+                                    WHEN jsonb_typeof(native_page.features_snapshot) = 'object'
+                                    THEN native_page.features_snapshot
+                                    ELSE '{{}}'::jsonb
+                                END
+                            ) AS item
+                        ) AS canonical ON TRUE
+                    )
+                    SELECT id, source, profile_id, ranking_id, decision_id,
+                           profile_version_id, score_engine_version_id,
+                           CASE
+                               WHEN features_snapshot IS NULL
+                                 OR jsonb_typeof(features_snapshot) <> 'object'
+                                 OR has_nested_snapshot
+                               THEN features_snapshot
+                               ELSE jsonb_build_object(
+                                   'atr_pct', features_snapshot -> 'atr_pct'
+                               )
+                           END AS features_snapshot,
+                           features_captured_at, feature_hash,
+                           feature_extractor_version, feature_schema_version,
+                           capture_contract_version, lineage_status,
+                           eligible_for_training, created_at, completed_at,
+                           CASE
+                               WHEN features_snapshot IS NULL
+                                 OR feature_hash IS NULL
+                                 OR jsonb_typeof(features_snapshot) <> 'object'
+                                 OR has_nested_snapshot
+                               THEN NULL
+                               ELSE encode(
+                                   digest(convert_to(payload, 'UTF8'), 'sha256'),
+                                   'hex'
+                               ) = feature_hash
+                           END AS _feature_hash_matches
+                    FROM canonicalized
+                    ORDER BY created_at DESC, id DESC
+            """
+        else:
+            query = f"""
+                    SELECT id, source, profile_id, ranking_id, decision_id,
+                           profile_version_id, score_engine_version_id,
+                           features_snapshot, features_captured_at, feature_hash,
+                           feature_extractor_version, feature_schema_version,
+                           capture_contract_version, lineage_status,
+                           eligible_for_training, created_at, completed_at
+                    FROM shadow_trades
+                    WHERE created_at >= :start
+                      AND created_at <= :audit_query_cutoff
+                      AND capture_contract_version = :capture_contract
+                      {cursor_clause}
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT :page_limit
+            """
+        page = (
+            await db.execute(
+                text(query), page_params
+            )
+        ).mappings().all()
+        if not page:
+            break
+        rows.extend(page)
+        if not full_window or len(page) < page_limit:
+            break
+        cursor_created_at = page[-1]["created_at"]
+        cursor_id = page[-1]["id"]
 
     checks = [
         classify_native_row(row, start_at, reference_now=audit_query_cutoff)
