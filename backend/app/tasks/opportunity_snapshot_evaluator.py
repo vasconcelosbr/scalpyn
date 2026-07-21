@@ -124,10 +124,10 @@ async def _evaluate_approved(db, snap: Dict[str, Any]) -> Optional[Dict[str, Any
     }
 
     if profiles_approved:
-        str_ids = [str(p) for p in profiles_approved]
+        profile_ids = [UUID(str(p)) for p in profiles_approved]
         # Use ANY with a text array cast for asyncpg compatibility
         profile_filter = "AND profile_id = ANY(CAST(:pids AS uuid[]))"
-        params["pids"] = "{" + ",".join(str_ids) + "}"
+        params["pids"] = profile_ids
 
     res = await db.execute(
         text(f"""
