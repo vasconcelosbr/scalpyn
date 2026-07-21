@@ -34,7 +34,7 @@ import logging
 import time
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from sqlalchemy import text
 
@@ -513,10 +513,12 @@ class SymbolHealthService:
         concurrency: int = 16,
         indicator_max_age_seconds: int = DEFAULT_INDICATOR_MAX_AGE_SECONDS,
         buffer_newest_max_age_seconds: int = DEFAULT_BUFFER_NEWEST_MAX_AGE_SECONDS,
+        session_factory: Optional[Callable[[], Any]] = None,
     ) -> None:
         self._concurrency = max(1, int(concurrency))
         self._indicator_max_age = int(indicator_max_age_seconds)
         self._buffer_newest_max_age = int(buffer_newest_max_age_seconds)
+        self._session_factory = session_factory
 
     async def audit(
         self,
@@ -544,7 +546,8 @@ class SymbolHealthService:
         from .redis_client import get_async_redis
 
         redis = await get_async_redis()
-        async with AsyncSessionLocal() as db:
+        session_factory = self._session_factory or AsyncSessionLocal
+        async with session_factory() as db:
             pool_state = await _load_pool_state(db)
             ws_universe = await _load_ws_universe(
                 symbol

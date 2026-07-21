@@ -39,7 +39,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from dataclasses import dataclass, field, asdict
-from typing import Any, Dict, Iterable, List, Optional, Set
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set
 
 from sqlalchemy import text
 
@@ -354,10 +354,12 @@ class SymbolRemediator:
         validator: Optional[GateSymbolValidator] = None,
         approve_unknown: bool = True,
         recompute_indicators: bool = True,
+        session_factory: Optional[Callable[[], Any]] = None,
     ) -> None:
         self._validator = validator or GateSymbolValidator()
         self._approve_unknown = bool(approve_unknown)
         self._recompute_indicators = bool(recompute_indicators)
+        self._session_factory = session_factory
 
     async def remediate(
         self,
@@ -375,7 +377,8 @@ class SymbolRemediator:
         # ``backend/docs/runbooks/pool-execution-gate.md``).
         try:
             from ..database import AsyncSessionLocal
-            async with AsyncSessionLocal() as _diag_db:
+            session_factory = self._session_factory or AsyncSessionLocal
+            async with session_factory() as _diag_db:
                 # Task #232 — only flag rows that have been waiting
                 # >7 days for operator promotion. Anything fresher is
                 # normal triage backlog and would create alert noise.
@@ -485,7 +488,8 @@ class SymbolRemediator:
         if approve_targets and not dry_run:
             from ..database import AsyncSessionLocal
             try:
-                async with AsyncSessionLocal() as db:
+                session_factory = self._session_factory or AsyncSessionLocal
+                async with session_factory() as db:
                     affected = await _bulk_approve(db, approve_targets)
                     approved_verified = await _verify_approved(db, approve_targets)
                 logger.info(
@@ -515,7 +519,8 @@ class SymbolRemediator:
         if remove_targets and not dry_run:
             from ..database import AsyncSessionLocal
             try:
-                async with AsyncSessionLocal() as db:
+                session_factory = self._session_factory or AsyncSessionLocal
+                async with session_factory() as db:
                     removed = await _remove_from_pool(db, remove_targets)
                     removed_verified = await _verify_removed(db, remove_targets)
                 logger.warning(
@@ -603,7 +608,8 @@ class SymbolRemediator:
         if no_redis_delisted and not dry_run:
             from ..database import AsyncSessionLocal
             try:
-                async with AsyncSessionLocal() as db:
+                session_factory = self._session_factory or AsyncSessionLocal
+                async with session_factory() as db:
                     removed = await _remove_from_pool(db, no_redis_delisted)
                     delisted_verified = await _verify_removed(db, no_redis_delisted)
                 logger.warning(

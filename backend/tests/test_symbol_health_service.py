@@ -440,6 +440,28 @@ def test_streaming_health_alert_filters_to_strict_zcard_zero():
     assert asyncio.run(_drive()) == 1
 
 
+def test_audit_task_resets_async_redis_after_failure(monkeypatch):
+    """Celery must not retain Redis sockets after asyncio.run closes its loop."""
+    from app.services import redis_client
+    from app.tasks import symbol_health_audit as task_mod
+
+    calls = []
+
+    async def fake_audit(monitor_only):
+        raise RuntimeError("audit failed")
+
+    async def fake_reset():
+        calls.append("reset")
+
+    monkeypatch.setattr(task_mod, "_audit_async", fake_audit)
+    monkeypatch.setattr(redis_client, "reset_async_redis", fake_reset)
+
+    with pytest.raises(RuntimeError, match="audit failed"):
+        asyncio.run(task_mod._run_audit_task(monitor_only=True))
+
+    assert calls == ["reset"]
+
+
 def test_remediator_marks_unverified_symbols_as_pending(monkeypatch):
     """Per-symbol verification gate: rowcount alone may not equal corrected."""
     from app.services import symbol_remediator as rem_mod

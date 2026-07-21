@@ -117,6 +117,7 @@ async def _evaluate_streaming_health(redis, report) -> int:
 
 
 async def _audit_async(monitor_only: bool) -> dict:
+    from ..database import CeleryAsyncSessionLocal
     from ..services.redis_client import get_async_redis
     from ..services.symbol_health_service import (
         STATUS_NOT_APPROVED,
@@ -132,7 +133,7 @@ async def _audit_async(monitor_only: bool) -> dict:
         SymbolRemediator,
     )
 
-    health = SymbolHealthService()
+    health = SymbolHealthService(session_factory=CeleryAsyncSessionLocal)
     report = await health.audit()
     counts = report.counts
 
@@ -206,7 +207,10 @@ async def _audit_async(monitor_only: bool) -> dict:
 
     remediation: Optional[dict] = None
     if not monitor_only:
-        remediator = SymbolRemediator(validator=GateSymbolValidator())
+        remediator = SymbolRemediator(
+            validator=GateSymbolValidator(),
+            session_factory=CeleryAsyncSessionLocal,
+        )
         rem = await remediator.remediate(report, dry_run=False)
         remediation = rem.to_dict()
         logger.info(
@@ -228,6 +232,16 @@ async def _audit_async(monitor_only: bool) -> dict:
     return envelope
 
 
+async def _run_audit_task(monitor_only: bool) -> dict:
+    """Run one Celery audit without leaking async clients across event loops."""
+    from ..services.redis_client import reset_async_redis
+
+    try:
+        return await _audit_async(monitor_only=monitor_only)
+    finally:
+        await reset_async_redis()
+
+
 @celery_app.task(name="app.tasks.symbol_health_audit.monitor_only")
 def monitor_only() -> dict:  # noqa: D401
     """Beat-scheduled monitor task. NEVER remediates by design — for
@@ -237,7 +251,7 @@ def monitor_only() -> dict:  # noqa: D401
     iterates the universe), preserving per-symbol report semantics
     while keeping the Celery surface area small.
     """
-    return asyncio.run(_audit_async(monitor_only=True))
+    return asyncio.run(_run_audit_task(monitor_only=True))
 
 
 
@@ -245,7 +259,7 @@ def monitor_only() -> dict:  # noqa: D401
 @celery_app.task(name="app.tasks.symbol_health_audit.run_repair")
 def run_repair() -> dict:
     """Full audit + repair (admin/CLI on-demand only — never beat-scheduled)."""
-    return asyncio.run(_audit_async(monitor_only=False))
+    return asyncio.run(_run_audit_task(monitor_only=False))
 
 
 __all__ = ["monitor_only", "run_repair"]
