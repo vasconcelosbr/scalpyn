@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.ml.feature_contract_v2 import snapshot_hash
+from app.api.profile_intelligence import get_profile_ranking
 from app.services.algorithm_governance_service import suggestion_registry_block_reasons
 from app.services.profile_intelligence_contract import (
     OFFICIAL_CAPTURE_COLUMNS,
@@ -101,3 +102,39 @@ def test_manual_pi_task_can_skip_ml_training_explicitly():
     assert "include_ml_challengers: bool = True" in source
     assert "if include_ml_challengers:" in source
     assert "ML challengers skipped explicitly" in source
+
+
+class _EmptyProfileRankingResult:
+    def fetchall(self):
+        return []
+
+
+class _ProfileRankingDb:
+    def __init__(self):
+        self.statement = None
+        self.params = None
+
+    async def execute(self, statement, params):
+        self.statement = statement
+        self.params = params
+        return _EmptyProfileRankingResult()
+
+
+@pytest.mark.asyncio
+async def test_profile_ranking_orders_by_aggregate_instead_of_casting_alias(monkeypatch):
+    monkeypatch.setenv("NATIVE_CAPTURE_START_AT", "2026-07-12T18:21:57Z")
+    db = _ProfileRankingDb()
+
+    result = await get_profile_ranking(
+        lookback_days=60,
+        min_closed_trades=10,
+        limit=30,
+        db=db,
+        user_id="00000000-0000-0000-0000-000000000001",
+    )
+
+    sql = str(db.statement)
+    assert result["profiles"] == []
+    assert "ORDER BY wins::float" not in sql
+    assert "(COUNT(*) FILTER (WHERE outcome = 'TP_HIT'))::float" in sql
+    assert db.params["min_ct"] == 10

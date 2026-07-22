@@ -687,7 +687,9 @@ async def get_profile_ranking(
           AND {official_where('shadow_trades')}
         GROUP BY profile_id, profile_name, source
         HAVING COUNT(*) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT','TIMEOUT')) >= :min_ct
-        ORDER BY wins::float / GREATEST(COUNT(*) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT','TIMEOUT')),1) DESC
+        ORDER BY
+            (COUNT(*) FILTER (WHERE outcome = 'TP_HIT'))::float
+            / GREATEST(COUNT(*) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT','TIMEOUT')), 1) DESC
         LIMIT :limit
     """), {
         "uid": str(user_id),
