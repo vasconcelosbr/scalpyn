@@ -19,7 +19,7 @@ FATAL: critical schema drift - <N> of 22 columns missing:
 
 This means `alembic_version.version_num` claims a revision is applied, but
 the DDL it should have run is not present in `information_schema.columns`.
-The boot gate `scripts.check_critical_schema` (invoked by `start.sh`) exits 1
+The boot gate `app.schema_boot_gate` (invoked by `start.sh`) exits 1
 and Cloud Run rolls back the revision.
 
 ## Root cause (why drift happens despite alembic_version being current)
