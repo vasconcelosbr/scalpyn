@@ -21,6 +21,18 @@ type ManualRecord = {
   runtime_target_score_engine_version_id?: string | null;
   runtime_confirmed_at?: string | null; runtime_confirmation_source?: string | null;
 };
+type ManualCapabilities = {
+  manual_read_enabled: boolean;
+  manual_draft_enabled: boolean;
+  manual_preview_enabled: boolean;
+  manual_apply_enabled: boolean;
+  manual_apply_reason?: string | null;
+  autopilot_enabled: boolean;
+  live_activation_enabled: boolean;
+  blocking_reasons: string[];
+  reject_enabled: boolean;
+  rollback_enabled: boolean;
+};
 type WindowEvidence = { start?: string; end?: string };
 type ValidationEvidence = {
   cases?: number; wins?: number; losses?: number; timeouts?: number;
@@ -87,6 +99,7 @@ export default function ManualAdjustmentPanel({ stat, onClose }: { stat: Indicat
   const [idempotencyKey] = useState(() => `pi-manual:${stat.id}:${crypto.randomUUID()}`);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [capabilities, setCapabilities] = useState<ManualCapabilities | null>(null);
 
   const warnings = useMemo(() => {
     const values: Array<Record<string, unknown>> = [];
@@ -114,11 +127,15 @@ export default function ManualAdjustmentPanel({ stat, onClose }: { stat: Indicat
         : "VALIDATION_FAILED";
 
   useEffect(() => {
-    apiGet<{ items: EligibleProfile[] }>("/profile-intelligence/manual-adjustments/eligible-profiles")
-      .then(result => {
+    Promise.all([
+      apiGet<{ items: EligibleProfile[] }>("/profile-intelligence/manual-adjustments/eligible-profiles"),
+      apiGet<ManualCapabilities>("/profile-intelligence/manual-adjustments/capabilities"),
+    ])
+      .then(([result, capabilityResult]) => {
         const associated = new Set((stat.associated_profiles || []).map(profile => profile.id));
         const ordered = [...(result.items || [])].sort((a, b) => Number(associated.has(b.id)) - Number(associated.has(a.id)));
         setProfiles(ordered); setProfileId(ordered[0]?.id || "");
+        setCapabilities(capabilityResult);
       })
       .catch(value => setError(value instanceof Error ? value.message : String(value)));
   }, [stat]);
@@ -187,15 +204,16 @@ export default function ManualAdjustmentPanel({ stat, onClose }: { stat: Indicat
       <div className="grid grid-cols-3 gap-2 text-[9px]">{[["Auto-Pilot", record.autopilot_applied], ["Treino ML", record.ml_training_mutated], ["Histórico", record.historical_dataset_mutated]].map(([label, value]) => <div key={String(label)} className="rounded border border-green-500/20 p-2 text-center text-green-300">{String(label)}: {value ? "ALTERADO" : "intacto"}</div>)}</div>
     </div>}
     {record?.state === "PENDING_MANUAL_APPROVAL" && <div className="space-y-2"><textarea className="input min-h-20 w-full" value={justification} onChange={event => setJustification(event.target.value)} placeholder="Justificativa operacional obrigatória (mínimo 10 caracteres)" /><label className="flex items-start gap-2"><input type="checkbox" checked={riskConfirmed} onChange={event => setRiskConfirmed(event.target.checked)} /><span>Confirmo o risco e aprovo somente o diff exibido neste preview imutável.</span></label></div>}
+    {record?.state === "PENDING_MANUAL_APPROVAL" && capabilities?.manual_apply_enabled === false && <div className="rounded border border-yellow-500/30 bg-yellow-500/5 p-2 text-yellow-200">Aplicação produtiva bloqueada: {capabilities.manual_apply_reason || "capacidade indisponível"}. Preview e rejeição permanecem seguros.</div>}
     {record?.state === "APPLIED" && record.runtime_status === "RUNTIME_CONFIRMED" && <textarea className="input min-h-20 w-full" value={rollbackReason} onChange={event => setRollbackReason(event.target.value)} placeholder="Motivo do rollback manual (mínimo 10 caracteres)" />}
     {error && <div className="rounded border border-red-500/30 bg-red-500/5 p-2 text-red-300">{error}</div>}
     <div className="flex gap-2 border-t border-[var(--border-subtle)] pt-3">
       <button className="btn btn-secondary flex-1" onClick={onClose}>Fechar</button>
       {!record && <button className="btn btn-primary flex-1" disabled={busy || !profileId} onClick={createDraft}><ShieldCheck className="h-4 w-4" /> Criar rascunho</button>}
       {record?.state === "MANUAL_DRAFT" && <button className="btn btn-primary flex-1" disabled={busy} onClick={preview}>Gerar preview imutável</button>}
-      {record?.state === "PENDING_MANUAL_APPROVAL" && <button className="btn btn-primary flex-1" disabled={busy || !riskConfirmed || justification.length < 10} onClick={apply}><CheckCircle className="h-4 w-4" /> Aprovar e aplicar</button>}
+      {record?.state === "PENDING_MANUAL_APPROVAL" && <button className="btn btn-primary flex-1" disabled={busy || capabilities?.manual_apply_enabled !== true || !riskConfirmed || justification.length < 10} onClick={apply}><CheckCircle className="h-4 w-4" /> Aprovar e aplicar</button>}
       {record?.state === "PENDING_MANUAL_APPROVAL" && <button className="btn btn-secondary" disabled={busy || justification.length < 10} onClick={reject}>Rejeitar</button>}
-      {record?.state === "APPLIED" && record.runtime_status === "RUNTIME_CONFIRMED" && <button className="btn btn-secondary flex-1" disabled={busy || rollbackReason.length < 10} onClick={rollback}><RotateCcw className="h-4 w-4" /> Rollback manual</button>}
+      {record?.state === "APPLIED" && record.runtime_status === "RUNTIME_CONFIRMED" && <button className="btn btn-secondary flex-1" disabled={busy || capabilities?.rollback_enabled !== true || rollbackReason.length < 10} onClick={rollback}><RotateCcw className="h-4 w-4" /> Rollback manual</button>}
     </div>
   </div>;
 }

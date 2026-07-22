@@ -1,4 +1,6 @@
 from copy import deepcopy
+from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 
@@ -144,6 +146,7 @@ def test_manual_api_contract_routes_are_registered_before_uuid_detail():
 
     routes = [(route.path, next(iter(route.methods or []), "")) for route in router.routes]
     expected = {
+        ("/api/profile-intelligence/manual-adjustments/capabilities", "GET"),
         ("/api/profile-intelligence/manual-adjustments", "POST"),
         ("/api/profile-intelligence/manual-adjustments", "GET"),
         ("/api/profile-intelligence/manual-adjustments/{adjustment_id}", "GET"),
@@ -156,3 +159,36 @@ def test_manual_api_contract_routes_are_registered_before_uuid_detail():
     assert expected.issubset(set(routes))
     paths = [path for path, _ in routes]
     assert paths.index("/api/profile-intelligence/manual-adjustments/eligible-profiles") < paths.index("/api/profile-intelligence/manual-adjustments/{adjustment_id}")
+
+
+def test_manual_apply_feature_flag_is_fail_closed(monkeypatch):
+    from app.api.profile_intelligence import _manual_apply_enabled
+
+    monkeypatch.delenv("PI_MANUAL_APPLY_ENABLED", raising=False)
+    assert _manual_apply_enabled() is False
+    monkeypatch.setenv("PI_MANUAL_APPLY_ENABLED", "1")
+    assert _manual_apply_enabled() is False
+    monkeypatch.setenv("PI_MANUAL_APPLY_ENABLED", "true")
+    assert _manual_apply_enabled() is True
+
+
+@pytest.mark.asyncio
+async def test_disabled_flag_blocks_before_manual_service(monkeypatch):
+    from fastapi import HTTPException
+    from app.api import profile_intelligence as api
+    from app.schemas.profile_intelligence import ManualAdjustmentApprovalRequest
+
+    monkeypatch.setenv("PI_MANUAL_APPLY_ENABLED", "false")
+    service = AsyncMock()
+    monkeypatch.setattr(api.profile_intelligence_manual_service, "approve_and_apply", service)
+    request = ManualAdjustmentApprovalRequest(
+        preview_hash="a" * 64,
+        justification="justificativa operacional segura",
+        confirm_risk=True,
+    )
+    with pytest.raises(HTTPException, match="manual_apply_disabled") as exc:
+        await api.approve_and_apply_manual_adjustment(
+            uuid4(), request, AsyncMock(), uuid4(),
+        )
+    assert exc.value.status_code == 503
+    service.assert_not_awaited()

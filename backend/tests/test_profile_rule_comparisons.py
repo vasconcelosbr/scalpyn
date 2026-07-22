@@ -86,11 +86,18 @@ def test_feature_engine_uses_base_volume_for_volume_indicators_and_quote_volume_
 
     assert indicators["volume_last_candle_base"] == 2.0
     assert indicators["volume_last_candle_usdt"] == 50.0
-    assert indicators["volume_24h_base"] == 48.0
-    assert indicators["volume_24h_usdt"] == 1200.0
+    # Candle sums are diagnostic proxies.  The canonical volume_24h_* keys
+    # are reserved for point-in-time ticker data so ML never mistakes a
+    # potentially gapped OHLCV sum for the official 24 h market metric.
+    assert indicators["volume_24h_base_aggregated"] == 48.0
+    assert indicators["volume_24h_usdt_aggregated"] == 1200.0
+    assert "volume_24h_base" not in indicators
+    assert "volume_24h_usdt" not in indicators
     assert indicators["volume_24h_candles"] == 24
     assert indicators["obv"] == 46.0
-    assert indicators["volume_delta"] == 0.0
+    # Directional volume needs the primary order-flow source; candles alone
+    # cannot infer taker direction without leaking a synthetic label.
+    assert indicators["volume_delta"] is None
 
 
 def test_feature_engine_prefers_normalized_market_data_over_candle_proxies():

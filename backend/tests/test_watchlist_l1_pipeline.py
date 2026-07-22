@@ -8,23 +8,84 @@ Tests for Watchlist L1 pipeline fixes:
 import pytest
 import requests
 import os
+import time
+from uuid import uuid4
 
-BASE_URL = "http://localhost:8001"
+BASE_URL = os.getenv("WATCHLIST_L1_BASE_URL", "http://localhost:8001").rstrip("/")
 
 # From context: existing pool/watchlist IDs
-POOL_ID = "d166102a-79e5-4824-9e02-13a2f046b819"
-WATCHLIST_ID = "56987c59-3354-4191-987d-9896d85a09c4"
+POOL_ID = ""
+WATCHLIST_ID = ""
+POOL_WATCHLIST_ID = ""
 
 
 @pytest.fixture(scope="module")
 def auth_token():
-    """Login and return JWT token."""
-    resp = requests.post(f"{BASE_URL}/api/auth/login", json={
-        "email": "test@scalpyn.com",
-        "password": "TestPass123!"
-    })
-    assert resp.status_code == 200, f"Login failed: {resp.text}"
-    return resp.json()["access_token"]
+    """Provision isolated API fixtures and return a JWT token.
+
+    This is a real HTTP/PostgreSQL integration contract.  A CI job may point
+    ``WATCHLIST_L1_BASE_URL`` at an isolated staging API; local runs keep the
+    documented localhost:8001 default.  Readiness and fixture ownership are
+    deterministic, and teardown removes only resources created by this run.
+    """
+    global POOL_ID, WATCHLIST_ID, POOL_WATCHLIST_ID
+    health = None
+    for _ in range(30):
+        try:
+            health = requests.get(f"{BASE_URL}/api/health", timeout=5)
+            if health.status_code == 200:
+                break
+        except requests.RequestException:
+            pass
+        time.sleep(1)
+    assert health is not None and health.status_code == 200, (
+        f"Integration API not ready at {BASE_URL}; start it or set WATCHLIST_L1_BASE_URL"
+    )
+
+    suffix = uuid4().hex
+    resp = requests.post(f"{BASE_URL}/api/auth/register", json={
+        "email": f"watchlist-l1-{suffix}@gmail.com",
+        "password": "WatchlistL1TestPass!",
+        "name": "Watchlist L1 integration",
+    }, timeout=30)
+    assert resp.status_code == 200, f"Registration failed: {resp.status_code} {resp.text}"
+    token = resp.json()["access_token"]
+    auth_headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    pool = requests.post(f"{BASE_URL}/api/pools/", json={
+        "name": f"watchlist-l1-{suffix}", "market_type": "spot", "mode": "paper",
+    }, headers=auth_headers, timeout=30)
+    assert pool.status_code == 200, f"Pool create failed: {pool.status_code} {pool.text}"
+    POOL_ID = pool.json()["id"]
+    for symbol in ("BTC_USDT", "ETH_USDT", "SOL_USDT"):
+        added = requests.post(
+            f"{BASE_URL}/api/pools/{POOL_ID}/coins",
+            json={"symbol": symbol, "market_type": "spot"},
+            headers=auth_headers, timeout=30,
+        )
+        assert added.status_code in (200, 201), f"Seed coin failed: {added.status_code} {added.text}"
+
+    pool_watchlist = requests.post(f"{BASE_URL}/api/watchlists/", json={
+        "name": f"watchlist-pool-{suffix}", "level": "POOL",
+        "source_pool_id": POOL_ID, "market_mode": "spot", "auto_refresh": False,
+    }, headers=auth_headers, timeout=30)
+    assert pool_watchlist.status_code == 200, f"POOL watchlist create failed: {pool_watchlist.status_code} {pool_watchlist.text}"
+    POOL_WATCHLIST_ID = pool_watchlist.json()["id"]
+
+    watchlist = requests.post(f"{BASE_URL}/api/watchlists/", json={
+        "name": f"watchlist-l1-{suffix}", "level": "L1",
+        "source_watchlist_id": POOL_WATCHLIST_ID,
+        "market_mode": "spot", "auto_refresh": False,
+    }, headers=auth_headers, timeout=30)
+    assert watchlist.status_code == 200, f"Watchlist create failed: {watchlist.status_code} {watchlist.text}"
+    WATCHLIST_ID = watchlist.json()["id"]
+
+    yield token
+
+    # Scoped teardown: delete only the two UUIDs created above in staging.
+    requests.delete(f"{BASE_URL}/api/watchlists/{WATCHLIST_ID}", headers=auth_headers, timeout=30)
+    requests.delete(f"{BASE_URL}/api/watchlists/{POOL_WATCHLIST_ID}", headers=auth_headers, timeout=30)
+    requests.delete(f"{BASE_URL}/api/pools/{POOL_ID}", headers=auth_headers, timeout=30)
 
 
 @pytest.fixture(scope="module")
@@ -97,7 +158,7 @@ class TestMarketSpotCurrencies:
 
     def test_spot_currencies_returns_underscore_format(self):
         """GET /api/market/spot-currencies should return BTC_USDT format."""
-        resp = requests.get(f"{BASE_URL}/api/market/spot-currencies", timeout=15)
+        resp = requests.get(f"{BASE_URL}/api/market/spot-currencies", timeout=30)
         assert resp.status_code == 200, f"Status: {resp.status_code} {resp.text}"
         data = resp.json()
         # Response should be a list of dicts with 'symbol'
@@ -141,7 +202,7 @@ class TestDebugEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert "summary" in data, "Debug missing summary field"
-        print(f"PASS: Debug summary: {data['summary']}")
+        assert isinstance(data["summary"], str) and data["summary"]
 
 
 # ── Test 4: L1 Watchlist assets ───────────────────────────────────────────────

@@ -330,6 +330,30 @@ def test_simulation_batch_errors_counter_reflects_all_failures():
 
 # ── 3. get_db dependency rollback contract ────────────────────────────────────
 
+def test_get_db_preserves_request_validation_error(monkeypatch):
+    """Body validation is an HTTP 422 contract, never a database 503."""
+    from fastapi.exceptions import RequestValidationError
+    from app import database as database_module
+
+    session = AsyncMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    monkeypatch.setattr(database_module, "AsyncSessionLocal", MagicMock(return_value=session))
+    validation = RequestValidationError([{
+        "type": "missing", "loc": ("body", "email"),
+        "msg": "Field required", "input": {},
+    }])
+
+    async def run():
+        gen = database_module.get_db()
+        await gen.__anext__()
+        with pytest.raises(RequestValidationError):
+            await gen.athrow(validation)
+        session.rollback.assert_awaited_once()
+
+    _run(run)
+
+
 def test_get_db_rolls_back_and_fresh_session_works_after_http_exception():
     """When the route raises ``HTTPException``, ``get_db`` must rollback the
     open session before returning the connection to the pool.  A subsequent

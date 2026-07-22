@@ -100,12 +100,16 @@ def test_l3_still_in_valid_sources():
 # ── 3. ON CONFLICT usa (user_id, symbol, source) ─────────────────────────────
 
 
-def test_insert_sql_uses_per_source_conflict():
-    """_INSERT_SHADOW_SQL deve referenciar (user_id, symbol, source) no ON CONFLICT."""
+def test_insert_sql_is_idempotent_across_all_shadow_unique_contracts():
+    """The INSERT must tolerate every partial unique index on shadow_trades.
+
+    A targeted ``ON CONFLICT (user_id, symbol, source)`` cannot arbitrate the
+    L1 point-in-time and canonical decision indexes.  PostgreSQL's generic
+    ``DO NOTHING`` is deliberately used so concurrent writers remain isolated.
+    """
     from app.services.shadow_trade_service import _INSERT_SHADOW_SQL
     sql_text = str(_INSERT_SHADOW_SQL)
-    assert "(user_id, symbol, source)" in sql_text
-    assert "WHERE status = 'RUNNING'" in sql_text
+    assert "ON CONFLICT DO NOTHING" in " ".join(sql_text.split()).upper()
 
 
 # ── 4. Enabled=false → retorna 0 sem DB calls ────────────────────────────────
@@ -130,7 +134,7 @@ async def test_disabled_flag_returns_zero():
     mock_cfg_db.__aexit__ = AsyncMock(return_value=False)
 
     with patch(
-        "app.services.shadow_trade_service.CeleryAsyncSessionLocal",
+        "app.database.CeleryAsyncSessionLocal",
         return_value=mock_cfg_db,
     ):
         result = await create_l1_spectrum_shadows(
@@ -205,10 +209,14 @@ async def test_rate_limit_generates_skip():
     mock_skip_ctx = AsyncMock()
     mock_skip_ctx.__aenter__ = AsyncMock(return_value=mock_skip_db)
     mock_skip_ctx.__aexit__ = AsyncMock(return_value=False)
+    mock_skip_db.begin = MagicMock(return_value=mock_skip_ctx)
 
     with patch(
-        "app.services.shadow_trade_service.CeleryAsyncSessionLocal",
-        side_effect=[mock_cfg_db, mock_cfg_db, mock_skip_db],
+        "app.database.CeleryAsyncSessionLocal",
+        side_effect=[mock_cfg_db, mock_cfg_db, mock_skip_db, mock_skip_db],
+    ), patch(
+        "app.services.indicators_provider.get_merged_indicators",
+        new=AsyncMock(return_value={}),
     ):
         result = await create_l1_spectrum_shadows(
             user_id="user-1",

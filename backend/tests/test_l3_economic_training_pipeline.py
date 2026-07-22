@@ -52,7 +52,12 @@ def test_stable_feature_filter_uses_train_coverage_and_exclusions():
 
 def test_l3_barrier_contract_rejects_mixed_payoff_policies():
     records = [
-        {"barrier_mode": "ATR_DYNAMIC", "tp_pct_applied": 1.5, "id": "keep"},
+        {
+            "barrier_mode": "ATR_DYNAMIC",
+            "tp_pct_applied": 1.5,
+            "barrier_contract_version": "shadow_atr_dynamic_v2",
+            "id": "keep",
+        },
         {"barrier_mode": "FIXED", "tp_pct_applied": 1.5, "id": "mode"},
         {"barrier_mode": "ATR_DYNAMIC", "tp_pct_applied": 0.6, "id": "tp"},
         {"barrier_mode": None, "tp_pct_applied": None, "id": "missing"},
@@ -67,8 +72,10 @@ def test_l3_barrier_contract_rejects_mixed_payoff_policies():
     assert [row["id"] for row in kept] == ["keep"]
     assert meta["barrier_contract_included"] == 1
     assert meta["barrier_contract_mode_mismatch"] == 1
-    assert meta["barrier_contract_tp_mismatch"] == 1
+    # ATR_DYNAMIC is selected by contract version, not a fixed TP equality.
+    assert meta["barrier_contract_tp_mismatch"] == 0
     assert meta["barrier_contract_missing"] == 1
+    assert meta["barrier_contract_atr_non_v2_excluded"] == 1
 
 
 def test_catboost_trial_selection_optimizes_validation_net_ev():

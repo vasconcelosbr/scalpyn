@@ -136,6 +136,7 @@ class TestTrainChallengersGate:
                 "ml_dataset_valid_from": "2026-06-14T21:33:10+00:00",
                 "ml_retrain_min_eligible_rows": 4,
                 "ml_maturity_embargo_margin_minutes": 60,
+                "ml_win_fast_threshold_seconds": 1800,
                 "shadow_barrier_mode": "ATR_DYNAMIC",
             })
             svc._load_strategy_tp_pct = AsyncMock(return_value=0.6)
@@ -143,6 +144,7 @@ class TestTrainChallengersGate:
                 "shadow_id": "a",
                 "barrier_mode": "ATR_DYNAMIC",
                 "tp_pct_applied": 0.6,
+                "barrier_contract_version": "shadow_atr_dynamic_v2",
             }] * 3)
             db = AsyncMock()
             feature_module = types.ModuleType("app.ml.feature_extractor")

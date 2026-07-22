@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo } from "react";
+import Link from "next/link";
 import {
   Brain, RefreshCw, Play, Settings, ChevronDown, ChevronRight,
   TrendingUp, TrendingDown, AlertTriangle, CheckCircle, Copy,
@@ -9,6 +10,260 @@ import {
 } from "lucide-react";
 import { apiGet, apiPost, apiPut } from "@/lib/api";
 import ManualAdjustmentPanel from "./ManualAdjustmentPanel";
+
+type JsonPrimitive = string | number | boolean | null;
+type JsonValue = JsonPrimitive | JsonObject | JsonValue[] | undefined;
+interface JsonObject { [key: string]: JsonValue }
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+interface RuleValue {
+  id?: string;
+  name?: string;
+  indicator?: string;
+  field?: string;
+  operator?: string;
+  value?: JsonValue;
+  points?: number;
+  item?: string;
+  range_min?: number;
+  range_max?: number;
+}
+
+interface IndicatorEvidence {
+  source?: string;
+  profile_id?: string;
+  dataset_version?: string;
+  label_version?: string;
+  ai_review?: { rationale?: string };
+  [key: string]: unknown;
+}
+
+interface CombinationMetrics {
+  total_cases?: number;
+  lift?: number;
+  blocked_reason?: string;
+  actionability_status?: string;
+  [key: string]: unknown;
+}
+
+interface AutopilotAuditEvent {
+  id?: string;
+  event_type?: string;
+  candidate_id?: string;
+  profile_name?: string;
+  reason?: string;
+  actor_type?: string;
+  created_at?: string;
+  decision?: string;
+}
+
+interface LiveStatus {
+  engine_status?: string;
+  is_stale?: boolean;
+  current_phase?: string;
+  last_heartbeat_at?: string;
+  next_cycle_at?: string;
+  worker_name?: string;
+}
+
+interface LiveActivity {
+  event_type?: string;
+  created_at?: string;
+  profile_name?: string;
+  description?: string;
+  status?: string;
+  severity?: string;
+  message?: string;
+}
+
+interface LiveShadow {
+  total_trades?: number;
+  total_profiles?: number;
+  win_rate?: number;
+  avg_pnl_pct?: number;
+  fallback_total_trades?: number;
+  fallback_total_profiles?: number;
+  negative_profiles?: number;
+  hard_negative_patterns_detected?: number;
+  message?: string;
+}
+
+interface LiveIndicators {
+  run_id?: string;
+  minimum_cases?: number;
+  top_winners?: LiveIndicatorRow[];
+  top_losers?: LiveIndicatorRow[];
+}
+
+interface LiveAdjustment {
+  id?: string;
+  profile_name?: string;
+  suggestion_type?: string;
+  target_section?: string;
+  status?: string;
+  requires_human_approval?: boolean;
+  mutation_applied?: boolean;
+  confidence?: number;
+  created_at?: string;
+  profile_id?: string;
+}
+
+interface LiveAiReview {
+  status?: string;
+  next_review_at?: string;
+  analysis_context_available?: boolean;
+  analysis_context_legacy?: boolean;
+  review_id?: string;
+  context_payload_hash?: string;
+  summary?: string;
+  risk_flags?: Array<string | { flag?: string }>;
+  tokens_input?: number;
+  tokens_output?: number;
+  analysis_context?: {
+    dataset?: { table?: string; portfolio_view?: string; sources?: string[] };
+    window?: { window_hours?: number; window_start?: string; window_end?: string };
+    sample?: { trades_count?: number; profiles_count?: number; symbols_count?: number; source_breakdown?: Record<string, number | { trades?: number }> };
+  };
+}
+
+interface LiveSafety {
+  gate?: string;
+  ml_gate_enabled?: boolean;
+  live_trading_enabled?: boolean;
+  auto_mutation_production?: boolean;
+  create_profile_enabled?: boolean;
+  shadow_calibration_autonomous?: boolean;
+  human_approval_required_for_production?: boolean;
+}
+
+interface CalibrationSummary {
+  portfolio_metrics?: { win_rate?: number; avg_pnl_pct?: number; pnl_total_usdt?: number; completed_trades?: number; profiles_count?: number };
+  suggestions?: { total?: number; profiles_targeted?: number; pending_shadow_validation?: number; high_confidence?: number; mutations_applied?: number };
+  indicators?: { distinct_indicators?: number; profiles_analyzed?: number; avg_win_rate?: number; avg_pnl_pct?: number };
+  latest_ai_review?: { status?: string; model_name?: string; tokens_input?: number; tokens_output?: number; completed_at?: string; summary_preview?: string };
+}
+
+interface CalibrationVersion {
+  id?: string;
+  profile_name?: string;
+  validation_status?: string;
+  scoring?: { score?: number };
+  created_at?: string;
+  profile_id?: string;
+  before_snapshot?: { scoring?: { thresholds?: { buy?: number } } };
+  after_snapshot?: { scoring?: { thresholds?: { buy?: number } } };
+  win_rate_before?: number;
+  win_rate_after?: number;
+}
+
+interface CalibrationV2Overview {
+  recommendations?: number;
+  proposals?: number;
+  shadow_canaries?: number;
+}
+
+interface CalibrationProposal {
+  id?: string;
+  profile_name?: string;
+  target_field?: string;
+  proposed_value?: JsonValue;
+  confidence?: number;
+  state?: string;
+  observed_trades?: number;
+}
+
+interface CalibrationSafetyCheck { pass?: boolean; name?: string; reason?: string; value?: JsonPrimitive }
+interface CalibrationSafety {
+  safety_pass?: boolean;
+  safety_status?: string;
+  hollow_ai_reviews_24h?: number;
+  legacy_hollow_reviews_24h?: number;
+  checks?: CalibrationSafetyCheck[];
+}
+
+interface CalibrationAdjustment {
+  id?: string;
+  profile_name?: string;
+  suggestion_type?: string;
+  target_section?: string;
+  target_field?: string;
+  confidence?: number;
+  suggestion_status?: string;
+  mutation_applied?: boolean;
+  created_at?: string;
+  suggestion_id?: string;
+  suggestion_created_at?: string;
+  baseline?: { total_trades?: number; win_rate?: number; avg_pnl_pct?: number };
+}
+
+interface CalibrationIndicator {
+  indicator?: string;
+  bucket_label?: string;
+  total_cases?: number;
+  win_rate?: number;
+  avg_pnl_pct?: number;
+  profile_name?: string;
+  profile_id?: string;
+  indicator_name?: string;
+  bucket?: string;
+  sample_count?: number;
+  lift_vs_profile?: number;
+  ev_pct?: number;
+  fpr?: number;
+}
+
+interface CalibrationTimelineEvent {
+  id?: string;
+  event_type?: string;
+  profile_name?: string;
+  created_at?: string;
+  description?: string;
+  mutation_applied?: boolean;
+  changes?: RuleChange[];
+  shadow_validation_status?: string;
+  severity?: string;
+  phase?: string;
+  message?: string;
+}
+
+interface RuleChange { section?: string; field?: string; old_value?: JsonValue; new_value?: JsonValue; reason?: string }
+
+interface CalibrationAiReview {
+  id?: string;
+  status?: string;
+  model_name?: string;
+  completed_at?: string;
+  summary_preview?: string;
+  recommendations?: string[];
+  risk_flags?: string[];
+  confidence?: number;
+  tokens_input?: number;
+  tokens_output?: number;
+  summary?: string;
+  findings?: JsonObject;
+}
+
+interface CalibrationDetail {
+  profile_name?: string;
+  suggestion_type?: string;
+  target_section?: string;
+  target_field?: string;
+  confidence?: number;
+  suggestion_status?: string;
+  mutation_applied?: boolean;
+  created_by?: string;
+  reason?: string;
+  evidence?: JsonValue;
+  current_value?: JsonValue;
+  suggested_value?: JsonValue;
+  version?: { version_status?: string; shadow_validation_status?: string; rollback_available?: boolean; applied_at?: string; mutation_applied?: boolean; diff?: JsonValue };
+  indicator_performance?: CalibrationIndicator[];
+}
+
+interface RunAnalysisResult { ok?: boolean; run_id?: string; error?: string; status?: string; execution?: string }
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -96,12 +351,12 @@ interface IndicatorStat {
   lift_vs_base?: number | null;
   confidence_level?: string | null;
   role_detected?: string | null;
-  source_profiles?: any;
+  source_profiles?: JsonValue;
   source_profile_ids?: string[];
   validation_status?: string | null;
   actionability_status?: string | null;
   target_section?: string | null;
-  evidence_json?: any;
+  evidence_json?: IndicatorEvidence;
   associated_profiles?: Array<{ id: string; name: string }>;
   can_apply_shadow_adjustment?: boolean;
   can_request_ai_review?: boolean;
@@ -124,7 +379,7 @@ interface Combination {
   combination_type: string;
   setup_family?: string | null;
   suggested_name?: string | null;
-  rules_json?: any[];
+  rules_json?: RuleValue[];
   total_cases?: number;
   wins?: number;
   losses?: number;
@@ -138,11 +393,11 @@ interface Combination {
   confidence_level?: string | null;
   overfit_risk?: boolean;
   status?: string | null;
-  discovery_metrics_json?: any;
-  validation_metrics_json?: any;
+  discovery_metrics_json?: CombinationMetrics;
+  validation_metrics_json?: CombinationMetrics;
   degradation_pct?: number | null;
-  signals_json?: any;
-  block_rules_json?: any;
+  signals_json?: JsonValue;
+  block_rules_json?: JsonValue;
   created_at?: string;
   source_profiles?: string[];
   source_profile_ids?: string[];
@@ -157,13 +412,13 @@ interface Suggestion {
   confidence_score?: number | null;
   confidence_level?: string | null;
   status: string;
-  evidence_summary_json?: any;
+  evidence_summary_json?: JsonObject;
   quantitative_explanation?: string | null;
   ai_explanation?: string | null;
   risk_notes?: string | null;
-  suggested_config_json?: any;
-  suggested_signals_json?: any;
-  suggested_block_rules_json?: any;
+  suggested_config_json?: JsonValue;
+  suggested_signals_json?: JsonValue;
+  suggested_block_rules_json?: JsonValue;
   source_combination_id?: string | null;
   source_type?: string | null;
   source_model_type?: string | null;
@@ -178,11 +433,11 @@ interface Suggestion {
   validation_status?: string | null;
   actionability_status?: string | null;
   blocked_reason?: string | null;
-  expected_impact?: any;
+  expected_impact?: JsonValue;
   risk_level?: string | null;
   evidence_count?: number | null;
   rollback_available?: boolean;
-  diff_json?: any;
+  diff_json?: JsonValue;
   created_at?: string;
 }
 
@@ -199,11 +454,11 @@ interface AuditEntry {
   event_description?: string | null;
   model_provider?: string | null;
   model_name?: string | null;
-  payload_json?: any;
-  result_json?: any;
-  before_json?: any;
-  after_json?: any;
-  diff_json?: any;
+  payload_json?: JsonValue;
+  result_json?: JsonValue;
+  before_json?: JsonValue;
+  after_json?: JsonValue;
+  diff_json?: JsonValue;
   mutation_applied?: boolean | null;
   mutation_status?: string | null;
   dry_run?: boolean | null;
@@ -219,14 +474,14 @@ interface CreateProfileDryRun {
     is_shadow_only: boolean;
     live_trading_enabled: boolean;
     config: {
-      signals?: { logic: string; conditions: any[] };
-      scoring?: { selected_rule_ids: string[]; weights: any; generated_rules: any[] };
-      block_rules?: { blocks: any[] };
+      signals?: { logic: string; conditions: RuleValue[] };
+      scoring?: { selected_rule_ids: string[]; weights: JsonObject; generated_rules: RuleValue[] };
+      block_rules?: { blocks: RuleValue[] };
     };
   };
-  master_rules_to_create: any[];
-  master_rules_to_reuse: any[];
-  master_rules_missing: any[];
+  master_rules_to_create: RuleValue[];
+  master_rules_to_reuse: RuleValue[];
+  master_rules_missing: RuleValue[];
   selected_rule_ids: string[];
   warnings: string[];
   blocked_reasons: string[];
@@ -241,8 +496,8 @@ interface CreateProfileResult {
   profile_name: string;
   profile_url: string;
   audit_id: string | null;
-  created_master_rules: any[];
-  reused_master_rules: any[];
+  created_master_rules: RuleValue[];
+  reused_master_rules: RuleValue[];
   warnings: string[];
 }
 
@@ -300,8 +555,8 @@ interface AutopilotCandidate {
   approval_reason?: string | null;
   promotion_blocked_reason?: string | null;
   rollback_available: boolean;
-  rollback_payload?: Record<string, any> | null;
-  evidence?: Record<string, any>;
+  rollback_payload?: JsonObject | null;
+  evidence?: JsonObject;
   reason?: string | null;
   updated_at: string;
 }
@@ -320,9 +575,9 @@ interface AutopilotStatus {
     window_start: string;
     completed_at?: string | null;
     metrics?: Record<string, number>;
-    errors?: any[];
+    errors?: JsonValue[];
   } | null;
-  latest_report?: any;
+  latest_report?: JsonValue;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -346,11 +601,6 @@ function fmtPctRaw(v: number | null | undefined, decimals = 2) {
   if (v == null) return "—";
   const sign = v >= 0 ? "+" : "";
   return `${sign}${v.toFixed(decimals)}%`;
-}
-
-function fmtNum(v: number | null | undefined, decimals = 1) {
-  if (v == null) return "—";
-  return v.toFixed(decimals);
 }
 
 function safeVal(v: unknown): string {
@@ -474,18 +724,6 @@ function combinationTypeBadge(type: string) {
   );
 }
 
-function validationBadge(combination: Combination) {
-  const validation = combination.validation_metrics_json || {};
-  const status = validation.validation_status || combination.status;
-  if (status === "validated") {
-    return <span className="badge bullish text-[10px]">VALIDADO</span>;
-  }
-  if (!status || status === "discovered") {
-    return <span className="badge range text-[10px]">EXPLORATÓRIO</span>;
-  }
-  return <span className="badge bearish text-[10px]">BLOQUEADO</span>;
-}
-
 function combinationIsActionable(combination: Combination) {
   if (!["counterfactual_dynamic", "association_rule", "optuna"].includes(combination.combination_type)) {
     return true;
@@ -570,35 +808,35 @@ export default function ProfileIntelligencePage() {
   }> | null>(null);
   const [autopilot, setAutopilot] = useState<AutopilotStatus | null>(null);
   const [autopilotCandidates, setAutopilotCandidates] = useState<AutopilotCandidate[]>([]);
-  const [autopilotAudit, setAutopilotAudit] = useState<any[]>([]);
+  const [autopilotAudit, setAutopilotAudit] = useState<AutopilotAuditEvent[]>([]);
   const [togglingAutopilot, setTogglingAutopilot] = useState(false);
   const [runningAutopilot, setRunningAutopilot] = useState(false);
   const [candidateActionId, setCandidateActionId] = useState<string | null>(null);
   const [selectedAutopilotCandidate, setSelectedAutopilotCandidate] = useState<AutopilotCandidate | null>(null);
 
   // Live Engine state
-  const [liveStatus, setLiveStatus] = useState<any>(null);
-  const [liveActivity, setLiveActivity] = useState<any[]>([]);
-  const [liveShadow, setLiveShadow] = useState<any>(null);
-  const [liveIndicators, setLiveIndicators] = useState<any>(null);
-  const [liveAdjustments, setLiveAdjustments] = useState<any[]>([]);
-  const [liveAiReview, setLiveAiReview] = useState<any>(null);
-  const [liveSafety, setLiveSafety] = useState<any>(null);
+  const [liveStatus, setLiveStatus] = useState<LiveStatus | null>(null);
+  const [liveActivity, setLiveActivity] = useState<LiveActivity[]>([]);
+  const [liveShadow, setLiveShadow] = useState<LiveShadow | null>(null);
+  const [liveIndicators, setLiveIndicators] = useState<LiveIndicators | null>(null);
+  const [liveAdjustments, setLiveAdjustments] = useState<LiveAdjustment[]>([]);
+  const [liveAiReview, setLiveAiReview] = useState<LiveAiReview | null>(null);
+  const [liveSafety, setLiveSafety] = useState<LiveSafety | null>(null);
 
   // Calibration Evolution state
-  const [calSummary, setCalSummary] = useState<any>(null);
-  const [calValidatedVersions, setCalValidatedVersions] = useState<any[]>([]);
-  const [calV2Overview, setCalV2Overview] = useState<any>(null);
-  const [calV2Proposals, setCalV2Proposals] = useState<any[]>([]);
-  const [calAdjustments, setCalAdjustments] = useState<any[]>([]);
-  const [calTimeline, setCalTimeline] = useState<any[]>([]);
-  const [calIndicators, setCalIndicators] = useState<any[]>([]);
-  const [calAiExplanations, setCalAiExplanations] = useState<any[]>([]);
-  const [calSafety, setCalSafety] = useState<any>(null);
+  const [calSummary, setCalSummary] = useState<CalibrationSummary | null>(null);
+  const [calValidatedVersions, setCalValidatedVersions] = useState<CalibrationVersion[]>([]);
+  const [calV2Overview, setCalV2Overview] = useState<CalibrationV2Overview | null>(null);
+  const [calV2Proposals, setCalV2Proposals] = useState<CalibrationProposal[]>([]);
+  const [calAdjustments, setCalAdjustments] = useState<CalibrationAdjustment[]>([]);
+  const [calTimeline, setCalTimeline] = useState<CalibrationTimelineEvent[]>([]);
+  const [calIndicators, setCalIndicators] = useState<CalibrationIndicator[]>([]);
+  const [calAiExplanations, setCalAiExplanations] = useState<CalibrationAiReview[]>([]);
+  const [calSafety, setCalSafety] = useState<CalibrationSafety | null>(null);
   const [calTotal, setCalTotal] = useState(0);
-  const [selectedCalAdjustment, setSelectedCalAdjustment] = useState<any>(null);
+  const [selectedCalAdjustment, setSelectedCalAdjustment] = useState<CalibrationAdjustment | null>(null);
   const [calDetailLoading, setCalDetailLoading] = useState(false);
-  const [calDetail, setCalDetail] = useState<any>(null);
+  const [calDetail, setCalDetail] = useState<CalibrationDetail | null>(null);
   const [calSubTab, setCalSubTab] = useState<"adjustments" | "indicators" | "timeline" | "ai">("adjustments");
   const [calFilterMinConf, setCalFilterMinConf] = useState<string>("");
 
@@ -618,7 +856,7 @@ export default function ProfileIntelligencePage() {
   const [showRunModal, setShowRunModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [runPayload, setRunPayload] = useState({ ...DEFAULT_RUN_PAYLOAD });
-  const [runResult, setRunResult] = useState<any>(null);
+  const [runResult, setRunResult] = useState<RunAnalysisResult | null>(null);
   const [running, setRunning] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
   const [explainingId, setExplainingId] = useState<string | null>(null);
@@ -660,8 +898,8 @@ export default function ProfileIntelligencePage() {
       setLastGeneratedSuggestionId(res.suggestion?.id || null);
       const data = await apiGet("/api/profile-intelligence/suggestions?limit=50");
       setSuggestions(data.suggestions || []);
-    } catch (e: any) {
-      showToast(`Erro ao gerar suggestion: ${e.message || "unknown"}`, false);
+    } catch (e: unknown) {
+      showToast(`Erro ao gerar suggestion: ${errorMessage(e)}`, false);
     } finally {
       setGeneratingSuggestion(false);
     }
@@ -770,8 +1008,14 @@ export default function ProfileIntelligencePage() {
     }
   }, []);
 
-  useEffect(() => { loadOverview(); }, [loadOverview]);
-  useEffect(() => { loadTab(activeTab); }, [activeTab, loadTab]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void loadOverview(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadOverview]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void loadTab(activeTab); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [activeTab, loadTab]);
 
   // Auto-refresh Live Engine tab every 30 seconds while it's active
   useEffect(() => {
@@ -802,8 +1046,8 @@ export default function ProfileIntelligencePage() {
       if (next && result?.cycle_status === "queued") {
         setTimeout(() => { loadOverview(); }, 3000);
       }
-    } catch (e: any) {
-      showToast(`Erro ao alterar Auto-Pilot: ${e.message}`, false);
+    } catch (e: unknown) {
+      showToast(`Erro ao alterar Auto-Pilot: ${errorMessage(e)}`, false);
     } finally {
       setTogglingAutopilot(false);
     }
@@ -833,8 +1077,8 @@ export default function ProfileIntelligencePage() {
       }
       await loadTab("Auto-Pilot");
       showToast("Ciclo do Auto-Pilot concluído.");
-    } catch (e: any) {
-      showToast(`Erro ao iniciar ciclo: ${e.message}`, false);
+    } catch (e: unknown) {
+      showToast(`Erro ao iniciar ciclo: ${errorMessage(e)}`, false);
     } finally {
       setRunningAutopilot(false);
     }
@@ -937,8 +1181,8 @@ export default function ProfileIntelligencePage() {
       });
       showToast("Candidato aprovado. A ativação live continua separada.");
       await refreshAutopilot();
-    } catch (e: any) {
-      showToast(`Erro ao aprovar candidato: ${e.message}`, false);
+    } catch (e: unknown) {
+      showToast(`Erro ao aprovar candidato: ${errorMessage(e)}`, false);
     } finally {
       setCandidateActionId(null);
     }
@@ -954,8 +1198,8 @@ export default function ProfileIntelligencePage() {
       });
       showToast("Candidato rejeitado.");
       await refreshAutopilot();
-    } catch (e: any) {
-      showToast(`Erro ao rejeitar candidato: ${e.message}`, false);
+    } catch (e: unknown) {
+      showToast(`Erro ao rejeitar candidato: ${errorMessage(e)}`, false);
     } finally {
       setCandidateActionId(null);
     }
@@ -968,8 +1212,8 @@ export default function ProfileIntelligencePage() {
       await apiPost(`/profile-intelligence/autopilot/candidates/${candidate.id}/activate`, {});
       showToast("Candidato ativado em live.");
       await refreshAutopilot();
-    } catch (e: any) {
-      showToast(`Ativação bloqueada: ${e.message}`, false);
+    } catch (e: unknown) {
+      showToast(`Ativação bloqueada: ${errorMessage(e)}`, false);
     } finally {
       setCandidateActionId(null);
     }
@@ -982,8 +1226,8 @@ export default function ProfileIntelligencePage() {
       await apiPost(`/profile-intelligence/autopilot/candidates/${candidate.id}/rollback`, {});
       showToast("Rollback executado.");
       await refreshAutopilot();
-    } catch (e: any) {
-      showToast(`Erro no rollback: ${e.message}`, false);
+    } catch (e: unknown) {
+      showToast(`Erro no rollback: ${errorMessage(e)}`, false);
     } finally {
       setCandidateActionId(null);
     }
@@ -999,9 +1243,9 @@ export default function ProfileIntelligencePage() {
       setRunResult({ ok: true, run_id: res?.run_id, status: res?.status });
       showToast(`Análise iniciada. Run ID: ${res?.run_id || "—"}`);
       setTimeout(() => { loadOverview(); }, 2000);
-    } catch (e: any) {
-      setRunResult({ ok: false, error: e.message });
-      showToast(`Erro: ${e.message}`, false);
+    } catch (e: unknown) {
+      setRunResult({ ok: false, error: errorMessage(e) });
+      showToast(`Erro: ${errorMessage(e)}`, false);
     } finally {
       setRunning(false);
     }
@@ -1012,7 +1256,7 @@ export default function ProfileIntelligencePage() {
   const handleExplain = async (suggestionId: string) => {
     setExplainingId(suggestionId);
     try {
-      const res = await apiPost(`/profile-intelligence/suggestions/${suggestionId}/explain`);
+      await apiPost(`/profile-intelligence/suggestions/${suggestionId}/explain`);
       showToast("Explicação gerada com sucesso.");
       // Refresh suggestion detail
       if (selectedSuggestion?.id === suggestionId) {
@@ -1022,8 +1266,8 @@ export default function ProfileIntelligencePage() {
       // Refresh list
       const d = await apiGet("/profile-intelligence/suggestions?limit=50");
       { const sArr = d?.suggestions ?? d; setSuggestions(Array.isArray(sArr) ? sArr : []); }
-    } catch (e: any) {
-      showToast(`Erro ao explicar: ${e.message}`, false);
+    } catch (e: unknown) {
+      showToast(`Erro ao explicar: ${errorMessage(e)}`, false);
     } finally {
       setExplainingId(null);
     }
@@ -1048,8 +1292,8 @@ export default function ProfileIntelligencePage() {
         reuse_existing_master_rules: true,
       });
       setCreateDryRunResult(res as CreateProfileDryRun);
-    } catch (e: any) {
-      showToast(`Dry-run falhou: ${e.message}`, false);
+    } catch (e: unknown) {
+      showToast(`Dry-run falhou: ${errorMessage(e)}`, false);
       setCreateProfileSuggestion(null);
     } finally {
       setCreateDryRunLoading(false);
@@ -1060,7 +1304,7 @@ export default function ProfileIntelligencePage() {
     if (!createProfileSuggestion) return;
     setCreateProfileLoading(true);
     try {
-      const res = await apiPost(`/profile-intelligence/suggestions/${createProfileSuggestion.id}/create-profile`, {
+      const res = await apiPost<CreateProfileResult>(`/profile-intelligence/suggestions/${createProfileSuggestion.id}/create-profile`, {
         dry_run: false,
         mode: "SHADOW_ONLY",
         confirm_low_confidence: confirmLowConfidence || createProfileSuggestion.confidence_level !== "LOW",
@@ -1068,16 +1312,16 @@ export default function ProfileIntelligencePage() {
         create_missing_master_rules: true,
         reuse_existing_master_rules: true,
       });
-      setCreateProfileResult(res as CreateProfileResult);
-      showToast(`Profile criado: ${(res as any).profile_name}`);
+      setCreateProfileResult(res);
+      showToast(`Profile criado: ${res.profile_name}`);
       // Refresh suggestions list
       const d = await apiGet("/profile-intelligence/suggestions?limit=50");
       { const sArr = d?.suggestions ?? d; setSuggestions(Array.isArray(sArr) ? sArr : []); }
       // Refresh audit
       const a = await apiGet("/profile-intelligence/audit?limit=100");
       setAudit(a?.events || []);
-    } catch (e: any) {
-      showToast(`Erro ao criar profile: ${e.message}`, false);
+    } catch (e: unknown) {
+      showToast(`Erro ao criar profile: ${errorMessage(e)}`, false);
     } finally {
       setCreateProfileLoading(false);
     }
@@ -1091,8 +1335,8 @@ export default function ProfileIntelligencePage() {
       const response = await apiPut("/profile-intelligence/settings", settings);
       setSettings(response?.settings || settings);
       showToast("Configurações salvas.");
-    } catch (e: any) {
-      showToast(`Erro: ${e.message}`, false);
+    } catch (e: unknown) {
+      showToast(`Erro: ${errorMessage(e)}`, false);
     } finally {
       setSavingSettings(false);
     }
@@ -1149,7 +1393,7 @@ export default function ProfileIntelligencePage() {
 
   // ── Combination deduplication ────────────────────────────────────────────────
 
-  function buildComboCanonicalKey(rules_json: any[] | null | undefined): string {
+  function buildComboCanonicalKey(rules_json: RuleValue[] | null | undefined): string {
     if (!rules_json?.length) return "";
     return rules_json
       .map(r => {
@@ -1299,7 +1543,7 @@ export default function ProfileIntelligencePage() {
                   <div key={i} className="card p-3 space-y-1" title={card.hint}>
                     <div className="text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider">{card.label}</div>
                     <div className="text-[18px] font-bold text-[var(--text-primary)] truncate">{String(card.value)}</div>
-                    {(card as any).sub && <div className="text-[11px] text-[var(--text-secondary)]">{(card as any).sub}</div>}
+                    {"sub" in card && card.sub && <div className="text-[11px] text-[var(--text-secondary)]">{card.sub}</div>}
                   </div>
                 ))}
               </div>
@@ -1384,7 +1628,7 @@ export default function ProfileIntelligencePage() {
               </div>
             </div>
             {calV2Proposals.length > 0 && <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
-              {calV2Proposals.slice(0, 6).map((proposal: any) => <div key={proposal.id} className="min-w-[220px] rounded-lg border border-white/10 bg-white/[.025] p-3">
+              {calV2Proposals.slice(0, 6).map((proposal) => <div key={proposal.id} className="min-w-[220px] rounded-lg border border-white/10 bg-white/[.025] p-3">
                 <div className="truncate text-[11px] font-medium text-slate-200">{proposal.profile_name}</div>
                 <div className="mt-1 flex items-center justify-between font-mono text-[9px] uppercase tracking-wider"><span className="text-cyan-300">{proposal.state}</span><span className="text-slate-500">n={proposal.observed_trades ?? 0}</span></div>
               </div>)}
@@ -1401,7 +1645,7 @@ export default function ProfileIntelligencePage() {
                 </h3>
               </div>
               <div className="space-y-2">
-                {calValidatedVersions.map((v: any) => (
+                {calValidatedVersions.map((v) => (
                   <div key={v.id} className="flex items-center justify-between gap-3 bg-[var(--bg-elevated)] rounded p-3">
                     <div className="flex-1 min-w-0">
                       <div className="text-[12px] font-medium text-[var(--text-primary)] truncate">
@@ -1443,8 +1687,8 @@ export default function ProfileIntelligencePage() {
                 ) : (
                   <div className="text-[11px] text-red-400">
                     Safety checks falhando — revise antes de qualquer ação.
-                    {calSafety.checks?.filter((check: any) => !check.pass).map((check: any) => (
-                      <span key={check.name} className="ml-2 font-mono">[{check.name}={check.value}]</span>
+                    {calSafety.checks?.filter((check) => !check.pass).map((check) => (
+                      <span key={check.name} className="ml-2 font-mono">[{check.name}={safeVal(check.value)}]</span>
                     ))}
                   </div>
                 )}
@@ -1689,7 +1933,7 @@ export default function ProfileIntelligencePage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[var(--border-subtle)]">
-                      {calAdjustments.map((item: any) => (
+                      {calAdjustments.map((item) => (
                         <tr key={item.suggestion_id} className="hover:bg-[var(--bg-elevated)] transition-colors">
                           <td className="px-3 py-2 text-[var(--text-primary)] max-w-[120px] truncate" title={item.profile_name}>{item.profile_name || "—"}</td>
                           <td className="px-3 py-2 text-[var(--text-secondary)]">{item.target_section || "—"}</td>
@@ -1698,7 +1942,7 @@ export default function ProfileIntelligencePage() {
                             <span className="badge range text-[10px]">{item.suggestion_type}</span>
                           </td>
                           <td className="px-3 py-2">
-                            <span className={`font-mono ${item.confidence >= 0.8 ? "text-green-400" : item.confidence >= 0.6 ? "text-yellow-400" : "text-[var(--text-tertiary)]"}`}>
+                            <span className={`font-mono ${(item.confidence ?? 0) >= 0.8 ? "text-green-400" : (item.confidence ?? 0) >= 0.6 ? "text-yellow-400" : "text-[var(--text-tertiary)]"}`}>
                               {item.confidence != null ? item.confidence.toFixed(2) : "—"}
                             </span>
                           </td>
@@ -1754,7 +1998,7 @@ export default function ProfileIntelligencePage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[var(--border-subtle)]">
-                      {calIndicators.map((ind: any, i: number) => (
+                      {calIndicators.map((ind, i) => (
                         <tr key={`${ind.profile_id}-${ind.indicator_name}-${i}`} className="hover:bg-[var(--bg-elevated)] transition-colors">
                           <td className="px-3 py-2 text-[var(--text-primary)] max-w-[120px] truncate">{ind.profile_name || "—"}</td>
                           <td className="px-3 py-2 font-mono text-[11px]">{ind.indicator_name}</td>
@@ -1780,8 +2024,8 @@ export default function ProfileIntelligencePage() {
               {loadingTab ? <TableSkeleton /> : calTimeline.length === 0 ? (
                 <div className="p-8 text-center text-[12px] text-[var(--text-tertiary)]">Nenhum evento de calibração nos últimos 7 dias.</div>
               ) : (
-                calTimeline.map((ev: any) => {
-                  const changes: any[] = Array.isArray(ev.changes) ? ev.changes : [];
+                calTimeline.map((ev) => {
+                  const changes = Array.isArray(ev.changes) ? ev.changes : [];
                   const hasMeta = ev.shadow_validation_status || ev.mutation_applied != null;
                   return (
                     <div key={ev.id} className="p-3 hover:bg-[var(--bg-elevated)] transition-colors">
@@ -1802,7 +2046,7 @@ export default function ProfileIntelligencePage() {
                       {/* Granular diff changes */}
                       {changes.length > 0 && (
                         <div className="ml-3.5 mt-2 space-y-1">
-                          {changes.map((c: any, i: number) => (
+                          {changes.map((c, i) => (
                             <div key={i} className="flex items-center gap-1 font-mono text-[10px] bg-[var(--bg-input)] rounded px-2 py-1">
                               <span className="text-[var(--text-tertiary)]">{c.section}.{c.field}:</span>
                               <span className="text-red-400 line-through">{String(c.old_value ?? "—")}</span>
@@ -1832,7 +2076,7 @@ export default function ProfileIntelligencePage() {
               {loadingTab ? <TableSkeleton /> : calAiExplanations.length === 0 ? (
                 <div className="card p-8 text-center text-[12px] text-[var(--text-tertiary)]">Nenhum AI Review real disponível.</div>
               ) : (
-                calAiExplanations.map((rev: any) => (
+                calAiExplanations.map((rev) => (
                   <div key={rev.id} className="card p-4 space-y-3">
                     <div className="flex items-start justify-between gap-2 flex-wrap">
                       <div>
@@ -1859,11 +2103,11 @@ export default function ProfileIntelligencePage() {
                         </pre>
                       </div>
                     )}
-                    {rev.recommendations?.length > 0 && (
+                    {(rev.recommendations?.length ?? 0) > 0 && (
                       <div>
                         <div className="text-[10px] uppercase font-semibold text-[var(--text-tertiary)] mb-1">Recomendações</div>
                         <ul className="space-y-1">
-                          {rev.recommendations.map((rec: string, i: number) => (
+                          {rev.recommendations?.map((rec, i) => (
                             <li key={i} className="text-[11px] text-[var(--text-secondary)] flex gap-1.5">
                               <span className="text-[var(--accent-primary)] shrink-0">→</span>
                               {rec}
@@ -1872,9 +2116,9 @@ export default function ProfileIntelligencePage() {
                         </ul>
                       </div>
                     )}
-                    {rev.risk_flags?.length > 0 && (
+                    {(rev.risk_flags?.length ?? 0) > 0 && (
                       <div className="flex gap-2 flex-wrap">
-                        {rev.risk_flags.map((flag: string, i: number) => (
+                        {rev.risk_flags?.map((flag, i) => (
                           <span key={i} className="badge bearish text-[10px]">{flag}</span>
                         ))}
                       </div>
@@ -1990,11 +2234,11 @@ export default function ProfileIntelligencePage() {
                 </div>
               )}
 
-              {calDetail.indicator_performance?.length > 0 && (
+              {(calDetail.indicator_performance?.length ?? 0) > 0 && (
                 <div>
                   <div className="text-[10px] uppercase font-semibold text-[var(--text-tertiary)] mb-1">Performance de Indicadores (top 10)</div>
                   <div className="space-y-1">
-                    {calDetail.indicator_performance.slice(0, 10).map((ind: any, i: number) => (
+                    {calDetail.indicator_performance?.slice(0, 10).map((ind, i) => (
                       <div key={i} className="flex items-center gap-2 text-[11px] text-[var(--text-secondary)]">
                         <span className="font-mono text-[var(--text-primary)] w-36 truncate">{ind.indicator_name}</span>
                         <span className={winRateColor(ind.win_rate)}>{ind.win_rate != null ? `WR ${(ind.win_rate * 100).toFixed(0)}%` : "—"}</span>
@@ -2316,10 +2560,10 @@ export default function ProfileIntelligencePage() {
                                 Ver {group.length} IDs
                               </button>
                             ) : (
-                              <a href="/profiles" className="btn btn-secondary text-[10px] px-2 py-1 flex items-center gap-1 whitespace-nowrap w-fit">
+                              <Link href="/profiles" className="btn btn-secondary text-[10px] px-2 py-1 flex items-center gap-1 whitespace-nowrap w-fit">
                                 <ExternalLink className="w-3 h-3" />
                                 Profiles
-                              </a>
+                              </Link>
                             )}
                           </div>
                         </td>
@@ -2873,7 +3117,7 @@ export default function ProfileIntelligencePage() {
                     <input
                       type="number"
                       step={step}
-                      value={(settings as any)[key] ?? ""}
+                      value={settings[key as keyof PISettings] as number | undefined ?? ""}
                       onChange={e => setSettings(s => ({ ...s, [key]: parseFloat(e.target.value) || 0 }))}
                       className="w-full bg-[var(--bg-input)] border border-[var(--border-default)] rounded-lg px-3 py-2 text-[13px] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
                     />
@@ -2919,10 +3163,10 @@ export default function ProfileIntelligencePage() {
                       <div className="text-[11px] text-[var(--text-tertiary)]">{hint}</div>
                     </div>
                     <button
-                      onClick={() => setSettings(s => ({ ...s, [key]: !(s as any)[key] }))}
-                      className={`relative w-11 h-6 rounded-full transition-colors ${(settings as any)[key] ? "bg-[var(--accent-primary)]" : "bg-[var(--bg-hover)]"} border border-[var(--border-strong)]`}
+                      onClick={() => setSettings(s => ({ ...s, [key]: !s[key as keyof PISettings] }))}
+                      className={`relative w-11 h-6 rounded-full transition-colors ${settings[key as keyof PISettings] ? "bg-[var(--accent-primary)]" : "bg-[var(--bg-hover)]"} border border-[var(--border-strong)]`}
                     >
-                      <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${(settings as any)[key] ? "translate-x-5" : "translate-x-0"}`} />
+                      <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${settings[key as keyof PISettings] ? "translate-x-5" : "translate-x-0"}`} />
                     </button>
                   </div>
                 ))}
@@ -2944,7 +3188,7 @@ export default function ProfileIntelligencePage() {
                       : "border-yellow-500/25 bg-yellow-500/5";
                     const statusColor = isOp ? "text-emerald-400" : "text-yellow-400";
                     const flagKey = key === "lightgbm" ? "enable_lightgbm" : "enable_catboost";
-                    const enabled = !!(settings as any)[flagKey];
+                    const enabled = !!settings[flagKey];
                     const caps: [string, boolean][] = ch ? [
                       ["Treina", ch.can_train],
                       ["Infere", ch.can_infer],
@@ -2960,7 +3204,7 @@ export default function ProfileIntelligencePage() {
                           </div>
                           <button
                             type="button"
-                            onClick={() => setSettings(s => ({ ...s, [flagKey]: !(s as any)[flagKey] }))}
+                            onClick={() => setSettings(s => ({ ...s, [flagKey]: !s[flagKey] }))}
                             aria-label={`${label} ${enabled ? "habilitado" : "desabilitado"}`}
                             className={`relative w-11 h-6 rounded-full transition-colors ${enabled ? "bg-[var(--accent-primary)]" : "bg-[var(--bg-hover)]"} border border-[var(--border-strong)]`}
                           >
@@ -3088,8 +3332,8 @@ export default function ProfileIntelligencePage() {
                     {[
                       ["Trades (24h)", liveShadow.total_trades],
                       ["Profiles (24h)", liveShadow.total_profiles],
-                      ["Win Rate", liveShadow.win_rate != null && liveShadow.total_trades > 0 ? `${(liveShadow.win_rate * 100).toFixed(1)}%` : "—"],
-                      ["Avg PnL", liveShadow.avg_pnl_pct != null && liveShadow.total_trades > 0 ? `${liveShadow.avg_pnl_pct > 0 ? "+" : ""}${liveShadow.avg_pnl_pct.toFixed(3)}%` : "—"],
+                      ["Win Rate", liveShadow.win_rate != null && (liveShadow.total_trades ?? 0) > 0 ? `${(liveShadow.win_rate * 100).toFixed(1)}%` : "—"],
+                      ["Avg PnL", liveShadow.avg_pnl_pct != null && (liveShadow.total_trades ?? 0) > 0 ? `${liveShadow.avg_pnl_pct > 0 ? "+" : ""}${liveShadow.avg_pnl_pct.toFixed(3)}%` : "—"],
                       ...(liveShadow.total_trades === 0 && liveShadow.fallback_total_trades != null
                         ? [["Trades (7d)", liveShadow.fallback_total_trades], ["Profiles (7d)", liveShadow.fallback_total_profiles]]
                         : [["Negative Profiles", liveShadow.negative_profiles], ["Hard Negatives", liveShadow.hard_negative_patterns_detected]]
@@ -3149,10 +3393,10 @@ export default function ProfileIntelligencePage() {
                       {liveAiReview.analysis_context.sample?.source_breakdown && Object.keys(liveAiReview.analysis_context.sample.source_breakdown).length > 0 && (
                         <div className="pt-1 border-t border-purple-500/10">
                           <div className="text-purple-400 font-semibold mb-0.5">Source breakdown</div>
-                          {Object.entries(liveAiReview.analysis_context.sample.source_breakdown).map(([src, val]: [string, any]) => (
+                          {Object.entries(liveAiReview.analysis_context.sample.source_breakdown).map(([src, val]) => (
                             <div key={src} className="flex gap-1">
                               <span className="text-[var(--text-tertiary)] min-w-[90px]">{src}</span>
-                              <span className="text-[var(--text-secondary)]">{val?.trades ?? val} trades</span>
+                              <span className="text-[var(--text-secondary)]">{typeof val === "number" ? val : (val.trades ?? 0)} trades</span>
                             </div>
                           ))}
                         </div>
@@ -3171,10 +3415,10 @@ export default function ProfileIntelligencePage() {
                   {liveAiReview.summary && (
                     <div className="text-[11px] text-[var(--text-secondary)] bg-[var(--bg-input)] rounded p-2">{liveAiReview.summary}</div>
                   )}
-                  {liveAiReview.risk_flags?.length > 0 && (
+                  {(liveAiReview.risk_flags?.length ?? 0) > 0 && (
                     <div className="space-y-1">
                       <div className="text-[10px] font-semibold text-yellow-400 uppercase">Risk Flags</div>
-                      {liveAiReview.risk_flags.map((f: any, i: number) => (
+                      {liveAiReview.risk_flags?.map((f, i) => (
                         <div key={i} className="text-[11px] text-yellow-300 bg-yellow-500/5 rounded px-2 py-1">
                           {typeof f === "string" ? f : f.flag || JSON.stringify(f)}
                         </div>
@@ -3421,9 +3665,9 @@ export default function ProfileIntelligencePage() {
               <div>
                 <div className="text-[11px] font-semibold text-[var(--text-tertiary)] uppercase mb-2">Regras ({selectedCombination.rules_json.length})</div>
                 <div className="space-y-1">
-                  {selectedCombination.rules_json.map((r: any, i: number) => (
+                  {selectedCombination.rules_json.map((r, i) => (
                     <div key={i} className="font-mono text-[11px] bg-[var(--bg-input)] rounded px-3 py-1.5 text-[var(--text-primary)]">
-                      {r.indicator || r.field} {r.operator} {r.value ?? `[${r.range_min}, ${r.range_max}]`}
+                      {r.indicator || r.field} {r.operator} {r.value == null ? `[${r.range_min}, ${r.range_max}]` : safeVal(r.value)}
                     </div>
                   ))}
                 </div>
@@ -3642,9 +3886,9 @@ export default function ProfileIntelligencePage() {
                   </div>
                 )}
                 <div className="flex gap-2">
-                  <a href="/profiles" className="btn btn-primary text-[12px] flex items-center gap-1.5 flex-1 justify-center">
+                  <Link href="/profiles" className="btn btn-primary text-[12px] flex items-center gap-1.5 flex-1 justify-center">
                     <ExternalLink className="w-3.5 h-3.5" /> Abrir em Profiles
-                  </a>
+                  </Link>
                   <button
                     className="btn btn-secondary text-[12px] flex-1"
                     onClick={() => { setCreateProfileSuggestion(null); setCreateDryRunResult(null); setCreateProfileResult(null); }}
@@ -3690,9 +3934,9 @@ export default function ProfileIntelligencePage() {
                       Signals ({createDryRunResult.profile_payload.config.signals?.conditions?.length ?? 0})
                     </div>
                     <div className="space-y-1">
-                      {createDryRunResult.profile_payload.config.signals?.conditions?.map((c: any, i: number) => (
+                      {createDryRunResult.profile_payload.config.signals?.conditions?.map((c, i) => (
                         <div key={i} className="font-mono text-[10px] bg-[var(--bg-input)] rounded px-2 py-1.5 text-[var(--text-primary)]">
-                          {c.indicator || c.field} {c.operator} {c.value}
+                          {c.indicator || c.field} {c.operator} {safeVal(c.value)}
                         </div>
                       ))}
                     </div>
@@ -3706,9 +3950,9 @@ export default function ProfileIntelligencePage() {
                       Block Rules ({createDryRunResult.profile_payload.config.block_rules?.blocks?.length ?? 0})
                     </div>
                     <div className="space-y-1">
-                      {createDryRunResult.profile_payload.config.block_rules?.blocks?.map((b: any, i: number) => (
+                      {createDryRunResult.profile_payload.config.block_rules?.blocks?.map((b, i) => (
                         <div key={i} className="font-mono text-[10px] bg-[var(--bg-input)] rounded px-2 py-1.5 text-red-400">
-                          BLOCK: {b.indicator || b.field} {b.operator} {b.value}
+                          BLOCK: {b.indicator || b.field} {b.operator} {safeVal(b.value)}
                         </div>
                       ))}
                     </div>
@@ -3720,12 +3964,12 @@ export default function ProfileIntelligencePage() {
                   <div>
                     <div className="text-[11px] font-semibold text-[var(--text-tertiary)] uppercase mb-1">Scoring Rules Master</div>
                     <div className="space-y-1">
-                      {createDryRunResult.master_rules_to_create?.map((r: any) => (
+                      {createDryRunResult.master_rules_to_create?.map((r) => (
                         <div key={r.id} className="text-[10px] bg-green-500/10 border border-green-500/20 rounded px-2 py-1 text-green-400">
                           + NOVA: {r.name || r.indicator} ({r.points}pts)
                         </div>
                       ))}
-                      {createDryRunResult.master_rules_to_reuse?.map((r: any) => (
+                      {createDryRunResult.master_rules_to_reuse?.map((r) => (
                         <div key={r.id} className="text-[10px] bg-[var(--bg-elevated)] rounded px-2 py-1 text-[var(--text-secondary)]">
                           ↩ Reutilizar: {r.name || r.indicator}
                         </div>
@@ -3803,7 +4047,7 @@ export default function ProfileIntelligencePage() {
             <span>
               Existem <strong>{selectedDuplicateGroup.length} profiles com o mesmo nome</strong>.
               As métricas abaixo são individuais por UUID. Considere renomear ou consolidar
-              em <a href="/profiles" className="underline hover:opacity-80">/profiles</a>.
+              em <Link href="/profiles" className="underline hover:opacity-80">/profiles</Link>.
             </span>
           </div>
 
@@ -3845,13 +4089,13 @@ export default function ProfileIntelligencePage() {
           </div>
 
           <div className="pt-2 border-t border-[var(--border-subtle)]">
-            <a
+            <Link
               href="/profiles"
               className="btn btn-secondary text-[12px] flex items-center gap-1.5 w-full justify-center"
             >
               <ExternalLink className="w-3.5 h-3.5" />
               Gerenciar em /profiles
-            </a>
+            </Link>
           </div>
         </Drawer>
       )}
@@ -3997,7 +4241,7 @@ export default function ProfileIntelligencePage() {
                   <input
                     type="number"
                     step={step}
-                    value={(runPayload as any)[key]}
+                    value={runPayload[key as keyof typeof runPayload] as number}
                     onChange={e => setRunPayload(p => ({ ...p, [key]: parseInt(e.target.value) || 0 }))}
                     className="w-full bg-[var(--bg-input)] border border-[var(--border-default)] rounded-lg px-3 py-2 text-[13px] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
                   />
@@ -4017,7 +4261,7 @@ export default function ProfileIntelligencePage() {
                   <span className="text-[var(--text-secondary)]">{label}</span>
                   <input
                     type="checkbox"
-                    checked={(runPayload as any)[key]}
+                    checked={runPayload[key as keyof typeof runPayload] as boolean}
                     onChange={e => setRunPayload(p => ({ ...p, [key]: e.target.checked }))}
                     className="w-4 h-4 rounded"
                   />

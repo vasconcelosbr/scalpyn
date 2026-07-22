@@ -9,6 +9,7 @@ from sqlalchemy.orm import declarative_base
 from sqlalchemy.pool import NullPool
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 from fastapi import HTTPException, status
+from fastapi.exceptions import RequestValidationError
 from .config import settings
 
 logger = logging.getLogger(__name__)
@@ -469,7 +470,7 @@ async def get_db():
                 # below for status-code mapping.
                 await _safe_rollback(session)
                 raise
-    except HTTPException:
+    except (HTTPException, RequestValidationError):
         # Routes raise these intentionally — propagate as-is.
         raise
     except asyncio.CancelledError:

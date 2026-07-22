@@ -4,6 +4,7 @@ from __future__ import annotations
 from importlib.util import find_spec
 import json
 import logging
+import os
 from typing import Any, Dict, Optional
 from uuid import UUID
 
@@ -62,6 +63,11 @@ _MANUAL_CONFLICTS = {
     "base_version_changed", "preview_hash_mismatch", "stale_profile_version",
     "rollback_current_version_changed", "profile_and_champion_config_mismatch",
 }
+
+
+def _manual_apply_enabled() -> bool:
+    """Fail closed: only the literal ``true`` enables the mutation boundary."""
+    return os.getenv("PI_MANUAL_APPLY_ENABLED", "false").strip().lower() == "true"
 
 
 def _manual_http_error(exc: ValueError) -> HTTPException:
@@ -142,6 +148,27 @@ def _ml_challenger_status() -> Dict[str, Dict[str, Any]]:
 
 
 # ── Manual, versioned adjustments ────────────────────────────────────────────
+
+@router.get("/manual-adjustments/capabilities")
+async def manual_adjustment_capabilities(
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    enabled = _manual_apply_enabled()
+    return {
+        "manual_read_enabled": True,
+        "manual_draft_enabled": True,
+        "manual_preview_enabled": True,
+        "manual_apply_enabled": enabled,
+        "manual_apply_reason": None if enabled else "PI_MANUAL_APPLY_ENABLED=false",
+        "autopilot_enabled": False,
+        "live_activation_enabled": False,
+        "blocking_reasons": [] if enabled else ["PI_MANUAL_APPLY_ENABLED=false"],
+        "reject_enabled": True,
+        # Rollback remains independent as the emergency exit for any
+        # adjustment applied before a later feature-flag change.
+        "rollback_enabled": True,
+    }
+
 
 @router.get("/manual-adjustments/eligible-profiles")
 async def list_manual_adjustment_profiles(
@@ -235,6 +262,11 @@ async def approve_and_apply_manual_adjustment(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ) -> Dict[str, Any]:
+    if not _manual_apply_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="manual_apply_disabled: PI_MANUAL_APPLY_ENABLED=false",
+        )
     try:
         result = await profile_intelligence_manual_service.approve_and_apply(
             db, user_id, adjustment_id, preview_hash=request.preview_hash,
