@@ -4,8 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CheckCircle, RotateCcw, ShieldCheck } from "lucide-react";
 import { apiGet, apiPost } from "@/lib/api";
 
-type IndicatorEvidence = {
-  id: string; indicator: string; bucket_label: string; total_cases: number;
+export type IndicatorEvidence = {
+  id?: string; indicator: string; bucket_label: string; total_cases: number;
   wins?: number; losses?: number; role_detected?: string | null;
   range_min?: number | null; range_max?: number | null; value_text?: string | null;
   validation_status?: string | null; actionability_status?: string | null;
@@ -45,6 +45,15 @@ const ACTIONS = [
   "ADD_SCORE_BONUS", "ADD_SCORE_PENALTY", "UPDATE_SCORE_WEIGHT", "UPDATE_SCORE_THRESHOLD",
   "ADD_BLOCK_RULE", "UPDATE_BLOCK_RULE", "REMOVE_BLOCK_RULE", "OBSERVE_ONLY",
 ] as const;
+type ManualAction = typeof ACTIONS[number];
+export type ManualAdjustmentPrefill = {
+  profileId?: string;
+  action?: ManualAction;
+  path?: string;
+  currentValue?: unknown;
+  proposedValue?: unknown;
+  suggestedJustification?: string;
+};
 
 function defaultDraft(stat: IndicatorEvidence, action: string) {
   const stableId = `pi-manual-${stat.id}`;
@@ -83,20 +92,27 @@ function parseJson(value: string, label: string) {
   try { return JSON.parse(value); } catch { throw new Error(`${label} precisa ser JSON válido.`); }
 }
 
-export default function ManualAdjustmentPanel({ stat, onClose }: { stat: IndicatorEvidence; onClose: () => void }) {
-  const defaultAction = stat.role_detected === "losing_indicator" ? "ADD_SCORE_PENALTY" : "ADD_SIGNAL_CONDITION";
+export default function ManualAdjustmentPanel({ stat, onClose, prefill }: { stat: IndicatorEvidence; onClose: () => void; prefill?: ManualAdjustmentPrefill }) {
+  const defaultAction = prefill?.action || (stat.role_detected === "losing_indicator" ? "ADD_SCORE_PENALTY" : "ADD_SIGNAL_CONDITION");
   const [action, setAction] = useState(defaultAction);
-  const initial = useMemo(() => defaultDraft(stat, action), [stat, action]);
+  const initial = useMemo(() => {
+    const fallback = defaultDraft(stat, action);
+    return {
+      path: prefill?.path ?? fallback.path,
+      current: prefill && "currentValue" in prefill ? JSON.stringify(prefill.currentValue, null, 2) : fallback.current,
+      proposed: prefill && "proposedValue" in prefill ? JSON.stringify(prefill.proposedValue, null, 2) : fallback.proposed,
+    };
+  }, [stat, action, prefill]);
   const [path, setPath] = useState(initial.path);
   const [currentValue, setCurrentValue] = useState(initial.current);
   const [proposedValue, setProposedValue] = useState(initial.proposed);
   const [profiles, setProfiles] = useState<EligibleProfile[]>([]);
   const [profileId, setProfileId] = useState("");
   const [record, setRecord] = useState<ManualRecord | null>(null);
-  const [justification, setJustification] = useState("");
+  const [justification, setJustification] = useState(prefill?.suggestedJustification || "");
   const [riskConfirmed, setRiskConfirmed] = useState(false);
   const [rollbackReason, setRollbackReason] = useState("");
-  const [idempotencyKey] = useState(() => `pi-manual:${stat.id}:${crypto.randomUUID()}`);
+  const [idempotencyKey] = useState(() => `pi-manual:${stat.id || "score-intelligence"}:${crypto.randomUUID()}`);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<ManualCapabilities | null>(null);
@@ -134,13 +150,13 @@ export default function ManualAdjustmentPanel({ stat, onClose }: { stat: Indicat
       .then(([result, capabilityResult]) => {
         const associated = new Set((stat.associated_profiles || []).map(profile => profile.id));
         const ordered = [...(result.items || [])].sort((a, b) => Number(associated.has(b.id)) - Number(associated.has(a.id)));
-        setProfiles(ordered); setProfileId(ordered[0]?.id || "");
+        setProfiles(ordered); setProfileId((prefill?.profileId && ordered.some(profile => profile.id === prefill.profileId)) ? prefill.profileId : (ordered[0]?.id || ""));
         setCapabilities(capabilityResult);
       })
       .catch(value => setError(value instanceof Error ? value.message : String(value)));
-  }, [stat]);
+  }, [stat, prefill?.profileId]);
 
-  const changeAction = (nextAction: string) => {
+  const changeAction = (nextAction: ManualAction) => {
     const next = defaultDraft(stat, nextAction);
     setAction(nextAction); setPath(next.path);
     setCurrentValue(next.current); setProposedValue(next.proposed);
@@ -155,7 +171,8 @@ export default function ManualAdjustmentPanel({ stat, onClose }: { stat: Indicat
     profile_id: profileId, action_type: action, target_path: action === "OBSERVE_ONLY" ? null : path,
     current_value: action === "OBSERVE_ONLY" ? null : parseJson(currentValue, "Valor atual"),
     proposed_value: action === "OBSERVE_ONLY" ? null : parseJson(proposedValue, "Valor proposto"),
-    run_id: typeof stat.evidence_json?.run_id === "string" ? stat.evidence_json.run_id : null, indicator_stat_id: stat.id,
+    run_id: typeof stat.evidence_json?.run_id === "string" ? stat.evidence_json.run_id : null,
+    indicator_stat_id: stat.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(stat.id) ? stat.id : null,
     evidence_json: { indicator: stat.indicator, bucket: stat.bucket_label, cases: stat.total_cases, wins: stat.wins, losses: stat.losses, source: stat.evidence_json || {} },
     statistical_warnings: warnings,
     idempotency_key: idempotencyKey,
@@ -184,7 +201,7 @@ export default function ManualAdjustmentPanel({ stat, onClose }: { stat: Indicat
     </div>}
     {!record && <>
       <label className="block"><span className="mb-1 block text-[10px] uppercase text-[var(--text-tertiary)]">Profile L3 existente</span><select className="input w-full" value={profileId} onChange={event => setProfileId(event.target.value)}>{profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name} · v{profile.version_number}</option>)}</select></label>
-      <label className="block"><span className="mb-1 block text-[10px] uppercase text-[var(--text-tertiary)]">Ação manual</span><select className="input w-full" value={action} onChange={event => changeAction(event.target.value)}>{ACTIONS.map(value => <option key={value}>{value}</option>)}</select></label>
+      <label className="block"><span className="mb-1 block text-[10px] uppercase text-[var(--text-tertiary)]">Ação manual</span><select className="input w-full" value={action} onChange={event => changeAction(event.target.value as ManualAction)}>{ACTIONS.map(value => <option key={value}>{value}</option>)}</select></label>
       {action !== "OBSERVE_ONLY" && <>
         <label className="block"><span className="mb-1 block text-[10px] uppercase text-[var(--text-tertiary)]">Path estável (sem índices)</span><input className="input w-full font-mono" value={path} onChange={event => setPath(event.target.value)} placeholder="/signals/conditions/by_id/.../value" /></label>
         <div className="grid gap-3 md:grid-cols-2">

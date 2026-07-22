@@ -113,6 +113,17 @@ class ManualAdjustmentRollbackRequest(BaseModel):
     reason: str = Field(min_length=10, max_length=4000)
 
 
+class ScoreThresholdSimulationRequest(BaseModel):
+    score: str
+    threshold: float
+    lookback_days: int = Field(default=30, ge=7, le=365)
+    source: Optional[str] = None
+    profile_id: Optional[UUID] = None
+    profile_version_id: Optional[UUID] = None
+    score_engine_version_id: Optional[UUID] = None
+    timeframe: Optional[str] = Field(default=None, max_length=16)
+
+
 class AutopilotSettingsUpdate(BaseModel):
     enabled: bool
     settings: Optional[Dict[str, Any]] = None

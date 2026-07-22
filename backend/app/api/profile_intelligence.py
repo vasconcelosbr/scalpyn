@@ -41,6 +41,7 @@ from ..schemas.profile_intelligence import (
     ManualAdjustmentUpdateRequest,
     ManualAdjustmentApprovalRequest,
     ManualAdjustmentRollbackRequest,
+    ScoreThresholdSimulationRequest,
 )
 from ..services.profile_intelligence_audit_service import log_pi_event
 from ..services.profile_intelligence_manual_service import (
@@ -52,6 +53,9 @@ from ..services.profile_intelligence_contract import (
     LABEL_VERSION,
     official_params,
     official_where,
+)
+from ..services.profile_score_intelligence_service import (
+    profile_score_intelligence_service,
 )
 
 logger = logging.getLogger(__name__)
@@ -318,6 +322,115 @@ async def rollback_manual_adjustment(
 
 
 # ── 1. Overview ──────────────────────────────────────────────────────────────
+
+# Score Intelligence: read-only, point-in-time analytics.
+async def _score_intelligence_analysis(
+    *, db: AsyncSession, user_id: UUID, lookback_days: int,
+    source: str | None, profile_id: UUID | None,
+    profile_version_id: UUID | None, score_engine_version_id: UUID | None,
+    timeframe: str | None,
+) -> Dict[str, Any]:
+    try:
+        return await profile_score_intelligence_service.analyze(
+            db, user_id=user_id, lookback_days=lookback_days, source=source,
+            profile_id=profile_id, profile_version_id=profile_version_id,
+            score_engine_version_id=score_engine_version_id, timeframe=timeframe,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/score-intelligence/overview")
+async def get_score_intelligence_overview(
+    lookback_days: int = Query(default=30, ge=7, le=365),
+    source: str | None = Query(default=None),
+    profile_id: UUID | None = Query(default=None),
+    profile_version_id: UUID | None = Query(default=None),
+    score_engine_version_id: UUID | None = Query(default=None),
+    timeframe: str | None = Query(default=None, max_length=16),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    return await _score_intelligence_analysis(
+        db=db, user_id=user_id, lookback_days=lookback_days, source=source,
+        profile_id=profile_id, profile_version_id=profile_version_id,
+        score_engine_version_id=score_engine_version_id, timeframe=timeframe,
+    )
+
+
+@router.get("/score-intelligence/threshold-analysis")
+async def get_score_threshold_analysis(
+    lookback_days: int = Query(default=30, ge=7, le=365),
+    source: str | None = Query(default=None),
+    profile_id: UUID | None = Query(default=None),
+    profile_version_id: UUID | None = Query(default=None),
+    score_engine_version_id: UUID | None = Query(default=None),
+    timeframe: str | None = Query(default=None, max_length=16),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    analysis = await _score_intelligence_analysis(
+        db=db, user_id=user_id, lookback_days=lookback_days, source=source,
+        profile_id=profile_id, profile_version_id=profile_version_id,
+        score_engine_version_id=score_engine_version_id, timeframe=timeframe,
+    )
+    return {
+        "status": analysis.get("status"), "read_only": True,
+        "scope": analysis.get("scope"), "current_thresholds": analysis.get("current_thresholds", []),
+        "recommendation": analysis.get("recommendation"), "association_not_causation": True,
+    }
+
+
+@router.get("/score-intelligence/distribution")
+async def get_score_distribution(
+    score: str = Query(...), bucket_mode: str = Query(default="fixed"),
+    lookback_days: int = Query(default=30, ge=7, le=365),
+    source: str | None = Query(default=None), profile_id: UUID | None = Query(default=None),
+    profile_version_id: UUID | None = Query(default=None),
+    score_engine_version_id: UUID | None = Query(default=None),
+    timeframe: str | None = Query(default=None, max_length=16),
+    db: AsyncSession = Depends(get_db), user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    try:
+        return await profile_score_intelligence_service.get_distribution(
+            db, user_id=user_id, score=score, bucket_mode=bucket_mode,
+            lookback_days=lookback_days, source=source, profile_id=profile_id,
+            profile_version_id=profile_version_id,
+            score_engine_version_id=score_engine_version_id, timeframe=timeframe,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/score-intelligence/version-comparison")
+async def get_score_version_comparison(
+    lookback_days: int = Query(default=90, ge=7, le=365),
+    source: str | None = Query(default=None), profile_id: UUID | None = Query(default=None),
+    db: AsyncSession = Depends(get_db), user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    try:
+        return await profile_score_intelligence_service.version_comparison(
+            db, user_id=user_id, lookback_days=lookback_days, source=source, profile_id=profile_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/score-intelligence/simulate-threshold")
+async def simulate_score_threshold(
+    request: ScoreThresholdSimulationRequest,
+    db: AsyncSession = Depends(get_db), user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    try:
+        return await profile_score_intelligence_service.simulate(
+            db, user_id=user_id, score=request.score, threshold=request.threshold,
+            lookback_days=request.lookback_days, source=request.source,
+            profile_id=request.profile_id, profile_version_id=request.profile_version_id,
+            score_engine_version_id=request.score_engine_version_id, timeframe=request.timeframe,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
 
 @router.get("/overview")
 async def get_overview(

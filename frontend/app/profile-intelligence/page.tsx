@@ -9,7 +9,8 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import { apiGet, apiPost, apiPut } from "@/lib/api";
-import ManualAdjustmentPanel from "./ManualAdjustmentPanel";
+import ManualAdjustmentPanel, { type IndicatorEvidence as ManualIndicatorEvidence, type ManualAdjustmentPrefill } from "./ManualAdjustmentPanel";
+import ScoreIntelligencePanel, { ScoreIntelligenceOverviewCard, type ScoreOverview } from "./ScoreIntelligencePanel";
 
 type JsonPrimitive = string | number | boolean | null;
 type JsonValue = JsonPrimitive | JsonObject | JsonValue[] | undefined;
@@ -771,7 +772,7 @@ function ChampionScoreBar({ score }: { score: number | null | undefined }) {
   );
 }
 
-const TABS = ["Overview", "Live Engine", "Calibration Evolution", "Auto-Pilot", "Profiles", "Indicators", "Combinations", "Suggestions", "Audit", "Settings"] as const;
+const TABS = ["Overview", "Live Engine", "Calibration Evolution", "Auto-Pilot", "Profiles", "Score Intelligence", "Indicators", "Combinations", "Suggestions", "Audit", "Settings"] as const;
 type Tab = typeof TABS[number];
 
 const DEFAULT_RUN_PAYLOAD = {
@@ -792,6 +793,7 @@ export default function ProfileIntelligencePage() {
 
   // Data state
   const [overview, setOverview] = useState<PIOverview | null>(null);
+  const [scoreOverview, setScoreOverview] = useState<ScoreOverview | null>(null);
   const [runs, setRuns] = useState<PIRun[]>([]);
   const [profiles, setProfiles] = useState<ProfileRanking[]>([]);
   const [winners, setWinners] = useState<IndicatorStat[]>([]);
@@ -848,6 +850,7 @@ export default function ProfileIntelligencePage() {
   const [indicatorSubTab, setIndicatorSubTab] = useState<"winners" | "losers">("winners");
   const [expandedIndicator, setExpandedIndicator] = useState<string | null>(null);
   const [selectedIndicatorAdjustment, setSelectedIndicatorAdjustment] = useState<IndicatorStat | null>(null);
+  const [scoreManualDraft, setScoreManualDraft] = useState<{ stat: ManualIndicatorEvidence; prefill: ManualAdjustmentPrefill } | null>(null);
   const [indicatorAdjustmentProfileIds, setIndicatorAdjustmentProfileIds] = useState<string[]>([]);
   const [indicatorAdjustmentLoading, setIndicatorAdjustmentLoading] = useState(false);
   const [selectedCombination, setSelectedCombination] = useState<Combination | null>(null);
@@ -910,14 +913,16 @@ export default function ProfileIntelligencePage() {
   const loadOverview = useCallback(async () => {
     setLoadingOverview(true);
     try {
-      const [ov, r, ap] = await Promise.all([
+      const [ov, r, ap, score] = await Promise.all([
         apiGet("/profile-intelligence/overview").catch(() => apiGet("/profile-intelligence/")),
         apiGet("/profile-intelligence/runs").catch(() => ({ runs: [] })),
         apiGet("/profile-intelligence/autopilot").catch(() => null),
+        apiGet<ScoreOverview>("/profile-intelligence/score-intelligence/overview?lookback_days=30").catch(() => null),
       ]);
       setOverview(ov || {});
       const runsArr = r?.runs ?? r; setRuns(Array.isArray(runsArr) ? runsArr : []);
       setAutopilot(ap);
+      setScoreOverview(score);
     } catch (e) {
       console.error(e);
     } finally {
@@ -980,6 +985,8 @@ export default function ProfileIntelligencePage() {
       } else if (tab === "Profiles") {
         const d = await apiGet("/profile-intelligence/profiles/ranking?lookback_days=60&limit=30");
         const profArr = d?.profiles ?? d; setProfiles(Array.isArray(profArr) ? profArr : []);
+      } else if (tab === "Score Intelligence") {
+        // The dedicated component owns its exact versioned scope and requests.
       } else if (tab === "Indicators") {
         const [w, l] = await Promise.all([
           apiGet("/profile-intelligence/indicators/top-winners?limit=50"),
@@ -1547,6 +1554,8 @@ export default function ProfileIntelligencePage() {
                   </div>
                 ))}
               </div>
+
+              <ScoreIntelligenceOverviewCard data={scoreOverview} onOpen={() => setActiveTab("Score Intelligence")} />
 
               {/* Runs history */}
               <div className="card">
@@ -2578,6 +2587,13 @@ export default function ProfileIntelligencePage() {
       )}
 
       {/* ── TAB: Indicators ────────────────────────────────────────────────────── */}
+      {activeTab === "Score Intelligence" && (
+        <ScoreIntelligencePanel
+          initialData={scoreOverview}
+          onCreateManual={(stat, prefill) => setScoreManualDraft({ stat, prefill })}
+        />
+      )}
+
       {activeTab === "Indicators" && (
         <div className="space-y-4">
           <div className="flex gap-2">
@@ -4098,6 +4114,16 @@ export default function ProfileIntelligencePage() {
             </Link>
           </div>
         </Drawer>
+      )}
+
+      {scoreManualDraft && (
+        <Modal title="Ajuste manual a partir do Score Intelligence" onClose={() => setScoreManualDraft(null)}>
+          <ManualAdjustmentPanel
+            stat={scoreManualDraft.stat}
+            prefill={scoreManualDraft.prefill}
+            onClose={() => setScoreManualDraft(null)}
+          />
+        </Modal>
       )}
 
       {selectedIndicatorAdjustment && (
