@@ -11,7 +11,7 @@ test("Score Intelligence exposes card, expanded view, filters, simulator and sta
   for (const token of [
     "Score Intelligence — TP × SL", "TP × SL × TIMEOUT", "Distribuição por faixas",
     "Simulador read-only", "Comparação por versão", "Evidência técnica",
-    "LOADING", "EMPTY", "INSUFFICIENT_SAMPLE", "ERROR",
+    "LOADING", "EMPTY", "INSUFFICIENT_SAMPLE", "PARTIAL_COVERAGE", "ERROR",
   ]) assert.ok(panel.includes(token), token);
   assert.ok(page.includes('"Score Intelligence"'));
   assert.ok(page.includes("ScoreIntelligenceOverviewCard"));
@@ -32,5 +32,6 @@ test("UI labels point-in-time, non-causality, missing coverage and ML isolation"
   for (const token of [
     "sem recálculo histórico", "Associação observacional", "Null permanece ausente",
     "Point-in-time: preservado", "ML mutation: nenhuma", "não persistidos no ML",
+    "SL P25", "SL P90", "Effect size", "Diferença vs threshold atual",
   ]) assert.ok(panel.includes(token), token);
 });

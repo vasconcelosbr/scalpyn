@@ -263,6 +263,17 @@ class ProfileIntelligenceManualService:
         )
         db.add(row); await db.flush()
         await _event(db, row, "MANUAL_ADJUSTMENT_CREATED", {"base_profile_version_id": str(version["version_id"])})
+        evidence = dict(payload.get("evidence_json") or {})
+        if evidence.get("dataset") == "pi-native-point-in-time-v1":
+            await _event(db, row, "MANUAL_ADJUSTMENT_DRAFTED_FROM_SCORE_INTELLIGENCE", {
+                "profile_id": str(row.profile_id),
+                "profile_version_id": str(evidence.get("profile_version_id") or version["version_id"]),
+                "score_engine_version_id": str(evidence.get("score_engine_version_id") or ""),
+                "source": evidence.get("source"),
+                "score": evidence.get("recommendation", {}).get("score"),
+                "current_threshold": evidence.get("recommendation", {}).get("current_threshold"),
+                "simulated_threshold": evidence.get("recommendation", {}).get("proposed_threshold"),
+            })
         await db.flush()
         return _public(row)
 

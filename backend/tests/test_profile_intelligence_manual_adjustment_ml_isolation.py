@@ -41,3 +41,9 @@ def test_persisted_safety_flags_are_fail_closed():
     assert table.c.autopilot_applied.default.arg is False
     assert table.c.ml_training_mutated.default.arg is False
     assert table.c.historical_dataset_mutated.default.arg is False
+
+
+def test_score_intelligence_drafts_get_a_specific_analytic_origin_event():
+    source = SERVICE.read_text(encoding="utf-8")
+    assert "pi-native-point-in-time-v1" in source
+    assert "MANUAL_ADJUSTMENT_DRAFTED_FROM_SCORE_INTELLIGENCE" in source

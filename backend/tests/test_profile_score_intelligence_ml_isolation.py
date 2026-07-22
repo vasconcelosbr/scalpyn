@@ -4,6 +4,7 @@ import pytest
 
 from app.services.profile_score_intelligence_service import (
     ScorePolicy,
+    _difference,
     distribution,
     score_statistics,
     threshold_metrics,
@@ -58,6 +59,11 @@ def test_threshold_simulator_is_read_only_math_with_timeout_and_volume_delta():
     assert result["eliminated_trades"] == 3
     assert result["volume_reduction"] == pytest.approx(0.6)
     assert result["passed"]["avg_pnl_pct"] == 1.5
+    assert result["passed"]["avg_mae_pct"] == pytest.approx(-0.15)
+    assert result["passed"]["avg_mfe_pct"] == pytest.approx(1.7)
+    assert result["passed"]["avg_holding_seconds"] == 150
+    assert _difference(0.65, 0.60) == pytest.approx(0.05)
+    assert _difference(None, 0.60) is None
 
 
 def test_buckets_are_deterministic_and_not_persisted():

@@ -480,6 +480,7 @@ class ProfileScoreIntelligenceService:
             "cutoff_at": cutoff, "lookback_days": lookback_days, "scope": scope_public, "available_scopes": public_scopes,
             "closed_trades": len(rows), "scoped_total": scoped_total, "open_not_matured_excluded": True, "truncated": truncated,
             "outcomes": dict(counts), "diversity": diversity, "policy": policy.__dict__, "gates": gates,
+            "outcome_metrics": _outcome_metrics(rows),
             "score_statistics": statistics, "current_thresholds": threshold_rows, "recommendation": recommendation,
             "summary": {
                 "strongest_separation": strongest, "weakest_separation": weakest,
@@ -500,8 +501,28 @@ class ProfileScoreIntelligenceService:
         cutoff = datetime.fromisoformat(str(analysis["cutoff_at"]))
         rows, _, _ = await self._rows(db, user_id=user_id, scope=scope, window_start=cutoff - timedelta(days=int(analysis["lookback_days"])), cutoff=cutoff)
         result = threshold_metrics(rows, score, threshold)
+        current = next(
+            (item for item in analysis.get("current_thresholds", []) if item.get("score") == score and item.get("name") == "buy"),
+            None,
+        )
+        difference_vs_current = None
+        if current:
+            current_passed = current.get("passed") or {}
+            simulated_passed = result.get("passed") or {}
+            difference_vs_current = {
+                "threshold_delta": threshold - float(current["threshold"]),
+                "passed_trades_delta": int(simulated_passed.get("trades") or 0) - int(current_passed.get("trades") or 0),
+                "win_rate_delta": _difference(simulated_passed.get("win_rate"), current_passed.get("win_rate")),
+                "avg_pnl_pct_delta": _difference(simulated_passed.get("avg_pnl_pct"), current_passed.get("avg_pnl_pct")),
+                "volume_reduction_delta": _difference(result.get("volume_reduction"), current.get("volume_reduction")),
+            }
         logger.info("SCORE_THRESHOLD_SIMULATED user=%s profile=%s profile_version=%s score_engine_version=%s source=%s score=%s threshold=%s", user_id, scope["profile_id"], scope["profile_version_id"], scope["score_engine_version_id"], scope["source"], score, threshold)
-        return _public_numbers({"status": analysis["status"], "read_only": True, "scope": scope, "simulation": result, "created_candidate": False, "triggered_job": False, "ml_mutated": False})
+        return _public_numbers({
+            "status": analysis["status"], "read_only": True, "scope": scope,
+            "simulation": result, "current_threshold": current,
+            "difference_vs_current": difference_vs_current,
+            "created_candidate": False, "triggered_job": False, "ml_mutated": False,
+        })
 
     async def get_distribution(self, db: AsyncSession, *, user_id: UUID, score: str, bucket_mode: str = "fixed", **filters: Any) -> dict[str, Any]:
         analysis = await self.analyze(db, user_id=user_id, **filters)
@@ -538,9 +559,19 @@ class ProfileScoreIntelligenceService:
 
 
 def _outcome_metrics_from_analysis(analysis: Mapping[str, Any]) -> dict[str, Any]:
+    metrics = dict(analysis.get("outcome_metrics") or {})
+    if metrics:
+        return metrics
     outcomes = analysis.get("outcomes") or {}
     closed = int(analysis.get("closed_trades") or 0)
     return {"trades": closed, "tp": outcomes.get("TP_HIT", 0), "sl": outcomes.get("SL_HIT", 0), "timeout": outcomes.get("TIMEOUT", 0), "win_rate": outcomes.get("TP_HIT", 0) / closed if closed else None}
+
+
+def _difference(left: Any, right: Any) -> float | None:
+    left_value, right_value = _finite(left), _finite(right)
+    if left_value is None or right_value is None:
+        return None
+    return left_value - right_value
 
 
 profile_score_intelligence_service = ProfileScoreIntelligenceService()
