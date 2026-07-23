@@ -770,7 +770,7 @@ class ProfileScoreOptimizationService:
             for attempt in range(2):
                 response = await client.messages.create(
                     model=model,
-                    max_tokens=8000,
+                    max_tokens=16000,
                     system=prompt,
                     messages=messages,
                     output_config={

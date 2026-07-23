@@ -195,8 +195,13 @@ def test_ai_guard_rejects_cross_profile_candidate_selection():
         ]
     }
     response = _valid_ai_response(payload)
-    response["profile_recommendations"][1] = {
-        **response["profile_recommendations"][1],
+    profile_b_index = next(
+        index
+        for index, item in enumerate(response["profile_recommendations"])
+        if item["profile_id"] == profile_b
+    )
+    response["profile_recommendations"][profile_b_index] = {
+        **response["profile_recommendations"][profile_b_index],
         "selected_candidate_ids": ["candidate-a"],
     }
     with pytest.raises(ValueError, match="cross_profile"):

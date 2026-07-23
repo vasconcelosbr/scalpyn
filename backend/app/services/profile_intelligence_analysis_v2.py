@@ -201,6 +201,13 @@ entre discovery e validation, suficiência de amostra, concentração, simulaç�
 redundância e conflito. Use confidence apenas como ALTA, MEDIA ou BAIXA e
 priority apenas como ALTA, MEDIA ou BAIXA.
 
+Seja conciso para cobrir todos os profiles sem truncamento: cada conclusão do
+resumo deve ter uma frase; cada campo de data_quality, cohort_analysis e
+confusion_matrix_analysis deve ter no máximo três itens; cada profile deve ter
+um ou dois itens em technical_reading, exatamente um item em limitations e uma
+recomendação de uma frase. Inclua redundancy_analysis somente quando houver
+overlap material no payload. next_steps deve ter entre quatro e oito itens.
+
 Os números e tabelas verificadas serão incorporados deterministicamente pelo
 sistema. Na narrativa, cite um número somente quando ele existir literalmente
 no payload (percentuais podem apenas converter taxa 0..1 para 0..100). Não
