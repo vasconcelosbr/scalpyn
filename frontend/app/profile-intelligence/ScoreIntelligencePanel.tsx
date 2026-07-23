@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AlertTriangle, BarChart3, Brain, Download, Eye, Loader2, Play, ShieldCheck, SlidersHorizontal } from "lucide-react";
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { apiGet, apiPost } from "@/lib/api";
@@ -50,6 +50,35 @@ type SimulationResponse = {
 };
 type VersionComparison = { status: string; current?: { scope: Scope; metrics: Record<string, Num> }; previous?: { scope: Scope; metrics: Record<string, Num> }; allowed_manual_states?: string[] };
 type GlobalMetric = { closed: number; tp: number; sl: number; timeout: number; tp_rate: Num; sl_rate: Num; avg_pnl_pct: Num };
+type VerifiedCandidate = {
+  candidate_id: string; profile_id: string; profile_name?: string; action_type?: string;
+  target_path?: string; proposed_value?: Record<string, unknown>; sources?: string[];
+  validation?: { status?: string; sl_rate_delta_present_minus_absent?: Num; present?: GlobalMetric; absent?: GlobalMetric };
+};
+type TechnicalProfileRecommendation = {
+  profile_id: string; technical_reading: string[]; limitations: string[];
+  recommendation: string; confidence: "ALTA" | "MEDIA" | "BAIXA";
+  priority: "ALTA" | "MEDIA" | "BAIXA"; selected_candidate_ids: string[];
+};
+type TechnicalExecutiveReport = {
+  report_schema_version: "pi-technical-report-v1"; executive_summary: string[];
+  data_quality: { integrity_assessment: string[]; limitations: string[] };
+  cohort_analysis: { l3: string[]; l3_lab: string[]; approved_combined: string[]; l3_rejected: string[] };
+  confusion_matrix_analysis: { interpretation: string[]; operational_impact: string[] };
+  profile_recommendations: TechnicalProfileRecommendation[];
+  redundancy_analysis: Array<{ profile_id: string; candidate_ids: string[]; diagnosis: string; recommendation: string }>;
+  prioritization: { high: string[]; medium: string[]; low: string[]; rationale: string[] };
+  next_steps: string[]; read_only_statement: string; governance_statement: string;
+  verified_evidence: {
+    cutoff_at?: string; lookback_days?: number; row_count?: number; deduplicated_row_count?: number;
+    deduplication?: { duplicate_rows?: number; missing_canonical_key_rows?: number; missing_canonical_key_by_source?: Record<string, number> };
+    cohorts?: Record<string, { scope?: string; definition?: string; profile_attribution_allowed?: boolean; metrics?: GlobalMetric }>;
+    source_metrics?: Record<string, GlobalMetric>;
+    confusion_matrix?: Record<string, number | string | Record<string, string> | null>;
+    candidate_accounting?: Record<string, number>;
+    candidates?: VerifiedCandidate[];
+  };
+};
 type GlobalOverview = {
   status: string; dataset_contract: string; cutoff_at: string; row_count: number; truncated: boolean;
   sources: Record<string, GlobalMetric>;
@@ -67,8 +96,20 @@ type OptimizationRun = {
     pre_ai_validation?: { valid: boolean; hard_errors?: string[]; warnings?: string[] };
   };
   executive_report?: {
-    executive_summary?: string; global_diagnosis?: string[]; risks?: string[]; safeguards?: string[];
-    profile_recommendations?: Array<{ profile_id: string; diagnosis: string; selected_candidate_ids: string[] }>;
+    report_schema_version?: string; executive_summary?: string | string[];
+    global_diagnosis?: string[]; risks?: string[]; safeguards?: string[];
+    profile_recommendations?: Array<{
+      profile_id: string; diagnosis?: string; selected_candidate_ids: string[];
+      technical_reading?: string[]; limitations?: string[]; recommendation?: string;
+      confidence?: string; priority?: string;
+    }>;
+    data_quality?: TechnicalExecutiveReport["data_quality"];
+    cohort_analysis?: TechnicalExecutiveReport["cohort_analysis"];
+    confusion_matrix_analysis?: TechnicalExecutiveReport["confusion_matrix_analysis"];
+    redundancy_analysis?: TechnicalExecutiveReport["redundancy_analysis"];
+    prioritization?: TechnicalExecutiveReport["prioritization"];
+    next_steps?: string[]; read_only_statement?: string; governance_statement?: string;
+    verified_evidence?: TechnicalExecutiveReport["verified_evidence"];
   };
   adjustment_envelope?: { contract?: string; changes?: Array<{ candidate_id: string; profile_id: string; profile_name: string; evidence: Record<string, number | string | string[]> }> };
   replays?: Array<{ id: string; profile_id: string; status: string; delta_metrics: Record<string, number | null>; gates: Record<string, boolean> }>;
@@ -84,6 +125,101 @@ const SCORE_LABELS: Record<string, string> = {
 };
 const pct = (value: Num, digits = 1) => value == null ? "—" : `${(value * 100).toFixed(digits)}%`;
 const num = (value: Num, digits = 2) => value == null ? "—" : value.toFixed(digits);
+
+function ReportList({ items }: { items?: string[] }) {
+  if (!items?.length) return <div className="text-[10px] text-slate-500">Sem observações adicionais.</div>;
+  return <div className="space-y-1">{items.map((item, index) => <div key={index} className="text-[10px] leading-4 text-slate-300">• {item}</div>)}</div>;
+}
+
+function ReportSection({ number, title, children }: { number: number; title: string; children: ReactNode }) {
+  return <section className="border-t border-white/10 pt-4">
+    <h4 className="mb-3 text-[11px] font-semibold text-violet-200">{number}. {title}</h4>
+    {children}
+  </section>;
+}
+
+function TechnicalReportView({ run }: { run: OptimizationRun }) {
+  const report = run.executive_report as TechnicalExecutiveReport;
+  const evidence = report.verified_evidence || {};
+  const candidates = evidence.candidates || [];
+  const candidatesById = new Map(candidates.map(item => [item.candidate_id, item]));
+  const sourceRows = Object.entries(evidence.source_metrics || {});
+  const matrix = evidence.confusion_matrix || {};
+  const matrixMetrics = [
+    ["TP", matrix.tp], ["FP", matrix.fp], ["TN", matrix.tn], ["FN", matrix.fn],
+    ["Precisão", matrix.precision], ["Recall", matrix.recall], ["Especificidade", matrix.specificity],
+    ["FPR", matrix.false_positive_rate], ["FNR", matrix.false_negative_rate],
+  ] as Array<[string, unknown]>;
+  const formatMatrix = (label: string, value: unknown) => (
+    typeof value !== "number" ? "—" : ["TP", "FP", "TN", "FN"].includes(label) ? String(value) : pct(value)
+  );
+  const priorityGroups = [
+    ["Alta", report.prioritization?.high || []],
+    ["Média", report.prioritization?.medium || []],
+    ["Baixa", report.prioritization?.low || []],
+  ] as Array<[string, string[]]>;
+
+  return <div className="mt-4 space-y-4 rounded border border-violet-400/20 bg-black/20 p-4">
+    <div>
+      <div className="text-[9px] uppercase tracking-widest text-violet-300">Relatório técnico revisado · {run.model || "IA configurada"}</div>
+      <div className="mt-1 font-mono text-[9px] text-slate-500">{report.report_schema_version} · cutoff {evidence.cutoff_at || run.cutoff_at}</div>
+    </div>
+    <ReportSection number={1} title="Resumo executivo"><ReportList items={report.executive_summary} /></ReportSection>
+    <ReportSection number={2} title="Qualidade e integridade dos dados">
+      <div className="mb-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="rounded border border-white/10 p-2"><div className="text-[8px] uppercase text-slate-500">Linhas de entrada</div><div className="font-mono text-[12px]">{evidence.row_count ?? "—"}</div></div>
+        <div className="rounded border border-white/10 p-2"><div className="text-[8px] uppercase text-slate-500">Após deduplicação</div><div className="font-mono text-[12px]">{evidence.deduplicated_row_count ?? "—"}</div></div>
+        <div className="rounded border border-white/10 p-2"><div className="text-[8px] uppercase text-slate-500">Duplicatas removidas</div><div className="font-mono text-[12px]">{evidence.deduplication?.duplicate_rows ?? "—"}</div></div>
+        <div className="rounded border border-white/10 p-2"><div className="text-[8px] uppercase text-slate-500">Sem chave canônica</div><div className="font-mono text-[12px]">{evidence.deduplication?.missing_canonical_key_rows ?? "—"}</div></div>
+      </div>
+      <div className="grid gap-3 lg:grid-cols-2"><ReportList items={report.data_quality?.integrity_assessment} /><ReportList items={report.data_quality?.limitations} /></div>
+    </ReportSection>
+    <ReportSection number={3} title="Resultados por coorte">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[720px] text-left text-[9px]">
+          <thead className="text-slate-500"><tr><th className="p-2">Fonte</th><th>Fechados</th><th>TP</th><th>SL</th><th>Timeout</th><th>TP rate</th><th>SL rate</th><th>PnL médio</th></tr></thead>
+          <tbody>{sourceRows.map(([source, metric]) => <tr key={source} className="border-t border-white/10">
+            <td className="p-2 font-mono text-cyan-200">{source}</td><td>{metric.closed}</td><td>{metric.tp}</td><td>{metric.sl}</td><td>{metric.timeout}</td><td>{pct(metric.tp_rate)}</td><td>{pct(metric.sl_rate)}</td><td>{metric.avg_pnl_pct == null ? "—" : `${num(metric.avg_pnl_pct, 2)}%`}</td>
+          </tr>)}</tbody>
+        </table>
+      </div>
+      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+        <div><div className="mb-1 text-[9px] font-semibold text-slate-400">L3</div><ReportList items={report.cohort_analysis?.l3} /></div>
+        <div><div className="mb-1 text-[9px] font-semibold text-slate-400">L3_LAB</div><ReportList items={report.cohort_analysis?.l3_lab} /></div>
+        <div><div className="mb-1 text-[9px] font-semibold text-slate-400">L3 + L3_LAB</div><ReportList items={report.cohort_analysis?.approved_combined} /></div>
+        <div><div className="mb-1 text-[9px] font-semibold text-slate-400">L3_REJECTED · contrafactual</div><ReportList items={report.cohort_analysis?.l3_rejected} /></div>
+      </div>
+    </ReportSection>
+    <ReportSection number={4} title="Matriz de confusão">
+      <div className="mb-3 grid grid-cols-3 gap-2 md:grid-cols-5 xl:grid-cols-9">{matrixMetrics.map(([label, value]) => <div key={label} className="rounded border border-white/10 p-2"><div className="text-[8px] uppercase text-slate-500">{label}</div><div className="font-mono text-[11px]">{formatMatrix(label, value)}</div></div>)}</div>
+      <div className="grid gap-3 lg:grid-cols-2"><ReportList items={report.confusion_matrix_analysis?.interpretation} /><ReportList items={report.confusion_matrix_analysis?.operational_impact} /></div>
+    </ReportSection>
+    <ReportSection number={5} title="Candidatos por profile">
+      <div className="space-y-3">{(report.profile_recommendations || []).map(item => {
+        const selectedCandidates = item.selected_candidate_ids.map(id => candidatesById.get(id)).filter(Boolean) as VerifiedCandidate[];
+        const profileName = candidates.find(candidate => candidate.profile_id === item.profile_id)?.profile_name;
+        return <div key={item.profile_id} className="rounded border border-white/10 p-3">
+          <div className="flex flex-wrap items-center gap-2"><span className="font-mono text-[10px] text-cyan-200">{profileName || item.profile_id}</span><span className="rounded bg-violet-400/10 px-2 py-0.5 text-[8px] text-violet-200">confiança {item.confidence}</span><span className="rounded bg-white/5 px-2 py-0.5 text-[8px]">prioridade {item.priority}</span></div>
+          <div className="mt-2 grid gap-3 lg:grid-cols-2"><ReportList items={item.technical_reading} /><ReportList items={item.limitations} /></div>
+          <div className="mt-2 text-[10px] text-slate-200"><span className="font-semibold">Recomendação:</span> {item.recommendation}</div>
+          {selectedCandidates.length ? <div className="mt-2 overflow-x-auto"><table className="w-full min-w-[760px] text-left text-[9px]"><thead className="text-slate-500"><tr><th className="p-2">Candidate ID</th><th>Fontes</th><th>Ação</th><th>Alvo</th><th>Status</th><th>Δ SL local</th></tr></thead><tbody>{selectedCandidates.map(candidate => <tr key={candidate.candidate_id} className="border-t border-white/10"><td className="p-2 font-mono text-cyan-300">{candidate.candidate_id}</td><td>{(candidate.sources || []).join(", ")}</td><td>{candidate.action_type || "—"}</td><td className="font-mono">{candidate.target_path || "—"}</td><td>{candidate.validation?.status || "—"}</td><td>{pct(candidate.validation?.sl_rate_delta_present_minus_absent ?? null)}</td></tr>)}</tbody></table></div> : <div className="mt-2 text-[9px] text-slate-500">Nenhum ajuste selecionado para este profile.</div>}
+        </div>;
+      })}</div>
+    </ReportSection>
+    <ReportSection number={6} title="Redundâncias e conflitos">
+      {report.redundancy_analysis?.length ? <div className="space-y-2">{report.redundancy_analysis.map((item, index) => <div key={`${item.profile_id}-${index}`} className="rounded border border-white/10 p-2 text-[10px]"><div className="font-mono text-cyan-200">{item.profile_id} · {item.candidate_ids.join(", ")}</div><div className="mt-1">{item.diagnosis}</div><div className="mt-1 text-slate-400">{item.recommendation}</div></div>)}</div> : <div className="text-[10px] text-slate-500">Nenhuma redundância material declarada.</div>}
+    </ReportSection>
+    <ReportSection number={7} title="Priorização das recomendações">
+      <div className="grid gap-3 lg:grid-cols-3">{priorityGroups.map(([label, ids]) => <div key={label} className="rounded border border-white/10 p-3"><div className="text-[9px] font-semibold text-violet-200">{label}</div><div className="mt-2 space-y-1">{ids.length ? ids.map(id => <div key={id} className="break-all font-mono text-[9px] text-slate-300">{id}</div>) : <div className="text-[9px] text-slate-500">Nenhum candidato.</div>}</div></div>)}</div>
+      <div className="mt-3"><ReportList items={report.prioritization?.rationale} /></div>
+    </ReportSection>
+    <ReportSection number={8} title="Próximas etapas"><ReportList items={report.next_steps} /></ReportSection>
+    <ReportSection number={9} title="Declaração de governança">
+      <div className="rounded border border-cyan-400/20 bg-cyan-400/5 p-3 text-[10px] leading-4 text-cyan-100">{report.read_only_statement}</div>
+      <div className="mt-2 rounded border border-violet-400/20 bg-violet-400/5 p-3 text-[10px] leading-4 text-violet-100">{report.governance_statement}</div>
+    </ReportSection>
+  </div>;
+}
 
 function GlobalOptimizationPanel({ lookbackDays }: { lookbackDays: number }) {
   const [overview, setOverview] = useState<GlobalOverview | null>(null);
@@ -199,7 +335,9 @@ function GlobalOptimizationPanel({ lookbackDays }: { lookbackDays: number }) {
       </div>
       {overview && <><div className="mt-4 grid gap-2 md:grid-cols-4">{Object.entries(quadrants).map(([key,value]) => <div key={key} className="rounded border border-white/10 p-3"><div className="text-[9px] uppercase text-slate-500">{quadrantLabels[key] || key}</div><div className="mt-1 font-mono text-[15px]">{value.closed}</div><div className="mt-1 text-[9px] text-slate-400">TP {value.tp} · SL {value.sl} · símbolos {value.distinct_symbols} · dias {value.distinct_days}</div></div>)}</div><div className="mt-2 text-[9px] font-mono text-slate-500">{overview.dataset_contract} · cutoff {overview.cutoff_at} · rows {overview.row_count}{overview.truncated ? " · TRUNCATED" : ""} · profiles {overview.profiles.length}</div></>}
       {run && ANALYSIS_BLOCKED_STATES.has(run.status) && <div className="mt-4 rounded border border-yellow-500/30 bg-yellow-500/5 p-3 text-[10px] text-yellow-100"><div className="font-semibold">{run.status} · nenhuma recomendação foi enviada à IA</div><div className="mt-1 font-mono">{run.error_code || "ANALYSIS_PAYLOAD_INVALID"}</div>{run.evidence?.deduplication?.missing_canonical_key_rows ? <div className="mt-1">Linhas sem chave canônica: {run.evidence.deduplication.missing_canonical_key_rows} · {JSON.stringify(run.evidence.deduplication.missing_canonical_key_by_source || {})}</div> : null}<div className="mt-1 text-yellow-200/70">Contrato {run.analysis_contract_version || "pi-ai-analysis-v2"} · skill {run.analysis_skill_version || "profile_intelligence_analysis_skill_v2"} · modelo solicitado {run.ai_model_requested || "—"}</div></div>}
-      {run?.executive_report && <div className="mt-4 rounded border border-violet-400/20 bg-black/20 p-4"><div className="text-[9px] uppercase tracking-widest text-violet-300">Relatório executivo · {run.model || "IA configurada"}</div><p className="mt-2 text-[12px] leading-5">{run.executive_report.executive_summary}</p><div className="mt-3 grid gap-3 lg:grid-cols-2"><div>{(run.executive_report.global_diagnosis || []).map((item,index) => <div key={index} className="mt-1 text-[10px] text-slate-300">• {item}</div>)}</div><div>{(run.executive_report.profile_recommendations || []).map(item => <div key={item.profile_id} className="mb-2 rounded border border-white/10 p-2 text-[10px]"><span className="font-mono text-cyan-300">{item.profile_id.slice(0,8)}…</span> · {item.diagnosis}<div className="mt-1 text-slate-500">{item.selected_candidate_ids.length} ajustes selecionados</div></div>)}</div></div></div>}
+      {run?.executive_report?.report_schema_version === "pi-technical-report-v1"
+        ? <TechnicalReportView run={run} />
+        : run?.executive_report && <div className="mt-4 rounded border border-violet-400/20 bg-black/20 p-4"><div className="text-[9px] uppercase tracking-widest text-violet-300">Relatório executivo legado · {run.model || "IA configurada"}</div><p className="mt-2 text-[12px] leading-5">{typeof run.executive_report.executive_summary === "string" ? run.executive_report.executive_summary : (run.executive_report.executive_summary || []).join(" ")}</p><div className="mt-3 grid gap-3 lg:grid-cols-2"><div>{(run.executive_report.global_diagnosis || []).map((item,index) => <div key={index} className="mt-1 text-[10px] text-slate-300">• {item}</div>)}</div><div>{(run.executive_report.profile_recommendations || []).map(item => <div key={item.profile_id} className="mb-2 rounded border border-white/10 p-2 text-[10px]"><span className="font-mono text-cyan-300">{item.profile_id.slice(0,8)}…</span> · {item.diagnosis || item.recommendation}<div className="mt-1 text-slate-500">{item.selected_candidate_ids.length} ajustes selecionados</div></div>)}</div></div></div>}
       {run?.replays?.length ? <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">{run.replays.map(item => <div key={item.id} className={`rounded border p-3 text-[10px] ${item.status === "REPLAY_READY" ? "border-green-500/30 bg-green-500/5" : "border-yellow-500/30 bg-yellow-500/5"}`}><div className="font-semibold">{item.status} · {item.profile_id.slice(0,8)}…</div><div className="mt-1 font-mono">SL evitados {String(item.delta_metrics.prevented_sl ?? "—")} · TP perdidos {String(item.delta_metrics.lost_tp ?? "—")}</div><div className="mt-1">retenção {pct(item.delta_metrics.volume_retention as number | null)} · redução SL {pct(item.delta_metrics.sl_reduction_rate as number | null)}</div></div>)}</div> : null}
       {run?.challengers?.length ? <div className="mt-3 text-[10px] text-cyan-200">{run.challengers.length} challenger(s): {run.challengers.map(item => `${item.status} ${item.profile_id.slice(0,8)}…`).join(" · ")}</div> : null}
       {error && <div className="mt-3 text-[10px] text-red-300">ERROR · {error}</div>}

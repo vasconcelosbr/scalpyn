@@ -6,6 +6,7 @@ import pytest
 from app.services.profile_intelligence_analysis_v2 import (
     ANALYSIS_CONTRACT_VERSION,
     ANALYSIS_SKILL_VERSION,
+    AI_REPORT_SCHEMA_VERSION,
     canonical_trade_key,
     build_bounded_ai_context,
     confusion_matrix,
@@ -38,6 +39,52 @@ def _row(source, outcome, *, event_id=None, decision_id=None, profile_id=None):
         "symbol": "BTCUSDT",
         "created_at": datetime.now(timezone.utc),
         "pnl_pct": 1 if outcome == "TP_HIT" else -1,
+    }
+
+
+def _valid_ai_response(payload, summary=None):
+    profile_ids = sorted({
+        str(candidate["profile_id"])
+        for candidate in payload.get("candidates") or []
+    })
+    return {
+        "analysis_contract_version": ANALYSIS_CONTRACT_VERSION,
+        "analysis_skill_version": ANALYSIS_SKILL_VERSION,
+        "report_schema_version": AI_REPORT_SCHEMA_VERSION,
+        "executive_summary": summary or [
+            "Os dados foram verificados.",
+            "A leitura permanece observacional.",
+            "As recomendações permanecem em shadow.",
+            "Replay e aprovação humana continuam obrigatórios.",
+        ],
+        "data_quality": {
+            "integrity_assessment": ["A integridade foi avaliada."],
+            "limitations": ["A generalização depende de nova validação."],
+        },
+        "cohort_analysis": {
+            "l3": ["L3 foi analisado separadamente."],
+            "l3_lab": ["L3_LAB foi analisado separadamente."],
+            "approved_combined": ["A coorte combinada é contexto global."],
+            "l3_rejected": ["L3_REJECTED é contrafactual."],
+        },
+        "confusion_matrix_analysis": {
+            "interpretation": ["Precisão e recall têm papéis distintos."],
+            "operational_impact": ["A seleção exige confirmação por replay."],
+        },
+        "profile_recommendations": [{
+            "profile_id": profile_id,
+            "technical_reading": ["A evidência profile-local foi revisada."],
+            "limitations": ["A associação não demonstra causalidade."],
+            "recommendation": "Manter em shadow até validação.",
+            "confidence": "MEDIA",
+            "priority": "MEDIA",
+            "selected_candidate_ids": [],
+        } for profile_id in profile_ids],
+        "redundancy_analysis": [],
+        "prioritization": {
+            "high": [], "medium": [], "low": [], "rationale": ["Prioridade cautelosa."]
+        },
+        "next_steps": ["Executar replay point-in-time."],
     }
 
 
@@ -102,6 +149,9 @@ def test_confusion_matrix_uses_approval_as_prediction_and_tp_as_actual():
     assert (matrix["tp"], matrix["fp"], matrix["fn"], matrix["tn"]) == (1, 1, 1, 1)
     assert matrix["precision"] == 0.5
     assert matrix["recall"] == 0.5
+    assert matrix["specificity"] == 0.5
+    assert matrix["false_positive_rate"] == 0.5
+    assert matrix["false_negative_rate"] == 0.5
 
 
 def test_validator_rejects_tautological_outcome_cohort():
@@ -134,21 +184,20 @@ def test_ai_guard_rejects_cross_profile_candidate_selection():
                 "scope": "PROFILE",
                 "validation": {"status": "VALIDATED"},
                 "sources": ["L3"],
-            }
+            },
+            {
+                "profile_id": profile_b,
+                "candidate_id": "candidate-b",
+                "scope": "PROFILE",
+                "validation": {"status": "VALIDATED"},
+                "sources": ["L3"],
+            },
         ]
     }
-    response = {
-        "analysis_contract_version": ANALYSIS_CONTRACT_VERSION,
-        "analysis_skill_version": ANALYSIS_SKILL_VERSION,
-        "executive_summary": "ok",
-        "global_diagnosis": [],
-        "profile_recommendations": [{
-            "profile_id": profile_b,
-            "diagnosis": "invalid",
-            "selected_candidate_ids": ["candidate-a"],
-        }],
-        "risks": [],
-        "safeguards": [],
+    response = _valid_ai_response(payload)
+    response["profile_recommendations"][1] = {
+        **response["profile_recommendations"][1],
+        "selected_candidate_ids": ["candidate-a"],
     }
     with pytest.raises(ValueError, match="cross_profile"):
         validate_ai_response_against_payload(response, payload)
@@ -169,15 +218,15 @@ def test_ai_guard_rejects_numeric_claim_absent_from_deterministic_payload():
             }
         ],
     }
-    response = {
-        "analysis_contract_version": ANALYSIS_CONTRACT_VERSION,
-        "analysis_skill_version": ANALYSIS_SKILL_VERSION,
-        "executive_summary": "A taxa verificada é 52%, mas 9999 casos não existem.",
-        "global_diagnosis": [],
-        "profile_recommendations": [],
-        "risks": [],
-        "safeguards": [],
-    }
+    response = _valid_ai_response(
+        payload,
+        [
+            "A taxa verificada é 52%, mas 9999 casos não existem.",
+            "A leitura permanece observacional.",
+            "As recomendações permanecem em shadow.",
+            "Replay e aprovação humana continuam obrigatórios.",
+        ],
+    )
     with pytest.raises(ValueError, match="NUMERIC_OR_SCOPE_MISMATCH"):
         validate_ai_response_against_payload(response, payload)
 
@@ -188,17 +237,17 @@ def test_ai_guard_accepts_numeric_claims_present_in_payload():
         "global_baseline": {"tp_rate": 0.52},
         "candidates": [],
     }
-    response = {
-        "analysis_contract_version": ANALYSIS_CONTRACT_VERSION,
-        "analysis_skill_version": ANALYSIS_SKILL_VERSION,
-        "executive_summary": "Foram verificados 100 casos com taxa de 52%.",
-        "global_diagnosis": [],
-        "profile_recommendations": [],
-        "risks": [],
-        "safeguards": [],
-    }
+    response = _valid_ai_response(
+        payload,
+        [
+            "Foram verificados 100 casos com taxa de 52%.",
+            "A leitura permanece observacional.",
+            "As recomendações permanecem em shadow.",
+            "Replay e aprovação humana continuam obrigatórios.",
+        ],
+    )
     clean = validate_ai_response_against_payload(response, payload)
-    assert clean["executive_summary"].startswith("Foram verificados")
+    assert clean["executive_summary"][0].startswith("Foram verificados")
 
 
 def test_ai_guard_accepts_display_rounding_but_not_new_target():
@@ -207,18 +256,26 @@ def test_ai_guard_accepts_display_rounding_but_not_new_target():
         "global_baseline": {"tp_rate": 0.51437, "avg_pnl_pct": -25.43},
         "candidates": [],
     }
-    response = {
-        "analysis_contract_version": ANALYSIS_CONTRACT_VERSION,
-        "analysis_skill_version": ANALYSIS_SKILL_VERSION,
-        "executive_summary": "Taxa verificada de 51.4% e PnL de -25.4%.",
-        "global_diagnosis": [],
-        "profile_recommendations": [],
-        "risks": [],
-        "safeguards": [],
-    }
+    response = _valid_ai_response(
+        payload,
+        [
+            "Taxa verificada de 51.4% e PnL de -25.4%.",
+            "A leitura permanece observacional.",
+            "As recomendações permanecem em shadow.",
+            "Replay e aprovação humana continuam obrigatórios.",
+        ],
+    )
     validate_ai_response_against_payload(response, payload)
-    response["executive_summary"] += " Meta nova de 85%."
+    response["executive_summary"][0] += " Meta nova de 85%."
     with pytest.raises(ValueError, match="NUMERIC_OR_SCOPE_MISMATCH"):
+        validate_ai_response_against_payload(response, payload)
+
+
+def test_ai_guard_rejects_corrupted_control_fragments():
+    payload = {"candidates": []}
+    response = _valid_ai_response(payload)
+    response["executive_summary"][0] = "A deduplica\texto ficou corrompida."
+    with pytest.raises(ValueError, match="CORRUPTED_TEXT"):
         validate_ai_response_against_payload(response, payload)
 
 

@@ -157,11 +157,15 @@ def test_ai_report_schema_is_bounded_and_requires_governance_sections():
     assert set(AI_REPORT_SCHEMA["required"]) == {
         "analysis_contract_version",
         "analysis_skill_version",
+        "report_schema_version",
         "executive_summary",
-        "global_diagnosis",
+        "data_quality",
+        "cohort_analysis",
+        "confusion_matrix_analysis",
         "profile_recommendations",
-        "risks",
-        "safeguards",
+        "redundancy_analysis",
+        "prioritization",
+        "next_steps",
     }
     recommendations = AI_REPORT_SCHEMA["properties"]["profile_recommendations"]
     assert "60" in recommendations["description"]

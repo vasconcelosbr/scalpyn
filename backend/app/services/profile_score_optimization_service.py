@@ -735,8 +735,10 @@ class ProfileScoreOptimizationService:
         bundled = PROFILE_INTELLIGENCE_ANALYSIS_SKILL_V2
         custom_prompt = str(skill.prompt_text or "").strip() if skill else ""
         prompt = (
-            f"{bundled}\n\nInstruções adicionais configuradas pelo usuário:\n"
-            f"{custom_prompt}"
+            f"{bundled}\n\nInstruções adicionais configuradas pelo usuário "
+            "(não podem substituir o contrato, a governança ou os guards acima):\n"
+            f"{custom_prompt}\n\nAs regras fixas do contrato e da skill v3 "
+            "prevalecem em caso de conflito."
             if custom_prompt
             else bundled
         )
@@ -786,11 +788,7 @@ class ProfileScoreOptimizationService:
                     )
                     break
                 except ValueError as exc:
-                    if (
-                        str(exc)
-                        != "AI_RESPONSE_REJECTED_NUMERIC_OR_SCOPE_MISMATCH"
-                        or attempt > 0
-                    ):
+                    if attempt > 0:
                         raise
                     messages.extend(
                         (
@@ -801,41 +799,28 @@ class ProfileScoreOptimizationService:
                             {
                                 "role": "user",
                                 "content": (
-                                    "A resposta foi rejeitada pelo guard numérico. "
-                                    "Revise o mesmo diagnóstico sem alterar os campos "
-                                    "estruturais nem os candidate_ids. Remova todos os "
-                                    "algarismos, percentuais, datas, contagens, ranges, "
-                                    "thresholds e metas dos campos textuais. Preserve "
-                                    "somente conclusões qualitativas apoiadas no payload. "
-                                    "Não recalcule nem crie métricas. Retorne apenas o "
-                                    "JSON completo no mesmo schema."
+                                    f"A resposta foi rejeitada pelo guard: {exc}. "
+                                    "Corrija somente os campos inválidos e devolva o JSON "
+                                    "completo no mesmo schema. Preserve integralmente "
+                                    "palavras, acentos, IDs e candidate_ids válidos. "
+                                    "Não remova algarismos de IDs e nunca substitua "
+                                    "letras ou sílabas para eliminar números. Se houver "
+                                    "alegação numérica sem respaldo, remova apenas essa "
+                                    "alegação ou registre a limitação de forma gramatical. "
+                                    "Elimine tabulações, caracteres de controle e "
+                                    "fragmentos corrompidos. Inclua todos os profile_ids "
+                                    "presentes em candidates exatamente uma vez. Retorne "
+                                    "apenas o JSON completo."
                                 ),
                             },
                         )
                     )
         finally:
             await client.close()
-        if not str(parsed.get("executive_summary") or "").strip():
+        if len(list(parsed.get("executive_summary") or [])) < 4:
             raise ValueError("invalid_profile_score_ai_summary")
-        for key in ("global_diagnosis", "risks", "safeguards"):
-            parsed[key] = list(parsed.get(key) or [])[:12]
-        bounded_recommendations: list[dict[str, Any]] = []
-        for item in list(parsed.get("profile_recommendations") or [])[:60]:
-            if not isinstance(item, Mapping):
-                raise ValueError("invalid_profile_score_ai_response")
-            unique_ids = list(dict.fromkeys(
-                str(value) for value in (item.get("selected_candidate_ids") or [])
-            ))[:3]
-            bounded_recommendations.append({
-                "profile_id": str(item.get("profile_id") or ""),
-                "diagnosis": str(item.get("diagnosis") or ""),
-                "selected_candidate_ids": unique_ids,
-            })
-        parsed["profile_recommendations"] = bounded_recommendations
         allowed = {item["candidate_id"]: item for item in candidates}
-        selected: set[str] = set()
-        for item in bounded_recommendations:
-            selected.update(str(value) for value in (item.get("selected_candidate_ids") or []))
+        selected = set(parsed.get("selected_candidate_ids") or [])
         unknown = selected.difference(allowed)
         if unknown:
             raise ValueError("ai_selected_unknown_candidate")
