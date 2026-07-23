@@ -926,6 +926,12 @@ def validate_ai_response_against_payload(
                 collect_numbers(nested)
 
     collect_numbers(payload)
+    numeric_values.extend(
+        (
+            float(len(clean["selected_candidate_ids"])),
+            float(len(clean["profile_recommendations"])),
+        )
+    )
     narratives = [
         clean["executive_summary"],
         *clean["global_diagnosis"],
@@ -945,11 +951,26 @@ def validate_ai_response_against_payload(
             else:
                 raw = raw.replace(",", ".")
             try:
-                cited = float(raw) / 100.0 if is_percent else float(raw)
+                cited_raw = float(raw)
             except ValueError:
                 continue
+            decimals = len(raw.rsplit(".", 1)[-1]) if "." in raw else 0
+            display_tolerance = 0.5 * (10 ** (-decimals)) + 1e-12
+            cited_candidates = [cited_raw]
+            if is_percent or abs(cited_raw) > 1:
+                cited_candidates.append(cited_raw / 100.0)
             if not any(
-                math.isclose(cited, known, rel_tol=1e-6, abs_tol=1e-9)
+                math.isclose(
+                    cited,
+                    known,
+                    rel_tol=0.0,
+                    abs_tol=(
+                        display_tolerance / 100.0
+                        if cited == cited_raw / 100.0 and cited != cited_raw
+                        else display_tolerance
+                    ),
+                )
+                for cited in cited_candidates
                 for known in numeric_values
             ):
                 raise ValueError(
@@ -1062,6 +1083,13 @@ def build_bounded_ai_context(payload: Mapping[str, Any]) -> dict[str, Any]:
         "source_metrics": payload.get("source_metrics"),
         "confusion_matrix": payload.get("confusion_matrix"),
         "candidate_accounting": payload.get("candidate_accounting"),
+        "profile_count": len(
+            {
+                str(item.get("profile_id"))
+                for item in payload.get("candidates") or []
+                if item.get("profile_id")
+            }
+        ),
         "counterfactual_analysis": compact_counterfactual,
         "overlap_analysis": payload.get("overlap_analysis"),
         "candidates": candidates,

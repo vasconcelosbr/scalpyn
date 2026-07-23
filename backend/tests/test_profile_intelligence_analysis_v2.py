@@ -201,6 +201,27 @@ def test_ai_guard_accepts_numeric_claims_present_in_payload():
     assert clean["executive_summary"].startswith("Foram verificados")
 
 
+def test_ai_guard_accepts_display_rounding_but_not_new_target():
+    payload = {
+        "row_count": 100,
+        "global_baseline": {"tp_rate": 0.51437, "avg_pnl_pct": -25.43},
+        "candidates": [],
+    }
+    response = {
+        "analysis_contract_version": ANALYSIS_CONTRACT_VERSION,
+        "analysis_skill_version": ANALYSIS_SKILL_VERSION,
+        "executive_summary": "Taxa verificada de 51.4% e PnL de -25.4%.",
+        "global_diagnosis": [],
+        "profile_recommendations": [],
+        "risks": [],
+        "safeguards": [],
+    }
+    validate_ai_response_against_payload(response, payload)
+    response["executive_summary"] += " Meta nova de 85%."
+    with pytest.raises(ValueError, match="NUMERIC_OR_SCOPE_MISMATCH"):
+        validate_ai_response_against_payload(response, payload)
+
+
 def test_bounded_ai_context_keeps_candidates_once_and_omits_provider_policy():
     payload = {
         "analysis_contract_version": ANALYSIS_CONTRACT_VERSION,

@@ -761,25 +761,58 @@ class ProfileScoreOptimizationService:
             max_retries=0,
         )
         try:
-            response = await client.messages.create(
-                model=model,
-                max_tokens=8000,
-                system=prompt,
-                messages=[{
-                    "role": "user",
-                    "content": json.dumps({"analysis_payload": context}, default=str),
-                }],
-                output_config={
-                    "format": {
-                        "type": "json_schema",
-                        "schema": AI_REPORT_SCHEMA,
-                    }
-                },
-            )
-            parsed = validate_ai_response_against_payload(
-                _parse_ai_report_response(response),
-                context,
-            )
+            messages = [{
+                "role": "user",
+                "content": json.dumps({"analysis_payload": context}, default=str),
+            }]
+            for attempt in range(2):
+                response = await client.messages.create(
+                    model=model,
+                    max_tokens=8000,
+                    system=prompt,
+                    messages=messages,
+                    output_config={
+                        "format": {
+                            "type": "json_schema",
+                            "schema": AI_REPORT_SCHEMA,
+                        }
+                    },
+                )
+                raw_report = _parse_ai_report_response(response)
+                try:
+                    parsed = validate_ai_response_against_payload(
+                        raw_report,
+                        context,
+                    )
+                    break
+                except ValueError as exc:
+                    if (
+                        str(exc)
+                        != "AI_RESPONSE_REJECTED_NUMERIC_OR_SCOPE_MISMATCH"
+                        or attempt > 0
+                    ):
+                        raise
+                    messages.extend(
+                        (
+                            {
+                                "role": "assistant",
+                                "content": json.dumps(raw_report, default=str),
+                            },
+                            {
+                                "role": "user",
+                                "content": (
+                                    "A resposta foi rejeitada pelo guard numérico. "
+                                    "Revise o mesmo diagnóstico sem alterar os campos "
+                                    "estruturais nem os candidate_ids. Remova todos os "
+                                    "algarismos, percentuais, datas, contagens, ranges, "
+                                    "thresholds e metas dos campos textuais. Preserve "
+                                    "somente conclusões qualitativas apoiadas no payload. "
+                                    "Não recalcule nem crie métricas. Retorne apenas o "
+                                    "JSON completo no mesmo schema."
+                                ),
+                            },
+                        )
+                    )
         finally:
             await client.close()
         if not str(parsed.get("executive_summary") or "").strip():
