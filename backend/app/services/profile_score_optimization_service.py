@@ -864,6 +864,64 @@ class ProfileScoreOptimizationService:
         truncated: bool,
     ) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
         deduplicated, deduplication = deduplicate_rows(rows)
+        if deduplication["missing_canonical_key_rows"] or truncated:
+            approved = [
+                row for row in deduplicated if row.get("source") in {"L3", "L3_LAB"}
+            ]
+            rejected = [
+                row for row in deduplicated if row.get("source") == "L3_REJECTED"
+            ]
+            evidence = {
+                "dataset_contract": DATASET_CONTRACT,
+                "analysis_contract_version": ANALYSIS_CONTRACT_VERSION,
+                "analysis_skill_version": ANALYSIS_SKILL_VERSION,
+                "cutoff_at": cutoff,
+                "lookback_days": lookback_days,
+                "row_count": len(rows),
+                "deduplicated_row_count": len(deduplicated),
+                "truncated": truncated,
+                "deduplication": deduplication,
+                "cohorts": {
+                    "approved": {
+                        "scope": "GLOBAL",
+                        "definition": "source in [L3,L3_LAB]",
+                        "metrics": cohort_metrics(approved),
+                    },
+                    "counterfactual_rejected": {
+                        "scope": "COUNTERFACTUAL",
+                        "definition": "source=L3_REJECTED",
+                        "metrics": cohort_metrics(rejected),
+                        "profile_attribution_allowed": False,
+                    },
+                },
+                "confusion_matrix": confusion_matrix(deduplicated),
+                "source_metrics": {
+                    source: cohort_metrics(
+                        [row for row in deduplicated if row["source"] == source]
+                    )
+                    for source in ANALYSIS_SOURCES
+                },
+                "candidates": [],
+                "candidate_count": 0,
+                "candidate_accounting": {
+                    "candidate_definitions": 0,
+                    "profile_rule_applications": 0,
+                    "mutation_instances": 0,
+                },
+                "candidate_applications": [],
+                "counterfactual_analysis": None,
+                "overlap_analysis": [],
+                "policy": policy,
+                "safety": {
+                    "shadow_only": True,
+                    "eligible_for_training": False,
+                    "incumbent_mutated": False,
+                    "training_or_promotion_allowed": False,
+                    "autopilot_invoked": False,
+                },
+            }
+            evidence["pre_ai_validation"] = validate_analysis_payload(evidence)
+            return evidence, [], _hash({"evidence": evidence, "candidates": []})
         buckets = list(_get_indicator_buckets())
         feature_cache: dict[str, dict[str, Any]] = {}
 

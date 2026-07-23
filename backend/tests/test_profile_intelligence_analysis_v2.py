@@ -17,6 +17,10 @@ from app.services.profile_intelligence_ai_models import (
     SUPPORTED_AI_MODELS,
     configured_model,
 )
+from app.services.profile_score_optimization_service import (
+    DEFAULT_POLICY,
+    ProfileScoreOptimizationService,
+)
 
 
 def _row(source, outcome, *, event_id=None, decision_id=None, profile_id=None):
@@ -61,6 +65,27 @@ def test_missing_canonical_key_hard_blocks_ai_payload():
     validation = validate_analysis_payload(payload)
     assert validation["valid"] is False
     assert "BLOCKED_CROSS_SOURCE_DEDUP_UNAVAILABLE" in validation["hard_errors"]
+
+
+def test_analysis_fail_fast_does_not_build_candidates_when_dedup_is_unavailable(monkeypatch):
+    import app.services.profile_score_optimization_service as module
+
+    monkeypatch.setattr(
+        module,
+        "_get_indicator_buckets",
+        lambda: (_ for _ in ()).throw(AssertionError("candidate scan must not run")),
+    )
+    evidence, candidates, _ = ProfileScoreOptimizationService()._build_analysis(
+        [_row("L3_REJECTED", "TP_HIT")],
+        [],
+        DEFAULT_POLICY,
+        30,
+        datetime.now(timezone.utc),
+        False,
+    )
+    assert candidates == []
+    assert evidence["pre_ai_validation"]["valid"] is False
+    assert evidence["candidate_accounting"]["mutation_instances"] == 0
 
 
 def test_confusion_matrix_uses_approval_as_prediction_and_tp_as_actual():
