@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -6,10 +7,12 @@ import pytest
 
 from app.services.profile_intelligence_manual_service import apply_manual_action
 from app.services.profile_score_optimization_service import (
+    AI_REPORT_SCHEMA,
     CHALLENGER_SOURCE,
     CHAMPION_SOURCE,
     DEFAULT_POLICY,
     ProfileScoreOptimizationService,
+    _parse_ai_report_response,
 )
 from app.tasks.celery_app import QUEUE_STRUCTURAL_COMPUTE, TASK_ROUTES
 from app.tasks.pipeline_scan import _RobustScoreShim
@@ -147,6 +150,39 @@ def test_global_candidates_prepare_each_feature_snapshot_once(monkeypatch):
 def test_global_analysis_task_is_routed_to_dedicated_compute_worker():
     route = TASK_ROUTES["app.tasks.profile_score_optimization.analyze"]
     assert route["queue"] == QUEUE_STRUCTURAL_COMPUTE
+
+
+def test_ai_report_schema_is_bounded_and_requires_governance_sections():
+    assert AI_REPORT_SCHEMA["additionalProperties"] is False
+    assert set(AI_REPORT_SCHEMA["required"]) == {
+        "executive_summary",
+        "global_diagnosis",
+        "profile_recommendations",
+        "risks",
+        "safeguards",
+    }
+    recommendations = AI_REPORT_SCHEMA["properties"]["profile_recommendations"]
+    assert "60" in recommendations["description"]
+    selected = recommendations["items"]["properties"]["selected_candidate_ids"]
+    assert "3" in selected["description"]
+
+
+def test_ai_report_parser_accepts_structured_json_and_rejects_truncation():
+    response = SimpleNamespace(
+        stop_reason="end_turn",
+        content=[SimpleNamespace(text=(
+            '{"executive_summary":"ok","global_diagnosis":[],'
+            '"profile_recommendations":[],"risks":[],"safeguards":[]}'
+        ))],
+    )
+    assert _parse_ai_report_response(response)["executive_summary"] == "ok"
+
+    truncated = SimpleNamespace(
+        stop_reason="max_tokens",
+        content=[SimpleNamespace(text='{"executive_summary":"incomplete"')],
+    )
+    with pytest.raises(ValueError, match="profile_score_ai_output_truncated"):
+        _parse_ai_report_response(truncated)
 
 
 def test_global_analysis_api_returns_accepted_for_async_execution():

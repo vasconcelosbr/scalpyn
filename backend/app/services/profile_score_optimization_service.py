@@ -65,6 +65,63 @@ DEFAULT_POLICY: dict[str, Any] = {
     "score_global_challenger_max_single_day_share": 0.40,
 }
 
+AI_REPORT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "executive_summary": {
+            "type": "string",
+            "description": "Resumo executivo conciso, obrigatório e não vazio.",
+        },
+        "global_diagnosis": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "No máximo 12 diagnósticos globais concisos.",
+        },
+        "profile_recommendations": {
+            "type": "array",
+            "description": "No máximo 60 recomendações, somente quando houver evidência.",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "profile_id": {"type": "string"},
+                    "diagnosis": {
+                        "type": "string",
+                    },
+                    "selected_candidate_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "No máximo 3 IDs únicos fornecidos para este profile.",
+                    },
+                },
+                "required": [
+                    "profile_id",
+                    "diagnosis",
+                    "selected_candidate_ids",
+                ],
+            },
+        },
+        "risks": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "No máximo 12 riscos concisos.",
+        },
+        "safeguards": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "No máximo 12 salvaguardas concisas.",
+        },
+    },
+    "required": [
+        "executive_summary",
+        "global_diagnosis",
+        "profile_recommendations",
+        "risks",
+        "safeguards",
+    ],
+}
+
 
 def _json(value: Any) -> Any:
     if isinstance(value, dict):
@@ -92,6 +149,25 @@ def _strip_json(raw: str) -> str:
         lines = value.splitlines()
         value = "\n".join(lines[1:-1])
     return value.strip()
+
+
+def _parse_ai_report_response(response: Any) -> dict[str, Any]:
+    stop_reason = getattr(response, "stop_reason", None)
+    if stop_reason == "max_tokens":
+        raise ValueError("profile_score_ai_output_truncated")
+    if stop_reason == "refusal":
+        raise ValueError("profile_score_ai_refused")
+    raw = "".join(
+        str(getattr(block, "text", "") or "")
+        for block in (getattr(response, "content", None) or [])
+    )
+    try:
+        parsed = json.loads(_strip_json(raw))
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise ValueError("invalid_profile_score_ai_response") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("invalid_profile_score_ai_response")
+    return parsed
 
 
 def _number(value: Any) -> float | None:
@@ -512,7 +588,13 @@ class ProfileScoreOptimizationService:
             "profile_recommendations (array de {profile_id,diagnosis,selected_candidate_ids}), "
             "risks (array), safeguards (array)."
         )
-        prompt = skill.prompt_text if skill else bundled
+        custom_prompt = str(skill.prompt_text or "").strip() if skill else ""
+        prompt = (
+            f"{bundled}\n\nInstruções adicionais configuradas pelo usuário:\n"
+            f"{custom_prompt}"
+            if custom_prompt
+            else bundled
+        )
         api_key = await get_decrypted_api_key(db, user_id, "anthropic")
         api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
@@ -531,23 +613,42 @@ class ProfileScoreOptimizationService:
         try:
             response = await client.messages.create(
                 model=model,
-                max_tokens=3500,
+                max_tokens=8000,
                 system=prompt,
                 messages=[{"role": "user", "content": json.dumps({
                     "evidence": context,
                     "bounded_candidates": candidates,
                 }, default=str)}],
+                output_config={
+                    "format": {
+                        "type": "json_schema",
+                        "schema": AI_REPORT_SCHEMA,
+                    }
+                },
             )
-            parsed = json.loads(_strip_json(response.content[0].text if response.content else ""))
-        except (json.JSONDecodeError, IndexError, TypeError, KeyError) as exc:
-            raise ValueError("invalid_profile_score_ai_response") from exc
+            parsed = _parse_ai_report_response(response)
         finally:
             await client.close()
         if not str(parsed.get("executive_summary") or "").strip():
             raise ValueError("invalid_profile_score_ai_summary")
+        for key in ("global_diagnosis", "risks", "safeguards"):
+            parsed[key] = list(parsed.get(key) or [])[:12]
+        bounded_recommendations: list[dict[str, Any]] = []
+        for item in list(parsed.get("profile_recommendations") or [])[:60]:
+            if not isinstance(item, Mapping):
+                raise ValueError("invalid_profile_score_ai_response")
+            unique_ids = list(dict.fromkeys(
+                str(value) for value in (item.get("selected_candidate_ids") or [])
+            ))[:3]
+            bounded_recommendations.append({
+                "profile_id": str(item.get("profile_id") or ""),
+                "diagnosis": str(item.get("diagnosis") or ""),
+                "selected_candidate_ids": unique_ids,
+            })
+        parsed["profile_recommendations"] = bounded_recommendations
         allowed = {item["candidate_id"]: item for item in candidates}
         selected: set[str] = set()
-        for item in parsed.get("profile_recommendations") or []:
+        for item in bounded_recommendations:
             selected.update(str(value) for value in (item.get("selected_candidate_ids") or []))
         unknown = selected.difference(allowed)
         if unknown:
