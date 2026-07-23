@@ -160,6 +160,7 @@ def deduplicate_rows(
     """
     seen: dict[str, dict[str, Any]] = {}
     duplicates: list[dict[str, Any]] = []
+    duplicates_by_source_pair: Counter[str] = Counter()
     missing_by_source: Counter[str] = Counter()
     key_field_counts: Counter[str] = Counter()
     for raw in rows:
@@ -170,6 +171,15 @@ def deduplicate_rows(
             continue
         key_field_counts[key.split(":", 1)[0]] += 1
         if key in seen:
+            source_pair = " -> ".join(
+                sorted(
+                    (
+                        str(seen[key].get("source") or "UNKNOWN"),
+                        str(row.get("source") or "UNKNOWN"),
+                    )
+                )
+            )
+            duplicates_by_source_pair[source_pair] += 1
             duplicates.append({
                 "canonical_key": key,
                 "kept_id": str(seen[key].get("id")),
@@ -184,6 +194,7 @@ def deduplicate_rows(
         "input_rows": len(rows),
         "deduplicated_rows": len(seen),
         "duplicate_rows_removed": len(duplicates),
+        "duplicates_by_source_pair": dict(sorted(duplicates_by_source_pair.items())),
         "missing_canonical_key_rows": sum(missing_by_source.values()),
         "missing_canonical_key_by_source": dict(sorted(missing_by_source.items())),
         "key_field_counts": dict(sorted(key_field_counts.items())),
@@ -206,11 +217,22 @@ def cohort_metrics(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "tp": counts["TP_HIT"],
         "sl": counts["SL_HIT"],
         "timeout": counts["TIMEOUT"],
+        "other_outcomes": total
+        - counts["TP_HIT"]
+        - counts["SL_HIT"]
+        - counts["TIMEOUT"],
+        "outcome_counts": dict(sorted(counts.items())),
         "tp_rate": counts["TP_HIT"] / total if total else None,
         "sl_rate": counts["SL_HIT"] / total if total else None,
         "timeout_rate": counts["TIMEOUT"] / total if total else None,
         "avg_pnl_pct": mean(pnls) if pnls else None,
         "pnl_sum_pct": sum(pnls) if pnls else None,
+        "pnl_n": len(pnls),
+        "rate_basis": {
+            "tp_rate": {"numerator": counts["TP_HIT"], "denominator": total},
+            "sl_rate": {"numerator": counts["SL_HIT"], "denominator": total},
+            "timeout_rate": {"numerator": counts["TIMEOUT"], "denominator": total},
+        },
         "distinct_symbols": len(symbols),
         "distinct_days": len(days),
         "max_single_symbol_share": max(symbols.values(), default=0) / total if total else 0.0,
@@ -257,6 +279,19 @@ def deterministic_split(
         return ordered, []
     boundary = max(1, min(len(ordered) - 1, int(len(ordered) * discovery_ratio)))
     return ordered[:boundary], ordered[boundary:]
+
+
+def cohort_period(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    timestamps = sorted(
+        str(row.get("created_at"))
+        for row in rows
+        if row.get("created_at") is not None
+    )
+    return {
+        "from": timestamps[0] if timestamps else None,
+        "to": timestamps[-1] if timestamps else None,
+        "rows": len(rows),
+    }
 
 
 def _condition_matches(
@@ -344,6 +379,36 @@ def _threshold_from_config(config: Mapping[str, Any]) -> float | None:
         parsed = _number(value)
         if parsed is not None:
             return parsed
+    score_fields = {
+        "score",
+        "alpha_score",
+        "total_score",
+        "score_total",
+        "robust_score",
+        "final_score",
+    }
+    for section in ("signals", "entry_triggers"):
+        conditions = (config.get(section) or {}).get("conditions") or []
+        thresholds: set[float] = set()
+        for condition in conditions:
+            if not isinstance(condition, Mapping):
+                continue
+            field = str(
+                condition.get("field") or condition.get("indicator") or ""
+            ).strip().lower().replace(" ", "_")
+            operator = str(condition.get("operator") or "")
+            value = _number(condition.get("value"))
+            if field in score_fields and operator in {">", ">="} and value is not None:
+                thresholds.add(value)
+        if len(thresholds) == 1:
+            return next(iter(thresholds))
+        if len(thresholds) > 1:
+            return None
+    buy_threshold = _number(
+        ((config.get("scoring") or {}).get("thresholds") or {}).get("buy")
+    )
+    if buy_threshold is not None:
+        return buy_threshold
     return None
 
 
@@ -359,6 +424,7 @@ def simulate_points(
         _score_from_row(row, features_getter(row)) is not None for row in rows
     )
     simulations = []
+    baseline_metrics = cohort_metrics(rows)
     for delta in points:
         if threshold is None or score_coverage != len(rows):
             simulations.append({
@@ -385,9 +451,82 @@ def simulate_points(
             "score_coverage": score_coverage,
             "row_count": len(rows),
             "selected": len(selected),
+            "rejected": len(rows) - len(selected),
             "metrics": cohort_metrics(selected),
+            "impact": {
+                "trades_approved": len(selected),
+                "trades_rejected": len(rows) - len(selected),
+                "tp_preserved": sum(row.get("outcome") == "TP_HIT" for row in selected),
+                "tp_lost": baseline_metrics["tp"]
+                - sum(row.get("outcome") == "TP_HIT" for row in selected),
+                "sl_preserved": sum(row.get("outcome") == "SL_HIT" for row in selected),
+                "sl_avoided": baseline_metrics["sl"]
+                - sum(row.get("outcome") == "SL_HIT" for row in selected),
+                "timeout_preserved": sum(
+                    row.get("outcome") == "TIMEOUT" for row in selected
+                ),
+                "timeout_avoided": baseline_metrics["timeout"]
+                - sum(row.get("outcome") == "TIMEOUT" for row in selected),
+                "volume_reduction": (
+                    (len(rows) - len(selected)) / len(rows) if rows else 0.0
+                ),
+                "score_minimum": threshold,
+            },
         })
     return simulations
+
+
+def select_simulated_points(
+    simulations: Sequence[Mapping[str, Any]],
+    policy: Mapping[str, Any],
+) -> int | None:
+    """Choose a penalty from measured alternatives, never from a default."""
+    baseline = next(
+        (
+            item
+            for item in simulations
+            if int(item.get("points") or 0) == 0 and item.get("status") == "SIMULATED"
+        ),
+        None,
+    )
+    if baseline is None:
+        return None
+    baseline_metrics = baseline.get("metrics") or {}
+    baseline_tp = int(baseline_metrics.get("tp") or 0)
+    baseline_sl = int(baseline_metrics.get("sl") or 0)
+    baseline_selected = int(baseline.get("selected") or 0)
+    eligible: list[tuple[tuple[float, float, float, int], int]] = []
+    for item in simulations:
+        points = int(item.get("points") or 0)
+        if points >= 0 or item.get("status") != "SIMULATED":
+            continue
+        metrics = item.get("metrics") or {}
+        selected = int(item.get("selected") or 0)
+        tp = int(metrics.get("tp") or 0)
+        sl = int(metrics.get("sl") or 0)
+        retention = selected / baseline_selected if baseline_selected else 0.0
+        tp_loss_rate = (baseline_tp - tp) / baseline_tp if baseline_tp else 0.0
+        sl_reduction_rate = (baseline_sl - sl) / baseline_sl if baseline_sl else 0.0
+        if (
+            retention < float(policy.get("score_global_replay_min_retention", 0.70))
+            or tp_loss_rate
+            > float(policy.get("score_global_replay_max_tp_loss_rate", 0.05))
+            or sl_reduction_rate
+            < float(policy.get("score_global_replay_min_sl_reduction_rate", 0.02))
+        ):
+            continue
+        eligible.append(
+            (
+                (
+                    sl_reduction_rate,
+                    -tp_loss_rate,
+                    float(metrics.get("avg_pnl_pct") or float("-inf")),
+                    points,
+                ),
+                points,
+            )
+        )
+    return max(eligible, default=((), None))[1]
 
 
 def build_candidates(
@@ -431,7 +570,18 @@ def build_candidates(
     applications: list[dict[str, Any]] = []
     for champion in champions:
         profile_id = str(champion["profile_id"])
-        own = approved_by_profile.get(profile_id, [])
+        own = [
+            row
+            for row in approved_by_profile.get(profile_id, [])
+            if str(row.get("profile_version_id") or "")
+            == str(champion.get("profile_version_id") or "")
+            and str(row.get("score_engine_version_id") or "")
+            == str(champion.get("score_engine_version_id") or "")
+            and str(row.get("profile_config_hash") or "")
+            == str(champion.get("config_hash") or "")
+            and str(row.get("score_engine_config_hash") or "")
+            == str(champion.get("score_engine_config_hash") or "")
+        ]
         discovery, validation = deterministic_split(own)
         ranked = []
         for bucket in buckets:
@@ -462,13 +612,16 @@ def build_candidates(
                 champion.get("config") or {},
                 features_getter,
             )
+            selected_points = select_simulated_points(simulations, policy)
+            if selected_points is None:
+                continue
             rule = {
                 "id": candidate_id,
                 "rule_id": candidate_id,
                 "indicator": bucket["indicator"],
                 "bucket": bucket["bucket_label"],
                 **_rule_condition(bucket),
-                "points": -5,
+                "points": selected_points,
                 "category": "signal",
                 "name": f"PI v2 shadow penalty: {bucket['bucket_label']}",
                 "description": "Penalidade candidata validada em coorte profile-local.",
@@ -480,13 +633,28 @@ def build_candidates(
                 "scope": "PROFILE",
                 "profile_id": profile_id,
                 "profile_name": champion.get("profile_name"),
+                "profile_version_id": str(champion.get("profile_version_id") or ""),
+                "score_engine_version_id": str(
+                    champion.get("score_engine_version_id") or ""
+                ),
+                "profile_config_hash": champion.get("config_hash"),
+                "score_engine_config_hash": champion.get("score_engine_config_hash"),
+                "timeframe": (champion.get("config") or {}).get("default_timeframe"),
                 "action_type": "ADD_SCORE_PENALTY",
                 "target_path": "/scoring/generated_rules",
                 "current_value": None,
                 "proposed_value": rule,
-                "discovery": discovery_effect,
-                "validation": {"status": status, **validation_effect},
+                "discovery": {
+                    "period": cohort_period(discovery),
+                    **discovery_effect,
+                },
+                "validation": {
+                    "status": status,
+                    "period": cohort_period(validation),
+                    **validation_effect,
+                },
                 "simulations": simulations,
+                "selected_simulation_points": selected_points,
                 "sources": sorted({str(row.get("source")) for row in own}),
             }
             ranked.append(item)
@@ -566,6 +734,39 @@ def build_overlap_analysis(
 def validate_analysis_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     errors: list[str] = []
     warnings: list[str] = []
+
+    def validate_metrics(path: str, metrics: Mapping[str, Any]) -> None:
+        closed = int(metrics.get("closed") or 0)
+        components = sum(
+            int(metrics.get(key) or 0)
+            for key in ("tp", "sl", "timeout", "other_outcomes")
+        )
+        if closed != components:
+            errors.append(f"INCONSISTENT_COUNTS:{path}")
+        for count_key, rate_key in (
+            ("tp", "tp_rate"),
+            ("sl", "sl_rate"),
+            ("timeout", "timeout_rate"),
+        ):
+            rate = metrics.get(rate_key)
+            expected = int(metrics.get(count_key) or 0) / closed if closed else None
+            if rate is not None and not 0.0 <= float(rate) <= 1.0:
+                errors.append(f"RATE_OUT_OF_RANGE:{path}:{rate_key}")
+            if (rate is None) != (expected is None) or (
+                rate is not None and not math.isclose(float(rate), expected, abs_tol=1e-12)
+            ):
+                errors.append(f"INCONSISTENT_RATE:{path}:{rate_key}")
+        pnl_n = int(metrics.get("pnl_n") or 0)
+        avg_pnl = metrics.get("avg_pnl_pct")
+        pnl_sum = metrics.get("pnl_sum_pct")
+        if pnl_n and avg_pnl is not None and pnl_sum is not None and not math.isclose(
+            float(avg_pnl) * pnl_n,
+            float(pnl_sum),
+            rel_tol=1e-9,
+            abs_tol=1e-9,
+        ):
+            errors.append(f"INCONSISTENT_PNL:{path}")
+
     if payload.get("analysis_contract_version") != ANALYSIS_CONTRACT_VERSION:
         errors.append("INVALID_ANALYSIS_CONTRACT_VERSION")
     if payload.get("analysis_skill_version") != ANALYSIS_SKILL_VERSION:
@@ -584,13 +785,11 @@ def validate_analysis_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
             errors.append("COUNTERFACTUAL_EVIDENCE_ATTRIBUTED_TO_PROFILE")
     source_metrics = payload.get("source_metrics") or {}
     for source, metrics in source_metrics.items():
-        closed = int((metrics or {}).get("closed") or 0)
-        components = sum(int((metrics or {}).get(key) or 0) for key in ("tp", "sl", "timeout"))
-        if closed != components:
-            errors.append(f"SOURCE_METRICS_NOT_EXHAUSTIVE:{source}")
+        validate_metrics(f"source_metrics.{source}", metrics or {})
     for cohort_name, cohort in (payload.get("cohorts") or {}).items():
         definition = str((cohort or {}).get("definition") or "").lower().replace(" ", "")
         metrics = (cohort or {}).get("metrics") or {}
+        validate_metrics(f"cohorts.{cohort_name}.metrics", metrics)
         closed = int(metrics.get("closed") or 0)
         if (
             "outcome=tp_hit" in definition
@@ -607,6 +806,59 @@ def validate_analysis_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         errors.append("INVALID_CONFUSION_MATRIX")
     if not payload.get("candidates"):
         warnings.append("NO_VALIDATED_PROFILE_CANDIDATES")
+    expected_simulation_points = set(PENALTY_ALTERNATIVES + BONUS_ALTERNATIVES)
+    candidate_ids: set[str] = set()
+    candidates_by_profile: Counter[str] = Counter()
+    for candidate in payload.get("candidates") or []:
+        candidate_id = str(candidate.get("candidate_id") or "")
+        if not candidate_id or candidate_id in candidate_ids:
+            errors.append("DUPLICATE_OR_EMPTY_CANDIDATE_ID")
+        candidate_ids.add(candidate_id)
+        profile_id = str(candidate.get("profile_id") or "")
+        candidates_by_profile[profile_id] += 1
+        for required in (
+            "profile_id",
+            "profile_version_id",
+            "score_engine_version_id",
+            "profile_config_hash",
+            "score_engine_config_hash",
+        ):
+            if not candidate.get(required):
+                errors.append(f"BLOCKED_SCOPE_MISMATCH:{candidate_id}:{required}")
+        simulations = candidate.get("simulations") or []
+        simulated_points = {
+            int(item.get("points") or 0)
+            for item in simulations
+            if item.get("status") == "SIMULATED"
+        }
+        if simulated_points != expected_simulation_points:
+            errors.append(f"BLOCKED_IMPACT_NOT_SIMULATED:{candidate_id}")
+        selected_points = candidate.get("selected_simulation_points")
+        if (
+            selected_points is None
+            or int(selected_points) == 0
+            or int(selected_points) not in simulated_points
+            or int((candidate.get("proposed_value") or {}).get("points") or 0)
+            != int(selected_points)
+        ):
+            errors.append(f"INVALID_SIMULATED_SELECTION:{candidate_id}")
+    expected_overlap_pairs = sum(
+        count * (count - 1) // 2 for count in candidates_by_profile.values()
+    )
+    overlap_pairs = {
+        (
+            str(item.get("profile_id") or ""),
+            *sorted(
+                (
+                    str(item.get("candidate_a") or ""),
+                    str(item.get("candidate_b") or ""),
+                )
+            ),
+        )
+        for item in payload.get("overlap_analysis") or []
+    }
+    if len(overlap_pairs) != expected_overlap_pairs:
+        errors.append("BLOCKED_RULE_OVERLAP_NOT_SIMULATED")
     return {
         "valid": not errors,
         "hard_errors": sorted(set(errors)),

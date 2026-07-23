@@ -10,6 +10,8 @@ from app.services.profile_intelligence_analysis_v2 import (
     build_bounded_ai_context,
     confusion_matrix,
     deduplicate_rows,
+    select_simulated_points,
+    simulate_points,
     validate_ai_response_against_payload,
     validate_analysis_payload,
 )
@@ -188,4 +190,69 @@ def test_model_allowlist_and_default_are_exact_and_no_unknown_fallback():
         "claude-sonnet-5",
         "claude-haiku-4-5-20251001",
     }
-    assert configured_model({"ai_model": "unknown"}) == DEFAULT_AI_MODEL
+    assert configured_model({}) == DEFAULT_AI_MODEL
+    with pytest.raises(ValueError, match="BLOCKED_MODEL_UNAVAILABLE"):
+        configured_model({"ai_model": "unknown"})
+
+
+def test_signal_score_threshold_drives_simulation_and_not_default_penalty():
+    bucket = {
+        "indicator": "volume_spike",
+        "condition": lambda value: value >= 2.0,
+    }
+    rows = [
+        {
+            "outcome": "TP_HIT",
+            "score": None,
+            "features_snapshot": {"score": 72, "volume_spike": 1.0},
+        },
+        {
+            "outcome": "SL_HIT",
+            "score": None,
+            "features_snapshot": {"score": 70, "volume_spike": 3.0},
+        },
+        {
+            "outcome": "SL_HIT",
+            "score": None,
+            "features_snapshot": {"score": 80, "volume_spike": 3.0},
+        },
+    ]
+    config = {
+        "signals": {
+            "conditions": [{"field": "score", "operator": ">=", "value": 70}]
+        }
+    }
+    simulations = simulate_points(
+        rows,
+        bucket,
+        (0, -1, -3, -5),
+        config,
+        lambda row: row["features_snapshot"],
+    )
+    minus_one = next(item for item in simulations if item["points"] == -1)
+    assert minus_one["status"] == "SIMULATED"
+    assert minus_one["impact"]["sl_avoided"] == 1
+    assert minus_one["impact"]["tp_lost"] == 0
+    assert minus_one["impact"]["score_minimum"] == 70
+    assert select_simulated_points(
+        simulations,
+        {
+            "score_global_replay_min_retention": 0.60,
+            "score_global_replay_max_tp_loss_rate": 0.05,
+            "score_global_replay_min_sl_reduction_rate": 0.02,
+        },
+    ) == -1
+
+
+def test_simulation_without_score_baseline_cannot_choose_default_minus_five():
+    simulations = simulate_points(
+        [{"outcome": "SL_HIT", "features_snapshot": {"volume_spike": 3.0}}],
+        {"indicator": "volume_spike", "condition": lambda value: value >= 2.0},
+        (0, -1, -5),
+        {},
+        lambda row: row["features_snapshot"],
+    )
+    assert {item["status"] for item in simulations} == {
+        "BLOCKED_SCORE_BASELINE_UNAVAILABLE"
+    }
+    assert select_simulated_points(simulations, {}) is None

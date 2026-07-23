@@ -50,15 +50,9 @@ def _safe_provider_error(exc: Exception) -> tuple[str, str]:
     name = exc.__class__.__name__.lower()
     status = getattr(exc, "status_code", None)
     request_id = str(getattr(exc, "request_id", "") or "")
-    if status == 401 or "authentication" in name:
-        return "UNAUTHORIZED", request_id
-    if status == 429 or "ratelimit" in name:
-        return "RATE_LIMITED", request_id
-    if "timeout" in name:
-        return "TIMEOUT", request_id
-    if status == 404 or "notfound" in name:
-        return "UNAVAILABLE", request_id
-    return "PROVIDER_ERROR", request_id
+    if status in {401, 403, 404} or "authentication" in name or "notfound" in name:
+        return "UNAVAILABLE_FOR_KEY", request_id
+    return "API_ERROR", request_id
 
 
 async def _client(db: AsyncSession, user_id: UUID, timeout_seconds: float = 30.0):
@@ -76,8 +70,13 @@ async def _client(db: AsyncSession, user_id: UUID, timeout_seconds: float = 30.0
 
 
 def configured_model(settings: Mapping[str, Any] | None) -> str:
-    value = str((settings or {}).get("ai_model") or DEFAULT_AI_MODEL)
-    return value if value in SUPPORTED_AI_MODELS else DEFAULT_AI_MODEL
+    raw = (settings or {}).get("ai_model")
+    if raw in (None, ""):
+        return DEFAULT_AI_MODEL
+    value = str(raw)
+    if value not in SUPPORTED_AI_MODELS:
+        raise ValueError("BLOCKED_MODEL_UNAVAILABLE:UNSUPPORTED_CONFIGURED_MODEL")
+    return value
 
 
 async def list_models_for_key(
@@ -98,7 +97,7 @@ async def list_models_for_key(
             items.append({
                 "id": model_id,
                 **metadata,
-                "status": "AVAILABLE" if item is not None else "UNAVAILABLE",
+                "status": "AVAILABLE" if item is not None else "UNAVAILABLE_FOR_KEY",
                 "available": item is not None,
                 "capabilities": (dumped or {}).get("capabilities") or {},
                 "max_input_tokens": (dumped or {}).get("max_input_tokens"),
@@ -178,4 +177,3 @@ async def retrieve_model_for_key(
         }
     finally:
         await client.close()
-

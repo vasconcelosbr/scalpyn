@@ -514,7 +514,8 @@ class ProfileScoreOptimizationService:
                    st.score_engine_version_id,st.symbol,st.timeframe,st.outcome,
                    st.pnl_pct,st.holding_seconds,st.mae_pct,st.mfe_pct,
                    st.created_at,st.completed_at,st.features_snapshot,
-                   st.decision_id,st.event_id,st.ranking_id
+                   st.decision_id,st.event_id,st.ranking_id,
+                   st.profile_config_hash,st.score_engine_config_hash
               FROM shadow_trades st
              WHERE st.user_id=:uid
                AND st.source IN ('L1_SPECTRUM','L3','L3_LAB','L3_REJECTED')
