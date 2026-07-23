@@ -1005,13 +1005,11 @@ def validate_ai_response_against_payload(
     if response.get("report_schema_version") != AI_REPORT_SCHEMA_VERSION:
         raise ValueError("ai_report_schema_mismatch")
 
-    candidates_by_id: dict[str, Mapping[str, Any]] = {}
     allowed_by_profile: dict[str, set[str]] = defaultdict(set)
     known_by_profile: dict[str, set[str]] = defaultdict(set)
     for candidate in payload.get("candidates") or []:
         profile_id = str(candidate["profile_id"])
         candidate_id = str(candidate["candidate_id"])
-        candidates_by_id[candidate_id] = candidate
         known_by_profile[profile_id].add(candidate_id)
         if (candidate.get("validation") or {}).get("status") == "VALIDATED":
             allowed_by_profile[profile_id].add(candidate_id)
@@ -1099,23 +1097,22 @@ def validate_ai_response_against_payload(
         })
 
     prioritization = response.get("prioritization") or {}
-    priority_ids: dict[str, list[str]] = {}
-    seen_priority_ids: set[str] = set()
-    for level in ("high", "medium", "low"):
-        candidate_ids = list(dict.fromkeys(
-            str(value) for value in prioritization.get(level) or []
-        ))[:60]
-        if any(
-            candidate_id not in candidates_by_id
-            or (candidates_by_id[candidate_id].get("validation") or {}).get("status")
-            != "VALIDATED"
-            for candidate_id in candidate_ids
-        ):
-            raise ValueError("ai_prioritized_unknown_or_unvalidated_candidate")
-        if seen_priority_ids.intersection(candidate_ids):
-            raise ValueError("ai_candidate_in_multiple_priorities")
-        seen_priority_ids.update(candidate_ids)
-        priority_ids[level] = candidate_ids
+    priority_ids: dict[str, list[str]] = {
+        "high": [],
+        "medium": [],
+        "low": [],
+    }
+    for item in bounded:
+        level = {
+            "ALTA": "high",
+            "MEDIA": "medium",
+            "BAIXA": "low",
+        }[item["priority"]]
+        priority_ids[level].extend(item["selected_candidate_ids"])
+    priority_ids = {
+        level: list(dict.fromkeys(candidate_ids))
+        for level, candidate_ids in priority_ids.items()
+    }
 
     clean = {
         "analysis_contract_version": ANALYSIS_CONTRACT_VERSION,

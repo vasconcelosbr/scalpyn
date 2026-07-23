@@ -284,6 +284,26 @@ def test_ai_guard_rejects_corrupted_control_fragments():
         validate_ai_response_against_payload(response, payload)
 
 
+def test_ai_prioritization_is_derived_only_from_validated_selections():
+    profile_id = str(uuid4())
+    payload = {
+        "candidates": [{
+            "profile_id": profile_id,
+            "candidate_id": "candidate-a",
+            "validation": {"status": "VALIDATED"},
+        }]
+    }
+    response = _valid_ai_response(payload)
+    response["profile_recommendations"][0].update({
+        "priority": "ALTA",
+        "selected_candidate_ids": ["candidate-a"],
+    })
+    response["prioritization"]["high"] = ["candidate-invented"]
+    clean = validate_ai_response_against_payload(response, payload)
+    assert clean["prioritization"]["high"] == ["candidate-a"]
+    assert clean["selected_candidate_ids"] == ["candidate-a"]
+
+
 def test_bounded_ai_context_keeps_candidates_once_and_omits_provider_policy():
     payload = {
         "analysis_contract_version": ANALYSIS_CONTRACT_VERSION,
