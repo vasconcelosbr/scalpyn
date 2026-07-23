@@ -44,6 +44,7 @@ from ..schemas.profile_intelligence import (
     ManualAdjustmentRollbackRequest,
     ScoreThresholdSimulationRequest,
     ScoreGlobalAnalysisRequest,
+    ProfileIntelligenceAIModelRequest,
 )
 from ..services.profile_intelligence_audit_service import log_pi_event
 from ..services.profile_intelligence_manual_service import (
@@ -84,6 +85,10 @@ def _manual_http_error(exc: ValueError) -> HTTPException:
     return HTTPException(status_code=409 if code in _MANUAL_CONFLICTS else 422, detail=code)
 
 _DEFAULT_SETTINGS = {
+    "ai_provider": "anthropic",
+    "ai_model": "claude-haiku-4-5-20251001",
+    "ai_model_status": "NOT_TESTED",
+    "analysis_skill_version": "profile_intelligence_analysis_skill_v2",
     "min_support": 0.05,
     "min_closed_trades": 30,
     "min_lift": 1.1,
@@ -465,6 +470,56 @@ async def get_score_global_overview(
             db, user_id, lookback_days
         )
     except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/score-intelligence/ai-models")
+async def get_profile_intelligence_ai_models(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    return await profile_score_optimization_service.ai_models(db, user_id)
+
+
+@router.post("/score-intelligence/ai-models/refresh")
+async def refresh_profile_intelligence_ai_models(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    try:
+        return await profile_score_optimization_service.refresh_ai_models(db, user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/score-intelligence/ai-models/test")
+async def test_profile_intelligence_ai_model(
+    request: ProfileIntelligenceAIModelRequest,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    try:
+        return await profile_score_optimization_service.test_ai_model(
+            db, user_id, request.model_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.put("/score-intelligence/ai-model")
+async def save_profile_intelligence_ai_model(
+    request: ProfileIntelligenceAIModelRequest,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    try:
+        result = await profile_score_optimization_service.save_ai_model(
+            db, user_id, request.model_id, request.reason
+        )
+        await db.commit()
+        return result
+    except ValueError as exc:
+        await db.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 

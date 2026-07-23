@@ -503,6 +503,11 @@ interface CreateProfileResult {
 }
 
 interface PISettings {
+  ai_provider?: string;
+  ai_model?: string;
+  ai_model_status?: string;
+  ai_model_verified_at?: string;
+  analysis_skill_version?: string;
   min_support?: number;
   min_closed_trades?: number;
   min_lift?: number;
@@ -552,6 +557,29 @@ interface PISettings {
   score_global_challenger_min_distinct_days?: number;
   score_global_challenger_max_single_symbol_share?: number;
   score_global_challenger_max_single_day_share?: number;
+}
+
+interface PIAIModel {
+  id: string;
+  label: string;
+  positioning: string;
+  status: string;
+  available: boolean | null;
+  capabilities?: Record<string, unknown>;
+  max_input_tokens?: number | null;
+  max_tokens?: number | null;
+}
+
+interface PIAIModelsResponse {
+  provider: string;
+  current_model: string;
+  default_model?: string;
+  model_status?: string;
+  verified_at?: string | null;
+  analysis_skill_version: string;
+  request_id?: string | null;
+  error_code?: string;
+  models: PIAIModel[];
 }
 
 interface AutopilotCandidate {
@@ -819,6 +847,10 @@ export default function ProfileIntelligencePage() {
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [settings, setSettings] = useState<PISettings>({});
+  const [aiModels, setAiModels] = useState<PIAIModelsResponse | null>(null);
+  const [selectedAiModel, setSelectedAiModel] = useState("");
+  const [aiModelBusy, setAiModelBusy] = useState<"refresh" | "test" | "save" | null>(null);
+  const [aiModelResult, setAiModelResult] = useState<string | null>(null);
   const [mlChallengers, setMlChallengers] = useState<Record<string, {
     available: boolean; implemented: boolean; installed: boolean;
     operational: boolean; status: string; effective_contribution: number;
@@ -1021,9 +1053,14 @@ export default function ProfileIntelligencePage() {
         const d = await apiGet("/profile-intelligence/audit?limit=100");
         setAudit(d?.events || d?.audit_log || d?.logs || []);
       } else if (tab === "Settings") {
-        const d = await apiGet("/profile-intelligence/settings");
+        const [d, modelData] = await Promise.all([
+          apiGet("/profile-intelligence/settings"),
+          apiGet<PIAIModelsResponse>("/profile-intelligence/score-intelligence/ai-models"),
+        ]);
         setSettings(d?.settings || d || {});
         if (d?.ml_challengers) setMlChallengers(d.ml_challengers);
+        setAiModels(modelData);
+        setSelectedAiModel(modelData.current_model);
       }
     } catch (e) {
       console.error(e);
@@ -1352,6 +1389,77 @@ export default function ProfileIntelligencePage() {
   };
 
   // ── Save Settings ─────────────────────────────────────────────────────────────
+
+  const handleRefreshAiModels = async () => {
+    setAiModelBusy("refresh"); setAiModelResult(null);
+    try {
+      const result = await apiPost<PIAIModelsResponse>(
+        "/profile-intelligence/score-intelligence/ai-models/refresh", {}
+      );
+      setAiModels(result);
+      setAiModelResult(result.error_code
+        ? `Consulta concluída com ${result.error_code}.`
+        : `Disponibilidade atualizada${result.request_id ? ` · request ${result.request_id}` : ""}.`);
+    } catch (e: unknown) {
+      setAiModelResult(`Falha ao consultar modelos: ${errorMessage(e)}`);
+    } finally { setAiModelBusy(null); }
+  };
+
+  const handleTestAiModel = async () => {
+    if (!selectedAiModel) return;
+    setAiModelBusy("test"); setAiModelResult(null);
+    try {
+      const result = await apiPost<{
+        status: string; available: boolean; request_id?: string | null;
+      }>("/profile-intelligence/score-intelligence/ai-models/test", {
+        model_id: selectedAiModel,
+      });
+      setAiModelResult(
+        `${result.status}${result.request_id ? ` · request ${result.request_id}` : ""}`
+      );
+      setAiModels(current => current ? {
+        ...current,
+        models: current.models.map(model => model.id === selectedAiModel
+          ? { ...model, status: result.status, available: result.available }
+          : model),
+      } : current);
+    } catch (e: unknown) {
+      setAiModelResult(`Falha no teste: ${errorMessage(e)}`);
+    } finally { setAiModelBusy(null); }
+  };
+
+  const handleSaveAiModel = async () => {
+    if (!selectedAiModel) return;
+    setAiModelBusy("save"); setAiModelResult(null);
+    try {
+      const result = await apiPut<{
+        current_model: string; status: string; verified_at: string;
+        request_id?: string | null; analysis_skill_version: string;
+      }>("/profile-intelligence/score-intelligence/ai-model", {
+        model_id: selectedAiModel,
+        reason: "Seleção manual em Profile Intelligence > Settings",
+      });
+      setSettings(current => ({
+        ...current,
+        ai_provider: "anthropic",
+        ai_model: result.current_model,
+        ai_model_status: result.status,
+        ai_model_verified_at: result.verified_at,
+        analysis_skill_version: result.analysis_skill_version,
+      }));
+      setAiModels(current => current ? {
+        ...current,
+        current_model: result.current_model,
+        model_status: result.status,
+        verified_at: result.verified_at,
+      } : current);
+      setAiModelResult(
+        `Modelo salvo e verificado${result.request_id ? ` · request ${result.request_id}` : ""}.`
+      );
+    } catch (e: unknown) {
+      setAiModelResult(`Modelo não salvo: ${errorMessage(e)}`);
+    } finally { setAiModelBusy(null); }
+  };
 
   const handleSaveSettings = async () => {
     setSavingSettings(true);
@@ -3116,6 +3224,70 @@ export default function ProfileIntelligencePage() {
             <div className="skeleton h-64 rounded-[var(--radius-lg)]" />
           ) : (
             <div className="card p-5 space-y-4">
+              <section className="space-y-3 rounded-lg border border-violet-500/25 bg-violet-500/5 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-[14px] font-semibold text-[var(--text-primary)]">
+                      IA do Score Intelligence
+                    </h2>
+                    <p className="mt-1 text-[11px] text-[var(--text-tertiary)]">
+                      Disponibilidade consultada na Models API para a chave Anthropic configurada. Não há fallback automático.
+                    </p>
+                  </div>
+                  <span className="rounded border border-violet-400/30 px-2 py-1 font-mono text-[9px] text-violet-300">
+                    {aiModels?.analysis_skill_version || "profile_intelligence_analysis_skill_v2"}
+                  </span>
+                </div>
+                <div className="grid gap-3 md:grid-cols-[1fr_auto_auto_auto]">
+                  <select
+                    className="input"
+                    value={selectedAiModel}
+                    onChange={event => {
+                      setSelectedAiModel(event.target.value);
+                      setAiModelResult(null);
+                    }}
+                  >
+                    {(aiModels?.models || []).map(model => (
+                      <option key={model.id} value={model.id}>
+                        {model.label} · {model.status}
+                      </option>
+                    ))}
+                  </select>
+                  <button type="button" className="btn btn-secondary" disabled={aiModelBusy !== null} onClick={() => void handleRefreshAiModels()}>
+                    <RefreshCw className={`h-3.5 w-3.5 ${aiModelBusy === "refresh" ? "animate-spin" : ""}`} />
+                    Atualizar
+                  </button>
+                  <button type="button" className="btn btn-secondary" disabled={aiModelBusy !== null || !selectedAiModel} onClick={() => void handleTestAiModel()}>
+                    Testar
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={
+                      aiModelBusy !== null ||
+                      !selectedAiModel ||
+                      aiModels?.models.find(model => model.id === selectedAiModel)?.status !== "AVAILABLE"
+                    }
+                    onClick={() => void handleSaveAiModel()}
+                  >
+                    Salvar modelo
+                  </button>
+                </div>
+                {selectedAiModel && (
+                  <div className="grid gap-2 text-[10px] text-[var(--text-secondary)] md:grid-cols-3">
+                    <div>Atual: <span className="font-mono text-[var(--text-primary)]">{aiModels?.current_model || "—"}</span></div>
+                    <div>Selecionado: <span className="font-mono text-[var(--text-primary)]">{selectedAiModel}</span></div>
+                    <div>Status: <span className="font-mono text-[var(--text-primary)]">{aiModels?.models.find(model => model.id === selectedAiModel)?.status || "NOT_TESTED"}</span></div>
+                    <div className="md:col-span-3">{aiModels?.models.find(model => model.id === selectedAiModel)?.positioning}</div>
+                  </div>
+                )}
+                {aiModelResult && (
+                  <div className="rounded border border-white/10 px-3 py-2 text-[10px] text-[var(--text-secondary)]">
+                    {aiModelResult}
+                  </div>
+                )}
+              </section>
+
               <h2 className="text-[14px] font-semibold text-[var(--text-primary)]">Parâmetros do Engine</h2>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

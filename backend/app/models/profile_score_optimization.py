@@ -37,6 +37,10 @@ class ProfileScoreOptimizationRun(Base):
     adjustment_envelope = Column(JSONB, nullable=True)
     provider = Column(String(32), nullable=True)
     model = Column(String(120), nullable=True)
+    analysis_contract_version = Column(String(64), nullable=True)
+    analysis_skill_version = Column(String(120), nullable=True)
+    ai_model_requested = Column(String(120), nullable=True)
+    ai_model_effective = Column(String(120), nullable=True)
     skill_id = Column(UUID(as_uuid=True), ForeignKey("ai_skills.id", ondelete="SET NULL"), nullable=True)
     error_code = Column(String(120), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -45,6 +49,23 @@ class ProfileScoreOptimizationRun(Base):
     __table_args__ = (
         UniqueConstraint("user_id", "idempotency_key", name="uq_pi_score_run_user_idempotency"),
     )
+
+
+class ProfileIntelligenceAIModelAudit(Base):
+    __tablename__ = "profile_intelligence_ai_model_audit"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    config_id = Column(
+        UUID(as_uuid=True), ForeignKey("config_profiles.id", ondelete="SET NULL"), nullable=True
+    )
+    previous_model = Column(String(120), nullable=True)
+    new_model = Column(String(120), nullable=False)
+    status = Column(String(32), nullable=False)
+    request_id = Column(String(160), nullable=True)
+    reason = Column(Text, nullable=True)
+    capabilities = Column(JSONB, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
 class ProfileScoreReplayResult(Base):

@@ -146,6 +146,11 @@ class ScoreGlobalAnalysisRequest(BaseModel):
     idempotency_key: Optional[str] = Field(default=None, min_length=12, max_length=160)
 
 
+class ProfileIntelligenceAIModelRequest(BaseModel):
+    model_id: str = Field(min_length=3, max_length=120)
+    reason: Optional[str] = Field(default=None, max_length=2000)
+
+
 class AutopilotSettingsUpdate(BaseModel):
     enabled: bool
     settings: Optional[Dict[str, Any]] = None

@@ -25,7 +25,9 @@ from sqlalchemy import delete, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.ai_skill import AiSkill
+from ..models.config_profile import ConfigProfile
 from ..models.profile_score_optimization import (
+    ProfileIntelligenceAIModelAudit,
     ProfileScoreOptimizationChallenger,
     ProfileScoreOptimizationRun,
     ProfileScorePerformanceDaily,
@@ -36,16 +38,40 @@ from .calibration_orchestrator_v2 import content_hash
 from .indicator_lift_service import _get_indicator_buckets
 from .profile_intelligence_contract import official_params, official_where
 from .profile_intelligence_manual_service import apply_manual_action
+from .profile_intelligence_ai_models import (
+    DEFAULT_AI_MODEL,
+    SUPPORTED_AI_MODELS,
+    configured_model,
+    list_models_for_key,
+    retrieve_model_for_key,
+)
+from .profile_intelligence_analysis_v2 import (
+    AI_REPORT_SCHEMA_V2,
+    ANALYSIS_CONTRACT_VERSION,
+    ANALYSIS_SKILL_VERSION,
+    PROFILE_INTELLIGENCE_ANALYSIS_SKILL_V2,
+    build_candidates,
+    build_overlap_analysis,
+    cohort_metrics,
+    confusion_matrix,
+    deduplicate_rows,
+    validate_ai_response_against_payload,
+    validate_analysis_payload,
+)
 from .profile_versioning_v2 import create_shadow_profile_version
 
 
-DATASET_CONTRACT = "pi-global-counterfactual-v1"
+DATASET_CONTRACT = ANALYSIS_CONTRACT_VERSION
 ANALYSIS_SOURCES = ("L1_SPECTRUM", "L3", "L3_LAB", "L3_REJECTED")
 CLOSED_OUTCOMES = ("TP_HIT", "SL_HIT", "TIMEOUT")
 CHAMPION_SOURCE = "PI_CHAMPION_CONTROL"
 CHALLENGER_SOURCE = "PI_CHALLENGER"
 
 DEFAULT_POLICY: dict[str, Any] = {
+    "ai_provider": "anthropic",
+    "ai_model": "claude-haiku-4-5-20251001",
+    "ai_model_status": "NOT_TESTED",
+    "analysis_skill_version": ANALYSIS_SKILL_VERSION,
     "score_global_rapid_sl_candles": 12,
     "score_global_max_analysis_rows": 100000,
     "score_global_min_bucket_trades": 30,
@@ -121,6 +147,10 @@ AI_REPORT_SCHEMA: dict[str, Any] = {
         "safeguards",
     ],
 }
+
+# Keep the public constant import-compatible while enforcing the v2 response
+# contract for all new runs.
+AI_REPORT_SCHEMA = AI_REPORT_SCHEMA_V2
 
 
 def _json(value: Any) -> Any:
@@ -357,6 +387,116 @@ class ProfileScoreOptimizationService:
             raw = json.loads(raw)
         return {**DEFAULT_POLICY, **dict(raw or {})}
 
+    async def ai_models(self, db: AsyncSession, user_id: UUID) -> dict[str, Any]:
+        policy = await self.policy(db, user_id)
+        current = configured_model(policy)
+        return {
+            "provider": "anthropic",
+            "current_model": current,
+            "default_model": DEFAULT_AI_MODEL,
+            "model_status": policy.get("ai_model_status") or "NOT_TESTED",
+            "verified_at": policy.get("ai_model_verified_at"),
+            "analysis_skill_version": ANALYSIS_SKILL_VERSION,
+            "models": [
+                {
+                    "id": model_id,
+                    **metadata,
+                    "status": (
+                        policy.get("ai_model_status")
+                        if model_id == current and policy.get("ai_model_status")
+                        else "NOT_TESTED"
+                    ),
+                    "available": (
+                        policy.get("ai_model_status") == "AVAILABLE"
+                        if model_id == current
+                        else None
+                    ),
+                    "capabilities": (
+                        policy.get("ai_model_capabilities") or {}
+                        if model_id == current
+                        else {}
+                    ),
+                }
+                for model_id, metadata in SUPPORTED_AI_MODELS.items()
+            ],
+        }
+
+    async def refresh_ai_models(
+        self, db: AsyncSession, user_id: UUID
+    ) -> dict[str, Any]:
+        result = await list_models_for_key(db, user_id)
+        result["current_model"] = configured_model(await self.policy(db, user_id))
+        return result
+
+    async def test_ai_model(
+        self, db: AsyncSession, user_id: UUID, model_id: str
+    ) -> dict[str, Any]:
+        return await retrieve_model_for_key(db, user_id, model_id)
+
+    async def save_ai_model(
+        self,
+        db: AsyncSession,
+        user_id: UUID,
+        model_id: str,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        verification = await retrieve_model_for_key(db, user_id, model_id)
+        if not verification.get("available"):
+            raise ValueError(
+                f"ai_model_not_available:{verification.get('status') or 'UNAVAILABLE'}"
+            )
+        config = await db.scalar(
+            select(ConfigProfile)
+            .where(
+                ConfigProfile.user_id == user_id,
+                ConfigProfile.config_type == "profile_intelligence",
+                ConfigProfile.pool_id.is_(None),
+                ConfigProfile.is_active.is_(True),
+            )
+            .order_by(ConfigProfile.updated_at.desc())
+            .limit(1)
+        )
+        previous = configured_model(config.config_json if config else {})
+        updated = {
+            **DEFAULT_POLICY,
+            **dict((config.config_json if config else {}) or {}),
+            "ai_provider": "anthropic",
+            "ai_model": model_id,
+            "ai_model_verified_at": verification["verified_at"],
+            "ai_model_status": verification["status"],
+            "ai_model_capabilities": verification.get("capabilities") or {},
+            "analysis_skill_version": ANALYSIS_SKILL_VERSION,
+        }
+        if config is None:
+            config = ConfigProfile(
+                user_id=user_id,
+                pool_id=None,
+                config_type="profile_intelligence",
+                config_json=updated,
+                is_active=True,
+            )
+            db.add(config)
+            await db.flush()
+        else:
+            config.config_json = updated
+        db.add(ProfileIntelligenceAIModelAudit(
+            user_id=user_id,
+            config_id=config.id,
+            previous_model=previous,
+            new_model=model_id,
+            status=verification["status"],
+            request_id=verification.get("request_id"),
+            reason=(reason or "Profile Intelligence Settings")[:2000],
+            capabilities=verification.get("capabilities") or {},
+        ))
+        await db.flush()
+        return {
+            **verification,
+            "previous_model": previous,
+            "current_model": model_id,
+            "analysis_skill_version": ANALYSIS_SKILL_VERSION,
+        }
+
     async def _official_rows(
         self, db: AsyncSession, user_id: UUID, lookback_days: int, cutoff: datetime,
         limit: int,
@@ -372,7 +512,8 @@ class ProfileScoreOptimizationService:
             SELECT st.id,st.source,st.profile_id,st.profile_version_id,
                    st.score_engine_version_id,st.symbol,st.timeframe,st.outcome,
                    st.pnl_pct,st.holding_seconds,st.mae_pct,st.mfe_pct,
-                   st.created_at,st.features_snapshot
+                   st.created_at,st.completed_at,st.features_snapshot,
+                   st.decision_id,st.event_id,st.ranking_id
               FROM shadow_trades st
              WHERE st.user_id=:uid
                AND st.source IN ('L1_SPECTRUM','L3','L3_LAB','L3_REJECTED')
@@ -571,6 +712,7 @@ class ProfileScoreOptimizationService:
         context: Mapping[str, Any],
         candidates: Sequence[Mapping[str, Any]],
         timeout_seconds: float,
+        model_id: str,
     ) -> tuple[dict[str, Any], str | None, str | None, UUID | None]:
         skill = await db.scalar(
             select(AiSkill).where(
@@ -588,6 +730,7 @@ class ProfileScoreOptimizationService:
             "profile_recommendations (array de {profile_id,diagnosis,selected_candidate_ids}), "
             "risks (array), safeguards (array)."
         )
+        bundled = PROFILE_INTELLIGENCE_ANALYSIS_SKILL_V2
         custom_prompt = str(skill.prompt_text or "").strip() if skill else ""
         prompt = (
             f"{bundled}\n\nInstruções adicionais configuradas pelo usuário:\n"
@@ -599,12 +742,17 @@ class ProfileScoreOptimizationService:
         api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
             raise ValueError("anthropic_key_not_configured")
+        availability = await retrieve_model_for_key(db, user_id, model_id)
+        if not availability.get("available"):
+            raise ValueError(
+                f"BLOCKED_MODEL_UNAVAILABLE:{availability.get('status') or 'UNAVAILABLE'}"
+            )
         # Do not keep a PostgreSQL transaction/connection open while waiting
         # for the external model provider.
         await db.commit()
         import anthropic  # type: ignore
 
-        model = os.getenv("PI_AI_MODEL", "claude-haiku-4-5-20251001")
+        model = model_id
         client = anthropic.AsyncAnthropic(
             api_key=api_key,
             timeout=max(30.0, min(float(timeout_seconds), 600.0)),
@@ -626,7 +774,10 @@ class ProfileScoreOptimizationService:
                     }
                 },
             )
-            parsed = _parse_ai_report_response(response)
+            parsed = validate_ai_response_against_payload(
+                _parse_ai_report_response(response),
+                context,
+            )
         finally:
             await client.close()
         if not str(parsed.get("executive_summary") or "").strip():
@@ -661,6 +812,8 @@ class ProfileScoreOptimizationService:
         idempotency_key: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         cutoff = datetime.now(timezone.utc)
+        policy = await self.policy(db, user_id)
+        requested_model = configured_model(policy)
         idem = idempotency_key or (
             f"pi-score-global:{user_id}:{cutoff.isoformat()}"
         )
@@ -672,6 +825,9 @@ class ProfileScoreOptimizationService:
             return self.public_run(existing), False
         queued_evidence = {
             "dataset_contract": DATASET_CONTRACT,
+            "analysis_contract_version": ANALYSIS_CONTRACT_VERSION,
+            "analysis_skill_version": ANALYSIS_SKILL_VERSION,
+            "ai_model_requested": requested_model,
             "cutoff_at": cutoff,
             "lookback_days": lookback_days,
             "status": "QUEUED",
@@ -690,6 +846,9 @@ class ProfileScoreOptimizationService:
             }),
             idempotency_key=idem,
             evidence_json=_json(queued_evidence),
+            analysis_contract_version=ANALYSIS_CONTRACT_VERSION,
+            analysis_skill_version=ANALYSIS_SKILL_VERSION,
+            ai_model_requested=requested_model,
         )
         db.add(run)
         await db.flush()
@@ -704,24 +863,82 @@ class ProfileScoreOptimizationService:
         cutoff: datetime,
         truncated: bool,
     ) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
-        quadrants = self._quadrants(
-            rows, int(policy["score_global_rapid_sl_candles"])
+        deduplicated, deduplication = deduplicate_rows(rows)
+        buckets = list(_get_indicator_buckets())
+        feature_cache: dict[str, dict[str, Any]] = {}
+
+        def cached_features(row: Mapping[str, Any]) -> dict[str, Any]:
+            key = str(row.get("canonical_trade_key") or row.get("id") or id(row))
+            if key not in feature_cache:
+                feature_cache[key] = _features(row)
+            return feature_cache[key]
+
+        candidates, candidate_summary, applications, counterfactual = build_candidates(
+            deduplicated,
+            champions,
+            policy,
+            buckets,
+            cached_features,
         )
-        candidates = self._candidates(rows, champions, policy)
+        overlaps = build_overlap_analysis(
+            deduplicated,
+            candidates,
+            {str(bucket["bucket_label"]): bucket for bucket in buckets},
+            cached_features,
+        )
+        approved = [
+            row for row in deduplicated if row.get("source") in {"L3", "L3_LAB"}
+        ]
+        rejected = [
+            row for row in deduplicated if row.get("source") == "L3_REJECTED"
+        ]
         evidence = {
             "dataset_contract": DATASET_CONTRACT,
+            "analysis_contract_version": ANALYSIS_CONTRACT_VERSION,
+            "analysis_skill_version": ANALYSIS_SKILL_VERSION,
             "cutoff_at": cutoff,
             "lookback_days": lookback_days,
             "row_count": len(rows),
+            "deduplicated_row_count": len(deduplicated),
             "truncated": truncated,
-            "quadrants": quadrants,
+            "deduplication": deduplication,
+            "cohorts": {
+                "approved": {
+                    "scope": "GLOBAL",
+                    "definition": "source in [L3,L3_LAB]",
+                    "metrics": cohort_metrics(approved),
+                },
+                "counterfactual_rejected": {
+                    "scope": "COUNTERFACTUAL",
+                    "definition": "source=L3_REJECTED",
+                    "metrics": cohort_metrics(rejected),
+                    "profile_attribution_allowed": False,
+                },
+            },
+            "confusion_matrix": confusion_matrix(deduplicated),
             "source_metrics": {
-                source: _metrics([row for row in rows if row["source"] == source])
+                source: cohort_metrics(
+                    [row for row in deduplicated if row["source"] == source]
+                )
                 for source in ANALYSIS_SOURCES
             },
+            "candidates": candidates,
             "candidate_count": len(candidates),
+            "candidate_accounting": candidate_summary,
+            "candidate_applications": applications,
+            "counterfactual_analysis": counterfactual,
+            "overlap_analysis": overlaps,
             "policy": policy,
+            "safety": {
+                "shadow_only": True,
+                "eligible_for_training": False,
+                "incumbent_mutated": False,
+                "training_or_promotion_allowed": False,
+                "autopilot_invoked": False,
+            },
         }
+        validation = validate_analysis_payload(evidence)
+        evidence["pre_ai_validation"] = validation
         return evidence, candidates, _hash({
             "evidence": evidence,
             "candidates": candidates,
@@ -780,6 +997,18 @@ class ProfileScoreOptimizationService:
             ))
             if not run:
                 raise ValueError("optimization_run_not_found")
+            validation = evidence.get("pre_ai_validation") or {}
+            if not validation.get("valid"):
+                hard_errors = list(validation.get("hard_errors") or [])
+                run.status = "ANALYSIS_BLOCKED"
+                run.evidence_json = _json(evidence)
+                run.input_hash = input_hash
+                run.error_code = str(
+                    hard_errors[0] if hard_errors else "ANALYSIS_PAYLOAD_INVALID"
+                )[:120]
+                run.completed_at = datetime.now(timezone.utc)
+                await db.commit()
+                return self.public_run(run)
             run.status = "AI_RUNNING"
             run.evidence_json = _json(evidence)
             run.input_hash = input_hash
@@ -791,6 +1020,7 @@ class ProfileScoreOptimizationService:
                 evidence,
                 candidates,
                 float(policy["score_global_ai_timeout_seconds"]),
+                run.ai_model_requested or configured_model(policy),
             )
             selected = set(report["selected_candidate_ids"])
             changes = [item for item in candidates if item["candidate_id"] in selected]
@@ -817,6 +1047,7 @@ class ProfileScoreOptimizationService:
             run.adjustment_envelope = _json(envelope)
             run.provider = provider
             run.model = model
+            run.ai_model_effective = model
             run.skill_id = skill_id
             run.status = "AI_COMPLETED"
             run.completed_at = datetime.now(timezone.utc)
@@ -827,8 +1058,13 @@ class ProfileScoreOptimizationService:
             ))
             if not run:
                 raise
-            run.status = "AI_FAILED"
-            run.error_code = str(exc)[:120]
+            error_code = str(exc)[:120]
+            run.status = (
+                "ANALYSIS_BLOCKED_MODEL_UNAVAILABLE"
+                if error_code.startswith("BLOCKED_MODEL_UNAVAILABLE")
+                else "AI_FAILED"
+            )
+            run.error_code = error_code
             run.completed_at = datetime.now(timezone.utc)
         await db.commit()
         return self.public_run(run)
@@ -1228,6 +1464,10 @@ class ProfileScoreOptimizationService:
             "id": str(row.id), "status": row.status, "lookback_days": row.lookback_days,
             "cutoff_at": row.cutoff_at.isoformat(), "dataset_contract": row.dataset_contract,
             "input_hash": row.input_hash, "provider": row.provider, "model": row.model,
+            "analysis_contract_version": row.analysis_contract_version,
+            "analysis_skill_version": row.analysis_skill_version,
+            "ai_model_requested": row.ai_model_requested,
+            "ai_model_effective": row.ai_model_effective,
             "skill_id": str(row.skill_id) if row.skill_id else None,
             "error_code": row.error_code,
             "created_at": row.created_at.isoformat() if row.created_at else None,

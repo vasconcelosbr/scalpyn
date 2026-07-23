@@ -48,6 +48,7 @@ from .profile_intelligence_manual import (
     ProfileIntelligenceManualAdjustmentEvent,
 )
 from .profile_score_optimization import (
+    ProfileIntelligenceAIModelAudit,
     ProfileScoreOptimizationRun,
     ProfileScoreReplayResult,
     ProfileScoreOptimizationChallenger,
@@ -108,6 +109,7 @@ __all__ = [
     "ProfileIntelligenceManualAdjustment",
     "ProfileIntelligenceManualAdjustmentEvent",
     "ProfileScoreOptimizationRun",
+    "ProfileIntelligenceAIModelAudit",
     "ProfileScoreReplayResult",
     "ProfileScoreOptimizationChallenger",
     "ProfileScorePerformanceDaily",

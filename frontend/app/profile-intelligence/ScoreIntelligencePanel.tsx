@@ -59,7 +59,13 @@ type GlobalOverview = {
 };
 type OptimizationRun = {
   id: string; status: string; cutoff_at: string; model?: string | null; error_code?: string | null;
-  evidence?: { candidate_count?: number; row_count?: number };
+  analysis_contract_version?: string | null; analysis_skill_version?: string | null;
+  ai_model_requested?: string | null; ai_model_effective?: string | null;
+  evidence?: {
+    candidate_count?: number; row_count?: number;
+    deduplication?: { missing_canonical_key_rows?: number; missing_canonical_key_by_source?: Record<string, number> };
+    pre_ai_validation?: { valid: boolean; hard_errors?: string[]; warnings?: string[] };
+  };
   executive_report?: {
     executive_summary?: string; global_diagnosis?: string[]; risks?: string[]; safeguards?: string[];
     profile_recommendations?: Array<{ profile_id: string; diagnosis: string; selected_candidate_ids: string[] }>;
@@ -70,6 +76,7 @@ type OptimizationRun = {
 };
 type PerformancePoint = { metric_date: string; variant: "champion" | "challenger"; closed: number; tp_rate: Num; sl_rate: Num; rapid_sl_rate: Num; pnl_sum_pct: Num };
 const ANALYSIS_RUNNING_STATES = new Set(["QUEUED", "ANALYZING", "AI_RUNNING"]);
+const ANALYSIS_BLOCKED_STATES = new Set(["ANALYSIS_BLOCKED", "ANALYSIS_BLOCKED_MODEL_UNAVAILABLE"]);
 
 const SCORE_LABELS: Record<string, string> = {
   liquidity_score: "Liquidity Score", market_structure_score: "Market Structure Score",
@@ -111,7 +118,7 @@ function GlobalOptimizationPanel({ lookbackDays }: { lookbackDays: number }) {
           `/profile-intelligence/score-intelligence/optimization-runs/${runId}`,
         );
         setRun(current);
-        if (current.status === "AI_COMPLETED") return current;
+        if (current.status === "AI_COMPLETED" || ANALYSIS_BLOCKED_STATES.has(current.status)) return current;
         if (current.status === "AI_FAILED") {
           throw new Error(current.error_code || "profile_score_ai_failed");
         }
@@ -191,6 +198,7 @@ function GlobalOptimizationPanel({ lookbackDays }: { lookbackDays: number }) {
         </div>
       </div>
       {overview && <><div className="mt-4 grid gap-2 md:grid-cols-4">{Object.entries(quadrants).map(([key,value]) => <div key={key} className="rounded border border-white/10 p-3"><div className="text-[9px] uppercase text-slate-500">{quadrantLabels[key] || key}</div><div className="mt-1 font-mono text-[15px]">{value.closed}</div><div className="mt-1 text-[9px] text-slate-400">TP {value.tp} · SL {value.sl} · símbolos {value.distinct_symbols} · dias {value.distinct_days}</div></div>)}</div><div className="mt-2 text-[9px] font-mono text-slate-500">{overview.dataset_contract} · cutoff {overview.cutoff_at} · rows {overview.row_count}{overview.truncated ? " · TRUNCATED" : ""} · profiles {overview.profiles.length}</div></>}
+      {run && ANALYSIS_BLOCKED_STATES.has(run.status) && <div className="mt-4 rounded border border-yellow-500/30 bg-yellow-500/5 p-3 text-[10px] text-yellow-100"><div className="font-semibold">{run.status} · nenhuma recomendação foi enviada à IA</div><div className="mt-1 font-mono">{run.error_code || "ANALYSIS_PAYLOAD_INVALID"}</div>{run.evidence?.deduplication?.missing_canonical_key_rows ? <div className="mt-1">Linhas sem chave canônica: {run.evidence.deduplication.missing_canonical_key_rows} · {JSON.stringify(run.evidence.deduplication.missing_canonical_key_by_source || {})}</div> : null}<div className="mt-1 text-yellow-200/70">Contrato {run.analysis_contract_version || "pi-ai-analysis-v2"} · skill {run.analysis_skill_version || "profile_intelligence_analysis_skill_v2"} · modelo solicitado {run.ai_model_requested || "—"}</div></div>}
       {run?.executive_report && <div className="mt-4 rounded border border-violet-400/20 bg-black/20 p-4"><div className="text-[9px] uppercase tracking-widest text-violet-300">Relatório executivo · {run.model || "IA configurada"}</div><p className="mt-2 text-[12px] leading-5">{run.executive_report.executive_summary}</p><div className="mt-3 grid gap-3 lg:grid-cols-2"><div>{(run.executive_report.global_diagnosis || []).map((item,index) => <div key={index} className="mt-1 text-[10px] text-slate-300">• {item}</div>)}</div><div>{(run.executive_report.profile_recommendations || []).map(item => <div key={item.profile_id} className="mb-2 rounded border border-white/10 p-2 text-[10px]"><span className="font-mono text-cyan-300">{item.profile_id.slice(0,8)}…</span> · {item.diagnosis}<div className="mt-1 text-slate-500">{item.selected_candidate_ids.length} ajustes selecionados</div></div>)}</div></div></div>}
       {run?.replays?.length ? <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">{run.replays.map(item => <div key={item.id} className={`rounded border p-3 text-[10px] ${item.status === "REPLAY_READY" ? "border-green-500/30 bg-green-500/5" : "border-yellow-500/30 bg-yellow-500/5"}`}><div className="font-semibold">{item.status} · {item.profile_id.slice(0,8)}…</div><div className="mt-1 font-mono">SL evitados {String(item.delta_metrics.prevented_sl ?? "—")} · TP perdidos {String(item.delta_metrics.lost_tp ?? "—")}</div><div className="mt-1">retenção {pct(item.delta_metrics.volume_retention as number | null)} · redução SL {pct(item.delta_metrics.sl_reduction_rate as number | null)}</div></div>)}</div> : null}
       {run?.challengers?.length ? <div className="mt-3 text-[10px] text-cyan-200">{run.challengers.length} challenger(s): {run.challengers.map(item => `${item.status} ${item.profile_id.slice(0,8)}…`).join(" · ")}</div> : null}

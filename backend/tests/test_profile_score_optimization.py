@@ -155,6 +155,8 @@ def test_global_analysis_task_is_routed_to_dedicated_compute_worker():
 def test_ai_report_schema_is_bounded_and_requires_governance_sections():
     assert AI_REPORT_SCHEMA["additionalProperties"] is False
     assert set(AI_REPORT_SCHEMA["required"]) == {
+        "analysis_contract_version",
+        "analysis_skill_version",
         "executive_summary",
         "global_diagnosis",
         "profile_recommendations",
@@ -162,16 +164,18 @@ def test_ai_report_schema_is_bounded_and_requires_governance_sections():
         "safeguards",
     }
     recommendations = AI_REPORT_SCHEMA["properties"]["profile_recommendations"]
-    assert "60" in recommendations["description"]
+    assert recommendations["maxItems"] == 60
     selected = recommendations["items"]["properties"]["selected_candidate_ids"]
-    assert "3" in selected["description"]
+    assert selected["maxItems"] == 3
 
 
 def test_ai_report_parser_accepts_structured_json_and_rejects_truncation():
     response = SimpleNamespace(
         stop_reason="end_turn",
         content=[SimpleNamespace(text=(
-            '{"executive_summary":"ok","global_diagnosis":[],'
+            '{"analysis_contract_version":"pi-ai-analysis-v2",'
+            '"analysis_skill_version":"profile_intelligence_analysis_skill_v2",'
+            '"executive_summary":"ok","global_diagnosis":[],'
             '"profile_recommendations":[],"risks":[],"safeguards":[]}'
         ))],
     )
@@ -198,6 +202,7 @@ def test_global_analysis_api_returns_accepted_for_async_execution():
 @pytest.mark.asyncio
 async def test_queue_global_analysis_persists_only_and_never_scans_dataset():
     service = ProfileScoreOptimizationService()
+    service.policy = AsyncMock(return_value=DEFAULT_POLICY)
     service._official_rows = AsyncMock(side_effect=AssertionError("dataset scan in API"))
     service._champions = AsyncMock(side_effect=AssertionError("champion scan in API"))
 
