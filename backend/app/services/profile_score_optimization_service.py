@@ -51,6 +51,7 @@ from .profile_intelligence_analysis_v2 import (
     ANALYSIS_SKILL_VERSION,
     PROFILE_INTELLIGENCE_ANALYSIS_SKILL_V2,
     build_candidates,
+    build_bounded_ai_context,
     build_overlap_analysis,
     cohort_metrics,
     confusion_matrix,
@@ -763,10 +764,10 @@ class ProfileScoreOptimizationService:
                 model=model,
                 max_tokens=8000,
                 system=prompt,
-                messages=[{"role": "user", "content": json.dumps({
-                    "evidence": context,
-                    "bounded_candidates": candidates,
-                }, default=str)}],
+                messages=[{
+                    "role": "user",
+                    "content": json.dumps({"analysis_payload": context}, default=str),
+                }],
                 output_config={
                     "format": {
                         "type": "json_schema",
@@ -1067,6 +1068,8 @@ class ProfileScoreOptimizationService:
                 run.completed_at = datetime.now(timezone.utc)
                 await db.commit()
                 return self.public_run(run)
+            ai_context = build_bounded_ai_context(evidence)
+            evidence["ai_context"] = ai_context["bounded_context"]
             run.status = "AI_RUNNING"
             run.evidence_json = _json(evidence)
             run.input_hash = input_hash
@@ -1075,7 +1078,7 @@ class ProfileScoreOptimizationService:
             report, provider, model, skill_id = await self._ai_report(
                 db,
                 run.user_id,
-                evidence,
+                ai_context,
                 candidates,
                 float(policy["score_global_ai_timeout_seconds"]),
                 run.ai_model_requested or configured_model(policy),

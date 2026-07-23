@@ -654,3 +654,122 @@ def validate_ai_response_against_payload(
     if not clean["executive_summary"]:
         raise ValueError("invalid_profile_score_ai_summary")
     return clean
+
+
+def build_bounded_ai_context(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the complete decision surface without verbose persisted detail.
+
+    The run keeps the full deterministic payload.  The external model receives
+    the same metrics at a bounded shape: candidates are present exactly once,
+    policy/provider capability blobs are omitted, and simulation metrics retain
+    only the fields that can affect the executive recommendation.
+    """
+
+    def compact_metrics(value: Mapping[str, Any] | None) -> dict[str, Any] | None:
+        if not value:
+            return None
+        return {
+            key: value.get(key)
+            for key in (
+                "closed",
+                "tp",
+                "sl",
+                "timeout",
+                "tp_rate",
+                "sl_rate",
+                "timeout_rate",
+                "avg_pnl_pct",
+                "pnl_sum_pct",
+                "distinct_symbols",
+                "distinct_days",
+                "max_single_symbol_share",
+                "max_single_day_share",
+            )
+            if key in value
+        }
+
+    candidates = []
+    for item in payload.get("candidates") or []:
+        discovery = item.get("discovery") or {}
+        validation = item.get("validation") or {}
+        candidates.append({
+            "candidate_id": item.get("candidate_id"),
+            "candidate_definition_id": item.get("candidate_definition_id"),
+            "scope": item.get("scope"),
+            "profile_id": item.get("profile_id"),
+            "profile_name": item.get("profile_name"),
+            "action_type": item.get("action_type"),
+            "target_path": item.get("target_path"),
+            "proposed_value": item.get("proposed_value"),
+            "sources": item.get("sources"),
+            "discovery": {
+                "present": compact_metrics(discovery.get("present")),
+                "absent": compact_metrics(discovery.get("absent")),
+                "sl_rate_delta_present_minus_absent": discovery.get(
+                    "sl_rate_delta_present_minus_absent"
+                ),
+            },
+            "validation": {
+                "status": validation.get("status"),
+                "present": compact_metrics(validation.get("present")),
+                "absent": compact_metrics(validation.get("absent")),
+                "sl_rate_delta_present_minus_absent": validation.get(
+                    "sl_rate_delta_present_minus_absent"
+                ),
+            },
+            "simulations": [{
+                "points": simulation.get("points"),
+                "status": simulation.get("status"),
+                "selected": simulation.get("selected"),
+                "metrics": compact_metrics(simulation.get("metrics")),
+            } for simulation in item.get("simulations") or []],
+        })
+
+    counterfactual = payload.get("counterfactual_analysis") or {}
+    counterfactual_buckets = sorted(
+        list(counterfactual.get("buckets") or []),
+        key=lambda item: int(((item.get("present") or {}).get("closed") or 0)),
+        reverse=True,
+    )[:50]
+    compact_counterfactual = {
+        "scope": counterfactual.get("scope"),
+        "source": counterfactual.get("source"),
+        "profile_attribution_allowed": counterfactual.get(
+            "profile_attribution_allowed"
+        ),
+        "baseline": compact_metrics(counterfactual.get("baseline")),
+        "buckets": [{
+            "bucket": item.get("bucket"),
+            "indicator": item.get("indicator"),
+            "present": compact_metrics(item.get("present")),
+            "absent": compact_metrics(item.get("absent")),
+            "sl_rate_delta_present_minus_absent": item.get(
+                "sl_rate_delta_present_minus_absent"
+            ),
+        } for item in counterfactual_buckets],
+    }
+    context = {
+        "analysis_contract_version": payload.get("analysis_contract_version"),
+        "analysis_skill_version": payload.get("analysis_skill_version"),
+        "cutoff_at": payload.get("cutoff_at"),
+        "lookback_days": payload.get("lookback_days"),
+        "row_count": payload.get("row_count"),
+        "deduplicated_row_count": payload.get("deduplicated_row_count"),
+        "deduplication": payload.get("deduplication"),
+        "cohorts": payload.get("cohorts"),
+        "source_metrics": payload.get("source_metrics"),
+        "confusion_matrix": payload.get("confusion_matrix"),
+        "candidate_accounting": payload.get("candidate_accounting"),
+        "counterfactual_analysis": compact_counterfactual,
+        "overlap_analysis": payload.get("overlap_analysis"),
+        "candidates": candidates,
+        "pre_ai_validation": payload.get("pre_ai_validation"),
+        "safety": payload.get("safety"),
+        "full_payload_persisted": True,
+    }
+    serialized = json.dumps(_json(context), separators=(",", ":"), default=str)
+    context["bounded_context"] = {
+        "char_count": len(serialized),
+        "sha256": hashlib.sha256(serialized.encode()).hexdigest(),
+    }
+    return context

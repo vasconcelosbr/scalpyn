@@ -7,6 +7,7 @@ from app.services.profile_intelligence_analysis_v2 import (
     ANALYSIS_CONTRACT_VERSION,
     ANALYSIS_SKILL_VERSION,
     canonical_trade_key,
+    build_bounded_ai_context,
     confusion_matrix,
     deduplicate_rows,
     validate_ai_response_against_payload,
@@ -149,6 +150,34 @@ def test_ai_guard_rejects_cross_profile_candidate_selection():
     }
     with pytest.raises(ValueError, match="cross_profile"):
         validate_ai_response_against_payload(response, payload)
+
+
+def test_bounded_ai_context_keeps_candidates_once_and_omits_provider_policy():
+    payload = {
+        "analysis_contract_version": ANALYSIS_CONTRACT_VERSION,
+        "analysis_skill_version": ANALYSIS_SKILL_VERSION,
+        "policy": {"ai_model_capabilities": {"large": "x" * 10000}},
+        "candidates": [{
+            "candidate_id": "c1",
+            "candidate_definition_id": "d1",
+            "scope": "PROFILE",
+            "profile_id": "p1",
+            "profile_name": "P1",
+            "action_type": "ADD_SCORE_PENALTY",
+            "target_path": "/scoring/generated_rules",
+            "proposed_value": {"points": -5},
+            "sources": ["L3"],
+            "discovery": {},
+            "validation": {"status": "VALIDATED"},
+            "simulations": [],
+        }],
+        "counterfactual_analysis": {"buckets": []},
+        "overlap_analysis": [],
+    }
+    context = build_bounded_ai_context(payload)
+    assert [item["candidate_id"] for item in context["candidates"]] == ["c1"]
+    assert "policy" not in context
+    assert context["bounded_context"]["char_count"] < 10000
 
 
 def test_model_allowlist_and_default_are_exact_and_no_unknown_fallback():
