@@ -204,6 +204,7 @@ TASK_ROUTES = {
     "app.tasks.profile_intelligence_job.monitor":        {"queue": QUEUE_STRUCTURAL},
     "app.tasks.profile_intelligence_job.feedback_loop": {"queue": QUEUE_STRUCTURAL_COMPUTE},
     "app.tasks.profile_intelligence_job.train_ml_challengers_for_user": {"queue": QUEUE_STRUCTURAL_COMPUTE},
+    "app.tasks.profile_score_optimization.analyze": {"queue": QUEUE_STRUCTURAL_COMPUTE},
     "app.tasks.profile_score_optimization.refresh": {"queue": QUEUE_STRUCTURAL_COMPUTE},
 
     # Opportunity Snapshot Evaluator — populates future_outcome on snapshots.
@@ -437,6 +438,16 @@ TASK_ANNOTATIONS = {
     "app.tasks.profile_intelligence_job.train_ml_challengers_for_user": {
         "time_limit": 1800,
         "soft_time_limit": 1740,
+        "max_retries": 0,
+        **_NO_REQUEUE_ON_WORKER_LOSS,
+    },
+    # User-triggered global score analysis.  It is intentionally asynchronous:
+    # the API only persists/dispatches the run, while heavy point-in-time
+    # aggregation and the provider call stay off the web request lifecycle.
+    "app.tasks.profile_score_optimization.analyze": {
+        "queue": QUEUE_STRUCTURAL_COMPUTE,
+        "time_limit": 900,
+        "soft_time_limit": 840,
         "max_retries": 0,
         **_NO_REQUEUE_ON_WORKER_LOSS,
     },

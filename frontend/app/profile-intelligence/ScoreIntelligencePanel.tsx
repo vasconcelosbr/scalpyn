@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, BarChart3, Brain, Download, Eye, Loader2, Play, ShieldCheck, SlidersHorizontal } from "lucide-react";
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { apiGet, apiPost } from "@/lib/api";
@@ -58,7 +58,7 @@ type GlobalOverview = {
   policy: Record<string, number>;
 };
 type OptimizationRun = {
-  id: string; status: string; cutoff_at: string; model?: string | null;
+  id: string; status: string; cutoff_at: string; model?: string | null; error_code?: string | null;
   evidence?: { candidate_count?: number; row_count?: number };
   executive_report?: {
     executive_summary?: string; global_diagnosis?: string[]; risks?: string[]; safeguards?: string[];
@@ -69,6 +69,7 @@ type OptimizationRun = {
   challengers?: Array<{ id: string; profile_id: string; status: string; champion_profile_version_id: string; challenger_profile_version_id: string }>;
 };
 type PerformancePoint = { metric_date: string; variant: "champion" | "challenger"; closed: number; tp_rate: Num; sl_rate: Num; rapid_sl_rate: Num; pnl_sum_pct: Num };
+const ANALYSIS_RUNNING_STATES = new Set(["QUEUED", "ANALYZING", "AI_RUNNING"]);
 
 const SCORE_LABELS: Record<string, string> = {
   liquidity_score: "Liquidity Score", market_structure_score: "Market Structure Score",
@@ -83,6 +84,7 @@ function GlobalOptimizationPanel({ lookbackDays }: { lookbackDays: number }) {
   const [performance, setPerformance] = useState<PerformancePoint[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const activePolls = useRef(new Map<string, Promise<OptimizationRun>>());
 
   const refresh = useCallback(async () => {
     const [globalData, runs, curve] = await Promise.all([
@@ -100,6 +102,38 @@ function GlobalOptimizationPanel({ lookbackDays }: { lookbackDays: number }) {
     void refresh().catch(value => setError(value instanceof Error ? value.message : String(value)));
   }, [refresh]);
 
+  const waitForAnalysis = useCallback(async (runId: string) => {
+    const active = activePolls.current.get(runId);
+    if (active) return active;
+    const polling = (async () => {
+      for (let attempt = 0; attempt < 300; attempt += 1) {
+        const current = await apiGet<OptimizationRun>(
+          `/profile-intelligence/score-intelligence/optimization-runs/${runId}`,
+        );
+        setRun(current);
+        if (current.status === "AI_COMPLETED") return current;
+        if (current.status === "AI_FAILED") {
+          throw new Error(current.error_code || "profile_score_ai_failed");
+        }
+        await new Promise(resolve => window.setTimeout(resolve, 2000));
+      }
+      throw new Error("profile_score_analysis_poll_timeout");
+    })();
+    activePolls.current.set(runId, polling);
+    try {
+      return await polling;
+    } finally {
+      activePolls.current.delete(runId);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!run?.id || !ANALYSIS_RUNNING_STATES.has(run.status) || busy) return;
+    void waitForAnalysis(run.id).catch(value => {
+      setError(value instanceof Error ? value.message : String(value));
+    });
+  }, [busy, run?.id, run?.status, waitForAnalysis]);
+
   const action = async (kind: "analysis" | "replay" | "challengers") => {
     setBusy(kind); setError(null);
     try {
@@ -108,7 +142,8 @@ function GlobalOptimizationPanel({ lookbackDays }: { lookbackDays: number }) {
           lookback_days: lookbackDays,
           idempotency_key: `pi-score-ui:${crypto.randomUUID()}`,
         });
-        setRun(await apiGet<OptimizationRun>(`/profile-intelligence/score-intelligence/optimization-runs/${created.id}`));
+        setRun(created);
+        await waitForAnalysis(created.id);
       } else if (run) {
         await apiPost(`/profile-intelligence/score-intelligence/optimization-runs/${run.id}/${kind === "replay" ? "replay" : "challengers"}`, {});
         setRun(await apiGet<OptimizationRun>(`/profile-intelligence/score-intelligence/optimization-runs/${run.id}`));
@@ -138,6 +173,7 @@ function GlobalOptimizationPanel({ lookbackDays }: { lookbackDays: number }) {
     return Array.from(byDate.values());
   }, [performance]);
 
+  const analysisRunning = Boolean(run && ANALYSIS_RUNNING_STATES.has(run.status));
   const quadrants = overview?.quadrants || {};
   const quadrantLabels: Record<string, string> = {
     approved_tp: "Aprovados → TP", approved_sl: "Aprovados → SL",
@@ -148,8 +184,8 @@ function GlobalOptimizationPanel({ lookbackDays }: { lookbackDays: number }) {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div><div className="flex items-center gap-2 text-[13px] font-semibold"><Brain className="h-4 w-4 text-violet-300" />Diagnóstico global de todos os profiles</div><p className="mt-1 text-[10px] text-[var(--text-tertiary)]">L1_SPECTRUM + L3 + L3_LAB + L3_REJECTED · propostas limitadas · replay e challenger obrigatórios.</p></div>
         <div className="flex flex-wrap gap-2">
-          <button className="btn btn-primary" disabled={!!busy} onClick={() => void action("analysis")}>{busy === "analysis" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Brain className="h-3.5 w-3.5" />} Analisar com IA</button>
-          <button className="btn btn-secondary" disabled={!run || !!busy || run.status === "AI_FAILED" || Boolean(run.challengers?.length)} onClick={() => void action("replay")}><Play className="h-3.5 w-3.5" /> Replay point-in-time</button>
+          <button className="btn btn-primary" disabled={!!busy || analysisRunning} onClick={() => void action("analysis")}>{busy === "analysis" || analysisRunning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Brain className="h-3.5 w-3.5" />} {analysisRunning ? run?.status : "Analisar com IA"}</button>
+          <button className="btn btn-secondary" disabled={!run || !!busy || !["AI_COMPLETED", "REPLAY_COMPLETED"].includes(run.status) || Boolean(run.challengers?.length)} onClick={() => void action("replay")}><Play className="h-3.5 w-3.5" /> Replay point-in-time</button>
           <button className="btn btn-secondary" disabled={!run?.replays?.some(item => item.status === "REPLAY_READY") || !!busy} onClick={() => void action("challengers")}><ShieldCheck className="h-3.5 w-3.5" /> Criar challengers shadow</button>
           <button className="btn btn-secondary" disabled={!run?.adjustment_envelope} onClick={download}><Download className="h-3.5 w-3.5" /> JSON</button>
         </div>

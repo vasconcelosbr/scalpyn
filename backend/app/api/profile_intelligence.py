@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..models.profile import Profile
+from ..models.profile_score_optimization import ProfileScoreOptimizationRun
 from ..models.profile_intelligence import (
     ProfileIntelligenceRun,
     ProfileIndicatorStats,
@@ -120,6 +121,7 @@ _DEFAULT_SETTINGS = {
     "score_global_min_bucket_trades": 30,
     "score_global_penalty_points": -5,
     "score_global_max_changes_per_profile": 3,
+    "score_global_ai_timeout_seconds": 180,
     "score_global_replay_min_retention": 0.70,
     "score_global_replay_max_tp_loss_rate": 0.05,
     "score_global_replay_min_sl_reduction_rate": 0.02,
@@ -466,17 +468,42 @@ async def get_score_global_overview(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-@router.post("/score-intelligence/global-analysis", status_code=201)
+@router.post("/score-intelligence/global-analysis", status_code=202)
 async def run_score_global_analysis(
     request: ScoreGlobalAnalysisRequest,
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ) -> Dict[str, Any]:
     try:
-        result = await profile_score_optimization_service.analyze_global(
+        result, created = await profile_score_optimization_service.queue_global_analysis(
             db, user_id, request.lookback_days, request.idempotency_key
         )
         await db.commit()
+        if created:
+            try:
+                from ..tasks.profile_score_optimization import analyze
+
+                task = analyze.delay(result["id"])
+                result["task_id"] = task.id
+                result["queue"] = "structural_compute"
+                logger.info(
+                    "[PI-Score] analysis queued run=%s task=%s user=%s",
+                    result["id"], task.id, user_id,
+                )
+            except Exception as dispatch_exc:
+                await db.execute(
+                    update(ProfileScoreOptimizationRun)
+                    .where(ProfileScoreOptimizationRun.id == UUID(result["id"]))
+                    .values(
+                        status="AI_FAILED",
+                        error_code=f"dispatch_failed:{dispatch_exc}"[:120],
+                    )
+                )
+                await db.commit()
+                raise HTTPException(
+                    status_code=503,
+                    detail="profile_score_analysis_dispatch_failed",
+                ) from dispatch_exc
         return result
     except (ValueError, RuntimeError) as exc:
         await db.rollback()

@@ -9,6 +9,7 @@ state.
 
 from __future__ import annotations
 
+import asyncio
 from collections import Counter, defaultdict
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
@@ -20,7 +21,7 @@ from statistics import mean
 from typing import Any, Mapping, Sequence
 from uuid import UUID
 
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.ai_skill import AiSkill
@@ -50,6 +51,7 @@ DEFAULT_POLICY: dict[str, Any] = {
     "score_global_min_bucket_trades": 30,
     "score_global_penalty_points": -5,
     "score_global_max_changes_per_profile": 3,
+    "score_global_ai_timeout_seconds": 180,
     "score_global_replay_min_retention": 0.70,
     "score_global_replay_max_tp_loss_rate": 0.05,
     "score_global_replay_min_sl_reduction_rate": 0.02,
@@ -210,6 +212,61 @@ def _evaluate_allow(config: Mapping[str, Any], row: Mapping[str, Any]) -> bool:
     return bool((processed.get("signal") or {}).get("triggered")) if signal_conditions else True
 
 
+def _candidate_stats(
+    prepared_rows: Sequence[tuple[Mapping[str, Any], Mapping[str, Any]]],
+    rapid_candles: int,
+    bucket: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    stats = {
+        "cases": 0,
+        "tp": 0,
+        "sl": 0,
+        "timeout": 0,
+        "rapid_sl": 0,
+        "pnl_sum": 0.0,
+        "pnl_count": 0,
+        "sources": set(),
+    }
+    for row, feature_map in prepared_rows:
+        if bucket is not None and not _matches(feature_map, bucket):
+            continue
+        stats["cases"] += 1
+        outcome = str(row.get("outcome"))
+        if outcome == "TP_HIT":
+            stats["tp"] += 1
+        elif outcome == "SL_HIT":
+            stats["sl"] += 1
+        elif outcome == "TIMEOUT":
+            stats["timeout"] += 1
+        if _rapid_sl(row, rapid_candles):
+            stats["rapid_sl"] += 1
+        pnl = _number(row.get("pnl_pct"))
+        if pnl is not None:
+            stats["pnl_sum"] += pnl
+            stats["pnl_count"] += 1
+        stats["sources"].add(str(row.get("source")))
+    return stats
+
+
+def _merge_candidate_stats(*items: Mapping[str, Any]) -> dict[str, Any]:
+    merged = {
+        "cases": 0,
+        "tp": 0,
+        "sl": 0,
+        "timeout": 0,
+        "rapid_sl": 0,
+        "pnl_sum": 0.0,
+        "pnl_count": 0,
+        "sources": set(),
+    }
+    for item in items:
+        for key in ("cases", "tp", "sl", "timeout", "rapid_sl", "pnl_count"):
+            merged[key] += int(item.get(key) or 0)
+        merged["pnl_sum"] += float(item.get("pnl_sum") or 0.0)
+        merged["sources"].update(item.get("sources") or ())
+    return merged
+
+
 class ProfileScoreOptimizationService:
     async def policy(self, db: AsyncSession, user_id: UUID) -> dict[str, Any]:
         result = await db.execute(text("""
@@ -293,28 +350,56 @@ class ProfileScoreOptimizationService:
         min_cases = int(policy["score_global_min_bucket_trades"])
         penalty = float(policy["score_global_penalty_points"])
         max_changes = int(policy["score_global_max_changes_per_profile"])
-        approved = [row for row in rows if row.get("source") in {"L3", "L3_LAB"}]
-        rejected = [row for row in rows if row.get("source") == "L3_REJECTED"]
+        rapid_candles = int(policy["score_global_rapid_sl_candles"])
+        buckets = list(_get_indicator_buckets())
+        prepared_rejected = [
+            (row, _features(row))
+            for row in rows
+            if row.get("source") == "L3_REJECTED"
+        ]
+        prepared_approved: dict[str, list[tuple[Mapping[str, Any], Mapping[str, Any]]]] = (
+            defaultdict(list)
+        )
+        for row in rows:
+            if row.get("source") in {"L3", "L3_LAB"}:
+                prepared_approved[str(row.get("profile_id") or "")].append(
+                    (row, _features(row))
+                )
+
+        # Rejected evidence is global and identical for every profile.  Compute
+        # each bucket once instead of rescanning the same cohort for every
+        # champion (the previous profile x bucket x row loop exceeded 5 min).
+        rejected_baseline = _candidate_stats(prepared_rejected, rapid_candles)
+        rejected_by_bucket = [
+            _candidate_stats(prepared_rejected, rapid_candles, bucket)
+            for bucket in buckets
+        ]
         candidates: list[dict[str, Any]] = []
         for champion in champions:
             profile_id = str(champion["profile_id"])
-            own = [row for row in approved if str(row.get("profile_id") or "") == profile_id]
-            # Global rejected evidence is intentionally shared across profiles;
-            # it detects conditions that the approved-only view cannot see.
-            evidence_rows = [*own, *rejected]
-            baseline = _metrics(evidence_rows)
+            own = prepared_approved.get(profile_id, [])
+            own_baseline = _candidate_stats(own, rapid_candles)
+            baseline = _merge_candidate_stats(rejected_baseline, own_baseline)
+            baseline_sl = (
+                baseline["sl"] / baseline["cases"] if baseline["cases"] else 0.0
+            )
             ranked: list[dict[str, Any]] = []
-            for bucket in _get_indicator_buckets():
-                matched = [row for row in evidence_rows if _matches(_features(row), bucket)]
-                if len(matched) < min_cases:
+            for bucket, global_stats in zip(buckets, rejected_by_bucket):
+                own_stats = _candidate_stats(own, rapid_candles, bucket)
+                matched = _merge_candidate_stats(global_stats, own_stats)
+                cases = int(matched["cases"])
+                if cases < min_cases:
                     continue
-                matched_metrics = _metrics(matched)
-                rapid = sum(_rapid_sl(row, int(policy["score_global_rapid_sl_candles"])) for row in matched)
+                rapid = int(matched["rapid_sl"])
                 loss_rate = (
-                    (matched_metrics["sl"] + rapid) / max(len(matched) + rapid, 1)
+                    (matched["sl"] + rapid) / max(cases + rapid, 1)
                 )
-                baseline_sl = baseline["sl_rate"] or 0.0
-                if matched_metrics["avg_pnl_pct"] is None or matched_metrics["avg_pnl_pct"] >= 0:
+                avg_pnl = (
+                    matched["pnl_sum"] / matched["pnl_count"]
+                    if matched["pnl_count"]
+                    else None
+                )
+                if avg_pnl is None or avg_pnl >= 0:
                     continue
                 if loss_rate <= baseline_sl:
                     continue
@@ -341,14 +426,14 @@ class ProfileScoreOptimizationService:
                     "proposed_value": rule,
                     "evidence": {
                         "bucket": bucket["bucket_label"],
-                        "cases": len(matched),
-                        "tp": matched_metrics["tp"],
-                        "sl": matched_metrics["sl"],
+                        "cases": cases,
+                        "tp": matched["tp"],
+                        "sl": matched["sl"],
                         "rapid_sl": rapid,
-                        "avg_pnl_pct": matched_metrics["avg_pnl_pct"],
+                        "avg_pnl_pct": avg_pnl,
                         "loss_rate": loss_rate,
                         "baseline_sl_rate": baseline_sl,
-                        "sources": sorted({str(row["source"]) for row in matched}),
+                        "sources": sorted(matched["sources"]),
                     },
                 })
             ranked.sort(
@@ -409,6 +494,7 @@ class ProfileScoreOptimizationService:
         user_id: UUID,
         context: Mapping[str, Any],
         candidates: Sequence[Mapping[str, Any]],
+        timeout_seconds: float,
     ) -> tuple[dict[str, Any], str | None, str | None, UUID | None]:
         skill = await db.scalar(
             select(AiSkill).where(
@@ -431,10 +517,17 @@ class ProfileScoreOptimizationService:
         api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
             raise ValueError("anthropic_key_not_configured")
+        # Do not keep a PostgreSQL transaction/connection open while waiting
+        # for the external model provider.
+        await db.commit()
         import anthropic  # type: ignore
 
         model = os.getenv("PI_AI_MODEL", "claude-haiku-4-5-20251001")
-        client = anthropic.AsyncAnthropic(api_key=api_key)
+        client = anthropic.AsyncAnthropic(
+            api_key=api_key,
+            timeout=max(30.0, min(float(timeout_seconds), 600.0)),
+            max_retries=0,
+        )
         try:
             response = await client.messages.create(
                 model=model,
@@ -462,18 +555,57 @@ class ProfileScoreOptimizationService:
         parsed["selected_candidate_ids"] = sorted(selected)
         return parsed, "anthropic", getattr(response, "model", model), skill.id if skill else None
 
-    async def analyze_global(
+    async def queue_global_analysis(
         self, db: AsyncSession, user_id: UUID, lookback_days: int = 30,
         idempotency_key: str | None = None,
-    ) -> dict[str, Any]:
-        policy = await self.policy(db, user_id)
+    ) -> tuple[dict[str, Any], bool]:
         cutoff = datetime.now(timezone.utc)
-        rows, truncated = await self._official_rows(
-            db, user_id, lookback_days, cutoff,
-            int(policy["score_global_max_analysis_rows"]),
+        idem = idempotency_key or (
+            f"pi-score-global:{user_id}:{cutoff.isoformat()}"
         )
-        champions = await self._champions(db, user_id)
-        quadrants = self._quadrants(rows, int(policy["score_global_rapid_sl_candles"]))
+        existing = await db.scalar(select(ProfileScoreOptimizationRun).where(
+            ProfileScoreOptimizationRun.user_id == user_id,
+            ProfileScoreOptimizationRun.idempotency_key == idem,
+        ))
+        if existing:
+            return self.public_run(existing), False
+        queued_evidence = {
+            "dataset_contract": DATASET_CONTRACT,
+            "cutoff_at": cutoff,
+            "lookback_days": lookback_days,
+            "status": "QUEUED",
+        }
+        run = ProfileScoreOptimizationRun(
+            user_id=user_id,
+            status="QUEUED",
+            lookback_days=lookback_days,
+            cutoff_at=cutoff,
+            dataset_contract=DATASET_CONTRACT,
+            input_hash=_hash({
+                "user_id": user_id,
+                "lookback_days": lookback_days,
+                "cutoff_at": cutoff,
+                "idempotency_key": idem,
+            }),
+            idempotency_key=idem,
+            evidence_json=_json(queued_evidence),
+        )
+        db.add(run)
+        await db.flush()
+        return self.public_run(run), True
+
+    def _build_analysis(
+        self,
+        rows: Sequence[Mapping[str, Any]],
+        champions: Sequence[Mapping[str, Any]],
+        policy: Mapping[str, Any],
+        lookback_days: int,
+        cutoff: datetime,
+        truncated: bool,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
+        quadrants = self._quadrants(
+            rows, int(policy["score_global_rapid_sl_candles"])
+        )
         candidates = self._candidates(rows, champions, policy)
         evidence = {
             "dataset_contract": DATASET_CONTRACT,
@@ -489,36 +621,82 @@ class ProfileScoreOptimizationService:
             "candidate_count": len(candidates),
             "policy": policy,
         }
-        input_hash = _hash({"evidence": evidence, "candidates": candidates})
-        idem = idempotency_key or f"pi-score-global:{user_id}:{input_hash}"
-        existing = await db.scalar(select(ProfileScoreOptimizationRun).where(
-            ProfileScoreOptimizationRun.user_id == user_id,
-            ProfileScoreOptimizationRun.idempotency_key == idem,
-        ))
-        if existing:
-            return self.public_run(existing)
-        run = ProfileScoreOptimizationRun(
-            user_id=user_id,
-            status="AI_RUNNING",
-            lookback_days=lookback_days,
-            cutoff_at=cutoff,
-            dataset_contract=DATASET_CONTRACT,
-            input_hash=input_hash,
-            idempotency_key=idem,
-            evidence_json=_json(evidence),
+        return evidence, candidates, _hash({
+            "evidence": evidence,
+            "candidates": candidates,
+        })
+
+    async def process_global_analysis(
+        self, db: AsyncSession, run_id: UUID
+    ) -> dict[str, Any]:
+        claimed = await db.execute(
+            update(ProfileScoreOptimizationRun)
+            .where(
+                ProfileScoreOptimizationRun.id == run_id,
+                ProfileScoreOptimizationRun.status == "QUEUED",
+            )
+            .values(status="ANALYZING", error_code=None)
+            .returning(ProfileScoreOptimizationRun.id)
         )
-        db.add(run)
-        await db.flush()
+        if claimed.scalar_one_or_none() is None:
+            existing = await db.scalar(select(ProfileScoreOptimizationRun).where(
+                ProfileScoreOptimizationRun.id == run_id
+            ))
+            if not existing:
+                raise ValueError("optimization_run_not_found")
+            return self.public_run(existing)
+        await db.commit()
+
+        run = await db.scalar(select(ProfileScoreOptimizationRun).where(
+            ProfileScoreOptimizationRun.id == run_id
+        ))
+        if not run:
+            raise ValueError("optimization_run_not_found")
         try:
+            policy = await self.policy(db, run.user_id)
+            rows, truncated = await self._official_rows(
+                db,
+                run.user_id,
+                run.lookback_days,
+                run.cutoff_at,
+                int(policy["score_global_max_analysis_rows"]),
+            )
+            champions = await self._champions(db, run.user_id)
+            # Release the read transaction before CPU work.  The fixed cutoff
+            # and immutable snapshots preserve the point-in-time contract.
+            await db.commit()
+            evidence, candidates, input_hash = await asyncio.to_thread(
+                self._build_analysis,
+                rows,
+                champions,
+                policy,
+                run.lookback_days,
+                run.cutoff_at,
+                truncated,
+            )
+            run = await db.scalar(select(ProfileScoreOptimizationRun).where(
+                ProfileScoreOptimizationRun.id == run_id
+            ))
+            if not run:
+                raise ValueError("optimization_run_not_found")
+            run.status = "AI_RUNNING"
+            run.evidence_json = _json(evidence)
+            run.input_hash = input_hash
+            await db.commit()
+
             report, provider, model, skill_id = await self._ai_report(
-                db, user_id, evidence, candidates
+                db,
+                run.user_id,
+                evidence,
+                candidates,
+                float(policy["score_global_ai_timeout_seconds"]),
             )
             selected = set(report["selected_candidate_ids"])
             changes = [item for item in candidates if item["candidate_id"] in selected]
             envelope = {
                 "contract": "profile-score-adjustment-v1",
                 "run_id": str(run.id),
-                "cutoff_at": cutoff.isoformat(),
+                "cutoff_at": run.cutoff_at.isoformat(),
                 "base_profiles": [{
                     "profile_id": str(item["profile_id"]),
                     "profile_version_id": str(item["profile_version_id"]),
@@ -542,10 +720,16 @@ class ProfileScoreOptimizationService:
             run.status = "AI_COMPLETED"
             run.completed_at = datetime.now(timezone.utc)
         except Exception as exc:
+            await db.rollback()
+            run = await db.scalar(select(ProfileScoreOptimizationRun).where(
+                ProfileScoreOptimizationRun.id == run_id
+            ))
+            if not run:
+                raise
             run.status = "AI_FAILED"
             run.error_code = str(exc)[:120]
             run.completed_at = datetime.now(timezone.utc)
-        await db.flush()
+        await db.commit()
         return self.public_run(run)
 
     async def replay(

@@ -56,6 +56,7 @@ class PISettingsUpdate(BaseModel):
     score_global_min_bucket_trades: Optional[int] = Field(default=None, ge=10, le=10000)
     score_global_penalty_points: Optional[float] = Field(default=None, ge=-20, le=-1)
     score_global_max_changes_per_profile: Optional[int] = Field(default=None, ge=1, le=10)
+    score_global_ai_timeout_seconds: Optional[int] = Field(default=None, ge=30, le=600)
     score_global_replay_min_retention: Optional[float] = Field(default=None, ge=0.1, le=1.0)
     score_global_replay_max_tp_loss_rate: Optional[float] = Field(default=None, ge=0.0, le=0.5)
     score_global_replay_min_sl_reduction_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)

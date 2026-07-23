@@ -1,4 +1,4 @@
-"""Daily aggregation for Profile Score Intelligence shadow challengers."""
+"""Async analysis and daily aggregation for Profile Score Intelligence."""
 
 from __future__ import annotations
 
@@ -22,14 +22,25 @@ async def _refresh() -> dict:
         return result
 
 
-@celery_app.task(name="app.tasks.profile_score_optimization.refresh", max_retries=0)
-def refresh():
+async def _analyze(run_id: str) -> dict:
+    from uuid import UUID
+
+    from ..database import get_celery_session
+    from ..services.profile_score_optimization_service import (
+        profile_score_optimization_service,
+    )
+
+    async with get_celery_session() as db:
+        return await profile_score_optimization_service.process_global_analysis(
+            db, UUID(run_id)
+        )
+
+
+def _run(coro) -> dict:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        result = loop.run_until_complete(_refresh())
-        logger.info("[PI-Score] daily performance refreshed: %s", result)
-        return result
+        return loop.run_until_complete(coro)
     finally:
         try:
             from ..database import _celery_engine
@@ -37,3 +48,25 @@ def refresh():
         except BaseException as exc:
             logger.debug("[PI-Score] engine dispose: %s", exc)
         loop.close()
+
+
+@celery_app.task(
+    name="app.tasks.profile_score_optimization.analyze",
+    max_retries=0,
+    acks_late=False,
+)
+def analyze(run_id: str):
+    result = _run(_analyze(run_id))
+    logger.info(
+        "[PI-Score] global analysis completed run=%s status=%s",
+        run_id,
+        result.get("status"),
+    )
+    return result
+
+
+@celery_app.task(name="app.tasks.profile_score_optimization.refresh", max_retries=0)
+def refresh():
+    result = _run(_refresh())
+    logger.info("[PI-Score] daily performance refreshed: %s", result)
+    return result

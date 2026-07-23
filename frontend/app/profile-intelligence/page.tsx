@@ -540,6 +540,7 @@ interface PISettings {
   score_global_min_bucket_trades?: number;
   score_global_penalty_points?: number;
   score_global_max_changes_per_profile?: number;
+  score_global_ai_timeout_seconds?: number;
   score_global_replay_min_retention?: number;
   score_global_replay_max_tp_loss_rate?: number;
   score_global_replay_min_sl_reduction_rate?: number;
@@ -3148,6 +3149,7 @@ export default function ProfileIntelligencePage() {
                   { key: "score_global_min_bucket_trades", label: "Global Min Bucket Trades", step: 1 },
                   { key: "score_global_penalty_points", label: "Global Penalty Points", step: 1 },
                   { key: "score_global_max_changes_per_profile", label: "Max Changes / Profile", step: 1 },
+                  { key: "score_global_ai_timeout_seconds", label: "AI Timeout Seconds", step: 10 },
                   { key: "score_global_replay_min_retention", label: "Replay Min Retention", step: 0.01 },
                   { key: "score_global_replay_max_tp_loss_rate", label: "Replay Max TP Loss", step: 0.01 },
                   { key: "score_global_replay_min_sl_reduction_rate", label: "Replay Min SL Reduction", step: 0.01 },
