@@ -535,6 +535,22 @@ interface PISettings {
   adjustment_max_win_rate?: number;
   adjustment_score_bump?: number;
   adjustment_score_cap?: number;
+  score_global_rapid_sl_candles?: number;
+  score_global_max_analysis_rows?: number;
+  score_global_min_bucket_trades?: number;
+  score_global_penalty_points?: number;
+  score_global_max_changes_per_profile?: number;
+  score_global_replay_min_retention?: number;
+  score_global_replay_max_tp_loss_rate?: number;
+  score_global_replay_min_sl_reduction_rate?: number;
+  score_global_challenger_min_days?: number;
+  score_global_challenger_min_closed?: number;
+  score_global_challenger_min_tp?: number;
+  score_global_challenger_min_sl?: number;
+  score_global_challenger_min_distinct_symbols?: number;
+  score_global_challenger_min_distinct_days?: number;
+  score_global_challenger_max_single_symbol_share?: number;
+  score_global_challenger_max_single_day_share?: number;
 }
 
 interface AutopilotCandidate {
@@ -3127,6 +3143,22 @@ export default function ProfileIntelligencePage() {
                   { key: "adjustment_max_win_rate", label: "Adjustment Max WR", step: 0.01 },
                   { key: "adjustment_score_bump", label: "Score Bump", step: 1 },
                   { key: "adjustment_score_cap", label: "Score Cap", step: 1 },
+                  { key: "score_global_rapid_sl_candles", label: "Global Rapid SL Candles", step: 1 },
+                  { key: "score_global_max_analysis_rows", label: "Global Max Analysis Rows", step: 1000 },
+                  { key: "score_global_min_bucket_trades", label: "Global Min Bucket Trades", step: 1 },
+                  { key: "score_global_penalty_points", label: "Global Penalty Points", step: 1 },
+                  { key: "score_global_max_changes_per_profile", label: "Max Changes / Profile", step: 1 },
+                  { key: "score_global_replay_min_retention", label: "Replay Min Retention", step: 0.01 },
+                  { key: "score_global_replay_max_tp_loss_rate", label: "Replay Max TP Loss", step: 0.01 },
+                  { key: "score_global_replay_min_sl_reduction_rate", label: "Replay Min SL Reduction", step: 0.01 },
+                  { key: "score_global_challenger_min_days", label: "Challenger Min Days", step: 1 },
+                  { key: "score_global_challenger_min_closed", label: "Challenger Min Closed", step: 1 },
+                  { key: "score_global_challenger_min_tp", label: "Challenger Min TP", step: 1 },
+                  { key: "score_global_challenger_min_sl", label: "Challenger Min SL", step: 1 },
+                  { key: "score_global_challenger_min_distinct_symbols", label: "Challenger Min Symbols", step: 1 },
+                  { key: "score_global_challenger_min_distinct_days", label: "Challenger Min Distinct Days", step: 1 },
+                  { key: "score_global_challenger_max_single_symbol_share", label: "Challenger Max Symbol Share", step: 0.01 },
+                  { key: "score_global_challenger_max_single_day_share", label: "Challenger Max Day Share", step: 0.01 },
                 ].map(({ key, label, step }) => (
                   <div key={key}>
                     <label className="block text-[11px] font-medium text-[var(--text-tertiary)] uppercase tracking-wider mb-1">{label}</label>

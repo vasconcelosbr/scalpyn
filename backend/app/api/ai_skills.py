@@ -27,6 +27,7 @@ ROLE_LABELS = {
     "primary_filter":  "L1 — Filtro Primário (Stage 1)",
     "score_engine":    "L2 — Score Engine (Stage 2)",
     "acquisition_queue": "L3 — Fila de Aquisição (Stage 3)",
+    "profile_score_intelligence": "Profile Intelligence — Otimização Global de Scores",
 }
 
 

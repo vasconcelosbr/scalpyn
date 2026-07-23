@@ -42,6 +42,7 @@ type ValidationEvidence = {
 
 const ACTIONS = [
   "ADD_SIGNAL_CONDITION", "UPDATE_SIGNAL_THRESHOLD", "UPDATE_SIGNAL_RANGE", "REMOVE_SIGNAL_CONDITION",
+  "ADD_ENTRY_TRIGGER_CONDITION", "UPDATE_ENTRY_TRIGGER_THRESHOLD", "UPDATE_ENTRY_TRIGGER_RANGE", "REMOVE_ENTRY_TRIGGER_CONDITION",
   "ADD_SCORE_BONUS", "ADD_SCORE_PENALTY", "UPDATE_SCORE_WEIGHT", "UPDATE_SCORE_THRESHOLD",
   "ADD_BLOCK_RULE", "UPDATE_BLOCK_RULE", "REMOVE_BLOCK_RULE", "OBSERVE_ONLY",
 ] as const;
@@ -71,6 +72,10 @@ function defaultDraft(stat: IndicatorEvidence, action: string) {
   if (action === "ADD_SIGNAL_CONDITION") return {
     path: "/signals/conditions", current: "null",
     proposed: JSON.stringify({ condition_id: stableId, field: stat.indicator, ...condition, required: false }, null, 2),
+  };
+  if (action === "ADD_ENTRY_TRIGGER_CONDITION") return {
+    path: "/entry_triggers/conditions", current: "null",
+    proposed: JSON.stringify({ id: stableId, indicator: stat.indicator, ...condition, required: false, enabled: true }, null, 2),
   };
   if (action === "ADD_BLOCK_RULE") return {
     path: "/block_rules/blocks", current: "null",

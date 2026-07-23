@@ -83,4 +83,12 @@ CRITICAL_COLUMNS: List[Tuple[str, str]] = [
     # The table is never touched by ORM models, so it was absent from this list
     # until the Rule N/N+1 promotion window (Task #224 / Task #225).
     ("trade_simulations", "id"),
+    # Profile Score Intelligence global optimization (migration 138).  These
+    # additive tables back operator-facing endpoints and must exist before a
+    # deployment is considered ready; otherwise a stamp-head fallback could
+    # hide a missing migration.
+    ("profile_score_optimization_runs", "id"),
+    ("profile_score_replay_results", "id"),
+    ("profile_score_optimization_challengers", "id"),
+    ("profile_score_performance_daily", "id"),
 ]

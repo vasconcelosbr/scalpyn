@@ -11,6 +11,7 @@ const ROLE_OPTIONS = [
   { value: "primary_filter",    label: "L1 — Filtro Primário (Stage 1)" },
   { value: "score_engine",      label: "L2 — Score Engine (Stage 2)" },
   { value: "acquisition_queue", label: "L3 — Fila de Aquisição (Stage 3)" },
+  { value: "profile_score_intelligence", label: "Profile Intelligence — Otimização Global de Scores" },
 ];
 
 interface Skill {

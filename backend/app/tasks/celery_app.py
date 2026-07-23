@@ -98,6 +98,7 @@ celery_app = Celery(
         "app.tasks.ttt_analyzer",
         "app.tasks.autopilot",
         "app.tasks.profile_intelligence_job",
+        "app.tasks.profile_score_optimization",
         "app.tasks.opportunity_snapshot_evaluator",
         "app.tasks.crypto_ev_score",
         "app.tasks.ml_data_certification",
@@ -203,6 +204,7 @@ TASK_ROUTES = {
     "app.tasks.profile_intelligence_job.monitor":        {"queue": QUEUE_STRUCTURAL},
     "app.tasks.profile_intelligence_job.feedback_loop": {"queue": QUEUE_STRUCTURAL_COMPUTE},
     "app.tasks.profile_intelligence_job.train_ml_challengers_for_user": {"queue": QUEUE_STRUCTURAL_COMPUTE},
+    "app.tasks.profile_score_optimization.refresh": {"queue": QUEUE_STRUCTURAL_COMPUTE},
 
     # Opportunity Snapshot Evaluator — populates future_outcome on snapshots.
     # Structural queue: DB-only work (ohlcv table + shadow_trades join), no latency req.
@@ -657,6 +659,11 @@ celery_app.conf.beat_schedule = {
     "profile_intelligence_live": {
         "task": "app.tasks.profile_intelligence_job.feedback_loop",
         "schedule": float(os.environ.get("PI_LIVE_FAST_INTERVAL_S", 300)),
+        "options": {"queue": QUEUE_STRUCTURAL_COMPUTE},
+    },
+    "profile_score_optimization_daily": {
+        "task": "app.tasks.profile_score_optimization.refresh",
+        "schedule": crontab(hour=3, minute=15),
         "options": {"queue": QUEUE_STRUCTURAL_COMPUTE},
     },
 

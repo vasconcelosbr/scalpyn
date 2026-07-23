@@ -976,12 +976,25 @@ class _RobustScoreShim:
     every score consumed by signal / entry evaluation.
     """
 
-    def __init__(self, thresholds: Optional[dict] = None) -> None:
+    def __init__(
+        self,
+        thresholds: Optional[dict] = None,
+        manual_rules: Optional[list[dict]] = None,
+    ) -> None:
         self.thresholds = thresholds or {
             "strong_buy": 80,
             "buy": 65,
             "neutral": 40,
         }
+        # Bounded Profile Intelligence rules are the only profile-local score
+        # delta allowed on top of the authoritative robust score.  They are
+        # versioned in the profile config and never rewrite the robust engine.
+        self.manual_rules = [
+            rule for rule in (manual_rules or [])
+            if isinstance(rule, dict)
+            and rule.get("manual_profile_intelligence") is True
+            and isinstance(rule.get("points"), (int, float))
+        ]
 
     def _classify(self, score: float) -> str:
         if score >= self.thresholds.get("strong_buy", 80):
@@ -1005,6 +1018,16 @@ class _RobustScoreShim:
         except (TypeError, ValueError):
             score = 0.0
         context = eval_data.get("_score_components") or {}
+        manual_delta = 0.0
+        manual_matched: list[str] = []
+        if self.manual_rules:
+            from ..services.score_engine import ScoreEngine
+            evaluator = ScoreEngine({"scoring_rules": self.manual_rules})
+            for rule in self.manual_rules:
+                if evaluator._evaluate_rule(rule, eval_data):
+                    manual_delta += float(rule.get("points") or 0.0)
+                    manual_matched.append(str(rule.get("id") or "pi-manual-rule"))
+        score = max(0.0, min(100.0, score + manual_delta))
         component_fields = (
             (context.get("component_fields") or {})
             if isinstance(context, dict) else {}
@@ -1023,9 +1046,10 @@ class _RobustScoreShim:
             "total_score": round(score, 2),
             "components": components,
             "matched_rules": (
-                context.get("matched_rule_ids", [])
+                [*(context.get("matched_rule_ids", []) or []), *manual_matched]
                 if isinstance(context, dict) else []
             ),
+            "manual_profile_intelligence_delta": manual_delta,
             "classification": self._classify(score),
         }
 
@@ -1056,6 +1080,12 @@ def _apply_level_filter(
     engine.score_engine = _RobustScoreShim(
         thresholds=(score_config or {}).get("thresholds")
         or (profile_config or {}).get("scoring", {}).get("thresholds"),
+        manual_rules=[
+            rule for rule in ((profile_config or {}).get("scoring", {}).get("generated_rules") or [])
+            if str(level).upper() == "L3"
+            and isinstance(rule, dict)
+            and rule.get("manual_profile_intelligence") is True
+        ],
     )
 
     min_score = 0.0
@@ -1166,6 +1196,10 @@ def _evaluate_l3_signals(assets: list, profile_config: Optional[dict], score_con
     engine.score_engine = _RobustScoreShim(
         thresholds=(score_config or {}).get("thresholds")
         or (profile_config or {}).get("scoring", {}).get("thresholds"),
+        manual_rules=[
+            rule for rule in ((profile_config or {}).get("scoring", {}).get("generated_rules") or [])
+            if isinstance(rule, dict) and rule.get("manual_profile_intelligence") is True
+        ],
     )
 
     # Check if the profile has any signal conditions at all.
@@ -1535,6 +1569,10 @@ async def _evaluate_l3_decisions(
     engine.score_engine = _RobustScoreShim(
         thresholds=(score_config or {}).get("thresholds")
         or (profile_config or {}).get("scoring", {}).get("thresholds"),
+        manual_rules=[
+            rule for rule in ((profile_config or {}).get("scoring", {}).get("generated_rules") or [])
+            if isinstance(rule, dict) and rule.get("manual_profile_intelligence") is True
+        ],
     )
 
     sig_conditions = (
@@ -4159,11 +4197,21 @@ async def _run_pipeline_scan():
                         import json as _json
                         _lab_rows = (await db.execute(
                             text("""
-                                SELECT id, name, config, updated_at
-                                FROM profiles
-                                WHERE is_active = true
-                                  AND user_id = :uid
-                                  AND name LIKE 'L3!_%' ESCAPE '!'
+                                SELECT p.id,p.name,p.config,p.updated_at,
+                                       exact_version.id AS profile_version_id,
+                                       exact_version.score_engine_version_id
+                                  FROM profiles p
+                                  JOIN LATERAL (
+                                      SELECT pv.id,pv.score_engine_version_id
+                                        FROM profile_versions pv
+                                       WHERE pv.profile_id=p.id
+                                         AND pv.config=p.config
+                                       ORDER BY pv.version_number DESC
+                                       LIMIT 1
+                                  ) exact_version ON TRUE
+                                 WHERE p.is_active = true
+                                   AND p.user_id = :uid
+                                   AND p.name LIKE 'L3!_%' ESCAPE '!'
                                 LIMIT 50
                             """),
                             {"uid": str(wl.user_id)},
@@ -4221,6 +4269,8 @@ async def _run_pipeline_scan():
                                             watchlist_name=wl.name,
                                             watchlist_level=wl.level,
                                             source_watchlist_id=str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
+                                            profile_version_id=str(_lp.profile_version_id),
+                                            score_engine_version_id=str(_lp.score_engine_version_id),
                                         )
                                     if _lp_block:
                                         await _create_lab_rejected(
@@ -4239,6 +4289,8 @@ async def _run_pipeline_scan():
                                             watchlist_name=wl.name,
                                             watchlist_level=wl.level,
                                             source_watchlist_id=str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
+                                            profile_version_id=str(_lp.profile_version_id),
+                                            score_engine_version_id=str(_lp.score_engine_version_id),
                                         )
                                 except Exception as _lp_exc:
                                     logger.warning(
@@ -4249,6 +4301,118 @@ async def _run_pipeline_scan():
                         logger.warning(
                             "[StrategyLab] multi-profile evaluation failed wl=%s: %s",
                             wl.name, _lab_exc,
+                        )
+
+                    # Profile Score Intelligence paired shadow control.
+                    # These rows use dedicated sources and are explicitly
+                    # ineligible for ML training.  Exact version IDs prevent a
+                    # SHADOW version from being mistaken for the incumbent.
+                    try:
+                        _opt_rows = (await db.execute(text("""
+                            SELECT c.id AS challenger_id,c.profile_id,p.name,
+                                   c.champion_profile_version_id,
+                                   c.challenger_profile_version_id,
+                                   champion.config AS champion_config,
+                                   champion.score_engine_version_id AS champion_score_engine_version_id,
+                                   challenger.config AS challenger_config,
+                                   challenger.score_engine_version_id AS challenger_score_engine_version_id
+                              FROM profile_score_optimization_challengers c
+                              JOIN profiles p ON p.id=c.profile_id
+                              JOIN profile_versions champion
+                                ON champion.id=c.champion_profile_version_id
+                              JOIN profile_versions challenger
+                                ON challenger.id=c.challenger_profile_version_id
+                             WHERE c.user_id=:uid
+                               AND c.status IN ('COLLECTING','VALIDATED')
+                             LIMIT 50
+                        """), {"uid": str(wl.user_id)})).mappings().all()
+                        if _opt_rows and assets:
+                            from ..services.shadow_trade_service import (
+                                SHADOW_SOURCE_PI_CHALLENGER,
+                                SHADOW_SOURCE_PI_CHAMPION_CONTROL,
+                                create_strategy_lab_shadows as _create_pi_score_shadow,
+                            )
+                            _opt_assets_by_symbol = {a["symbol"]: a for a in assets}
+                            for _opt in _opt_rows:
+                                _champ_cfg = dict(_opt["champion_config"] or {})
+                                _chall_cfg = dict(_opt["challenger_config"] or {})
+                                _champ_passed, _ = evaluate_rejections(
+                                    assets, profile_config=_champ_cfg, stage="L3",
+                                    profile_id=str(_opt["profile_id"]),
+                                )
+                                _chall_passed, _ = evaluate_rejections(
+                                    assets, profile_config=_chall_cfg, stage="L3",
+                                    profile_id=str(_opt["profile_id"]),
+                                )
+                                _champ_allow = [
+                                    item for item in await _evaluate_l3_decisions(
+                                        _champ_passed, _champ_cfg, level,
+                                    ) if item.get("decision") == "ALLOW"
+                                ]
+                                _chall_allow = [
+                                    item for item in await _evaluate_l3_decisions(
+                                        _chall_passed, _chall_cfg, level,
+                                    ) if item.get("decision") == "ALLOW"
+                                ]
+                                _pair_meta = {
+                                    "pi_challenger_id": str(_opt["challenger_id"]),
+                                    "pi_pair_execution_id": str(execution_id),
+                                }
+                                if _champ_allow:
+                                    await _create_pi_score_shadow(
+                                        user_id=wl.user_id,
+                                        profile_id=_opt["profile_id"],
+                                        profile_version=None,
+                                        profile_name=_opt["name"],
+                                        strategy_type="PI_SCORE_CHAMPION_CONTROL",
+                                        rules_snapshot=_champ_cfg,
+                                        allow_decisions=_champ_allow,
+                                        assets_by_symbol=_opt_assets_by_symbol,
+                                        execution_id=str(execution_id),
+                                        promotion_at=datetime.now(timezone.utc),
+                                        db=db,
+                                        watchlist_id=str(wl.id),
+                                        watchlist_name=wl.name,
+                                        watchlist_level=wl.level,
+                                        source_watchlist_id=str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
+                                        shadow_source=SHADOW_SOURCE_PI_CHAMPION_CONTROL,
+                                        profile_version_id=str(_opt["champion_profile_version_id"]),
+                                        score_engine_version_id=str(_opt["champion_score_engine_version_id"]),
+                                        eligible_for_training=False,
+                                        optimization_metadata={**_pair_meta, "variant": "champion"},
+                                    )
+                                if _chall_allow:
+                                    await _create_pi_score_shadow(
+                                        user_id=wl.user_id,
+                                        profile_id=_opt["profile_id"],
+                                        profile_version=None,
+                                        profile_name=_opt["name"],
+                                        strategy_type="PI_SCORE_CHALLENGER",
+                                        rules_snapshot=_chall_cfg,
+                                        allow_decisions=_chall_allow,
+                                        assets_by_symbol=_opt_assets_by_symbol,
+                                        execution_id=str(execution_id),
+                                        promotion_at=datetime.now(timezone.utc),
+                                        db=db,
+                                        watchlist_id=str(wl.id),
+                                        watchlist_name=wl.name,
+                                        watchlist_level=wl.level,
+                                        source_watchlist_id=str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
+                                        shadow_source=SHADOW_SOURCE_PI_CHALLENGER,
+                                        profile_version_id=str(_opt["challenger_profile_version_id"]),
+                                        score_engine_version_id=str(_opt["challenger_score_engine_version_id"]),
+                                        eligible_for_training=False,
+                                        optimization_metadata={**_pair_meta, "variant": "challenger"},
+                                    )
+                                logger.info(
+                                    "[PI-Score] challenger=%s profile=%s champion_allow=%d challenger_allow=%d",
+                                    _opt["challenger_id"], _opt["name"],
+                                    len(_champ_allow), len(_chall_allow),
+                                )
+                    except Exception as _opt_exc:
+                        logger.warning(
+                            "[PI-Score] paired shadow capture failed wl=%s: %s",
+                            wl.name, _opt_exc,
                         )
 
                     if new_syms:

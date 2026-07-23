@@ -71,6 +71,8 @@ SHADOW_CLOSABLE_SOURCES: frozenset[str] = frozenset({
     "L3_SIMULATED",
     "L1_SPECTRUM",
     "STRATEGY_LAB",
+    "PI_CHAMPION_CONTROL",
+    "PI_CHALLENGER",
 })
 
 # Preço stale: se market_metadata.last_updated for mais antigo que este limite,

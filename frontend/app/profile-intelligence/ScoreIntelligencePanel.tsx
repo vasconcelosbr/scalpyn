@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, BarChart3, Brain, Eye, Loader2, SlidersHorizontal } from "lucide-react";
+import { AlertTriangle, BarChart3, Brain, Download, Eye, Loader2, Play, ShieldCheck, SlidersHorizontal } from "lucide-react";
+import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { apiGet, apiPost } from "@/lib/api";
 import type { IndicatorEvidence, ManualAdjustmentPrefill } from "./ManualAdjustmentPanel";
 
@@ -48,6 +49,26 @@ type SimulationResponse = {
   simulation?: Threshold & { eliminated_trades: number; baseline: { win_rate: Num; avg_pnl_pct: Num }; passed: Threshold["passed"] };
 };
 type VersionComparison = { status: string; current?: { scope: Scope; metrics: Record<string, Num> }; previous?: { scope: Scope; metrics: Record<string, Num> }; allowed_manual_states?: string[] };
+type GlobalMetric = { closed: number; tp: number; sl: number; timeout: number; tp_rate: Num; sl_rate: Num; avg_pnl_pct: Num };
+type GlobalOverview = {
+  status: string; dataset_contract: string; cutoff_at: string; row_count: number; truncated: boolean;
+  sources: Record<string, GlobalMetric>;
+  quadrants: Record<string, GlobalMetric & { rapid_sl?: number; distinct_symbols: number; distinct_days: number }>;
+  profiles: Array<{ profile_id: string; profile_name: string; profile_version_id: string; score_engine_version_id: string }>;
+  policy: Record<string, number>;
+};
+type OptimizationRun = {
+  id: string; status: string; cutoff_at: string; model?: string | null;
+  evidence?: { candidate_count?: number; row_count?: number };
+  executive_report?: {
+    executive_summary?: string; global_diagnosis?: string[]; risks?: string[]; safeguards?: string[];
+    profile_recommendations?: Array<{ profile_id: string; diagnosis: string; selected_candidate_ids: string[] }>;
+  };
+  adjustment_envelope?: { contract?: string; changes?: Array<{ candidate_id: string; profile_id: string; profile_name: string; evidence: Record<string, number | string | string[]> }> };
+  replays?: Array<{ id: string; profile_id: string; status: string; delta_metrics: Record<string, number | null>; gates: Record<string, boolean> }>;
+  challengers?: Array<{ id: string; profile_id: string; status: string; champion_profile_version_id: string; challenger_profile_version_id: string }>;
+};
+type PerformancePoint = { metric_date: string; variant: "champion" | "challenger"; closed: number; tp_rate: Num; sl_rate: Num; rapid_sl_rate: Num; pnl_sum_pct: Num };
 
 const SCORE_LABELS: Record<string, string> = {
   liquidity_score: "Liquidity Score", market_structure_score: "Market Structure Score",
@@ -55,6 +76,93 @@ const SCORE_LABELS: Record<string, string> = {
 };
 const pct = (value: Num, digits = 1) => value == null ? "—" : `${(value * 100).toFixed(digits)}%`;
 const num = (value: Num, digits = 2) => value == null ? "—" : value.toFixed(digits);
+
+function GlobalOptimizationPanel({ lookbackDays }: { lookbackDays: number }) {
+  const [overview, setOverview] = useState<GlobalOverview | null>(null);
+  const [run, setRun] = useState<OptimizationRun | null>(null);
+  const [performance, setPerformance] = useState<PerformancePoint[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    const [globalData, runs, curve] = await Promise.all([
+      apiGet<GlobalOverview>(`/profile-intelligence/score-intelligence/global-overview?lookback_days=${lookbackDays}`),
+      apiGet<{ items: OptimizationRun[] }>("/profile-intelligence/score-intelligence/optimization-runs?limit=1"),
+      apiGet<{ items: PerformancePoint[] }>("/profile-intelligence/score-intelligence/performance-evolution"),
+    ]);
+    setOverview(globalData); setPerformance(curve.items || []);
+    if (runs.items?.[0]) {
+      setRun(await apiGet<OptimizationRun>(`/profile-intelligence/score-intelligence/optimization-runs/${runs.items[0].id}`));
+    }
+  }, [lookbackDays]);
+
+  useEffect(() => {
+    void refresh().catch(value => setError(value instanceof Error ? value.message : String(value)));
+  }, [refresh]);
+
+  const action = async (kind: "analysis" | "replay" | "challengers") => {
+    setBusy(kind); setError(null);
+    try {
+      if (kind === "analysis") {
+        const created = await apiPost<OptimizationRun>("/profile-intelligence/score-intelligence/global-analysis", {
+          lookback_days: lookbackDays,
+          idempotency_key: `pi-score-ui:${crypto.randomUUID()}`,
+        });
+        setRun(await apiGet<OptimizationRun>(`/profile-intelligence/score-intelligence/optimization-runs/${created.id}`));
+      } else if (run) {
+        await apiPost(`/profile-intelligence/score-intelligence/optimization-runs/${run.id}/${kind === "replay" ? "replay" : "challengers"}`, {});
+        setRun(await apiGet<OptimizationRun>(`/profile-intelligence/score-intelligence/optimization-runs/${run.id}`));
+      }
+      await refresh();
+    } catch (value) { setError(value instanceof Error ? value.message : String(value)); }
+    finally { setBusy(null); }
+  };
+
+  const download = () => {
+    if (!run?.adjustment_envelope) return;
+    const blob = new Blob([JSON.stringify(run.adjustment_envelope, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob); const link = document.createElement("a");
+    link.href = url; link.download = `profile-score-adjustments-${run.id}.json`; link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const curve = useMemo(() => {
+    const byDate = new Map<string, Record<string, string | number | null>>();
+    for (const point of performance) {
+      const item = byDate.get(point.metric_date) || { date: point.metric_date };
+      item[`${point.variant}_tp`] = point.tp_rate == null ? null : point.tp_rate * 100;
+      item[`${point.variant}_sl`] = point.sl_rate == null ? null : point.sl_rate * 100;
+      item[`${point.variant}_rapid_sl`] = point.rapid_sl_rate == null ? null : point.rapid_sl_rate * 100;
+      byDate.set(point.metric_date, item);
+    }
+    return Array.from(byDate.values());
+  }, [performance]);
+
+  const quadrants = overview?.quadrants || {};
+  const quadrantLabels: Record<string, string> = {
+    approved_tp: "Aprovados → TP", approved_sl: "Aprovados → SL",
+    rejected_rapid_sl: "Rejeitados → SL rápido", rejected_tp: "Rejeitados → TP",
+  };
+  return <section className="space-y-4">
+    <div className="card border-violet-400/20 bg-violet-400/[.025] p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div><div className="flex items-center gap-2 text-[13px] font-semibold"><Brain className="h-4 w-4 text-violet-300" />Diagnóstico global de todos os profiles</div><p className="mt-1 text-[10px] text-[var(--text-tertiary)]">L1_SPECTRUM + L3 + L3_LAB + L3_REJECTED · propostas limitadas · replay e challenger obrigatórios.</p></div>
+        <div className="flex flex-wrap gap-2">
+          <button className="btn btn-primary" disabled={!!busy} onClick={() => void action("analysis")}>{busy === "analysis" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Brain className="h-3.5 w-3.5" />} Analisar com IA</button>
+          <button className="btn btn-secondary" disabled={!run || !!busy || run.status === "AI_FAILED" || Boolean(run.challengers?.length)} onClick={() => void action("replay")}><Play className="h-3.5 w-3.5" /> Replay point-in-time</button>
+          <button className="btn btn-secondary" disabled={!run?.replays?.some(item => item.status === "REPLAY_READY") || !!busy} onClick={() => void action("challengers")}><ShieldCheck className="h-3.5 w-3.5" /> Criar challengers shadow</button>
+          <button className="btn btn-secondary" disabled={!run?.adjustment_envelope} onClick={download}><Download className="h-3.5 w-3.5" /> JSON</button>
+        </div>
+      </div>
+      {overview && <><div className="mt-4 grid gap-2 md:grid-cols-4">{Object.entries(quadrants).map(([key,value]) => <div key={key} className="rounded border border-white/10 p-3"><div className="text-[9px] uppercase text-slate-500">{quadrantLabels[key] || key}</div><div className="mt-1 font-mono text-[15px]">{value.closed}</div><div className="mt-1 text-[9px] text-slate-400">TP {value.tp} · SL {value.sl} · símbolos {value.distinct_symbols} · dias {value.distinct_days}</div></div>)}</div><div className="mt-2 text-[9px] font-mono text-slate-500">{overview.dataset_contract} · cutoff {overview.cutoff_at} · rows {overview.row_count}{overview.truncated ? " · TRUNCATED" : ""} · profiles {overview.profiles.length}</div></>}
+      {run?.executive_report && <div className="mt-4 rounded border border-violet-400/20 bg-black/20 p-4"><div className="text-[9px] uppercase tracking-widest text-violet-300">Relatório executivo · {run.model || "IA configurada"}</div><p className="mt-2 text-[12px] leading-5">{run.executive_report.executive_summary}</p><div className="mt-3 grid gap-3 lg:grid-cols-2"><div>{(run.executive_report.global_diagnosis || []).map((item,index) => <div key={index} className="mt-1 text-[10px] text-slate-300">• {item}</div>)}</div><div>{(run.executive_report.profile_recommendations || []).map(item => <div key={item.profile_id} className="mb-2 rounded border border-white/10 p-2 text-[10px]"><span className="font-mono text-cyan-300">{item.profile_id.slice(0,8)}…</span> · {item.diagnosis}<div className="mt-1 text-slate-500">{item.selected_candidate_ids.length} ajustes selecionados</div></div>)}</div></div></div>}
+      {run?.replays?.length ? <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">{run.replays.map(item => <div key={item.id} className={`rounded border p-3 text-[10px] ${item.status === "REPLAY_READY" ? "border-green-500/30 bg-green-500/5" : "border-yellow-500/30 bg-yellow-500/5"}`}><div className="font-semibold">{item.status} · {item.profile_id.slice(0,8)}…</div><div className="mt-1 font-mono">SL evitados {String(item.delta_metrics.prevented_sl ?? "—")} · TP perdidos {String(item.delta_metrics.lost_tp ?? "—")}</div><div className="mt-1">retenção {pct(item.delta_metrics.volume_retention as number | null)} · redução SL {pct(item.delta_metrics.sl_reduction_rate as number | null)}</div></div>)}</div> : null}
+      {run?.challengers?.length ? <div className="mt-3 text-[10px] text-cyan-200">{run.challengers.length} challenger(s): {run.challengers.map(item => `${item.status} ${item.profile_id.slice(0,8)}…`).join(" · ")}</div> : null}
+      {error && <div className="mt-3 text-[10px] text-red-300">ERROR · {error}</div>}
+    </div>
+    <div className="card p-4"><div><h3 className="text-[13px] font-semibold">Evolução após as mudanças · Champion × Challenger</h3><p className="text-[10px] text-[var(--text-tertiary)]">TP%, SL% e SL rápido% por data; somente trades shadow fechados das versões pareadas.</p></div><div className="mt-3 h-72">{curve.length ? <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 800, height: 288 }}><LineChart data={curve}><CartesianGrid strokeDasharray="3 3" stroke="#ffffff12" /><XAxis dataKey="date" tick={{ fontSize: 9 }} /><YAxis unit="%" tick={{ fontSize: 9 }} /><Tooltip /><Legend /><Line type="monotone" dataKey="champion_tp" name="Champion TP" stroke="#38bdf8" /><Line type="monotone" dataKey="challenger_tp" name="Challenger TP" stroke="#22c55e" /><Line type="monotone" dataKey="champion_sl" name="Champion SL" stroke="#fb7185" strokeDasharray="4 3" /><Line type="monotone" dataKey="challenger_sl" name="Challenger SL" stroke="#f97316" /><Line type="monotone" dataKey="challenger_rapid_sl" name="Challenger SL rápido" stroke="#eab308" /></LineChart></ResponsiveContainer> : <div className="flex h-full items-center justify-center text-[11px] text-[var(--text-tertiary)]">COLLECTION_IN_PROGRESS · o gráfico aparecerá após os primeiros pares fechados.</div>}</div></div>
+  </section>;
+}
 
 function scopeQuery(scope: Scope | undefined, lookbackDays: number) {
   const params = new URLSearchParams({ lookback_days: String(lookbackDays) });
@@ -186,6 +294,8 @@ export default function ScoreIntelligencePanel({ initialData, onCreateManual }: 
     </div>
 
     {data.status !== "READY" && <div className="flex gap-2 rounded border border-yellow-500/30 bg-yellow-500/5 p-3 text-[11px] text-yellow-200"><AlertTriangle className="h-4 w-4 shrink-0" /><div>{data.status}. Resultados permanecem observacionais; somente OBSERVE_ONLY é recomendado.</div></div>}
+
+    <GlobalOptimizationPanel lookbackDays={lookbackDays} />
 
     <section className="card overflow-hidden"><div className="border-b border-[var(--border-default)] p-4"><h3 className="text-[13px] font-semibold">TP × SL × TIMEOUT</h3><p className="text-[10px] text-[var(--text-tertiary)]">Null permanece ausente; percentis são calculados sobre valores presentes.</p></div><div className="overflow-x-auto"><table className="w-full text-[10px]"><thead><tr className="border-b border-[var(--border-subtle)]">{["Score","TP N","TP Min","TP P25","TP Med","TP Média","TP P75","TP P90","TP Max","SL N","SL Min","SL P25","SL Med","SL Média","SL P75","SL P90","SL Max","TIMEOUT N","TIMEOUT Média","Δ média","Δ mediana","Missing","Cobertura"].map(label => <th key={label} className="whitespace-nowrap px-3 py-2 text-left uppercase text-[var(--text-tertiary)]">{label}</th>)}</tr></thead><tbody className="divide-y divide-[var(--border-subtle)]">{stats.map(item => <tr key={item.score}><td className="px-3 py-2"><div className="font-semibold">{SCORE_LABELS[item.score]}</div><div className="font-mono text-[8px] text-[var(--text-tertiary)]">{item.origin}</div></td>{[item.tp.n,item.tp.min,item.tp.p25,item.tp.median,item.tp.mean,item.tp.p75,item.tp.p90,item.tp.max,item.sl.n,item.sl.min,item.sl.p25,item.sl.median,item.sl.mean,item.sl.p75,item.sl.p90,item.sl.max,item.timeout.n,item.timeout.mean,item.delta_mean_tp_sl,item.delta_median_tp_sl,item.missing].map((value,index) => <td key={index} className="px-3 py-2 font-mono">{typeof value === "number" ? ([0,8,16,20].includes(index) ? value : value.toFixed(2)) : "—"}</td>)}<td className="px-3 py-2">{pct(item.coverage)}</td></tr>)}</tbody></table></div></section>
 

@@ -8,7 +8,7 @@ import os
 from typing import Any, Dict, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
 from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -42,6 +42,7 @@ from ..schemas.profile_intelligence import (
     ManualAdjustmentApprovalRequest,
     ManualAdjustmentRollbackRequest,
     ScoreThresholdSimulationRequest,
+    ScoreGlobalAnalysisRequest,
 )
 from ..services.profile_intelligence_audit_service import log_pi_event
 from ..services.profile_intelligence_manual_service import (
@@ -56,6 +57,9 @@ from ..services.profile_intelligence_contract import (
 )
 from ..services.profile_score_intelligence_service import (
     profile_score_intelligence_service,
+)
+from ..services.profile_score_optimization_service import (
+    profile_score_optimization_service,
 )
 
 logger = logging.getLogger(__name__)
@@ -111,6 +115,22 @@ _DEFAULT_SETTINGS = {
     "adjustment_max_win_rate": 0.35,
     "adjustment_score_bump": 5,
     "adjustment_score_cap": 85,
+    "score_global_rapid_sl_candles": 12,
+    "score_global_max_analysis_rows": 100000,
+    "score_global_min_bucket_trades": 30,
+    "score_global_penalty_points": -5,
+    "score_global_max_changes_per_profile": 3,
+    "score_global_replay_min_retention": 0.70,
+    "score_global_replay_max_tp_loss_rate": 0.05,
+    "score_global_replay_min_sl_reduction_rate": 0.02,
+    "score_global_challenger_min_days": 7,
+    "score_global_challenger_min_closed": 100,
+    "score_global_challenger_min_tp": 20,
+    "score_global_challenger_min_sl": 20,
+    "score_global_challenger_min_distinct_symbols": 3,
+    "score_global_challenger_min_distinct_days": 3,
+    "score_global_challenger_max_single_symbol_share": 0.40,
+    "score_global_challenger_max_single_day_share": 0.40,
 }
 
 _ML_CHALLENGER_FLAGS = {
@@ -430,6 +450,126 @@ async def simulate_score_threshold(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/score-intelligence/global-overview")
+async def get_score_global_overview(
+    lookback_days: int = Query(default=30, ge=7, le=365),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    try:
+        return await profile_score_optimization_service.overview(
+            db, user_id, lookback_days
+        )
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/score-intelligence/global-analysis", status_code=201)
+async def run_score_global_analysis(
+    request: ScoreGlobalAnalysisRequest,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    try:
+        result = await profile_score_optimization_service.analyze_global(
+            db, user_id, request.lookback_days, request.idempotency_key
+        )
+        await db.commit()
+        return result
+    except (ValueError, RuntimeError) as exc:
+        await db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/score-intelligence/optimization-runs")
+async def list_score_optimization_runs(
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    items = await profile_score_optimization_service.list_runs(db, user_id, limit)
+    return {"items": items, "total": len(items)}
+
+
+@router.get("/score-intelligence/optimization-runs/{run_id}")
+async def get_score_optimization_run(
+    run_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    try:
+        return await profile_score_optimization_service.get_run(db, user_id, run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/score-intelligence/optimization-runs/{run_id}/download")
+async def download_score_optimization_run(
+    run_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Response:
+    try:
+        payload = await profile_score_optimization_service.get_run(
+            db, user_id, run_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    envelope = payload.get("adjustment_envelope") or {}
+    return Response(
+        content=json.dumps(envelope, ensure_ascii=False, indent=2, default=str),
+        media_type="application/json",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="profile-score-adjustments-{run_id}.json"'
+            )
+        },
+    )
+
+
+@router.post("/score-intelligence/optimization-runs/{run_id}/replay")
+async def replay_score_optimization_run(
+    run_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    try:
+        result = await profile_score_optimization_service.replay(db, user_id, run_id)
+        await db.commit()
+        return result
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/score-intelligence/optimization-runs/{run_id}/challengers")
+async def create_score_optimization_challengers(
+    run_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    try:
+        result = await profile_score_optimization_service.create_challengers(
+            db, user_id, run_id
+        )
+        await db.commit()
+        return result
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/score-intelligence/performance-evolution")
+async def get_score_performance_evolution(
+    profile_id: UUID | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    return await profile_score_optimization_service.performance(
+        db, user_id, profile_id
+    )
 
 
 @router.get("/overview")

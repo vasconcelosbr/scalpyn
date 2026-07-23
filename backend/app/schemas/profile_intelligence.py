@@ -51,6 +51,22 @@ class PISettingsUpdate(BaseModel):
     adjustment_max_win_rate: Optional[float] = None
     adjustment_score_bump: Optional[int] = None
     adjustment_score_cap: Optional[int] = None
+    score_global_rapid_sl_candles: Optional[int] = Field(default=None, ge=1, le=288)
+    score_global_max_analysis_rows: Optional[int] = Field(default=None, ge=1000, le=250000)
+    score_global_min_bucket_trades: Optional[int] = Field(default=None, ge=10, le=10000)
+    score_global_penalty_points: Optional[float] = Field(default=None, ge=-20, le=-1)
+    score_global_max_changes_per_profile: Optional[int] = Field(default=None, ge=1, le=10)
+    score_global_replay_min_retention: Optional[float] = Field(default=None, ge=0.1, le=1.0)
+    score_global_replay_max_tp_loss_rate: Optional[float] = Field(default=None, ge=0.0, le=0.5)
+    score_global_replay_min_sl_reduction_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    score_global_challenger_min_days: Optional[int] = Field(default=None, ge=1, le=90)
+    score_global_challenger_min_closed: Optional[int] = Field(default=None, ge=10, le=10000)
+    score_global_challenger_min_tp: Optional[int] = Field(default=None, ge=1, le=5000)
+    score_global_challenger_min_sl: Optional[int] = Field(default=None, ge=1, le=5000)
+    score_global_challenger_min_distinct_symbols: Optional[int] = Field(default=None, ge=1, le=1000)
+    score_global_challenger_min_distinct_days: Optional[int] = Field(default=None, ge=1, le=365)
+    score_global_challenger_max_single_symbol_share: Optional[float] = Field(default=None, gt=0, le=1)
+    score_global_challenger_max_single_day_share: Optional[float] = Field(default=None, gt=0, le=1)
     enable_anthropic_explanations: Optional[bool] = None
     enable_optuna: Optional[bool] = None
     enable_association_rules: Optional[bool] = None
@@ -122,6 +138,11 @@ class ScoreThresholdSimulationRequest(BaseModel):
     profile_version_id: Optional[UUID] = None
     score_engine_version_id: Optional[UUID] = None
     timeframe: Optional[str] = Field(default=None, max_length=16)
+
+
+class ScoreGlobalAnalysisRequest(BaseModel):
+    lookback_days: int = Field(default=30, ge=7, le=365)
+    idempotency_key: Optional[str] = Field(default=None, min_length=12, max_length=160)
 
 
 class AutopilotSettingsUpdate(BaseModel):

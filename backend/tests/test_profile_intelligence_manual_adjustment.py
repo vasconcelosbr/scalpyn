@@ -26,7 +26,9 @@ def config():
 def test_all_contract_actions_are_exposed():
     assert MANUAL_ACTIONS == {
         "ADD_SIGNAL_CONDITION", "UPDATE_SIGNAL_THRESHOLD", "UPDATE_SIGNAL_RANGE",
-        "REMOVE_SIGNAL_CONDITION", "ADD_SCORE_BONUS", "ADD_SCORE_PENALTY",
+        "REMOVE_SIGNAL_CONDITION", "ADD_ENTRY_TRIGGER_CONDITION",
+        "UPDATE_ENTRY_TRIGGER_THRESHOLD", "UPDATE_ENTRY_TRIGGER_RANGE",
+        "REMOVE_ENTRY_TRIGGER_CONDITION", "ADD_SCORE_BONUS", "ADD_SCORE_PENALTY",
         "UPDATE_SCORE_WEIGHT", "UPDATE_SCORE_THRESHOLD", "ADD_BLOCK_RULE",
         "UPDATE_BLOCK_RULE", "REMOVE_BLOCK_RULE", "OBSERVE_ONLY",
     }
@@ -126,12 +128,17 @@ def test_every_manual_action_has_a_valid_bounded_path(config, action, path, curr
 def test_every_mutating_action_rejects_a_cross_scope_target(action):
     wrong_root = {
         "signals": "/scoring/thresholds/allow",
+        "entry_triggers": "/signals/conditions",
         "scoring": "/block_rules/blocks",
         "block_rules": "/signals/conditions",
     }
     expected_root = next(root for name, root in {
         "ADD_SIGNAL_CONDITION": "signals", "UPDATE_SIGNAL_THRESHOLD": "signals",
         "UPDATE_SIGNAL_RANGE": "signals", "REMOVE_SIGNAL_CONDITION": "signals",
+        "ADD_ENTRY_TRIGGER_CONDITION": "entry_triggers",
+        "UPDATE_ENTRY_TRIGGER_THRESHOLD": "entry_triggers",
+        "UPDATE_ENTRY_TRIGGER_RANGE": "entry_triggers",
+        "REMOVE_ENTRY_TRIGGER_CONDITION": "entry_triggers",
         "ADD_SCORE_BONUS": "scoring", "ADD_SCORE_PENALTY": "scoring",
         "UPDATE_SCORE_WEIGHT": "scoring", "UPDATE_SCORE_THRESHOLD": "scoring",
         "ADD_BLOCK_RULE": "block_rules", "UPDATE_BLOCK_RULE": "block_rules",

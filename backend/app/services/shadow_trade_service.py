@@ -291,6 +291,8 @@ SHADOW_SOURCE_L3_SIMULATED = "L3_SIMULATED"
 # ux_shadow_running_user_source partial index (profile_id IS NULL) never fires.
 # Multiple profiles can shadow the same symbol simultaneously.
 SHADOW_SOURCE_L3_LAB = "L3_LAB"
+SHADOW_SOURCE_PI_CHAMPION_CONTROL = "PI_CHAMPION_CONTROL"
+SHADOW_SOURCE_PI_CHALLENGER = "PI_CHALLENGER"
 _VALID_SHADOW_SOURCES = (
     SHADOW_SOURCE_L3,
     SHADOW_SOURCE_L3_REJECTED,
@@ -298,6 +300,8 @@ _VALID_SHADOW_SOURCES = (
     SHADOW_SOURCE_L1_SPECTRUM,
     SHADOW_SOURCE_L3_SIMULATED,
     SHADOW_SOURCE_L3_LAB,
+    SHADOW_SOURCE_PI_CHAMPION_CONTROL,
+    SHADOW_SOURCE_PI_CHALLENGER,
 )
 
 # ── Contract version stamps (Fase 1) — fonte única em app/ml/dataset_config.
@@ -3283,6 +3287,9 @@ async def _strategy_lab_snapshot_contract(
     *,
     profile_id: Optional[str],
     features: Dict[str, Any],
+    profile_version_id: Optional[str] = None,
+    score_engine_version_id: Optional[str] = None,
+    eligible_for_training: bool = True,
 ) -> tuple[Dict[str, Any], Dict[str, Any]]:
     from ..ml.feature_contract_v2 import (
         capture_native_snapshot,
@@ -3293,14 +3300,32 @@ async def _strategy_lab_snapshot_contract(
     normalized = native_capture.snapshot
     feature_errors = list(native_capture.errors)
     version_row = None
-    if profile_id:
+    if profile_id and profile_version_id:
+        version_row = (await db.execute(text("""
+            SELECT pv.id AS profile_version_id,pv.config_hash,
+                   pv.score_engine_version_id,sev.config_hash AS score_config_hash
+              FROM profile_versions pv
+              JOIN score_engine_versions sev ON sev.id=pv.score_engine_version_id
+             WHERE pv.id=CAST(:profile_version_id AS UUID)
+               AND pv.profile_id=CAST(:profile_id AS UUID)
+               AND (
+                   CAST(:score_engine_version_id AS UUID) IS NULL
+                   OR pv.score_engine_version_id=CAST(:score_engine_version_id AS UUID)
+               )
+             LIMIT 1
+        """), {
+            "profile_id": profile_id,
+            "profile_version_id": profile_version_id,
+            "score_engine_version_id": score_engine_version_id,
+        })).mappings().first()
+    elif profile_id:
         version_row = (await db.execute(text("""
             SELECT pv.id AS profile_version_id, pv.config_hash,
                    pv.score_engine_version_id, sev.config_hash AS score_config_hash
               FROM profile_versions pv
               JOIN score_engine_versions sev ON sev.id = pv.score_engine_version_id
              WHERE pv.profile_id = CAST(:profile_id AS UUID)
-               AND pv.status IN ('SHADOW', 'CHAMPION')
+               AND pv.status = 'CHAMPION'
              ORDER BY pv.version_number DESC
              LIMIT 1
         """), {"profile_id": profile_id})).mappings().first()
@@ -3337,7 +3362,9 @@ async def _strategy_lab_snapshot_contract(
             else "EXACT" if lineage_complete
             else "UNRESOLVED_VERSION"
         ),
-        "eligible_for_training": lineage_complete and not feature_errors,
+        "eligible_for_training": (
+            eligible_for_training and lineage_complete and not feature_errors
+        ),
     }
     return normalized, contract
 
@@ -3448,6 +3475,11 @@ async def create_strategy_lab_shadows(
     watchlist_name: Optional[str] = None,
     watchlist_level: Optional[str] = None,
     source_watchlist_id: Optional[str] = None,
+    shadow_source: str = SHADOW_SOURCE_L3_LAB,
+    profile_version_id: Optional[str] = None,
+    score_engine_version_id: Optional[str] = None,
+    eligible_for_training: bool = True,
+    optimization_metadata: Optional[Dict[str, Any]] = None,
 ) -> int:
     """Strategy Lab: create profile-attributed ALLOW shadows bypassing decisions_log dedup.
 
@@ -3514,7 +3546,7 @@ async def create_strategy_lab_shadows(
                 active_symbols = await _load_active_profile_shadow_symbols(
                     active_db,
                     profile_id_str,
-                    SHADOW_SOURCE_L3_LAB,
+                    shadow_source,
                 )
         except Exception:
             logger.debug(
@@ -3572,6 +3604,7 @@ async def create_strategy_lab_shadows(
             "profile_id": profile_id_str,
             "profile_name": profile_name,
             "execution_id": execution_id,
+            **dict(optimization_metadata or {}),
         }
 
         try:
@@ -3582,6 +3615,9 @@ async def create_strategy_lab_shadows(
                             own_db,
                             profile_id=profile_id_str,
                             features=features_flat,
+                            profile_version_id=profile_version_id,
+                            score_engine_version_id=score_engine_version_id,
+                            eligible_for_training=eligible_for_training,
                         )
                     )
                     try:
@@ -3603,7 +3639,7 @@ async def create_strategy_lab_shadows(
                                     "sl_pct": sl_pct or None,
                                     "timeout_candles": timeout_candles,
                                     "status": initial_status,
-                                    "source": SHADOW_SOURCE_L3_LAB,
+                                    "source": shadow_source,
                                     "config_snapshot": _json.dumps(config_snap, default=str),
                                     "features_snapshot": _json.dumps(features_normalized, default=str),
                                     "last_processed_time": promotion_at,
@@ -3675,6 +3711,8 @@ async def create_strategy_lab_rejected_shadows(
     watchlist_name: Optional[str] = None,
     watchlist_level: Optional[str] = None,
     source_watchlist_id: Optional[str] = None,
+    profile_version_id: Optional[str] = None,
+    score_engine_version_id: Optional[str] = None,
 ) -> int:
     """Strategy Lab: create profile-attributed BLOCK shadows for counterfactual analysis.
 
@@ -3803,6 +3841,8 @@ async def create_strategy_lab_rejected_shadows(
                             own_db,
                             profile_id=profile_id_str,
                             features=features_flat,
+                            profile_version_id=profile_version_id,
+                            score_engine_version_id=score_engine_version_id,
                         )
                     )
                     try:
