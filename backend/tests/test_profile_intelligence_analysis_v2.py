@@ -154,6 +154,53 @@ def test_ai_guard_rejects_cross_profile_candidate_selection():
         validate_ai_response_against_payload(response, payload)
 
 
+def test_ai_guard_rejects_numeric_claim_absent_from_deterministic_payload():
+    profile_id = str(uuid4())
+    payload = {
+        "row_count": 100,
+        "global_baseline": {"tp_rate": 0.52},
+        "candidates": [
+            {
+                "profile_id": profile_id,
+                "candidate_id": "candidate-a",
+                "scope": "PROFILE",
+                "validation": {"status": "VALIDATED"},
+                "sources": ["L3"],
+            }
+        ],
+    }
+    response = {
+        "analysis_contract_version": ANALYSIS_CONTRACT_VERSION,
+        "analysis_skill_version": ANALYSIS_SKILL_VERSION,
+        "executive_summary": "A taxa verificada é 52%, mas 9999 casos não existem.",
+        "global_diagnosis": [],
+        "profile_recommendations": [],
+        "risks": [],
+        "safeguards": [],
+    }
+    with pytest.raises(ValueError, match="NUMERIC_OR_SCOPE_MISMATCH"):
+        validate_ai_response_against_payload(response, payload)
+
+
+def test_ai_guard_accepts_numeric_claims_present_in_payload():
+    payload = {
+        "row_count": 100,
+        "global_baseline": {"tp_rate": 0.52},
+        "candidates": [],
+    }
+    response = {
+        "analysis_contract_version": ANALYSIS_CONTRACT_VERSION,
+        "analysis_skill_version": ANALYSIS_SKILL_VERSION,
+        "executive_summary": "Foram verificados 100 casos com taxa de 52%.",
+        "global_diagnosis": [],
+        "profile_recommendations": [],
+        "risks": [],
+        "safeguards": [],
+    }
+    clean = validate_ai_response_against_payload(response, payload)
+    assert clean["executive_summary"].startswith("Foram verificados")
+
+
 def test_bounded_ai_context_keeps_candidates_once_and_omits_provider_policy():
     payload = {
         "analysis_contract_version": ANALYSIS_CONTRACT_VERSION,

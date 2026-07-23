@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import math
+import re
 from statistics import mean
 from typing import Any, Callable, Mapping, Sequence
 
@@ -90,6 +91,10 @@ evidência PROFILE. Selecione somente candidate_ids fornecidos no mesmo
 profile_id e somente quando validation.status for VALIDATED. Não recomende
 candidate definitions sem aplicação validada. Preserve explicitamente riscos,
 limitações de deduplicação e indisponibilidade de simulação.
+
+Qualquer número citado na narrativa deve existir literalmente no payload
+verificado (percentuais podem apenas converter uma taxa de 0..1 para 0..100).
+Se um número não for necessário, descreva a conclusão qualitativamente.
 
 Nunca autorize treino, aprovação ou promoção de modelo; escrita nos datasets
 L1/L3; mutação de incumbent; ativação de Auto-Pilot; ou aplicação direta.
@@ -905,6 +910,51 @@ def validate_ai_response_against_payload(
     }
     if not clean["executive_summary"]:
         raise ValueError("invalid_profile_score_ai_summary")
+    numeric_values: list[float] = []
+
+    def collect_numbers(value: Any) -> None:
+        if isinstance(value, bool):
+            return
+        if isinstance(value, (int, float)) and math.isfinite(float(value)):
+            numeric_values.append(float(value))
+            return
+        if isinstance(value, Mapping):
+            for nested in value.values():
+                collect_numbers(nested)
+        elif isinstance(value, (list, tuple)):
+            for nested in value:
+                collect_numbers(nested)
+
+    collect_numbers(payload)
+    narratives = [
+        clean["executive_summary"],
+        *clean["global_diagnosis"],
+        *(item["diagnosis"] for item in clean["profile_recommendations"]),
+        *clean["risks"],
+        *clean["safeguards"],
+    ]
+    for narrative in narratives:
+        for token in re.findall(
+            r"(?<![\w-])[-+]?\d+(?:[.,]\d+)?%?",
+            str(narrative),
+        ):
+            is_percent = token.endswith("%")
+            raw = token[:-1] if is_percent else token
+            if "," in raw and "." not in raw and len(raw.rsplit(",", 1)[-1]) == 3:
+                raw = raw.replace(",", "")
+            else:
+                raw = raw.replace(",", ".")
+            try:
+                cited = float(raw) / 100.0 if is_percent else float(raw)
+            except ValueError:
+                continue
+            if not any(
+                math.isclose(cited, known, rel_tol=1e-6, abs_tol=1e-9)
+                for known in numeric_values
+            ):
+                raise ValueError(
+                    "AI_RESPONSE_REJECTED_NUMERIC_OR_SCOPE_MISMATCH"
+                )
     return clean
 
 
