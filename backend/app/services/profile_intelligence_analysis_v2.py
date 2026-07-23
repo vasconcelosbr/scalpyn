@@ -588,6 +588,20 @@ def validate_analysis_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         components = sum(int((metrics or {}).get(key) or 0) for key in ("tp", "sl", "timeout"))
         if closed != components:
             errors.append(f"SOURCE_METRICS_NOT_EXHAUSTIVE:{source}")
+    for cohort_name, cohort in (payload.get("cohorts") or {}).items():
+        definition = str((cohort or {}).get("definition") or "").lower().replace(" ", "")
+        metrics = (cohort or {}).get("metrics") or {}
+        closed = int(metrics.get("closed") or 0)
+        if (
+            "outcome=tp_hit" in definition
+            and closed > 0
+            and int(metrics.get("tp") or 0) == closed
+        ) or (
+            "outcome=sl_hit" in definition
+            and closed > 0
+            and int(metrics.get("sl") or 0) == closed
+        ):
+            errors.append(f"TAUTOLOGICAL_OUTCOME_COHORT:{cohort_name}")
     matrix = payload.get("confusion_matrix") or {}
     if any(int(matrix.get(key) or 0) < 0 for key in ("tp", "fp", "fn", "tn")):
         errors.append("INVALID_CONFUSION_MATRIX")

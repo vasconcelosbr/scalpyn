@@ -101,6 +101,26 @@ def test_confusion_matrix_uses_approval_as_prediction_and_tp_as_actual():
     assert matrix["recall"] == 0.5
 
 
+def test_validator_rejects_tautological_outcome_cohort():
+    payload = {
+        "analysis_contract_version": ANALYSIS_CONTRACT_VERSION,
+        "analysis_skill_version": ANALYSIS_SKILL_VERSION,
+        "deduplication": {"missing_canonical_key_rows": 0},
+        "truncated": False,
+        "source_metrics": {},
+        "confusion_matrix": {"tp": 1, "fp": 0, "fn": 0, "tn": 0},
+        "candidates": [],
+        "cohorts": {
+            "approved_tp": {
+                "definition": "outcome=TP_HIT",
+                "metrics": {"closed": 2, "tp": 2, "sl": 0, "timeout": 0},
+            }
+        },
+    }
+    validation = validate_analysis_payload(payload)
+    assert "TAUTOLOGICAL_OUTCOME_COHORT:approved_tp" in validation["hard_errors"]
+
+
 def test_ai_guard_rejects_cross_profile_candidate_selection():
     profile_a, profile_b = str(uuid4()), str(uuid4())
     payload = {
