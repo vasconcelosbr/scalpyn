@@ -164,9 +164,9 @@ def test_ai_report_schema_is_bounded_and_requires_governance_sections():
         "safeguards",
     }
     recommendations = AI_REPORT_SCHEMA["properties"]["profile_recommendations"]
-    assert recommendations["maxItems"] == 60
+    assert "60" in recommendations["description"]
     selected = recommendations["items"]["properties"]["selected_candidate_ids"]
-    assert selected["maxItems"] == 3
+    assert "3" in selected["description"]
 
 
 def test_ai_report_parser_accepts_structured_json_and_rejects_truncation():

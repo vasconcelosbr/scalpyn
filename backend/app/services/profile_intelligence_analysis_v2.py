@@ -36,12 +36,12 @@ AI_REPORT_SCHEMA_V2: dict[str, Any] = {
         "executive_summary": {"type": "string"},
         "global_diagnosis": {
             "type": "array",
-            "maxItems": 12,
+            "description": "No máximo 12 itens; o guard pós-IA aplica o limite.",
             "items": {"type": "string"},
         },
         "profile_recommendations": {
             "type": "array",
-            "maxItems": 60,
+            "description": "No máximo 60 itens; o guard pós-IA aplica o limite.",
             "items": {
                 "type": "object",
                 "additionalProperties": False,
@@ -50,7 +50,7 @@ AI_REPORT_SCHEMA_V2: dict[str, Any] = {
                     "diagnosis": {"type": "string"},
                     "selected_candidate_ids": {
                         "type": "array",
-                        "maxItems": 3,
+                        "description": "No máximo 3 IDs; o guard pós-IA aplica o limite.",
                         "items": {"type": "string"},
                     },
                 },
@@ -59,12 +59,12 @@ AI_REPORT_SCHEMA_V2: dict[str, Any] = {
         },
         "risks": {
             "type": "array",
-            "maxItems": 12,
+            "description": "No máximo 12 itens; o guard pós-IA aplica o limite.",
             "items": {"type": "string"},
         },
         "safeguards": {
             "type": "array",
-            "maxItems": 12,
+            "description": "No máximo 12 itens; o guard pós-IA aplica o limite.",
             "items": {"type": "string"},
         },
     },
