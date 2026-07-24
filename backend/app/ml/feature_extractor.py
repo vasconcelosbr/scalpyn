@@ -468,10 +468,15 @@ def build_training_dataframe(
 
     if len(df) > 0:
         win_rate = df["is_win_fast"].mean() * 100
+        effective_label_version = (
+            "positive_net_return_v1"
+            if label_objective == "positive_net_return"
+            else label_version_for_threshold(win_fast_threshold_s)
+        )
         logger.info(
-            "Base WIN rate: %.1f%% (label_version=%s; "
+            "Base WIN rate: %.1f%% (label_objective=%s; label_version=%s; "
             "label_net_of_fees ignored=%s; fee ignored=%.4f)",
-            win_rate, label_version_for_threshold(win_fast_threshold_s),
+            win_rate, label_objective, effective_label_version,
             label_net_of_fees, _FEE_ROUND_TRIP_PCT,
         )
 

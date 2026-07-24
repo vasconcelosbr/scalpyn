@@ -1,5 +1,6 @@
 import pandas as pd
 
+from backend.app.ml.feature_extractor import build_training_dataframe
 from backend.app.services.ml_challenger_service import _apply_feature_contract
 
 
@@ -49,3 +50,23 @@ def test_min_row_coverage_rejects_sparse_shape_under_same_contract():
 
     assert list(filtered.index) == [1]
     assert rejected == 1
+
+
+def test_positive_net_return_objective_logs_its_actual_label(caplog):
+    with caplog.at_level("INFO"):
+        build_training_dataframe(
+            [
+                {
+                    "pnl_pct": 0.3,
+                    "net_return_pct": 0.1,
+                    "holding_seconds": 100,
+                    "outcome": "TIMEOUT",
+                    "features_snapshot": {},
+                }
+            ],
+            win_fast_threshold_s=14400,
+            label_objective="positive_net_return",
+        )
+
+    assert "label_objective=positive_net_return" in caplog.text
+    assert "label_version=positive_net_return_v1" in caplog.text
