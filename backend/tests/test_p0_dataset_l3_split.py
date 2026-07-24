@@ -113,14 +113,14 @@ class TestTrainChallengersGate:
             return await svc.train_challengers(
                 db=db,
                 user_id="00000000-0000-0000-0000-000000000001",
-                enable_lightgbm=False,
-                enable_catboost=True,
-                catboost_source_filter=["L3", "L3_LAB"],
+                enable_xgboost_l1=False,
+                enable_xgboost_l3=True,
+                xgboost_l3_source_filter=["L3", "L3_LAB"],
                 allow_mixed_source=False,
             )
         result = asyncio.run(_run())
-        assert result["catboost"]["status"] == "blocked"
-        assert result["catboost"]["reason"] == MIXED_SOURCE_BLOCKED_REASON
+        assert result["xgboost_l3"]["status"] == "blocked"
+        assert result["xgboost_l3"]["reason"] == MIXED_SOURCE_BLOCKED_REASON
 
     def test_default_catboost_sources_are_l3_only(self):
         """When no source_filter is given, CatBoost defaults to L3_ONLY (not combined)."""
@@ -134,7 +134,7 @@ class TestTrainChallengersGate:
             svc = MLChallengerService()
             svc._load_ml_config = AsyncMock(return_value={
                 "ml_dataset_valid_from": "2026-06-14T21:33:10+00:00",
-                "ml_retrain_min_eligible_rows": 4,
+                "ml_xgboost_l1_retrain_min_eligible_rows": 4,
                 "ml_maturity_embargo_margin_minutes": 60,
                 "ml_win_fast_threshold_seconds": 1800,
                 "shadow_barrier_mode": "ATR_DYNAMIC",
@@ -157,16 +157,16 @@ class TestTrainChallengersGate:
                 return await svc.train_challengers(
                     db=db,
                     user_id="00000000-0000-0000-0000-000000000001",
-                    enable_lightgbm=True,
-                    enable_catboost=False,
+                    enable_xgboost_l1=True,
+                    enable_xgboost_l3=False,
                 )
 
         result = asyncio.run(_run())
 
-        assert result["lightgbm"]["status"] == "skipped"
-        assert result["lightgbm"]["reason"] == "insufficient_retrain_eligible_rows"
-        assert result["lightgbm"]["records"] == 3
-        assert result["lightgbm"]["min_required"] == 4
+        assert result["xgboost_l1"]["status"] == "skipped"
+        assert result["xgboost_l1"]["reason"] == "insufficient_retrain_eligible_rows"
+        assert result["xgboost_l1"]["records"] == 3
+        assert result["xgboost_l1"]["min_required"] == 4
 
 
 # ---------------------------------------------------------------------------

@@ -12,28 +12,30 @@ from backend.app.ml.promotion_gate import BLOCKED, evaluate_promotion_gate
 from backend.scripts.run_catboost_retrain import _dry_run_gate_payload
 
 
-def test_catboost_minimum_is_required():
+def test_xgboost_l3_minimum_is_required():
     with pytest.raises(
-        ValueError, match="missing_ml_catboost_retrain_min_eligible_rows"
-    ):
-        _require_positive_int_config({}, "ml_catboost_retrain_min_eligible_rows")
-
-
-@pytest.mark.parametrize("value", [0, -1, "200", 1.5, True, False])
-def test_catboost_minimum_rejects_non_positive_or_non_integer_values(value):
-    with pytest.raises(
-        ValueError, match="invalid_ml_catboost_retrain_min_eligible_rows"
+        ValueError, match="missing_ml_xgboost_l3_retrain_min_eligible_rows"
     ):
         _require_positive_int_config(
-            {"ml_catboost_retrain_min_eligible_rows": value},
-            "ml_catboost_retrain_min_eligible_rows",
+            {}, "ml_xgboost_l3_retrain_min_eligible_rows"
         )
 
 
-def test_catboost_minimum_accepts_positive_integer():
+@pytest.mark.parametrize("value", [0, -1, "200", 1.5, True, False])
+def test_xgboost_l3_minimum_rejects_non_positive_or_non_integer_values(value):
+    with pytest.raises(
+        ValueError, match="invalid_ml_xgboost_l3_retrain_min_eligible_rows"
+    ):
+        _require_positive_int_config(
+            {"ml_xgboost_l3_retrain_min_eligible_rows": value},
+            "ml_xgboost_l3_retrain_min_eligible_rows",
+        )
+
+
+def test_xgboost_l3_minimum_accepts_positive_integer():
     assert _require_positive_int_config(
-        {"ml_catboost_retrain_min_eligible_rows": 200},
-        "ml_catboost_retrain_min_eligible_rows",
+        {"ml_xgboost_l3_retrain_min_eligible_rows": 200},
+        "ml_xgboost_l3_retrain_min_eligible_rows",
     ) == 200
 
 
@@ -116,10 +118,11 @@ def test_catboost_train_gate_uses_database_minimum_and_reports_deficit(monkeypat
         svc._load_ml_config = AsyncMock(return_value={
             "ml_dataset_valid_from": "2026-07-01T00:00:00+00:00",
             "ml_l3_dataset_valid_from": "2026-07-11T03:21:06+00:00",
-            "ml_catboost_retrain_min_eligible_rows": 4,
+            "ml_xgboost_l3_retrain_min_eligible_rows": 4,
             "ml_promotion_min_test_samples": 3,
             "ml_maturity_embargo_margin_minutes": 60,
             "shadow_barrier_mode": "ATR_DYNAMIC",
+            "ml_win_fast_threshold_seconds": 14400,
         })
         svc._load_strategy_tp_pct = AsyncMock(return_value=0.6)
         svc._prepare_catboost_gate_records = AsyncMock(return_value=(
@@ -142,18 +145,18 @@ def test_catboost_train_gate_uses_database_minimum_and_reports_deficit(monkeypat
         return await svc.train_challengers(
             db=AsyncMock(),
             user_id="00000000-0000-0000-0000-000000000001",
-            enable_lightgbm=False,
-            enable_catboost=True,
-            catboost_source_filter=["L3"],
+            enable_xgboost_l1=False,
+            enable_xgboost_l3=True,
+            xgboost_l3_source_filter=["L3"],
         )
 
     result = asyncio.run(_run())
 
-    assert result["catboost"]["status"] == "skipped"
-    assert result["catboost"]["reason"] == "insufficient_retrain_eligible_rows"
-    assert result["catboost"]["records"] == 3
-    assert result["catboost"]["min_required"] == 4
-    assert result["catboost"]["deficit"] == 1
+    assert result["xgboost_l3"]["status"] == "skipped"
+    assert result["xgboost_l3"]["reason"] == "insufficient_retrain_eligible_rows"
+    assert result["xgboost_l3"]["records"] == 3
+    assert result["xgboost_l3"]["min_required"] == 4
+    assert result["xgboost_l3"]["deficit"] == 1
 
 
 def test_catboost_dry_run_payload_uses_post_barrier_records():
@@ -230,9 +233,23 @@ def test_new_candidate_persists_contracts_and_fail_closed_governance():
         def scalar():
             return 80
 
+    class _FirstResult:
+        @staticmethod
+        def first():
+            return (1,)
+
     async def _run():
         db = AsyncMock()
-        db.execute = AsyncMock(side_effect=[_ScalarResult(), None, None])
+        db.execute = AsyncMock(
+            side_effect=[
+                _ScalarResult(),
+                _FirstResult(),
+                None,
+                None,
+                None,
+                None,
+            ]
+        )
         svc = MLChallengerService()
         svc._load_ml_config = AsyncMock(return_value={
             "ml_label_version": "is_tp_4h_v2_sim_outcome",
@@ -241,10 +258,12 @@ def test_new_candidate_persists_contracts_and_fail_closed_governance():
             "ml_promotion_max_val_test_gap": 0.05,
             "ml_promotion_max_test_fpr": 0.5,
             "ml_promotion_require_positive_net_ev": True,
+            "ml_approval_test_auc_ci_excludes_half": True,
+            "ml_approval_min_distinct_days": 5,
         })
         await svc._save_to_db(
             db=db,
-            model_type="catboost",
+            model_type="xgboost",
             model_obj={"kind": "test"},
             feature_columns=["f1", "f2"],
             metrics={
@@ -270,11 +289,17 @@ def test_new_candidate_persists_contracts_and_fail_closed_governance():
                 "net_ev": 0.1,
             },
             win_fast_threshold_s=14400,
+            dataset_stats={
+                "n_samples": 240,
+                "n_positive": 80,
+                "n_negative": 160,
+                "positive_rate": 1 / 3,
+            },
         )
         return db
 
     db = asyncio.run(_run())
-    insert_params = db.execute.await_args_list[1].args[1]
+    insert_params = db.execute.await_args_list[2].args[1]
     assert insert_params["dataset_contract_id"]
     assert insert_params["label_contract_id"]
     assert insert_params["feature_contract_id"]
@@ -291,6 +316,8 @@ def test_promotion_gate_requires_label_and_feature_contract_ids():
         "ml_promotion_max_val_test_gap": 0.05,
         "ml_promotion_max_test_fpr": 0.5,
         "ml_promotion_require_positive_net_ev": True,
+        "ml_approval_test_auc_ci_excludes_half": True,
+        "ml_approval_min_distinct_days": 5,
     }
     result = evaluate_promotion_gate({
         "metrics_json": {
@@ -316,7 +343,7 @@ def test_promotion_gate_requires_label_and_feature_contract_ids():
         "dataset_hash": "a" * 64,
     }, promotion_config=config)
 
-    assert result["status"] == BLOCKED
+    assert result["status"] == "REJECTED"
     assert "missing_label_contract_id" in result["reasons"]
     assert "missing_feature_contract_id" in result["reasons"]
 
@@ -327,9 +354,23 @@ def test_new_candidate_sanitizes_non_finite_metrics_before_jsonb():
         def scalar():
             return 81
 
+    class _FirstResult:
+        @staticmethod
+        def first():
+            return (1,)
+
     async def _run():
         db = AsyncMock()
-        db.execute = AsyncMock(side_effect=[_ScalarResult(), None, None])
+        db.execute = AsyncMock(
+            side_effect=[
+                _ScalarResult(),
+                _FirstResult(),
+                None,
+                None,
+                None,
+                None,
+            ]
+        )
         svc = MLChallengerService()
         svc._load_ml_config = AsyncMock(return_value={
             "ml_label_version": "positive_net_return_v1",
@@ -338,10 +379,12 @@ def test_new_candidate_sanitizes_non_finite_metrics_before_jsonb():
             "ml_promotion_max_val_test_gap": 0.05,
             "ml_promotion_max_test_fpr": 0.5,
             "ml_promotion_require_positive_net_ev": True,
+            "ml_approval_test_auc_ci_excludes_half": True,
+            "ml_approval_min_distinct_days": 5,
         })
         await svc._save_to_db(
             db=db,
-            model_type="catboost",
+            model_type="xgboost",
             model_obj={"kind": "test"},
             feature_columns=["f1", "f2"],
             metrics={
@@ -367,11 +410,17 @@ def test_new_candidate_sanitizes_non_finite_metrics_before_jsonb():
                 "net_ev": float("nan"),
             },
             win_fast_threshold_s=14400,
+            dataset_stats={
+                "n_samples": 525,
+                "n_positive": 125,
+                "n_negative": 400,
+                "positive_rate": 125 / 525,
+            },
         )
         return db
 
     db = asyncio.run(_run())
-    insert_params = db.execute.await_args_list[1].args[1]
+    insert_params = db.execute.await_args_list[2].args[1]
     assert insert_params["roc_auc"] is None
     assert "NaN" not in insert_params["hyperparams"]
     assert "NaN" not in insert_params["metrics_json"]

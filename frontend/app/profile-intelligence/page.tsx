@@ -520,8 +520,8 @@ interface PISettings {
   enable_optuna?: boolean;
   enable_association_rules?: boolean;
   enable_dynamic_combinations?: boolean;
-  enable_lightgbm?: boolean;
-  enable_catboost?: boolean;
+  enable_xgboost_l1?: boolean;
+  enable_xgboost_l3?: boolean;
   analysis_sources?: string[];
   indicator_winning_lift?: number;
   indicator_losing_winrate_ratio?: number;
@@ -3394,8 +3394,8 @@ export default function ProfileIntelligencePage() {
                 ))}
 
                 <div className="grid grid-cols-1 gap-3 pt-2">
-                  {(["lightgbm", "catboost"] as const).map(key => {
-                    const label = key === "lightgbm" ? "LightGBM" : "CatBoost";
+                  {(["xgboost_l1", "xgboost_l3"] as const).map(key => {
+                    const label = key === "xgboost_l1" ? "XGBoost L1" : "XGBoost L3";
                     const ch = mlChallengers?.[key];
                     const isOp = ch?.operational === true;
                     const statusText = ch == null
@@ -3409,7 +3409,7 @@ export default function ProfileIntelligencePage() {
                       ? "border-emerald-500/30 bg-emerald-500/5"
                       : "border-yellow-500/25 bg-yellow-500/5";
                     const statusColor = isOp ? "text-emerald-400" : "text-yellow-400";
-                    const flagKey = key === "lightgbm" ? "enable_lightgbm" : "enable_catboost";
+                    const flagKey = key === "xgboost_l1" ? "enable_xgboost_l1" : "enable_xgboost_l3";
                     const enabled = !!settings[flagKey];
                     const caps: [string, boolean][] = ch ? [
                       ["Treina", ch.can_train],

@@ -101,8 +101,8 @@ _DEFAULT_SETTINGS = {
     "enable_optuna": False,
     "enable_association_rules": False,
     "enable_dynamic_combinations": True,
-    "enable_lightgbm": False,
-    "enable_catboost": False,
+    "enable_xgboost_l1": False,
+    "enable_xgboost_l3": False,
     "analysis_sources": ["L1_SPECTRUM", "L3", "L3_LAB"],
     "indicator_winning_lift": 1.15,
     "indicator_losing_winrate_ratio": 0.85,
@@ -141,8 +141,8 @@ _DEFAULT_SETTINGS = {
 }
 
 _ML_CHALLENGER_FLAGS = {
-    "enable_lightgbm": "lightgbm",
-    "enable_catboost": "catboost",
+    "enable_xgboost_l1": "xgboost",
+    "enable_xgboost_l3": "xgboost",
 }
 
 
@@ -952,9 +952,10 @@ async def trigger_ml_training(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ) -> Dict[str, Any]:
-    """Dispatch LightGBM + CatBoost training as a Celery task on the structural_compute queue.
+    """Dispatch XGBoost L1 + L3 training on the structural_compute queue.
 
-    Requires enable_lightgbm and/or enable_catboost in the user's profile_intelligence config.
+    Requires enable_xgboost_l1 and/or enable_xgboost_l3 in the user's
+    profile_intelligence config.
     Bypasses the PI Redis lock — runs training only, no PI analysis.
     """
     try:
@@ -977,7 +978,7 @@ async def trigger_run_with_ml(
     Runs _run_for_user on scalpyn-worker-structural, which includes:
       1. PI Engine analysis
       2. Autopilot cycle
-      3. LightGBM (L1_SPECTRUM) + CatBoost (L3/L3_LAB) training if enabled in settings
+      3. XGBoost L1_SPECTRUM + L3 training if enabled in settings
 
     Returns immediately with the Celery task ID.
     """

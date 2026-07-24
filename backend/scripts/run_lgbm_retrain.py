@@ -1,6 +1,7 @@
-"""Standalone LightGBM retrain script.
+"""Compatibility entrypoint for the governed XGBoost L1 retrain.
 
-Treina Lane 1 (LightGBM / L1_SPECTRUM / is_tp_4h_v2_sim_outcome) e persiste em ml_models.
+The filename is retained for operators with old runbooks. New automation should
+use ``run_xgboost_retrain.py --lane l1``.
 Não requer rede interna Railway. Não promove modelo automaticamente.
 Não altera outcomes, shadow trades, estratégias ou Auto-Pilot.
 
@@ -35,7 +36,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     stream=sys.stdout,
 )
-logger = logging.getLogger("lgbm_retrain")
+logger = logging.getLogger("xgboost_l1_retrain")
 
 DRY_RUN = "--dry-run" in sys.argv
 
@@ -81,7 +82,9 @@ async def main():
             logger.info("[DRY-RUN] Carregando dataset L1_SPECTRUM apenas — sem treino nem persistência")
             ml_config = await svc._load_ml_config(db)
             dataset_valid_from = parse_required_ml_dataset_valid_from(ml_config)
-            min_required = int(ml_config["ml_retrain_min_eligible_rows"])
+            min_required = int(
+                ml_config["ml_xgboost_l1_retrain_min_eligible_rows"]
+            )
             dataset_query_cutoff = datetime.now(timezone.utc)
             maturity_embargo_margin_minutes = ml_config.get(
                 "ml_maturity_embargo_margin_minutes"
@@ -133,12 +136,12 @@ async def main():
                 "barrier_contract": barrier_meta,
             }
 
-        logger.info("Iniciando train_challengers (LightGBM only)...")
+        logger.info("Iniciando train_challengers (XGBoost L1 only)...")
         result = await svc.train_challengers(
             db=db,
             user_id=USER_ID,
-            enable_lightgbm=True,
-            enable_catboost=False,
+            enable_xgboost_l1=True,
+            enable_xgboost_l3=False,
         )
 
         logger.info("Resultado: %s", result)

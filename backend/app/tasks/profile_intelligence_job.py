@@ -147,7 +147,7 @@ async def _run_pi_job():
 
 
 async def _run_ml_challengers_if_enabled(db, user_id) -> None:
-    """Treina LightGBM/CatBoost se habilitados nas settings do usuário. Isolado — falhas não abortam o job."""
+    """Train the enabled XGBoost lanes. Failures remain isolated from the PI job."""
     try:
         from sqlalchemy import text as _text
         import json as _json
@@ -159,18 +159,18 @@ async def _run_ml_challengers_if_enabled(db, user_id) -> None:
         if not row:
             return
         cfg = _json.loads(row[0]) if isinstance(row[0], str) else (row[0] or {})
-        enable_lgbm = bool(cfg.get("enable_lightgbm", False))
-        enable_cb   = bool(cfg.get("enable_catboost", False))
-        if not enable_lgbm and not enable_cb:
+        enable_xgboost_l1 = bool(cfg.get("enable_xgboost_l1", False))
+        enable_xgboost_l3 = bool(cfg.get("enable_xgboost_l3", False))
+        if not enable_xgboost_l1 and not enable_xgboost_l3:
             return
         # Fase 1 B.3 — fonte única: train_challengers lê o threshold da config
         # ml ativa; passar valor por chamada aqui (lido de outra config, com
         # default) era exatamente o vetor de divergência do v80.
-        catboost_source_filter = cfg.get("catboost_source_filter")
-        if isinstance(catboost_source_filter, str):
-            catboost_source_filter = [catboost_source_filter]
-        if not isinstance(catboost_source_filter, list):
-            catboost_source_filter = None
+        xgboost_l3_source_filter = cfg.get("xgboost_l3_source_filter")
+        if isinstance(xgboost_l3_source_filter, str):
+            xgboost_l3_source_filter = [xgboost_l3_source_filter]
+        if not isinstance(xgboost_l3_source_filter, list):
+            xgboost_l3_source_filter = None
         ml_row = (await db.execute(_text("""
             SELECT config_json FROM config_profiles
             WHERE user_id = :uid AND config_type = 'ml' AND is_active = TRUE
@@ -185,14 +185,16 @@ async def _run_ml_challengers_if_enabled(db, user_id) -> None:
             CATBOOST_CONTEXTUAL_INTELLIGENCE_SOURCES,
             MLChallengerService,
         )
-        if advisory_intelligence and catboost_source_filter is None:
-            catboost_source_filter = list(CATBOOST_CONTEXTUAL_INTELLIGENCE_SOURCES)
+        if advisory_intelligence and xgboost_l3_source_filter is None:
+            xgboost_l3_source_filter = list(
+                CATBOOST_CONTEXTUAL_INTELLIGENCE_SOURCES
+            )
         result = await MLChallengerService().train_challengers(
             db=db,
             user_id=user_id,
-            enable_lightgbm=enable_lgbm,
-            enable_catboost=enable_cb,
-            catboost_source_filter=catboost_source_filter,
+            enable_xgboost_l1=enable_xgboost_l1,
+            enable_xgboost_l3=enable_xgboost_l3,
+            xgboost_l3_source_filter=xgboost_l3_source_filter,
             advisory_intelligence=advisory_intelligence,
         )
         logger.info("[PIJob] ML challengers result for user %s: %s", user_id, result)

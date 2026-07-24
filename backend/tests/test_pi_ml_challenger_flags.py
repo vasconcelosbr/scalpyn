@@ -21,35 +21,34 @@ def test_normalize_ml_flags_blocks_uninstalled_packages():
     with patch("app.api.profile_intelligence.find_spec", return_value=None):
         normalized, warnings = _normalize_unimplemented_ml_flags(
             {
-                "enable_lightgbm": True,
-                "enable_catboost": True,
+                "enable_xgboost_l1": True,
+                "enable_xgboost_l3": True,
                 "enable_dynamic_combinations": True,
             }
         )
 
-    assert normalized["enable_lightgbm"] is False
-    assert normalized["enable_catboost"] is False
+    assert normalized["enable_xgboost_l1"] is False
+    assert normalized["enable_xgboost_l3"] is False
     assert normalized["enable_dynamic_combinations"] is True
     assert len(warnings) == 2
-    assert any("lightgbm" in w for w in warnings)
-    assert any("catboost" in w for w in warnings)
+    assert all("xgboost" in w for w in warnings)
 
 
 def test_normalize_ml_flags_passes_through_when_installed():
     """When packages ARE installed, flags are preserved unchanged and no warnings are emitted."""
-    if find_spec("lightgbm") is None or find_spec("catboost") is None:
-        pytest.skip("LightGBM/CatBoost not installed in this environment")
+    if find_spec("xgboost") is None:
+        pytest.skip("XGBoost not installed in this environment")
 
     normalized, warnings = _normalize_unimplemented_ml_flags(
         {
-            "enable_lightgbm": True,
-            "enable_catboost": True,
+            "enable_xgboost_l1": True,
+            "enable_xgboost_l3": True,
             "enable_dynamic_combinations": True,
         }
     )
 
-    assert normalized["enable_lightgbm"] is True
-    assert normalized["enable_catboost"] is True
+    assert normalized["enable_xgboost_l1"] is True
+    assert normalized["enable_xgboost_l3"] is True
     assert normalized["enable_dynamic_combinations"] is True
     assert warnings == []
 
@@ -57,13 +56,13 @@ def test_normalize_ml_flags_passes_through_when_installed():
 # ── _ml_challenger_status ─────────────────────────────────────────────────────
 
 def test_ml_challenger_overview_reports_operational_when_installed():
-    """With LightGBM and CatBoost installed, status is operational."""
-    if find_spec("lightgbm") is None or find_spec("catboost") is None:
-        pytest.skip("LightGBM/CatBoost not installed in this environment")
+    """With XGBoost installed, both governed lanes are operational."""
+    if find_spec("xgboost") is None:
+        pytest.skip("XGBoost not installed in this environment")
 
     challengers = _ml_challenger_status()
 
-    for model in ("lightgbm", "catboost"):
+    for model in ("xgboost_l1", "xgboost_l3"):
         s = challengers[model]
         assert s["available"] is True
         assert s["implemented"] is True
@@ -84,7 +83,7 @@ def test_ml_challenger_overview_zero_when_packages_not_installed():
     with patch.object(_svc, "_is_installed", return_value=False):
         challengers = _svc.get_challenger_status()
 
-    for model in ("lightgbm", "catboost"):
+    for model in ("xgboost_l1", "xgboost_l3"):
         s = challengers[model]
         assert s["available"] is False
         assert s["installed"] is False
@@ -99,9 +98,9 @@ def test_ml_challenger_overview_zero_when_packages_not_installed():
 # ── update_settings ───────────────────────────────────────────────────────────
 
 def test_settings_endpoint_persists_ml_challengers_when_installed(monkeypatch):
-    """When packages are installed, enable_lightgbm/catboost are saved as True."""
-    if find_spec("lightgbm") is None or find_spec("catboost") is None:
-        pytest.skip("LightGBM/CatBoost not installed in this environment")
+    """When XGBoost is installed, both lane flags are saved as True."""
+    if find_spec("xgboost") is None:
+        pytest.skip("XGBoost not installed in this environment")
 
     saved = {}
 
@@ -112,15 +111,15 @@ def test_settings_endpoint_persists_ml_challengers_when_installed(monkeypatch):
     monkeypatch.setattr(config_service, "update_config", _update_config)
 
     response = asyncio.run(update_settings(
-        PISettingsUpdate(enable_lightgbm=True, enable_catboost=True),
+        PISettingsUpdate(enable_xgboost_l1=True, enable_xgboost_l3=True),
         db=object(),
         user_id=uuid4(),
     ))
 
-    assert saved["enable_lightgbm"] is True
-    assert saved["enable_catboost"] is True
-    assert response["settings"]["enable_lightgbm"] is True
-    assert response["settings"]["enable_catboost"] is True
+    assert saved["enable_xgboost_l1"] is True
+    assert saved["enable_xgboost_l3"] is True
+    assert response["settings"]["enable_xgboost_l1"] is True
+    assert response["settings"]["enable_xgboost_l3"] is True
     assert response["warnings"] == []
 
 
@@ -136,15 +135,15 @@ def test_settings_endpoint_blocks_ml_challengers_when_not_installed(monkeypatch)
 
     with patch("app.api.profile_intelligence.find_spec", return_value=None):
         response = asyncio.run(update_settings(
-            PISettingsUpdate(enable_lightgbm=True, enable_catboost=True),
+            PISettingsUpdate(enable_xgboost_l1=True, enable_xgboost_l3=True),
             db=object(),
             user_id=uuid4(),
         ))
 
-    assert saved["enable_lightgbm"] is False
-    assert saved["enable_catboost"] is False
-    assert response["settings"]["enable_lightgbm"] is False
-    assert response["settings"]["enable_catboost"] is False
+    assert saved["enable_xgboost_l1"] is False
+    assert saved["enable_xgboost_l3"] is False
+    assert response["settings"]["enable_xgboost_l1"] is False
+    assert response["settings"]["enable_xgboost_l3"] is False
     assert len(response["warnings"]) == 2
 
 

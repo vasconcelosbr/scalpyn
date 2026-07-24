@@ -1,6 +1,7 @@
-"""Standalone CatBoost retrain script — usa URL pública do banco.
+"""Compatibility entrypoint for the governed XGBoost L3 retrain.
 
-Treina Lane 2 (CatBoost / L3_PROFILE / is_tp_4h_v2_sim_outcome) e persiste em ml_models.
+The filename is retained for operators with old runbooks. New automation should
+use ``run_xgboost_retrain.py --lane l3``.
 Não requer rede interna Railway. Não promove modelo automaticamente.
 Não altera outcomes, shadow trades, estratégias ou Auto-Pilot.
 
@@ -42,7 +43,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     stream=sys.stdout,
 )
-logger = logging.getLogger("catboost_retrain")
+logger = logging.getLogger("xgboost_l3_retrain")
 
 DRY_RUN = "--dry-run" in sys.argv
 
@@ -137,7 +138,7 @@ async def main():
             logger.info("[DRY-RUN] Carregando dataset L3_PROFILE apenas — sem treino nem persistencia")
             ml_config = await svc._load_ml_config(db)
             min_required = _require_positive_int_config(
-                ml_config, "ml_catboost_retrain_min_eligible_rows"
+                ml_config, "ml_xgboost_l3_retrain_min_eligible_rows"
             )
             dataset_query_cutoff = datetime.now(timezone.utc)
             maturity_margin = ml_config.get("ml_maturity_embargo_margin_minutes")
@@ -216,13 +217,13 @@ async def main():
                 split_readiness=split_readiness,
             )
 
-        logger.info("Iniciando train_challengers (CatBoost only)...")
+        logger.info("Iniciando train_challengers (XGBoost L3 only)...")
         result = await svc.train_challengers(
             db=db,
             user_id=USER_ID,
-            enable_lightgbm=False,
-            enable_catboost=True,
-            catboost_source_filter=CATBOOST_SOURCES,
+            enable_xgboost_l1=False,
+            enable_xgboost_l3=True,
+            xgboost_l3_source_filter=CATBOOST_SOURCES,
             allow_mixed_source=False,
             advisory_intelligence=ADVISORY_INTELLIGENCE,
             lookback_days=90,

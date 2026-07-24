@@ -72,13 +72,13 @@ class PISettingsUpdate(BaseModel):
     enable_optuna: Optional[bool] = None
     enable_association_rules: Optional[bool] = None
     enable_dynamic_combinations: Optional[bool] = None
-    enable_lightgbm: Optional[bool] = Field(
+    enable_xgboost_l1: Optional[bool] = Field(
         default=None,
-        description="Reserved compatibility flag; LightGBM is not implemented and is normalized to false.",
+        description="Enable governed XGBoost training for the L1_SPECTRUM lane.",
     )
-    enable_catboost: Optional[bool] = Field(
+    enable_xgboost_l3: Optional[bool] = Field(
         default=None,
-        description="Reserved compatibility flag; CatBoost is not implemented and is normalized to false.",
+        description="Enable governed XGBoost training for the L3 lane.",
     )
 
 
