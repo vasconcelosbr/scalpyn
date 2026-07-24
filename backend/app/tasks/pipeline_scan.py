@@ -1339,7 +1339,20 @@ def _decision_metrics(asset: dict, processed: dict) -> dict:
                         k for k in comp_value.keys()
                         if isinstance(k, str) and k in (merged.values or {})
                     )
-        snapshot = build_indicators_snapshot(merged, keys=consumed_keys)
+        # P0-A (auditoria captura L3 2026-07-24): capturar o conjunto COMPLETO
+        # de indicadores merged, não apenas o escopo ``consumed_keys``. O escopo
+        # antigo excluía as 20 features direcionais/estendidas (rsi_slope_*,
+        # macd_hist_slope_*, adx_slope_3, higher_highs/lows_5, bb_width,
+        # volume_spike, ema*_gt_*, vwap_distance_pct …) do snapshot, deixando o
+        # dataset de treino do L3 com ~33% de cobertura (restante NaN). Enquanto
+        # não há modelo ML elegível, o native capture (ml_result) não roda e o
+        # shadow L3 cai neste snapshot — que precisa ser completo por si só.
+        # ``merged.values`` já contém as direcionais (mesma fonte SSoT que
+        # L1_SPECTRUM usa em create_l1_spectrum_shadows). ``extract_features``
+        # seleciona só FEATURE_COLUMNS e ignora chaves extras; ML_EXCLUDED_FIELDS
+        # segue filtrando score* (sem leakage).
+        snapshot_keys = set(merged.values or {}) | consumed_keys
+        snapshot = build_indicators_snapshot(merged, keys=snapshot_keys)
 
         # Gap B fix: overlay live-injected values onto snapshot entries so the
         # persisted snapshot matches what the decision engine actually saw.

@@ -58,6 +58,44 @@ REGISTRY: dict[str, FeatureSpec] = {
 _ALIASES = {alias: name for name, spec in REGISTRY.items() for alias in spec.aliases}
 
 
+# ── P0-B (auditoria captura L3 2026-07-24) ───────────────────────────────────
+# Bloco direcional point-in-time emitido por ``feature_engine._calc_directional_
+# features``. Antes desta guarda, ``eligible_for_training`` só validava a
+# presença de ``atr_pct`` (REGISTRY), então snapshots "finos" (16 chaves, sem
+# nenhuma direcional) eram marcados elegíveis e contaminavam o dataset de treino
+# com features NaN. Estas 9 chaves co-ocorrem em exatamente 100% das linhas de
+# captura completa (L3/L3_LAB/L1_SPECTRUM) e em 0% das linhas finas — logo
+# separam captura completa de captura quebrada sem rejeitar linhas saudáveis.
+# Uma linha sem o bloco → ``missing_directional:*`` em ``errors`` →
+# ``eligible_for_training=False`` (shadow_trade_service._create_from_decision).
+REQUIRED_DIRECTIONAL_FEATURES: tuple[str, ...] = (
+    "rsi_slope_3",
+    "rsi_slope_5",
+    "macd_hist_slope_3",
+    "macd_hist_slope_5",
+    "adx_slope_3",
+    "ema21_ema50_distance_pct",
+    "di_plus_minus_diff",
+    "higher_highs_5",
+    "higher_lows_5",
+)
+
+
+def directional_capture_errors(snapshot: Mapping[str, Any]) -> list[str]:
+    """Erros de contrato quando o bloco direcional não foi capturado.
+
+    Checa PRESENÇA da chave (não valor não-nulo): um snapshot completo com
+    valor ``None`` por histórico insuficiente ainda carrega a chave e é
+    tratado a jusante pelo filtro de cobertura por-feature. Um snapshot fino
+    não tem a chave — e é este o caso que invalida a elegibilidade.
+    """
+    return [
+        f"missing_directional:{name}"
+        for name in REQUIRED_DIRECTIONAL_FEATURES
+        if name not in snapshot
+    ]
+
+
 def _canonical_value(name: str, value: Any, values: Mapping[str, Any]) -> Any:
     if name == "macd_signal" and isinstance(value, str):
         return {"positive": "bullish", "negative": "bearish"}.get(value.lower(), value.lower())
@@ -106,6 +144,10 @@ def snapshot_hash(snapshot: Mapping[str, Any]) -> str:
 def capture_native_snapshot(snapshot: Mapping[str, Any]) -> NativeFeatureCapture:
     captured_at = utcnow()
     normalized, errors = normalize_snapshot(snapshot)
+    # P0-B: bloco direcional é requisito de elegibilidade. Checado sobre o
+    # snapshot cru (direcionais não têm alias, então normalized == snapshot
+    # para essas chaves) para invalidar capturas finas na origem.
+    errors.extend(directional_capture_errors(snapshot))
     return NativeFeatureCapture(
         snapshot=normalized,
         captured_at=captured_at,

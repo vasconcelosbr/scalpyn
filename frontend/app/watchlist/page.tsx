@@ -1161,6 +1161,20 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
             <span>N {wl.completed_trades ?? 0}</span>
           </span>
         )}
+        {profileName && (
+          <span
+            className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold tabular-nums ${
+              wl.asset_count > 0
+                ? 'border-[#2A3448] bg-[#1E2433] text-[#CBD5E1]'
+                : 'border-[#1E2433] bg-[#0F1117] text-[#4B5563]'
+            }`}
+            title={`${wl.asset_count} ativo${wl.asset_count !== 1 ? 's' : ''} aprovado${wl.asset_count !== 1 ? 's' : ''} neste profile`}
+            data-testid={`profile-approved-count-${wl.id}`}
+          >
+            <Layers size={9} />
+            {wl.asset_count} ativo{wl.asset_count !== 1 ? 's' : ''}
+          </span>
+        )}
         {isFutures && (
           <span className="inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-[#F472B6]/10 text-[#F472B6] border border-[#F472B6]/25 font-semibold">
             <ArrowLeftRight size={8} />
@@ -1517,8 +1531,12 @@ function PipelineTab() {
                   <LevelBadge level={lvl} />
                   <span className="text-xs text-[#4B5563]">{lvlWls.length} watchlist{lvlWls.length !== 1 ? 's' : ''}</span>
                   {totalAssets > 0 && (
-                    <span className="ml-1 px-2 py-0.5 rounded-full text-xs font-medium bg-[#1E2433] text-[#94A3B8] border border-[#2A3448]">
-                      {totalAssets} ativo{totalAssets !== 1 ? 's' : ''}
+                    <span
+                      className="ml-1 inline-flex items-center gap-1 rounded-full border border-[#2A3448] bg-[#1E2433] px-2 py-0.5 text-xs font-medium text-[#94A3B8] tabular-nums"
+                      title={`Total consolidado de ativos aprovados nas ${lvlWls.length} watchlists ${lvl}`}
+                    >
+                      <Layers size={10} />
+                      {totalAssets} ativo{totalAssets !== 1 ? 's' : ''} aprovado{totalAssets !== 1 ? 's' : ''}
                     </span>
                   )}
                 </div>
