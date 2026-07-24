@@ -125,6 +125,37 @@ class TestCriticalGateRemoved:
 
 
 class TestL3DecisionMetrics:
+    def test_l3_snapshot_captures_all_merged_point_in_time_features(self):
+        from app.utils.indicator_merge import MergedIndicators
+
+        merged = MergedIndicators()
+        merged.values = {
+            "adx": 31.0,
+            "rsi": 55.0,
+            "macd_histogram": 0.02,
+            "bb_width": 0.15,
+            "ema200": 1.1,
+        }
+        merged.meta = {
+            key: {"group": "structural", "stale": False}
+            for key in merged.values
+        }
+        asset = {
+            "symbol": "SUI_USDT",
+            "indicators": dict(merged.values),
+            "_merged_indicators": merged,
+        }
+        processed = {
+            "score": {"total_score": 80.0, "components": {}},
+            "signal": {"direction": "long"},
+        }
+
+        snapshot = _decision_metrics(asset, processed)["indicators_snapshot"]
+
+        assert snapshot["bb_width"]["value"] == 0.15
+        assert snapshot["ema200"]["value"] == 1.1
+        assert set(merged.values).issubset(snapshot)
+
     def test_l3_approved_snapshot_preserves_robust_component_fields(self):
         asset = {
             "symbol": "SUI_USDT",

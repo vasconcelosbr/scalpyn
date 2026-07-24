@@ -219,7 +219,12 @@ def _apply_feature_contract(
     """E7: Apply per-lane feature contract to a training DataFrame.
 
     Rejects rows where any required feature is NaN and rows that violate
-    configured range assertions (gt/gte/lt/lte). Returns (filtered_df, n_rejected).
+    configured range assertions (gt/gte/lt/lte). Missing optional values do
+    not violate a numeric range; XGBoost handles their NaN branch natively.
+    A lane may also declare ``min_row_coverage`` across its required+optional
+    feature names to prevent a sparse physical schema from masquerading as the
+    same versioned feature contract.
+    Returns (filtered_df, n_rejected).
     The returned df preserves original integer index so callers can re-align
     parallel lists (valid_records, created_at, etc.) by index before reset_index.
     """
@@ -230,24 +235,63 @@ def _apply_feature_contract(
 
     mask = np.ones(len(df), dtype=bool)
 
+    optional_features = set()
     if lane_contract:
+        optional_features = set(lane_contract.get("optional", []))
         for feat in lane_contract.get("required", []):
             if feat in df.columns:
                 mask &= df[feat].notna().values
+        min_row_coverage = lane_contract.get("min_row_coverage")
+        if min_row_coverage is not None:
+            contract_features = [
+                feat
+                for feat in (
+                    list(lane_contract.get("required", []))
+                    + list(lane_contract.get("optional", []))
+                )
+                if feat in df.columns
+            ]
+            if not contract_features:
+                raise ValueError(
+                    f"empty_feature_contract_for_row_coverage:{lane_name}"
+                )
+            coverage = df[contract_features].notna().mean(axis=1)
+            mask &= (coverage >= float(min_row_coverage)).values
 
     if feature_ranges:
         for feat, rules in feature_ranges.items():
             if feat not in df.columns:
                 continue
             col = df[feat]
+            present = col.notna()
             if "gt" in rules:
-                mask &= (col > rules["gt"]).fillna(False).values
+                valid = (col > rules["gt"]).fillna(False)
+                mask &= (
+                    (~present | valid).values
+                    if feat in optional_features
+                    else valid.values
+                )
             if "gte" in rules:
-                mask &= (col >= rules["gte"]).fillna(False).values
+                valid = (col >= rules["gte"]).fillna(False)
+                mask &= (
+                    (~present | valid).values
+                    if feat in optional_features
+                    else valid.values
+                )
             if "lt" in rules:
-                mask &= (col < rules["lt"]).fillna(False).values
+                valid = (col < rules["lt"]).fillna(False)
+                mask &= (
+                    (~present | valid).values
+                    if feat in optional_features
+                    else valid.values
+                )
             if "lte" in rules:
-                mask &= (col <= rules["lte"]).fillna(False).values
+                valid = (col <= rules["lte"]).fillna(False)
+                mask &= (
+                    (~present | valid).values
+                    if feat in optional_features
+                    else valid.values
+                )
 
     n_rejected = int((~mask).sum())
     if n_rejected > 0:

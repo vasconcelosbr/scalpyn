@@ -62,6 +62,7 @@ ADVISORY_INTELLIGENCE = os.getenv("ADVISORY_INTELLIGENCE", "false").strip().lowe
 def _dry_run_gate_payload(
     *,
     records: int,
+    barrier_records: int | None = None,
     min_required: int,
     dataset_query_cutoff: datetime,
     maturity_margin: int,
@@ -100,6 +101,10 @@ def _dry_run_gate_payload(
         "records_with_profile": gate_meta["records_with_profile"],
         **barrier,
         "records": records,
+        "barrier_records": (
+            barrier_records if barrier_records is not None else records
+        ),
+        "feature_valid_records": records,
         "min_required": min_required,
         "deficit": max(0, min_required - records),
         "split_readiness": split_readiness or None,
@@ -208,7 +213,8 @@ async def main():
                 "diagnostics": split["split_diagnostics"],
             }
             return _dry_run_gate_payload(
-                records=len(records),
+                records=len(y),
+                barrier_records=len(records),
                 min_required=min_required,
                 dataset_query_cutoff=dataset_query_cutoff,
                 maturity_margin=maturity_margin,

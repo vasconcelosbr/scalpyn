@@ -1385,7 +1385,17 @@ def _decision_metrics(asset: dict, processed: dict) -> dict:
                         k for k in comp_value.keys()
                         if isinstance(k, str) and k in (merged.values or {})
                     )
-        snapshot = build_indicators_snapshot(merged, keys=consumed_keys)
+        # The same snapshot is the immutable point-in-time ML payload written
+        # to shadow_trades.  Limiting it to ``consumed_keys`` made the physical
+        # shape depend on the score-component representation: some profiles
+        # persisted 15-16 keys while others persisted the full ~86-key merged
+        # observation under the exact same ``entry_features_v2`` version.
+        # Capture every non-stale merged value and retain ``consumed_keys`` only
+        # as an additive union for defensive compatibility.
+        snapshot = build_indicators_snapshot(
+            merged,
+            keys=set(merged.values) | consumed_keys,
+        )
 
         # Gap B fix: overlay live-injected values onto snapshot entries so the
         # persisted snapshot matches what the decision engine actually saw.
