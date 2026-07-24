@@ -31,6 +31,11 @@ try:
 except ModuleNotFoundError:  # pragma: no cover
     from backend.app.ml.dataset_config import parse_required_ml_dataset_valid_from
 
+try:
+    from app.ml.feature_contract_v2 import REQUIRED_DIRECTIONAL_FEATURES
+except ModuleNotFoundError:  # pragma: no cover
+    from backend.app.ml.feature_contract_v2 import REQUIRED_DIRECTIONAL_FEATURES
+
 logger = logging.getLogger(__name__)
 
 CANONICAL_SOURCE = "L1_SPECTRUM"
@@ -39,6 +44,102 @@ CANONICAL_BARRIER_MODE = "ATR_DYNAMIC"
 # Janela do job: 26h sobreposta de propósito — nenhuma linha escapa entre
 # execuções de 2h.
 JOB_WINDOW_HOURS = 26
+
+# ── P1 (auditoria captura L3 2026-07-24) — guard anti-silêncio de captura ─────
+# A regressão de captura direcional do L3 (2,1% por ~1 semana) passou
+# despercebida porque NADA verificava a taxa de captura. Este guard alerta
+# (WARN → YELLOW) quando a fração de shadows recentes com o bloco direcional
+# (REQUIRED_DIRECTIONAL_FEATURES, mesma fonte de verdade do P0-B) cai abaixo do
+# threshold config-driven, em QUALQUER source (L3/L3_LAB/L1_SPECTRUM). É WARN e
+# não invariante FAIL: não bloqueia o gate GREEN/retrain (evita dano colateral),
+# mas nunca é silencioso. Se as chaves de config faltarem, emite o WARN
+# ``L3_CAPTURE_GUARD_UNCONFIGURED`` (visível, não quebra o job).
+_L3_CAPTURE_GUARD_KEYS = (
+    "ml_l3_capture_min_directional_rate",
+    "ml_l3_capture_window_hours",
+    "ml_l3_capture_min_sample",
+)
+_L3_CAPTURE_SOURCES = ("L3", "L3_LAB", "L1_SPECTRUM")
+
+
+def _resolve_l3_capture_guard(ml_config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Lê o guard de captura da config ML ativa (Zero Hardcode, tolerante).
+
+    Retorna ``None`` (→ WARN de "unconfigured", não crash) quando qualquer chave
+    está ausente/inválida. Nenhum threshold literal é usado para decidir sem
+    config.
+    """
+    cfg = ml_config or {}
+    rate = cfg.get("ml_l3_capture_min_directional_rate")
+    window_h = cfg.get("ml_l3_capture_window_hours")
+    min_sample = cfg.get("ml_l3_capture_min_sample")
+    if rate is None or window_h is None or min_sample is None:
+        return None
+    if isinstance(rate, bool) or isinstance(window_h, bool) or isinstance(min_sample, bool):
+        return None
+    try:
+        rate_f = float(rate)
+        window_i = int(window_h)
+        sample_i = int(min_sample)
+    except (TypeError, ValueError):
+        return None
+    if not (0.0 < rate_f <= 1.0) or window_i <= 0 or sample_i <= 0:
+        return None
+    return {"min_rate": rate_f, "window_hours": window_i, "min_sample": sample_i}
+
+
+def _l3_capture_sql():
+    """Contagens por source: n e quantos têm o bloco direcional COMPLETO.
+
+    Usa ``jsonb_exists`` (forma-função do operador ``?``) para evitar ambiguidade
+    de paramstyle no driver. As 9 chaves vêm de REQUIRED_DIRECTIONAL_FEATURES.
+    """
+    dir_clause = " AND ".join(
+        f"jsonb_exists(features_snapshot, '{f}')" for f in REQUIRED_DIRECTIONAL_FEATURES
+    )
+    sources = ", ".join(f"'{s}'" for s in _L3_CAPTURE_SOURCES)
+    return text(
+        f"""
+        SELECT source,
+               COUNT(*)                                 AS n,
+               COUNT(*) FILTER (WHERE {dir_clause})     AS with_dir
+          FROM shadow_trades
+         WHERE source IN ({sources})
+           AND status = 'COMPLETED'
+           AND created_at >= :cap_from
+         GROUP BY source
+        """
+    )
+
+
+def evaluate_l3_capture_warns(
+    cap_guard: Dict[str, Any], rows
+) -> List[Dict[str, Any]]:
+    """Puro: dado o guard e as contagens por source, retorna warns de captura baixa.
+
+    ``rows``: iterável de mappings com chaves ``source``, ``n``, ``with_dir``.
+    Fontes com amostra < ``min_sample`` são ignoradas (não flapam em baixo volume).
+    """
+    warns: List[Dict[str, Any]] = []
+    min_rate = cap_guard["min_rate"]
+    min_sample = cap_guard["min_sample"]
+    for r in rows:
+        n = int(r["n"])
+        with_dir = int(r["with_dir"])
+        if n < min_sample:
+            continue
+        rate = with_dir / n if n else 0.0
+        if rate < min_rate:
+            warns.append({
+                "warn": "DIRECTIONAL_CAPTURE_BELOW_THRESHOLD",
+                "source": r["source"],
+                "rate": round(rate, 4),
+                "threshold": min_rate,
+                "n": n,
+                "with_directional": with_dir,
+                "window_hours": cap_guard["window_hours"],
+            })
+    return warns
 
 _INVARIANTS_SQL = text("""
 WITH pop AS (
@@ -360,6 +461,20 @@ async def run_certification(
             "warn": "ATR_NULL_IN_RUNNING",
             "count": int(atr_running),
         })
+
+    # P1 — guard anti-silêncio de captura direcional (config-driven, tolerante).
+    cap_guard = _resolve_l3_capture_guard(ml_config)
+    if cap_guard is None:
+        warns.append({
+            "warn": "L3_CAPTURE_GUARD_UNCONFIGURED",
+            "keys": list(_L3_CAPTURE_GUARD_KEYS),
+        })
+    else:
+        cap_from = now - timedelta(hours=cap_guard["window_hours"])
+        cap_rows = (await db.execute(
+            _l3_capture_sql(), {"cap_from": cap_from}
+        )).mappings().all()
+        warns.extend(evaluate_l3_capture_warns(cap_guard, cap_rows))
 
     failed = [
         inv["invariante"] for inv in invariants

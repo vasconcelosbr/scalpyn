@@ -50,7 +50,10 @@ SELECT
             "vwap_reclaim_bool",
             "ema21_ema50_distance_pct",
             "di_plus_minus_diff"
-        ]
+        ],
+        "ml_l3_capture_min_directional_rate": 0.90,
+        "ml_l3_capture_window_hours":         72,
+        "ml_l3_capture_min_sample":           30
     }'::jsonb,
     true,
     NOW(),
@@ -60,3 +63,17 @@ WHERE NOT EXISTS (
     WHERE user_id = '8080110c-ee9d-4a2b-a53f-6bef86dd8867'
       AND config_type = 'ml'
 );
+
+-- P1 (auditoria captura L3 2026-07-24) — guard anti-silêncio de captura.
+-- Patch idempotente para configs 'ml' JÁ existentes (o INSERT acima só cobre
+-- instalações novas). Só adiciona as chaves quando ausentes; não sobrescreve.
+UPDATE config_profiles
+   SET config_json = config_json || jsonb_build_object(
+           'ml_l3_capture_min_directional_rate', 0.90,
+           'ml_l3_capture_window_hours',         72,
+           'ml_l3_capture_min_sample',           30
+       ),
+       updated_at = NOW()
+ WHERE config_type = 'ml'
+   AND is_active = TRUE
+   AND NOT (config_json ? 'ml_l3_capture_min_directional_rate');
