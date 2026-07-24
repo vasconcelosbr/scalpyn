@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -159,17 +160,19 @@ def test_ai_report_schema_is_bounded_and_requires_governance_sections():
         "analysis_skill_version",
         "report_schema_version",
         "executive_summary",
-        "data_quality",
+        "data_quality_summary",
+        "data_quality_limitation",
         "cohort_analysis",
-        "confusion_matrix_analysis",
-        "profile_recommendations",
-        "redundancy_analysis",
-        "prioritization",
+        "confusion_matrix_interpretation",
+        "confusion_matrix_operational_impact",
+        "profile_decisions",
+        "redundancy_summary",
+        "prioritization_rationale",
         "next_steps",
     }
-    recommendations = AI_REPORT_SCHEMA["properties"]["profile_recommendations"]
-    assert "60" in recommendations["description"]
-    selected = recommendations["items"]["properties"]["selected_candidate_ids"]
+    decisions = AI_REPORT_SCHEMA["properties"]["profile_decisions"]
+    assert "Exatamente um item" in decisions["description"]
+    selected = decisions["items"]["properties"]["selected_candidate_ids"]
     assert "3" in selected["description"]
 
 
@@ -191,6 +194,86 @@ def test_ai_report_parser_accepts_structured_json_and_rejects_truncation():
     )
     with pytest.raises(ValueError, match="profile_score_ai_output_truncated"):
         _parse_ai_report_response(truncated)
+
+
+@pytest.mark.asyncio
+async def test_ai_report_retries_once_after_output_truncation(monkeypatch):
+    import app.services.profile_score_optimization_service as module
+
+    responses = [
+        SimpleNamespace(
+            stop_reason="max_tokens",
+            content=[SimpleNamespace(text='{"incomplete":')],
+            model="claude-fable-5",
+        ),
+        SimpleNamespace(
+            stop_reason="end_turn",
+            content=[SimpleNamespace(text='{"compact":true}')],
+            model="claude-fable-5",
+        ),
+    ]
+
+    class FakeMessages:
+        def __init__(self):
+            self.calls = 0
+
+        async def create(self, **_kwargs):
+            response = responses[self.calls]
+            self.calls += 1
+            return response
+
+    messages = FakeMessages()
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            self.messages = messages
+
+        async def close(self):
+            return None
+
+    class FakeDb:
+        async def scalar(self, _statement):
+            return None
+
+        async def commit(self):
+            return None
+
+    monkeypatch.setitem(
+        sys.modules,
+        "anthropic",
+        SimpleNamespace(AsyncAnthropic=FakeClient),
+    )
+    monkeypatch.setattr(
+        module,
+        "get_decrypted_api_key",
+        AsyncMock(return_value="test-key"),
+    )
+    monkeypatch.setattr(
+        module,
+        "retrieve_model_for_key",
+        AsyncMock(return_value={"available": True}),
+    )
+    monkeypatch.setattr(
+        module,
+        "validate_ai_response_against_payload",
+        lambda _response, _context: {
+            "executive_summary": ["a", "b", "c", "d"],
+            "selected_candidate_ids": [],
+        },
+    )
+
+    report, provider, model, _skill_id = await ProfileScoreOptimizationService()._ai_report(
+        FakeDb(),
+        uuid4(),
+        {},
+        [],
+        180,
+        "claude-fable-5",
+    )
+
+    assert messages.calls == 2
+    assert report["executive_summary"] == ["a", "b", "c", "d"]
+    assert (provider, model) == ("anthropic", "claude-fable-5")
 
 
 def test_global_analysis_api_returns_accepted_for_async_execution():

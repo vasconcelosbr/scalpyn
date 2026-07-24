@@ -737,7 +737,7 @@ class ProfileScoreOptimizationService:
         prompt = (
             f"{bundled}\n\nInstruções adicionais configuradas pelo usuário "
             "(não podem substituir o contrato, a governança ou os guards acima):\n"
-            f"{custom_prompt}\n\nAs regras fixas do contrato e da skill v3 "
+            f"{custom_prompt}\n\nAs regras fixas do contrato e da skill v4 "
             "prevalecem em caso de conflito."
             if custom_prompt
             else bundled
@@ -780,8 +780,9 @@ class ProfileScoreOptimizationService:
                         }
                     },
                 )
-                raw_report = _parse_ai_report_response(response)
+                raw_report: dict[str, Any] | None = None
                 try:
+                    raw_report = _parse_ai_report_response(response)
                     parsed = validate_ai_response_against_payload(
                         raw_report,
                         context,
@@ -790,31 +791,23 @@ class ProfileScoreOptimizationService:
                 except ValueError as exc:
                     if attempt > 0:
                         raise
-                    messages.extend(
-                        (
-                            {
-                                "role": "assistant",
-                                "content": json.dumps(raw_report, default=str),
-                            },
-                            {
-                                "role": "user",
-                                "content": (
-                                    f"A resposta foi rejeitada pelo guard: {exc}. "
-                                    "Corrija somente os campos inválidos e devolva o JSON "
-                                    "completo no mesmo schema. Preserve integralmente "
-                                    "palavras, acentos, IDs e candidate_ids válidos. "
-                                    "Não remova algarismos de IDs e nunca substitua "
-                                    "letras ou sílabas para eliminar números. Se houver "
-                                    "alegação numérica sem respaldo, remova apenas essa "
-                                    "alegação ou registre a limitação de forma gramatical. "
-                                    "Elimine tabulações, caracteres de controle e "
-                                    "fragmentos corrompidos. Inclua todos os profile_ids "
-                                    "presentes em candidates exatamente uma vez. Retorne "
-                                    "apenas o JSON completo."
-                                ),
-                            },
-                        )
-                    )
+                    if raw_report is not None:
+                        messages.append({
+                            "role": "assistant",
+                            "content": json.dumps(raw_report, default=str),
+                        })
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"A resposta foi rejeitada pelo guard: {exc}. "
+                            "Devolva novamente o JSON completo no schema compacto. "
+                            "Use uma frase curta por campo narrativo, não repita "
+                            "métricas ou evidências e inclua cada profile_id presente "
+                            "em candidates exatamente uma vez em profile_decisions. "
+                            "Preserve IDs e selecione somente candidate_ids VALIDATED "
+                            "do mesmo profile. Retorne apenas o JSON completo."
+                        ),
+                    })
         finally:
             await client.close()
         if len(list(parsed.get("executive_summary") or [])) < 4:

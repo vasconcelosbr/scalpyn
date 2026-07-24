@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import json
 from uuid import uuid4
 
 import pytest
@@ -57,34 +58,31 @@ def _valid_ai_response(payload, summary=None):
             "As recomendações permanecem em shadow.",
             "Replay e aprovação humana continuam obrigatórios.",
         ],
-        "data_quality": {
-            "integrity_assessment": ["A integridade foi avaliada."],
-            "limitations": ["A generalização depende de nova validação."],
-        },
+        "data_quality_summary": "A integridade foi avaliada.",
+        "data_quality_limitation": "A generalização depende de nova validação.",
         "cohort_analysis": {
-            "l3": ["L3 foi analisado separadamente."],
-            "l3_lab": ["L3_LAB foi analisado separadamente."],
-            "approved_combined": ["A coorte combinada é contexto global."],
-            "l3_rejected": ["L3_REJECTED é contrafactual."],
+            "l3": "L3 foi analisado separadamente.",
+            "l3_lab": "L3_LAB foi analisado separadamente.",
+            "approved_combined": "A coorte combinada é contexto global.",
+            "l3_rejected": "L3_REJECTED é contrafactual.",
         },
-        "confusion_matrix_analysis": {
-            "interpretation": ["Precisão e recall têm papéis distintos."],
-            "operational_impact": ["A seleção exige confirmação por replay."],
-        },
-        "profile_recommendations": [{
+        "confusion_matrix_interpretation": "Precisão e recall têm papéis distintos.",
+        "confusion_matrix_operational_impact": "A seleção exige confirmação por replay.",
+        "profile_decisions": [{
             "profile_id": profile_id,
-            "technical_reading": ["A evidência profile-local foi revisada."],
-            "limitations": ["A associação não demonstra causalidade."],
-            "recommendation": "Manter em shadow até validação.",
+            "verdict": "HOLD_SHADOW",
             "confidence": "MEDIA",
             "priority": "MEDIA",
             "selected_candidate_ids": [],
         } for profile_id in profile_ids],
-        "redundancy_analysis": [],
-        "prioritization": {
-            "high": [], "medium": [], "low": [], "rationale": ["Prioridade cautelosa."]
-        },
-        "next_steps": ["Executar replay point-in-time."],
+        "redundancy_summary": "Não há redundância material selecionada.",
+        "prioritization_rationale": "A prioridade permanece cautelosa.",
+        "next_steps": [
+            "Executar replay point-in-time.",
+            "Conferir retenção de TP.",
+            "Conferir redução de SL.",
+            "Manter o challenger em shadow.",
+        ],
     }
 
 
@@ -197,11 +195,12 @@ def test_ai_guard_rejects_cross_profile_candidate_selection():
     response = _valid_ai_response(payload)
     profile_b_index = next(
         index
-        for index, item in enumerate(response["profile_recommendations"])
+        for index, item in enumerate(response["profile_decisions"])
         if item["profile_id"] == profile_b
     )
-    response["profile_recommendations"][profile_b_index] = {
-        **response["profile_recommendations"][profile_b_index],
+    response["profile_decisions"][profile_b_index] = {
+        **response["profile_decisions"][profile_b_index],
+        "verdict": "SELECT_FOR_REPLAY",
         "selected_candidate_ids": ["candidate-a"],
     }
     with pytest.raises(ValueError, match="cross_profile"):
@@ -294,11 +293,11 @@ def test_ai_prioritization_is_derived_only_from_validated_selections():
         }]
     }
     response = _valid_ai_response(payload)
-    response["profile_recommendations"][0].update({
+    response["profile_decisions"][0].update({
+        "verdict": "SELECT_FOR_REPLAY",
         "priority": "ALTA",
         "selected_candidate_ids": ["candidate-a"],
     })
-    response["prioritization"]["high"] = ["candidate-invented"]
     clean = validate_ai_response_against_payload(response, payload)
     assert clean["prioritization"]["high"] == ["candidate-a"]
     assert clean["selected_candidate_ids"] == ["candidate-a"]
@@ -321,7 +320,14 @@ def test_bounded_ai_context_keeps_candidates_once_and_omits_provider_policy():
             "sources": ["L3"],
             "discovery": {},
             "validation": {"status": "VALIDATED"},
-            "simulations": [],
+            "selected_simulation_points": -5,
+            "simulations": [{
+                "points": points,
+                "status": "SIMULATED",
+                "selected": 100,
+                "metrics": {"closed": 100, "tp": 55, "sl": 45},
+                "impact": {"tp_lost": 0, "sl_avoided": 1},
+            } for points in range(-10, 11)],
         }],
         "counterfactual_analysis": {"buckets": []},
         "overlap_analysis": [],
@@ -329,7 +335,24 @@ def test_bounded_ai_context_keeps_candidates_once_and_omits_provider_policy():
     context = build_bounded_ai_context(payload)
     assert [item["candidate_id"] for item in context["candidates"]] == ["c1"]
     assert "policy" not in context
+    assert context["candidates"][0]["selected_simulation"]["points"] == -5
+    assert "simulations" not in context["candidates"][0]
     assert context["bounded_context"]["char_count"] < 10000
+
+
+def test_compact_ai_response_contract_stays_small_at_sixty_profiles():
+    payload = {
+        "candidates": [{
+            "profile_id": f"profile-{index:02d}",
+            "candidate_id": f"candidate-{index:02d}",
+            "validation": {"status": "VALIDATED"},
+        } for index in range(60)],
+    }
+    response = _valid_ai_response(payload)
+    assert len(response["profile_decisions"]) == 60
+    assert len(json.dumps(response, ensure_ascii=False)) < 30000
+    clean = validate_ai_response_against_payload(response, payload)
+    assert len(clean["profile_recommendations"]) == 60
 
 
 def test_model_allowlist_and_default_are_exact_and_no_unknown_fallback():

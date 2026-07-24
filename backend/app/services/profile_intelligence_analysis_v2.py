@@ -19,7 +19,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 
 ANALYSIS_CONTRACT_VERSION = "pi-ai-analysis-v2"
-ANALYSIS_SKILL_VERSION = "profile_intelligence_analysis_skill_v3"
+ANALYSIS_SKILL_VERSION = "profile_intelligence_analysis_skill_v4"
 AI_REPORT_SCHEMA_VERSION = "pi-technical-report-v1"
 CANONICAL_KEY_FIELDS = ("decision_id", "event_id", "ranking_id")
 PENALTY_ALTERNATIVES = (0, -1, -2, -3, -5, -7, -10)
@@ -38,122 +38,69 @@ AI_REPORT_SCHEMA_V2: dict[str, Any] = {
         "report_schema_version": {"type": "string"},
         "executive_summary": {
             "type": "array",
-            "description": "Entre 4 e 8 conclusões; o guard pós-IA aplica os limites.",
+            "description": "Entre 4 e 8 conclusões de uma frase.",
             "items": {"type": "string"},
         },
-        "data_quality": {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "integrity_assessment": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                },
-                "limitations": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                },
-            },
-            "required": ("integrity_assessment", "limitations"),
-        },
+        "data_quality_summary": {"type": "string"},
+        "data_quality_limitation": {"type": "string"},
         "cohort_analysis": {
             "type": "object",
             "additionalProperties": False,
             "properties": {
-                "l3": {"type": "array", "items": {"type": "string"}},
-                "l3_lab": {"type": "array", "items": {"type": "string"}},
-                "approved_combined": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                },
-                "l3_rejected": {"type": "array", "items": {"type": "string"}},
+                "l3": {"type": "string"},
+                "l3_lab": {"type": "string"},
+                "approved_combined": {"type": "string"},
+                "l3_rejected": {"type": "string"},
             },
             "required": ("l3", "l3_lab", "approved_combined", "l3_rejected"),
         },
-        "confusion_matrix_analysis": {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "interpretation": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                },
-                "operational_impact": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                },
-            },
-            "required": ("interpretation", "operational_impact"),
-        },
-        "profile_recommendations": {
+        "confusion_matrix_interpretation": {"type": "string"},
+        "confusion_matrix_operational_impact": {"type": "string"},
+        "profile_decisions": {
             "type": "array",
-            "description": "No máximo 60 itens; o guard pós-IA aplica o limite.",
+            "description": (
+                "Exatamente um item por profile_id presente em candidates; "
+                "somente decisão categórica, sem narrativa longa."
+            ),
             "items": {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
                     "profile_id": {"type": "string"},
-                    "technical_reading": {
-                        "type": "array",
-                        "items": {"type": "string"},
+                    "verdict": {
+                        "type": "string",
+                        "enum": (
+                            "SELECT_FOR_REPLAY",
+                            "HOLD_SHADOW",
+                            "INSUFFICIENT_EVIDENCE",
+                            "REDUNDANT",
+                        ),
                     },
-                    "limitations": {
-                        "type": "array",
-                        "items": {"type": "string"},
+                    "confidence": {
+                        "type": "string",
+                        "enum": ("ALTA", "MEDIA", "BAIXA"),
                     },
-                    "recommendation": {"type": "string"},
-                    "confidence": {"type": "string"},
-                    "priority": {"type": "string"},
+                    "priority": {
+                        "type": "string",
+                        "enum": ("ALTA", "MEDIA", "BAIXA"),
+                    },
                     "selected_candidate_ids": {
                         "type": "array",
-                        "description": "No máximo 3 IDs; o guard pós-IA aplica o limite.",
+                        "description": "No máximo 3 IDs VALIDATED do mesmo profile.",
                         "items": {"type": "string"},
                     },
                 },
                 "required": (
                     "profile_id",
-                    "technical_reading",
-                    "limitations",
-                    "recommendation",
+                    "verdict",
                     "confidence",
                     "priority",
                     "selected_candidate_ids",
                 ),
             },
         },
-        "redundancy_analysis": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "profile_id": {"type": "string"},
-                    "candidate_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "diagnosis": {"type": "string"},
-                    "recommendation": {"type": "string"},
-                },
-                "required": (
-                    "profile_id",
-                    "candidate_ids",
-                    "diagnosis",
-                    "recommendation",
-                ),
-            },
-        },
-        "prioritization": {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "high": {"type": "array", "items": {"type": "string"}},
-                "medium": {"type": "array", "items": {"type": "string"}},
-                "low": {"type": "array", "items": {"type": "string"}},
-                "rationale": {"type": "array", "items": {"type": "string"}},
-            },
-            "required": ("high", "medium", "low", "rationale"),
-        },
+        "redundancy_summary": {"type": "string"},
+        "prioritization_rationale": {"type": "string"},
         "next_steps": {"type": "array", "items": {"type": "string"}},
     },
     "required": (
@@ -161,19 +108,21 @@ AI_REPORT_SCHEMA_V2: dict[str, Any] = {
         "analysis_skill_version",
         "report_schema_version",
         "executive_summary",
-        "data_quality",
+        "data_quality_summary",
+        "data_quality_limitation",
         "cohort_analysis",
-        "confusion_matrix_analysis",
-        "profile_recommendations",
-        "redundancy_analysis",
-        "prioritization",
+        "confusion_matrix_interpretation",
+        "confusion_matrix_operational_impact",
+        "profile_decisions",
+        "redundancy_summary",
+        "prioritization_rationale",
         "next_steps",
     ),
 }
 
 
 PROFILE_INTELLIGENCE_ANALYSIS_SKILL_V2 = """
-Você executa profile_intelligence_analysis_skill_v3 como revisor técnico sênior.
+Você executa profile_intelligence_analysis_skill_v4 como revisor técnico sênior.
 
 O payload pi-ai-analysis-v2 já foi calculado e validado deterministicamente.
 Produza um relatório executivo claro, gramaticalmente correto, preciso,
@@ -201,12 +150,12 @@ entre discovery e validation, suficiência de amostra, concentração, simulaç�
 redundância e conflito. Use confidence apenas como ALTA, MEDIA ou BAIXA e
 priority apenas como ALTA, MEDIA ou BAIXA.
 
-Seja conciso para cobrir todos os profiles sem truncamento: cada conclusão do
-resumo deve ter uma frase; cada campo de data_quality, cohort_analysis e
-confusion_matrix_analysis deve ter no máximo três itens; cada profile deve ter
-um ou dois itens em technical_reading, exatamente um item em limitations e uma
-recomendação de uma frase. Inclua redundancy_analysis somente quando houver
-overlap material no payload. next_steps deve ter entre quatro e oito itens.
+Seja conciso para cobrir todos os profiles sem truncamento. Cada conclusão do
+resumo e cada campo narrativo deve ter uma frase. Para cada profile, retorne
+somente verdict, confidence, priority e candidate_ids. O backend recompõe
+deterministicamente a leitura técnica, limitações, prioridades, redundâncias e
+governança usando o payload validado. Não repita tabelas, métricas ou evidências.
+next_steps deve ter entre quatro e oito itens de uma frase.
 
 Os números e tabelas verificadas serão incorporados deterministicamente pelo
 sistema. Na narrativa, cite um número somente quando ele existir literalmente
@@ -222,7 +171,7 @@ versionado.
 
 Retorne apenas JSON no schema solicitado, com:
 analysis_contract_version=pi-ai-analysis-v2 e
-analysis_skill_version=profile_intelligence_analysis_skill_v3 e
+analysis_skill_version=profile_intelligence_analysis_skill_v4 e
 report_schema_version=pi-technical-report-v1.
 """.strip()
 
@@ -1014,10 +963,12 @@ def validate_ai_response_against_payload(
         if (candidate.get("validation") or {}).get("status") == "VALIDATED":
             allowed_by_profile[profile_id].add(candidate_id)
 
-    def clean_text(value: Any) -> str:
+    def clean_text(value: Any, max_chars: int = 1200) -> str:
         text = str(value or "").strip()
         if not text:
             raise ValueError("AI_RESPONSE_REJECTED_EMPTY_REPORT_TEXT")
+        if len(text) > max_chars:
+            raise ValueError("AI_RESPONSE_REJECTED_REPORT_TEXT_TOO_LONG")
         if any(
             ord(char) < 32 and char not in ("\n", "\r")
             for char in text
@@ -1037,13 +988,29 @@ def validate_ai_response_against_payload(
     if len(executive_summary) < 4:
         raise ValueError("AI_RESPONSE_REJECTED_INCOMPLETE_REPORT")
 
-    data_quality = response.get("data_quality") or {}
     cohort_analysis = response.get("cohort_analysis") or {}
-    confusion_analysis = response.get("confusion_matrix_analysis") or {}
     selected: set[str] = set()
     bounded: list[dict[str, Any]] = []
     seen_profiles: set[str] = set()
-    for item in list(response.get("profile_recommendations") or [])[:60]:
+    verdict_recommendations = {
+        "SELECT_FOR_REPLAY": (
+            "Encaminhar somente os candidates validados selecionados para "
+            "replay point-in-time e manter qualquer alteração em shadow."
+        ),
+        "HOLD_SHADOW": (
+            "Manter o profile sem ajuste proposto até nova evidência "
+            "profile-local validada."
+        ),
+        "INSUFFICIENT_EVIDENCE": (
+            "Não selecionar ajuste enquanto a evidência profile-local "
+            "permanecer insuficiente."
+        ),
+        "REDUNDANT": (
+            "Não combinar regras sobrepostas antes de validar o efeito "
+            "incremental em replay point-in-time."
+        ),
+    }
+    for item in list(response.get("profile_decisions") or [])[:60]:
         profile_id = str(item.get("profile_id") or "")
         if profile_id in seen_profiles:
             raise ValueError("ai_duplicate_profile_recommendation")
@@ -1058,12 +1025,28 @@ def validate_ai_response_against_payload(
             for candidate_id in candidate_ids
         ):
             raise ValueError("ai_selected_unknown_or_cross_profile_candidate")
+        verdict = str(item.get("verdict") or "").strip().upper()
+        if verdict not in verdict_recommendations:
+            raise ValueError("ai_invalid_profile_verdict")
+        if bool(candidate_ids) != (verdict == "SELECT_FOR_REPLAY"):
+            raise ValueError("ai_profile_verdict_selection_mismatch")
         selected.update(candidate_ids)
         bounded.append({
             "profile_id": profile_id,
-            "technical_reading": clean_texts(item.get("technical_reading"), 8),
-            "limitations": clean_texts(item.get("limitations"), 8),
-            "recommendation": clean_text(item.get("recommendation")),
+            "technical_reading": [
+                (
+                    "A decisão categórica da IA foi validada contra os "
+                    "candidates profile-local e suas simulações persistidas."
+                )
+            ],
+            "limitations": [
+                (
+                    "A evidência é associativa e permanece restrita a replay "
+                    "point-in-time e challenger shadow versionado."
+                )
+            ],
+            "recommendation": verdict_recommendations[verdict],
+            "verdict": verdict,
             "confidence": str(item.get("confidence") or "").strip().upper(),
             "priority": str(item.get("priority") or "").strip().upper(),
             "selected_candidate_ids": candidate_ids,
@@ -1075,28 +1058,16 @@ def validate_ai_response_against_payload(
     if seen_profiles != set(known_by_profile):
         raise ValueError("AI_RESPONSE_REJECTED_INCOMPLETE_PROFILE_COVERAGE")
 
-    redundancies: list[dict[str, Any]] = []
-    for item in list(response.get("redundancy_analysis") or [])[:50]:
-        profile_id = str(item.get("profile_id") or "")
-        candidate_ids = list(dict.fromkeys(
-            str(value) for value in item.get("candidate_ids") or []
-        ))[:6]
-        if (
-            profile_id not in known_by_profile
-            or any(
-                candidate_id not in known_by_profile[profile_id]
-                for candidate_id in candidate_ids
-            )
-        ):
-            raise ValueError("ai_redundancy_unknown_or_cross_profile_candidate")
-        redundancies.append({
-            "profile_id": profile_id,
-            "candidate_ids": candidate_ids,
-            "diagnosis": clean_text(item.get("diagnosis")),
-            "recommendation": clean_text(item.get("recommendation")),
-        })
-
-    prioritization = response.get("prioritization") or {}
+    redundancy_summary = clean_text(response.get("redundancy_summary"))
+    redundancies = [{
+        "profile_id": "GLOBAL",
+        "candidate_ids": [],
+        "diagnosis": redundancy_summary,
+        "recommendation": (
+            "Use o overlap determinístico persistido para impedir a combinação "
+            "de regras redundantes antes do replay."
+        ),
+    }]
     priority_ids: dict[str, list[str]] = {
         "high": [],
         "medium": [],
@@ -1114,42 +1085,48 @@ def validate_ai_response_against_payload(
         for level, candidate_ids in priority_ids.items()
     }
 
+    next_steps = clean_texts(response.get("next_steps"), 8)
+    if len(next_steps) < 4:
+        raise ValueError("AI_RESPONSE_REJECTED_INCOMPLETE_NEXT_STEPS")
+
     clean = {
         "analysis_contract_version": ANALYSIS_CONTRACT_VERSION,
         "analysis_skill_version": ANALYSIS_SKILL_VERSION,
         "report_schema_version": AI_REPORT_SCHEMA_VERSION,
         "executive_summary": executive_summary,
         "data_quality": {
-            "integrity_assessment": clean_texts(
-                data_quality.get("integrity_assessment"), 12
-            ),
-            "limitations": clean_texts(data_quality.get("limitations"), 12),
+            "integrity_assessment": [
+                clean_text(response.get("data_quality_summary"))
+            ],
+            "limitations": [
+                clean_text(response.get("data_quality_limitation"))
+            ],
         },
         "cohort_analysis": {
-            "l3": clean_texts(cohort_analysis.get("l3"), 12),
-            "l3_lab": clean_texts(cohort_analysis.get("l3_lab"), 12),
-            "approved_combined": clean_texts(
-                cohort_analysis.get("approved_combined"), 12
-            ),
-            "l3_rejected": clean_texts(
-                cohort_analysis.get("l3_rejected"), 12
-            ),
+            "l3": [clean_text(cohort_analysis.get("l3"))],
+            "l3_lab": [clean_text(cohort_analysis.get("l3_lab"))],
+            "approved_combined": [
+                clean_text(cohort_analysis.get("approved_combined"))
+            ],
+            "l3_rejected": [clean_text(cohort_analysis.get("l3_rejected"))],
         },
         "confusion_matrix_analysis": {
-            "interpretation": clean_texts(
-                confusion_analysis.get("interpretation"), 12
-            ),
-            "operational_impact": clean_texts(
-                confusion_analysis.get("operational_impact"), 12
-            ),
+            "interpretation": [
+                clean_text(response.get("confusion_matrix_interpretation"))
+            ],
+            "operational_impact": [
+                clean_text(response.get("confusion_matrix_operational_impact"))
+            ],
         },
         "profile_recommendations": bounded,
         "redundancy_analysis": redundancies,
         "prioritization": {
             **priority_ids,
-            "rationale": clean_texts(prioritization.get("rationale"), 12),
+            "rationale": [
+                clean_text(response.get("prioritization_rationale"))
+            ],
         },
-        "next_steps": clean_texts(response.get("next_steps"), 12),
+        "next_steps": next_steps,
         "selected_candidate_ids": sorted(selected),
         "read_only_statement": (
             "Esta análise foi realizada em modo somente leitura. Nenhuma "
@@ -1305,6 +1282,16 @@ def build_bounded_ai_context(payload: Mapping[str, Any]) -> dict[str, Any]:
     for item in payload.get("candidates") or []:
         discovery = item.get("discovery") or {}
         validation = item.get("validation") or {}
+        selected_points = item.get("selected_simulation_points")
+        selected_simulation = next(
+            (
+                simulation
+                for simulation in item.get("simulations") or []
+                if simulation.get("status") == "SIMULATED"
+                and simulation.get("points") == selected_points
+            ),
+            None,
+        )
         candidates.append({
             "candidate_id": item.get("candidate_id"),
             "candidate_definition_id": item.get("candidate_definition_id"),
@@ -1330,12 +1317,14 @@ def build_bounded_ai_context(payload: Mapping[str, Any]) -> dict[str, Any]:
                     "sl_rate_delta_present_minus_absent"
                 ),
             },
-            "simulations": [{
-                "points": simulation.get("points"),
-                "status": simulation.get("status"),
-                "selected": simulation.get("selected"),
-                "metrics": compact_metrics(simulation.get("metrics")),
-            } for simulation in item.get("simulations") or []],
+            "selected_simulation_points": selected_points,
+            "selected_simulation": ({
+                "points": selected_simulation.get("points"),
+                "status": selected_simulation.get("status"),
+                "selected": selected_simulation.get("selected"),
+                "metrics": compact_metrics(selected_simulation.get("metrics")),
+                "impact": selected_simulation.get("impact"),
+            } if selected_simulation else None),
         })
 
     counterfactual = payload.get("counterfactual_analysis") or {}
@@ -1343,7 +1332,7 @@ def build_bounded_ai_context(payload: Mapping[str, Any]) -> dict[str, Any]:
         list(counterfactual.get("buckets") or []),
         key=lambda item: int(((item.get("present") or {}).get("closed") or 0)),
         reverse=True,
-    )[:50]
+    )[:20]
     compact_counterfactual = {
         "scope": counterfactual.get("scope"),
         "source": counterfactual.get("source"),
@@ -1361,6 +1350,16 @@ def build_bounded_ai_context(payload: Mapping[str, Any]) -> dict[str, Any]:
             ),
         } for item in counterfactual_buckets],
     }
+    compact_overlap = [{
+        "profile_id": item.get("profile_id"),
+        "candidate_a": item.get("candidate_a"),
+        "candidate_b": item.get("candidate_b"),
+        "combined_penalty_cap": item.get("combined_penalty_cap"),
+        "cohorts": {
+            name: compact_metrics(metrics)
+            for name, metrics in (item.get("cohorts") or {}).items()
+        },
+    } for item in payload.get("overlap_analysis") or []]
     context = {
         "analysis_contract_version": payload.get("analysis_contract_version"),
         "analysis_skill_version": payload.get("analysis_skill_version"),
@@ -1381,7 +1380,7 @@ def build_bounded_ai_context(payload: Mapping[str, Any]) -> dict[str, Any]:
             }
         ),
         "counterfactual_analysis": compact_counterfactual,
-        "overlap_analysis": payload.get("overlap_analysis"),
+        "overlap_analysis": compact_overlap,
         "candidates": candidates,
         "pre_ai_validation": payload.get("pre_ai_validation"),
         "safety": payload.get("safety"),
