@@ -182,6 +182,87 @@ def _require_v2_barrier_config(user_config: dict, symbol: str) -> None:
         )
 
 
+async def _load_lab_barrier_config(user_id) -> dict:
+    """Carrega config_profiles(ml) e devolve os parâmetros de barreira do lab.
+
+    Mesma fonte de verdade do L3 canônico (``_apply_barrier_params``). Falha de
+    carga degrada para legacy FIXED (carimbo v1 correto — nunca v2 mislabeled);
+    a validação fail-closed das chaves v2 é do caller (``_require_v2_barrier_config``).
+    """
+    from ..database import CeleryAsyncSessionLocal
+    from ..models.config_profile import ConfigProfile
+
+    ml_cfg: dict = {}
+    try:
+        async with CeleryAsyncSessionLocal() as cfg_db:
+            res = await cfg_db.execute(
+                select(ConfigProfile).where(
+                    ConfigProfile.user_id == user_id,
+                    ConfigProfile.config_type == "ml",
+                    ConfigProfile.is_active.is_(True),
+                ).limit(1)
+            )
+            row = res.scalar_one_or_none()
+            if row is not None:
+                ml_cfg = row.config_json or {}
+    except Exception:
+        logger.warning(
+            "[StrategyLab] ml barrier config load failed user=%s — legacy FIXED",
+            user_id,
+        )
+        ml_cfg = {}
+    return _apply_barrier_params({}, ml_cfg)
+
+
+def _resolve_lab_barrier(
+    features_flat: Dict[str, Any],
+    tp_pct: float,
+    sl_pct: float,
+    barrier_cfg: dict,
+    *,
+    symbol: str,
+    log_tag: str,
+) -> Optional[tuple]:
+    """Resolve ``(barrier_mode, tp_eff, sl_eff, contract_version)`` para o lab.
+
+    Espelha o write-path canônico (``_create_from_decision`` :938-964):
+    - contrato v2 ativo + ATR ausente/zero → ``None`` (linha NÃO criada, fail-closed)
+    - contrato v2 ativo → TP/SL = clamp(atr×mult) e carimbo shadow_atr_dynamic_v2
+    - sem contrato v2 ativo → legacy FIXED com carimbo shadow_fixed_v1 (inalterado)
+
+    Pré-condição: sob contrato v2 o caller já validou as chaves via
+    ``_require_v2_barrier_config`` (uma vez, antes do loop de símbolos).
+    """
+    active = barrier_cfg.get("ml_active_barrier_contract_version")
+    if active != BARRIER_CONTRACT_ATR_DYNAMIC_V2:
+        return "FIXED", tp_pct, sl_pct, "shadow_fixed_v1"
+    _atr_raw = features_flat.get("atr_percent")
+    if _atr_raw is None:
+        _atr_raw = features_flat.get("atr_pct")
+    try:
+        _atr = float(_atr_raw if _atr_raw is not None else 0.0)
+    except (TypeError, ValueError):
+        _atr = 0.0
+    if _atr <= 0.0:
+        logger.info(
+            "[%s] barrier_v2_atr_unavailable symbol=%s atr=%r — linha NÃO criada",
+            log_tag, symbol, _atr_raw,
+        )
+        return None
+    tp_eff, sl_eff = _resolve_atr_barriers(_atr, tp_pct, sl_pct, barrier_cfg)
+    mode = barrier_cfg.get("shadow_barrier_mode")
+    version = _resolve_barrier_contract_version(
+        mode, barrier_cfg.get("tp_atr_multiplier")
+    )
+    if version != BARRIER_CONTRACT_ATR_DYNAMIC_V2:
+        # Defensivo: após _require_v2_barrier_config isto não deve ocorrer.
+        raise ValueError(
+            f"barrier_contract_degraded: active={active} produced={version} "
+            f"symbol={symbol} — linha NÃO criada"
+        )
+    return mode, tp_eff, sl_eff, version
+
+
 def _build_economic_config_snapshot(
     *,
     tp_pct,
@@ -3233,6 +3314,7 @@ async def _strategy_lab_snapshot_contract(
     *,
     profile_id: Optional[str],
     features: Dict[str, Any],
+    barrier_contract_version: str = "shadow_fixed_v1",
 ) -> tuple[Dict[str, Any], Dict[str, Any]]:
     from ..ml.feature_contract_v2 import (
         capture_native_snapshot,
@@ -3274,7 +3356,7 @@ async def _strategy_lab_snapshot_contract(
         "feature_extractor_version": native_capture.feature_extractor_version,
         "capture_contract_version": native_capture.capture_contract_version,
         "label_contract_version": "positive_net_return_v1",
-        "barrier_contract_version": "shadow_fixed_v1",
+        "barrier_contract_version": barrier_contract_version,
         "features_captured_at": native_capture.captured_at,
         "features_coverage": feature_coverage(normalized),
         "feature_hash": native_capture.snapshot_hash,
@@ -3450,6 +3532,19 @@ async def create_strategy_lab_shadows(
     except Exception:
         logger.debug("[StrategyLab-allow] config load failed user=%s", user_id)
 
+    # Contrato de barreira — mesma fonte de verdade do L3 canônico (config ml).
+    # Sob contrato v2, TP/SL do lab passam a ser ATR-dinâmicos (paridade
+    # econômica com o dataset de treino da lane L3). Fail-closed: chave ausente
+    # aborta a criação de TODOS os shadows deste ciclo (nunca degrada p/ FIXED
+    # carimbado como v2).
+    barrier_cfg = await _load_lab_barrier_config(user_id)
+    if barrier_cfg.get("ml_active_barrier_contract_version") == BARRIER_CONTRACT_ATR_DYNAMIC_V2:
+        try:
+            _require_v2_barrier_config(barrier_cfg, f"L3_LAB:{profile_name}")
+        except ValueError as exc:
+            logger.error("[StrategyLab-allow] %s — nenhum shadow criado", exc)
+            return 0
+
     created = 0
     profile_id_str = str(profile_id) if profile_id is not None else None
     rules_json = _json.dumps(rules_snapshot, default=str) if rules_snapshot else None
@@ -3495,25 +3590,34 @@ async def create_strategy_lab_shadows(
                 except (TypeError, ValueError):
                     pass
 
-        if entry_price and entry_price > 0 and tp_pct > 0 and sl_pct > 0:
-            tp_price = entry_price * (1 + tp_pct / 100.0)
-            sl_price = entry_price * (1 - sl_pct / 100.0)
-            initial_status = "RUNNING"
-        else:
-            tp_price = None
-            sl_price = None
-            initial_status = "PENDING"
-
-        # Build features snapshot from decision metrics
+        # Build features snapshot from decision metrics — ANTES do preço:
+        # o ATR do snapshot alimenta a barreira v2 (paridade com o L3).
         _metrics = d.get("metrics") or {}
         features_flat = dict(strategy_lab_features.get(symbol) or {})
         if not features_flat:
             _snap = _metrics.get("indicators_snapshot") or {}
             features_flat = _flatten_indicator_snapshot_values(_snap)
 
+        _resolved = _resolve_lab_barrier(
+            features_flat, tp_pct, sl_pct, barrier_cfg,
+            symbol=symbol, log_tag="StrategyLab-allow",
+        )
+        if _resolved is None:
+            continue
+        _bmode, _tp_eff, _sl_eff, _bversion = _resolved
+
+        if entry_price and entry_price > 0 and _tp_eff > 0 and _sl_eff > 0:
+            tp_price = entry_price * (1 + _tp_eff / 100.0)
+            sl_price = entry_price * (1 - _sl_eff / 100.0)
+            initial_status = "RUNNING"
+        else:
+            tp_price = None
+            sl_price = None
+            initial_status = "PENDING"
+
         config_snap = {
-            "tp_pct": tp_pct,
-            "sl_pct": sl_pct,
+            "tp_pct": _tp_eff,
+            "sl_pct": _sl_eff,
             "timeout_candles": timeout_candles,
             "amount_usdt": SHADOW_TRADE_AMOUNT_USDT,
             "ttt_enabled": ttt_enabled,
@@ -3522,6 +3626,8 @@ async def create_strategy_lab_shadows(
             "profile_id": profile_id_str,
             "profile_name": profile_name,
             "execution_id": execution_id,
+            "barrier_mode": _bmode,
+            "barrier_contract_version": _bversion,
         }
 
         try:
@@ -3532,6 +3638,7 @@ async def create_strategy_lab_shadows(
                             own_db,
                             profile_id=profile_id_str,
                             features=features_flat,
+                            barrier_contract_version=_bversion,
                         )
                     )
                     try:
@@ -3549,8 +3656,8 @@ async def create_strategy_lab_shadows(
                                     "entry_timestamp": promotion_at,
                                     "tp_price": tp_price,
                                     "sl_price": sl_price,
-                                    "tp_pct": tp_pct or None,
-                                    "sl_pct": sl_pct or None,
+                                    "tp_pct": _tp_eff or None,
+                                    "sl_pct": _sl_eff or None,
                                     "timeout_candles": timeout_candles,
                                     "status": initial_status,
                                     "source": SHADOW_SOURCE_L3_LAB,
@@ -3560,9 +3667,9 @@ async def create_strategy_lab_shadows(
                                     "ttt_enabled": ttt_enabled,
                                     "ttt_tp_pct": ttt_tp_pct,
                                     "ttt_timeout_minutes": ttt_timeout_minutes,
-                                    "barrier_mode": "FIXED",
-                                    "tp_pct_applied": tp_pct or None,
-                                    "sl_pct_applied": sl_pct or None,
+                                    "barrier_mode": _bmode,
+                                    "tp_pct_applied": _tp_eff or None,
+                                    "sl_pct_applied": _sl_eff or None,
                                     "profile_id": profile_id_str,
                                     "profile_version": profile_version,
                                     "profile_name": profile_name,
@@ -3671,6 +3778,15 @@ async def create_strategy_lab_rejected_shadows(
     except Exception:
         logger.debug("[StrategyLab-block] config load failed user=%s", user_id)
 
+    # Contrato de barreira — mesma fonte do L3 canônico (ver create_strategy_lab_shadows).
+    barrier_cfg = await _load_lab_barrier_config(user_id)
+    if barrier_cfg.get("ml_active_barrier_contract_version") == BARRIER_CONTRACT_ATR_DYNAMIC_V2:
+        try:
+            _require_v2_barrier_config(barrier_cfg, f"L3_LAB:{profile_name}")
+        except ValueError as exc:
+            logger.error("[StrategyLab-block] %s — nenhum shadow criado", exc)
+            return 0
+
     created = 0
     profile_id_str = str(profile_id) if profile_id is not None else None
     rules_json = _json.dumps(rules_snapshot, default=str) if rules_snapshot else None
@@ -3715,24 +3831,32 @@ async def create_strategy_lab_rejected_shadows(
                 except (TypeError, ValueError):
                     pass
 
-        if entry_price and entry_price > 0 and tp_pct > 0 and sl_pct > 0:
-            tp_price = entry_price * (1 + tp_pct / 100.0)
-            sl_price = entry_price * (1 - sl_pct / 100.0)
-            initial_status = "RUNNING"
-        else:
-            tp_price = None
-            sl_price = None
-            initial_status = "PENDING"
-
         _metrics = d.get("metrics") or {}
         features_flat = dict(strategy_lab_features.get(symbol) or {})
         if not features_flat:
             _snap = _metrics.get("indicators_snapshot") or {}
             features_flat = _flatten_indicator_snapshot_values(_snap)
 
+        _resolved = _resolve_lab_barrier(
+            features_flat, tp_pct, sl_pct, barrier_cfg,
+            symbol=symbol, log_tag="StrategyLab-block",
+        )
+        if _resolved is None:
+            continue
+        _bmode, _tp_eff, _sl_eff, _bversion = _resolved
+
+        if entry_price and entry_price > 0 and _tp_eff > 0 and _sl_eff > 0:
+            tp_price = entry_price * (1 + _tp_eff / 100.0)
+            sl_price = entry_price * (1 - _sl_eff / 100.0)
+            initial_status = "RUNNING"
+        else:
+            tp_price = None
+            sl_price = None
+            initial_status = "PENDING"
+
         config_snap = {
-            "tp_pct": tp_pct,
-            "sl_pct": sl_pct,
+            "tp_pct": _tp_eff,
+            "sl_pct": _sl_eff,
             "timeout_candles": timeout_candles,
             "amount_usdt": SHADOW_TRADE_AMOUNT_USDT,
             "ttt_enabled": ttt_enabled,
@@ -3743,6 +3867,8 @@ async def create_strategy_lab_rejected_shadows(
             "execution_id": execution_id,
             "l3_decision": "BLOCK",
             "l3_score": d.get("score"),
+            "barrier_mode": _bmode,
+            "barrier_contract_version": _bversion,
         }
 
         try:
@@ -3753,6 +3879,7 @@ async def create_strategy_lab_rejected_shadows(
                             own_db,
                             profile_id=profile_id_str,
                             features=features_flat,
+                            barrier_contract_version=_bversion,
                         )
                     )
                     try:
@@ -3770,8 +3897,8 @@ async def create_strategy_lab_rejected_shadows(
                                     "entry_timestamp": promotion_at,
                                     "tp_price": tp_price,
                                     "sl_price": sl_price,
-                                    "tp_pct": tp_pct or None,
-                                    "sl_pct": sl_pct or None,
+                                    "tp_pct": _tp_eff or None,
+                                    "sl_pct": _sl_eff or None,
                                     "timeout_candles": timeout_candles,
                                     "status": initial_status,
                                     "source": SHADOW_SOURCE_L3_LAB,
@@ -3781,9 +3908,9 @@ async def create_strategy_lab_rejected_shadows(
                                     "ttt_enabled": ttt_enabled,
                                     "ttt_tp_pct": ttt_tp_pct,
                                     "ttt_timeout_minutes": ttt_timeout_minutes,
-                                    "barrier_mode": "FIXED",
-                                    "tp_pct_applied": tp_pct or None,
-                                    "sl_pct_applied": sl_pct or None,
+                                    "barrier_mode": _bmode,
+                                    "tp_pct_applied": _tp_eff or None,
+                                    "sl_pct_applied": _sl_eff or None,
                                     "profile_id": profile_id_str,
                                     "profile_version": profile_version,
                                     "profile_name": profile_name,
