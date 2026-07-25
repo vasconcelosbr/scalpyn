@@ -2216,7 +2216,14 @@ class MLChallengerService:
         maturity_diagnostics = dict(self._last_shadow_load_diagnostics)
         cb_profile_records = [r for r in cb_all_records if r.get("profile_id")]
         barrier_meta: Dict[str, Any] = {}
-        if cb_sources in (["L3"], ["L3_REJECTED"]) and cb_lane != "L3_APPROVED_INTELLIGENCE":
+        # L3_LAB incluído (2026-07-25): a migração do lab para o contrato
+        # shadow_atr_dynamic_v2 convive, na mesma janela de valid_from, com
+        # linhas legadas shadow_fixed_v1 gravadas antes do cutover de deploy.
+        # Sem este filtro, um treino com cb_sources=["L3_LAB"] misturaria as
+        # duas economias de barreira — mesmo risco que o filtro já cobre para
+        # L3/L3_REJECTED. Sob ATR_DYNAMIC, expected_tp_pct é ignorado pelo
+        # filtro (paridade é dada pelo carimbo de versão, não por match de TP).
+        if cb_sources in (["L3"], ["L3_REJECTED"], ["L3_LAB"]) and cb_lane != "L3_APPROVED_INTELLIGENCE":
             if ml_config.get("shadow_barrier_mode") in (None, ""):
                 raise ValueError("missing_shadow_barrier_mode_for_l3_dataset_contract")
             if strategy_tp_pct is None:

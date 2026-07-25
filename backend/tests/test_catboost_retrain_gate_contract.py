@@ -110,6 +110,62 @@ def test_shared_catboost_preparation_applies_profile_and_barrier_contract():
     assert load_kwargs["collect_diagnostics"] is True
 
 
+def test_shared_catboost_preparation_applies_barrier_contract_to_l3_lab():
+    # 2026-07-25: L3_LAB migrado para o contrato shadow_atr_dynamic_v2, mas
+    # convive na mesma janela de valid_from com linhas legadas shadow_fixed_v1
+    # gravadas antes do cutover de deploy. Sem o filtro aplicado a cb_sources
+    # == ["L3_LAB"], um treino standalone dessa lane misturaria as duas
+    # economias de barreira (achado da auditoria 2026-07-25).
+    async def _run():
+        svc = MLChallengerService()
+        svc._last_shadow_load_diagnostics = {}
+        svc._load_shadow_data = AsyncMock(return_value=[
+            {
+                "source": "L3_LAB",
+                "profile_id": "lab-profile-a",
+                "barrier_mode": "ATR_DYNAMIC",
+                "tp_pct_applied": 0.5,
+                "barrier_contract_version": "shadow_atr_dynamic_v2",
+            },
+            {
+                # Legado pré-migração: barrier_mode="FIXED" carimbado v1 —
+                # deve ser excluído, não misturado com a economia v2.
+                "source": "L3_LAB",
+                "profile_id": "lab-profile-a",
+                "barrier_mode": "FIXED",
+                "tp_pct_applied": 3.0,
+                "barrier_contract_version": "shadow_fixed_v1",
+            },
+        ])
+        cutoff = datetime(2026, 7, 25, 12, 0, tzinfo=timezone.utc)
+        records, meta = await svc._prepare_catboost_gate_records(
+            AsyncMock(),
+            "00000000-0000-0000-0000-000000000001",
+            lookback_days=90,
+            cb_sources=["L3_LAB"],
+            dataset_query_cutoff=cutoff,
+            ml_config={
+                "ml_dataset_valid_from": "2026-07-01T00:00:00+00:00",
+                "ml_l3_dataset_valid_from": "2026-07-24T19:00:00+00:00",
+                "ml_maturity_embargo_margin_minutes": 60,
+                "shadow_barrier_mode": "ATR_DYNAMIC",
+            },
+            strategy_tp_pct=0.6,
+        )
+        return records, meta
+
+    records, meta = asyncio.run(_run())
+
+    assert len(records) == 1
+    assert records[0]["barrier_contract_version"] == "shadow_atr_dynamic_v2"
+    assert meta["barrier_contract"]["barrier_contract_included"] == 1
+    # A linha legada carrega barrier_mode="FIXED" (não ATR_DYNAMIC) — cai em
+    # mode-mismatch, não em atr_non_v2_excluded (esse ramo é só para linhas
+    # ATR_DYNAMIC sem o carimbo v2).
+    assert meta["barrier_contract"]["barrier_contract_mode_mismatch"] == 1
+    assert meta["barrier_contract"]["barrier_contract_atr_non_v2_excluded"] == 0
+
+
 def test_catboost_train_gate_uses_database_minimum_and_reports_deficit(monkeypatch):
     async def _run():
         svc = MLChallengerService()
