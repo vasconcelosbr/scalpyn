@@ -101,6 +101,7 @@ celery_app = Celery(
         "app.tasks.opportunity_snapshot_evaluator",
         "app.tasks.crypto_ev_score",
         "app.tasks.ml_data_certification",
+        "app.tasks.prune_indicator_snapshots",
     ],
 )
 
@@ -212,6 +213,12 @@ TASK_ROUTES = {
     # falha do job nunca afeta a captura. Read-only + INSERT em
     # ml_data_certification_runs.
     "app.tasks.ml_data_certification.run": {"queue": QUEUE_STRUCTURAL_COMPUTE},
+
+    # Auditoria 2026-07-26 — indicator_snapshots nunca teve retenção e causou
+    # crash de disco do Postgres (100% cheio). Compute queue: isolada da
+    # captura; falha aqui nunca afeta scan/persist_snapshot. DELETE em lotes
+    # apenas em indicator_snapshots.
+    "app.tasks.prune_indicator_snapshots.run": {"queue": QUEUE_STRUCTURAL_COMPUTE},
 }
 
 # Static queue declarations so beat / dispatch never rely on an "implicit"
@@ -422,6 +429,15 @@ TASK_ANNOTATIONS = {
     "app.tasks.profile_intelligence_job.train_ml_challengers_for_user": {
         "time_limit": 1800,
         "soft_time_limit": 1740,
+        "max_retries": 0,
+        **_NO_REQUEUE_ON_WORKER_LOSS,
+    },
+    # Auditoria 2026-07-26 — retenção de indicator_snapshots. Budget generoso
+    # (300s) só importa na primeira execução (pode ter backlog); runs
+    # subsequentes ficam bem abaixo disso (incremento horário << backlog inicial).
+    "app.tasks.prune_indicator_snapshots.run": {
+        "time_limit": 300,
+        "soft_time_limit": 270,
         "max_retries": 0,
         **_NO_REQUEUE_ON_WORKER_LOSS,
     },
@@ -660,6 +676,16 @@ celery_app.conf.beat_schedule = {
     "ml_data_certification": {
         "task": "app.tasks.ml_data_certification.run",
         "schedule": crontab(minute=0, hour="*/2"),
+        "options": {"queue": QUEUE_STRUCTURAL_COMPUTE},
+    },
+
+    # Auditoria 2026-07-26 — indicator_snapshots nunca teve retenção; causou
+    # o disco do Postgres encher 100% e crashar. A cada hora (0 * * * *),
+    # apaga em lotes o que passou de INDICATOR_SNAPSHOTS_RETENTION_HOURS
+    # (default 48h — o único consumidor, robust_alerts, só olha ~90s/5min).
+    "prune_indicator_snapshots": {
+        "task": "app.tasks.prune_indicator_snapshots.run",
+        "schedule": crontab(minute=0),
         "options": {"queue": QUEUE_STRUCTURAL_COMPUTE},
     },
 }
