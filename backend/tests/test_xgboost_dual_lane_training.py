@@ -1,6 +1,10 @@
 import numpy as np
+import inspect
 
-from app.services.ml_challenger_service import _train_xgboost_sync
+from app.services.ml_challenger_service import (
+    MLChallengerService,
+    _train_xgboost_sync,
+)
 
 
 def test_xgboost_trainer_emits_complete_promotion_evidence():
@@ -51,3 +55,14 @@ def test_xgboost_trainer_emits_complete_promotion_evidence():
     assert 0 <= result["test_metrics"]["roc_auc"] <= 1
     assert 0 <= result["test_metrics"]["roc_auc_ci_low"] <= 1
     assert result["test_metrics"]["net_ev"] is not None
+
+
+def test_l1_training_propagates_canonical_label_objective_to_dataset_and_lineage():
+    source = inspect.getsource(MLChallengerService.train_challengers)
+    l1_source = source.split(
+        "# \u2500\u2500 Lane 2:",
+        maxsplit=1,
+    )[0]
+
+    assert "label_objective=label_objective" in l1_source
+    assert '"label_objective": label_objective' in l1_source

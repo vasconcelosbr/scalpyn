@@ -122,7 +122,15 @@ async def main():
                 }
             from backend.app.ml.feature_extractor import FEATURE_COLUMNS
             _win_threshold_s = float(ml_config["ml_win_fast_threshold_seconds"])
-            X, y, cols, *_ = svc._build_dataset(records, list(FEATURE_COLUMNS), _win_threshold_s)
+            _label_objective = str(
+                ml_config.get("ml_label_objective") or "fast_tp"
+            )
+            X, y, cols, *_ = svc._build_dataset(
+                records,
+                list(FEATURE_COLUMNS),
+                _win_threshold_s,
+                label_objective=_label_objective,
+            )
             pos_rate = float(y.mean()) if len(y) else 0
             logger.info("[DRY-RUN] Dataset: rows=%d features=%d positive_rate=%.2f%%", len(y), len(cols), pos_rate * 100)
             return {

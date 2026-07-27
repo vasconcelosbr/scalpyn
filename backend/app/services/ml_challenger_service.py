@@ -2751,6 +2751,7 @@ class MLChallengerService:
                         lane_contract=lgbm_lane_contract, feature_ranges=feature_ranges,
                         backfilled_feature_names=backfilled_feature_names,
                         backfill_marker_key=backfill_marker_key,
+                        label_objective=label_objective,
                     )
                     if len(y) < MIN_RECORDS:
                         results["xgboost_l1"] = {"status": "skipped", "reason": "insufficient_labeled"}
@@ -2843,6 +2844,7 @@ class MLChallengerService:
                                     "dataset_hash": hashlib.sha256(
                                         "|".join(sorted(str(x) for x in shadow_ids if x)).encode()
                                     ).hexdigest(),
+                                    "label_objective": label_objective,
                                 },
                                 threshold=lgbm_result["threshold"],
                                 profile_id=profile_id,
