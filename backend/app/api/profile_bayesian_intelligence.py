@@ -308,7 +308,10 @@ async def indicator_effects(
                 JOIN profile_bayesian_analysis_runs r ON r.id = e.analysis_run_id
                 WHERE r.user_id = :user_id
                   AND e.profile_id = :profile_id
-                  AND (:run_id IS NULL OR e.analysis_run_id = :run_id)
+                  AND (
+                      CAST(:run_id AS UUID) IS NULL
+                      OR e.analysis_run_id = CAST(:run_id AS UUID)
+                  )
                 ORDER BY e.created_at DESC, e.evidence_grade DESC, e.indicator
                 LIMIT :limit
                 """

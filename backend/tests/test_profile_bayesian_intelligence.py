@@ -4,9 +4,11 @@ import ast
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
+from uuid import uuid4
 
 import pytest
 
+from app.api import profile_bayesian_intelligence as bayesian_api
 from app.profile_bayesian.config import (
     BayesianPolicy,
     PolicyConfigurationError,
@@ -287,3 +289,45 @@ def test_importing_api_contract_does_not_import_scientific_runtime():
     newly_loaded = set(sys.modules) - before
     assert "pymc" not in newly_loaded
     assert "arviz" not in newly_loaded
+
+
+class _EmptyIndicatorEffectsResult:
+    def mappings(self):
+        return self
+
+    def all(self):
+        return []
+
+
+class _IndicatorEffectsDb:
+    def __init__(self):
+        self.statement = None
+        self.params = None
+
+    async def execute(self, statement, params):
+        self.statement = statement
+        self.params = params
+        return _EmptyIndicatorEffectsResult()
+
+
+@pytest.mark.asyncio
+async def test_indicator_effects_casts_optional_run_id_for_postgres(monkeypatch):
+    async def _owned_profile(*_args, **_kwargs):
+        return object()
+
+    monkeypatch.setattr(bayesian_api, "_profile_for_user", _owned_profile)
+    db = _IndicatorEffectsDb()
+
+    result = await bayesian_api.indicator_effects(
+        profile_id=uuid4(),
+        analysis_run_id=None,
+        limit=100,
+        db=db,
+        user_id=uuid4(),
+    )
+
+    sql = str(db.statement)
+    assert result == {"items": []}
+    assert "CAST(:run_id AS UUID) IS NULL" in sql
+    assert "e.analysis_run_id = CAST(:run_id AS UUID)" in sql
+    assert db.params["run_id"] is None
