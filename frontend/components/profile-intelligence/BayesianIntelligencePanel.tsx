@@ -36,6 +36,10 @@ type ProfileOption = {
   profile_name: string;
 };
 
+type ProfileRankingResponse = {
+  profiles?: ProfileOption[];
+};
+
 type AnalysisRun = {
   id: string;
   status: string;
@@ -204,13 +208,32 @@ export default function BayesianIntelligencePanel() {
     setLoading(true);
     setError(null);
     try {
-      const [statusResult, profilesResult] = await Promise.all([
+      const [statusResult, profilesResult] = await Promise.allSettled([
         apiGet<ModuleStatus>("/profile-intelligence/bayesian/status"),
-        apiGet("/profile-intelligence/profiles/ranking?lookback_days=60&limit=100"),
+        apiGet<ProfileRankingResponse>(
+          "/profile-intelligence/profiles/ranking?lookback_days=60&limit=100",
+        ),
       ]);
-      const items: ProfileOption[] = profilesResult?.profiles ?? [];
-      setModuleStatus(statusResult);
+
+      if (statusResult.status === "rejected") {
+        throw statusResult.reason;
+      }
+
+      setModuleStatus(statusResult.value);
+      const items =
+        profilesResult.status === "fulfilled"
+          ? profilesResult.value?.profiles ?? []
+          : [];
       setProfiles(items);
+
+      if (profilesResult.status === "rejected") {
+        const rankingMessage =
+          profilesResult.reason instanceof Error
+            ? profilesResult.reason.message
+            : "erro inesperado";
+        setError(`Ranking de profiles indisponível: ${rankingMessage}`);
+      }
+
       const selected = profileId || items[0]?.profile_id || "";
       setProfileId(selected);
       await loadProfile(selected);
