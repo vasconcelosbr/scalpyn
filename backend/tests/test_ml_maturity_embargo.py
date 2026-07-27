@@ -26,6 +26,10 @@ class _CapturingSession:
 def _load(**kwargs):
     service = MLChallengerService()
     session = _CapturingSession()
+    if kwargs.get("source_filter") == ["L1_SPECTRUM"]:
+        kwargs.setdefault(
+            "lane_contract_version", "l1_spectrum_entry_v2"
+        )
 
     async def run():
         await service._load_shadow_data(
@@ -105,6 +109,15 @@ def test_loader_enforces_official_contract_resolution_and_maturity():
     assert session.params["maturity_embargo_margin_minutes"] == 60
     # Fase 1 B.2 — a query restringe à população pós-fronteira.
     assert "entry_timestamp >= :valid_from" in session.statement
+    assert "config_snapshot->>'l1_lane_eligible'" in session.statement
+    assert session.params["lane_contract_version"] == "l1_spectrum_entry_v2"
     assert session.params["valid_from"] == datetime(
         2026, 7, 11, tzinfo=timezone.utc
     )
+
+
+def test_l3_loader_is_unchanged_by_l1_lane_contract():
+    session = _load(source_filter=["L3"])
+    assert "l1_lane_eligible" not in session.statement
+    assert "l1_feature_contract_version" not in session.statement
+    assert "lane_contract_version" not in session.params

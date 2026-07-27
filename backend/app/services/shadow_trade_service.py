@@ -29,7 +29,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy import select, text
@@ -981,6 +981,8 @@ async def _create_from_decision(
     source: str = SHADOW_SOURCE_L3,
     extra_config: Optional[Dict[str, Any]] = None,
     lineage: Optional[Any] = None,
+    l1_ml_config: Optional[Mapping[str, Any]] = None,
+    l1_feature_metadata: Optional[Mapping[str, Mapping[str, Any]]] = None,
 ) -> Optional[UUID]:
     """Insere uma row em ``shadow_trades`` para a ``decision`` informada.
 
@@ -1108,6 +1110,15 @@ async def _create_from_decision(
     native_capture = capture_native_snapshot(_build_features_snapshot(decision))
     features_snap = native_capture.snapshot
     feature_errors = list(native_capture.errors)
+    l1_evaluation = None
+    if normalized_source == SHADOW_SOURCE_L1_SPECTRUM:
+        from ..ml.l1_feature_contract import evaluate_l1_snapshot
+
+        l1_evaluation = evaluate_l1_snapshot(
+            features_snap,
+            l1_ml_config,
+            feature_metadata=l1_feature_metadata,
+        )
 
     config_snap = _build_economic_config_snapshot(
         tp_pct=tp_pct,
@@ -1171,6 +1182,37 @@ async def _create_from_decision(
         else "EXACT" if lineage_complete
         else "UNRESOLVED_VERSION"
     )
+    native_eligible = lineage_complete and not feature_errors
+    if l1_evaluation is not None:
+        l1_lane_eligible = native_eligible and l1_evaluation.eligible
+        config_snap.update(
+            {
+                "l1_native_eligible": native_eligible,
+                "l1_lane_eligible": l1_lane_eligible,
+                "l1_lane_eligibility_reasons": list(l1_evaluation.reasons),
+                "l1_feature_contract_version": l1_evaluation.contract_version,
+                "l1_feature_coverage": round(l1_evaluation.coverage, 6),
+                "l1_feature_present_count": l1_evaluation.present_count,
+                "l1_feature_expected_count": l1_evaluation.expected_count,
+                "l1_stale_required_features": list(
+                    l1_evaluation.stale_required_features
+                ),
+                "l1_feature_freshness": dict(l1_feature_metadata or {}),
+            }
+        )
+        config_hash = hashlib.sha256(
+            json.dumps(
+                config_snap, sort_keys=True, separators=(",", ":"), default=str
+            ).encode("utf-8")
+        ).hexdigest()
+        if not l1_lane_eligible:
+            logger.warning(
+                "[shadow-l1] lane-ineligible capture preserved symbol=%s "
+                "contract=%s reasons=%s",
+                decision.symbol,
+                l1_evaluation.contract_version,
+                list(l1_evaluation.reasons),
+            )
 
     try:
         async with db.begin_nested():
@@ -1275,7 +1317,7 @@ async def _create_from_decision(
                     "profile_config_hash": _lin_profile_config_hash or config_hash,
                     "score_engine_config_hash": _lin_score_engine_config_hash,
                     "lineage_status": lineage_status,
-                    "eligible_for_training": lineage_complete and not feature_errors,
+                    "eligible_for_training": native_eligible,
                 },
             )
     except IntegrityError as exc:
@@ -2155,6 +2197,19 @@ async def create_l1_spectrum_shadows(
     if not ml_config.get("shadow_capture_l1_enabled", False):
         return 0
 
+    from ..ml.l1_feature_contract import (
+        L1FeatureContractConfigError,
+        load_l1_feature_contract,
+    )
+
+    try:
+        _l1_contract = load_l1_feature_contract(ml_config)
+    except L1FeatureContractConfigError as exc:
+        # Preserve pure point-in-time captures for audit, but the writer below
+        # will mark every row lane-ineligible until the config is repaired.
+        _l1_contract = None
+        logger.error("[shadow-l1] invalid lane contract: %s", exc)
+
     sample_rate = float(ml_config.get("shadow_capture_l1_sample_rate", 0.10))
     source_label = str(ml_config.get("shadow_capture_l1_source_label", SHADOW_SOURCE_L1_SPECTRUM))
     if source_label not in _VALID_SHADOW_SOURCES:
@@ -2253,8 +2308,11 @@ async def create_l1_spectrum_shadows(
     # B1 — bulk indicators fetch before loop (L1 assets have no analysis_snapshot).
     # Pureza invariant: low coverage is RECORDED, never a reason to skip shadow creation.
     _ind_captured_at = promotion_at.isoformat()
-    _expected_n_features = 37
+    _expected_feature_names = (
+        _l1_contract.feature_names if _l1_contract is not None else ()
+    )
     features_by_symbol: Dict[str, Dict[str, Any]] = {}
+    feature_metadata_by_symbol: Dict[str, Dict[str, Dict[str, Any]]] = {}
     try:
         from .indicators_provider import get_merged_indicators
         async with CeleryAsyncSessionLocal() as _ind_db:
@@ -2264,8 +2322,14 @@ async def create_l1_spectrum_shadows(
             _mi = _merged.get(_sym)
             if _mi is not None:
                 _flat = _mi.as_flat_dict()
-                _n_cap = sum(1 for v in _flat.values() if v is not None)
-                _coverage = _n_cap / max(_expected_n_features, 1)
+                _n_cap = sum(
+                    _flat.get(name) is not None for name in _expected_feature_names
+                )
+                _coverage = (
+                    _n_cap / len(_expected_feature_names)
+                    if _expected_feature_names
+                    else 0.0
+                )
                 _oldest_age_s = None
                 try:
                     _ts_list = [
@@ -2287,18 +2351,34 @@ async def create_l1_spectrum_shadows(
                     "_features_coverage":      {"value": round(_coverage, 3)},
                     "_oldest_indicator_age_s": {"value": _oldest_age_s},
                 }
+                feature_metadata_by_symbol[_sym] = {}
+                for _name in _expected_feature_names:
+                    _meta = _mi.meta.get(_name) or {}
+                    _timestamp = _meta.get("timestamp")
+                    feature_metadata_by_symbol[_sym][_name] = {
+                        "source_group": _meta.get("group"),
+                        "timestamp": (
+                            _timestamp.isoformat()
+                            if hasattr(_timestamp, "isoformat")
+                            else None
+                        ),
+                        "stale": bool(_meta.get("stale", False)),
+                        "age_seconds": _meta.get("age_seconds"),
+                    }
             else:
                 features_by_symbol[_sym] = {
                     "_features_captured_at":   {"value": _ind_captured_at},
                     "_features_coverage":      {"value": 0.0},
                     "_oldest_indicator_age_s": {"value": None},
                 }
+                feature_metadata_by_symbol[_sym] = {}
     except Exception as _b1_err:
         logger.warning(
             "[shadow-l1] B1: indicators fetch failed (%s) — shadows created with empty features",
             _b1_err,
         )
         features_by_symbol = {}
+        feature_metadata_by_symbol = {}
 
     for symbol in sampled:
         if shadows_last_hour + created >= max_per_hour:
@@ -2353,6 +2433,8 @@ async def create_l1_spectrum_shadows(
                         own_db, synthetic, "L1_SPECTRUM_CAPTURE", user_config,
                         source=source_label,
                         lineage=_lineage_l1,
+                        l1_ml_config=ml_config,
+                        l1_feature_metadata=feature_metadata_by_symbol.get(symbol),
                     )
                     if new_id is not None:
                         created += 1

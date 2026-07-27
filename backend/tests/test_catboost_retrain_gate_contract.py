@@ -171,8 +171,9 @@ def test_catboost_train_gate_uses_database_minimum_and_reports_deficit(monkeypat
         svc = MLChallengerService()
         svc._load_ml_config = AsyncMock(return_value={
             "ml_dataset_valid_from": "2026-07-01T00:00:00+00:00",
-            "ml_l3_dataset_valid_from": "2026-07-11T03:21:06+00:00",
-            "ml_catboost_retrain_min_eligible_rows": 4,
+                "ml_l3_dataset_valid_from": "2026-07-11T03:21:06+00:00",
+                "ml_win_fast_threshold_seconds": 1800,
+                "ml_catboost_retrain_min_eligible_rows": 4,
             "ml_promotion_min_test_samples": 3,
             "ml_maturity_embargo_margin_minutes": 60,
             "shadow_barrier_mode": "ATR_DYNAMIC",

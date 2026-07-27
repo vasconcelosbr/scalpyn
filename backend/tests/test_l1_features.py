@@ -46,9 +46,44 @@ def _make_db_session_mock():
 
 # ─── Feature count used in production ─────────────────────────────────────────
 
-EXPECTED_N_FEATURES = 37
-
-_FULL_INDICATORS = {f"ind_{i}": float(i) for i in range(EXPECTED_N_FEATURES)}
+_REQUIRED = [
+    "taker_ratio", "volume_delta", "rsi", "macd_histogram_pct",
+    "macd_histogram_slope", "adx", "adx_acceleration", "spread_pct",
+    "volume_spike", "bb_width", "atr_pct", "ema9_gt_ema21",
+    "orderbook_depth_usdt", "vwap_distance_pct", "rsi_slope_3",
+    "rsi_slope_5", "macd_hist_slope_3", "macd_hist_slope_5",
+    "ema21_ema50_distance_pct", "di_plus_minus_diff", "adx_slope_3",
+    "vwap_reclaim_bool", "higher_highs_5", "higher_lows_5",
+]
+_OPTIONAL = [
+    "volume_24h_usdt", "flow_strength", "momentum_strength",
+    "delta_normalized", "ema_distance_pct", "ema50_distance_pct",
+    "ema200_distance_pct",
+]
+EXPECTED_N_FEATURES = len(_REQUIRED) + len(_OPTIONAL)
+_ML_CONFIG = {
+    "shadow_capture_l1_enabled": True,
+    "shadow_capture_l1_sample_rate": 1.0,
+    "shadow_capture_l1_max_per_hour": 200,
+    "ml_fee_roundtrip_pct": 0.20,
+    "ml_l1_feature_contract_version": "l1_spectrum_entry_v2",
+    "ml_l1_feature_exclusions": [],
+    "ml_feature_contract": {
+        "L1_SPECTRUM": {
+            "version": "l1_spectrum_entry_v2",
+            "required": _REQUIRED,
+            "optional": _OPTIONAL,
+            "min_row_coverage": 0.7,
+        }
+    },
+    "ml_feature_ranges": {
+        "atr_pct": {"gt": 0},
+        "rsi": {"gte": 0, "lte": 100},
+        "spread_pct": {"gte": 0},
+    },
+}
+_FULL_INDICATORS = {name: 1.0 for name in _REQUIRED + _OPTIONAL}
+_FULL_INDICATORS["rsi"] = 50.0
 
 
 # ─── Tests ────────────────────────────────────────────────────────────────────
@@ -62,19 +97,16 @@ async def test_l1_shadow_full_coverage():
 
     _created_metrics: list = []
 
-    async def _fake_create_from_decision(db, decision, skip_reason, user_config, *, source=None):
+    async def _fake_create_from_decision(
+        db, decision, skip_reason, user_config, **kwargs
+    ):
         _created_metrics.append(decision.metrics)
         return "fake-uuid-1"
 
     db_mock = _make_db_session_mock()
     # _skp_row for ml config (ml_fee + shadow_capture_l1_enabled etc.)
     ml_cfg = MagicMock()
-    ml_cfg.config_json = {
-        "shadow_capture_l1_enabled": True,
-        "shadow_capture_l1_sample_rate": 1.0,  # 100% → BTC_USDT always sampled
-        "shadow_capture_l1_max_per_hour": 200,
-        "ml_fee_roundtrip_pct": 0.20,
-    }
+    ml_cfg.config_json = dict(_ML_CONFIG)
     se_cfg = MagicMock()
     se_cfg.config_json = {}
 
@@ -90,11 +122,11 @@ async def test_l1_shadow_full_coverage():
 
     with (
         patch(
-            "backend.app.services.shadow_trade_service.CeleryAsyncSessionLocal",
+            "backend.app.database.CeleryAsyncSessionLocal",
             return_value=db_mock,
         ),
         patch(
-            "backend.app.services.shadow_trade_service.get_merged_indicators",
+            "backend.app.services.indicators_provider.get_merged_indicators",
             new=AsyncMock(return_value=merged_result),
         ),
         patch(
@@ -102,7 +134,7 @@ async def test_l1_shadow_full_coverage():
             new=AsyncMock(side_effect=_fake_create_from_decision),
         ),
         patch(
-            "backend.app.services.shadow_trade_service.SpotEngineConfig",
+            "backend.app.schemas.spot_engine_config.SpotEngineConfig",
         ),
     ):
         created = await create_l1_spectrum_shadows(
@@ -142,18 +174,15 @@ async def test_l1_shadow_no_indicators():
 
     _created_metrics: list = []
 
-    async def _fake_create_from_decision(db, decision, skip_reason, user_config, *, source=None):
+    async def _fake_create_from_decision(
+        db, decision, skip_reason, user_config, **kwargs
+    ):
         _created_metrics.append(decision.metrics)
         return "fake-uuid-2"
 
     db_mock = _make_db_session_mock()
     ml_cfg = MagicMock()
-    ml_cfg.config_json = {
-        "shadow_capture_l1_enabled": True,
-        "shadow_capture_l1_sample_rate": 1.0,
-        "shadow_capture_l1_max_per_hour": 200,
-        "ml_fee_roundtrip_pct": 0.20,
-    }
+    ml_cfg.config_json = dict(_ML_CONFIG)
     se_cfg = MagicMock()
     se_cfg.config_json = {}
 
@@ -169,11 +198,11 @@ async def test_l1_shadow_no_indicators():
 
     with (
         patch(
-            "backend.app.services.shadow_trade_service.CeleryAsyncSessionLocal",
+            "backend.app.database.CeleryAsyncSessionLocal",
             return_value=db_mock,
         ),
         patch(
-            "backend.app.services.shadow_trade_service.get_merged_indicators",
+            "backend.app.services.indicators_provider.get_merged_indicators",
             new=AsyncMock(return_value=merged_result),
         ),
         patch(
@@ -181,7 +210,7 @@ async def test_l1_shadow_no_indicators():
             new=AsyncMock(side_effect=_fake_create_from_decision),
         ),
         patch(
-            "backend.app.services.shadow_trade_service.SpotEngineConfig",
+            "backend.app.schemas.spot_engine_config.SpotEngineConfig",
         ),
     ):
         created = await create_l1_spectrum_shadows(
@@ -212,18 +241,15 @@ async def test_l1_shadow_provider_exception():
 
     _created_metrics: list = []
 
-    async def _fake_create_from_decision(db, decision, skip_reason, user_config, *, source=None):
+    async def _fake_create_from_decision(
+        db, decision, skip_reason, user_config, **kwargs
+    ):
         _created_metrics.append(decision.metrics)
         return "fake-uuid-3"
 
     db_mock = _make_db_session_mock()
     ml_cfg = MagicMock()
-    ml_cfg.config_json = {
-        "shadow_capture_l1_enabled": True,
-        "shadow_capture_l1_sample_rate": 1.0,
-        "shadow_capture_l1_max_per_hour": 200,
-        "ml_fee_roundtrip_pct": 0.20,
-    }
+    ml_cfg.config_json = dict(_ML_CONFIG)
     se_cfg = MagicMock()
     se_cfg.config_json = {}
 
@@ -242,11 +268,11 @@ async def test_l1_shadow_provider_exception():
 
     with (
         patch(
-            "backend.app.services.shadow_trade_service.CeleryAsyncSessionLocal",
+            "backend.app.database.CeleryAsyncSessionLocal",
             return_value=db_mock,
         ),
         patch(
-            "backend.app.services.shadow_trade_service.get_merged_indicators",
+            "backend.app.services.indicators_provider.get_merged_indicators",
             new=_exploding_get_merged,
         ),
         patch(
@@ -254,7 +280,7 @@ async def test_l1_shadow_provider_exception():
             new=AsyncMock(side_effect=_fake_create_from_decision),
         ),
         patch(
-            "backend.app.services.shadow_trade_service.SpotEngineConfig",
+            "backend.app.schemas.spot_engine_config.SpotEngineConfig",
         ),
     ):
         created = await create_l1_spectrum_shadows(

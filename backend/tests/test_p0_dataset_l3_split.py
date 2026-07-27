@@ -134,6 +134,19 @@ class TestTrainChallengersGate:
             svc = MLChallengerService()
             svc._load_ml_config = AsyncMock(return_value={
                 "ml_dataset_valid_from": "2026-06-14T21:33:10+00:00",
+                "ml_l1_dataset_valid_from": "2026-06-14T21:33:10+00:00",
+                "ml_l1_feature_contract_version": "l1_spectrum_entry_v2",
+                "ml_l1_feature_exclusions": [],
+                "ml_feature_contract": {
+                    "L1_SPECTRUM": {
+                        "version": "l1_spectrum_entry_v2",
+                        "required": ["rsi"],
+                        "optional": ["volume_delta"],
+                        "min_row_coverage": 0.5,
+                    }
+                },
+                "ml_feature_ranges": {},
+                "ml_win_fast_threshold_seconds": 1800,
                 "ml_retrain_min_eligible_rows": 4,
                 "ml_maturity_embargo_margin_minutes": 60,
                 "shadow_barrier_mode": "ATR_DYNAMIC",
@@ -142,6 +155,7 @@ class TestTrainChallengersGate:
             svc._load_shadow_data = AsyncMock(return_value=[{
                 "shadow_id": "a",
                 "barrier_mode": "ATR_DYNAMIC",
+                "barrier_contract_version": "shadow_atr_dynamic_v2",
                 "tp_pct_applied": 0.6,
             }] * 3)
             db = AsyncMock()

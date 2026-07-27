@@ -80,8 +80,18 @@ async def main():
         if DRY_RUN:
             logger.info("[DRY-RUN] Carregando dataset L1_SPECTRUM apenas — sem treino nem persistência")
             ml_config = await svc._load_ml_config(db)
-            dataset_valid_from = parse_required_ml_dataset_valid_from(ml_config)
-            min_required = int(ml_config["ml_retrain_min_eligible_rows"])
+            if ml_config.get("ml_l1_dataset_valid_from") in (None, ""):
+                raise RuntimeError("missing_ml_l1_dataset_valid_from")
+            dataset_valid_from = parse_required_ml_dataset_valid_from(
+                {"ml_dataset_valid_from": ml_config["ml_l1_dataset_valid_from"]}
+            )
+            from backend.app.ml.l1_feature_contract import load_l1_feature_contract
+
+            l1_contract = load_l1_feature_contract(ml_config)
+            min_required = int(
+                ml_config.get("ml_xgboost_l1_retrain_min_eligible_rows")
+                or ml_config["ml_retrain_min_eligible_rows"]
+            )
             dataset_query_cutoff = datetime.now(timezone.utc)
             maturity_embargo_margin_minutes = ml_config.get(
                 "ml_maturity_embargo_margin_minutes"
@@ -95,6 +105,7 @@ async def main():
                 dataset_query_cutoff=dataset_query_cutoff,
                 maturity_embargo_margin_minutes=maturity_embargo_margin_minutes,
                 collect_diagnostics=True,
+                lane_contract_version=l1_contract.version,
             )
             strategy_tp_pct = await svc._load_strategy_tp_pct(db, USER_ID)
             records, barrier_meta = _filter_l3_barrier_contract(
@@ -116,10 +127,21 @@ async def main():
                     "maturity_embargo_margin_minutes": maturity_embargo_margin_minutes,
                     "maturity_diagnostics": svc._last_shadow_load_diagnostics,
                     "barrier_contract": barrier_meta,
+                    "feature_contract_version": l1_contract.version,
+                    "feature_columns": list(l1_contract.feature_names),
                 }
-            from backend.app.ml.feature_extractor import FEATURE_COLUMNS
             _win_threshold_s = float(ml_config["ml_win_fast_threshold_seconds"])
-            X, y, cols, *_ = svc._build_dataset(records, list(FEATURE_COLUMNS), _win_threshold_s)
+            X, y, cols, *_ = svc._build_dataset(
+                records,
+                list(l1_contract.feature_names),
+                _win_threshold_s,
+                lane_contract=(
+                    (ml_config.get("ml_feature_contract") or {}).get(
+                        "L1_SPECTRUM"
+                    )
+                ),
+                feature_ranges=ml_config.get("ml_feature_ranges"),
+            )
             pos_rate = float(y.mean()) if len(y) else 0
             logger.info("[DRY-RUN] Dataset: rows=%d features=%d positive_rate=%.2f%%", len(y), len(cols), pos_rate * 100)
             return {
@@ -131,6 +153,8 @@ async def main():
                 "maturity_embargo_margin_minutes": maturity_embargo_margin_minutes,
                 "maturity_diagnostics": svc._last_shadow_load_diagnostics,
                 "barrier_contract": barrier_meta,
+                "feature_contract_version": l1_contract.version,
+                "feature_columns": list(l1_contract.feature_names),
             }
 
         logger.info("Iniciando train_challengers (LightGBM only)...")

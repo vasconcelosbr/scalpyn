@@ -231,6 +231,7 @@ async def test_load_shadow_data_aborts_on_row_before_valid_from():
             dataset_valid_from=valid_from,
             dataset_query_cutoff=datetime.now(timezone.utc),
             maturity_embargo_margin_minutes=120,
+            lane_contract_version="l1_spectrum_entry_v2",
         )
 
 

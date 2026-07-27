@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timezone
+import json
 from typing import Any, Mapping
 
 from sqlalchemy import text
@@ -123,6 +125,41 @@ def classify_native_row(
     return "official_native_eligible", []
 
 
+def classify_l1_lane_row(row: Mapping[str, Any]) -> tuple[str, list[str]]:
+    """Classify persisted L1 lane eligibility without changing native validity."""
+    if row.get("source") != "L1_SPECTRUM":
+        return "not_l1", []
+    config_snapshot = row.get("config_snapshot") or {}
+    if isinstance(config_snapshot, str):
+        try:
+            config_snapshot = json.loads(config_snapshot)
+        except json.JSONDecodeError:
+            return "lane_ineligible", ["invalid_l1_config_snapshot"]
+    if not isinstance(config_snapshot, Mapping):
+        return "lane_ineligible", ["invalid_l1_config_snapshot"]
+
+    version = config_snapshot.get("l1_feature_contract_version")
+    if not version:
+        return "legacy_unclassified", ["missing_l1_feature_contract_version"]
+
+    persisted_reasons = config_snapshot.get("l1_lane_eligibility_reasons") or []
+    if not isinstance(persisted_reasons, list):
+        persisted_reasons = ["invalid_l1_lane_eligibility_reasons"]
+    reasons = [str(item) for item in persisted_reasons]
+    lane_eligible = config_snapshot.get("l1_lane_eligible") is True
+    native_matches = (
+        config_snapshot.get("l1_native_eligible")
+        is bool(row.get("eligible_for_training"))
+    )
+    if not native_matches:
+        reasons.append("l1_native_eligibility_mismatch")
+    if lane_eligible and not reasons:
+        return "lane_eligible", []
+    if not lane_eligible and not reasons:
+        reasons.append("l1_lane_ineligible_without_reason")
+    return "lane_ineligible", list(dict.fromkeys(reasons))
+
+
 def approval_guard_reason(metrics: Mapping[str, int], minimum_required: int) -> str | None:
     gates = (
         ("official_invalid", "OFFICIAL_DATASET_INVALID"),
@@ -183,7 +220,8 @@ async def audit_native_capture(
                        features_snapshot, features_captured_at, feature_hash,
                        feature_extractor_version, feature_schema_version,
                        capture_contract_version, lineage_status,
-                       eligible_for_training, created_at, completed_at
+                       eligible_for_training, config_snapshot,
+                       created_at, completed_at
                 FROM shadow_trades
                 WHERE created_at >= :start
                   AND created_at <= :audit_query_cutoff
@@ -234,6 +272,38 @@ async def audit_native_capture(
         )
         values["total_native"] += 1
         values[bucket] += 1
+
+    l1_checks = [classify_l1_lane_row(row) for row in rows]
+    l1_buckets = [bucket for bucket, _ in l1_checks]
+    l1_lane_errors = [
+        item for bucket, errors_for_row in l1_checks
+        if bucket == "lane_ineligible"
+        for item in errors_for_row
+    ]
+    l1_versions = Counter()
+    for row in rows:
+        if row.get("source") != "L1_SPECTRUM":
+            continue
+        config_snapshot = row.get("config_snapshot") or {}
+        if isinstance(config_snapshot, str):
+            try:
+                config_snapshot = json.loads(config_snapshot)
+            except json.JSONDecodeError:
+                config_snapshot = {}
+        if isinstance(config_snapshot, Mapping):
+            version = config_snapshot.get("l1_feature_contract_version")
+            if version:
+                l1_versions[str(version)] += 1
+    if "L1_SPECTRUM" in by_source:
+        by_source["L1_SPECTRUM"].update(
+            {
+                "l1_lane_eligible": l1_buckets.count("lane_eligible"),
+                "l1_lane_ineligible": l1_buckets.count("lane_ineligible"),
+                "l1_lane_legacy_unclassified": l1_buckets.count(
+                    "legacy_unclassified"
+                ),
+            }
+        )
 
     official_population = official_eligible + official_invalid
     if official_invalid:
@@ -308,6 +378,13 @@ async def audit_native_capture(
         "invalid_profile": count_error("missing_profile_id"),
         "labels_completed": sum(row["completed_at"] is not None for row in rows),
         "labels_pending": sum(row["completed_at"] is None for row in rows),
+        "l1_lane_eligible": l1_buckets.count("lane_eligible"),
+        "l1_lane_ineligible": l1_buckets.count("lane_ineligible"),
+        "l1_lane_legacy_unclassified": l1_buckets.count(
+            "legacy_unclassified"
+        ),
+        "l1_lane_reason_counts": dict(Counter(l1_lane_errors)),
+        "l1_feature_contract_versions": dict(l1_versions),
         "by_source": by_source,
         "last_capture_at": max(captures).isoformat() if captures else None,
     }

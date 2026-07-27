@@ -79,8 +79,11 @@ async def test_l1_loader_reads_only_official_native_rows():
         dataset_valid_from=datetime(2026, 7, 1, tzinfo=timezone.utc),
         dataset_query_cutoff=datetime(2026, 7, 12, tzinfo=timezone.utc),
         maturity_embargo_margin_minutes=60,
+        lane_contract_version="l1_spectrum_entry_v2",
     )
 
     assert "capture_contract_version = 'point-in-time-v1'" in db.statement
     assert "eligible_for_training IS TRUE" in db.statement
     assert "lineage_status = 'EXACT'" in db.statement
+    assert "config_snapshot->>'l1_lane_eligible'" in db.statement
+    assert "config_snapshot->>'l1_feature_contract_version'" in db.statement

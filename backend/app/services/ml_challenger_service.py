@@ -808,6 +808,7 @@ class MLChallengerService:
         dataset_query_cutoff: Optional[datetime] = None,
         maturity_embargo_margin_minutes: Optional[int] = None,
         collect_diagnostics: bool = False,
+        lane_contract_version: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         if dataset_query_cutoff is None:
             raise ValueError("missing_dataset_query_cutoff")
@@ -829,6 +830,17 @@ class MLChallengerService:
                 "a fronteira ml_dataset_valid_from lida da config"
             )
         sources = source_filter if source_filter is not None else TRAIN_SOURCES
+        l1_lane_clause = ""
+        l1_lane_params: dict = {}
+        if sources == ["L1_SPECTRUM"]:
+            if not lane_contract_version:
+                raise MLDatasetConfigError("missing_l1_feature_contract_version")
+            l1_lane_clause = """
+              AND config_snapshot->>'l1_lane_eligible' = 'true'
+              AND config_snapshot->>'l1_feature_contract_version'
+                    = :lane_contract_version
+            """
+            l1_lane_params["lane_contract_version"] = str(lane_contract_version)
         # Build per-source placeholders to avoid any injection risk
         source_placeholders = ", ".join(f":src_{i}" for i in range(len(sources)))
         source_params = {f"src_{i}": s for i, s in enumerate(sources)}
@@ -853,6 +865,7 @@ class MLChallengerService:
             **source_params,
             **valid_from_params,
             **cutoff_params,
+            **l1_lane_params,
         }
         base_where = f"""
             user_id = :uid
@@ -868,6 +881,7 @@ class MLChallengerService:
               AND feature_hash IS NOT NULL
               AND lineage_status = 'EXACT'
               AND eligible_for_training IS TRUE
+              {l1_lane_clause}
               AND created_at >= :cutoff
               {valid_from_clause}
               {profile_clause}
@@ -2353,10 +2367,24 @@ class MLChallengerService:
             )
         win_fast_threshold_s = _cfg_win_threshold_s
         dataset_valid_from = parse_required_ml_dataset_valid_from(ml_config)
+        l1_dataset_valid_from = None
+        if enable_lightgbm:
+            if ml_config.get("ml_l1_dataset_valid_from") in (None, ""):
+                raise MLDatasetConfigError("missing_ml_l1_dataset_valid_from")
+            l1_dataset_valid_from = parse_required_ml_dataset_valid_from(
+                {"ml_dataset_valid_from": ml_config["ml_l1_dataset_valid_from"]}
+            )
         min_lgbm_retrain_eligible = (
-            _require_positive_int_config(ml_config, "ml_retrain_min_eligible_rows")
+            int(
+                ml_config.get("ml_xgboost_l1_retrain_min_eligible_rows")
+                or _require_positive_int_config(
+                    ml_config, "ml_retrain_min_eligible_rows"
+                )
+            )
             if enable_lightgbm else None
         )
+        if min_lgbm_retrain_eligible is not None and min_lgbm_retrain_eligible <= 0:
+            raise ValueError("invalid_ml_xgboost_l1_retrain_min_eligible_rows")
         threshold_grid_step = float(ml_config.get("ml_threshold_grid_step", 0.01))
         threshold_min_positives = int(ml_config.get("ml_threshold_min_positives", 10))
         promotion_min_test_samples = (
@@ -2376,6 +2404,14 @@ class MLChallengerService:
         feature_ranges = ml_config.get("ml_feature_ranges")
         lgbm_lane_contract = _feature_contract_all.get("L1_SPECTRUM")
         cb_lane_contract = _feature_contract_all.get("L3_PROFILE")
+        try:
+            from app.ml.l1_feature_contract import load_l1_feature_contract
+        except ModuleNotFoundError:
+            from backend.app.ml.l1_feature_contract import (
+                load_l1_feature_contract,
+            )
+
+        l1_contract = load_l1_feature_contract(ml_config) if enable_lightgbm else None
         backfilled_feature_names = [
             str(item) for item in (ml_config.get("ml_backfilled_feature_names") or []) if item
         ]
@@ -2383,19 +2419,17 @@ class MLChallengerService:
         # F3 (encerramento fase ML 2026-07): exclusão reversível de features com
         # inversão de AUC junho→julho (evidência H4, lane L1 apenas). Nomes vivem
         # em config — decisão desligável via ml_feature_exclusion_apply=false.
-        _feat_excl_proposed = [
-            str(item)
-            for item in (ml_config.get("ml_feature_exclusion_candidates_proposed") or [])
-            if item
-        ]
-        lgbm_feature_columns = feature_columns
-        if bool(ml_config.get("ml_feature_exclusion_apply")) and _feat_excl_proposed:
-            lgbm_feature_columns = [
-                c for c in feature_columns if c not in set(_feat_excl_proposed)
-            ]
+        # The exact L1 feature order comes from the versioned lane contract.
+        # L3 continues using ``feature_columns`` unchanged below.
+        lgbm_feature_columns = (
+            list(l1_contract.feature_names) if l1_contract is not None else []
+        )
+        if l1_contract is not None:
             logger.info(
-                "[MLChallenger] ml_feature_exclusion_apply=true: excluídas %s (%d→%d features)",
-                _feat_excl_proposed, len(feature_columns), len(lgbm_feature_columns),
+                "[MLChallenger] L1 feature contract=%s features=%d exclusions=%s",
+                l1_contract.version,
+                len(lgbm_feature_columns),
+                list(l1_contract.excluded),
             )
 
         results: Dict[str, Any] = {}
@@ -2405,9 +2439,10 @@ class MLChallengerService:
             lgbm_sources = lgbm_source_filter or (source_filter if source_filter else LGBM_TRAIN_SOURCES)
             lgbm_records = await self._load_shadow_data(
                 db, user_id, lookback_days, lgbm_sources,
-                dataset_valid_from=dataset_valid_from,
+                dataset_valid_from=l1_dataset_valid_from,
                 dataset_query_cutoff=dataset_query_cutoff,
                 maturity_embargo_margin_minutes=maturity_embargo_margin_minutes,
+                lane_contract_version=l1_contract.version,
             )
             lgbm_barrier_meta: Dict[str, Any] = {}
             if lgbm_sources == ["L1_SPECTRUM"]:
@@ -2426,8 +2461,7 @@ class MLChallengerService:
                     "records": len(lgbm_records),
                     "min_required": min_lgbm_retrain_eligible,
                     "sources": lgbm_sources,
-                    "dataset_valid_from": dataset_valid_from.isoformat()
-                    if hasattr(dataset_valid_from, "isoformat") else str(dataset_valid_from),
+                    "dataset_valid_from": l1_dataset_valid_from.isoformat(),
                     "dataset_query_cutoff": dataset_query_cutoff.isoformat(),
                     "maturity_embargo_margin_minutes": maturity_embargo_margin_minutes,
                     "barrier_contract": lgbm_barrier_meta,
