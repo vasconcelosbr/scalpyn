@@ -64,8 +64,17 @@ QUEUE_MICROSTRUCTURE = "microstructure"
 QUEUE_STRUCTURAL = "structural"
 QUEUE_STRUCTURAL_COMPUTE = "structural_compute"
 QUEUE_EXECUTION = "execution"
+QUEUE_PROFILE_BAYESIAN = "profile_bayesian"
+QUEUE_PROFILE_OPTIMIZATION = "profile_optimization"
 
-ALL_QUEUES = (QUEUE_MICROSTRUCTURE, QUEUE_STRUCTURAL, QUEUE_STRUCTURAL_COMPUTE, QUEUE_EXECUTION)
+ALL_QUEUES = (
+    QUEUE_MICROSTRUCTURE,
+    QUEUE_STRUCTURAL,
+    QUEUE_STRUCTURAL_COMPUTE,
+    QUEUE_EXECUTION,
+    QUEUE_PROFILE_BAYESIAN,
+    QUEUE_PROFILE_OPTIMIZATION,
+)
 
 celery_app = Celery(
     "scalpyn_tasks",
@@ -102,6 +111,7 @@ celery_app = Celery(
         "app.tasks.crypto_ev_score",
         "app.tasks.ml_data_certification",
         "app.tasks.prune_indicator_snapshots",
+        "app.tasks.profile_bayesian_intelligence",
     ],
 )
 
@@ -219,6 +229,15 @@ TASK_ROUTES = {
     # captura; falha aqui nunca afeta scan/persist_snapshot. DELETE em lotes
     # apenas em indicator_snapshots.
     "app.tasks.prune_indicator_snapshots.run": {"queue": QUEUE_STRUCTURAL_COMPUTE},
+
+    # Profile Bayesian Intelligence — separate optional workers only. Neither
+    # queue is consumed by the trading/API workers unless explicitly configured.
+    "app.tasks.profile_bayesian_intelligence.analyze": {
+        "queue": QUEUE_PROFILE_BAYESIAN
+    },
+    "app.tasks.profile_bayesian_intelligence.optimize": {
+        "queue": QUEUE_PROFILE_OPTIMIZATION
+    },
 }
 
 # Static queue declarations so beat / dispatch never rely on an "implicit"
@@ -296,6 +315,27 @@ TASK_ANNOTATIONS = {
     # Microstructure (Task #245: idempotent + beat-driven → opt-out of acks_late)
     "app.tasks.collect_market_data.collect_5m":  {**_MICRO_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.compute_indicators.compute_5m":   {**_MICRO_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},
+
+    "app.tasks.profile_bayesian_intelligence.analyze": {
+        "time_limit": int(os.getenv("PROFILE_BAYESIAN_TASK_TIME_LIMIT_SECONDS", "7200")),
+        "soft_time_limit": int(
+            os.getenv("PROFILE_BAYESIAN_TASK_SOFT_TIME_LIMIT_SECONDS", "6900")
+        ),
+        "rate_limit": "2/h",
+        "max_retries": 0,
+        "acks_late": False,
+    },
+    "app.tasks.profile_bayesian_intelligence.optimize": {
+        "time_limit": int(
+            os.getenv("PROFILE_OPTIMIZATION_TASK_TIME_LIMIT_SECONDS", "7200")
+        ),
+        "soft_time_limit": int(
+            os.getenv("PROFILE_OPTIMIZATION_TASK_SOFT_TIME_LIMIT_SECONDS", "6900")
+        ),
+        "rate_limit": "2/h",
+        "max_retries": 0,
+        "acks_late": False,
+    },
 
     # Structural — collectors + ops (Task #245: idempotent + beat-driven → opt-out of acks_late)
     "app.tasks.collect_market_data.collect_all":         {**_STRUCTURAL_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},

@@ -482,6 +482,10 @@ app.include_router(calibration_evolution_api.router)
 from .api import calibration_evolution_v2 as calibration_evolution_v2_api  # noqa: E402
 app.include_router(calibration_evolution_v2_api.router)
 
+# Profile Bayesian Intelligence — optional, fail-closed analytical surface.
+from .api import profile_bayesian_intelligence as profile_bayesian_api  # noqa: E402
+app.include_router(profile_bayesian_api.router)
+
 # Operational Co-Pilot - read-only analysis, human-approved shadow candidates.
 from .copilot import router as copilot_api  # noqa: E402
 app.include_router(copilot_api.router)

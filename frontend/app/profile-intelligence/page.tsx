@@ -8,6 +8,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import { apiGet, apiPost, apiPut } from "@/lib/api";
+import BayesianIntelligencePanel from "@/components/profile-intelligence/BayesianIntelligencePanel";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -526,7 +527,7 @@ function ChampionScoreBar({ score }: { score: number | null | undefined }) {
   );
 }
 
-const TABS = ["Overview", "Live Engine", "Calibration Evolution", "Auto-Pilot", "Profiles", "Indicators", "Combinations", "Suggestions", "Audit", "Settings"] as const;
+const TABS = ["Overview", "Live Engine", "Calibration Evolution", "Bayesian Intelligence", "Auto-Pilot", "Profiles", "Indicators", "Combinations", "Suggestions", "Audit", "Settings"] as const;
 type Tab = typeof TABS[number];
 
 const DEFAULT_RUN_PAYLOAD = {
@@ -1977,6 +1978,11 @@ export default function ProfileIntelligencePage() {
             <div className="text-center py-6 text-[12px] text-[var(--text-tertiary)]">Erro ao carregar detalhe.</div>
           )}
         </Drawer>
+      )}
+
+      {/* ── TAB: Bayesian Intelligence ─────────────────────────────────────── */}
+      {activeTab === "Bayesian Intelligence" && (
+        <BayesianIntelligencePanel />
       )}
 
       {activeTab === "Auto-Pilot" && (

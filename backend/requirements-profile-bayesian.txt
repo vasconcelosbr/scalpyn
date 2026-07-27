@@ -1,0 +1,9 @@
+# Install only in the dedicated profile_bayesian/profile_optimization worker.
+# The exact scientific stack is pinned against the base NumPy/SciPy versions so
+# production builds are deterministic and do not trigger resolver backtracking.
+# The API and trading workers intentionally do not need these packages.
+-r requirements.txt
+pymc==5.16.2
+pytensor==2.25.4
+arviz==0.18.0
+matplotlib==3.8.4
