@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 import hashlib
@@ -55,6 +55,66 @@ class BayesianDatasetBuilder:
     ) -> BuiltDataset:
         if max_trades <= 0:
             raise DatasetContractError("max_trades must be positive")
+        profile_version_value = (
+            str(profile_version_id) if profile_version_id else None
+        )
+        policy_groups = (
+            await db.execute(
+                text(
+                    """
+                    SELECT
+                        st.barrier_contract_version, st.tp_pct, st.sl_pct,
+                        st.timeout_candles, st.direction, COUNT(*) AS row_count
+                    FROM shadow_trades st
+                    WHERE st.user_id = :user_id
+                      AND st.profile_id = :profile_id
+                      AND st.status = 'COMPLETED'
+                      AND st.completed_at >= :window_from
+                      AND st.completed_at < :window_to
+                      AND (
+                          CAST(:profile_version_id AS UUID) IS NULL
+                          OR st.profile_version_id = CAST(:profile_version_id AS UUID)
+                      )
+                    GROUP BY
+                        st.barrier_contract_version, st.tp_pct, st.sl_pct,
+                        st.timeout_candles, st.direction
+                    ORDER BY
+                        row_count DESC,
+                        st.barrier_contract_version NULLS LAST,
+                        st.direction NULLS LAST,
+                        st.timeout_candles NULLS LAST,
+                        st.tp_pct NULLS LAST,
+                        st.sl_pct NULLS LAST
+                    """
+                ),
+                {
+                    "user_id": str(user_id),
+                    "profile_id": str(profile_id),
+                    "profile_version_id": profile_version_value,
+                    "window_from": window_from,
+                    "window_to": window_to,
+                },
+            )
+        ).mappings().all()
+        if not policy_groups:
+            raise DatasetContractError("no completed point-in-time observations")
+
+        selected_group: Mapping[str, Any] | None = None
+        if requested_policy_key:
+            selected_group = next(
+                (
+                    group
+                    for group in policy_groups
+                    if policy_key(group) == requested_policy_key
+                ),
+                None,
+            )
+            if selected_group is None:
+                raise DatasetContractError("requested operational policy not found")
+        else:
+            selected_group = policy_groups[0]
+        selected_policy = policy_key(selected_group)
+
         rows = (
             await db.execute(
                 text(
@@ -69,11 +129,19 @@ class BayesianDatasetBuilder:
                     FROM shadow_trades st
                     WHERE st.user_id = :user_id
                       AND st.profile_id = :profile_id
-                      AND st.status = 'CLOSED'
+                      AND st.status = 'COMPLETED'
                       AND st.completed_at >= :window_from
                       AND st.completed_at < :window_to
-                      AND (:profile_version_id IS NULL
-                           OR st.profile_version_id = :profile_version_id)
+                      AND (
+                          CAST(:profile_version_id AS UUID) IS NULL
+                          OR st.profile_version_id = CAST(:profile_version_id AS UUID)
+                      )
+                      AND st.barrier_contract_version
+                          IS NOT DISTINCT FROM :barrier_contract_version
+                      AND st.tp_pct IS NOT DISTINCT FROM :tp_pct
+                      AND st.sl_pct IS NOT DISTINCT FROM :sl_pct
+                      AND st.timeout_candles IS NOT DISTINCT FROM :timeout_candles
+                      AND st.direction IS NOT DISTINCT FROM :direction
                     ORDER BY st.completed_at ASC, st.id ASC
                     LIMIT :max_trades
                     """
@@ -81,38 +149,28 @@ class BayesianDatasetBuilder:
                 {
                     "user_id": str(user_id),
                     "profile_id": str(profile_id),
-                    "profile_version_id": (
-                        str(profile_version_id) if profile_version_id else None
-                    ),
+                    "profile_version_id": profile_version_value,
                     "window_from": window_from,
                     "window_to": window_to,
+                    "barrier_contract_version": selected_group[
+                        "barrier_contract_version"
+                    ],
+                    "tp_pct": selected_group["tp_pct"],
+                    "sl_pct": selected_group["sl_pct"],
+                    "timeout_candles": selected_group["timeout_candles"],
+                    "direction": selected_group["direction"],
                     "max_trades": max_trades,
                 },
             )
         ).mappings().all()
         if not rows:
-            raise DatasetContractError("no closed point-in-time observations")
-
-        by_policy: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
-        for row in rows:
-            by_policy[policy_key(row)].append(row)
-        if requested_policy_key:
-            selected = by_policy.get(requested_policy_key)
-            if not selected:
-                raise DatasetContractError("requested operational policy not found")
-            selected_policy = requested_policy_key
-        elif len(by_policy) == 1:
-            selected_policy, selected = next(iter(by_policy.items()))
-        else:
-            raise DatasetContractError(
-                "multiple incompatible TP/SL policies; select one explicitly"
-            )
+            raise DatasetContractError("selected operational policy has no observations")
 
         observations: list[CanonicalObservation] = []
         duplicate_ids: list[str] = []
         invalid_rows: list[str] = []
         seen: set[str] = set()
-        for row in selected:
+        for row in rows:
             observation_id = str(row["event_id"] or row["id"])
             if observation_id in seen:
                 duplicate_ids.append(observation_id)
@@ -171,17 +229,29 @@ class BayesianDatasetBuilder:
             "entry_features_only": True,
             "observation_ids": [item.observation_id for item in observations],
             "inclusion": {
-                "status": "CLOSED",
+                "status": "COMPLETED",
                 "profile_id": str(profile_id),
                 "profile_version_id": str(profile_version_id) if profile_version_id else None,
                 "window_from": window_from.isoformat(),
                 "window_to": window_to.isoformat(),
                 "policy_key": selected_policy,
+                "policy_selection": (
+                    "requested"
+                    if requested_policy_key
+                    else "largest_compatible_group"
+                ),
             },
             "exclusion": {
                 "duplicate_ids": duplicate_ids,
                 "invalid_rows": invalid_rows,
-                "incompatible_policy_rows": len(rows) - len(selected),
+                "incompatible_policy_rows": sum(
+                    int(group["row_count"]) for group in policy_groups
+                )
+                - int(selected_group["row_count"]),
+                "selected_policy_rows_before_limit": int(
+                    selected_group["row_count"]
+                ),
+                "policy_group_count": len(policy_groups),
                 "exit_features_excluded": True,
             },
             "counts": {

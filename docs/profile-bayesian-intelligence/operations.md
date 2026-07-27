@@ -44,6 +44,28 @@ The policy must explicitly provide every limit, sampler setting, evidence gate,
 authorized search dimension, objective weight, temporal split, and permission.
 An incomplete policy returns `PROFILE_BAYESIAN_POLICY_MISSING`.
 
+The Profile Intelligence UI exposes a guarded activation button. It imports the
+versioned `analysis_only_v1` template, validates the complete nested policy, and
+persists it through `ConfigService`, including a `config_audit_log` entry. The
+runtime never reads implicit defaults: after activation it reads the persisted
+per-user `config_profiles.config_json`.
+
+The same UI can import or edit the JSON policy. The backend rejects incomplete
+objects, invalid ranges, unsafe permissions, non-empty optimization search
+spaces, and non-zero optimization/candidate limits while the policy mode is
+`analysis_only`.
+
+The activation preset permits only:
+
+```text
+profile_bayesian.view
+profile_bayesian.run_analysis
+```
+
+It explicitly denies optimization, candidate creation, replay, shadow
+submission, approval, ML training, profile mutation, trading decisions, and
+automatic activation.
+
 ## Progressive activation
 
 1. Deploy code and migration with flags false.

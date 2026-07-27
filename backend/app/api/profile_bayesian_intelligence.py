@@ -18,10 +18,13 @@ from ..models.profile import Profile
 from ..profile_bayesian.analysis_service import dependency_versions
 from ..profile_bayesian.candidate_adapter import CandidateAdapter
 from ..profile_bayesian.config import (
+    ANALYSIS_ONLY_TEMPLATE_ID,
     AUTHORITY,
     BayesianPolicy,
     PolicyConfigurationError,
     feature_flags,
+    load_analysis_only_policy_template,
+    require_analysis_only,
 )
 from ..profile_bayesian.metrics import (
     ANALYSIS_TOTAL,
@@ -60,6 +63,20 @@ def _jsonable(value: Any) -> Any:
 
 def _stable_key(*parts: str) -> str:
     return hashlib.sha256(":".join(parts).encode("utf-8")).hexdigest()
+
+
+def _policy_summary(policy: BayesianPolicy | None) -> dict[str, Any] | None:
+    if policy is None:
+        return None
+    values = policy.values
+    return {
+        "policy_version": values.get("policy_version"),
+        "mode": values.get("mode"),
+        "max_trades": values.get("max_trades"),
+        "max_runtime_seconds": values.get("max_runtime_seconds"),
+        "sampler_config": values.get("sampler_config"),
+        "permissions": values.get("permissions"),
+    }
 
 
 async def _policy(
@@ -111,8 +128,9 @@ async def module_status(
     user_id: UUID = Depends(get_current_user_id),
 ) -> dict[str, Any]:
     raw = await config_service.get_config(db, "profile_bayesian", user_id)
+    policy: BayesianPolicy | None = None
     try:
-        BayesianPolicy.from_mapping(raw)
+        policy = BayesianPolicy.from_mapping(raw)
         policy_configured = True
         policy_error = None
     except PolicyConfigurationError as exc:
@@ -124,11 +142,124 @@ async def module_status(
         "authority": AUTHORITY.__dict__,
         "policy_configured": policy_configured,
         "policy_error": policy_error,
+        "policy": _policy_summary(policy),
+        "activation": {
+            "template_id": ANALYSIS_ONLY_TEMPLATE_ID,
+            "mode": "analysis_only",
+            "can_activate": not policy_configured,
+        },
         "replay": {
             "supported": False,
             "reason": "existing_profile_replay_engine_is_stub",
         },
         "dependencies": dependency_versions(),
+    }
+
+
+@router.get("/bayesian/policy")
+async def get_bayesian_policy(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    raw = await config_service.get_config(db, "profile_bayesian", user_id)
+    if not raw:
+        return {"configured": False, "data": None, "summary": None}
+    try:
+        policy = BayesianPolicy.from_mapping(raw)
+    except PolicyConfigurationError as exc:
+        return {
+            "configured": False,
+            "data": raw,
+            "summary": None,
+            "error": str(exc),
+        }
+    return {
+        "configured": True,
+        "data": dict(policy.values),
+        "summary": _policy_summary(policy),
+    }
+
+
+@router.put("/bayesian/policy")
+async def update_bayesian_policy(
+    payload: dict[str, Any],
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    try:
+        policy = BayesianPolicy.from_mapping(payload)
+        require_analysis_only(policy)
+    except PolicyConfigurationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"INVALID_ANALYSIS_ONLY_POLICY: {exc}",
+        ) from exc
+    updated = await config_service.update_config(
+        db=db,
+        config_type="profile_bayesian",
+        user_id=user_id,
+        new_json=dict(policy.values),
+        changed_by=user_id,
+        change_description="Updated analysis-only Bayesian policy via Profile Intelligence UI",
+    )
+    return {
+        "configured": True,
+        "updated": True,
+        "data": updated,
+        "summary": _policy_summary(policy),
+    }
+
+
+@router.post("/bayesian/policy/activate-analysis-only")
+async def activate_analysis_only_policy(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    current_raw = await config_service.get_config(db, "profile_bayesian", user_id)
+    if current_raw:
+        try:
+            current = BayesianPolicy.from_mapping(current_raw)
+        except PolicyConfigurationError:
+            current = None
+        if current is not None:
+            try:
+                require_analysis_only(current)
+            except PolicyConfigurationError as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "EXISTING_POLICY_REQUIRES_EXPLICIT_REVIEW: "
+                        f"{exc}"
+                    ),
+                ) from exc
+            return {
+                "configured": True,
+                "created": False,
+                "summary": _policy_summary(current),
+            }
+
+    policy = load_analysis_only_policy_template()
+    updated = await config_service.update_config(
+        db=db,
+        config_type="profile_bayesian",
+        user_id=user_id,
+        new_json=dict(policy.values),
+        changed_by=user_id,
+        change_description=(
+            "Activated versioned analysis-only Bayesian policy from Profile Intelligence UI"
+        ),
+    )
+    return {
+        "configured": True,
+        "created": True,
+        "data": updated,
+        "summary": _policy_summary(policy),
+        "safety": {
+            "optimization_enabled": False,
+            "candidate_creation_enabled": False,
+            "shadow_submission_enabled": False,
+            "automatic_activation": False,
+        },
     }
 
 

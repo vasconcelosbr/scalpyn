@@ -13,6 +13,8 @@ from app.profile_bayesian.config import (
     BayesianPolicy,
     PolicyConfigurationError,
     feature_flags,
+    load_analysis_only_policy_template,
+    require_analysis_only,
 )
 from app.profile_bayesian.data_contract import (
     CanonicalObservation,
@@ -20,6 +22,7 @@ from app.profile_bayesian.data_contract import (
     extract_indicators,
     finite_number,
 )
+from app.profile_bayesian.dataset_builder import BayesianDatasetBuilder
 from app.profile_bayesian.evidence_grading import grade_evidence
 from app.profile_bayesian.hierarchical_model import prepare_matrix
 from app.profile_bayesian.optimization.constraints import constraint_violations
@@ -73,6 +76,39 @@ def test_flags_default_false_and_auto_promotion_cannot_be_enabled(monkeypatch):
 def test_policy_is_fail_closed_when_any_required_key_is_missing():
     with pytest.raises(PolicyConfigurationError, match="policy is incomplete"):
         BayesianPolicy.from_mapping({})
+
+
+def test_versioned_analysis_only_policy_is_complete_and_blocks_mutations():
+    policy = load_analysis_only_policy_template()
+
+    require_analysis_only(policy)
+    assert policy.values["policy_version"] == "analysis_only_v1"
+    assert policy.values["permissions"]["profile_bayesian.run_analysis"] is True
+    assert policy.values["permissions"]["profile_bayesian.run_optimization"] is False
+    assert policy.values["authorized_search_space"] == {}
+    assert policy.values["max_trials"] == 0
+    assert policy.values["max_candidates"] == 0
+
+
+def test_analysis_only_policy_rejects_unsafe_import():
+    policy = load_analysis_only_policy_template()
+    raw = dict(policy.values)
+    raw["permissions"] = {
+        **raw["permissions"],
+        "profile_bayesian.create_candidate": True,
+    }
+
+    with pytest.raises(PolicyConfigurationError, match="cannot enable"):
+        require_analysis_only(BayesianPolicy.from_mapping(raw))
+
+
+def test_policy_deep_validation_rejects_invalid_sampler():
+    policy = load_analysis_only_policy_template()
+    raw = dict(policy.values)
+    raw["sampler_config"] = {**raw["sampler_config"], "target_accept": 1.5}
+
+    with pytest.raises(PolicyConfigurationError, match="target_accept"):
+        BayesianPolicy.from_mapping(raw)
 
 
 def test_missing_and_invalid_indicator_values_are_never_zero_imputed():
@@ -331,3 +367,124 @@ async def test_indicator_effects_casts_optional_run_id_for_postgres(monkeypatch)
     assert "CAST(:run_id AS UUID) IS NULL" in sql
     assert "e.analysis_run_id = CAST(:run_id AS UUID)" in sql
     assert db.params["run_id"] is None
+
+
+class _SequenceMappings:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def mappings(self):
+        return self
+
+    def all(self):
+        return self.rows
+
+
+class _DatasetDb:
+    def __init__(self, results):
+        self.results = list(results)
+        self.calls = []
+
+    async def execute(self, statement, params):
+        self.calls.append((str(statement), params))
+        return _SequenceMappings(self.results.pop(0))
+
+
+@pytest.mark.asyncio
+async def test_dataset_builder_uses_completed_rows_and_dominant_policy():
+    profile_id = uuid4()
+    user_id = uuid4()
+    now = datetime(2026, 7, 27, tzinfo=timezone.utc)
+    dominant = {
+        "barrier_contract_version": "shadow_atr_dynamic_v2",
+        "tp_pct": 0.5,
+        "sl_pct": 0.5,
+        "timeout_candles": 1440,
+        "direction": "SPOT",
+        "row_count": 1404,
+    }
+    secondary = {
+        "barrier_contract_version": "shadow_fixed_v1",
+        "tp_pct": 1.0,
+        "sl_pct": 1.0,
+        "timeout_candles": 1440,
+        "direction": "SPOT",
+        "row_count": 77,
+    }
+    selected_row = {
+        "id": uuid4(),
+        "event_id": uuid4(),
+        "profile_id": profile_id,
+        "profile_version_id": None,
+        "symbol": "BTC_USDT",
+        "timeframe": "5m",
+        "entry_timestamp": now - timedelta(minutes=5),
+        "completed_at": now,
+        "outcome": "TP_HIT",
+        "pnl_pct": 0.5,
+        "source": "L3",
+        "direction": "SPOT",
+        "tp_pct": 0.5,
+        "sl_pct": 0.5,
+        "timeout_candles": 1440,
+        "barrier_contract_version": "shadow_atr_dynamic_v2",
+        "features_snapshot": {"rsi": 55.0, "adx": 25.0},
+        "exit_metrics_json": {"net_return_pct": 0.45},
+    }
+    db = _DatasetDb([[dominant, secondary], [selected_row]])
+
+    dataset = await BayesianDatasetBuilder().build(
+        db,
+        user_id=user_id,
+        profile_id=profile_id,
+        window_from=now - timedelta(days=30),
+        window_to=now + timedelta(days=1),
+        max_trades=2000,
+    )
+
+    group_sql, group_params = db.calls[0]
+    row_sql, row_params = db.calls[1]
+    assert "st.status = 'COMPLETED'" in group_sql
+    assert "CAST(:profile_version_id AS UUID)" in group_sql
+    assert "st.status = 'COMPLETED'" in row_sql
+    assert group_params["profile_version_id"] is None
+    assert row_params["barrier_contract_version"] == "shadow_atr_dynamic_v2"
+    assert dataset.manifest["inclusion"]["policy_selection"] == (
+        "largest_compatible_group"
+    )
+    assert dataset.manifest["exclusion"]["incompatible_policy_rows"] == 77
+    assert len(dataset.observations) == 1
+
+
+class _PolicyConfigService:
+    def __init__(self):
+        self.saved = None
+
+    async def get_config(self, *_args, **_kwargs):
+        return {}
+
+    async def update_config(self, **kwargs):
+        self.saved = kwargs
+        return kwargs["new_json"]
+
+
+@pytest.mark.asyncio
+async def test_policy_activation_persists_analysis_only_template(monkeypatch):
+    service = _PolicyConfigService()
+    monkeypatch.setattr(bayesian_api, "config_service", service)
+
+    result = await bayesian_api.activate_analysis_only_policy(
+        db=object(),
+        user_id=uuid4(),
+    )
+
+    assert result["configured"] is True
+    assert result["created"] is True
+    assert result["summary"]["policy_version"] == "analysis_only_v1"
+    assert service.saved["config_type"] == "profile_bayesian"
+    assert (
+        service.saved["new_json"]["permissions"][
+            "profile_bayesian.run_optimization"
+        ]
+        is False
+    )

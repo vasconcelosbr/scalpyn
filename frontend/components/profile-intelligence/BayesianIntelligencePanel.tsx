@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  type ChangeEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import {
   Activity,
   AlertTriangle,
@@ -9,26 +15,50 @@ import {
   CheckCircle2,
   Clock3,
   Database,
+  FileJson2,
   Fingerprint,
   FlaskConical,
   Layers3,
   LoaderCircle,
   LockKeyhole,
   Play,
+  Power,
   RefreshCw,
+  Save,
   ShieldCheck,
   Sparkles,
+  Upload,
+  X,
 } from "lucide-react";
 
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet, apiPost, apiPut } from "@/lib/api";
 
 type ModuleStatus = {
   flags: Record<string, boolean>;
   authority: Record<string, boolean | string>;
   policy_configured: boolean;
   policy_error?: string | null;
+  policy?: {
+    policy_version?: string;
+    mode?: string;
+    max_trades?: number;
+    max_runtime_seconds?: number;
+    sampler_config?: Record<string, number>;
+    permissions?: Record<string, boolean>;
+  } | null;
+  activation?: {
+    template_id: string;
+    mode: string;
+    can_activate: boolean;
+  };
   replay: { supported: boolean; reason: string };
   dependencies: Record<string, string | null>;
+};
+
+type PolicyResponse = {
+  configured: boolean;
+  data?: Record<string, unknown> | null;
+  error?: string;
 };
 
 type ProfileOption = {
@@ -163,6 +193,11 @@ export default function BayesianIntelligencePanel() {
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
+  const [activatingPolicy, setActivatingPolicy] = useState(false);
+  const [policyEditorOpen, setPolicyEditorOpen] = useState(false);
+  const [policyDraft, setPolicyDraft] = useState("");
+  const [savingPolicy, setSavingPolicy] = useState(false);
+  const [policyNotice, setPolicyNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const defaultWindow = useMemo(() => {
@@ -298,6 +333,88 @@ export default function BayesianIntelligencePanel() {
     }
   };
 
+  const activateAnalysisOnly = async () => {
+    if (activatingPolicy) return;
+    setActivatingPolicy(true);
+    setError(null);
+    setPolicyNotice(null);
+    try {
+      await apiPost(
+        "/profile-intelligence/bayesian/policy/activate-analysis-only",
+        {},
+      );
+      setPolicyNotice(
+        "Política analysis-only ativada. Otimização, candidates e shadow permanecem bloqueados.",
+      );
+      await loadInitial();
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Não foi possível ativar a política protegida.",
+      );
+    } finally {
+      setActivatingPolicy(false);
+    }
+  };
+
+  const openPolicyEditor = async () => {
+    setError(null);
+    try {
+      const response = await apiGet<PolicyResponse>(
+        "/profile-intelligence/bayesian/policy",
+      );
+      setPolicyDraft(
+        response.data ? JSON.stringify(response.data, null, 2) : "",
+      );
+      setPolicyEditorOpen(true);
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Não foi possível carregar a política.",
+      );
+    }
+  };
+
+  const importPolicyFile = async (
+    event: ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setError(null);
+    try {
+      const parsed = JSON.parse(await file.text()) as Record<string, unknown>;
+      setPolicyDraft(JSON.stringify(parsed, null, 2));
+      setPolicyEditorOpen(true);
+    } catch {
+      setError("O arquivo selecionado não contém um JSON válido.");
+    }
+  };
+
+  const savePolicy = async () => {
+    if (savingPolicy) return;
+    setSavingPolicy(true);
+    setError(null);
+    setPolicyNotice(null);
+    try {
+      const parsed = JSON.parse(policyDraft) as Record<string, unknown>;
+      await apiPut("/profile-intelligence/bayesian/policy", parsed);
+      setPolicyNotice("Política validada e salva com auditoria.");
+      setPolicyEditorOpen(false);
+      await loadInitial();
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "A política não pôde ser validada e salva.",
+      );
+    } finally {
+      setSavingPolicy(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-cyan-400/15 bg-[#061013]">
@@ -392,20 +509,156 @@ export default function BayesianIntelligencePanel() {
         </div>
       )}
 
+      {policyNotice && (
+        <div className="flex items-start gap-2 rounded-xl border border-emerald-400/25 bg-emerald-400/8 p-3 text-sm text-emerald-100">
+          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+          {policyNotice}
+        </div>
+      )}
+
       {!moduleStatus?.policy_configured && (
-        <div className="flex items-start gap-3 rounded-xl border border-amber-300/25 bg-amber-300/8 p-4">
-          <Braces className="mt-0.5 h-5 w-5 shrink-0 text-amber-200" />
-          <div>
-            <div className="text-sm font-semibold text-amber-100">
-              Política quantitativa ainda não configurada
+        <div className="relative overflow-hidden rounded-xl border border-amber-300/25 bg-amber-300/8 p-4">
+          <div className="pointer-events-none absolute -right-10 -top-16 h-40 w-40 rounded-full bg-amber-300/10 blur-3xl" />
+          <div className="relative flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-start gap-3">
+              <Braces className="mt-0.5 h-5 w-5 shrink-0 text-amber-200" />
+              <div>
+                <div className="text-sm font-semibold text-amber-100">
+                  Política quantitativa ainda não configurada
+                </div>
+                <p className="mt-1 max-w-3xl text-xs leading-5 text-amber-100/70">
+                  Ative o preset versionado{" "}
+                  <span className="font-mono text-amber-100">
+                    {moduleStatus?.activation?.template_id || "analysis_only_v1"}
+                  </span>
+                  . Ele libera somente análises offline; otimização, candidates,
+                  shadow, ML e trading continuam bloqueados.
+                </p>
+              </div>
             </div>
-            <p className="mt-1 text-xs leading-5 text-amber-100/70">
-              O backend permanecerá fail-closed até existir um config profile
-              <span className="mx-1 font-mono text-amber-100">profile_bayesian</span>
-              completo. Nenhum threshold é preenchido por suposição.
-            </p>
+            <div className="flex shrink-0 flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void activateAnalysisOnly()}
+                disabled={activatingPolicy}
+                className="inline-flex items-center gap-2 rounded-lg border border-amber-200/35 bg-amber-200/15 px-3.5 py-2.5 text-xs font-semibold text-amber-50 transition hover:bg-amber-200/20 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {activatingPolicy ? (
+                  <LoaderCircle className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Power className="h-4 w-4" />
+                )}
+                Ativar análise protegida
+              </button>
+              <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-white/10 bg-black/15 px-3.5 py-2.5 text-xs font-medium text-amber-100/80 transition hover:bg-black/25">
+                <Upload className="h-4 w-4" />
+                Importar JSON
+                <input
+                  type="file"
+                  accept="application/json,.json"
+                  onChange={(event) => void importPolicyFile(event)}
+                  className="sr-only"
+                />
+              </label>
+            </div>
           </div>
         </div>
+      )}
+
+      {moduleStatus?.policy_configured && (
+        <div className="flex flex-col gap-3 rounded-xl border border-emerald-400/20 bg-emerald-400/7 p-4 md:flex-row md:items-center md:justify-between">
+          <div className="flex items-start gap-3">
+            <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-emerald-300" />
+            <div>
+              <div className="text-sm font-semibold text-emerald-100">
+                Política de análise protegida ativa
+              </div>
+              <p className="mt-1 text-xs text-emerald-100/65">
+                <span className="font-mono text-emerald-200">
+                  {moduleStatus.policy?.policy_version || "custom"}
+                </span>
+                {" · "}
+                limite de {moduleStatus.policy?.max_trades ?? "—"} trades por run
+                {" · "}
+                sem autoridade sobre profiles ativos ou trading.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => void openPolicyEditor()}
+            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-emerald-300/20 bg-emerald-300/8 px-3 py-2 text-xs font-medium text-emerald-100 transition hover:bg-emerald-300/12"
+          >
+            <FileJson2 className="h-4 w-4" />
+            Editar / importar política
+          </button>
+        </div>
+      )}
+
+      {policyEditorOpen && (
+        <section className="overflow-hidden rounded-xl border border-cyan-300/20 bg-[#071115]">
+          <div className="flex items-center justify-between border-b border-white/8 px-4 py-3">
+            <div>
+              <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-cyan-300">
+                Policy workspace
+              </div>
+              <h3 className="mt-1 text-sm font-semibold text-slate-100">
+                JSON validado no backend
+              </h3>
+            </div>
+            <button
+              type="button"
+              onClick={() => setPolicyEditorOpen(false)}
+              className="rounded-lg border border-white/8 p-2 text-slate-400 transition hover:text-slate-100"
+              aria-label="Fechar editor da política"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="grid gap-4 p-4 lg:grid-cols-[1fr_280px]">
+            <textarea
+              value={policyDraft}
+              onChange={(event) => setPolicyDraft(event.target.value)}
+              spellCheck={false}
+              className="min-h-[360px] w-full resize-y rounded-lg border border-white/10 bg-black/30 p-4 font-mono text-xs leading-5 text-cyan-50 outline-none transition focus:border-cyan-300/35"
+              aria-label="Política Bayesian Intelligence em JSON"
+            />
+            <aside className="rounded-lg border border-white/8 bg-white/[0.025] p-4">
+              <div className="text-xs font-semibold text-slate-100">
+                Interlocks obrigatórios
+              </div>
+              <ul className="mt-3 space-y-2 text-[11px] leading-4 text-slate-400">
+                <li>• mode deve permanecer analysis_only.</li>
+                <li>• Search space deve permanecer vazio.</li>
+                <li>• Otimização, candidates, replay e shadow devem ficar falsos.</li>
+                <li>• Limites e objetos internos são validados antes do commit.</li>
+              </ul>
+              <label className="mt-4 flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/5">
+                <Upload className="h-4 w-4" />
+                Substituir por arquivo
+                <input
+                  type="file"
+                  accept="application/json,.json"
+                  onChange={(event) => void importPolicyFile(event)}
+                  className="sr-only"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => void savePolicy()}
+                disabled={savingPolicy || !policyDraft.trim()}
+                className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-cyan-300/25 bg-cyan-300/10 px-3 py-2.5 text-xs font-semibold text-cyan-100 transition hover:bg-cyan-300/15 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {savingPolicy ? (
+                  <LoaderCircle className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Save className="h-4 w-4" />
+                )}
+                Validar e salvar
+              </button>
+            </aside>
+          </div>
+        </section>
       )}
 
       <section className="grid gap-4 xl:grid-cols-[340px_1fr]">
