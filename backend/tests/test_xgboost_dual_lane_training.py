@@ -3,6 +3,7 @@ import inspect
 
 from app.services.ml_challenger_service import (
     MLChallengerService,
+    _train_catboost_sync,
     _train_xgboost_sync,
 )
 
@@ -66,3 +67,53 @@ def test_l1_training_propagates_canonical_label_objective_to_dataset_and_lineage
 
     assert "label_objective=label_objective" in l1_source
     assert '"label_objective": label_objective' in l1_source
+
+
+def test_catboost_l3_pattern_emits_complete_promotion_evidence():
+    rng = np.random.default_rng(7)
+    features = rng.normal(size=(180, 4))
+    labels = (
+        features[:, 0]
+        - 0.4 * features[:, 2]
+        + rng.normal(scale=0.8, size=180)
+        > 0
+    ).astype(int)
+
+    result = _train_catboost_sync(
+        features[:100],
+        labels[:100],
+        features[100:140],
+        labels[100:140],
+        ["f0", "f1", "f2", "f3"],
+        n_trials=1,
+        X_test=features[140:],
+        y_test=labels[140:],
+        val_returns=np.where(labels[100:140], 0.5, -0.3),
+        test_returns=np.where(labels[140:], 0.5, -0.3),
+        threshold_grid_step=0.1,
+        threshold_min_positives=3,
+        seed=42,
+        optuna_timeout_s=30,
+        auc_ci_level=0.95,
+        bootstrap_iterations=20,
+    )
+
+    assert result["model_type"] == "catboost"
+    assert result["metrics"]["trial_selection_objective"] == "net_ev"
+    assert result["test_metrics"]["samples"] == 40
+    assert 0 <= result["test_metrics"]["roc_auc"] <= 1
+    assert 0 <= result["test_metrics"]["roc_auc_ci_low"] <= 1
+
+
+def test_l1_catboost_pattern_keeps_l1_dataset_and_lane_isolation():
+    source = inspect.getsource(MLChallengerService.train_challengers)
+    l1_source = source.split(
+        "# \u2500\u2500 Lane 2:",
+        maxsplit=1,
+    )[0]
+
+    assert '"catboost_l3"' in l1_source
+    assert "_train_catboost_sync" in l1_source
+    assert '"group_ids": snapshot_keys' in l1_source
+    assert 'model_lane="L1_SPECTRUM"' in l1_source
+    assert "_build_l3_dataset" not in l1_source

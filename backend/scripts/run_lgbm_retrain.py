@@ -1,7 +1,7 @@
-"""Compatibility entrypoint for the governed XGBoost L1 retrain.
+"""Compatibility entrypoint for the governed L1 retrain.
 
-The filename is retained for operators with old runbooks. New automation should
-use ``run_xgboost_retrain.py --lane l1``.
+The filename is retained for operators with old runbooks. The active algorithm
+and split pattern come from ``ml_l1_training_pattern`` in the ML configuration.
 Não requer rede interna Railway. Não promove modelo automaticamente.
 Não altera outcomes, shadow trades, estratégias ou Auto-Pilot.
 
@@ -125,26 +125,106 @@ async def main():
             _label_objective = str(
                 ml_config.get("ml_label_objective") or "fast_tp"
             )
-            X, y, cols, *_ = svc._build_dataset(
+            _training_pattern = str(
+                ml_config.get("ml_l1_training_pattern") or "xgboost"
+            ).strip().lower()
+            if _training_pattern not in {"xgboost", "catboost_l3"}:
+                raise ValueError(
+                    "unsupported_ml_l1_training_pattern:"
+                    f"{_training_pattern}"
+                )
+            feature_columns = list(FEATURE_COLUMNS)
+            if bool(ml_config.get("ml_feature_exclusion_apply")):
+                exclusions = {
+                    str(item)
+                    for item in (
+                        ml_config.get(
+                            "ml_feature_exclusion_candidates_proposed"
+                        )
+                        or []
+                    )
+                }
+                feature_columns = [
+                    column
+                    for column in feature_columns
+                    if column not in exclusions
+                ]
+            lane_contract = (
+                ml_config.get("ml_feature_contract") or {}
+            ).get("L1_SPECTRUM")
+            (
+                X,
+                y,
+                cols,
+                returns,
+                created_at,
+                shadow_ids,
+                holding_seconds,
+                snapshot_keys,
+            ) = svc._build_dataset(
                 records,
-                list(FEATURE_COLUMNS),
+                feature_columns,
                 _win_threshold_s,
+                lane_contract=lane_contract,
+                feature_ranges=ml_config.get("ml_feature_ranges"),
+                backfilled_feature_names=ml_config.get(
+                    "ml_backfilled_feature_names"
+                ),
+                backfill_marker_key=ml_config.get(
+                    "ml_backfill_marker_key"
+                ),
                 label_objective=_label_objective,
             )
             pos_rate = float(y.mean()) if len(y) else 0
             logger.info("[DRY-RUN] Dataset: rows=%d features=%d positive_rate=%.2f%%", len(y), len(cols), pos_rate * 100)
+            split_diagnostics = None
+            if _training_pattern == "catboost_l3":
+                split = svc._chronological_split_with_embargo(
+                    X,
+                    y,
+                    metadata=[
+                        returns,
+                        created_at,
+                        shadow_ids,
+                        snapshot_keys,
+                    ],
+                    created_at=created_at,
+                    holding_seconds=holding_seconds,
+                    group_ids=snapshot_keys,
+                    embargo_seconds=int(
+                        ml_config["ml_split_embargo_seconds"]
+                    ),
+                    min_train_size=min_required,
+                    min_validation_size=int(
+                        ml_config["ml_threshold_min_positives"]
+                    ),
+                    min_test_size=int(
+                        ml_config["ml_promotion_min_test_samples"]
+                    ),
+                    max_boundary_candidates=int(
+                        ml_config[
+                            "ml_l1_split_max_boundary_candidates"
+                        ]
+                    ),
+                )
+                split_diagnostics = split["split_diagnostics"]
             return {
                 "dry_run": True,
                 "records": len(records),
                 "rows": len(y),
                 "pos_rate": round(pos_rate, 4),
+                "training_pattern": _training_pattern,
+                "split_diagnostics": split_diagnostics,
                 "dataset_query_cutoff": dataset_query_cutoff.isoformat(),
                 "maturity_embargo_margin_minutes": maturity_embargo_margin_minutes,
                 "maturity_diagnostics": svc._last_shadow_load_diagnostics,
                 "barrier_contract": barrier_meta,
             }
 
-        logger.info("Iniciando train_challengers (XGBoost L1 only)...")
+        logger.info(
+            "Iniciando train_challengers (L1 only; pattern from "
+            "config ml_l1_training_pattern)..."
+        )
         result = await svc.train_challengers(
             db=db,
             user_id=USER_ID,

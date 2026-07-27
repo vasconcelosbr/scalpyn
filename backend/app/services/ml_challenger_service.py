@@ -879,6 +879,10 @@ def _train_catboost_sync(
     train_weights=None, val_weights=None, test_weights=None,
     selection_objective: str = "net_ev",
     fixed_params: Optional[Dict[str, Any]] = None,
+    seed: int = 42,
+    optuna_timeout_s: int = 180,
+    auc_ci_level: float = 0.95,
+    bootstrap_iterations: int = 2000,
 ) -> Dict[str, Any]:
     from catboost import CatBoostClassifier, Pool
     import numpy as np
@@ -923,7 +927,7 @@ def _train_catboost_sync(
             "verbose": False,
             "eval_metric": "AUC",
             "nan_mode": "Min",
-            "random_seed": 42,
+            "random_seed": int(seed),
             "allow_writing_files": False,
         }
         model = CatBoostClassifier(**params)
@@ -944,8 +948,16 @@ def _train_catboost_sync(
 
     study = None
     if fixed_params is None:
-        study = optuna.create_study(direction="maximize")
-        study.optimize(objective, n_trials=n_trials, timeout=180, show_progress_bar=False)
+        study = optuna.create_study(
+            direction="maximize",
+            sampler=optuna.samplers.TPESampler(seed=int(seed)),
+        )
+        study.optimize(
+            objective,
+            n_trials=n_trials,
+            timeout=int(optuna_timeout_s),
+            show_progress_bar=False,
+        )
         selected_params = study.best_params
     else:
         selected_params = dict(fixed_params)
@@ -955,7 +967,7 @@ def _train_catboost_sync(
         "verbose": False,
         "eval_metric": "AUC",
         "nan_mode": "Min",
-        "random_seed": 42,
+        "random_seed": int(seed),
         "allow_writing_files": False,
     }
     final_model = CatBoostClassifier(**final_params)
@@ -1003,6 +1015,13 @@ def _train_catboost_sync(
             "weighted_roc_auc": float(roc_auc_score(y_test, t_preds, sample_weight=test_weights)),
             "weighted_brier": float(brier_score_loss(y_test, t_preds, sample_weight=test_weights)),
             "effective_snapshots": float(np.asarray(test_weights).sum()) if test_weights is not None else float(len(y_test)),
+            "roc_auc_ci_low": _bootstrap_auc_ci_low(
+                y_test,
+                t_preds,
+                auc_ci_level,
+                bootstrap_iterations,
+                seed,
+            ),
         }
 
     return {
@@ -1337,7 +1356,17 @@ class MLChallengerService:
             list(df["_holding_seconds"]) if "_holding_seconds" in df.columns
             else [0.0] * len(df)
         )
-        return X, y, available, returns, created_at, ids, holding_seconds
+        snapshot_keys = [_snapshot_group_key(pnl_records[i]) for i in valid_idx]
+        return (
+            X,
+            y,
+            available,
+            returns,
+            created_at,
+            ids,
+            holding_seconds,
+            snapshot_keys,
+        )
 
     def _build_l3_dataset(
         self,
@@ -2632,11 +2661,36 @@ class MLChallengerService:
         )
         threshold_grid_step = float(ml_config.get("ml_threshold_grid_step", 0.01))
         threshold_min_positives = int(ml_config.get("ml_threshold_min_positives", 10))
+        l1_training_pattern = str(
+            ml_config.get("ml_l1_training_pattern") or "xgboost"
+        ).strip().lower()
+        if l1_training_pattern not in {"xgboost", "catboost_l3"}:
+            raise ValueError(
+                "unsupported_ml_l1_training_pattern:"
+                f"{l1_training_pattern}"
+            )
         promotion_min_test_samples = (
             _require_positive_int_config(
                 ml_config, "ml_promotion_min_test_samples"
             )
-            if enable_xgboost_l3
+            if (
+                enable_xgboost_l3
+                or (
+                    enable_xgboost_l1
+                    and l1_training_pattern == "catboost_l3"
+                )
+            )
+            else None
+        )
+        l1_max_boundary_candidates = (
+            _require_positive_int_config(
+                ml_config,
+                "ml_l1_split_max_boundary_candidates",
+            )
+            if (
+                enable_xgboost_l1
+                and l1_training_pattern == "catboost_l3"
+            )
             else None
         )
         label_objective = str(ml_config.get("ml_label_objective") or "fast_tp")
@@ -2690,7 +2744,10 @@ class MLChallengerService:
                     expected_tp_pct=strategy_tp_pct,
                 )
             logger.info(
-                "[MLChallenger] Lane1/XGBoost: sources=%s records=%d", lgbm_sources, len(lgbm_records),
+                "[MLChallenger] Lane1/%s: sources=%s records=%d",
+                l1_training_pattern,
+                lgbm_sources,
+                len(lgbm_records),
             )
             if (
                 min_xgboost_l1_retrain_eligible is not None
@@ -2716,7 +2773,11 @@ class MLChallengerService:
                     "min_required": MIN_RECORDS,
                     "sources": lgbm_sources,
                 }
-            elif _is_installed("xgboost"):
+            elif _is_installed(
+                "catboost"
+                if l1_training_pattern == "catboost_l3"
+                else "xgboost"
+            ):
                 try:
                     # R1 fail-closed: n_trials e espaço de busca do Optuna vêm da
                     # config — ausência aborta a lane com mensagem (mesmo padrão
@@ -2741,12 +2802,24 @@ class MLChallengerService:
                     xgboost_search_space = (
                         ml_config.get("ml_optuna_search_space") or {}
                     ).get("xgboost")
-                    if not xgboost_search_space:
+                    if (
+                        l1_training_pattern == "xgboost"
+                        and not xgboost_search_space
+                    ):
                         raise ValueError(
                             "missing_ml_optuna_search_space_xgboost: gravar em "
                             "config_profiles(config_type='ml') antes do treino"
                         )
-                    X, y, available_cols, returns, created_at, shadow_ids, holding_seconds = self._build_dataset(
+                    (
+                        X,
+                        y,
+                        available_cols,
+                        returns,
+                        created_at,
+                        shadow_ids,
+                        holding_seconds,
+                        snapshot_keys,
+                    ) = self._build_dataset(
                         lgbm_records, lgbm_feature_columns, win_fast_threshold_s,
                         lane_contract=lgbm_lane_contract, feature_ranges=feature_ranges,
                         backfilled_feature_names=backfilled_feature_names,
@@ -2756,13 +2829,36 @@ class MLChallengerService:
                     if len(y) < MIN_RECORDS:
                         results["xgboost_l1"] = {"status": "skipped", "reason": "insufficient_labeled"}
                     else:
+                        split_kwargs: Dict[str, Any] = {}
+                        split_metadata = [
+                            returns,
+                            created_at,
+                            shadow_ids,
+                            snapshot_keys,
+                        ]
+                        if l1_training_pattern == "catboost_l3":
+                            split_kwargs = {
+                                "group_ids": snapshot_keys,
+                                "min_train_size": (
+                                    min_xgboost_l1_retrain_eligible
+                                ),
+                                "min_validation_size": (
+                                    threshold_min_positives
+                                ),
+                                "min_test_size": promotion_min_test_samples,
+                                "max_boundary_candidates": (
+                                    l1_max_boundary_candidates
+                                ),
+                            }
                         _lgbm_split = self._chronological_split_with_embargo(
-                            X, y,
-                            metadata=[returns, created_at, shadow_ids],
+                            X,
+                            y,
+                            metadata=split_metadata,
                             created_at=created_at,
                             holding_seconds=holding_seconds,
                             val_fraction=VAL_FRACTION,
                             embargo_seconds=embargo_seconds,
+                            **split_kwargs,
                         )
                         X_tr, y_tr = _lgbm_split["X_tr"], _lgbm_split["y_tr"]
                         X_va, y_va = _lgbm_split["X_va"], _lgbm_split["y_va"]
@@ -2770,40 +2866,131 @@ class MLChallengerService:
                         ret_va = _lgbm_split["meta_va"][0]
                         ret_te = _lgbm_split["meta_te"][0] if _lgbm_split["has_test"] else None
                         logger.info(
-                                "[MLChallenger] XGBoost L1 split: train=%d val=%d test=%d "
-                            "purged=%d embargoed=%d embargo_s=%d",
+                            "[MLChallenger] L1 pattern=%s split: "
+                            "train=%d val=%d test=%d purged=%d "
+                            "embargoed=%d embargo_s=%d strategy=%s",
+                            l1_training_pattern,
                             len(y_tr), len(y_va),
                             len(y_te) if y_te is not None else 0,
                             _lgbm_split["n_purged"], _lgbm_split["n_embargoed"],
                             embargo_seconds,
+                            _lgbm_split["split_diagnostics"][
+                                "split_strategy"
+                            ],
                         )
-                        if len(y_va) < 10:
+                        if not _lgbm_split["has_test"]:
+                            results["xgboost_l1"] = {
+                                "status": "skipped",
+                                "reason": _lgbm_split[
+                                    "split_diagnostics"
+                                ].get(
+                                    "block_reason",
+                                    "insufficient_promotion_holdout",
+                                ),
+                                "training_pattern": l1_training_pattern,
+                                "split_diagnostics": _lgbm_split[
+                                    "split_diagnostics"
+                                ],
+                            }
+                        elif len(y_va) < threshold_min_positives:
                             results["xgboost_l1"] = {"status": "skipped", "reason": "val_too_small"}
                         else:
                             logger.info(
-                                "[MLChallenger] Treinando XGBoost L1 (n_train=%d n_val=%d n_test=%d n_trials=%d)",
-                                len(y_tr), len(y_va), len(y_te) if y_te is not None else 0, n_trials_l1,
+                                "[MLChallenger] Treinando L1 pattern=%s "
+                                "(n_train=%d n_val=%d n_test=%d n_trials=%d)",
+                                l1_training_pattern,
+                                len(y_tr),
+                                len(y_va),
+                                len(y_te) if y_te is not None else 0,
+                                n_trials_l1,
                             )
-                            lgbm_result = await asyncio.to_thread(
-                                _train_xgboost_sync,
-                                X_tr,
-                                y_tr,
-                                X_va,
-                                y_va,
-                                available_cols,
-                                n_trials=n_trials_l1,
-                                X_test=X_te,
-                                y_test=y_te,
-                                val_returns=ret_va,
-                                test_returns=ret_te,
-                                threshold_grid_step=threshold_grid_step,
-                                threshold_min_positives=threshold_min_positives,
-                                search_space=xgboost_search_space,
-                                seed=_train_seed,
-                                optuna_timeout_s=_optuna_timeout,
-                                auc_ci_level=_auc_ci_level,
-                                bootstrap_iterations=_bootstrap_iters,
-                            )
+                            if l1_training_pattern == "catboost_l3":
+                                min_feature_coverage = float(
+                                    ml_config.get(
+                                        "ml_feature_min_coverage_pct",
+                                        0.30,
+                                    )
+                                )
+                                l1_exclusions = [
+                                    str(item)
+                                    for item in (
+                                        ml_config.get(
+                                            "ml_l1_feature_exclusions"
+                                        )
+                                        or []
+                                    )
+                                ]
+                                stable_indices = _stable_train_feature_indices(
+                                    X_tr,
+                                    available_cols,
+                                    min_coverage=min_feature_coverage,
+                                    excluded=l1_exclusions,
+                                )
+                                if not stable_indices:
+                                    raise ValueError(
+                                        "no_stable_l1_features_after_train_filter"
+                                    )
+                                available_cols = [
+                                    available_cols[index]
+                                    for index in stable_indices
+                                ]
+                                X_tr = X_tr[:, stable_indices]
+                                X_va = X_va[:, stable_indices]
+                                X_te = (
+                                    X_te[:, stable_indices]
+                                    if X_te is not None
+                                    else None
+                                )
+                                lgbm_result = await asyncio.to_thread(
+                                    _train_catboost_sync,
+                                    X_tr,
+                                    y_tr,
+                                    X_va,
+                                    y_va,
+                                    available_cols,
+                                    n_trials=n_trials_l1,
+                                    cat_feature_indices=None,
+                                    X_test=X_te,
+                                    y_test=y_te,
+                                    val_returns=ret_va,
+                                    test_returns=ret_te,
+                                    threshold_grid_step=(
+                                        threshold_grid_step
+                                    ),
+                                    threshold_min_positives=(
+                                        threshold_min_positives
+                                    ),
+                                    selection_objective="net_ev",
+                                    seed=_train_seed,
+                                    optuna_timeout_s=_optuna_timeout,
+                                    auc_ci_level=_auc_ci_level,
+                                    bootstrap_iterations=_bootstrap_iters,
+                                )
+                            else:
+                                lgbm_result = await asyncio.to_thread(
+                                    _train_xgboost_sync,
+                                    X_tr,
+                                    y_tr,
+                                    X_va,
+                                    y_va,
+                                    available_cols,
+                                    n_trials=n_trials_l1,
+                                    X_test=X_te,
+                                    y_test=y_te,
+                                    val_returns=ret_va,
+                                    test_returns=ret_te,
+                                    threshold_grid_step=(
+                                        threshold_grid_step
+                                    ),
+                                    threshold_min_positives=(
+                                        threshold_min_positives
+                                    ),
+                                    search_space=xgboost_search_space,
+                                    seed=_train_seed,
+                                    optuna_timeout_s=_optuna_timeout,
+                                    auc_ci_level=_auc_ci_level,
+                                    bootstrap_iterations=_bootstrap_iters,
+                                )
                             # Fase 1.5 P3 — cobertura temporal do test (gate
                             # ml_approval_min_distinct_days): dias UTC distintos
                             # entre os created_at do split de teste.
@@ -2832,7 +3019,7 @@ class MLChallengerService:
                             }
                             model_id = await self._save_to_db(
                                 db, user_id=user_id,
-                                model_type="xgboost",
+                                model_type=lgbm_result["model_type"],
                                 model_obj=lgbm_result["model"],
                                 feature_columns=available_cols,
                                 metrics={
@@ -2845,6 +3032,12 @@ class MLChallengerService:
                                         "|".join(sorted(str(x) for x in shadow_ids if x)).encode()
                                     ).hexdigest(),
                                     "label_objective": label_objective,
+                                    "training_pattern": (
+                                        l1_training_pattern
+                                    ),
+                                    "split_diagnostics": _lgbm_split[
+                                        "split_diagnostics"
+                                    ],
                                 },
                                 threshold=lgbm_result["threshold"],
                                 profile_id=profile_id,
@@ -2859,6 +3052,8 @@ class MLChallengerService:
                                 "model_id": str(model_id),
                                 "lane": "L1_SPECTRUM",
                                 "sources": lgbm_sources,
+                                "model_type": lgbm_result["model_type"],
+                                "training_pattern": l1_training_pattern,
                                 "rows_with_backfill_neutralized": int(
                                     getattr(self, "_last_rows_with_backfill_neutralized", 0)
                                 ),
@@ -2867,7 +3062,11 @@ class MLChallengerService:
                                 "threshold": lgbm_result["threshold"],
                             }
                             logger.info(
-                                "[MLChallenger] XGBoost L1 OK: roc_auc=%.4f prec=%.4f rec=%.4f model_id=%s",
+                                "[MLChallenger] L1 pattern=%s model_type=%s "
+                                "OK: roc_auc=%.4f prec=%.4f rec=%.4f "
+                                "model_id=%s",
+                                l1_training_pattern,
+                                lgbm_result["model_type"],
                                 lgbm_result["metrics"]["roc_auc"],
                                 lgbm_result["metrics"].get("precision", 0),
                                 lgbm_result["metrics"].get("recall", 0),
