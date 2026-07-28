@@ -395,7 +395,7 @@ async def start_analysis(
                     "models": (
                         [
                             "hierarchical_multinomial_outcome",
-                            "hierarchical_conditional_net_pnl_student_t",
+                            "identified_conditional_net_pnl_student_t",
                         ]
                         if policy.values.get("policy_version")
                         == "analysis_only_v2"

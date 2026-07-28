@@ -65,6 +65,19 @@ OUTCOME_LABELS = ("SL_HIT", "TIMEOUT", "TP_HIT")
 OUTCOME_INDEX = {label: index for index, label in enumerate(OUTCOME_LABELS)}
 
 
+def _zero_sum_basis(size: int) -> np.ndarray:
+    """Return a deterministic orthonormal Helmert basis for a zero-sum vector."""
+
+    if size < 2:
+        raise ValueError("zero-sum basis requires at least two levels")
+    basis = np.zeros((size, size - 1), dtype=float)
+    for column in range(size - 1):
+        denominator = np.sqrt((column + 1) * (column + 2))
+        basis[: column + 1, column] = 1.0 / denominator
+        basis[column + 1, column] = -(column + 1) / denominator
+    return basis
+
+
 def _encode(values: Sequence[str]) -> tuple[np.ndarray, tuple[str, ...]]:
     labels = tuple(sorted(set(values)))
     index = {label: pos for pos, label in enumerate(labels)}
@@ -235,6 +248,33 @@ class HierarchicalModel:
         scale = pm.HalfNormal(f"{name}_scale", sigma=scale_sigma)
         offset = pm.Normal(f"{name}_offset", mu=0, sigma=1, dims=dims)
         effect = pm.Deterministic(f"{name}_effect", offset * scale, dims=dims)
+        return effect[index]
+
+    @staticmethod
+    def _identified_group_component(
+        pm: Any,
+        *,
+        name: str,
+        labels: Sequence[str],
+        index: Any,
+        dims: str,
+        prior_sigma: float,
+    ) -> Any:
+        """Return an exactly identified, regularized zero-sum group effect."""
+
+        if len(labels) <= 1:
+            return 0.0
+        contrast = pm.Normal(
+            f"{name}_contrast",
+            mu=0,
+            sigma=prior_sigma,
+            shape=(len(labels) - 1,),
+        )
+        effect = pm.Deterministic(
+            f"{name}_effect",
+            pm.math.dot(_zero_sum_basis(len(labels)), contrast),
+            dims=dims,
+        )
         return effect[index]
 
     def fit_tp(self, matrix: PreparedMatrix, sampler: Mapping[str, Any]):
@@ -574,10 +614,6 @@ class HierarchicalModel:
         coords = {
             "feature": matrix.feature_names,
             "outcome": OUTCOME_LABELS,
-            "profile": matrix.profile_labels,
-            "symbol": matrix.symbol_labels,
-            "regime": matrix.regime_labels,
-            "source": matrix.source_labels,
             "observation_pnl": np.arange(int(valid.sum())),
         }
         if matrix.temporal_block_labels:
@@ -586,18 +622,6 @@ class HierarchicalModel:
             x = pm.Data("x", matrix.x[valid], dims=("observation_pnl", "feature"))
             outcome_idx = pm.Data(
                 "outcome_idx", matrix.outcome[valid], dims="observation_pnl"
-            )
-            p_idx = pm.Data(
-                "profile_idx", matrix.profile_index[valid], dims="observation_pnl"
-            )
-            s_idx = pm.Data(
-                "symbol_idx", matrix.symbol_index[valid], dims="observation_pnl"
-            )
-            r_idx = pm.Data(
-                "regime_idx", matrix.regime_index[valid], dims="observation_pnl"
-            )
-            source_idx = pm.Data(
-                "source_idx", matrix.source_index[valid], dims="observation_pnl"
             )
             b_idx = (
                 pm.Data(
@@ -608,83 +632,36 @@ class HierarchicalModel:
                 if matrix.temporal_block_labels
                 else None
             )
-            global_intercept = pm.Normal(
-                "pnl_global_intercept", mu=0, sigma=0.5
-            )
-            outcome_intercept_scale = pm.HalfNormal(
-                "pnl_outcome_intercept_scale", sigma=0.5
-            )
-            outcome_intercept_offset = pm.Normal(
-                "pnl_outcome_intercept_offset",
-                mu=0,
-                sigma=1,
-                dims="outcome",
-            )
-            outcome_intercept = pm.Deterministic(
+            # Outcome-specific intercepts are direct parameters. The previous
+            # global + scale * offset decomposition was redundant and created
+            # a funnel when an outcome (normally TIMEOUT) was sparse.
+            outcome_intercept = pm.Normal(
                 "pnl_outcome_intercept",
-                global_intercept
-                + outcome_intercept_offset * outcome_intercept_scale,
+                mu=0,
+                sigma=0.5,
                 dims="outcome",
             )
-            profile_component = self._group_component(
-                pm,
-                name="profile",
-                labels=matrix.profile_labels,
-                index=p_idx,
-                dims="profile",
-                scale_sigma=0.25,
-            )
-            symbol_component = self._group_component(
-                pm,
-                name="symbol",
-                labels=matrix.symbol_labels,
-                index=s_idx,
-                dims="symbol",
-                scale_sigma=0.25,
-            )
-            regime_component = self._group_component(
-                pm,
-                name="regime",
-                labels=matrix.regime_labels,
-                index=r_idx,
-                dims="regime",
-                scale_sigma=0.25,
-            )
-            source_component = self._group_component(
-                pm,
-                name="source",
-                labels=matrix.source_labels,
-                index=source_idx,
-                dims="source",
-                scale_sigma=0.25,
-            )
-            temporal_component = self._group_component(
+            # Conditional barrier magnitude is not given independent
+            # symbol/source/profile intercepts: those effects already enter
+            # the multinomial outcome model. Keeping them here duplicated the
+            # hierarchy and let them trade off against the PnL intercepts.
+            # The temporal component remains to account for overlapping
+            # market exposure, but is constrained to sum to zero so it cannot
+            # absorb the intercept.
+            temporal_component = self._identified_group_component(
                 pm,
                 name="temporal_block",
                 labels=matrix.temporal_block_labels,
                 index=b_idx,
                 dims="temporal_block",
-                scale_sigma=0.25,
+                prior_sigma=0.25,
             )
-            beta_global = pm.Normal(
-                "indicator_pnl_global_effect",
+            # Direct regularized outcome coefficients remove the shared-scale
+            # funnel from the previous global + scale * offset construction.
+            beta = pm.Normal(
+                "indicator_pnl_effect",
                 mu=0,
                 sigma=0.2,
-                dims="feature",
-            )
-            beta_outcome_scale = pm.HalfNormal(
-                "indicator_pnl_outcome_scale", sigma=0.1
-            )
-            beta_outcome_offset = pm.Normal(
-                "indicator_pnl_outcome_offset",
-                mu=0,
-                sigma=1,
-                dims=("feature", "outcome"),
-            )
-            beta = pm.Deterministic(
-                "indicator_pnl_effect",
-                beta_global[:, None]
-                + beta_outcome_offset * beta_outcome_scale,
                 dims=("feature", "outcome"),
             )
             selected_beta = beta.T[outcome_idx]
@@ -694,10 +671,6 @@ class HierarchicalModel:
             nu_minus_two = pm.Exponential("nu_minus_two", lam=0.1)
             mu = (
                 outcome_intercept[outcome_idx]
-                + profile_component
-                + symbol_component
-                + regime_component
-                + source_component
                 + temporal_component
                 + pm.math.sum(x * selected_beta, axis=1)
             )

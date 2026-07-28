@@ -29,7 +29,10 @@ from app.profile_bayesian.data_contract import (
 )
 from app.profile_bayesian.dataset_builder import BayesianDatasetBuilder
 from app.profile_bayesian.evidence_grading import grade_evidence
-from app.profile_bayesian.hierarchical_model import prepare_matrix
+from app.profile_bayesian.hierarchical_model import (
+    _zero_sum_basis,
+    prepare_matrix,
+)
 from app.profile_bayesian.optimization.constraints import constraint_violations
 from app.profile_bayesian.optimization.objective import robust_score
 from app.profile_bayesian.optimization.search_space import build_search_space
@@ -149,6 +152,9 @@ def test_versioned_analysis_only_policy_is_complete_and_blocks_mutations():
     assert policy.values["bayesian_model"]["pnl_model"] == (
         "conditional_student_t"
     )
+    assert policy.values["bayesian_model"]["pnl_parameterization"] == (
+        "identified_zero_sum_v1"
+    )
     assert policy.values["bayesian_model"]["validation_refit"] is True
     assert policy.values["population_config"]["selection_strategy"] == (
         "most_recent_contiguous"
@@ -165,6 +171,37 @@ def test_versioned_analysis_only_policy_is_complete_and_blocks_mutations():
     assert policy.values["authorized_search_space"] == {}
     assert policy.values["max_trials"] == 0
     assert policy.values["max_candidates"] == 0
+
+
+def test_zero_sum_basis_is_identified_and_orthonormal():
+    import numpy as np
+
+    basis = _zero_sum_basis(5)
+
+    assert basis.shape == (5, 4)
+    np.testing.assert_allclose(basis.sum(axis=0), 0.0, atol=1e-12)
+    np.testing.assert_allclose(basis.T @ basis, np.eye(4), atol=1e-12)
+
+
+def test_conditional_pnl_uses_identified_parameterization():
+    import inspect
+
+    from app.profile_bayesian.hierarchical_model import HierarchicalModel
+
+    source = inspect.getsource(HierarchicalModel.fit_conditional_pnl)
+
+    assert '"pnl_outcome_intercept"' in source
+    assert '"indicator_pnl_effect"' in source
+    assert "_identified_group_component" in source
+    for redundant_parameter in (
+        "pnl_global_intercept",
+        "pnl_outcome_intercept_scale",
+        "pnl_outcome_intercept_offset",
+        "indicator_pnl_global_effect",
+        "indicator_pnl_outcome_scale",
+        "indicator_pnl_outcome_offset",
+    ):
+        assert redundant_parameter not in source
 
 
 def test_analysis_only_policy_rejects_unsafe_import():
