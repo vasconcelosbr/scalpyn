@@ -43,6 +43,11 @@ type ModuleStatus = {
     mode?: string;
     max_trades?: number;
     max_runtime_seconds?: number;
+    diagnostic_gates?: {
+      max_rhat?: number;
+      min_effective_sample_size?: number;
+      max_divergences?: number;
+    };
     sampler_config?: Record<string, number>;
     permissions?: Record<string, boolean>;
   } | null;
@@ -82,6 +87,21 @@ type AnalysisRun = {
   error_message?: string | null;
   created_at?: string;
   finished_at?: string | null;
+};
+
+type BayesianDiagnostic = {
+  id: string;
+  analysis_run_id: string;
+  model_name: string;
+  status: string;
+  rhat_max?: number | null;
+  effective_sample_size_min?: number | null;
+  divergences: number;
+  posterior_predictive_check?: Record<string, unknown>;
+  credible_intervals?: Record<string, unknown>;
+  sampling_warnings?: string[];
+  details?: Record<string, unknown>;
+  created_at?: string;
 };
 
 type IndicatorEffect = {
@@ -182,11 +202,25 @@ function StatusPill({ value }: { value?: string | null }) {
   );
 }
 
+function diagnosticModelLabel(modelName: string) {
+  if (modelName === "tp_probability") return "Probabilidade de TP";
+  if (modelName === "net_pnl") return "PnL líquido";
+  if (modelName === "preflight") return "Pré-validação";
+  return modelName.replaceAll("_", " ");
+}
+
+function diagnosticMetricTone(passed?: boolean) {
+  if (passed === true) return "text-emerald-200";
+  if (passed === false) return "text-rose-200";
+  return "text-[var(--text-muted)]";
+}
+
 export default function BayesianIntelligencePanel() {
   const [moduleStatus, setModuleStatus] = useState<ModuleStatus | null>(null);
   const [profiles, setProfiles] = useState<ProfileOption[]>([]);
   const [profileId, setProfileId] = useState("");
   const [latest, setLatest] = useState<AnalysisRun | null>(null);
+  const [diagnostics, setDiagnostics] = useState<BayesianDiagnostic[]>([]);
   const [effects, setEffects] = useState<IndicatorEffect[]>([]);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [studies, setStudies] = useState<OptimizationStudy[]>([]);
@@ -214,13 +248,10 @@ export default function BayesianIntelligencePanel() {
 
   const loadProfile = useCallback(async (selectedProfileId: string) => {
     if (!selectedProfileId) return;
-    const [latestResult, effectsResult, candidatesResult, studiesResult, auditResult] =
+    const [latestResult, candidatesResult, studiesResult, auditResult] =
       await Promise.all([
         apiGet(`/profile-intelligence/${selectedProfileId}/bayesian/latest`).catch(
-          () => ({ item: null }),
-        ),
-        apiGet(`/profile-intelligence/${selectedProfileId}/bayesian/effects`).catch(
-          () => ({ items: [] }),
+          () => ({ item: null, diagnostics: [] }),
         ),
         apiGet(
           `/profile-intelligence/${selectedProfileId}/bayesian/candidates`,
@@ -232,7 +263,17 @@ export default function BayesianIntelligencePanel() {
           `/profile-intelligence/${selectedProfileId}/bayesian/audit?limit=100`,
         ).catch(() => ({ items: [] })),
       ]);
-    setLatest(latestResult?.item ?? null);
+    const latestRun = latestResult?.item ?? null;
+    const effectsResult = latestRun?.id
+      ? await apiGet(
+          `/profile-intelligence/${selectedProfileId}/bayesian/effects?analysis_run_id=${encodeURIComponent(
+            latestRun.id,
+          )}`,
+        ).catch(() => ({ items: [] }))
+      : { items: [] };
+
+    setLatest(latestRun);
+    setDiagnostics(latestResult?.diagnostics ?? []);
     setEffects(effectsResult?.items ?? []);
     setCandidates(candidatesResult?.items ?? []);
     setStudies(studiesResult?.items ?? []);
@@ -307,6 +348,11 @@ export default function BayesianIntelligencePanel() {
     moduleStatus?.flags?.analysis_enabled === true &&
     moduleStatus?.policy_configured === true &&
     Boolean(profileId);
+  const diagnosticGates = moduleStatus?.policy?.diagnostic_gates;
+  const isActiveRun = Boolean(
+    latest && !terminalStatuses.has(latest.status),
+  );
+  const posteriorWithheld = latest?.diagnostic_status === "NOT_CONVERGED";
 
   const runAnalysis = async () => {
     if (!canAnalyze || running) return;
@@ -807,6 +853,198 @@ export default function BayesianIntelligencePanel() {
       </section>
 
       <section className="overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--bg-card)]">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-default)] p-4">
+          <div>
+            <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-[var(--text-muted)]">
+              Convergence ledger
+            </div>
+            <h3 className="mt-1 text-sm font-semibold text-[var(--text-primary)]">
+              Resultado dos diagnósticos
+            </h3>
+          </div>
+          <div className="flex items-center gap-2 text-[11px] text-[var(--text-muted)]">
+            <ShieldCheck className="h-3.5 w-3.5 text-cyan-300" />
+            Gates carregados da política ativa
+          </div>
+        </div>
+
+        {!latest ? (
+          <div className="grid min-h-40 place-items-center p-6 text-center">
+            <div>
+              <FlaskConical className="mx-auto h-7 w-7 text-[var(--text-muted)]" />
+              <p className="mt-3 text-sm text-[var(--text-secondary)]">
+                Solicite uma análise para gerar o posterior.
+              </p>
+            </div>
+          </div>
+        ) : isActiveRun ? (
+          <div className="p-5">
+            <div className="flex items-start gap-3 rounded-xl border border-cyan-300/20 bg-cyan-300/5 p-4">
+              <LoaderCircle className="mt-0.5 h-5 w-5 shrink-0 animate-spin text-cyan-300" />
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-cyan-100">
+                  Amostragem em processamento
+                </p>
+                <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
+                  Fase atual:{" "}
+                  <span className="font-mono text-cyan-200">{latest.status}</span>.
+                  O worker publicará R-hat, ESS e divergências ao concluir os
+                  modelos.
+                </p>
+                <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/5">
+                  <div className="h-full w-1/3 animate-pulse rounded-full bg-cyan-300/70" />
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : diagnostics.length === 0 ? (
+          <div className="grid min-h-40 place-items-center p-6 text-center">
+            <div>
+              <AlertTriangle className="mx-auto h-7 w-7 text-amber-300" />
+              <p className="mt-3 text-sm text-[var(--text-secondary)]">
+                A execução terminou sem um ledger diagnóstico disponível.
+              </p>
+              <p className="mt-1 text-xs text-[var(--text-muted)]">
+                Verifique o erro da execução e os eventos de auditoria.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="p-4">
+            {posteriorWithheld && (
+              <div className="mb-4 flex items-start gap-3 rounded-xl border border-amber-400/25 bg-amber-400/8 p-4">
+                <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-300" />
+                <div>
+                  <p className="text-sm font-semibold text-amber-100">
+                    Posterior retido pelo gate de convergência
+                  </p>
+                  <p className="mt-1 text-xs leading-5 text-amber-100/75">
+                    A análise foi executada, mas pelo menos um diagnóstico não
+                    satisfez a política quantitativa. Os efeitos e recomendações
+                    permanecem bloqueados para evitar evidência estatística
+                    inválida.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            <div className="grid gap-3 xl:grid-cols-2">
+              {diagnostics.map((diagnostic) => {
+                const rhatPassed =
+                  diagnostic.rhat_max != null &&
+                  diagnosticGates?.max_rhat != null
+                    ? diagnostic.rhat_max <= diagnosticGates.max_rhat
+                    : undefined;
+                const essPassed =
+                  diagnostic.effective_sample_size_min != null &&
+                  diagnosticGates?.min_effective_sample_size != null
+                    ? diagnostic.effective_sample_size_min >=
+                      diagnosticGates.min_effective_sample_size
+                    : undefined;
+                const divergencesPassed =
+                  diagnosticGates?.max_divergences != null
+                    ? diagnostic.divergences <=
+                      diagnosticGates.max_divergences
+                    : undefined;
+
+                return (
+                  <article
+                    key={diagnostic.id}
+                    className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-elevated)] p-4"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-cyan-300">
+                          {diagnostic.model_name}
+                        </div>
+                        <h4 className="mt-1 text-sm font-semibold text-[var(--text-primary)]">
+                          {diagnosticModelLabel(diagnostic.model_name)}
+                        </h4>
+                      </div>
+                      <StatusPill value={diagnostic.status} />
+                    </div>
+
+                    <dl className="mt-4 grid grid-cols-3 divide-x divide-[var(--border-default)] rounded-lg border border-[var(--border-default)] bg-black/10">
+                      <div className="p-3">
+                        <dt className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
+                          R-hat máx.
+                        </dt>
+                        <dd
+                          className={`mt-1 font-mono text-sm ${diagnosticMetricTone(
+                            rhatPassed,
+                          )}`}
+                        >
+                          {fmtNumber(diagnostic.rhat_max, 3)}
+                        </dd>
+                        <div className="mt-1 font-mono text-[9px] text-[var(--text-muted)]">
+                          limite ≤{" "}
+                          {fmtNumber(diagnosticGates?.max_rhat, 3)}
+                        </div>
+                      </div>
+                      <div className="p-3">
+                        <dt className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
+                          ESS mín.
+                        </dt>
+                        <dd
+                          className={`mt-1 font-mono text-sm ${diagnosticMetricTone(
+                            essPassed,
+                          )}`}
+                        >
+                          {fmtNumber(
+                            diagnostic.effective_sample_size_min,
+                            0,
+                          )}
+                        </dd>
+                        <div className="mt-1 font-mono text-[9px] text-[var(--text-muted)]">
+                          mínimo ≥{" "}
+                          {fmtNumber(
+                            diagnosticGates?.min_effective_sample_size,
+                            0,
+                          )}
+                        </div>
+                      </div>
+                      <div className="p-3">
+                        <dt className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
+                          Divergências
+                        </dt>
+                        <dd
+                          className={`mt-1 font-mono text-sm ${diagnosticMetricTone(
+                            divergencesPassed,
+                          )}`}
+                        >
+                          {diagnostic.divergences}
+                        </dd>
+                        <div className="mt-1 font-mono text-[9px] text-[var(--text-muted)]">
+                          máximo ≤{" "}
+                          {fmtNumber(
+                            diagnosticGates?.max_divergences,
+                            0,
+                          )}
+                        </div>
+                      </div>
+                    </dl>
+
+                    {(diagnostic.sampling_warnings?.length ?? 0) > 0 && (
+                      <div className="mt-3 flex flex-wrap gap-1.5">
+                        {diagnostic.sampling_warnings?.map((warning) => (
+                          <span
+                            key={warning}
+                            className="rounded-md border border-amber-400/20 bg-amber-400/8 px-2 py-1 font-mono text-[9px] text-amber-200"
+                          >
+                            {warning}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </section>
+
+      <section className="overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--bg-card)]">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border-default)] p-4">
           <div>
             <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-[var(--text-muted)]">
@@ -824,12 +1062,24 @@ export default function BayesianIntelligencePanel() {
         {effects.length === 0 ? (
           <div className="grid min-h-52 place-items-center p-6 text-center">
             <div>
-              <Atom className="mx-auto h-7 w-7 text-[var(--text-muted)]" />
+              {posteriorWithheld ? (
+                <LockKeyhole className="mx-auto h-7 w-7 text-amber-300" />
+              ) : isActiveRun ? (
+                <LoaderCircle className="mx-auto h-7 w-7 animate-spin text-cyan-300" />
+              ) : (
+                <Atom className="mx-auto h-7 w-7 text-[var(--text-muted)]" />
+              )}
               <p className="mt-3 text-sm text-[var(--text-secondary)]">
-                Nenhum efeito posterior elegível foi persistido.
+                {posteriorWithheld
+                  ? "Efeitos não publicados: convergência reprovada."
+                  : isActiveRun
+                    ? "Efeitos aguardando a conclusão da amostragem."
+                    : "Nenhum efeito posterior elegível foi persistido."}
               </p>
               <p className="mt-1 text-xs text-[var(--text-muted)]">
-                Runs insuficientes ou não convergentes não geram recomendações.
+                {posteriorWithheld
+                  ? "Consulte o ledger acima para identificar cada gate reprovado."
+                  : "Runs insuficientes ou não convergentes não geram recomendações."}
               </p>
             </div>
           </div>

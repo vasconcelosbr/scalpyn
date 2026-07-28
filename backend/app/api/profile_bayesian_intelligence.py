@@ -74,6 +74,13 @@ def _policy_summary(policy: BayesianPolicy | None) -> dict[str, Any] | None:
         "mode": values.get("mode"),
         "max_trades": values.get("max_trades"),
         "max_runtime_seconds": values.get("max_runtime_seconds"),
+        "diagnostic_gates": {
+            "max_rhat": values.get("max_rhat"),
+            "min_effective_sample_size": values.get(
+                "min_effective_sample_size"
+            ),
+            "max_divergences": values.get("max_divergences"),
+        },
         "sampler_config": values.get("sampler_config"),
         "permissions": values.get("permissions"),
     }
@@ -388,7 +395,29 @@ async def latest_analysis(
             {"user_id": str(user_id), "profile_id": str(profile_id)},
         )
     ).mappings().first()
-    return {"item": _jsonable(dict(row)) if row else None}
+    if not row:
+        return {"item": None, "diagnostics": []}
+
+    diagnostics = (
+        await db.execute(
+            text(
+                """
+                SELECT id, analysis_run_id, model_name, status, rhat_max,
+                       effective_sample_size_min, divergences,
+                       posterior_predictive_check, credible_intervals,
+                       sampling_warnings, details, created_at
+                FROM profile_bayesian_diagnostics
+                WHERE analysis_run_id = :run_id
+                ORDER BY model_name
+                """
+            ),
+            {"run_id": str(row["id"])},
+        )
+    ).mappings().all()
+    return {
+        "item": _jsonable(dict(row)),
+        "diagnostics": [_jsonable(dict(item)) for item in diagnostics],
+    }
 
 
 @router.get("/{profile_id}/bayesian/history")

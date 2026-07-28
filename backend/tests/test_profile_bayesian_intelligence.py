@@ -449,6 +449,92 @@ async def test_indicator_effects_casts_optional_run_id_for_postgres(monkeypatch)
     assert db.params["run_id"] is None
 
 
+class _LatestAnalysisResult:
+    def __init__(self, *, first=None, all_rows=None):
+        self._first = first
+        self._all = all_rows or []
+
+    def mappings(self):
+        return self
+
+    def first(self):
+        return self._first
+
+    def all(self):
+        return self._all
+
+
+class _LatestAnalysisDb:
+    def __init__(self, results):
+        self.results = list(results)
+        self.calls = []
+
+    async def execute(self, statement, params):
+        self.calls.append((str(statement), params))
+        return self.results.pop(0)
+
+
+@pytest.mark.asyncio
+async def test_latest_analysis_returns_diagnostics_for_the_exact_run(monkeypatch):
+    async def _owned_profile(*_args, **_kwargs):
+        return object()
+
+    monkeypatch.setattr(bayesian_api, "_profile_for_user", _owned_profile)
+    run_id = uuid4()
+    diagnostic_id = uuid4()
+    db = _LatestAnalysisDb(
+        [
+            _LatestAnalysisResult(
+                first={
+                    "id": run_id,
+                    "status": "COMPLETED_WITH_WARNINGS",
+                    "diagnostic_status": "NOT_CONVERGED",
+                }
+            ),
+            _LatestAnalysisResult(
+                all_rows=[
+                    {
+                        "id": diagnostic_id,
+                        "analysis_run_id": run_id,
+                        "model_name": "net_pnl",
+                        "status": "NOT_CONVERGED",
+                        "rhat_max": 1.14,
+                        "effective_sample_size_min": 12,
+                        "divergences": 25,
+                    }
+                ]
+            ),
+        ]
+    )
+
+    result = await bayesian_api.latest_analysis(
+        profile_id=uuid4(),
+        db=db,
+        user_id=uuid4(),
+    )
+
+    assert result["item"]["id"] == str(run_id)
+    assert result["diagnostics"][0]["analysis_run_id"] == str(run_id)
+    assert result["diagnostics"][0]["model_name"] == "net_pnl"
+    assert db.calls[1][1]["run_id"] == str(run_id)
+    assert "WHERE analysis_run_id = :run_id" in db.calls[1][0]
+
+
+def test_policy_summary_exposes_configured_diagnostic_gates():
+    policy = load_analysis_only_policy_template()
+
+    summary = bayesian_api._policy_summary(policy)
+
+    assert summary is not None
+    assert summary["diagnostic_gates"] == {
+        "max_rhat": policy.values["max_rhat"],
+        "min_effective_sample_size": policy.values[
+            "min_effective_sample_size"
+        ],
+        "max_divergences": policy.values["max_divergences"],
+    }
+
+
 class _SequenceMappings:
     def __init__(self, rows):
         self.rows = rows
