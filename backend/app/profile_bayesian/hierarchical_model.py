@@ -612,73 +612,36 @@ class HierarchicalModel:
         if not valid.any():
             raise ValueError("net PnL is unavailable for every observation")
         coords = {
-            "feature": matrix.feature_names,
             "outcome": OUTCOME_LABELS,
             "observation_pnl": np.arange(int(valid.sum())),
         }
-        if matrix.temporal_block_labels:
-            coords["temporal_block"] = matrix.temporal_block_labels
         with pm.Model(coords=coords) as model:
-            x = pm.Data("x", matrix.x[valid], dims=("observation_pnl", "feature"))
             outcome_idx = pm.Data(
                 "outcome_idx", matrix.outcome[valid], dims="observation_pnl"
             )
-            b_idx = (
-                pm.Data(
-                    "temporal_block_idx",
-                    matrix.temporal_block_index[valid],
-                    dims="observation_pnl",
-                )
-                if matrix.temporal_block_labels
-                else None
-            )
-            # Outcome-specific intercepts are direct parameters. The previous
-            # global + scale * offset decomposition was redundant and created
-            # a funnel when an outcome (normally TIMEOUT) was sparse.
+            # The barrier contract makes TP_HIT/SL_HIT magnitude deterministic
+            # in the current dataset, while TIMEOUT is sparse. Indicator and
+            # temporal associations are therefore estimated by the multinomial
+            # outcome model only. Re-estimating them in the conditional
+            # magnitude model creates parameters with no within-outcome
+            # information. This model retains the recommended outcome-
+            # conditional magnitude decomposition without duplicating those
+            # unidentifiable effects.
             outcome_intercept = pm.Normal(
                 "pnl_outcome_intercept",
                 mu=0,
-                sigma=0.5,
+                sigma=float(
+                    sampler["pnl_outcome_intercept_prior_sigma_pct"]
+                ),
                 dims="outcome",
-            )
-            # Conditional barrier magnitude is not given independent
-            # symbol/source/profile intercepts: those effects already enter
-            # the multinomial outcome model. Keeping them here duplicated the
-            # hierarchy and let them trade off against the PnL intercepts.
-            # The temporal component remains to account for overlapping
-            # market exposure, but is constrained to sum to zero so it cannot
-            # absorb the intercept.
-            temporal_component = self._identified_group_component(
-                pm,
-                name="temporal_block",
-                labels=matrix.temporal_block_labels,
-                index=b_idx,
-                dims="temporal_block",
-                prior_sigma=0.25,
-            )
-            # Direct regularized outcome coefficients remove the shared-scale
-            # funnel from the previous global + scale * offset construction.
-            beta = pm.Normal(
-                "indicator_pnl_effect",
-                mu=0,
-                sigma=0.2,
-                dims=("feature", "outcome"),
-            )
-            selected_beta = beta.T[outcome_idx]
-            # A shared residual geometry keeps the sparse TIMEOUT class from
-            # creating a weakly identified outcome-specific funnel.
-            residual_scale = pm.HalfNormal("residual_scale", sigma=0.5)
-            nu_minus_two = pm.Exponential("nu_minus_two", lam=0.1)
-            mu = (
-                outcome_intercept[outcome_idx]
-                + temporal_component
-                + pm.math.sum(x * selected_beta, axis=1)
             )
             pm.StudentT(
                 "pnl_observed",
-                nu=nu_minus_two + 2,
-                mu=mu,
-                sigma=residual_scale,
+                nu=float(sampler["pnl_student_t_nu"]),
+                mu=outcome_intercept[outcome_idx],
+                sigma=float(
+                    sampler["pnl_student_t_observation_sigma_pct"]
+                ),
                 observed=matrix.pnl[valid],
                 dims="observation_pnl",
             )

@@ -63,6 +63,12 @@ def analyze_diagnostics(
             if sample_stats is not None and "diverging" in sample_stats
             else 0
         )
+        max_tree_depth_hits = (
+            int(sample_stats["reached_max_treedepth"].sum().values)
+            if sample_stats is not None
+            and "reached_max_treedepth" in sample_stats
+            else 0
+        )
         posterior_predictive = getattr(inference_data, "posterior_predictive", None)
         observed_data = getattr(inference_data, "observed_data", None)
         prior_predictive = getattr(inference_data, "prior_predictive", None)
@@ -155,9 +161,15 @@ def analyze_diagnostics(
         if rhat_max is None or ess_min is None:
             status = DiagnosticStatus.INSUFFICIENT_EVIDENCE
             warnings.append("diagnostics_missing")
-        elif rhat_max > max_rhat or divergences > max_divergences:
+        elif (
+            rhat_max > max_rhat
+            or divergences > max_divergences
+            or max_tree_depth_hits > 0
+        ):
             status = DiagnosticStatus.NOT_CONVERGED
             warnings.append("convergence_gate_failed")
+            if max_tree_depth_hits > 0:
+                warnings.append("maximum_tree_depth_reached")
         elif ess_min < min_effective_sample_size:
             status = DiagnosticStatus.VALID_WITH_WARNINGS
             warnings.append("effective_sample_size_below_policy")
@@ -176,6 +188,7 @@ def analyze_diagnostics(
             warnings=tuple(warnings),
             details={
                 "summary_rows": int(len(summary)),
+                "maximum_tree_depth_hits": max_tree_depth_hits,
                 "worst_rhat": [
                     {
                         "parameter": str(index),

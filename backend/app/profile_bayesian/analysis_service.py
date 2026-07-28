@@ -513,6 +513,15 @@ async def execute_analysis(db: AsyncSession, run_id: UUID) -> dict[str, Any]:
                     "prior_predictive_pnl_abs_limit_pct", 5.0
                 )
             ),
+            "pnl_outcome_intercept_prior_sigma_pct": float(
+                bayesian_model_config["pnl_outcome_intercept_prior_sigma_pct"]
+            ),
+            "pnl_student_t_observation_sigma_pct": float(
+                bayesian_model_config["pnl_student_t_observation_sigma_pct"]
+            ),
+            "pnl_student_t_nu": float(
+                bayesian_model_config["pnl_student_t_nu"]
+            ),
         }
         model = HierarchicalModel()
         sample_started = time.perf_counter()

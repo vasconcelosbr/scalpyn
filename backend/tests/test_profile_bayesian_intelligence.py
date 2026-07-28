@@ -153,7 +153,14 @@ def test_versioned_analysis_only_policy_is_complete_and_blocks_mutations():
         "conditional_student_t"
     )
     assert policy.values["bayesian_model"]["pnl_parameterization"] == (
-        "identified_zero_sum_v1"
+        "outcome_intercept_only_v2"
+    )
+    assert policy.values["bayesian_model"]["pnl_student_t_nu"] == 7.0
+    assert (
+        policy.values["bayesian_model"][
+            "pnl_student_t_observation_sigma_pct"
+        ]
+        == 0.25
     )
     assert policy.values["bayesian_model"]["validation_refit"] is True
     assert policy.values["population_config"]["selection_strategy"] == (
@@ -183,7 +190,7 @@ def test_zero_sum_basis_is_identified_and_orthonormal():
     np.testing.assert_allclose(basis.T @ basis, np.eye(4), atol=1e-12)
 
 
-def test_conditional_pnl_uses_identified_parameterization():
+def test_conditional_pnl_uses_contract_aware_identified_parameterization():
     import inspect
 
     from app.profile_bayesian.hierarchical_model import HierarchicalModel
@@ -191,8 +198,10 @@ def test_conditional_pnl_uses_identified_parameterization():
     source = inspect.getsource(HierarchicalModel.fit_conditional_pnl)
 
     assert '"pnl_outcome_intercept"' in source
-    assert '"indicator_pnl_effect"' in source
-    assert "_identified_group_component" in source
+    assert '"indicator_pnl_effect"' not in source
+    assert "_identified_group_component" not in source
+    assert "pnl_student_t_nu" in source
+    assert "pnl_student_t_observation_sigma_pct" in source
     for redundant_parameter in (
         "pnl_global_intercept",
         "pnl_outcome_intercept_scale",
@@ -200,6 +209,8 @@ def test_conditional_pnl_uses_identified_parameterization():
         "indicator_pnl_global_effect",
         "indicator_pnl_outcome_scale",
         "indicator_pnl_outcome_offset",
+        "nu_minus_two",
+        "residual_scale",
     ):
         assert redundant_parameter not in source
 
@@ -465,6 +476,37 @@ def test_v2_posterior_grades_one_coherent_net_ev_estimand():
     assert result[0]["probability_negative_effect"] == 0.0
     assert result[0]["probability_practically_equivalent"] == 0.0
     assert result[0]["credible_interval_95"][0] > 0
+
+
+def test_v2_posterior_supports_contract_aware_pnl_without_feature_slopes():
+    import numpy as np
+
+    samples = 8
+    outcome = SimpleNamespace(
+        posterior={
+            "indicator_outcome_effect": _PosteriorArray(
+                np.asarray([[[0.0] * samples, [2.0] * samples]])
+            ),
+            "outcome_intercept": _PosteriorArray(np.zeros((samples, 2))),
+        }
+    )
+    pnl = SimpleNamespace(
+        posterior={
+            "pnl_outcome_intercept": _PosteriorArray(
+                np.tile(np.asarray([-0.5, 0.0, 0.5]), (samples, 1))
+            ),
+        }
+    )
+
+    result = indicator_ev_posteriors(
+        outcome,
+        pnl,
+        ("rsi",),
+        practical_effect_rope_pct=0.0,
+    )
+
+    assert result[0]["estimated_tp_lift"] > 0
+    assert result[0]["estimated_pnl_lift"] > 0
 
 
 def test_search_space_is_bounded_around_current_configuration():

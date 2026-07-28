@@ -72,7 +72,10 @@
   "bayesian_model": {
     "outcome_model": "multinomial_outcome",
     "pnl_model": "conditional_student_t",
-    "pnl_parameterization": "identified_zero_sum_v1",
+    "pnl_parameterization": "outcome_intercept_only_v2",
+    "pnl_outcome_intercept_prior_sigma_pct": 1.0,
+    "pnl_student_t_observation_sigma_pct": 0.25,
+    "pnl_student_t_nu": 7.0,
     "prior_predictive_samples": 500,
     "temporal_block_seconds": 86400,
     "practical_effect_rope_pct": 0.05,

@@ -243,9 +243,13 @@ class PopulationConfig(_StrictPolicyModel):
 class BayesianModelConfig(_StrictPolicyModel):
     outcome_model: Literal["bernoulli_tp", "multinomial_outcome"]
     pnl_model: Literal["student_t", "conditional_student_t"]
-    pnl_parameterization: Literal["identified_zero_sum_v1"] = (
-        "identified_zero_sum_v1"
-    )
+    pnl_parameterization: Literal[
+        "identified_zero_sum_v1",
+        "outcome_intercept_only_v2",
+    ] = "outcome_intercept_only_v2"
+    pnl_outcome_intercept_prior_sigma_pct: float = Field(default=1.0, gt=0)
+    pnl_student_t_observation_sigma_pct: float = Field(default=0.25, gt=0)
+    pnl_student_t_nu: float = Field(default=7.0, gt=2)
     prior_predictive_samples: int = Field(gt=0)
     temporal_block_seconds: int = Field(gt=0)
     practical_effect_rope_pct: float = Field(ge=0)

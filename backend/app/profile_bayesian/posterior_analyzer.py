@@ -34,18 +34,28 @@ def indicator_ev_posteriors(
         .transpose("sample", "outcome_logit")
         .values
     )
-    pnl_beta = (
-        pnl_inference.posterior["indicator_pnl_effect"]
-        .stack(sample=("chain", "draw"))
-        .transpose("feature", "outcome", "sample")
-        .values
-    )
     pnl_intercept = (
         pnl_inference.posterior["pnl_outcome_intercept"]
         .stack(sample=("chain", "draw"))
         .transpose("sample", "outcome")
         .values
     )
+    if "indicator_pnl_effect" in pnl_inference.posterior:
+        pnl_beta = (
+            pnl_inference.posterior["indicator_pnl_effect"]
+            .stack(sample=("chain", "draw"))
+            .transpose("feature", "outcome", "sample")
+            .values
+        )
+    else:
+        # In the contract-aware parameterization, indicator associations enter
+        # through outcome probabilities. Conditional magnitude has only
+        # outcome intercepts because TP/SL magnitudes are deterministic and
+        # TIMEOUT has insufficient within-class support for feature slopes.
+        pnl_beta = np.zeros(
+            (len(feature_names), pnl_intercept.shape[1], pnl_intercept.shape[0]),
+            dtype=float,
+        )
     reference_logits = np.column_stack(
         [np.zeros(outcome_intercept.shape[0]), outcome_intercept]
     )
