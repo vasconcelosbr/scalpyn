@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 
 from app.api import profile_bayesian_intelligence as bayesian_api
+from app.profile_bayesian.analysis_service import _set_run_status
 from app.profile_bayesian.config import (
     BayesianPolicy,
     PolicyConfigurationError,
@@ -367,6 +368,43 @@ def test_importing_api_contract_does_not_import_scientific_runtime():
     newly_loaded = set(sys.modules) - before
     assert "pymc" not in newly_loaded
     assert "arviz" not in newly_loaded
+
+
+class _RunStatusDb:
+    def __init__(self):
+        self.calls = []
+        self.commits = 0
+
+    async def execute(self, statement, params):
+        self.calls.append((str(statement), params))
+
+    async def commit(self):
+        self.commits += 1
+
+
+@pytest.mark.asyncio
+async def test_run_status_uses_explicit_types_for_asyncpg():
+    db = _RunStatusDb()
+    run_id = uuid4()
+
+    await _set_run_status(db, run_id, "BUILDING_DATASET")
+
+    sql, params = db.calls[0]
+    assert "status = CAST(:status AS VARCHAR(40))" in sql
+    assert "WHEN CAST(:mark_started AS BOOLEAN)" in sql
+    assert ":status = 'BUILDING_DATASET'" not in sql
+    assert params["status"] == "BUILDING_DATASET"
+    assert params["mark_started"] is True
+    assert params["finished"] is False
+    assert db.commits == 1
+
+    await _set_run_status(db, run_id, "FAILED", finished=True)
+
+    _, failed_params = db.calls[1]
+    assert failed_params["status"] == "FAILED"
+    assert failed_params["mark_started"] is False
+    assert failed_params["finished"] is True
+    assert db.commits == 2
 
 
 class _EmptyIndicatorEffectsResult:

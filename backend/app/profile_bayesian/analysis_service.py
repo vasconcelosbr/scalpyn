@@ -61,12 +61,13 @@ async def _set_run_status(
         text(
             """
             UPDATE profile_bayesian_analysis_runs
-            SET status = :status,
+            SET status = CAST(:status AS VARCHAR(40)),
                 diagnostic_status = COALESCE(:diagnostic_status, diagnostic_status),
                 warnings = COALESCE(CAST(:warnings AS JSONB), warnings),
                 error_message = :error_message,
                 started_at = CASE
-                    WHEN :status = 'BUILDING_DATASET' THEN COALESCE(started_at, now())
+                    WHEN CAST(:mark_started AS BOOLEAN)
+                    THEN COALESCE(started_at, now())
                     ELSE started_at
                 END,
                 finished_at = CASE WHEN :finished THEN now() ELSE finished_at END,
@@ -80,6 +81,7 @@ async def _set_run_status(
             "diagnostic_status": diagnostic_status,
             "warnings": json.dumps(warnings) if warnings is not None else None,
             "error_message": error_message,
+            "mark_started": status == "BUILDING_DATASET",
             "finished": finished,
         },
     )
