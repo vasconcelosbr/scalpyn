@@ -57,6 +57,14 @@ class CanonicalObservation:
     policy_key: str
     indicators: Mapping[str, float | None]
     source: str
+    barrier_mode: str | None = None
+    lineage_status: str | None = None
+    eligible_for_training: bool | None = None
+    target_horizon_seconds: int | None = None
+    atr_pct_at_entry: float | None = None
+    fee_roundtrip_pct: float | None = None
+    btc_change_1h_pct: float | None = None
+    market_data_confidence: float | None = None
 
 
 def finite_number(value: Any) -> float | None:
@@ -67,6 +75,40 @@ def finite_number(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if math.isfinite(number) else None
+
+
+def timeframe_seconds(value: str | None) -> int | None:
+    """Convert a canonical exchange timeframe into seconds, fail-closed."""
+
+    if not value:
+        return None
+    normalized = value.strip().lower()
+    units = {"m": 60, "h": 3600, "d": 86400}
+    if len(normalized) < 2 or normalized[-1] not in units:
+        return None
+    try:
+        amount = int(normalized[:-1])
+    except ValueError:
+        return None
+    if amount <= 0:
+        return None
+    return amount * units[normalized[-1]]
+
+
+def target_horizon_seconds(
+    timeframe: str | None, timeout_candles: Any
+) -> int | None:
+    # ShadowTrade.timeout_candles is a legacy name. The production monitor
+    # contract defines it as elapsed minutes / 1m candles, independently from
+    # the signal timeframe stored on the row.
+    del timeframe
+    try:
+        candles = int(timeout_candles)
+    except (TypeError, ValueError):
+        return None
+    if candles <= 0:
+        return None
+    return candles * 60
 
 
 def extract_indicators(

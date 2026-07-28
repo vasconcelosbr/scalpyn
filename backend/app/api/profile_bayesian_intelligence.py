@@ -76,12 +76,15 @@ def _policy_summary(policy: BayesianPolicy | None) -> dict[str, Any] | None:
         "max_runtime_seconds": values.get("max_runtime_seconds"),
         "diagnostic_gates": {
             "max_rhat": values.get("max_rhat"),
-            "min_effective_sample_size": values.get(
-                "min_effective_sample_size"
+            "min_mcmc_effective_sample_size": values.get(
+                "min_mcmc_effective_sample_size"
             ),
             "max_divergences": values.get("max_divergences"),
         },
         "sampler_config": values.get("sampler_config"),
+        "split_config": values.get("split_config"),
+        "population_config": values.get("population_config"),
+        "bayesian_model": values.get("bayesian_model"),
         "permissions": values.get("permissions"),
     }
 
@@ -154,6 +157,12 @@ async def module_status(
             "template_id": ANALYSIS_ONLY_TEMPLATE_ID,
             "mode": "analysis_only",
             "can_activate": not policy_configured,
+            "can_upgrade": (
+                policy_configured
+                and policy is not None
+                and policy.values.get("policy_version")
+                != ANALYSIS_ONLY_TEMPLATE_ID
+            ),
         },
         "replay": {
             "supported": False,
@@ -270,6 +279,53 @@ async def activate_analysis_only_policy(
     }
 
 
+@router.post("/bayesian/policy/upgrade-analysis-v2")
+async def upgrade_analysis_v2_policy(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    current_raw = await config_service.get_config(db, "profile_bayesian", user_id)
+    if current_raw:
+        try:
+            current = BayesianPolicy.from_mapping(current_raw)
+            require_analysis_only(current)
+        except PolicyConfigurationError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"EXISTING_POLICY_REQUIRES_EXPLICIT_REVIEW: {exc}",
+            ) from exc
+        if current.values.get("policy_version") == ANALYSIS_ONLY_TEMPLATE_ID:
+            return {
+                "configured": True,
+                "upgraded": False,
+                "summary": _policy_summary(current),
+            }
+    policy = load_analysis_only_policy_template()
+    updated = await config_service.update_config(
+        db=db,
+        config_type="profile_bayesian",
+        user_id=user_id,
+        new_json=dict(policy.values),
+        changed_by=user_id,
+        change_description=(
+            "Upgraded Bayesian policy to analysis_only_v2 with temporal holdout, "
+            "non-centered hierarchy, and coherent net-EV estimand"
+        ),
+    )
+    return {
+        "configured": True,
+        "upgraded": True,
+        "data": updated,
+        "summary": _policy_summary(policy),
+        "safety": {
+            "optimization_enabled": False,
+            "candidate_creation_enabled": False,
+            "shadow_submission_enabled": False,
+            "automatic_activation": False,
+        },
+    }
+
+
 @router.post(
     "/{profile_id}/bayesian/analyze",
     status_code=status.HTTP_202_ACCEPTED,
@@ -314,7 +370,7 @@ async def start_analysis(
                 sampler_config, dependency_versions, filters, requested_by
             ) VALUES (
                 :id, :user_id, :profile_id, :profile_version_id, :key,
-                'PENDING', :random_seed, 'profile_bayesian_v1', :git_commit,
+                'PENDING', :random_seed, :code_version, :git_commit,
                 CAST(:model_config AS JSONB), CAST(:sampler_config AS JSONB),
                 CAST(:dependency_versions AS JSONB), CAST(:filters AS JSONB),
                 :requested_by
@@ -330,11 +386,30 @@ async def start_analysis(
             ),
             "key": scoped_key,
             "random_seed": request.random_seed,
+            "code_version": str(
+                policy.values.get("policy_version", "profile_bayesian_v1")
+            ),
             "git_commit": os.getenv("GIT_COMMIT_SHA"),
             "model_config": json.dumps(
                 {
-                    "models": ["hierarchical_tp_logit", "hierarchical_net_pnl_student_t"],
+                    "models": (
+                        [
+                            "hierarchical_multinomial_outcome",
+                            "hierarchical_conditional_net_pnl_student_t",
+                        ]
+                        if policy.values.get("policy_version")
+                        == "analysis_only_v2"
+                        else [
+                            "hierarchical_tp_logit",
+                            "hierarchical_net_pnl_student_t",
+                        ]
+                    ),
                     "min_feature_coverage": policy.float("min_feature_coverage"),
+                    "bayesian_model": policy.values.get("bayesian_model"),
+                    "split_config": policy.values.get("split_config"),
+                    "population_config": policy.values.get(
+                        "population_config"
+                    ),
                 }
             ),
             "sampler_config": json.dumps(policy.values["sampler_config"]),
@@ -383,7 +458,8 @@ async def latest_analysis(
         await db.execute(
             text(
                 """
-                SELECT r.*, d.dataset_hash, d.row_count, d.window_from, d.window_to
+                SELECT r.*, d.dataset_hash, d.row_count, d.window_from,
+                       d.window_to, d.manifest
                 FROM profile_bayesian_analysis_runs r
                 LEFT JOIN profile_bayesian_dataset_snapshots d
                   ON d.id = r.dataset_snapshot_id

@@ -46,11 +46,11 @@ not propagated into trading tasks.
 
 Create an active `config_profiles` row with `config_type=profile_bayesian`.
 The policy must explicitly provide every limit, sampler setting, evidence gate,
-authorized search dimension, objective weight, temporal split, and permission.
+population contract, model contract, temporal split, and permission.
 An incomplete policy returns `PROFILE_BAYESIAN_POLICY_MISSING`.
 
 The Profile Intelligence UI exposes a guarded activation button. It imports the
-versioned `analysis_only_v1` template, validates the complete nested policy, and
+versioned `analysis_only_v2` template, validates the complete nested policy, and
 persists it through `ConfigService`, including a `config_audit_log` entry. The
 runtime never reads implicit defaults: after activation it reads the persisted
 per-user `config_profiles.config_json`.
@@ -59,6 +59,11 @@ The same UI can import or edit the JSON policy. The backend rejects incomplete
 objects, invalid ranges, unsafe permissions, non-empty optimization search
 spaces, and non-zero optimization/candidate limits while the policy mode is
 `analysis_only`.
+
+Existing `analysis_only_v1` rows remain readable. The UI exposes an explicit,
+audited v1→v2 upgrade action; deployment never overwrites a persisted policy
+silently. In v2, inactive optimization thresholds and `objective_weights` are
+`null`, eliminating zero-as-disabled ambiguity.
 
 The activation preset permits only:
 

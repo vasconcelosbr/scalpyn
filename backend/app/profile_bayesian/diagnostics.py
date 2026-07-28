@@ -40,6 +40,7 @@ def analyze_diagnostics(
     max_rhat: float,
     min_effective_sample_size: float,
     max_divergences: int,
+    prior_predictive_pnl_abs_limit_pct: float | None = None,
 ) -> DiagnosticResult:
     az = _load_arviz()
     warnings: list[str] = []
@@ -64,6 +65,7 @@ def analyze_diagnostics(
         )
         posterior_predictive = getattr(inference_data, "posterior_predictive", None)
         observed_data = getattr(inference_data, "observed_data", None)
+        prior_predictive = getattr(inference_data, "prior_predictive", None)
         ppc: dict[str, Any]
         if posterior_predictive is None or observed_data is None:
             ppc = {"status": "MISSING"}
@@ -76,16 +78,73 @@ def analyze_diagnostics(
                 -1, posterior_predictive[variable].shape[-1]
             )
             observed = np.asarray(observed_data[observed_variable])
-            predictive_means = predictive.mean(axis=1)
-            observed_mean = float(observed.mean())
-            lower = float(np.quantile(predictive_means, 0.025))
-            upper = float(np.quantile(predictive_means, 0.975))
-            ppc = {
-                "status": "PASS" if lower <= observed_mean <= upper else "WARNING",
-                "observed_mean": observed_mean,
-                "predictive_mean": float(predictive_means.mean()),
-                "predictive_mean_interval_95": [lower, upper],
+            if variable == "outcome_observed":
+                classes = sorted(
+                    set(np.asarray(observed, dtype=int).reshape(-1).tolist())
+                )
+                class_checks: dict[str, Any] = {}
+                class_passes: list[bool] = []
+                for outcome_class in classes:
+                    predictive_rate = (predictive == outcome_class).mean(axis=1)
+                    observed_rate = float(
+                        (np.asarray(observed).reshape(-1) == outcome_class).mean()
+                    )
+                    lower = float(np.quantile(predictive_rate, 0.025))
+                    upper = float(np.quantile(predictive_rate, 0.975))
+                    passed = lower <= observed_rate <= upper
+                    class_passes.append(passed)
+                    class_checks[str(outcome_class)] = {
+                        "observed_rate": observed_rate,
+                        "predictive_rate": float(predictive_rate.mean()),
+                        "predictive_rate_interval_95": [lower, upper],
+                        "passed": passed,
+                    }
+                ppc = {
+                    "status": "PASS" if all(class_passes) else "WARNING",
+                    "outcome_classes": class_checks,
+                }
+            else:
+                predictive_means = predictive.mean(axis=1)
+                observed_mean = float(observed.mean())
+                lower = float(np.quantile(predictive_means, 0.025))
+                upper = float(np.quantile(predictive_means, 0.975))
+                ppc = {
+                    "status": "PASS" if lower <= observed_mean <= upper else "WARNING",
+                    "observed_mean": observed_mean,
+                    "predictive_mean": float(predictive_means.mean()),
+                    "predictive_mean_interval_95": [lower, upper],
+                }
+            prior_check: dict[str, Any] = {
+                "status": "PRESENT" if prior_predictive is not None else "MISSING"
             }
+            if (
+                prior_predictive is not None
+                and variable == "pnl_observed"
+                and prior_predictive_pnl_abs_limit_pct is not None
+            ):
+                prior_values = np.asarray(
+                    prior_predictive[variable], dtype=float
+                )
+                prior_abs_q995 = float(
+                    np.quantile(np.abs(prior_values), 0.995)
+                )
+                prior_check.update(
+                    {
+                        "absolute_q995_pct": prior_abs_q995,
+                        "absolute_limit_pct": (
+                            prior_predictive_pnl_abs_limit_pct
+                        ),
+                        "status": (
+                            "PASS"
+                            if prior_abs_q995
+                            <= prior_predictive_pnl_abs_limit_pct
+                            else "FAIL"
+                        ),
+                    }
+                )
+            ppc["prior_predictive"] = prior_check
+            if prior_predictive is None:
+                warnings.append("prior_predictive_check_missing")
             status = (
                 DiagnosticStatus.VALID
                 if ppc["status"] == "PASS"
@@ -102,6 +161,11 @@ def analyze_diagnostics(
         elif ess_min < min_effective_sample_size:
             status = DiagnosticStatus.VALID_WITH_WARNINGS
             warnings.append("effective_sample_size_below_policy")
+        if prior_predictive is None or ppc.get("prior_predictive", {}).get(
+            "status"
+        ) == "FAIL":
+            status = DiagnosticStatus.NOT_CONVERGED
+            warnings.append("prior_predictive_gate_failed")
         return DiagnosticResult(
             status=status,
             rhat_max=rhat_max,
@@ -110,7 +174,34 @@ def analyze_diagnostics(
             posterior_predictive_check=ppc,
             credible_intervals={"probability": 0.95},
             warnings=tuple(warnings),
-            details={"summary_rows": int(len(summary))},
+            details={
+                "summary_rows": int(len(summary)),
+                "worst_rhat": [
+                    {
+                        "parameter": str(index),
+                        "rhat": float(row["r_hat"]),
+                    }
+                    for index, row in summary.sort_values(
+                        "r_hat", ascending=False
+                    ).head(10).iterrows()
+                    if math.isfinite(float(row["r_hat"]))
+                ],
+                "lowest_ess": [
+                    {
+                        "parameter": str(index),
+                        "ess_bulk": float(row["ess_bulk"]),
+                        "ess_tail": float(row["ess_tail"]),
+                    }
+                    for index, row in summary.assign(
+                        ess_minimum=summary[["ess_bulk", "ess_tail"]].min(axis=1)
+                    )
+                    .sort_values("ess_minimum", ascending=True)
+                    .head(10)
+                    .iterrows()
+                    if math.isfinite(float(row["ess_bulk"]))
+                    and math.isfinite(float(row["ess_tail"]))
+                ],
+            },
         )
     except Exception as exc:
         return DiagnosticResult(

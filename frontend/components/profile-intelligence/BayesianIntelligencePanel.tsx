@@ -45,16 +45,20 @@ type ModuleStatus = {
     max_runtime_seconds?: number;
     diagnostic_gates?: {
       max_rhat?: number;
-      min_effective_sample_size?: number;
+      min_mcmc_effective_sample_size?: number;
       max_divergences?: number;
     };
     sampler_config?: Record<string, number>;
+    split_config?: Record<string, unknown>;
+    population_config?: Record<string, unknown>;
+    bayesian_model?: Record<string, unknown>;
     permissions?: Record<string, boolean>;
   } | null;
   activation?: {
     template_id: string;
     mode: string;
     can_activate: boolean;
+    can_upgrade?: boolean;
   };
   replay: { supported: boolean; reason: string };
   dependencies: Record<string, string | null>;
@@ -87,6 +91,35 @@ type AnalysisRun = {
   error_message?: string | null;
   created_at?: string;
   finished_at?: string | null;
+  manifest?: {
+    temporal_split?: {
+      effective_embargo_seconds?: number;
+      counts?: {
+        discovery?: number;
+        validation?: number;
+        final_holdout?: number;
+      };
+      final_holdout_used_for_fit?: boolean;
+      final_holdout_used_for_grading?: boolean;
+    };
+    preflight?: {
+      power_analysis?: {
+        status?: string;
+        minimum_detectable_net_ev_pct?: number;
+        posterior_probability?: number;
+        practical_rope_pct?: number;
+      };
+      maximum_plausible_edge_pct?: number;
+      feature_quality?: {
+        approved_for_both_windows?: string[];
+        excluded_from_model?: string[];
+      };
+      outcome_counts?: {
+        discovery?: Record<string, number>;
+        validation?: Record<string, number>;
+      };
+    };
+  } | null;
 };
 
 type BayesianDiagnostic = {
@@ -205,6 +238,14 @@ function StatusPill({ value }: { value?: string | null }) {
 function diagnosticModelLabel(modelName: string) {
   if (modelName === "tp_probability") return "Probabilidade de TP";
   if (modelName === "net_pnl") return "PnL líquido";
+  if (modelName === "outcome_discovery")
+    return "Outcome multinomial · discovery";
+  if (modelName === "net_pnl_discovery")
+    return "PnL condicional · discovery";
+  if (modelName === "outcome_validation")
+    return "Outcome multinomial · validation";
+  if (modelName === "net_pnl_validation")
+    return "PnL condicional · validation";
   if (modelName === "preflight") return "Pré-validação";
   return modelName.replaceAll("_", " ");
 }
@@ -325,6 +366,8 @@ export default function BayesianIntelligencePanel() {
   }, [loadProfile, profileId]);
 
   useEffect(() => {
+    // Async loader synchronizes this client panel with the authenticated API.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadInitial();
     // The first load intentionally selects the first available profile.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -332,6 +375,8 @@ export default function BayesianIntelligencePanel() {
 
   useEffect(() => {
     if (!profileId) return;
+    // Async loader synchronizes the selected profile with the API.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadProfile(profileId);
   }, [loadProfile, profileId]);
 
@@ -398,6 +443,31 @@ export default function BayesianIntelligencePanel() {
         requestError instanceof Error
           ? requestError.message
           : "Não foi possível ativar a política protegida.",
+      );
+    } finally {
+      setActivatingPolicy(false);
+    }
+  };
+
+  const upgradeAnalysisV2 = async () => {
+    if (activatingPolicy) return;
+    setActivatingPolicy(true);
+    setError(null);
+    setPolicyNotice(null);
+    try {
+      await apiPost(
+        "/profile-intelligence/bayesian/policy/upgrade-analysis-v2",
+        {},
+      );
+      setPolicyNotice(
+        "Política analysis_only_v2 ativada: holdout temporal, hierarquia não centrada e EV líquido coerente.",
+      );
+      await loadInitial();
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Não foi possível atualizar a política para v2.",
       );
     } finally {
       setActivatingPolicy(false);
@@ -575,7 +645,7 @@ export default function BayesianIntelligencePanel() {
                 <p className="mt-1 max-w-3xl text-xs leading-5 text-amber-100/70">
                   Ative o preset versionado{" "}
                   <span className="font-mono text-amber-100">
-                    {moduleStatus?.activation?.template_id || "analysis_only_v1"}
+                    {moduleStatus?.activation?.template_id || "analysis_only_v2"}
                   </span>
                   . Ele libera somente análises offline; otimização, candidates,
                   shadow, ML e trading continuam bloqueados.
@@ -630,14 +700,31 @@ export default function BayesianIntelligencePanel() {
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => void openPolicyEditor()}
-            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-emerald-300/20 bg-emerald-300/8 px-3 py-2 text-xs font-medium text-emerald-100 transition hover:bg-emerald-300/12"
-          >
-            <FileJson2 className="h-4 w-4" />
-            Editar / importar política
-          </button>
+          <div className="flex shrink-0 flex-wrap gap-2">
+            {moduleStatus.activation?.can_upgrade && (
+              <button
+                type="button"
+                onClick={() => void upgradeAnalysisV2()}
+                disabled={activatingPolicy}
+                className="inline-flex items-center justify-center gap-2 rounded-lg border border-cyan-300/25 bg-cyan-300/10 px-3 py-2 text-xs font-semibold text-cyan-100 transition hover:bg-cyan-300/15 disabled:opacity-40"
+              >
+                {activatingPolicy ? (
+                  <LoaderCircle className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Sparkles className="h-4 w-4" />
+                )}
+                Atualizar para v2
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => void openPolicyEditor()}
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-300/20 bg-emerald-300/8 px-3 py-2 text-xs font-medium text-emerald-100 transition hover:bg-emerald-300/12"
+            >
+              <FileJson2 className="h-4 w-4" />
+              Editar / importar política
+            </button>
+          </div>
         </div>
       )}
 
@@ -844,6 +931,91 @@ export default function BayesianIntelligencePanel() {
               </span>
             </div>
           </div>
+          {latest?.manifest?.temporal_split?.counts && (
+            <div className="mt-2 grid gap-2 text-[11px] text-[var(--text-secondary)] sm:grid-cols-4">
+              {[
+                [
+                  "Discovery",
+                  latest.manifest.temporal_split.counts.discovery,
+                ],
+                [
+                  "Validation",
+                  latest.manifest.temporal_split.counts.validation,
+                ],
+                [
+                  "Holdout lacrado",
+                  latest.manifest.temporal_split.counts.final_holdout,
+                ],
+                [
+                  "Embargo",
+                  `${latest.manifest.temporal_split.effective_embargo_seconds ?? "—"}s`,
+                ],
+              ].map(([label, value]) => (
+                <div
+                  key={String(label)}
+                  className="rounded-lg border border-[var(--border-default)] px-3 py-2"
+                >
+                  <div className="font-mono text-cyan-100">{value}</div>
+                  <div className="mt-1 text-[9px] uppercase tracking-wider text-[var(--text-muted)]">
+                    {label}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {latest?.manifest?.preflight && (
+            <div className="mt-2 grid gap-2 text-[11px] text-[var(--text-secondary)] sm:grid-cols-4">
+              {[
+                [
+                  "MDE EV líquido",
+                  fmtNumber(
+                    latest.manifest.preflight.power_analysis
+                      ?.minimum_detectable_net_ev_pct,
+                    4,
+                  ),
+                ],
+                [
+                  "Limite de edge",
+                  fmtNumber(
+                    latest.manifest.preflight.maximum_plausible_edge_pct,
+                    4,
+                  ),
+                ],
+                [
+                  "Features aprovadas",
+                  latest.manifest.preflight.feature_quality
+                    ?.approved_for_both_windows?.length ?? "—",
+                ],
+                [
+                  "Features excluídas",
+                  latest.manifest.preflight.feature_quality?.excluded_from_model
+                    ?.length ?? "—",
+                ],
+              ].map(([label, value]) => (
+                <div
+                  key={String(label)}
+                  className="rounded-lg border border-[var(--border-default)] px-3 py-2"
+                >
+                  <div className="font-mono text-cyan-100">{value}</div>
+                  <div className="mt-1 text-[9px] uppercase tracking-wider text-[var(--text-muted)]">
+                    {label}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {(latest?.warnings?.length ?? 0) > 0 && (
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {latest?.warnings?.map((warning) => (
+                <span
+                  key={warning}
+                  className="rounded-md border border-amber-400/20 bg-amber-400/8 px-2 py-1 font-mono text-[9px] text-amber-200"
+                >
+                  {warning}
+                </span>
+              ))}
+            </div>
+          )}
           {latest?.error_message && (
             <div className="mt-3 rounded-lg border border-rose-400/20 bg-rose-400/8 p-3 font-mono text-[11px] text-rose-200">
               {latest.error_message}
@@ -937,9 +1109,9 @@ export default function BayesianIntelligencePanel() {
                     : undefined;
                 const essPassed =
                   diagnostic.effective_sample_size_min != null &&
-                  diagnosticGates?.min_effective_sample_size != null
+                  diagnosticGates?.min_mcmc_effective_sample_size != null
                     ? diagnostic.effective_sample_size_min >=
-                      diagnosticGates.min_effective_sample_size
+                      diagnosticGates.min_mcmc_effective_sample_size
                     : undefined;
                 const divergencesPassed =
                   diagnosticGates?.max_divergences != null
@@ -998,7 +1170,7 @@ export default function BayesianIntelligencePanel() {
                         <div className="mt-1 font-mono text-[9px] text-[var(--text-muted)]">
                           mínimo ≥{" "}
                           {fmtNumber(
-                            diagnosticGates?.min_effective_sample_size,
+                            diagnosticGates?.min_mcmc_effective_sample_size,
                             0,
                           )}
                         </div>
@@ -1092,12 +1264,12 @@ export default function BayesianIntelligencePanel() {
                     "Indicador",
                     "Direção",
                     "Lift TP",
-                    "Lift PnL",
-                    "P(efeito +)",
+                    "Lift EV líquido",
+                    "P(EV > ROPE)",
                     "IC 95%",
                     "Evidência",
-                    "Amostra direta",
-                    "Amostra compartilhada",
+                    "Discovery",
+                    "Validation",
                     "ESS",
                     "Status",
                   ].map((label) => (

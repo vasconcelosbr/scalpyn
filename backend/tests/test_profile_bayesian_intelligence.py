@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import ast
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -22,6 +24,8 @@ from app.profile_bayesian.data_contract import (
     canonical_hash,
     extract_indicators,
     finite_number,
+    target_horizon_seconds,
+    timeframe_seconds,
 )
 from app.profile_bayesian.dataset_builder import BayesianDatasetBuilder
 from app.profile_bayesian.evidence_grading import grade_evidence
@@ -29,9 +33,22 @@ from app.profile_bayesian.hierarchical_model import prepare_matrix
 from app.profile_bayesian.optimization.constraints import constraint_violations
 from app.profile_bayesian.optimization.objective import robust_score
 from app.profile_bayesian.optimization.search_space import build_search_space
+from app.profile_bayesian.posterior_analyzer import indicator_ev_posteriors
 from app.profile_bayesian.schemas import DiagnosticStatus, EvidenceGrade
 from app.profile_bayesian.validation.profile_replay_adapter import ProfileReplayAdapter
-from app.profile_bayesian.validation.temporal_split import purged_temporal_split
+from app.profile_bayesian.validation.concentration_checks import (
+    concentration_metrics,
+)
+from app.profile_bayesian.validation.data_quality import (
+    stratified_feature_quality,
+)
+from app.profile_bayesian.validation.power_analysis import (
+    minimum_detectable_net_ev,
+)
+from app.profile_bayesian.validation.temporal_split import (
+    derive_embargo_seconds,
+    purged_temporal_split,
+)
 
 
 def _observation(
@@ -125,7 +142,24 @@ def test_versioned_analysis_only_policy_is_complete_and_blocks_mutations():
     policy = load_analysis_only_policy_template()
 
     require_analysis_only(policy)
-    assert policy.values["policy_version"] == "analysis_only_v1"
+    assert policy.values["policy_version"] == "analysis_only_v2"
+    assert policy.values["bayesian_model"]["outcome_model"] == (
+        "multinomial_outcome"
+    )
+    assert policy.values["bayesian_model"]["pnl_model"] == (
+        "conditional_student_t"
+    )
+    assert policy.values["bayesian_model"]["validation_refit"] is True
+    assert policy.values["population_config"]["selection_strategy"] == (
+        "most_recent_contiguous"
+    )
+    assert policy.values["population_config"][
+        "required_barrier_contract_versions"
+    ] == ["shadow_atr_dynamic_v2"]
+    assert policy.values["max_drawdown"] is None
+    assert policy.values["min_expectancy_oos"] is None
+    assert policy.values["max_is_oos_degradation"] is None
+    assert policy.values["objective_weights"] is None
     assert policy.values["permissions"]["profile_bayesian.run_analysis"] is True
     assert policy.values["permissions"]["profile_bayesian.run_optimization"] is False
     assert policy.values["authorized_search_space"] == {}
@@ -167,6 +201,90 @@ def test_dataset_hash_is_deterministic_and_order_independent():
     assert canonical_hash([first, second]) == canonical_hash([second, first])
 
 
+def test_embargo_is_derived_from_target_horizon_plus_feature_lookback():
+    observations = tuple(
+        replace(
+            _observation(index, rsi=50 + index),
+            target_horizon_seconds=1800,
+        )
+        for index in range(3)
+    )
+
+    assert timeframe_seconds("4h") == 14400
+    assert target_horizon_seconds("5m", 30) == 1800
+    assert (
+        derive_embargo_seconds(
+            observations,
+            minimum_embargo_seconds=300,
+            max_feature_lookback_seconds=14400,
+        )
+        == 16200
+    )
+
+
+def test_power_analysis_reports_pre_fit_minimum_detectable_net_ev():
+    observations = tuple(
+        replace(item, net_pnl_pct=value)
+        for item, value in zip(
+            (
+                _observation(0, rsi=40),
+                _observation(1, rsi=41),
+                _observation(2, rsi=42),
+                _observation(3, rsi=43),
+            ),
+            (-1.0, -0.5, 0.5, 1.0),
+        )
+    )
+
+    result = minimum_detectable_net_ev(
+        observations,
+        posterior_probability=0.95,
+        practical_rope_pct=0.05,
+    )
+
+    assert result["status"] == "CALCULATED"
+    assert result["n"] == 4
+    assert result["minimum_detectable_net_ev_pct"] > 0.05
+
+
+def test_feature_quality_detects_outcome_associated_missingness():
+    observations = tuple(
+        replace(
+            _observation(index, rsi=None if index % 2 == 0 else 50.0),
+            atr_pct_at_entry=1.0,
+        )
+        for index in range(6)
+    )
+
+    result = stratified_feature_quality(
+        observations,
+        atr_bucket_edges_pct=(0.5, 1.0, 2.0),
+        min_global_coverage=0.4,
+        min_group_samples=1,
+        max_missing_outcome_cramers_v=0.2,
+    )
+
+    assert result["features"]["rsi"]["missing_outcome_cramers_v"] == pytest.approx(
+        1.0
+    )
+    assert "rsi:missingness_associated_with_outcome" in result["violations"]
+
+
+def test_concentration_reports_effective_counts_not_only_nominal_counts():
+    observations = (
+        _observation(0, rsi=40),
+        _observation(1, rsi=41),
+        replace(_observation(2, rsi=42), symbol="BTC_USDT"),
+        replace(_observation(3, rsi=43), symbol="BTC_USDT"),
+    )
+
+    metrics = concentration_metrics(observations)
+
+    assert metrics["n_symbols"] == 2
+    assert metrics["effective_symbols"] < metrics["n_symbols"]
+    assert metrics["effective_days"] == pytest.approx(4.0)
+
+
 def test_matrix_removes_constants_and_tracks_missingness_explicitly():
     matrix = prepare_matrix(
         [_observation(1, rsi=50.0), _observation(2, rsi=None), _observation(3, rsi=60.0)],
@@ -177,6 +295,43 @@ def test_matrix_removes_constants_and_tracks_missingness_explicitly():
     assert matrix.x.shape == (3, 2)
     assert matrix.x[1, 0] == 0.0
     assert matrix.x[1, 1] == 1.0
+
+
+def test_matrix_drops_exact_linear_dependencies_before_sampling():
+    observations = [
+        replace(
+            _observation(index, rsi=value),
+            indicators={
+                "rsi": value,
+                "rsi_copy": value,
+                "sparse_a": None if index == 2 else float(index),
+                "sparse_b": None if index == 2 else float(index * 2),
+            },
+        )
+        for index, value in enumerate((50.0, 55.0, 60.0, 65.0), start=1)
+    ]
+
+    matrix = prepare_matrix(observations, min_coverage=0.5)
+
+    assert matrix.matrix_rank == matrix.x.shape[1]
+    assert matrix.dropped_features
+    assert {"rsi", "rsi_copy"} & set(matrix.dropped_features)
+    assert not (
+        {"sparse_a__missing", "sparse_b__missing"} <= set(matrix.feature_names)
+    )
+
+
+def test_single_level_groups_are_not_parameterized_as_random_effects():
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "app"
+        / "profile_bayesian"
+        / "hierarchical_model.py"
+    ).read_text(encoding="utf-8")
+
+    assert "if len(labels) <= 1:" in source
+    assert "offset * scale" in source
+    assert 'pm.Normal(f"{name}_effect"' not in source
 
 
 def test_evidence_grading_requires_valid_diagnostics_and_configured_diversity():
@@ -223,6 +378,56 @@ def test_evidence_grading_requires_valid_diagnostics_and_configured_diversity():
         )
         == EvidenceGrade.INSUFFICIENT
     )
+
+
+class _PosteriorArray:
+    def __init__(self, values):
+        self.values = values
+
+    def stack(self, **_kwargs):
+        return self
+
+    def transpose(self, *_args):
+        return self
+
+
+def test_v2_posterior_grades_one_coherent_net_ev_estimand():
+    import numpy as np
+
+    samples = 8
+    outcome = SimpleNamespace(
+        posterior={
+                "indicator_outcome_effect": _PosteriorArray(
+                    np.asarray([[[0.0] * samples, [2.0] * samples]])
+                ),
+            "outcome_intercept": _PosteriorArray(np.zeros((samples, 2))),
+        }
+    )
+    pnl = SimpleNamespace(
+        posterior={
+            "indicator_pnl_effect": _PosteriorArray(
+                np.full((1, 3, samples), 0.1)
+            ),
+            "pnl_outcome_intercept": _PosteriorArray(
+                np.tile(np.asarray([-0.5, 0.0, 0.5]), (samples, 1))
+            ),
+        }
+    )
+
+    result = indicator_ev_posteriors(
+        outcome,
+        pnl,
+        ("rsi",),
+        practical_effect_rope_pct=0.0,
+    )
+
+    assert result[0]["estimand"] == "standardized_global_net_ev_lift"
+    assert result[0]["estimated_tp_lift"] > 0
+    assert result[0]["estimated_pnl_lift"] > 0
+    assert result[0]["probability_positive_effect"] == 1.0
+    assert result[0]["probability_negative_effect"] == 0.0
+    assert result[0]["probability_practically_equivalent"] == 0.0
+    assert result[0]["credible_interval_95"][0] > 0
 
 
 def test_search_space_is_bounded_around_current_configuration():
@@ -528,8 +733,8 @@ def test_policy_summary_exposes_configured_diagnostic_gates():
     assert summary is not None
     assert summary["diagnostic_gates"] == {
         "max_rhat": policy.values["max_rhat"],
-        "min_effective_sample_size": policy.values[
-            "min_effective_sample_size"
+        "min_mcmc_effective_sample_size": policy.values[
+            "min_mcmc_effective_sample_size"
         ],
         "max_divergences": policy.values["max_divergences"],
     }
@@ -646,11 +851,46 @@ async def test_policy_activation_persists_analysis_only_template(monkeypatch):
 
     assert result["configured"] is True
     assert result["created"] is True
-    assert result["summary"]["policy_version"] == "analysis_only_v1"
+    assert result["summary"]["policy_version"] == "analysis_only_v2"
     assert service.saved["config_type"] == "profile_bayesian"
     assert (
         service.saved["new_json"]["permissions"][
             "profile_bayesian.run_optimization"
         ]
         is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_policy_upgrade_replaces_safe_v1_with_safe_v2(monkeypatch):
+    service = _PolicyConfigService()
+    v1_path = (
+        Path(__file__).resolve().parents[1]
+        / "app"
+        / "profile_bayesian"
+        / "policies"
+        / "analysis_only_v1.json"
+    )
+    import json
+
+    service.current = json.loads(v1_path.read_text(encoding="utf-8"))
+
+    async def get_config(*_args, **_kwargs):
+        return service.current
+
+    service.get_config = get_config
+    monkeypatch.setattr(bayesian_api, "config_service", service)
+
+    result = await bayesian_api.upgrade_analysis_v2_policy(
+        db=object(),
+        user_id=uuid4(),
+    )
+
+    assert result["upgraded"] is True
+    assert service.saved["new_json"]["policy_version"] == "analysis_only_v2"
+    assert all(
+        value is False
+        for key, value in service.saved["new_json"]["permissions"].items()
+        if key != "profile_bayesian.view"
+        and key != "profile_bayesian.run_analysis"
     )

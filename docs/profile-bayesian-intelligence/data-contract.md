@@ -17,6 +17,11 @@ prevent leakage. Outcome and net PnL are labels, not features.
 - The entry snapshot is an object.
 - Outcome belongs to the recognized TP, SL, or timeout vocabulary.
 - The operational TP/SL policy matches the selected policy hash.
+- Source, lineage status, barrier mode, and barrier contract version match the
+  explicit persisted policy.
+- Entry time is at or after the policy's versioned population frontier.
+- Selection is a declared contiguous temporal window; random truncation is not
+  supported.
 
 If the window contains more than one incompatible TP/SL policy and the caller
 does not select one, the build fails. Policies are never mixed implicitly.
@@ -32,6 +37,11 @@ total score when present.
 - Invalid, infinite, and non-numeric values become missing, never zero.
 - Constant indicators are removed from model fitting.
 - Indicators below the configured coverage policy are removed.
+- Indicators must also pass coverage by entry day × entry ATR bucket and the
+  missingness/outcome association gate in both discovery and validation.
+- The dedicated `atr_pct_at_entry` column overrides a snapshot ATR
+  representation; entry-time BTC change and market-data confidence are exposed
+  as controls when coverage permits.
 - For retained indicators, missingness receives an explicit indicator column.
 - Standardization parameters are stored in the run context.
 
@@ -55,5 +65,5 @@ observations.
 - `direct_sample_size`: selected profile observations.
 - `shared_sample_size`: observations borrowed by an explicitly broader
   hierarchical dataset. The initial profile-scoped builder reports zero.
-- `effective_sample_size`: posterior sampling diagnostic; it is not a trade
+- `min_mcmc_effective_sample_size`: posterior sampling diagnostic; it is not a trade
   count.

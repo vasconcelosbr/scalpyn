@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from bisect import bisect_right
 from dataclasses import dataclass
 from datetime import datetime
 import hashlib
@@ -20,6 +21,7 @@ from .data_contract import (
     extract_regime,
     finite_number,
     policy_key,
+    target_horizon_seconds,
 )
 
 
@@ -52,9 +54,37 @@ class BayesianDatasetBuilder:
         profile_version_id: UUID | None = None,
         requested_policy_key: str | None = None,
         requested_indicators: Iterable[str] | None = None,
+        required_sources: Iterable[str] = (),
+        required_lineage_statuses: Iterable[str] = (),
+        required_barrier_modes: Iterable[str] = (),
+        required_barrier_contract_versions: Iterable[str] = (),
+        minimum_entry_at: datetime | None = None,
+        require_eligible_for_training: bool = False,
+        atr_bucket_edges_pct: Iterable[float] = (),
+        selection_strategy: str = "oldest_contiguous",
     ) -> BuiltDataset:
         if max_trades <= 0:
             raise DatasetContractError("max_trades must be positive")
+        if selection_strategy not in {
+            "oldest_contiguous",
+            "most_recent_contiguous",
+        }:
+            raise DatasetContractError("unsupported dataset selection strategy")
+        required_sources = tuple(sorted(set(required_sources)))
+        required_lineage_statuses = tuple(sorted(set(required_lineage_statuses)))
+        required_barrier_modes = tuple(sorted(set(required_barrier_modes)))
+        required_barrier_contract_versions = tuple(
+            sorted(set(required_barrier_contract_versions))
+        )
+        requested_indicators = (
+            tuple(requested_indicators)
+            if requested_indicators is not None
+            else None
+        )
+        atr_bucket_edges_pct = tuple(sorted(set(atr_bucket_edges_pct)))
+        order_direction = (
+            "DESC" if selection_strategy == "most_recent_contiguous" else "ASC"
+        )
         profile_version_value = (
             str(profile_version_id) if profile_version_id else None
         )
@@ -72,8 +102,42 @@ class BayesianDatasetBuilder:
                       AND st.completed_at >= :window_from
                       AND st.completed_at < :window_to
                       AND (
+                          CAST(:minimum_entry_at AS TIMESTAMPTZ) IS NULL
+                          OR st.entry_timestamp >= CAST(
+                              :minimum_entry_at AS TIMESTAMPTZ
+                          )
+                      )
+                      AND (
                           CAST(:profile_version_id AS UUID) IS NULL
                           OR st.profile_version_id = CAST(:profile_version_id AS UUID)
+                      )
+                      AND (
+                          cardinality(CAST(:required_sources AS TEXT[])) = 0
+                          OR st.source = ANY(CAST(:required_sources AS TEXT[]))
+                      )
+                      AND (
+                          cardinality(CAST(:required_lineage_statuses AS TEXT[])) = 0
+                          OR st.lineage_status = ANY(
+                              CAST(:required_lineage_statuses AS TEXT[])
+                          )
+                      )
+                      AND (
+                          cardinality(CAST(:required_barrier_modes AS TEXT[])) = 0
+                          OR st.barrier_mode = ANY(
+                              CAST(:required_barrier_modes AS TEXT[])
+                          )
+                      )
+                      AND (
+                          cardinality(
+                              CAST(:required_barrier_contract_versions AS TEXT[])
+                          ) = 0
+                          OR st.barrier_contract_version = ANY(
+                              CAST(:required_barrier_contract_versions AS TEXT[])
+                          )
+                      )
+                      AND (
+                          CAST(:require_eligible_for_training AS BOOLEAN) = FALSE
+                          OR st.eligible_for_training IS TRUE
                       )
                     GROUP BY
                         st.barrier_contract_version, st.tp_pct, st.sl_pct,
@@ -93,6 +157,16 @@ class BayesianDatasetBuilder:
                     "profile_version_id": profile_version_value,
                     "window_from": window_from,
                     "window_to": window_to,
+                    "minimum_entry_at": minimum_entry_at,
+                    "required_sources": list(required_sources),
+                    "required_lineage_statuses": list(
+                        required_lineage_statuses
+                    ),
+                    "required_barrier_modes": list(required_barrier_modes),
+                    "required_barrier_contract_versions": list(
+                        required_barrier_contract_versions
+                    ),
+                    "require_eligible_for_training": require_eligible_for_training,
                 },
             )
         ).mappings().all()
@@ -125,7 +199,10 @@ class BayesianDatasetBuilder:
                         st.outcome, st.pnl_pct, st.source, st.direction,
                         st.tp_pct, st.sl_pct, st.timeout_candles,
                         st.barrier_contract_version, st.features_snapshot,
-                        st.exit_metrics_json
+                        st.exit_metrics_json, st.barrier_mode,
+                        st.lineage_status, st.eligible_for_training,
+                        st.atr_pct_at_entry, st.fee_roundtrip_pct_applied,
+                        st.btc_change_1h_pct, st.market_data_confidence
                     FROM shadow_trades st
                     WHERE st.user_id = :user_id
                       AND st.profile_id = :profile_id
@@ -133,8 +210,42 @@ class BayesianDatasetBuilder:
                       AND st.completed_at >= :window_from
                       AND st.completed_at < :window_to
                       AND (
+                          CAST(:minimum_entry_at AS TIMESTAMPTZ) IS NULL
+                          OR st.entry_timestamp >= CAST(
+                              :minimum_entry_at AS TIMESTAMPTZ
+                          )
+                      )
+                      AND (
                           CAST(:profile_version_id AS UUID) IS NULL
                           OR st.profile_version_id = CAST(:profile_version_id AS UUID)
+                      )
+                      AND (
+                          cardinality(CAST(:required_sources AS TEXT[])) = 0
+                          OR st.source = ANY(CAST(:required_sources AS TEXT[]))
+                      )
+                      AND (
+                          cardinality(CAST(:required_lineage_statuses AS TEXT[])) = 0
+                          OR st.lineage_status = ANY(
+                              CAST(:required_lineage_statuses AS TEXT[])
+                          )
+                      )
+                      AND (
+                          cardinality(CAST(:required_barrier_modes AS TEXT[])) = 0
+                          OR st.barrier_mode = ANY(
+                              CAST(:required_barrier_modes AS TEXT[])
+                          )
+                      )
+                      AND (
+                          cardinality(
+                              CAST(:required_barrier_contract_versions AS TEXT[])
+                          ) = 0
+                          OR st.barrier_contract_version = ANY(
+                              CAST(:required_barrier_contract_versions AS TEXT[])
+                          )
+                      )
+                      AND (
+                          CAST(:require_eligible_for_training AS BOOLEAN) = FALSE
+                          OR st.eligible_for_training IS TRUE
                       )
                       AND st.barrier_contract_version
                           IS NOT DISTINCT FROM :barrier_contract_version
@@ -142,9 +253,9 @@ class BayesianDatasetBuilder:
                       AND st.sl_pct IS NOT DISTINCT FROM :sl_pct
                       AND st.timeout_candles IS NOT DISTINCT FROM :timeout_candles
                       AND st.direction IS NOT DISTINCT FROM :direction
-                    ORDER BY st.completed_at ASC, st.id ASC
+                    ORDER BY st.completed_at {order_direction}, st.id {order_direction}
                     LIMIT :max_trades
-                    """
+                    """.format(order_direction=order_direction)
                 ),
                 {
                     "user_id": str(user_id),
@@ -152,6 +263,7 @@ class BayesianDatasetBuilder:
                     "profile_version_id": profile_version_value,
                     "window_from": window_from,
                     "window_to": window_to,
+                    "minimum_entry_at": minimum_entry_at,
                     "barrier_contract_version": selected_group[
                         "barrier_contract_version"
                     ],
@@ -160,6 +272,15 @@ class BayesianDatasetBuilder:
                     "timeout_candles": selected_group["timeout_candles"],
                     "direction": selected_group["direction"],
                     "max_trades": max_trades,
+                    "required_sources": list(required_sources),
+                    "required_lineage_statuses": list(
+                        required_lineage_statuses
+                    ),
+                    "required_barrier_modes": list(required_barrier_modes),
+                    "required_barrier_contract_versions": list(
+                        required_barrier_contract_versions
+                    ),
+                    "require_eligible_for_training": require_eligible_for_training,
                 },
             )
         ).mappings().all()
@@ -193,6 +314,27 @@ class BayesianDatasetBuilder:
             )
             if net_pnl is None:
                 net_pnl = finite_number(row["pnl_pct"])
+            indicators = extract_indicators(snapshot, requested_indicators)
+            atr_at_entry = finite_number(row.get("atr_pct_at_entry"))
+            btc_change_1h = finite_number(row.get("btc_change_1h_pct"))
+            market_confidence = finite_number(
+                row.get("market_data_confidence")
+            )
+            requested = set(requested_indicators or ())
+            # Dedicated immutable entry columns are authoritative controls.
+            # They replace any less-specific snapshot representation.
+            if requested_indicators is None or "atr_pct" in requested:
+                indicators["atr_pct"] = atr_at_entry
+            if (
+                requested_indicators is None
+                or "btc_change_1h_pct" in requested
+            ):
+                indicators["btc_change_1h_pct"] = btc_change_1h
+            if (
+                requested_indicators is None
+                or "market_data_confidence" in requested
+            ):
+                indicators["market_data_confidence"] = market_confidence
             observations.append(
                 CanonicalObservation(
                     observation_id=observation_id,
@@ -210,8 +352,33 @@ class BayesianDatasetBuilder:
                     net_pnl_pct=net_pnl,
                     regime=extract_regime(snapshot),
                     policy_key=selected_policy,
-                    indicators=extract_indicators(snapshot, requested_indicators),
+                    indicators=indicators,
                     source=str(row["source"]),
+                    barrier_mode=(
+                        str(row.get("barrier_mode"))
+                        if row.get("barrier_mode")
+                        else None
+                    ),
+                    lineage_status=(
+                        str(row.get("lineage_status"))
+                        if row.get("lineage_status")
+                        else None
+                    ),
+                    eligible_for_training=(
+                        bool(row.get("eligible_for_training"))
+                        if row.get("eligible_for_training") is not None
+                        else None
+                    ),
+                    target_horizon_seconds=target_horizon_seconds(
+                        str(row["timeframe"]) if row["timeframe"] else None,
+                        row["timeout_candles"],
+                    ),
+                    atr_pct_at_entry=atr_at_entry,
+                    fee_roundtrip_pct=finite_number(
+                        row.get("fee_roundtrip_pct_applied")
+                    ),
+                    btc_change_1h_pct=btc_change_1h,
+                    market_data_confidence=market_confidence,
                 )
             )
         if not observations:
@@ -223,6 +390,37 @@ class BayesianDatasetBuilder:
         counts_by_regime = Counter(item.regime or "UNKNOWN" for item in observations)
         counts_by_outcome = Counter(item.outcome for item in observations)
         counts_by_profile = Counter(item.profile_id for item in observations)
+        counts_by_source = Counter(item.source for item in observations)
+        counts_by_lineage = Counter(
+            item.lineage_status or "NULL" for item in observations
+        )
+        counts_by_barrier_mode = Counter(
+            item.barrier_mode or "NULL" for item in observations
+        )
+        counts_by_eligibility = Counter(
+            str(item.eligible_for_training).lower()
+            if item.eligible_for_training is not None
+            else "null"
+            for item in observations
+        )
+        counts_by_atr_bucket: Counter[str] = Counter()
+        for item in observations:
+            if item.atr_pct_at_entry is None:
+                counts_by_atr_bucket["MISSING"] += 1
+                continue
+            position = bisect_right(atr_bucket_edges_pct, item.atr_pct_at_entry)
+            if not atr_bucket_edges_pct:
+                label = "ALL_FINITE"
+            elif position == 0:
+                label = f"<={atr_bucket_edges_pct[0]:g}"
+            elif position >= len(atr_bucket_edges_pct):
+                label = f">{atr_bucket_edges_pct[-1]:g}"
+            else:
+                label = (
+                    f"({atr_bucket_edges_pct[position - 1]:g},"
+                    f"{atr_bucket_edges_pct[position]:g}]"
+                )
+            counts_by_atr_bucket[label] += 1
         manifest = {
             "contract_version": "profile_bayesian_dataset_v1",
             "source_tables": ["shadow_trades"],
@@ -240,6 +438,20 @@ class BayesianDatasetBuilder:
                     if requested_policy_key
                     else "largest_compatible_group"
                 ),
+                "selection_strategy": selection_strategy,
+                "required_sources": list(required_sources),
+                "required_lineage_statuses": list(
+                    required_lineage_statuses
+                ),
+                "required_barrier_modes": list(required_barrier_modes),
+                "required_barrier_contract_versions": list(
+                    required_barrier_contract_versions
+                ),
+                "minimum_entry_at": (
+                    minimum_entry_at.isoformat() if minimum_entry_at else None
+                ),
+                "require_eligible_for_training": require_eligible_for_training,
+                "atr_bucket_edges_pct": list(atr_bucket_edges_pct),
             },
             "exclusion": {
                 "duplicate_ids": duplicate_ids,
@@ -256,6 +468,11 @@ class BayesianDatasetBuilder:
             },
             "counts": {
                 "profile": dict(counts_by_profile),
+                "source": dict(counts_by_source),
+                "lineage_status": dict(counts_by_lineage),
+                "barrier_mode": dict(counts_by_barrier_mode),
+                "eligible_for_training": dict(counts_by_eligibility),
+                "atr_pct_at_entry_bucket": dict(counts_by_atr_bucket),
                 "symbol": dict(counts_by_symbol),
                 "regime": dict(counts_by_regime),
                 "outcome": dict(counts_by_outcome),
@@ -268,7 +485,32 @@ class BayesianDatasetBuilder:
             dataset_hash=canonical_hash(observations),
             policy_hash=hashlib.sha256(
                 json.dumps(
-                    {"policy_key": selected_policy}, sort_keys=True
+                    {
+                        "policy_key": selected_policy,
+                        "required_sources": list(required_sources),
+                        "required_lineage_statuses": list(
+                            required_lineage_statuses
+                        ),
+                        "required_barrier_modes": list(
+                            required_barrier_modes
+                        ),
+                        "required_barrier_contract_versions": list(
+                            required_barrier_contract_versions
+                        ),
+                        "minimum_entry_at": (
+                            minimum_entry_at.isoformat()
+                            if minimum_entry_at
+                            else None
+                        ),
+                        "require_eligible_for_training": (
+                            require_eligible_for_training
+                        ),
+                        "atr_bucket_edges_pct": list(
+                            atr_bucket_edges_pct
+                        ),
+                        "selection_strategy": selection_strategy,
+                    },
+                    sort_keys=True,
                 ).encode("utf-8")
             ).hexdigest(),
             window_from=window_from,
