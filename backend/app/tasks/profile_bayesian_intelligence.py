@@ -4,9 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from uuid import UUID
 
-from .celery_app import celery_app
+if os.getenv("PROFILE_BAYESIAN_DEDICATED_APP", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}:
+    from .profile_bayesian_celery_app import celery_app
+else:
+    from .celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 

@@ -23,6 +23,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HOME=/home/appuser \
     XDG_CACHE_HOME=/home/appuser/.cache \
     MPLCONFIGDIR=/home/appuser/.cache/matplotlib \
+    PROFILE_BAYESIAN_DEDICATED_APP=1 \
     PROFILE_BAYESIAN_WORKER_QUEUES=profile_bayesian,profile_optimization \
     PROFILE_BAYESIAN_WORKER_CONCURRENCY=1 \
     DEBIAN_FRONTEND=noninteractive

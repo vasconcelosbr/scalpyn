@@ -1,8 +1,21 @@
 # Install only in the dedicated profile_bayesian/profile_optimization worker.
-# The exact scientific stack is pinned against the base NumPy/SciPy versions so
-# production builds are deterministic and do not trigger resolver backtracking.
-# The API and trading workers intentionally do not need these packages.
--r requirements.txt
+# This worker uses a minimal Celery app and must not inherit the trading/ML
+# runtime (XGBoost, LightGBM, CatBoost, Gate.io or MLflow). Keeping the
+# scientific image isolated prevents an unrelated dependency download from
+# exhausting Railway's build window.
+fastapi>=0.111.0,<0.136.0
+sqlalchemy>=2.0.31
+asyncpg>=0.29.0
+celery[redis]>=5.4.0
+redis>=5.0.4
+pydantic>=2.7.4
+pydantic-settings>=2.3.4
+prometheus-client>=0.20.0
+
+# Exact scientific stack: deterministic and compatible with Python 3.12.
+pandas==2.2.2
+numpy==1.26.4
+scipy==1.13.1
 pymc==5.16.2
 pytensor==2.25.4
 arviz==0.18.0

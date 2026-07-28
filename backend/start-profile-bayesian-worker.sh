@@ -30,7 +30,9 @@ case "$concurrency" in
     ;;
 esac
 
-exec celery -A app.tasks.celery_app worker \
+export PROFILE_BAYESIAN_DEDICATED_APP=1
+
+exec celery -A app.tasks.profile_bayesian_celery_app:celery_app worker \
   --loglevel="${CELERY_LOGLEVEL:-INFO}" \
   --concurrency="$concurrency" \
   --queues="$queues" \

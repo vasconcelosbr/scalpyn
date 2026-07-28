@@ -32,6 +32,11 @@ both analytical queues with one process. Any override is validated so it cannot
 subscribe to a trading queue. The image starts only Celery: it does not run API,
 beat, migrations, scanners, or trading tasks.
 
+The image starts `profile_bayesian_celery_app`, which imports only the Bayesian
+task module. Its requirements intentionally exclude the generic trading and ML
+runtime (XGBoost, LightGBM, CatBoost, Gate.io and MLflow), keeping the
+scientific worker independent and inside the production builder budget.
+
 The API creates an idempotent run and dispatches it. PostgreSQL advisory locks
 and unique keys prevent concurrent duplicate processing. Failures update the run
 to `FAILED`, release transaction-level locks, and are returned as data; they are

@@ -73,6 +73,48 @@ def test_flags_default_false_and_auto_promotion_cannot_be_enabled(monkeypatch):
     assert feature_flags().auto_promotion_enabled is False
 
 
+def test_dedicated_worker_image_excludes_unrelated_trading_ml_runtime():
+    backend_root = Path(__file__).resolve().parents[1]
+    requirements = (
+        backend_root / "requirements-profile-bayesian.txt"
+    ).read_text(encoding="utf-8")
+    start_script = (
+        backend_root / "start-profile-bayesian-worker.sh"
+    ).read_text(encoding="utf-8")
+    dockerfile = (
+        backend_root / "Dockerfile.profile-bayesian"
+    ).read_text(encoding="utf-8")
+    requirement_entries = "\n".join(
+        line
+        for line in requirements.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ).lower()
+
+    assert "-r requirements.txt" not in requirements
+    for excluded in ("xgboost", "lightgbm", "catboost", "gate-api", "mlflow"):
+        assert excluded not in requirement_entries
+    for required in ("pymc==", "pytensor==", "arviz==", "matplotlib=="):
+        assert required in requirements.lower()
+    assert "profile_bayesian_celery_app:celery_app" in start_script
+    assert "PROFILE_BAYESIAN_DEDICATED_APP=1" in dockerfile
+
+
+def test_dedicated_celery_app_registers_only_bayesian_task_module(monkeypatch):
+    monkeypatch.setenv("PROFILE_BAYESIAN_DEDICATED_APP", "1")
+    from app.tasks.profile_bayesian_celery_app import (
+        ANALYZE_TASK,
+        OPTIMIZE_TASK,
+        celery_app,
+    )
+
+    assert celery_app.conf.include == ["app.tasks.profile_bayesian_intelligence"]
+    assert celery_app.conf.task_routes[ANALYZE_TASK]["queue"] == "profile_bayesian"
+    assert (
+        celery_app.conf.task_routes[OPTIMIZE_TASK]["queue"]
+        == "profile_optimization"
+    )
+
+
 def test_policy_is_fail_closed_when_any_required_key_is_missing():
     with pytest.raises(PolicyConfigurationError, match="policy is incomplete"):
         BayesianPolicy.from_mapping({})
