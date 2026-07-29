@@ -20,6 +20,12 @@ QUEUE_PROFILE_OPTIMIZATION = "profile_optimization"
 ANALYZE_TASK = "app.tasks.profile_bayesian_intelligence.analyze"
 OPTIMIZE_TASK = "app.tasks.profile_bayesian_intelligence.optimize"
 
+
+def _optional_rate_limit(env_name: str) -> str | None:
+    value = os.getenv(env_name, "").strip()
+    return value or None
+
+
 celery_app = Celery(
     "scalpyn_profile_bayesian",
     broker=settings.REDIS_URL,
@@ -74,7 +80,9 @@ celery_app.conf.update(
             "soft_time_limit": int(
                 os.getenv("PROFILE_BAYESIAN_TASK_SOFT_TIME_LIMIT_SECONDS", "6900")
             ),
-            "rate_limit": "2/h",
+            "rate_limit": _optional_rate_limit(
+                "PROFILE_BAYESIAN_TASK_RATE_LIMIT"
+            ),
             "max_retries": 0,
             "acks_late": False,
         },
@@ -85,7 +93,9 @@ celery_app.conf.update(
             "soft_time_limit": int(
                 os.getenv("PROFILE_OPTIMIZATION_TASK_SOFT_TIME_LIMIT_SECONDS", "6900")
             ),
-            "rate_limit": "2/h",
+            "rate_limit": _optional_rate_limit(
+                "PROFILE_OPTIMIZATION_TASK_RATE_LIMIT"
+            ),
             "max_retries": 0,
             "acks_late": False,
         },

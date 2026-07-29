@@ -31,11 +31,10 @@ import {
   X,
 } from "lucide-react";
 
-import { ApiError, apiGet, apiPost, apiPut } from "@/lib/api";
+import { apiGet, apiPost, apiPut } from "@/lib/api";
 import {
   ALL_PROFILES_VALUE,
   analysisTargets,
-  batchIdempotencyKey,
   deduplicateProfileOptions,
   type BayesianProfileOption,
 } from "@/lib/profile-bayesian-batch";
@@ -88,6 +87,71 @@ type BatchRequestState = {
   failed: number;
   currentProfile?: string;
   failures: string[];
+};
+
+type ConsolidatedIndicator = {
+  indicator: string;
+  regime?: string | null;
+  profiles_included: number;
+  total_direct_sample_size: number;
+  direction_counts: {
+    POSITIVE: number;
+    NEGATIVE: number;
+    NEUTRAL: number;
+  };
+  consensus_direction: string;
+  weighted_tp_lift?: number | null;
+  weighted_pnl_lift?: number | null;
+  weighted_probability_positive?: number | null;
+  highest_evidence_grade: string;
+};
+
+type BatchAnalysis = {
+  batch_id: string;
+  legacy_batch: boolean;
+  status: string;
+  progress: number;
+  counts: {
+    total: number;
+    terminal: number;
+    pending: number;
+    active: number;
+    valid: number;
+    warnings: number;
+    not_converged: number;
+    failed: number;
+  };
+  profile_runs: Array<{
+    id: string;
+    profile_id: string;
+    profile_name: string;
+    status: string;
+    diagnostic_status?: string | null;
+    row_count?: number | null;
+    error_message?: string | null;
+  }>;
+  report: {
+    status: "PARTIAL" | "FINAL";
+    eligible_profiles: number;
+    excluded_profiles: number;
+    indicator_count: number;
+    indicators: ConsolidatedIndicator[];
+    direction_summary: {
+      POSITIVE: number;
+      NEGATIVE: number;
+      NEUTRAL: number;
+      MIXED: number;
+    };
+    evidence_summary: {
+      INSUFFICIENT: number;
+      WEAK: number;
+      MODERATE: number;
+      STRONG: number;
+      VERY_STRONG: number;
+    };
+    methodology: string;
+    language: "association_not_causation";
+  };
 };
 
 type AnalysisRun = {
@@ -275,6 +339,7 @@ export default function BayesianIntelligencePanel() {
   const [batchRequest, setBatchRequest] = useState<BatchRequestState | null>(
     null,
   );
+  const [batchAnalysis, setBatchAnalysis] = useState<BatchAnalysis | null>(null);
   const [latest, setLatest] = useState<AnalysisRun | null>(null);
   const [diagnostics, setDiagnostics] = useState<BayesianDiagnostic[]>([]);
   const [effects, setEffects] = useState<IndicatorEffect[]>([]);
@@ -342,16 +407,28 @@ export default function BayesianIntelligencePanel() {
     setAuditEvents(auditResult?.items ?? []);
   }, []);
 
+  const loadBatch = useCallback(async () => {
+    const result = await apiGet<{ item: BatchAnalysis | null }>(
+      "/profile-intelligence/bayesian/batches/latest",
+    ).catch(() => ({ item: null }));
+    setBatchAnalysis(result.item);
+    return result.item;
+  }, []);
+
   const loadInitial = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [statusResult, profilesResult] = await Promise.allSettled([
-        apiGet<ModuleStatus>("/profile-intelligence/bayesian/status"),
-        apiGet<ProfileRankingResponse>(
-          "/profile-intelligence/profiles/ranking?lookback_days=60&limit=100",
-        ),
-      ]);
+      const [statusResult, profilesResult, batchResult] =
+        await Promise.allSettled([
+          apiGet<ModuleStatus>("/profile-intelligence/bayesian/status"),
+          apiGet<ProfileRankingResponse>(
+            "/profile-intelligence/profiles/ranking?lookback_days=60&limit=100",
+          ),
+          apiGet<{ item: BatchAnalysis | null }>(
+            "/profile-intelligence/bayesian/batches/latest",
+          ),
+        ]);
 
       if (statusResult.status === "rejected") {
         throw statusResult.reason;
@@ -364,6 +441,9 @@ export default function BayesianIntelligencePanel() {
           : [];
       const items = deduplicateProfileOptions(rawItems);
       setProfiles(items);
+      const latestBatch =
+        batchResult.status === "fulfilled" ? batchResult.value.item : null;
+      setBatchAnalysis(latestBatch);
 
       if (profilesResult.status === "rejected") {
         const rankingMessage =
@@ -375,7 +455,10 @@ export default function BayesianIntelligencePanel() {
 
       const selected = profileId || items[0]?.profile_id || "";
       setProfileId(selected);
-      setAnalysisSelection((current) => current || selected);
+      setAnalysisSelection((current) =>
+        current ||
+        (latestBatch?.status === "RUNNING" ? ALL_PROFILES_VALUE : selected),
+      );
       await loadProfile(selected);
     } catch (requestError) {
       setError(
@@ -390,7 +473,6 @@ export default function BayesianIntelligencePanel() {
 
   useEffect(() => {
     // Async loader synchronizes this client panel with the authenticated API.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadInitial();
     // The first load intentionally selects the first available profile.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -399,7 +481,6 @@ export default function BayesianIntelligencePanel() {
   useEffect(() => {
     if (!profileId) return;
     // Async loader synchronizes the selected profile with the API.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadProfile(profileId);
   }, [loadProfile, profileId]);
 
@@ -411,6 +492,19 @@ export default function BayesianIntelligencePanel() {
     return () => window.clearInterval(interval);
   }, [latest, loadProfile, profileId]);
 
+  useEffect(() => {
+    if (analysisSelection !== ALL_PROFILES_VALUE) return;
+    void loadBatch();
+  }, [analysisSelection, loadBatch]);
+
+  useEffect(() => {
+    if (batchAnalysis?.status !== "RUNNING") return;
+    const interval = window.setInterval(() => {
+      void loadBatch();
+    }, 10000);
+    return () => window.clearInterval(interval);
+  }, [batchAnalysis?.status, loadBatch]);
+
   const canAnalyze =
     moduleStatus?.flags?.enabled === true &&
     moduleStatus?.flags?.analysis_enabled === true &&
@@ -421,12 +515,14 @@ export default function BayesianIntelligencePanel() {
     latest && !terminalStatuses.has(latest.status),
   );
   const posteriorWithheld = latest?.diagnostic_status === "NOT_CONVERGED";
+  const isActiveBatch = batchAnalysis?.status === "RUNNING";
 
   const runAnalysis = async () => {
     if (!canAnalyze || running) return;
     const targets = analysisTargets(analysisSelection, profiles);
     if (targets.length === 0) return;
     const isBatchSelection = analysisSelection === ALL_PROFILES_VALUE;
+    if (isBatchSelection && isActiveBatch) return;
     setRunning(true);
     setError(null);
     setBatchRequest(
@@ -443,57 +539,41 @@ export default function BayesianIntelligencePanel() {
     try {
       const from = new Date(`${windowFrom}T00:00:00.000Z`);
       const to = new Date(`${windowTo}T23:59:59.999Z`);
-      const batchId = crypto.randomUUID();
       const randomSeed = Date.now() % 2147483647;
-      let accepted = 0;
-      const failures: string[] = [];
-
-      for (const target of targets) {
-        if (isBatchSelection) {
-          setBatchRequest({
-            status: "submitting",
-            total: targets.length,
-            accepted,
-            failed: failures.length,
-            currentProfile: target.profile_name,
-            failures: [...failures],
-          });
-        }
-        try {
-          await apiPost(
-            `/profile-intelligence/${target.profile_id}/bayesian/analyze`,
-            {
-              window_from: from.toISOString(),
-              window_to: to.toISOString(),
-              random_seed: randomSeed,
-              idempotency_key:
-                isBatchSelection
-                  ? batchIdempotencyKey(batchId, target.profile_id)
-                  : crypto.randomUUID(),
-            },
-          );
-          accepted += 1;
-        } catch (requestError) {
-          if (requestError instanceof ApiError && requestError.status === 401) {
-            throw requestError;
-          }
-          failures.push(target.profile_name);
-        }
-      }
-
       if (isBatchSelection) {
+        const response = await apiPost<{
+          total: number;
+          enqueued: number;
+          enqueue_failures: string[];
+        }>("/profile-intelligence/bayesian/batches", {
+          profile_ids: targets.map((target) => target.profile_id),
+          window_from: from.toISOString(),
+          window_to: to.toISOString(),
+          random_seed: randomSeed,
+          idempotency_key: crypto.randomUUID(),
+        });
+        const failures = response.enqueue_failures ?? [];
         setBatchRequest({
           status: failures.length > 0 ? "partial" : "submitted",
-          total: targets.length,
-          accepted,
+          total: response.total,
+          accepted: response.enqueued,
           failed: failures.length,
           failures,
         });
-        if (accepted === 0) {
+        if (response.enqueued === 0) {
           throw new Error("Nenhuma análise do lote pôde ser enfileirada.");
         }
-      } else if (failures.length > 0) {
-        throw new Error("A análise não pôde ser enfileirada.");
+        await loadBatch();
+      } else {
+        await apiPost(
+          `/profile-intelligence/${targets[0].profile_id}/bayesian/analyze`,
+          {
+            window_from: from.toISOString(),
+            window_to: to.toISOString(),
+            random_seed: randomSeed,
+            idempotency_key: crypto.randomUUID(),
+          },
+        );
       }
 
       const profileToRefresh = profileId || targets[0]?.profile_id || "";
@@ -942,7 +1022,11 @@ export default function BayesianIntelligencePanel() {
           </div>
           <button
             type="button"
-            disabled={!canAnalyze || running}
+            disabled={
+              !canAnalyze ||
+              running ||
+              (analysisSelection === ALL_PROFILES_VALUE && isActiveBatch)
+            }
             onClick={runAnalysis}
             className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg border border-cyan-300/25 bg-cyan-300/10 px-3 py-2.5 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-300/15 disabled:cursor-not-allowed disabled:opacity-40"
           >
@@ -952,9 +1036,11 @@ export default function BayesianIntelligencePanel() {
               <Play className="h-4 w-4" />
             )}
             {running && batchRequest
-              ? `Enfileirando ${batchRequest.accepted}/${batchRequest.total}`
+              ? "Criando lote persistente"
               : analysisSelection === ALL_PROFILES_VALUE
-                ? "Solicitar análise de todos"
+                ? isActiveBatch
+                  ? `Lote em execução ${batchAnalysis?.counts.terminal ?? 0}/${batchAnalysis?.counts.total ?? 0}`
+                  : "Solicitar análise de todos"
                 : "Solicitar análise"}
           </button>
           {batchRequest && (
@@ -982,9 +1068,8 @@ export default function BayesianIntelligencePanel() {
                 </span>
               </div>
               <p className="mt-1 text-[10px] leading-4 text-[var(--text-muted)]">
-                {batchRequest.currentProfile
-                  ? `Enviando ${batchRequest.currentProfile}.`
-                  : "O worker dedicado processará os profiles sequencialmente. Consulte cada resultado pelo seletor."}
+                O lote fica persistido e o relatório consolidado é atualizado
+                conforme cada profile termina.
               </p>
               {batchRequest.failures.length > 0 && (
                 <p className="mt-1 text-[10px] leading-4 text-amber-200">
@@ -995,7 +1080,7 @@ export default function BayesianIntelligencePanel() {
           )}
           <p className="mt-3 text-[11px] leading-4 text-[var(--text-muted)]">
             {analysisSelection === ALL_PROFILES_VALUE
-              ? "Cada profile recebe um run idempotente com a mesma janela e seed. O lote não aumenta a concorrência do worker."
+              ? "Os profiles são processados sequencialmente, sem elevar a concorrência científica do worker."
               : "A API cria um run idempotente; o worker dedicado processa o dataset sem bloquear esta tela."}
           </p>
         </div>
@@ -1019,7 +1104,12 @@ export default function BayesianIntelligencePanel() {
               <StatusPill value={latest?.status} />
               <button
                 type="button"
-                onClick={() => void loadProfile(profileId)}
+                onClick={() => {
+                  void loadProfile(profileId);
+                  if (analysisSelection === ALL_PROFILES_VALUE) {
+                    void loadBatch();
+                  }
+                }}
                 className="rounded-lg border border-[var(--border-default)] p-2 text-[var(--text-secondary)] hover:text-cyan-200"
                 aria-label="Atualizar Bayesian Intelligence"
               >
@@ -1168,6 +1258,256 @@ export default function BayesianIntelligencePanel() {
           )}
         </div>
       </section>
+
+      {analysisSelection === ALL_PROFILES_VALUE && (
+        <section className="overflow-hidden rounded-xl border border-cyan-300/20 bg-[var(--bg-card)]">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-default)] p-4">
+            <div>
+              <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-cyan-300">
+                Cross-profile evidence
+              </div>
+              <h3 className="mt-1 text-sm font-semibold text-[var(--text-primary)]">
+                Relatório consolidado de todos os profiles
+              </h3>
+            </div>
+            <div className="flex items-center gap-2">
+              {batchAnalysis?.report.status === "PARTIAL" && (
+                <span className="rounded-full border border-amber-400/25 bg-amber-400/8 px-2.5 py-1 font-mono text-[9px] uppercase tracking-wider text-amber-200">
+                  Relatório parcial
+                </span>
+              )}
+              <StatusPill value={batchAnalysis?.status} />
+              <button
+                type="button"
+                onClick={() => void loadBatch()}
+                className="rounded-lg border border-[var(--border-default)] p-2 text-[var(--text-secondary)] hover:text-cyan-200"
+                aria-label="Atualizar relatório consolidado"
+              >
+                <RefreshCw
+                  className={`h-4 w-4 ${isActiveBatch ? "animate-spin" : ""}`}
+                />
+              </button>
+            </div>
+          </div>
+
+          {!batchAnalysis ? (
+            <div className="grid min-h-44 place-items-center p-6 text-center">
+              <div>
+                <Layers3 className="mx-auto h-7 w-7 text-[var(--text-muted)]" />
+                <p className="mt-3 text-sm text-[var(--text-secondary)]">
+                  Solicite a análise de todos para criar o relatório consolidado.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-5 p-4">
+              <div>
+                <div className="flex items-center justify-between gap-3 text-xs">
+                  <span className="text-[var(--text-secondary)]">
+                    Progresso persistido do lote
+                  </span>
+                  <span className="font-mono text-cyan-100">
+                    {batchAnalysis.counts.terminal}/{batchAnalysis.counts.total}
+                  </span>
+                </div>
+                <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/5">
+                  <div
+                    className="h-full rounded-full bg-cyan-300 transition-[width]"
+                    style={{
+                      width: `${Math.max(
+                        0,
+                        Math.min(100, batchAnalysis.progress * 100),
+                      )}%`,
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
+                {[
+                  ["Concluídos", batchAnalysis.counts.terminal],
+                  ["Válidos", batchAnalysis.counts.valid],
+                  ["Ativos", batchAnalysis.counts.active],
+                  ["Pendentes", batchAnalysis.counts.pending],
+                  ["Não convergentes", batchAnalysis.counts.not_converged],
+                  ["Falhas", batchAnalysis.counts.failed],
+                ].map(([label, value]) => (
+                  <div
+                    key={String(label)}
+                    className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-elevated)] p-3"
+                  >
+                    <div className="font-mono text-base text-cyan-100">
+                      {value}
+                    </div>
+                    <div className="mt-1 text-[9px] uppercase tracking-wider text-[var(--text-muted)]">
+                      {label}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex items-start gap-3 rounded-xl border border-cyan-300/15 bg-cyan-300/5 p-4">
+                <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-cyan-300" />
+                <div>
+                  <p className="text-xs font-semibold text-cyan-100">
+                    Síntese descritiva, não causal
+                  </p>
+                  <p className="mt-1 text-[11px] leading-5 text-[var(--text-muted)]">
+                    Médias ponderadas pelo N direto de cada profile. Não
+                    representa posterior conjunto. Runs pendentes, falhos ou
+                    não convergentes ficam excluídos automaticamente.
+                  </p>
+                </div>
+              </div>
+
+              {batchAnalysis.report.indicators.length === 0 ? (
+                <div className="rounded-xl border border-amber-400/20 bg-amber-400/5 p-4 text-xs leading-5 text-amber-100/80">
+                  Ainda não há efeitos convergentes elegíveis para consolidar.
+                  O relatório será atualizado conforme os profiles válidos
+                  terminarem.
+                </div>
+              ) : (
+                <>
+                  <div className="grid gap-3 lg:grid-cols-2">
+                    <div className="rounded-xl border border-[var(--border-default)] bg-black/10 p-4">
+                      <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-cyan-300">
+                        Leitura de direção
+                      </div>
+                      <p className="mt-2 text-xs leading-5 text-[var(--text-secondary)]">
+                        Consenso positivo em{" "}
+                        <span className="font-mono text-emerald-200">
+                          {batchAnalysis.report.direction_summary.POSITIVE}
+                        </span>{" "}
+                        indicadores; negativo em{" "}
+                        <span className="font-mono text-rose-200">
+                          {batchAnalysis.report.direction_summary.NEGATIVE}
+                        </span>
+                        ; neutro em{" "}
+                        <span className="font-mono text-slate-200">
+                          {batchAnalysis.report.direction_summary.NEUTRAL}
+                        </span>{" "}
+                        e misto em{" "}
+                        <span className="font-mono text-amber-200">
+                          {batchAnalysis.report.direction_summary.MIXED}
+                        </span>
+                        .
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-[var(--border-default)] bg-black/10 p-4">
+                      <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-cyan-300">
+                        Força da evidência
+                      </div>
+                      <p className="mt-2 text-xs leading-5 text-[var(--text-secondary)]">
+                        Evidência forte ou muito forte em{" "}
+                        <span className="font-mono text-cyan-100">
+                          {batchAnalysis.report.evidence_summary.STRONG +
+                            batchAnalysis.report.evidence_summary.VERY_STRONG}
+                        </span>{" "}
+                        indicadores; moderada em{" "}
+                        <span className="font-mono text-cyan-100">
+                          {batchAnalysis.report.evidence_summary.MODERATE}
+                        </span>
+                        . Esta leitura não autoriza alteração de profile.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="overflow-x-auto rounded-xl border border-[var(--border-default)]">
+                  <table className="w-full min-w-[980px] text-left text-xs">
+                    <thead className="bg-[var(--bg-elevated)] text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
+                      <tr>
+                        {[
+                          "Indicador",
+                          "Consenso",
+                          "Profiles",
+                          "N direto",
+                          "Lift TP pond.",
+                          "Lift EV pond.",
+                          "P(EV > ROPE) pond.",
+                          "Direções + / − / neutra",
+                          "Maior evidência",
+                        ].map((label) => (
+                          <th key={label} className="px-4 py-3 font-medium">
+                            {label}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {batchAnalysis.report.indicators.map((indicator) => (
+                        <tr
+                          key={`${indicator.indicator}:${indicator.regime ?? ""}`}
+                          className="border-t border-[var(--border-default)] text-[var(--text-secondary)]"
+                        >
+                          <td className="px-4 py-3 font-mono text-[var(--text-primary)]">
+                            {indicator.indicator}
+                          </td>
+                          <td className="px-4 py-3">
+                            <StatusPill value={indicator.consensus_direction} />
+                          </td>
+                          <td className="px-4 py-3 font-mono">
+                            {indicator.profiles_included}
+                          </td>
+                          <td className="px-4 py-3 font-mono">
+                            {indicator.total_direct_sample_size}
+                          </td>
+                          <td className="px-4 py-3 font-mono">
+                            {fmtNumber(indicator.weighted_tp_lift, 4)}
+                          </td>
+                          <td className="px-4 py-3 font-mono">
+                            {fmtNumber(indicator.weighted_pnl_lift, 4)}
+                          </td>
+                          <td className="px-4 py-3 font-mono">
+                            {fmtPct(
+                              indicator.weighted_probability_positive,
+                            )}
+                          </td>
+                          <td className="px-4 py-3 font-mono">
+                            {indicator.direction_counts.POSITIVE} /{" "}
+                            {indicator.direction_counts.NEGATIVE} /{" "}
+                            {indicator.direction_counts.NEUTRAL}
+                          </td>
+                          <td className="px-4 py-3">
+                            <StatusPill
+                              value={indicator.highest_evidence_grade}
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  </div>
+                </>
+              )}
+
+              <div>
+                <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--text-muted)]">
+                  Execuções por profile
+                </div>
+                <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                  {batchAnalysis.profile_runs.map((run) => (
+                    <div
+                      key={run.id}
+                      className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border-default)] bg-black/10 px-3 py-2"
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate text-xs text-[var(--text-primary)]">
+                          {run.profile_name}
+                        </div>
+                        <div className="mt-0.5 font-mono text-[9px] text-[var(--text-muted)]">
+                          {run.row_count ?? "—"} trades diretos
+                        </div>
+                      </div>
+                      <StatusPill
+                        value={run.diagnostic_status || run.status}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
+      )}
 
       <section className="overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--bg-card)]">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-default)] p-4">

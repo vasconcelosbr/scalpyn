@@ -55,6 +55,24 @@ class AnalyzeRequest(BaseModel):
         return self
 
 
+class AnalyzeBatchRequest(BaseModel):
+    profile_ids: list[UUID] = Field(min_length=1, max_length=100)
+    window_from: datetime
+    window_to: datetime
+    policy_key: str | None = None
+    indicator_names: list[str] | None = None
+    random_seed: int = Field(ge=0)
+    idempotency_key: str = Field(min_length=8, max_length=180)
+
+    @model_validator(mode="after")
+    def validate_batch(self) -> "AnalyzeBatchRequest":
+        if self.window_to <= self.window_from:
+            raise ValueError("window_to must be after window_from")
+        if len(set(self.profile_ids)) != len(self.profile_ids):
+            raise ValueError("profile_ids must not contain duplicates")
+        return self
+
+
 class OptimizationRequest(BaseModel):
     analysis_run_id: UUID
     random_seed: int = Field(ge=0)

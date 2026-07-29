@@ -12,6 +12,7 @@ import pytest
 
 from app.api import profile_bayesian_intelligence as bayesian_api
 from app.profile_bayesian.analysis_service import _set_run_status
+from app.profile_bayesian.batch_reporting import build_batch_report
 from app.profile_bayesian.config import (
     BayesianPolicy,
     PolicyConfigurationError,
@@ -134,6 +135,125 @@ def test_dedicated_celery_app_registers_only_bayesian_task_module(monkeypatch):
         celery_app.conf.task_routes[OPTIMIZE_TASK]["queue"]
         == "profile_optimization"
     )
+    assert celery_app.conf.task_annotations[ANALYZE_TASK]["rate_limit"] is None
+
+
+def test_batch_report_tracks_progress_and_excludes_non_converged_effects():
+    valid_profile_id = str(uuid4())
+    non_converged_profile_id = str(uuid4())
+    pending_profile_id = str(uuid4())
+    report = build_batch_report(
+        [
+            {
+                "id": str(uuid4()),
+                "profile_id": valid_profile_id,
+                "profile_name": "valid",
+                "status": "COMPLETED",
+                "diagnostic_status": "VALID",
+            },
+            {
+                "id": str(uuid4()),
+                "profile_id": non_converged_profile_id,
+                "profile_name": "withheld",
+                "status": "COMPLETED_WITH_WARNINGS",
+                "diagnostic_status": "NOT_CONVERGED",
+            },
+            {
+                "id": str(uuid4()),
+                "profile_id": pending_profile_id,
+                "profile_name": "pending",
+                "status": "PENDING",
+                "diagnostic_status": None,
+            },
+        ],
+        [
+            {
+                "profile_id": valid_profile_id,
+                "indicator": "rsi",
+                "regime": None,
+                "effect_direction": "POSITIVE",
+                "estimated_tp_lift": 0.04,
+                "estimated_pnl_lift": 0.08,
+                "probability_positive_effect": 0.9,
+                "direct_sample_size": 100,
+                "evidence_grade": "STRONG",
+            }
+        ],
+        batch_id="batch-a",
+        legacy_batch=False,
+    )
+
+    assert report["status"] == "RUNNING"
+    assert report["counts"] == {
+        "total": 3,
+        "terminal": 2,
+        "pending": 1,
+        "active": 0,
+        "valid": 1,
+        "warnings": 1,
+        "not_converged": 1,
+        "failed": 0,
+    }
+    assert report["progress"] == pytest.approx(2 / 3)
+    assert report["report"]["status"] == "PARTIAL"
+    assert report["report"]["eligible_profiles"] == 1
+    assert report["report"]["excluded_profiles"] == 2
+    assert report["report"]["indicators"][0]["profiles_included"] == 1
+
+
+def test_batch_report_uses_sample_weighted_descriptive_indicator_summary():
+    first_profile = str(uuid4())
+    second_profile = str(uuid4())
+    completed_runs = [
+        {
+            "id": str(uuid4()),
+            "profile_id": profile_id,
+            "profile_name": profile_id,
+            "status": "COMPLETED",
+            "diagnostic_status": "VALID",
+        }
+        for profile_id in (first_profile, second_profile)
+    ]
+    effects = [
+        {
+            "profile_id": first_profile,
+            "indicator": "adx",
+            "regime": None,
+            "effect_direction": "POSITIVE",
+            "estimated_tp_lift": 0.1,
+            "estimated_pnl_lift": 0.2,
+            "probability_positive_effect": 0.8,
+            "direct_sample_size": 100,
+            "evidence_grade": "MODERATE",
+        },
+        {
+            "profile_id": second_profile,
+            "indicator": "adx",
+            "regime": None,
+            "effect_direction": "NEGATIVE",
+            "estimated_tp_lift": -0.1,
+            "estimated_pnl_lift": -0.2,
+            "probability_positive_effect": 0.2,
+            "direct_sample_size": 300,
+            "evidence_grade": "STRONG",
+        },
+    ]
+
+    report = build_batch_report(
+        completed_runs,
+        effects,
+        batch_id="batch-b",
+        legacy_batch=False,
+    )
+    indicator = report["report"]["indicators"][0]
+
+    assert report["status"] == "COMPLETED"
+    assert indicator["consensus_direction"] == "MIXED"
+    assert indicator["profiles_included"] == 2
+    assert indicator["total_direct_sample_size"] == 400
+    assert indicator["weighted_pnl_lift"] == pytest.approx(-0.1)
+    assert indicator["weighted_probability_positive"] == pytest.approx(0.35)
+    assert indicator["highest_evidence_grade"] == "STRONG"
 
 
 def test_policy_is_fail_closed_when_any_required_key_is_missing():
