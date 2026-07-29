@@ -733,7 +733,6 @@ async def latest_analysis_batch(
     ]
     effects: list[Any] = []
     if eligible_run_ids:
-        run_id_array = "{" + ",".join(eligible_run_ids) + "}"
         effects = list(
             (
                 await db.execute(
@@ -752,7 +751,7 @@ async def latest_analysis_batch(
                         ORDER BY e.indicator, e.regime, e.profile_id
                         """
                     ),
-                    {"run_ids": run_id_array},
+                    {"run_ids": eligible_run_ids},
                 )
             ).mappings().all()
         )
