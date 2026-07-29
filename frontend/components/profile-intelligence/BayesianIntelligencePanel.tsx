@@ -31,7 +31,14 @@ import {
   X,
 } from "lucide-react";
 
-import { apiGet, apiPost, apiPut } from "@/lib/api";
+import { ApiError, apiGet, apiPost, apiPut } from "@/lib/api";
+import {
+  ALL_PROFILES_VALUE,
+  analysisTargets,
+  batchIdempotencyKey,
+  deduplicateProfileOptions,
+  type BayesianProfileOption,
+} from "@/lib/profile-bayesian-batch";
 
 type ModuleStatus = {
   flags: Record<string, boolean>;
@@ -70,13 +77,17 @@ type PolicyResponse = {
   error?: string;
 };
 
-type ProfileOption = {
-  profile_id: string;
-  profile_name: string;
+type ProfileRankingResponse = {
+  profiles?: BayesianProfileOption[];
 };
 
-type ProfileRankingResponse = {
-  profiles?: ProfileOption[];
+type BatchRequestState = {
+  status: "submitting" | "submitted" | "partial";
+  total: number;
+  accepted: number;
+  failed: number;
+  currentProfile?: string;
+  failures: string[];
 };
 
 type AnalysisRun = {
@@ -258,8 +269,12 @@ function diagnosticMetricTone(passed?: boolean) {
 
 export default function BayesianIntelligencePanel() {
   const [moduleStatus, setModuleStatus] = useState<ModuleStatus | null>(null);
-  const [profiles, setProfiles] = useState<ProfileOption[]>([]);
+  const [profiles, setProfiles] = useState<BayesianProfileOption[]>([]);
   const [profileId, setProfileId] = useState("");
+  const [analysisSelection, setAnalysisSelection] = useState("");
+  const [batchRequest, setBatchRequest] = useState<BatchRequestState | null>(
+    null,
+  );
   const [latest, setLatest] = useState<AnalysisRun | null>(null);
   const [diagnostics, setDiagnostics] = useState<BayesianDiagnostic[]>([]);
   const [effects, setEffects] = useState<IndicatorEffect[]>([]);
@@ -286,6 +301,12 @@ export default function BayesianIntelligencePanel() {
   }, []);
   const [windowFrom, setWindowFrom] = useState(defaultWindow.from);
   const [windowTo, setWindowTo] = useState(defaultWindow.to);
+  const activeProfileName = useMemo(
+    () =>
+      profiles.find((profile) => profile.profile_id === profileId)
+        ?.profile_name ?? "profile selecionado",
+    [profileId, profiles],
+  );
 
   const loadProfile = useCallback(async (selectedProfileId: string) => {
     if (!selectedProfileId) return;
@@ -337,10 +358,11 @@ export default function BayesianIntelligencePanel() {
       }
 
       setModuleStatus(statusResult.value);
-      const items =
+      const rawItems =
         profilesResult.status === "fulfilled"
           ? profilesResult.value?.profiles ?? []
           : [];
+      const items = deduplicateProfileOptions(rawItems);
       setProfiles(items);
 
       if (profilesResult.status === "rejected") {
@@ -353,6 +375,7 @@ export default function BayesianIntelligencePanel() {
 
       const selected = profileId || items[0]?.profile_id || "";
       setProfileId(selected);
+      setAnalysisSelection((current) => current || selected);
       await loadProfile(selected);
     } catch (requestError) {
       setError(
@@ -392,7 +415,7 @@ export default function BayesianIntelligencePanel() {
     moduleStatus?.flags?.enabled === true &&
     moduleStatus?.flags?.analysis_enabled === true &&
     moduleStatus?.policy_configured === true &&
-    Boolean(profileId);
+    analysisTargets(analysisSelection, profiles).length > 0;
   const diagnosticGates = moduleStatus?.policy?.diagnostic_gates;
   const isActiveRun = Boolean(
     latest && !terminalStatuses.has(latest.status),
@@ -401,18 +424,80 @@ export default function BayesianIntelligencePanel() {
 
   const runAnalysis = async () => {
     if (!canAnalyze || running) return;
+    const targets = analysisTargets(analysisSelection, profiles);
+    if (targets.length === 0) return;
+    const isBatchSelection = analysisSelection === ALL_PROFILES_VALUE;
     setRunning(true);
     setError(null);
+    setBatchRequest(
+      isBatchSelection
+        ? {
+            status: "submitting",
+            total: targets.length,
+            accepted: 0,
+            failed: 0,
+            failures: [],
+          }
+        : null,
+    );
     try {
       const from = new Date(`${windowFrom}T00:00:00.000Z`);
       const to = new Date(`${windowTo}T23:59:59.999Z`);
-      await apiPost(`/profile-intelligence/${profileId}/bayesian/analyze`, {
-        window_from: from.toISOString(),
-        window_to: to.toISOString(),
-        random_seed: Date.now() % 2147483647,
-        idempotency_key: crypto.randomUUID(),
-      });
-      await loadProfile(profileId);
+      const batchId = crypto.randomUUID();
+      const randomSeed = Date.now() % 2147483647;
+      let accepted = 0;
+      const failures: string[] = [];
+
+      for (const target of targets) {
+        if (isBatchSelection) {
+          setBatchRequest({
+            status: "submitting",
+            total: targets.length,
+            accepted,
+            failed: failures.length,
+            currentProfile: target.profile_name,
+            failures: [...failures],
+          });
+        }
+        try {
+          await apiPost(
+            `/profile-intelligence/${target.profile_id}/bayesian/analyze`,
+            {
+              window_from: from.toISOString(),
+              window_to: to.toISOString(),
+              random_seed: randomSeed,
+              idempotency_key:
+                isBatchSelection
+                  ? batchIdempotencyKey(batchId, target.profile_id)
+                  : crypto.randomUUID(),
+            },
+          );
+          accepted += 1;
+        } catch (requestError) {
+          if (requestError instanceof ApiError && requestError.status === 401) {
+            throw requestError;
+          }
+          failures.push(target.profile_name);
+        }
+      }
+
+      if (isBatchSelection) {
+        setBatchRequest({
+          status: failures.length > 0 ? "partial" : "submitted",
+          total: targets.length,
+          accepted,
+          failed: failures.length,
+          failures,
+        });
+        if (accepted === 0) {
+          throw new Error("Nenhuma análise do lote pôde ser enfileirada.");
+        }
+      } else if (failures.length > 0) {
+        throw new Error("A análise não pôde ser enfileirada.");
+      }
+
+      const profileToRefresh = profileId || targets[0]?.profile_id || "";
+      if (profileToRefresh) await loadProfile(profileToRefresh);
     } catch (requestError) {
       setError(
         requestError instanceof Error
@@ -811,10 +896,22 @@ export default function BayesianIntelligencePanel() {
             Profile
           </label>
           <select
-            value={profileId}
-            onChange={(event) => setProfileId(event.target.value)}
+            value={analysisSelection || profileId}
+            disabled={running}
+            onChange={(event) => {
+              const value = event.target.value;
+              setAnalysisSelection(value);
+              if (value !== ALL_PROFILES_VALUE) {
+                setProfileId(value);
+              }
+            }}
             className="mt-1 w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-elevated)] px-3 py-2 text-sm text-[var(--text-primary)]"
           >
+            {profiles.length > 0 && (
+              <option value={ALL_PROFILES_VALUE}>
+                Todos os profiles — {profiles.length}
+              </option>
+            )}
             {profiles.map((profile) => (
               <option key={profile.profile_id} value={profile.profile_id}>
                 {profile.profile_name}
@@ -827,6 +924,7 @@ export default function BayesianIntelligencePanel() {
               <input
                 type="date"
                 value={windowFrom}
+                disabled={running}
                 onChange={(event) => setWindowFrom(event.target.value)}
                 className="mt-1 w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-elevated)] px-2 py-2 text-xs text-[var(--text-primary)]"
               />
@@ -836,6 +934,7 @@ export default function BayesianIntelligencePanel() {
               <input
                 type="date"
                 value={windowTo}
+                disabled={running}
                 onChange={(event) => setWindowTo(event.target.value)}
                 className="mt-1 w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-elevated)] px-2 py-2 text-xs text-[var(--text-primary)]"
               />
@@ -852,11 +951,52 @@ export default function BayesianIntelligencePanel() {
             ) : (
               <Play className="h-4 w-4" />
             )}
-            Solicitar análise
+            {running && batchRequest
+              ? `Enfileirando ${batchRequest.accepted}/${batchRequest.total}`
+              : analysisSelection === ALL_PROFILES_VALUE
+                ? "Solicitar análise de todos"
+                : "Solicitar análise"}
           </button>
+          {batchRequest && (
+            <div
+              className={`mt-3 rounded-lg border px-3 py-2.5 ${
+                batchRequest.status === "partial"
+                  ? "border-amber-300/25 bg-amber-300/8"
+                  : batchRequest.status === "submitted"
+                    ? "border-emerald-300/25 bg-emerald-300/8"
+                    : "border-cyan-300/25 bg-cyan-300/8"
+              }`}
+              role="status"
+              aria-live="polite"
+            >
+              <div className="flex items-center justify-between gap-3 text-[11px]">
+                <span className="font-semibold text-[var(--text-primary)]">
+                  {batchRequest.status === "submitting"
+                    ? "Preparando lote"
+                    : batchRequest.status === "submitted"
+                      ? "Lote enfileirado"
+                      : "Lote parcialmente enfileirado"}
+                </span>
+                <span className="font-mono text-cyan-200">
+                  {batchRequest.accepted}/{batchRequest.total}
+                </span>
+              </div>
+              <p className="mt-1 text-[10px] leading-4 text-[var(--text-muted)]">
+                {batchRequest.currentProfile
+                  ? `Enviando ${batchRequest.currentProfile}.`
+                  : "O worker dedicado processará os profiles sequencialmente. Consulte cada resultado pelo seletor."}
+              </p>
+              {batchRequest.failures.length > 0 && (
+                <p className="mt-1 text-[10px] leading-4 text-amber-200">
+                  Falharam: {batchRequest.failures.join(", ")}
+                </p>
+              )}
+            </div>
+          )}
           <p className="mt-3 text-[11px] leading-4 text-[var(--text-muted)]">
-            A API cria um run idempotente; o worker dedicado processa o dataset
-            sem bloquear esta tela.
+            {analysisSelection === ALL_PROFILES_VALUE
+              ? "Cada profile recebe um run idempotente com a mesma janela e seed. O lote não aumenta a concorrência do worker."
+              : "A API cria um run idempotente; o worker dedicado processa o dataset sem bloquear esta tela."}
           </p>
         </div>
 
@@ -871,6 +1011,11 @@ export default function BayesianIntelligencePanel() {
               </h3>
             </div>
             <div className="flex items-center gap-2">
+              {analysisSelection === ALL_PROFILES_VALUE && (
+                <span className="hidden rounded-md border border-[var(--border-default)] px-2 py-1 font-mono text-[9px] uppercase tracking-wider text-[var(--text-muted)] sm:inline">
+                  Exibindo {activeProfileName}
+                </span>
+              )}
               <StatusPill value={latest?.status} />
               <button
                 type="button"
