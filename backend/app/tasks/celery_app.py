@@ -98,6 +98,7 @@ celery_app = Celery(
         "app.tasks.ttt_analyzer",
         "app.tasks.autopilot",
         "app.tasks.profile_intelligence_job",
+        "app.tasks.shadow_trade_analysis",
         "app.tasks.opportunity_snapshot_evaluator",
         "app.tasks.crypto_ev_score",
         "app.tasks.ml_data_certification",
@@ -203,6 +204,7 @@ TASK_ROUTES = {
     "app.tasks.profile_intelligence_job.monitor":        {"queue": QUEUE_STRUCTURAL},
     "app.tasks.profile_intelligence_job.feedback_loop": {"queue": QUEUE_STRUCTURAL_COMPUTE},
     "app.tasks.profile_intelligence_job.train_ml_challengers_for_user": {"queue": QUEUE_STRUCTURAL_COMPUTE},
+    "app.tasks.shadow_trade_analysis.run": {"queue": QUEUE_STRUCTURAL_COMPUTE},
 
     # Opportunity Snapshot Evaluator — populates future_outcome on snapshots.
     # Structural queue: DB-only work (ohlcv table + shadow_trades join), no latency req.
@@ -427,6 +429,12 @@ TASK_ANNOTATIONS = {
     # Dedicated ML training task: runs on structural_compute (idle worker) so
     # it never competes with pipeline scans on the structural queue.
     "app.tasks.profile_intelligence_job.train_ml_challengers_for_user": {
+        "time_limit": 1800,
+        "soft_time_limit": 1740,
+        "max_retries": 0,
+        **_NO_REQUEUE_ON_WORKER_LOSS,
+    },
+    "app.tasks.shadow_trade_analysis.run": {
         "time_limit": 1800,
         "soft_time_limit": 1740,
         "max_retries": 0,

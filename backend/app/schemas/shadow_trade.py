@@ -115,6 +115,37 @@ class ShadowTradeDetail(ShadowTradeRead):
     final_priority_score: Optional[float] = None
 
 
+class ShadowTradeChartCandle(BaseModel):
+    """Uma candle OHLCV usada no replay visual read-only do trade."""
+
+    time: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: Optional[float] = None
+
+
+class ShadowTradeChartResponse(BaseModel):
+    """Janela de mercado do trade, incluindo contexto antes/depois."""
+
+    shadow_id: UUID
+    symbol: str
+    timeframe: Optional[str] = None
+    exchange: Optional[str] = None
+    context_minutes: int
+    window_start: datetime
+    window_end: datetime
+    entry_timestamp: datetime
+    exit_timestamp: datetime
+    entry_price: Optional[float] = None
+    exit_price: Optional[float] = None
+    tp_price: Optional[float] = None
+    sl_price: Optional[float] = None
+    outcome: Optional[str] = None
+    candles: List[ShadowTradeChartCandle]
+
+
 class ShadowTradeListResponse(BaseModel):
     items: List[ShadowTradeRead]
     total: int

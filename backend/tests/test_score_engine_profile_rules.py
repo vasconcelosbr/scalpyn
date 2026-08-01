@@ -31,6 +31,7 @@ from app.services.score_engine import (
     ScoreEngine,
     hydrate_profile_scoring,
     merge_score_config,
+    resolve_profile_scoring_rules,
     resolve_rule_category,
 )
 
@@ -201,6 +202,36 @@ def test_merge_score_config_respects_profile_selected_rule_ids():
 
     assert [rule["id"] for rule in merged["scoring_rules"]] == ["rsi_1"]
     assert merged["weights"] == profile_config["scoring"]["weights"]
+
+
+def test_explicit_score_rule_selection_fails_closed_when_any_id_is_missing():
+    global_rules = [
+        {"id": "rsi_1", "indicator": "rsi"},
+        {"id": "adx_1", "indicator": "adx"},
+    ]
+    profile_config = {
+        "scoring": {"selected_rule_ids": ["rsi_1", "missing_rule"]},
+        "filters": {"conditions": [{"rule_id": "adx_1"}]},
+    }
+
+    resolved = resolve_profile_scoring_rules(global_rules, profile_config)
+
+    assert resolved == []
+
+
+def test_explicit_score_rule_selection_resolves_only_exact_global_ids():
+    global_rules = [
+        {"id": "rsi_1", "indicator": "rsi"},
+        {"id": "adx_1", "indicator": "adx"},
+    ]
+    profile_config = {
+        "scoring": {"selected_rule_ids": ["adx_1"]},
+        "filters": {"conditions": [{"rule_id": "rsi_1"}]},
+    }
+
+    resolved = resolve_profile_scoring_rules(global_rules, profile_config)
+
+    assert [rule["id"] for rule in resolved] == ["adx_1"]
 
 
 def test_hydrate_profile_scoring_injects_global_rules_into_profile():

@@ -458,6 +458,14 @@ app.include_router(performance_api.router)
 from .api import shadow_trades as shadow_trades_api  # noqa: E402
 app.include_router(shadow_trades_api.router)
 
+# Immutable detailed samples, JSON exports and provider-backed trade analysis.
+from .api import shadow_trade_reports as shadow_trade_reports_api  # noqa: E402
+from .api import shadow_trade_analysis as shadow_trade_analysis_api  # noqa: E402
+from .api import profile_optimizations as profile_optimizations_api  # noqa: E402
+app.include_router(shadow_trade_reports_api.router)
+app.include_router(shadow_trade_analysis_api.router)
+app.include_router(profile_optimizations_api.router)
+
 # Shared Shadow Portfolio / Watchlist / L3 performance ordering.
 from .api import performance_rankings as performance_rankings_api  # noqa: E402
 app.include_router(performance_rankings_api.router)

@@ -156,12 +156,24 @@ def resolve_profile_scoring_rules(
     scoring_section = profile_config.get("scoring") or {}
     selected_ids_new = scoring_section.get("selected_rule_ids") or []
     if selected_ids_new:
+        requested_ids = {str(rid) for rid in selected_ids_new}
         selected = [
             rule for rule in global_rules
-            if str(rule.get("id")) in {str(rid) for rid in selected_ids_new}
+            if str(rule.get("id")) in requested_ids
         ]
-        if selected:
+        resolved_ids = {str(rule.get("id")) for rule in selected}
+        if resolved_ids == requested_ids:
             return selected
+        logger.warning(
+            "Score rules rejected fail-closed: profile selected_rule_ids "
+            "contain IDs absent from the active global score matrix",
+            extra={
+                "requested_rule_ids": sorted(requested_ids),
+                "resolved_rule_ids": sorted(resolved_ids),
+                "missing_rule_ids": sorted(requested_ids - resolved_ids),
+            },
+        )
+        return []
 
     conditions = ((profile_config.get("filters") or {}).get("conditions") or [])
 

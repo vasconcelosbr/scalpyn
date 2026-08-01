@@ -17,6 +17,11 @@ from .trade_tracking import TradeTracking
 from .exchange_execution import ExchangeExecution
 from .position_lifecycle import PositionLifecycle
 from .shadow_trade import ShadowTrade
+from .shadow_trade_analysis import (
+    ShadowTradeAnalysisJob,
+    ShadowTradeReportItem,
+    ShadowTradeReportRun,
+)
 from .crypto_ev import CryptoEVL3ReplayFlag, CryptoEVSnapshot
 from .opportunity_snapshot import OpportunitySnapshot
 from .profile_metrics import ProfileMetrics
@@ -72,6 +77,9 @@ __all__ = [
     "ExchangeExecution",
     "PositionLifecycle",
     "ShadowTrade",
+    "ShadowTradeAnalysisJob",
+    "ShadowTradeReportItem",
+    "ShadowTradeReportRun",
     "CryptoEVL3ReplayFlag",
     "CryptoEVSnapshot",
     "OpportunitySnapshot",

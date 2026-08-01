@@ -19,7 +19,7 @@ user`` — multi-tenancy é hard-required, igual aos outros routers
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
@@ -41,6 +41,8 @@ from ..schemas.shadow_trade import (
     OutcomeMetrics,
     ProfileReportRow,
     ShadowTradeAnalytics,
+    ShadowTradeChartCandle,
+    ShadowTradeChartResponse,
     ShadowTradeDetail,
     ShadowTradeListResponse,
     ShadowTradePricesResponse,
@@ -930,6 +932,133 @@ async def profile_report(
     except Exception as exc:
         logger.error("Failed to compute performance ranking: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to compute performance ranking") from exc
+
+
+@router.get("/{shadow_id}/chart", response_model=ShadowTradeChartResponse)
+async def get_shadow_trade_chart(
+    shadow_id: UUID,
+    context_minutes: int = Query(default=30, ge=5, le=120),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> ShadowTradeChartResponse:
+    """OHLCV do trade com contexto simétrico antes da entrada e após a saída.
+
+    O endpoint é estritamente read-only e mantém o mesmo isolamento por
+    ``user_id`` do detalhe. Prefere candles de 1 minuto; quando o símbolo não
+    possui esse timeframe na janela, usa o timeframe mais granular disponível.
+    """
+    q = select(ShadowTrade).where(
+        and_(ShadowTrade.id == shadow_id, ShadowTrade.user_id == user_id)
+    )
+    row = (await db.execute(q)).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Shadow trade not found")
+
+    entry_ts = row.entry_timestamp or row.created_at
+    exit_ts = row.exit_timestamp or row.completed_at
+    if entry_ts is None or exit_ts is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Shadow trade does not have a complete entry/exit timeline",
+        )
+
+    window_start = entry_ts - timedelta(minutes=context_minutes)
+    window_end = exit_ts + timedelta(minutes=context_minutes)
+    candle_rows = (
+        await db.execute(
+            text(
+                """
+                WITH selected_timeframe AS (
+                    SELECT timeframe
+                      FROM ohlcv
+                     WHERE symbol = :symbol
+                       AND time BETWEEN :window_start AND :window_end
+                       AND timeframe IN ('1m', '5m', '15m', '30m')
+                       AND open IS NOT NULL
+                       AND high IS NOT NULL
+                       AND low IS NOT NULL
+                       AND close IS NOT NULL
+                     GROUP BY timeframe
+                     ORDER BY CASE timeframe
+                         WHEN '1m' THEN 1
+                         WHEN '5m' THEN 2
+                         WHEN '15m' THEN 3
+                         WHEN '30m' THEN 4
+                         ELSE 5
+                     END
+                     LIMIT 1
+                ), ranked AS (
+                    SELECT
+                        time,
+                        open,
+                        high,
+                        low,
+                        close,
+                        volume,
+                        timeframe,
+                        exchange,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY time
+                            ORDER BY
+                                CASE WHEN exchange = :exchange THEN 0 ELSE 1 END,
+                                CASE WHEN market_type = 'spot' THEN 0 ELSE 1 END,
+                                exchange
+                        ) AS row_rank
+                      FROM ohlcv
+                     WHERE symbol = :symbol
+                       AND time BETWEEN :window_start AND :window_end
+                       AND timeframe = (SELECT timeframe FROM selected_timeframe)
+                       AND open IS NOT NULL
+                       AND high IS NOT NULL
+                       AND low IS NOT NULL
+                       AND close IS NOT NULL
+                )
+                SELECT time, open, high, low, close, volume, timeframe, exchange
+                  FROM ranked
+                 WHERE row_rank = 1
+                 ORDER BY time ASC
+                """
+            ),
+            {
+                "symbol": row.symbol,
+                "exchange": row.exchange,
+                "window_start": window_start,
+                "window_end": window_end,
+            },
+        )
+    ).fetchall()
+
+    candles = [
+        ShadowTradeChartCandle(
+            time=candle.time,
+            open=float(candle.open),
+            high=float(candle.high),
+            low=float(candle.low),
+            close=float(candle.close),
+            volume=float(candle.volume) if candle.volume is not None else None,
+        )
+        for candle in candle_rows
+    ]
+    selected_timeframe = candle_rows[0].timeframe if candle_rows else None
+    selected_exchange = candle_rows[0].exchange if candle_rows else row.exchange
+
+    return ShadowTradeChartResponse(
+        shadow_id=row.id,
+        symbol=row.symbol,
+        timeframe=selected_timeframe,
+        exchange=selected_exchange,
+        context_minutes=context_minutes,
+        window_start=window_start,
+        window_end=window_end,
+        entry_timestamp=entry_ts,
+        exit_timestamp=exit_ts,
+        entry_price=float(row.entry_price) if row.entry_price is not None else None,
+        exit_price=float(row.exit_price) if row.exit_price is not None else None,
+        tp_price=float(row.tp_price) if row.tp_price is not None else None,
+        sl_price=float(row.sl_price) if row.sl_price is not None else None,
+        outcome=row.outcome,
+        candles=candles,
+    )
 
 
 @router.get("/{shadow_id}", response_model=ShadowTradeDetail)

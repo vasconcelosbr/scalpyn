@@ -74,6 +74,82 @@ class SaveKeyRequest(BaseModel):
     monthly_token_limit: Optional[int] = Field(None, ge=1_000, le=_MAX_TOKEN_LIMIT)
 
 
+@router.get("/capabilities")
+async def list_ai_capabilities(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """Return configured and validated generative providers without secrets."""
+    from ..services.ai_keys_service import get_ai_key_info
+
+    providers = []
+    for provider in ("anthropic", "openai", "gemini"):
+        info = await get_ai_key_info(db, user_id, provider)
+        if not info:
+            continue
+        providers.append({
+            "provider": provider,
+            "name": PROVIDER_META[provider]["name"],
+            "is_configured": True,
+            "is_validated": bool(info.get("is_validated")),
+            "monthly_token_limit": info.get("monthly_token_limit"),
+            "tokens_used_month": info.get("tokens_used_month"),
+        })
+    return {"providers": providers}
+
+
+@router.get("/{provider}/models")
+async def list_provider_models(
+    provider: str,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """Discover models available to the user's validated provider key."""
+    if provider not in ("anthropic", "openai", "gemini"):
+        raise HTTPException(status_code=404, detail=f"Provider não suportado: {provider}")
+    from ..services.ai_keys_service import get_ai_key_info, get_decrypted_api_key
+    import httpx
+
+    info = await get_ai_key_info(db, user_id, provider)
+    if not info or not info.get("is_validated"):
+        raise HTTPException(status_code=409, detail="Provider precisa estar configurado e validado")
+    api_key = await get_decrypted_api_key(db, user_id, provider)
+    if not api_key:
+        raise HTTPException(status_code=404, detail="Chave não configurada")
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            if provider == "openai":
+                response = await client.get(
+                    "https://api.openai.com/v1/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+                response.raise_for_status()
+                ids = [str(item.get("id")) for item in response.json().get("data", [])]
+                ids = [model for model in ids if model.startswith(("gpt-", "o1", "o3", "o4"))]
+            elif provider == "anthropic":
+                response = await client.get(
+                    "https://api.anthropic.com/v1/models",
+                    headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+                )
+                response.raise_for_status()
+                ids = [str(item.get("id")) for item in response.json().get("data", [])]
+            else:
+                response = await client.get(
+                    "https://generativelanguage.googleapis.com/v1beta/models",
+                    params={"key": api_key},
+                )
+                response.raise_for_status()
+                ids = [
+                    str(item.get("name", "")).removeprefix("models/")
+                    for item in response.json().get("models", [])
+                    if "generateContent" in item.get("supportedGenerationMethods", [])
+                ]
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Falha ao consultar modelos do provider: {exc}") from exc
+    return {"provider": provider, "models": [{"id": model, "name": model} for model in sorted(set(ids))]}
+
+
 @router.get("")
 async def list_keys(
     db: AsyncSession = Depends(get_db),

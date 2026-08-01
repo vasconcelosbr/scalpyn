@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   Activity,
   AlertTriangle,
@@ -17,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { apiGet, ApiError } from "@/lib/api";
+import DetailedReportWorkspace from "@/components/shadow-portfolio/DetailedReportWorkspace";
 
 // ── theme (alinhado com /dashboard/performance) ──────────────────────────────
 const C = {
@@ -678,7 +680,7 @@ function TradeTable({
   loading: boolean;
   error: string | null;
   profileEvScores: Record<string, number>;
-  onRowClick: (id: string) => void;
+  onRowClick: (trade: ShadowTradeRead) => void;
 }) {
   // Tick a cada 30s para o "Holding" das operações em aberto avançar
   // visualmente sem precisar de refetch. P&L em aberto também usa esse
@@ -917,11 +919,11 @@ function TradeTable({
             return (
               <tr
                 key={it.id}
-                onClick={() => onRowClick(it.id)}
+                onClick={() => onRowClick(it)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
-                    onRowClick(it.id);
+                    onRowClick(it);
                   }
                 }}
                 tabIndex={0}
@@ -2248,6 +2250,7 @@ function buildSummaryQuery(filter: FilterState, source?: SourceTab, profileId?: 
 
 // ── page ─────────────────────────────────────────────────────────────────────
 export default function ShadowPortfolioPage() {
+  const router = useRouter();
   const [filter, setFilter] = useState<FilterState>(DEFAULT_FILTER);
   const [list, setList] = useState<ShadowTradeListResponse | null>(null);
   const [summary, setSummary] = useState<ShadowTradeSummary | null>(null);
@@ -2261,7 +2264,7 @@ export default function ShadowPortfolioPage() {
   const [profiles, setProfiles] = useState<ProfileItem[]>([]);
   const [watchlistNames, setWatchlistNames] = useState<Record<string, string>>({});
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
-  const [mainTab, setMainTab] = useState<"trades" | "report">("trades");
+  const [mainTab, setMainTab] = useState<"trades" | "report" | "detailed-report">("trades");
   const [profileReport, setProfileReport] = useState<ProfileReportRow[]>([]);
   const [loadingReport, setLoadingReport] = useState(false);
 
@@ -2512,6 +2515,7 @@ export default function ShadowPortfolioPage() {
               [
                 { key: "trades" as const, label: "Shadow Trades" },
                 { key: "report" as const, label: "Relatório Executivo" },
+                { key: "detailed-report" as const, label: "Relatório Detalhado" },
               ]
             ).map(({ key, label }) => {
               const active = mainTab === key;
@@ -2688,7 +2692,16 @@ export default function ShadowPortfolioPage() {
               loading={loadingList}
               error={errorList}
               profileEvScores={profileEvScores}
-              onRowClick={(id) => setSelectedId(id)}
+              onRowClick={(trade) => {
+                if (
+                  trade.status === "COMPLETED" &&
+                  (trade.outcome === "TP_HIT" || trade.outcome === "SL_HIT")
+                ) {
+                  router.push(`/dashboard/shadow-portfolio/${trade.id}`);
+                  return;
+                }
+                setSelectedId(trade.id);
+              }}
             />
 
             {list ? (
@@ -2709,12 +2722,14 @@ export default function ShadowPortfolioPage() {
               )
             ) : null}
           </>
-        ) : (
+        ) : mainTab === "report" ? (
           <ProfileReportTable
             rows={profileReport}
             loading={loadingReport}
             watchlistNames={watchlistNames}
           />
+        ) : (
+          <DetailedReportWorkspace />
         )}
       </div>
 
