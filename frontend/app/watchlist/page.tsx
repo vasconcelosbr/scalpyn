@@ -1800,15 +1800,24 @@ function PipelineTab() {
           ))}
         </div>
       ) : watchlists.length === 0 ? (
-        <div className="text-center py-16 border border-dashed border-[#1E2433] rounded-xl">
-          <Layers size={40} className="mx-auto text-[#1E2433] mb-4" />
-          <p className="text-[#4B5563] text-sm mb-4">Build your institutional asset funnel</p>
-          <button
-            onClick={openCreate}
-            className="px-6 py-2.5 rounded-lg bg-[#1E2433] text-sm text-[#94A3B8] hover:bg-[#263048] hover:text-[#E2E8F0] transition-colors"
-          >
-            Create first watchlist
-          </button>
+        <div className="space-y-6">
+          <div>
+            <div className="mb-3 flex items-center gap-2">
+              <LevelBadge level="L3" />
+              <span className="text-xs text-[#4B5563]">visão virtual</span>
+            </div>
+            <L3ConsolidatedCard refreshTick={refreshTick} />
+          </div>
+          <div className="rounded-xl border border-dashed border-[#1E2433] py-16 text-center">
+            <Layers size={40} className="mx-auto mb-4 text-[#1E2433]" />
+            <p className="mb-4 text-sm text-[#4B5563]">Build your institutional asset funnel</p>
+            <button
+              onClick={openCreate}
+              className="rounded-lg bg-[#1E2433] px-6 py-2.5 text-sm text-[#94A3B8] transition-colors hover:bg-[#263048] hover:text-[#E2E8F0]"
+            >
+              Create first watchlist
+            </button>
+          </div>
         </div>
       ) : (
         <div className="space-y-6">
