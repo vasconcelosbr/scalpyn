@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
+import Link from 'next/link';
 import { WatchlistTable } from '@/components/watchlist/WatchlistTable';
 import {
   WatchlistDecisionTable,
@@ -20,6 +21,11 @@ import {
   BookOpen,
   ArrowLeftRight,
   Clock,
+  Crown,
+  ExternalLink,
+  GitMerge,
+  LockKeyhole,
+  Users,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -66,6 +72,36 @@ interface PipelineWatchlist {
   completed_trades?: number | null;
   win_rate?: number | null;
   avg_pnl_pct?: number | null;
+}
+
+interface L3ConsolidatedAsset {
+  shadow_id: string;
+  symbol: string;
+  direction: string | null;
+  status: string;
+  profile_id: string | null;
+  profile_name: string | null;
+  entry_price: number | null;
+  selected_at: string | null;
+  entry_timestamp: string | null;
+  candidate_count: number | null;
+  suppressed_count: number;
+  candidate_profile_names: string[];
+  suppressed_profile_names: string[];
+  selection_metrics: Record<string, number | null>;
+  consolidation_rule_version: string | null;
+  consolidation_enforced: boolean;
+}
+
+interface L3ConsolidatedResponse {
+  id: 'l3-consolidated';
+  name: string;
+  level: 'L3';
+  virtual: true;
+  read_only: true;
+  items: L3ConsolidatedAsset[];
+  total: number;
+  as_of: string;
 }
 
 type WatchlistDetailTab = 'approved' | 'rejected';
@@ -1345,6 +1381,261 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
 
 // ── Pipeline Tab ──────────────────────────────────────────────────────────────
 
+function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
+  const [expanded, setExpanded] = useState(false);
+  const [data, setData] = useState<L3ConsolidatedResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const requestInFlight = useRef(false);
+
+  const load = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
+    if (requestInFlight.current) return;
+    requestInFlight.current = true;
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+    }
+    try {
+      const response = await apiFetch<L3ConsolidatedResponse>('/watchlists/l3-consolidated/assets');
+      setData(response);
+      setError(null);
+    } catch (err: unknown) {
+      if (!silent) {
+        setError(err instanceof Error ? err.message : 'Falha ao carregar a consolidação L3.');
+      }
+    } finally {
+      requestInFlight.current = false;
+      if (!silent) setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
+
+  useEffect(() => {
+    if (refreshTick <= 0) return;
+    const timer = window.setTimeout(() => void load({ silent: true }), 0);
+    return () => window.clearTimeout(timer);
+  }, [refreshTick, load]);
+
+  const items = data?.items ?? [];
+
+  return (
+    <div
+      className="relative overflow-hidden rounded-xl border border-[#D6A84B]/35 bg-[#0A0B10] shadow-[0_0_0_1px_rgba(214,168,75,0.04),0_18px_60px_rgba(0,0,0,0.18)]"
+      data-testid="l3-consolidated-card"
+    >
+      <div className="pointer-events-none absolute inset-y-0 left-0 w-px bg-gradient-to-b from-transparent via-[#F2C66D] to-transparent" />
+      <div
+        className="group flex cursor-pointer items-center gap-3 px-4 py-3 transition-colors hover:bg-[#111217]"
+        onClick={() => setExpanded((value) => !value)}
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            setExpanded((value) => !value);
+          }
+        }}
+      >
+        <span
+          className="text-[#7D8494] transition-transform"
+          style={{ transform: expanded ? 'rotate(0)' : 'rotate(-90deg)' }}
+        >
+          <ChevronDown size={16} />
+        </span>
+        <span className="flex h-7 w-7 items-center justify-center rounded-lg border border-[#D6A84B]/30 bg-[#D6A84B]/10 text-[#F2C66D] shadow-[inset_0_0_14px_rgba(214,168,75,0.08)]">
+          <Crown size={14} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <LevelBadge level="L3" />
+            <span className="text-sm font-semibold tracking-[0.01em] text-[#F8FAFC]">L3 Consolidado</span>
+            <span className="rounded border border-[#D6A84B]/25 bg-[#D6A84B]/8 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.14em] text-[#D6A84B]">
+              Virtual
+            </span>
+            <span className="inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-[0.12em] text-[#64748B]">
+              <LockKeyhole size={9} />
+              somente leitura
+            </span>
+          </div>
+          <p className="mt-0.5 truncate text-[11px] text-[#64748B]">
+            Dono canônico ativo por símbolo e direção, após a seleção entre profiles.
+          </p>
+        </div>
+        <span
+          className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold tabular-nums ${
+            items.length > 0
+              ? 'border-[#D6A84B]/30 bg-[#D6A84B]/10 text-[#F2C66D]'
+              : 'border-[#1E2433] bg-[#0F1117] text-[#4B5563]'
+          }`}
+          data-testid="l3-consolidated-count"
+        >
+          <GitMerge size={10} />
+          {loading && !data ? 'carregando' : `${items.length} ativo${items.length !== 1 ? 's' : ''}`}
+        </span>
+        <div onClick={(event) => event.stopPropagation()}>
+          <button
+            type="button"
+            onClick={() => void load()}
+            disabled={loading}
+            title="Atualizar L3 Consolidado"
+            aria-label="Atualizar L3 Consolidado"
+            className="rounded p-1.5 text-[#64748B] transition-colors hover:bg-[#1E2433] hover:text-[#CBD5E1] disabled:opacity-40"
+          >
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+          </button>
+        </div>
+      </div>
+
+      {expanded && (
+        <div className="border-t border-[#2A251B]" data-testid="l3-consolidated-assets">
+          <div className="flex flex-col gap-2 border-b border-[#1E2433] bg-[#0D0E13] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-2 text-[11px] text-[#7D8494]">
+              <GitMerge size={12} className="text-[#D6A84B]" />
+              Profiles contribuintes permanecem auditáveis; somente o vencedor acompanha o trade.
+            </div>
+            <code className="w-fit rounded border border-[#1E2433] bg-[#08090D] px-2 py-1 text-[10px] text-[#94A3B8]">
+              GET /api/watchlists/l3-consolidated/assets
+            </code>
+          </div>
+
+          {error ? (
+            <div className="flex items-center gap-3 px-4 py-5">
+              <span className="flex-1 text-xs text-red-400">{error}</span>
+              <button
+                type="button"
+                onClick={() => void load()}
+                className="flex items-center gap-1.5 rounded-lg border border-red-500/30 px-3 py-1.5 text-[11px] text-red-400 transition-colors hover:bg-red-500/10"
+              >
+                <RefreshCw size={11} />
+                Tentar novamente
+              </button>
+            </div>
+          ) : loading && !data ? (
+            <div className="flex items-center justify-center gap-2 px-4 py-8 text-sm text-[#4B5563]">
+              <RefreshCw size={13} className="animate-spin" />
+              Carregando ativos consolidados…
+            </div>
+          ) : items.length === 0 ? (
+            <div className="px-4 py-9 text-center">
+              <Crown size={24} className="mx-auto mb-3 text-[#3A3324]" />
+              <p className="text-sm text-[#94A3B8]">Nenhum dono canônico L3 ativo.</p>
+              <p className="mt-1 text-xs text-[#4B5563]">
+                O card será preenchido quando houver um shadow trade L3 pendente ou em acompanhamento.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[900px] text-left">
+                <thead>
+                  <tr className="border-b border-[#1E2433] bg-[#090A0E] text-[9px] uppercase tracking-[0.12em] text-[#4B5563]">
+                    <th className="px-4 py-2.5 font-semibold">Cripto</th>
+                    <th className="px-3 py-2.5 font-semibold">Direção</th>
+                    <th className="px-3 py-2.5 font-semibold">Profile vencedor</th>
+                    <th className="px-3 py-2.5 font-semibold">Contribuição</th>
+                    <th className="px-3 py-2.5 font-semibold">Score</th>
+                    <th className="px-3 py-2.5 font-semibold">Status</th>
+                    <th className="px-3 py-2.5 font-semibold">Selecionado</th>
+                    <th className="px-4 py-2.5 text-right font-semibold">Detalhes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((asset) => {
+                    const decisionScore = asset.selection_metrics?.decision_score;
+                    const contributors = asset.candidate_count ?? asset.candidate_profile_names.length;
+                    const selectedAt = asset.selected_at ? new Date(asset.selected_at) : null;
+                    return (
+                      <tr
+                        key={`${asset.symbol}-${asset.direction}-${asset.shadow_id}`}
+                        className="border-b border-[#161B29] text-xs transition-colors last:border-0 hover:bg-[#0F1117]"
+                      >
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <span className="flex h-7 w-7 items-center justify-center rounded-full border border-[#D6A84B]/20 bg-[#D6A84B]/8 text-[10px] font-bold text-[#F2C66D]">
+                              {asset.symbol.slice(0, 1)}
+                            </span>
+                            <div>
+                              <div className="font-mono text-sm font-semibold text-[#E2E8F0]">{asset.symbol}</div>
+                              <div className="text-[9px] uppercase tracking-[0.1em] text-[#4B5563]">
+                                {asset.consolidation_enforced ? 'consolidação aplicada' : 'ativo L3 anterior'}
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-3 py-3">
+                          <span className="rounded border border-[#22B97A]/25 bg-[#22B97A]/10 px-2 py-1 text-[10px] font-bold text-[#34D399]">
+                            {asset.direction ?? '—'}
+                          </span>
+                        </td>
+                        <td className="px-3 py-3">
+                          <div className="flex items-center gap-1.5 text-[#CBD5E1]">
+                            <Crown size={11} className="text-[#D6A84B]" />
+                            <span className="max-w-[220px] truncate" title={asset.profile_name ?? undefined}>
+                              {asset.profile_name ?? 'Profile não informado'}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-3 py-3">
+                          {asset.candidate_count == null && asset.candidate_profile_names.length === 0 ? (
+                            <span className="text-[#4B5563]">metadados legados</span>
+                          ) : (
+                            <div
+                              className="inline-flex items-center gap-2 text-[#94A3B8]"
+                              title={asset.candidate_profile_names.join(', ') || undefined}
+                            >
+                              <span className="inline-flex items-center gap-1">
+                                <Users size={11} />
+                                {contributors} profile{contributors !== 1 ? 's' : ''}
+                              </span>
+                              {asset.suppressed_count > 0 && (
+                                <span className="text-[#64748B]">· {asset.suppressed_count} suprimido{asset.suppressed_count !== 1 ? 's' : ''}</span>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-3 py-3 font-mono tabular-nums text-[#E2E8F0]">
+                          {typeof decisionScore === 'number' ? decisionScore.toFixed(2) : '—'}
+                        </td>
+                        <td className="px-3 py-3">
+                          <span className={`rounded-full border px-2 py-1 text-[9px] font-bold uppercase tracking-[0.1em] ${
+                            asset.status === 'RUNNING'
+                              ? 'border-[#22B97A]/25 bg-[#22B97A]/10 text-[#34D399]'
+                              : 'border-[#FBBF24]/25 bg-[#FBBF24]/10 text-[#FBBF24]'
+                          }`}>
+                            {asset.status}
+                          </span>
+                        </td>
+                        <td className="px-3 py-3 text-[#64748B]" title={selectedAt?.toLocaleString()}>
+                          {asset.selected_at ? timeAgo(asset.selected_at) : '—'}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <Link
+                            href={`/dashboard/shadow-portfolio/${asset.shadow_id}`}
+                            onClick={(event) => event.stopPropagation()}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-[#2A3448] px-2.5 py-1.5 text-[10px] font-semibold text-[#94A3B8] transition-colors hover:border-[#D6A84B]/35 hover:text-[#F2C66D]"
+                          >
+                            Abrir trade
+                            <ExternalLink size={10} />
+                          </Link>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 function PipelineTab() {
   const [watchlists, setWatchlists] = useState<PipelineWatchlist[]>([]);
   const [pools, setPools] = useState<Pool[]>([]);
@@ -1523,7 +1814,7 @@ function PipelineTab() {
         <div className="space-y-6">
           {(['POOL', 'L1', 'L2', 'L3'] as const).map((lvl) => {
             const lvlWls = byLevel(lvl);
-            if (lvlWls.length === 0) return null;
+            if (lvlWls.length === 0 && lvl !== 'L3') return null;
             const totalAssets = lvlWls.reduce((sum, w) => sum + (w.asset_count ?? 0), 0);
             return (
               <div key={lvl}>
@@ -1541,6 +1832,7 @@ function PipelineTab() {
                   )}
                 </div>
                 <div className="space-y-2">
+                  {lvl === 'L3' && <L3ConsolidatedCard refreshTick={refreshTick} />}
                   {lvlWls.map((wl) => (
                     <WatchlistRow
                       key={wl.id}

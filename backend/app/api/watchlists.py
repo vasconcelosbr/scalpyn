@@ -31,6 +31,7 @@ from ..models.pipeline_watchlist import (
     PipelineWatchlistAsset,
     PipelineWatchlistRejection,
 )
+from ..models.shadow_trade import ShadowTrade
 from ..services.market_data_service import _is_etf_pair
 from ..services.watchlist_performance_ranking_service import (
     RankingConfigError,
@@ -867,7 +868,69 @@ def _normalize_decision_snapshot(
 def _iso_utc(value: Optional[datetime]) -> Optional[str]:
     if value is None:
         return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _l3_consolidated_asset_to_dict(row: ShadowTrade) -> Dict[str, Any]:
+    """Serialize the active canonical owner shown by the virtual L3 card.
+
+    A legacy active L3 shadow can temporarily own a symbol/direction because
+    the consolidator deliberately refuses to create a competing trade. Such
+    rows remain visible and are explicitly marked as non-enforced instead of
+    being silently dropped from the operator surface.
+    """
+    snapshot = row.config_snapshot if isinstance(row.config_snapshot, dict) else {}
+    raw_consolidation = snapshot.get("consolidation")
+    consolidation = raw_consolidation if isinstance(raw_consolidation, dict) else {}
+
+    def _string_list(key: str) -> List[str]:
+        value = consolidation.get(key)
+        if not isinstance(value, list):
+            return []
+        return [str(item) for item in value if item is not None and str(item).strip()]
+
+    candidate_profile_names = _string_list("candidate_profile_names")
+    suppressed_profile_names = _string_list("suppressed_profile_names")
+    candidate_profile_ids = _string_list("candidate_profile_ids")
+    suppressed_profile_ids = _string_list("suppressed_profile_ids")
+    selection_rule = _string_list("selection_rule")
+    selection_metrics = consolidation.get("selection_metrics")
+    if not isinstance(selection_metrics, dict):
+        selection_metrics = {}
+
+    raw_candidate_count = consolidation.get("candidate_count")
+    try:
+        candidate_count = int(raw_candidate_count) if raw_candidate_count is not None else None
+    except (TypeError, ValueError):
+        candidate_count = None
+
+    primary_profile_id = consolidation.get("primary_profile_id")
+    primary_profile_name = consolidation.get("primary_profile_name")
+
+    return {
+        "shadow_id": str(row.id),
+        "symbol": row.symbol,
+        "direction": row.direction,
+        "status": row.status,
+        "profile_id": str(primary_profile_id or row.profile_id) if (primary_profile_id or row.profile_id) else None,
+        "profile_name": primary_profile_name or row.profile_name,
+        "entry_price": float(row.entry_price) if row.entry_price is not None else None,
+        "selected_at": _iso_utc(row.created_at),
+        "entry_timestamp": _iso_utc(row.entry_timestamp),
+        "candidate_count": candidate_count,
+        "suppressed_count": len(suppressed_profile_names),
+        "candidate_profile_ids": candidate_profile_ids,
+        "candidate_profile_names": candidate_profile_names,
+        "suppressed_profile_ids": suppressed_profile_ids,
+        "suppressed_profile_names": suppressed_profile_names,
+        "selection_rule": selection_rule,
+        "selection_metrics": selection_metrics,
+        "consolidation_event_id": consolidation.get("event_id"),
+        "consolidation_rule_version": consolidation.get("rule_version"),
+        "consolidation_enforced": bool(row.l3_consolidation_enforced),
+    }
 
 
 # ── CRUD ───────────────────────────────────────────────────────────────────────
@@ -963,6 +1026,52 @@ async def list_watchlists(
             item.get("created_at") or "",
         ))
     return {"watchlists": items, "total": len(items), "order_by": order_by}
+
+
+@router.get("/l3-consolidated/assets")
+async def list_l3_consolidated_assets(
+    user_id: UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the read-only virtual L3 watchlist for external/UI consumers.
+
+    The first active L3 shadow is the canonical owner used by the consolidation
+    guard. Rows are therefore ordered exactly like ``find_active_l3_shadow``
+    and de-duplicated by symbol/direction. Completed trades are historical and
+    intentionally do not belong to this current-state watchlist.
+    """
+    result = await db.execute(
+        select(ShadowTrade)
+        .where(
+            ShadowTrade.user_id == user_id,
+            ShadowTrade.source == "L3",
+            ShadowTrade.status.in_(("PENDING", "RUNNING")),
+        )
+        .order_by(ShadowTrade.created_at.asc(), ShadowTrade.id.asc())
+    )
+    rows = result.scalars().all()
+
+    items: List[Dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in rows:
+        key = (str(row.symbol or "").upper(), str(row.direction or "").upper())
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append(_l3_consolidated_asset_to_dict(row))
+
+    items.sort(key=lambda item: (item["symbol"], item["direction"] or ""))
+    return {
+        "id": "l3-consolidated",
+        "name": "L3 Consolidado",
+        "level": "L3",
+        "virtual": True,
+        "read_only": True,
+        "items": items,
+        "total": len(items),
+        "as_of": _iso_utc(datetime.now(timezone.utc)),
+    }
+
 
 @router.post("/")
 async def create_watchlist(
