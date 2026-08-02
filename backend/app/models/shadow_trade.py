@@ -90,6 +90,11 @@ class ShadowTrade(Base):
     # Histórico: 'ARROW' existia para watchlist custom (Task #321, removida).
     source = Column(String(20), nullable=False, default="L3", index=True)
 
+    # True only for canonical L3 shadows created while consolidation is
+    # enabled. The partial unique index is scoped to these rows so flag=false
+    # preserves the legacy multi-profile behaviour.
+    l3_consolidation_enforced = Column(Boolean, nullable=False, default=False)
+
     config_snapshot = Column(JSONB, nullable=True)
     features_snapshot = Column(JSONB, nullable=True)
     # Snapshot dos indicadores no momento em que TP/SL/TIMEOUT foi

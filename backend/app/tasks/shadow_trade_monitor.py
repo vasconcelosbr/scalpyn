@@ -1724,6 +1724,12 @@ async def _backfill_shadows_for_all_users() -> int:
                         se_cfg.sell_flow.kill_switch.max_drawdown_from_hwm_pct
                     ),
                     "timeout_candles": None,
+                    "l3_single_profile_per_symbol_enabled": bool(
+                        se_cfg.scanner.l3_single_profile_per_symbol_enabled
+                    ),
+                    "l3_profile_consolidation_rule_version": (
+                        se_cfg.scanner.l3_profile_consolidation_rule_version
+                    ),
                 }
                 total += await safe_backfill_watchlist_shadows(cfg_row.user_id, user_config)
             except Exception:

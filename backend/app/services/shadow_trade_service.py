@@ -924,6 +924,7 @@ _INSERT_SHADOW_SQL = text("""
         amount_usdt, entry_price, entry_timestamp,
         tp_price, sl_price, tp_pct, sl_pct, timeout_candles,
         status, skip_reason, source, config_snapshot, features_snapshot,
+        l3_consolidation_enforced,
         last_processed_time,
         ttt_enabled, ttt_tp_pct, ttt_timeout_minutes,
         barrier_mode, tp_pct_applied, sl_pct_applied,
@@ -948,6 +949,7 @@ _INSERT_SHADOW_SQL = text("""
         :status, :skip_reason, :source,
         CAST(:config_snapshot AS JSONB),
         CAST(:features_snapshot AS JSONB),
+        :l3_consolidation_enforced,
         :last_processed_time,
         :ttt_enabled, :ttt_tp_pct, :ttt_timeout_minutes,
         :barrier_mode, :tp_pct_applied, :sl_pct_applied,
@@ -981,6 +983,7 @@ async def _create_from_decision(
     source: str = SHADOW_SOURCE_L3,
     extra_config: Optional[Dict[str, Any]] = None,
     lineage: Optional[Any] = None,
+    consolidation_enforced: Optional[bool] = None,
 ) -> Optional[UUID]:
     """Insere uma row em ``shadow_trades`` para a ``decision`` informada.
 
@@ -1067,6 +1070,75 @@ async def _create_from_decision(
     normalized_source = (
         source if source in _VALID_SHADOW_SOURCES else SHADOW_SOURCE_L3
     )
+
+    _consolidation_enforced = bool(
+        user_config.get("l3_single_profile_per_symbol_enabled", False)
+        if consolidation_enforced is None
+        else consolidation_enforced
+    ) and normalized_source == SHADOW_SOURCE_L3
+    if _consolidation_enforced:
+        from .l3_trade_consolidation import (
+            acquire_consolidation_lock,
+            build_consolidation_event_id,
+            candle_open_for_timeframe,
+            find_active_l3_shadow,
+        )
+
+        _direction = (getattr(decision, "direction", None) or "SPOT").upper()
+        await acquire_consolidation_lock(
+            db,
+            user_id=decision.user_id,
+            symbol=decision.symbol,
+            direction=_direction,
+        )
+        _active_l3 = await find_active_l3_shadow(
+            db,
+            user_id=decision.user_id,
+            symbol=decision.symbol,
+            direction=_direction,
+        )
+        if _active_l3 is not None:
+            logger.info(
+                "[shadow] L3 consolidation active trade skip symbol=%s "
+                "direction=%s existing_trade_id=%s",
+                decision.symbol,
+                _direction,
+                _active_l3.id,
+            )
+            return None
+
+        # Safety-net writers can reach this function outside pipeline_scan's
+        # full candidate aggregation. Keep those rows auditable without
+        # pretending that more than the locally available candidate was seen.
+        _extra = dict(extra_config or {})
+        if "consolidation" not in _extra:
+            _timeframe = str(getattr(decision, "timeframe", None) or "5m")
+            _candle_open = candle_open_for_timeframe(
+                getattr(decision, "created_at", None) or datetime.now(timezone.utc),
+                _timeframe,
+            )
+            _extra["consolidation"] = {
+                "enabled": True,
+                "rule_version": user_config.get(
+                    "l3_profile_consolidation_rule_version",
+                    "single_profile_per_symbol_v1",
+                ),
+                "event_id": build_consolidation_event_id(
+                    symbol=decision.symbol,
+                    direction=_direction,
+                    timeframe=_timeframe,
+                    candle_open_timestamp=_candle_open,
+                ),
+                "candidate_count": 1,
+                "primary_profile_id": str(_lin_profile_id) if _lin_profile_id else None,
+                "primary_profile_name": _lin_profile_name,
+                "candidate_profile_ids": [
+                    str(_lin_profile_id) if _lin_profile_id else None
+                ],
+                "suppressed_profile_ids": [],
+                "selection_mode": "single_candidate_safety_net",
+            }
+        extra_config = _extra
 
     if _lin_profile_id and await _has_active_profile_shadow(
         db,
@@ -1225,6 +1297,7 @@ async def _create_from_decision(
                     "source": normalized_source,
                     "config_snapshot": json.dumps(config_snap, default=str),
                     "features_snapshot": json.dumps(features_snap, default=str),
+                    "l3_consolidation_enforced": _consolidation_enforced,
                     # Bookmark do monitor: começa em entry_ts para que a
                     # primeira janela de candles avaliada seja "tudo após a
                     # entrada" (e não tudo desde sempre).
@@ -1304,6 +1377,49 @@ async def _create_from_decision(
 
 
 # ── public own-session helpers ───────────────────────────────────────────────
+
+async def load_shadow_creation_config(user_id) -> Dict[str, Any]:
+    """Load the GUI-backed Spot/ML contract used by canonical L3 writers."""
+    from ..database import CeleryAsyncSessionLocal
+    from ..models.config_profile import ConfigProfile
+    from ..schemas.spot_engine_config import SpotEngineConfig
+
+    spot_config = SpotEngineConfig()
+    try:
+        async with CeleryAsyncSessionLocal() as db:
+            result = await db.execute(
+                select(ConfigProfile).where(
+                    ConfigProfile.user_id == user_id,
+                    ConfigProfile.config_type == "spot_engine",
+                    ConfigProfile.is_active.is_(True),
+                ).limit(1)
+            )
+            row = result.scalar_one_or_none()
+            if row is not None:
+                spot_config = SpotEngineConfig.from_config_json(
+                    row.config_json or {}
+                )
+    except Exception:
+        logger.exception(
+            "[shadow] spot-engine config load failed user=%s; using schema defaults",
+            user_id,
+        )
+
+    user_config: Dict[str, Any] = {
+        "tp_pct": float(spot_config.selling.take_profit_pct),
+        "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
+            spot_config.sell_flow.kill_switch.max_drawdown_from_hwm_pct
+        ),
+        "timeout_candles": None,
+        "l3_single_profile_per_symbol_enabled": bool(
+            spot_config.scanner.l3_single_profile_per_symbol_enabled
+        ),
+        "l3_profile_consolidation_rule_version": (
+            spot_config.scanner.l3_profile_consolidation_rule_version
+        ),
+    }
+    return await _load_ml_shadow_config(user_id, user_config)
+
 
 async def safe_create_from_symbol_skip(
     user_id,
@@ -1646,6 +1762,12 @@ async def create_shadows_for_new_decisions(
                         se_cfg.sell_flow.kill_switch.max_drawdown_from_hwm_pct
                     ),
                     "timeout_candles": None,
+                    "l3_single_profile_per_symbol_enabled": bool(
+                        se_cfg.scanner.l3_single_profile_per_symbol_enabled
+                    ),
+                    "l3_profile_consolidation_rule_version": (
+                        se_cfg.scanner.l3_profile_consolidation_rule_version
+                    ),
                 }
             # Load ML config for fee snapshot (B1 fix)
             ml_res = await cfg_db.execute(
@@ -1672,6 +1794,12 @@ async def create_shadows_for_new_decisions(
                 _se_defaults.sell_flow.kill_switch.max_drawdown_from_hwm_pct
             ),
             "timeout_candles": None,
+            "l3_single_profile_per_symbol_enabled": bool(
+                _se_defaults.scanner.l3_single_profile_per_symbol_enabled
+            ),
+            "l3_profile_consolidation_rule_version": (
+                _se_defaults.scanner.l3_profile_consolidation_rule_version
+            ),
         }
         logger.info(
             "[shadow] inline create: no spot_engine config for user=%s — using schema defaults (tp=%.1f%% sl=%.1f%%)",

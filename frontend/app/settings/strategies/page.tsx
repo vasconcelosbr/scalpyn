@@ -18,6 +18,8 @@ interface ScannerConfig {
   max_opportunities_per_scan: number;
   symbol_cooldown_seconds: number;
   global_cooldown_after_n_buys: number;
+  l3_single_profile_per_symbol_enabled: boolean;
+  l3_profile_consolidation_rule_version: "single_profile_per_symbol_v1";
 }
 
 interface BuyingConfig {
@@ -113,6 +115,8 @@ const DEFAULT_SCANNER: ScannerConfig = {
   max_opportunities_per_scan: 3,
   symbol_cooldown_seconds: 300,
   global_cooldown_after_n_buys: 0,
+  l3_single_profile_per_symbol_enabled: false,
+  l3_profile_consolidation_rule_version: "single_profile_per_symbol_v1",
 };
 
 const DEFAULT_BUYING: BuyingConfig = {
@@ -406,6 +410,22 @@ export default function StrategySettings() {
               caption="Tempo mínimo entre duas compras do mesmo ativo."
               onChange={(v) => setScanner({ symbol_cooldown_seconds: v })}
             />
+            <div className="md:col-span-2 flex items-start justify-between gap-4 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4">
+              <div>
+                <div className="text-[12px] font-semibold text-[var(--text-primary)]">
+                  Consolidar profiles L3 por ativo
+                </div>
+                <p className="mt-1 text-[11px] text-[var(--text-tertiary)]">
+                  Mantém no máximo um trade L3 ativo por símbolo e direção. Regra: {scanner.l3_profile_consolidation_rule_version}.
+                </p>
+              </div>
+              <Toggle
+                active={scanner.l3_single_profile_per_symbol_enabled}
+                onToggle={() => setScanner({
+                  l3_single_profile_per_symbol_enabled: !scanner.l3_single_profile_per_symbol_enabled,
+                })}
+              />
+            </div>
           </div>
         </div>
       </section>

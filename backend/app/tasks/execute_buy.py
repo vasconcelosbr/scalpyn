@@ -314,6 +314,12 @@ async def _execute_buy_cycle_async() -> dict:
                     "tp_pct": float(se_cfg.selling.take_profit_pct),
                     "sl_pct": float(se_cfg.sell_flow.kill_switch.max_drawdown_from_hwm_pct),
                     "timeout_candles": None,  # service usa SHADOW_TIMEOUT_CANDLES
+                    "l3_single_profile_per_symbol_enabled": bool(
+                        se_cfg.scanner.l3_single_profile_per_symbol_enabled
+                    ),
+                    "l3_profile_consolidation_rule_version": (
+                        se_cfg.scanner.l3_profile_consolidation_rule_version
+                    ),
                 }
 
                 if not allowed:
@@ -845,6 +851,12 @@ async def _execute_buy_cycle_async() -> dict:
                         "order_type":        se_cfg.buying.order_type,
                         "take_profit_price": tp_price,
                         "stop_loss_price":   None,  # sell engine manages exits
+                        "l3_single_profile_per_symbol_enabled": bool(
+                            se_cfg.scanner.l3_single_profile_per_symbol_enabled
+                        ),
+                        "l3_profile_consolidation_rule_version": (
+                            se_cfg.scanner.l3_profile_consolidation_rule_version
+                        ),
                     }
 
                     # Task #232 — execution gate. Candidate passed
@@ -943,6 +955,33 @@ async def _execute_buy_cycle_async() -> dict:
                             db, user_id, "buy",
                             {"symbol": symbol, "price": current_price, "score": alpha_score},
                         )
+                    elif trade_result.get("error") == "ACTIVE_TRADE_ALREADY_EXISTS":
+                        logger.info(
+                            "[execute_buy] SUPPRESSED %s reason=ACTIVE_TRADE_ALREADY_EXISTS "
+                            "existing_trade_id=%s",
+                            symbol,
+                            trade_result.get("existing_trade_id"),
+                            extra=get_log_extra(),
+                        )
+                        await safe_record_decision(
+                            db=db,
+                            trace_id=get_trace(),
+                            user_id=str(user_id),
+                            pool_id=str(pool.id) if pool else None,
+                            symbol=symbol,
+                            market_type="spot",
+                            exchange="gate",
+                            status="SKIPPED",
+                            stage="EXECUTION",
+                            reason="ACTIVE_TRADE_ALREADY_EXISTS",
+                            blocking_rule="L3TradeConsolidation",
+                            rule_details={
+                                "existing_trade_id": trade_result.get("existing_trade_id"),
+                                "rule_version": se_cfg.scanner.l3_profile_consolidation_rule_version,
+                            },
+                            score_breakdown={"alpha_score": alpha_score},
+                        )
+                        stats["skipped"] += 1
                     else:
                         logger.warning(
                             "Trade failed %s (user %s): %s",

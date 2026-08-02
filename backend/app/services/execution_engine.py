@@ -6,7 +6,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.trade import Trade
@@ -104,6 +104,50 @@ class ExecutionEngine:
         order_type = risk_params.get("order_type", "limit")
         exchange_order_id = None
 
+        consolidation_enabled = bool(
+            risk_params.get("l3_single_profile_per_symbol_enabled", False)
+        )
+        if consolidation_enabled:
+            from .l3_trade_consolidation import build_advisory_lock_key
+
+            await db.execute(
+                text("SELECT pg_advisory_xact_lock(:lock_key)"),
+                {
+                    "lock_key": build_advisory_lock_key(
+                        user_id, symbol, direction
+                    )
+                },
+            )
+            active_trade = (
+                await db.execute(
+                    select(Trade.id)
+                    .where(
+                        Trade.user_id == user_id,
+                        Trade.symbol == symbol,
+                        Trade.direction == direction,
+                        Trade.status.in_(("open", "ACTIVE", "HOLDING_UNDERWATER")),
+                    )
+                    .order_by(Trade.entry_at.asc(), Trade.id.asc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if active_trade is not None:
+                # Release the transaction-scoped advisory lock before returning.
+                await db.rollback()
+                logger.info(
+                    "l3_trade_consolidation active real trade block "
+                    "symbol=%s direction=%s existing_trade_id=%s rule_version=%s",
+                    symbol,
+                    direction,
+                    active_trade,
+                    risk_params.get("l3_profile_consolidation_rule_version"),
+                )
+                return {
+                    "success": False,
+                    "error": "ACTIVE_TRADE_ALREADY_EXISTS",
+                    "existing_trade_id": str(active_trade),
+                }
+
         if not paper_mode:
             # Get user's exchange connection
             result = await db.execute(
@@ -114,6 +158,8 @@ class ExecutionEngine:
             )
             conn = result.scalars().first()
             if not conn:
+                if consolidation_enabled:
+                    await db.rollback()
                 return {"success": False, "error": "No active exchange connection"}
 
             try:
@@ -139,6 +185,8 @@ class ExecutionEngine:
                     price=current_price,
                 )
             except Exception as e:
+                if consolidation_enabled:
+                    await db.rollback()
                 logger.exception(
                     "execute_trade_failed",
                     extra={
