@@ -15,13 +15,15 @@ from typing import Any, Mapping
 
 FEATURE_SCHEMA_VERSION = "entry_features_v2"
 FEATURE_EXTRACTOR_VERSION = "feature-engine-v2"
-CAPTURE_CONTRACT_VERSION = "point-in-time-v1"
+CAPTURE_CONTRACT_VERSION = "point-in-time-v2"
 
 
 @dataclass(frozen=True)
 class NativeFeatureCapture:
     snapshot: dict[str, Any]
     captured_at: datetime
+    source_at: datetime | None
+    source_times: dict[str, str]
     snapshot_hash: str
     feature_extractor_version: str
     feature_schema_version: str
@@ -56,6 +58,9 @@ REGISTRY: dict[str, FeatureSpec] = {
 }
 
 _ALIASES = {alias: name for name, spec in REGISTRY.items() for alias in spec.aliases}
+_DERIVED_SOURCE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
+    "di_trend": ("di_plus", "di_minus"),
+}
 
 
 # ── P0-B (auditoria captura L3 2026-07-24) ───────────────────────────────────
@@ -141,16 +146,129 @@ def snapshot_hash(snapshot: Mapping[str, Any]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def capture_native_snapshot(snapshot: Mapping[str, Any]) -> NativeFeatureCapture:
-    captured_at = utcnow()
+def _parse_timestamp(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str) and value.strip():
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _feature_source_timestamps(
+    snapshot: Mapping[str, Any],
+    *,
+    source_snapshot: Mapping[str, Any] | None = None,
+    feature_metadata: Mapping[str, Mapping[str, Any]] | None = None,
+) -> tuple[dict[str, datetime], list[str]]:
+    """Return the causal source timestamp used by every non-null feature.
+
+    ``features_captured_at`` is intentionally not a substitute for this value:
+    a worker may persist an already-known snapshot after the decision.  Every
+    non-null training feature must therefore carry its own ``ts``/``timestamp``
+    either in the source envelope or in the explicit metadata map.
+    """
+    source_snapshot = source_snapshot or {}
+    feature_metadata = feature_metadata or {}
+    timestamps: dict[str, datetime] = {}
+    errors: list[str] = []
+    for name, value in snapshot.items():
+        if str(name).startswith("_") or value is None:
+            continue
+        lookup_names = (
+            name,
+            *(REGISTRY.get(name).aliases if name in REGISTRY else ()),
+            *_DERIVED_SOURCE_DEPENDENCIES.get(name, ()),
+        )
+        envelopes = [source_snapshot.get(key) for key in lookup_names]
+        metadata_entries = [feature_metadata.get(key) for key in lookup_names]
+        candidates: list[Any] = []
+        for envelope in envelopes:
+            if isinstance(envelope, Mapping):
+                candidates.extend((envelope.get("ts"), envelope.get("timestamp")))
+        for metadata in metadata_entries:
+            if isinstance(metadata, Mapping):
+                candidates.extend((metadata.get("ts"), metadata.get("timestamp")))
+        raw_timestamps = [
+            candidate for candidate in candidates if candidate is not None
+        ]
+        parsed_timestamps = [
+            parsed
+            for parsed in (_parse_timestamp(candidate) for candidate in raw_timestamps)
+            if parsed is not None
+        ]
+        if not raw_timestamps:
+            errors.append(f"missing_source_timestamp:{name}")
+        elif len(parsed_timestamps) != len(raw_timestamps):
+            errors.append(f"invalid_source_timestamp:{name}")
+        if parsed_timestamps:
+            timestamps[name] = max(parsed_timestamps)
+    return timestamps, errors
+
+
+def feature_source_timestamp(
+    snapshot: Mapping[str, Any],
+    *,
+    source_snapshot: Mapping[str, Any] | None = None,
+    feature_metadata: Mapping[str, Mapping[str, Any]] | None = None,
+) -> tuple[datetime | None, list[str]]:
+    """Return the latest immutable source timestamp used by the snapshot."""
+    timestamps, errors = _feature_source_timestamps(
+        snapshot,
+        source_snapshot=source_snapshot,
+        feature_metadata=feature_metadata,
+    )
+    if not timestamps:
+        errors.append("missing_feature_source_at")
+        return None, errors
+    return max(timestamps.values()), errors
+
+
+def capture_native_snapshot(
+    snapshot: Mapping[str, Any],
+    *,
+    source_snapshot: Mapping[str, Any] | None = None,
+    feature_metadata: Mapping[str, Mapping[str, Any]] | None = None,
+    decision_created_at: datetime | None = None,
+    entry_at: datetime | None = None,
+    captured_at: datetime | None = None,
+) -> NativeFeatureCapture:
+    captured_at = captured_at or utcnow()
     normalized, errors = normalize_snapshot(snapshot)
     # P0-B: bloco direcional é requisito de elegibilidade. Checado sobre o
     # snapshot cru (direcionais não têm alias, então normalized == snapshot
     # para essas chaves) para invalidar capturas finas na origem.
     errors.extend(directional_capture_errors(snapshot))
+    source_times, source_errors = _feature_source_timestamps(
+        normalized,
+        source_snapshot=source_snapshot,
+        feature_metadata=feature_metadata,
+    )
+    source_at = max(source_times.values()) if source_times else None
+    if source_at is None:
+        source_errors.append("missing_feature_source_at")
+    errors.extend(source_errors)
+    errors.extend(temporal_contract_errors(
+        feature_source_at=source_at,
+        features_captured_at=captured_at,
+        decision_created_at=decision_created_at,
+        entry_at=entry_at,
+        label_resolved_at=None,
+    ))
     return NativeFeatureCapture(
         snapshot=normalized,
         captured_at=captured_at,
+        source_at=source_at,
+        source_times={
+            name: timestamp.isoformat()
+            for name, timestamp in sorted(source_times.items())
+        },
         snapshot_hash=snapshot_hash(normalized),
         feature_extractor_version=FEATURE_EXTRACTOR_VERSION,
         feature_schema_version=FEATURE_SCHEMA_VERSION,
@@ -169,8 +287,9 @@ def temporal_contract_errors(
 ) -> list[str]:
     errors: list[str] = []
     ordered = (
-        (feature_source_at, features_captured_at, "feature_after_capture"),
-        (features_captured_at, decision_created_at, "features_after_decision"),
+        (feature_source_at, features_captured_at, "feature_source_after_capture"),
+        (feature_source_at, decision_created_at, "feature_source_after_decision"),
+        (feature_source_at, entry_at, "feature_source_after_entry"),
         (decision_created_at, entry_at, "decision_after_entry"),
     )
     for earlier, later, reason in ordered:

@@ -12,6 +12,7 @@ pytest.importorskip("optuna")
 
 from app.services.ml_challenger_service import (  # noqa: E402
     _suggest_params_from_space,
+    _train_catboost_sync,
     _train_lgbm_sync,
 )
 
@@ -55,6 +56,14 @@ class TestFailClosed:
                 _FakeTrial(), {"x": {"type": "categorical", "low": 0, "high": 1}}
             )
 
+    def test_catboost_missing_search_space_aborts_before_training(self):
+        X, y, r = _synth()
+        with pytest.raises(ValueError, match="missing_ml_optuna_search_space_catboost"):
+            _train_catboost_sync(
+                X.iloc[:200], y.iloc[:200], X.iloc[200:], y.iloc[200:],
+                list(X.columns), 2, val_returns=r[200:],
+            )
+
 
 class TestSmokeConfigDriven:
     def test_n_trials_and_space_from_config_ev_selection(self):
@@ -66,6 +75,8 @@ class TestSmokeConfigDriven:
             r[200:], None,
             0.01, 5,
             SMOKE_SPACE,
+            seed=7,
+            optuna_timeout_s=60,
         )
         # n_trials propagado da "config"
         assert res["metrics"]["n_trials"] == 2
@@ -73,6 +84,8 @@ class TestSmokeConfigDriven:
         assert res["metrics"]["trial_selection_objective"] == "net_ev"
         # espaço registrado na proveniência é exatamente o da config
         assert res["metrics"]["optuna_search_space"] == SMOKE_SPACE
+        assert res["metrics"]["optuna_study"]["executed_trials"] == 2
+        assert len(res["metrics"]["optuna_study"]["trials"]) == 2
         # nenhum hiperparâmetro sugerido fora do espaço da config
         assert set(res["best_params"]).issubset(set(SMOKE_SPACE))
         for name, value in res["best_params"].items():

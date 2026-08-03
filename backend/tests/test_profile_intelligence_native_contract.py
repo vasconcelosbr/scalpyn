@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.ml.feature_contract_v2 import snapshot_hash
+from app.ml.feature_contract_v2 import CAPTURE_CONTRACT_VERSION, snapshot_hash
 from app.services.algorithm_governance_service import suggestion_registry_block_reasons
 from app.services.profile_intelligence_contract import (
     OFFICIAL_CAPTURE_COLUMNS,
@@ -19,11 +19,17 @@ def _official_row(**overrides):
         "profile_id": "00000000-0000-0000-0000-000000000001",
         "decision_id": "00000000-0000-0000-0000-000000000002",
         "features_snapshot": snapshot,
+        "feature_source_at": datetime(2026, 7, 12, 23, 59, tzinfo=timezone.utc),
+        "feature_source_times": {
+            "atr_pct": "2026-07-12T23:59:00+00:00",
+            "rsi": "2026-07-12T23:59:00+00:00",
+        },
         "features_captured_at": datetime(2026, 7, 13, tzinfo=timezone.utc),
+        "entry_timestamp": datetime(2026, 7, 13, tzinfo=timezone.utc),
         "feature_hash": snapshot_hash(snapshot),
         "feature_extractor_version": "feature-engine-v2",
         "feature_schema_version": "entry_features_v2",
-        "capture_contract_version": "point-in-time-v1",
+        "capture_contract_version": CAPTURE_CONTRACT_VERSION,
         "label_contract_version": "positive_net_return_v1",
         "profile_version_id": "00000000-0000-0000-0000-000000000003",
         "score_engine_version_id": "00000000-0000-0000-0000-000000000004",
@@ -36,7 +42,9 @@ def _official_row(**overrides):
 
 def test_official_sql_contract_is_fail_closed():
     clause = official_where("st")
-    assert "capture_contract_version = 'point-in-time-v1'" in clause
+    assert f"capture_contract_version = '{CAPTURE_CONTRACT_VERSION}'" in clause
+    assert "feature_source_at IS NOT NULL" in clause
+    assert "feature_source_times IS NOT NULL" in clause
     assert "label_contract_version = 'positive_net_return_v1'" in clause
     assert "profile_version_id IS NOT NULL" in clause
     assert "score_engine_version_id IS NOT NULL" in clause

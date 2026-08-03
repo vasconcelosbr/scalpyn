@@ -8,7 +8,10 @@ from app.ml.grouped_purged_split import TemporalObservation, grouped_purged_spli
 from app.ml.model_governance import can_publish_ml_evidence, governance_from_gate
 from app.services.profile_versioning_v2 import content_hash
 from app.ml.economic_targets import OutcomeCosts, economic_label, expected_value_pct
-from app.services.ml_challenger_service import MLChallengerService
+from app.services.ml_challenger_service import (
+    MLChallengerService,
+    _partition_membership_contract,
+)
 
 
 def test_descriptive_findings_never_grant_predictive_authority():
@@ -54,7 +57,7 @@ def test_feature_aliases_and_categories_are_canonical():
     assert snapshot_hash(normalized) == snapshot_hash(dict(reversed(list(normalized.items()))))
 
 
-def test_temporal_contract_rejects_future_features_and_early_label():
+def test_temporal_contract_allows_deferred_persistence_and_rejects_early_label():
     now = datetime.now(timezone.utc)
     errors = temporal_contract_errors(
         feature_source_at=now,
@@ -63,8 +66,20 @@ def test_temporal_contract_rejects_future_features_and_early_label():
         entry_at=now + timedelta(seconds=10),
         label_resolved_at=now,
     )
-    assert "features_after_decision" in errors
+    assert "feature_source_after_decision" not in errors
     assert "label_not_after_decision" in errors
+
+
+def test_temporal_contract_rejects_source_observed_after_decision():
+    now = datetime.now(timezone.utc)
+    errors = temporal_contract_errors(
+        feature_source_at=now + timedelta(seconds=1),
+        features_captured_at=now + timedelta(seconds=5),
+        decision_created_at=now,
+        entry_at=now + timedelta(seconds=2),
+        label_resolved_at=None,
+    )
+    assert "feature_source_after_decision" in errors
 
 
 def test_grouped_split_purges_both_boundaries_and_group_overlap():
@@ -234,3 +249,28 @@ def test_operational_split_rejects_single_class_validation():
     assert result["has_test"] is False
     assert result["split_diagnostics"]["requires_class_diversity"] is True
     assert result["split_diagnostics"]["single_class_candidates"] > 0
+
+
+def test_partition_membership_hash_is_exact_and_order_independent():
+    first = _partition_membership_contract({
+        "meta_tr": [[], [], ["b", "a"]],
+        "meta_va": [[], [], ["c"]],
+        "meta_te": [[], [], ["d"]],
+    })
+    second = _partition_membership_contract({
+        "meta_tr": [[], [], ["a", "b"]],
+        "meta_va": [[], [], ["c"]],
+        "meta_te": [[], [], ["d"]],
+    })
+    assert first == second
+    assert first["dataset"]["count"] == 4
+    assert first["partitions"]["train"]["count"] == 2
+
+
+def test_partition_membership_overlap_fails_closed():
+    with pytest.raises(ValueError, match="split_membership_overlap"):
+        _partition_membership_contract({
+            "meta_tr": [[], [], ["same"]],
+            "meta_va": [[], [], ["same"]],
+            "meta_te": [[], [], []],
+        })

@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from app.ml.feature_contract_v2 import snapshot_hash
+from app.ml.feature_contract_v2 import CAPTURE_CONTRACT_VERSION, snapshot_hash
 from app.ml.native_capture_governance import (
     ALERT_RULES,
     LANE_CONTRACT,
@@ -20,11 +20,14 @@ def valid_row():
         "score_engine_version_id": "score-version",
         "lineage_status": "EXACT",
         "features_snapshot": snapshot,
+        "feature_source_at": now - timedelta(seconds=1),
+        "feature_source_times": {"atr_pct": (now - timedelta(seconds=1)).isoformat()},
         "features_captured_at": now,
+        "entry_timestamp": now,
         "feature_hash": snapshot_hash(snapshot),
         "feature_extractor_version": "feature-engine-v2",
         "feature_schema_version": "entry_features_v2",
-        "capture_contract_version": "point-in-time-v1",
+        "capture_contract_version": CAPTURE_CONTRACT_VERSION,
         "eligible_for_training": True,
     }
 

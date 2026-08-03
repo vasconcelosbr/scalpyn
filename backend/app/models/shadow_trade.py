@@ -115,6 +115,8 @@ class ShadowTrade(Base):
     capture_contract_version = Column(String(80), nullable=True)
     label_contract_version = Column(String(80), nullable=True)
     barrier_contract_version = Column(String(80), nullable=True)
+    feature_source_at = Column(DateTime(timezone=True), nullable=True)
+    feature_source_times = Column(JSONB, nullable=True)
     features_captured_at = Column(DateTime(timezone=True), nullable=True)
     label_resolved_at = Column(DateTime(timezone=True), nullable=True)
     features_coverage = Column(Numeric(7, 6), nullable=True)

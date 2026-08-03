@@ -21,7 +21,7 @@ import math
 import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 from uuid import UUID, uuid4
 
 # Q2 council 2026-06-29: hard ceiling on completed_at to exclude shadow monitor
@@ -44,6 +44,11 @@ except ModuleNotFoundError:
         MLDatasetConfigError,
         parse_required_ml_dataset_valid_from,
     )
+
+try:
+    from app.ml.feature_contract_v2 import CAPTURE_CONTRACT_VERSION
+except ModuleNotFoundError:
+    from backend.app.ml.feature_contract_v2 import CAPTURE_CONTRACT_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +104,53 @@ def _snapshot_group_key(record: Dict[str, Any]) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+def _partition_membership_contract(split: Mapping[str, Any]) -> Dict[str, Any]:
+    """Hash exact train/validation/test membership and fail on overlap."""
+    memberships: Dict[str, list[str]] = {}
+    for name, meta_key in (
+        ("train", "meta_tr"),
+        ("validation", "meta_va"),
+        ("test", "meta_te"),
+    ):
+        metadata = split.get(meta_key)
+        ids = metadata[2] if metadata and len(metadata) > 2 else []
+        memberships[name] = sorted(str(value) for value in (ids or []) if value)
+
+    sets = {name: set(values) for name, values in memberships.items()}
+    overlaps = {
+        "train_validation": len(sets["train"] & sets["validation"]),
+        "train_test": len(sets["train"] & sets["test"]),
+        "validation_test": len(sets["validation"] & sets["test"]),
+    }
+    if any(overlaps.values()):
+        raise ValueError(f"split_membership_overlap:{overlaps}")
+
+    partitions = {
+        name: {
+            "count": len(values),
+            "hash": hashlib.sha256("|".join(values).encode()).hexdigest(),
+        }
+        for name, values in memberships.items()
+    }
+    dataset_ids = sorted(
+        memberships["train"] + memberships["validation"] + memberships["test"]
+    )
+    contract = {
+        "dataset": {
+            "count": len(dataset_ids),
+            "hash": hashlib.sha256("|".join(dataset_ids).encode()).hexdigest(),
+        },
+        "partitions": partitions,
+        "overlaps": overlaps,
+    }
+    contract["split_hash"] = hashlib.sha256(
+        json.dumps(
+            contract, sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+    return contract
+
+
 _BARRIER_MODE_ENCODING = {"FIXED": 0.0, "ATR_DYNAMIC": 1.0}
 
 
@@ -150,6 +202,17 @@ def _require_positive_int_config(config: Dict[str, Any], key: str) -> int:
     value = raw_value
     if value <= 0:
         raise ValueError(f"invalid_{key}: expected positive integer, got {raw_value!r}")
+    return value
+
+
+def _require_fraction_config(config: Dict[str, Any], key: str) -> float:
+    """Read a required split fraction from the active ML config."""
+    raw_value = config.get(key)
+    if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float)):
+        raise ValueError(f"invalid_{key}: expected fraction in (0, 1), got {raw_value!r}")
+    value = float(raw_value)
+    if not 0.0 < value < 1.0:
+        raise ValueError(f"invalid_{key}: expected fraction in (0, 1), got {raw_value!r}")
     return value
 
 
@@ -404,6 +467,68 @@ def _suggest_params_from_space(trial, search_space: Dict[str, Any]) -> Dict[str,
     return params
 
 
+def _json_safe(value: Any) -> Any:
+    """Convert Optuna metadata to strict JSON accepted by PostgreSQL JSONB."""
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return str(value)
+
+
+def _serialize_optuna_study(
+    study,
+    *,
+    search_space: Mapping[str, Any],
+    seed: int,
+    timeout_seconds: int,
+    requested_trials: int,
+    selection_objective: str,
+) -> Dict[str, Any]:
+    """Persist every completed/failed/pruned trial and reproduction input."""
+    trials = []
+    for trial in study.trials:
+        trials.append({
+            "number": int(trial.number),
+            "state": trial.state.name,
+            "value": _json_safe(trial.value),
+            "values": _json_safe(trial.values),
+            "params": _json_safe(trial.params),
+            "distributions": {
+                str(name): str(distribution)
+                for name, distribution in trial.distributions.items()
+            },
+            "intermediate_values": _json_safe(trial.intermediate_values),
+            "user_attrs": _json_safe(trial.user_attrs),
+            "system_attrs": _json_safe(trial.system_attrs),
+            "datetime_start": _json_safe(trial.datetime_start),
+            "datetime_complete": _json_safe(trial.datetime_complete),
+            "duration_seconds": (
+                trial.duration.total_seconds() if trial.duration is not None else None
+            ),
+        })
+    return {
+        "study_name": study.study_name,
+        "directions": [direction.name for direction in study.directions],
+        "sampler": type(study.sampler).__name__,
+        "seed": int(seed),
+        "timeout_seconds": int(timeout_seconds),
+        "requested_trials": int(requested_trials),
+        "executed_trials": len(trials),
+        "selection_objective": selection_objective,
+        "search_space": _json_safe(dict(search_space)),
+        "best_trial_number": int(study.best_trial.number),
+        "best_trial_value": _json_safe(study.best_trial.value),
+        "trials": trials,
+    }
+
+
 def _bootstrap_auc_ci_low(
     y_true, y_pred, level: float, n_boot: int, seed: int
 ) -> Optional[float]:
@@ -579,6 +704,14 @@ def _train_lgbm_sync(
             "optuna_search_space": search_space,
             "best_trial_number": study.best_trial.number,
             "best_trial_value": study.best_trial.value,
+            "optuna_study": _serialize_optuna_study(
+                study,
+                search_space=search_space,
+                seed=seed,
+                timeout_seconds=optuna_timeout_s,
+                requested_trials=n_trials,
+                selection_objective=_trial_selection_objective,
+            ),
             "val_samples": int(len(y_val)),
             "train_samples": int(len(y_train)),
             "positive_rate": float(y_val.mean()) if hasattr(y_val, "mean") else 0.0,
@@ -601,7 +734,15 @@ def _train_catboost_sync(
     train_weights=None, val_weights=None, test_weights=None,
     selection_objective: str = "net_ev",
     fixed_params: Optional[Dict[str, Any]] = None,
+    search_space: Optional[Dict[str, Any]] = None,
+    base_params: Optional[Dict[str, Any]] = None,
+    seed: int = 42,
+    optuna_timeout_s: int = 180,
+    early_stopping_rounds: int = 30,
 ) -> Dict[str, Any]:
+    if fixed_params is None and not search_space:
+        raise ValueError("missing_ml_optuna_search_space_catboost")
+    import catboost as catboost_package
     from catboost import CatBoostClassifier, Pool
     import numpy as np
     import optuna
@@ -636,20 +777,19 @@ def _train_catboost_sync(
 
     def objective(trial: optuna.Trial) -> float:
         params = {
-            "iterations": trial.suggest_int("iterations", 200, 800),
-            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
-            "depth": trial.suggest_int("depth", 4, 10),
-            "l2_leaf_reg": trial.suggest_float("l2_leaf_reg", 1.0, 10.0),
-            "min_data_in_leaf": trial.suggest_int("min_data_in_leaf", 1, 50),
-            "random_strength": trial.suggest_float("random_strength", 0.1, 10.0),
+            **(base_params or {}),
+            **_suggest_params_from_space(trial, search_space or {}),
             "verbose": False,
-            "eval_metric": "AUC",
-            "nan_mode": "Min",
-            "random_seed": 42,
+            "random_seed": int(seed),
             "allow_writing_files": False,
         }
         model = CatBoostClassifier(**params)
-        model.fit(train_pool, eval_set=val_pool, early_stopping_rounds=20, verbose=False)
+        model.fit(
+            train_pool,
+            eval_set=val_pool,
+            early_stopping_rounds=int(early_stopping_rounds),
+            verbose=False,
+        )
         preds = model.predict_proba(val_pool)[:, 1]
         if selection_objective == "weighted_roc_auc":
             return float(roc_auc_score(y_val, preds, sample_weight=val_weights))
@@ -666,22 +806,34 @@ def _train_catboost_sync(
 
     study = None
     if fixed_params is None:
-        study = optuna.create_study(direction="maximize")
-        study.optimize(objective, n_trials=n_trials, timeout=180, show_progress_bar=False)
+        study = optuna.create_study(
+            direction="maximize",
+            sampler=optuna.samplers.TPESampler(seed=int(seed)),
+        )
+        study.optimize(
+            objective,
+            n_trials=n_trials,
+            timeout=int(optuna_timeout_s),
+            show_progress_bar=False,
+        )
         selected_params = study.best_params
     else:
         selected_params = dict(fixed_params)
 
     final_params = {
+        **(base_params or {}),
         **selected_params,
         "verbose": False,
-        "eval_metric": "AUC",
-        "nan_mode": "Min",
-        "random_seed": 42,
+        "random_seed": int(seed),
         "allow_writing_files": False,
     }
     final_model = CatBoostClassifier(**final_params)
-    final_model.fit(train_pool, eval_set=val_pool, early_stopping_rounds=40, verbose=False)
+    final_model.fit(
+        train_pool,
+        eval_set=val_pool,
+        early_stopping_rounds=int(early_stopping_rounds),
+        verbose=False,
+    )
 
     val_preds = final_model.predict_proba(val_pool)[:, 1]
     roc_auc = float(roc_auc_score(y_val, val_preds, sample_weight=val_weights))
@@ -743,6 +895,22 @@ def _train_catboost_sync(
             "best_trial_number": study.best_trial.number if study is not None else None,
             "best_trial_value": study.best_trial.value if study is not None else roc_auc,
             "fixed_params": selected_params if study is None else None,
+            "optuna_search_space": search_space if study is not None else None,
+            "catboost_base_params": base_params or {},
+            "early_stopping_rounds": int(early_stopping_rounds),
+            "catboost_version": catboost_package.__version__,
+            "optuna_study": (
+                _serialize_optuna_study(
+                    study,
+                    search_space=search_space or {},
+                    seed=seed,
+                    timeout_seconds=optuna_timeout_s,
+                    requested_trials=n_trials,
+                    selection_objective=_trial_selection_objective,
+                )
+                if study is not None
+                else None
+            ),
             "val_samples": int(len(y_val)),
             "train_samples": int(len(y_train)),
             "positive_rate": float(y_val.mean()) if hasattr(y_val, "mean") else 0.0,
@@ -850,6 +1018,7 @@ class MLChallengerService:
             "cutoff": dataset_query_cutoff - timedelta(days=lookback_days),
             "dataset_query_cutoff": dataset_query_cutoff,
             "maturity_embargo_margin_minutes": int(maturity_embargo_margin_minutes),
+            "capture_contract_version": CAPTURE_CONTRACT_VERSION,
             **source_params,
             **valid_from_params,
             **cutoff_params,
@@ -861,8 +1030,13 @@ class MLChallengerService:
               AND pnl_pct IS NOT NULL
               AND features_snapshot IS NOT NULL
               AND features_snapshot::text <> '{{}}'
-              AND capture_contract_version = 'point-in-time-v1'
+              AND capture_contract_version = :capture_contract_version
+              AND feature_source_at IS NOT NULL
+              AND feature_source_times IS NOT NULL
+              AND feature_source_times <> '{{}}'::jsonb
               AND features_captured_at IS NOT NULL
+              AND feature_source_at <= entry_timestamp
+              AND feature_source_at <= features_captured_at
               AND feature_extractor_version IS NOT NULL
               AND feature_schema_version IS NOT NULL
               AND feature_hash IS NOT NULL
@@ -917,6 +1091,8 @@ class MLChallengerService:
                 sl_pct_applied,
                 entry_timestamp,
                 created_at,
+                feature_source_at,
+                feature_source_times,
                 features_captured_at,
                 timeframe,
                 exchange,
@@ -2270,6 +2446,7 @@ class MLChallengerService:
         win_fast_threshold_s: Optional[float] = None,
         allow_mixed_source: bool = False,
         advisory_intelligence: bool = False,
+        dataset_query_cutoff: Optional[datetime] = None,
     ) -> Dict[str, Any]:
         """
         Treina challengers habilitados e registra no banco.
@@ -2328,7 +2505,9 @@ class MLChallengerService:
             return {"skipped": "feature_extractor_unavailable"}
 
         ml_config = await self._load_ml_config(db)
-        dataset_query_cutoff = datetime.now(timezone.utc)
+        dataset_query_cutoff = dataset_query_cutoff or datetime.now(timezone.utc)
+        if dataset_query_cutoff.tzinfo is None:
+            raise ValueError("invalid_dataset_query_cutoff_timezone")
         maturity_embargo_margin_minutes = ml_config.get(
             "ml_maturity_embargo_margin_minutes"
         )
@@ -2359,6 +2538,37 @@ class MLChallengerService:
         )
         threshold_grid_step = float(ml_config.get("ml_threshold_grid_step", 0.01))
         threshold_min_positives = int(ml_config.get("ml_threshold_min_positives", 10))
+        catboost_train_fraction = (
+            _require_fraction_config(ml_config, "ml_catboost_train_size_ratio")
+            if enable_catboost else None
+        )
+        catboost_validation_fraction = (
+            _require_fraction_config(ml_config, "ml_catboost_validation_size_ratio")
+            if enable_catboost else None
+        )
+        catboost_test_fraction = (
+            _require_fraction_config(ml_config, "ml_catboost_test_size_ratio")
+            if enable_catboost else None
+        )
+        if enable_catboost and not math.isclose(
+            catboost_train_fraction + catboost_validation_fraction + catboost_test_fraction,
+            1.0,
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        ):
+            raise ValueError("invalid_catboost_split_ratios: fractions must sum to 1.0")
+        catboost_min_train_samples = (
+            _require_positive_int_config(ml_config, "ml_catboost_min_train_samples")
+            if enable_catboost else None
+        )
+        catboost_min_validation_samples = (
+            _require_positive_int_config(ml_config, "ml_catboost_min_validation_samples")
+            if enable_catboost else None
+        )
+        catboost_min_test_samples = (
+            _require_positive_int_config(ml_config, "ml_catboost_min_test_samples")
+            if enable_catboost else None
+        )
         promotion_min_test_samples = (
             _require_positive_int_config(
                 ml_config, "ml_promotion_min_test_samples"
@@ -2461,7 +2671,9 @@ class MLChallengerService:
                     if ml_config.get("ml_approval_auc_ci_level") is None:
                         raise ValueError("missing_ml_approval_auc_ci_level")
                     _auc_ci_level = float(ml_config["ml_approval_auc_ci_level"])
-                    _optuna_timeout = int(ml_config.get("ml_optuna_timeout_seconds", 180))
+                    _optuna_timeout = _require_positive_int_config(
+                        ml_config, "ml_optuna_timeout_seconds"
+                    )
                     lgbm_search_space = (
                         ml_config.get("ml_optuna_search_space") or {}
                     ).get("lightgbm")
@@ -2543,6 +2755,33 @@ class MLChallengerService:
                                 "n_negative": _lgbm_n - _lgbm_pos,
                                 "positive_rate": (_lgbm_pos / _lgbm_n) if _lgbm_n else 0.0,
                             }
+                            _lgbm_source_population_hash = hashlib.sha256(
+                                "|".join(
+                                    sorted(str(x) for x in shadow_ids if x)
+                                ).encode()
+                            ).hexdigest()
+                            _lgbm_membership = _partition_membership_contract(
+                                _lgbm_split
+                            )
+                            _lgbm_dataset_hash = _lgbm_membership["dataset"]["hash"]
+                            _lgbm_split_hash = _lgbm_membership["split_hash"]
+                            lgbm_result["metrics"]["optuna_study"].update({
+                                "dataset_hash": _lgbm_dataset_hash,
+                                "source_population_hash": _lgbm_source_population_hash,
+                                "split_hash": _lgbm_split_hash,
+                                "training_config_hash": hashlib.sha256(
+                                    json.dumps(
+                                        ml_config,
+                                        sort_keys=True,
+                                        separators=(",", ":"),
+                                        default=str,
+                                    ).encode()
+                                ).hexdigest(),
+                                "code_commit": (
+                                    os.getenv("RAILWAY_GIT_COMMIT_SHA")
+                                    or os.getenv("GIT_COMMIT_SHA")
+                                ),
+                            })
                             model_id = await self._save_to_db(
                                 db, user_id=user_id,
                                 model_type="lightgbm",
@@ -2634,6 +2873,9 @@ class MLChallengerService:
                 strategy_tp_pct=strategy_tp_pct,
             )
             cb_lane = cb_gate_meta["lane"]
+            intelligence_lane = cb_lane in {
+                "L3_INTELLIGENCE", "L3_APPROVED_INTELLIGENCE"
+            }
             cb_dataset_policy = cb_gate_meta["dataset_policy"]
             barrier_meta = cb_gate_meta["barrier_contract"]
             l3_meta = cb_gate_meta["l3_strict_meta"]
@@ -2664,6 +2906,31 @@ class MLChallengerService:
                 }
             elif _is_installed("catboost"):
                 try:
+                    _raw_cb_trials = ml_config.get("ml_optuna_max_trials")
+                    if _raw_cb_trials is None:
+                        raise ValueError("missing_ml_optuna_max_trials")
+                    n_trials_cb = int(_raw_cb_trials)
+                    _cb_seed = _require_positive_int_config(
+                        ml_config, "ml_training_seed"
+                    )
+                    _cb_timeout = _require_positive_int_config(
+                        ml_config, "ml_optuna_timeout_seconds"
+                    )
+                    cb_search_space = (
+                        (ml_config.get("ml_optuna_search_space") or {}).get(
+                            "catboost"
+                        )
+                    )
+                    cb_base_params = ml_config.get("ml_catboost_base_params")
+                    if not isinstance(cb_base_params, dict) or not cb_base_params:
+                        raise ValueError("missing_ml_catboost_base_params")
+                    cb_early_stopping_rounds = _require_positive_int_config(
+                        ml_config, "ml_catboost_early_stopping_rounds"
+                    )
+                    if not intelligence_lane and not cb_search_space:
+                        raise ValueError(
+                            "missing_ml_optuna_search_space_catboost"
+                        )
                     (
                         X, y, all_cols, cat_indices, returns, created_at, shadow_ids,
                         holding_seconds, snapshot_keys,
@@ -2690,20 +2957,21 @@ class MLChallengerService:
                             created_at=created_at,
                             holding_seconds=holding_seconds,
                             group_ids=snapshot_keys,
-                            val_fraction=VAL_FRACTION,
+                            val_fraction=catboost_validation_fraction,
+                            test_fraction=catboost_test_fraction,
                             embargo_seconds=embargo_seconds,
-                            min_train_size=min_catboost_retrain_eligible,
-                            min_validation_size=threshold_min_positives,
-                            min_test_size=promotion_min_test_samples,
+                            min_train_size=catboost_min_train_samples,
+                            min_validation_size=catboost_min_validation_samples,
+                            min_test_size=catboost_min_test_samples,
+                            max_boundary_candidates=_require_positive_int_config(
+                                ml_config, "ml_catboost_max_boundary_candidates"
+                            ),
                         )
                         X_tr, y_tr = _cb_split["X_tr"], _cb_split["y_tr"]
                         X_va, y_va = _cb_split["X_va"], _cb_split["y_va"]
                         X_te, y_te = _cb_split["X_te"], _cb_split["y_te"]
                         ret_va = _cb_split["meta_va"][0]
                         ret_te = _cb_split["meta_te"][0] if _cb_split["has_test"] else None
-                        intelligence_lane = cb_lane in {
-                            "L3_INTELLIGENCE", "L3_APPROVED_INTELLIGENCE"
-                        }
                         train_weights = val_weights = test_weights = None
                         if intelligence_lane:
                             from app.ml.indicator_intelligence import inverse_group_frequency_weights
@@ -2747,10 +3015,10 @@ class MLChallengerService:
                                     "insufficient_promotion_holdout",
                                 ),
                                 "records": len(y),
-                                "min_test_samples": promotion_min_test_samples,
+                                "min_test_samples": catboost_min_test_samples,
                                 "split_diagnostics": _cb_split["split_diagnostics"],
                             }
-                        elif len(y_va) < threshold_min_positives:
+                        elif len(y_va) < catboost_min_validation_samples:
                             results["catboost"] = {"status": "skipped", "reason": "val_too_small"}
                         else:
                             logger.info(
@@ -2766,6 +3034,11 @@ class MLChallengerService:
                                 "weighted_roc_auc" if intelligence_lane else "net_ev",
                                 ml_config.get("ml_intelligence_catboost_params")
                                 if intelligence_lane else None,
+                                search_space=cb_search_space,
+                                base_params=cb_base_params,
+                                seed=_cb_seed,
+                                optuna_timeout_s=_cb_timeout,
+                                early_stopping_rounds=cb_early_stopping_rounds,
                             )
                             intelligence_report = None
                             if intelligence_lane:
@@ -2796,6 +3069,34 @@ class MLChallengerService:
                                 "n_negative": _cb_n - _cb_pos,
                                 "positive_rate": (_cb_pos / _cb_n) if _cb_n else 0.0,
                             }
+                            _cb_source_population_hash = hashlib.sha256(
+                                "|".join(
+                                    sorted(str(x) for x in shadow_ids if x)
+                                ).encode()
+                            ).hexdigest()
+                            _cb_membership = _partition_membership_contract(
+                                _cb_split
+                            )
+                            _cb_dataset_hash = _cb_membership["dataset"]["hash"]
+                            _cb_split_hash = _cb_membership["split_hash"]
+                            if cb_result["metrics"].get("optuna_study"):
+                                cb_result["metrics"]["optuna_study"].update({
+                                    "dataset_hash": _cb_dataset_hash,
+                                    "source_population_hash": _cb_source_population_hash,
+                                    "split_hash": _cb_split_hash,
+                                    "training_config_hash": hashlib.sha256(
+                                        json.dumps(
+                                            ml_config,
+                                            sort_keys=True,
+                                            separators=(",", ":"),
+                                            default=str,
+                                        ).encode()
+                                    ).hexdigest(),
+                                    "code_commit": (
+                                        os.getenv("RAILWAY_GIT_COMMIT_SHA")
+                                        or os.getenv("GIT_COMMIT_SHA")
+                                    ),
+                                })
                             model_id = await self._save_to_db(
                                 db, user_id=user_id,
                                 model_type="catboost",

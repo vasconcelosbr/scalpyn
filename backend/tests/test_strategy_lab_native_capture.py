@@ -18,7 +18,7 @@ def _make_db_session_mock():
 
 
 @pytest.mark.asyncio
-async def test_strategy_lab_merged_features_loader_uses_canonical_flat_dict():
+async def test_strategy_lab_merged_features_loader_preserves_source_metadata():
     from backend.app.services.shadow_trade_service import (
         _load_strategy_lab_features_by_symbol,
     )
@@ -28,6 +28,9 @@ async def test_strategy_lab_merged_features_loader_uses_canonical_flat_dict():
         "atr_pct": 1.23,
         "volume_24h_base": 456.0,
         "psar_trend": "RISING",
+    }
+    merged_item.meta = {
+        "atr_pct": {"timestamp": "2026-08-01T12:00:00+00:00"}
     }
     db_mock = _make_db_session_mock()
 
@@ -44,9 +47,12 @@ async def test_strategy_lab_merged_features_loader_uses_canonical_flat_dict():
 
     assert features == {
         "BTC_USDT": {
-            "atr_pct": 1.23,
-            "volume_24h_base": 456.0,
-            "psar_trend": "RISING",
+            "features": {
+                "atr_pct": 1.23,
+                "volume_24h_base": 456.0,
+                "psar_trend": "RISING",
+            },
+            "metadata": merged_item.meta,
         }
     }
 

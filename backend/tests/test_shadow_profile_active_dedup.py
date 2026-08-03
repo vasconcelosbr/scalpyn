@@ -14,7 +14,9 @@ def test_create_from_decision_prefilters_active_profile_shadow_before_price_look
     )[0]
 
     preflight = function.index("await _has_active_profile_shadow(")
-    price_lookup = function.index("entry_price, entry_ts = await _get_current_price_multi_tf(")
+    price_lookup = function.index(
+        "entry_price, entry_price_source_at = await _get_current_price_multi_tf("
+    )
     nested_insert = function.index("async with db.begin_nested():")
     insert_sql = function.index("_INSERT_SHADOW_SQL")
 

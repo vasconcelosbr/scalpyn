@@ -22,6 +22,7 @@ from app.ml.dataset_config import (
     LABEL_CONTRACT_VERSION,
     MLDatasetConfigError,
 )
+from app.ml.feature_contract_v2 import CAPTURE_CONTRACT_VERSION
 from app.services.shadow_trade_service import (
     _apply_barrier_params,
     _build_economic_config_snapshot,
@@ -100,7 +101,7 @@ def _fake_capture():
     return SimpleNamespace(
         snapshot={"rsi": 50.0},
         feature_schema_version="fs_v2",
-        capture_contract_version="point-in-time-v1",
+        capture_contract_version=CAPTURE_CONTRACT_VERSION,
         errors=[],
     )
 

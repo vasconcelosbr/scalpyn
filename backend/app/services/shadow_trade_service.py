@@ -555,7 +555,10 @@ async def _next_1m_open(
 
 
 async def _get_current_price_multi_tf(
-    db: AsyncSession, symbol: str
+    db: AsyncSession,
+    symbol: str,
+    *,
+    as_of: Optional[datetime] = None,
 ) -> tuple[Optional[float], Optional[datetime]]:
     """Último ``close`` disponível de ``ohlcv`` em qualquer timeframe rápido.
 
@@ -576,11 +579,15 @@ async def _get_current_price_multi_tf(
               FROM ohlcv
              WHERE symbol = :s
                AND timeframe IN ('1m', '5m', '15m', '30m')
+               AND (
+                   CAST(:as_of AS timestamptz) IS NULL
+                   OR time <= CAST(:as_of AS timestamptz)
+               )
              ORDER BY time DESC
              LIMIT 1
             """
         ),
-        {"s": symbol},
+        {"s": symbol, "as_of": as_of},
     )
     row = res.fetchone()
     if row is None or row.close is None:
@@ -939,6 +946,7 @@ _INSERT_SHADOW_SQL = text("""
         profile_version_id, score_engine_version_id,
         feature_schema_version, feature_extractor_version, capture_contract_version,
         label_contract_version, barrier_contract_version,
+        feature_source_at, feature_source_times,
         features_captured_at, features_coverage, feature_hash,
         profile_config_hash, score_engine_config_hash,
         lineage_status, eligible_for_training
@@ -968,6 +976,7 @@ _INSERT_SHADOW_SQL = text("""
         CAST(:profile_version_id AS UUID), CAST(:score_engine_version_id AS UUID),
         :feature_schema_version, :feature_extractor_version, :capture_contract_version,
         :label_contract_version, :barrier_contract_version,
+        :feature_source_at, CAST(:feature_source_times AS JSONB),
         :features_captured_at, :features_coverage, :feature_hash,
         :profile_config_hash, :score_engine_config_hash,
         :lineage_status, :eligible_for_training
@@ -1166,14 +1175,16 @@ async def _create_from_decision(
     # Fallback para next-1m-open mantém compat caso o pool não tenha
     # NENHUMA candle recente do símbolo (cenário raro, e ainda assim o
     # monitor reprocessa via _ensure_entry).
-    entry_price, entry_ts = await _get_current_price_multi_tf(
-        db, decision.symbol
+    entry_price, entry_price_source_at = await _get_current_price_multi_tf(
+        db, decision.symbol, as_of=decision.created_at
     )
+    entry_ts = decision.created_at if entry_price is not None else None
     initial_status = "RUNNING"
     if entry_price is None:
         entry_price, entry_ts = await _next_1m_open(
             db, decision.symbol, decision.created_at
         )
+        entry_price_source_at = entry_ts
         if entry_price is None:
             initial_status = "PENDING"
 
@@ -1184,7 +1195,13 @@ async def _create_from_decision(
         tp_price = None
         sl_price = None
 
-    native_capture = capture_native_snapshot(_build_features_snapshot(decision))
+    _source_snapshot = (decision.metrics or {}).get("indicators_snapshot") or {}
+    native_capture = capture_native_snapshot(
+        _build_features_snapshot(decision),
+        source_snapshot=_source_snapshot,
+        decision_created_at=decision.created_at,
+        entry_at=entry_ts,
+    )
     features_snap = native_capture.snapshot
     feature_errors = list(native_capture.errors)
 
@@ -1202,6 +1219,18 @@ async def _create_from_decision(
         barrier_contract_version=_barrier_contract_version,
         native_capture=native_capture,
     )
+    config_snap["entry_price_source_at"] = (
+        entry_price_source_at.isoformat()
+        if isinstance(entry_price_source_at, datetime)
+        else None
+    )
+    config_snap["feature_source_at"] = (
+        native_capture.source_at.isoformat()
+        if native_capture.source_at is not None
+        else None
+    )
+    config_snap["feature_source_times"] = native_capture.source_times
+    config_snap["feature_contract_errors"] = feature_errors
     # Merge caller-provided metadata (e.g. l3_decision, l3_score, l3_reasons for
     # L3_REJECTED / L3_SIMULATED) into config_snapshot so outcomes can be correlated
     # with gate labels after closure.
@@ -1354,6 +1383,8 @@ async def _create_from_decision(
                     "capture_contract_version": native_capture.capture_contract_version,
                     "label_contract_version": LABEL_CONTRACT_VERSION,
                     "barrier_contract_version": _barrier_contract_version,
+                    "feature_source_at": native_capture.source_at,
+                    "feature_source_times": json.dumps(native_capture.source_times),
                     "features_captured_at": native_capture.captured_at,
                     "features_coverage": feature_coverage(features_snap),
                     "feature_hash": native_capture.snapshot_hash,
@@ -3458,6 +3489,10 @@ async def _strategy_lab_snapshot_contract(
     *,
     profile_id: Optional[str],
     features: Dict[str, Any],
+    source_snapshot: Optional[Mapping[str, Any]] = None,
+    feature_metadata: Optional[Mapping[str, Mapping[str, Any]]] = None,
+    decision_created_at: Optional[datetime] = None,
+    entry_at: Optional[datetime] = None,
     barrier_contract_version: str = "shadow_fixed_v1",
 ) -> tuple[Dict[str, Any], Dict[str, Any]]:
     from ..ml.feature_contract_v2 import (
@@ -3465,7 +3500,13 @@ async def _strategy_lab_snapshot_contract(
         coverage as feature_coverage,
     )
 
-    native_capture = capture_native_snapshot(features)
+    native_capture = capture_native_snapshot(
+        features,
+        source_snapshot=source_snapshot,
+        feature_metadata=feature_metadata,
+        decision_created_at=decision_created_at,
+        entry_at=entry_at,
+    )
     normalized = native_capture.snapshot
     feature_errors = list(native_capture.errors)
     version_row = None
@@ -3501,6 +3542,9 @@ async def _strategy_lab_snapshot_contract(
         "capture_contract_version": native_capture.capture_contract_version,
         "label_contract_version": "positive_net_return_v1",
         "barrier_contract_version": barrier_contract_version,
+        "feature_source_at": native_capture.source_at,
+        "feature_source_times": json.dumps(native_capture.source_times),
+        "feature_source_times_map": native_capture.source_times,
         "features_captured_at": native_capture.captured_at,
         "features_coverage": feature_coverage(normalized),
         "feature_hash": native_capture.snapshot_hash,
@@ -3549,7 +3593,10 @@ async def _load_strategy_lab_features_by_symbol(
             for sym, merged_item in merged.items():
                 flat = merged_item.as_flat_dict()
                 if isinstance(flat, dict) and flat:
-                    features_by_symbol[sym] = flat
+                    features_by_symbol[sym] = {
+                        "features": flat,
+                        "metadata": merged_item.meta,
+                    }
             return features_by_symbol
     except Exception:
         logger.exception(
@@ -3576,6 +3623,7 @@ _INSERT_STRATEGY_LAB_SQL = text("""
         profile_version_id, score_engine_version_id,
         feature_schema_version, feature_extractor_version, capture_contract_version,
         label_contract_version, barrier_contract_version,
+        feature_source_at, feature_source_times,
         features_captured_at, features_coverage, feature_hash,
         profile_config_hash, score_engine_config_hash,
         lineage_status, eligible_for_training
@@ -3599,6 +3647,7 @@ _INSERT_STRATEGY_LAB_SQL = text("""
         CAST(:profile_version_id AS UUID), CAST(:score_engine_version_id AS UUID),
         :feature_schema_version, :feature_extractor_version, :capture_contract_version,
         :label_contract_version, :barrier_contract_version,
+        :feature_source_at, CAST(:feature_source_times AS JSONB),
         :features_captured_at, :features_coverage, :feature_hash,
         :profile_config_hash, :score_engine_config_hash,
         :lineage_status, :eligible_for_training
@@ -3737,10 +3786,14 @@ async def create_strategy_lab_shadows(
         # Build features snapshot from decision metrics — ANTES do preço:
         # o ATR do snapshot alimenta a barreira v2 (paridade com o L3).
         _metrics = d.get("metrics") or {}
-        features_flat = dict(strategy_lab_features.get(symbol) or {})
+        _feature_payload = strategy_lab_features.get(symbol) or {}
+        features_flat = dict(_feature_payload.get("features") or {})
+        feature_metadata = _feature_payload.get("metadata") or {}
+        source_snapshot: Mapping[str, Any] = {}
         if not features_flat:
             _snap = _metrics.get("indicators_snapshot") or {}
             features_flat = _flatten_indicator_snapshot_values(_snap)
+            source_snapshot = _snap
 
         _resolved = _resolve_lab_barrier(
             features_flat, tp_pct, sl_pct, barrier_cfg,
@@ -3782,8 +3835,15 @@ async def create_strategy_lab_shadows(
                             own_db,
                             profile_id=profile_id_str,
                             features=features_flat,
+                            source_snapshot=source_snapshot,
+                            feature_metadata=feature_metadata,
+                            decision_created_at=promotion_at,
+                            entry_at=promotion_at,
                             barrier_contract_version=_bversion,
                         )
+                    )
+                    config_snap["feature_source_times"] = snapshot_contract.get(
+                        "feature_source_times_map", {}
                     )
                     try:
                         async with own_db.begin_nested():
@@ -3976,10 +4036,14 @@ async def create_strategy_lab_rejected_shadows(
                     pass
 
         _metrics = d.get("metrics") or {}
-        features_flat = dict(strategy_lab_features.get(symbol) or {})
+        _feature_payload = strategy_lab_features.get(symbol) or {}
+        features_flat = dict(_feature_payload.get("features") or {})
+        feature_metadata = _feature_payload.get("metadata") or {}
+        source_snapshot: Mapping[str, Any] = {}
         if not features_flat:
             _snap = _metrics.get("indicators_snapshot") or {}
             features_flat = _flatten_indicator_snapshot_values(_snap)
+            source_snapshot = _snap
 
         _resolved = _resolve_lab_barrier(
             features_flat, tp_pct, sl_pct, barrier_cfg,
@@ -4023,8 +4087,15 @@ async def create_strategy_lab_rejected_shadows(
                             own_db,
                             profile_id=profile_id_str,
                             features=features_flat,
+                            source_snapshot=source_snapshot,
+                            feature_metadata=feature_metadata,
+                            decision_created_at=promotion_at,
+                            entry_at=promotion_at,
                             barrier_contract_version=_bversion,
                         )
+                    )
+                    config_snap["feature_source_times"] = snapshot_contract.get(
+                        "feature_source_times_map", {}
                     )
                     try:
                         async with own_db.begin_nested():

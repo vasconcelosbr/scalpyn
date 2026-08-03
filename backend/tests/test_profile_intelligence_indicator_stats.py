@@ -47,7 +47,7 @@ async def test_indicator_stats_default_to_latest_completed_run():
         "indicators": [],
         "role": "winning_indicator",
         "run_id": str(latest_run_id),
-        "dataset_version": "pi-native-point-in-time-v1",
+        "dataset_version": "pi-native-point-in-time-v2",
         "label_version": "shadow_outcome-v1",
     }
     assert len(db.scalar_statements) == 1

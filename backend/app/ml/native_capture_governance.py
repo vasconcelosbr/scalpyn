@@ -7,9 +7,9 @@ from typing import Any, Mapping
 
 from sqlalchemy import text
 
-from .feature_contract_v2 import snapshot_hash
+from .feature_contract_v2 import CAPTURE_CONTRACT_VERSION, snapshot_hash
 
-CAPTURE_CONTRACT = "point-in-time-v1"
+CAPTURE_CONTRACT = CAPTURE_CONTRACT_VERSION
 EXTRACTOR_VERSION = "feature-engine-v2"
 SCHEMA_VERSION = "entry_features_v2"
 CANARY_LIMIT = 50
@@ -71,6 +71,8 @@ def official_row_errors(
     errors: list[str] = []
     required = (
         "features_snapshot",
+        "feature_source_at",
+        "feature_source_times",
         "features_captured_at",
         "feature_hash",
         "feature_extractor_version",
@@ -79,6 +81,10 @@ def official_row_errors(
         "score_engine_version_id",
     )
     errors.extend(f"missing_{name}" for name in required if row.get(name) is None)
+    if not isinstance(row.get("feature_source_times"), Mapping) or not row.get(
+        "feature_source_times"
+    ):
+        errors.append("missing_feature_source_times")
 
     if row.get("capture_contract_version") != CAPTURE_CONTRACT:
         errors.append("invalid_contract")
@@ -88,11 +94,16 @@ def official_row_errors(
         errors.append("invalid_schema")
 
     captured = row.get("features_captured_at")
+    source_at = row.get("feature_source_at")
     if captured and captured < start_at:
         errors.append("pre_native_row")
     observed_at = reference_now or datetime.now(timezone.utc)
     if captured and captured > observed_at:
         errors.append("future_timestamp")
+    if source_at and captured and source_at > captured:
+        errors.append("feature_source_after_capture")
+    if source_at and row.get("entry_timestamp") and source_at > row["entry_timestamp"]:
+        errors.append("feature_source_after_entry")
     if not row.get("eligible_for_training"):
         errors.append("not_training_eligible")
 
@@ -180,10 +191,12 @@ async def audit_native_capture(
                 f"""
                 SELECT id, source, profile_id, ranking_id, decision_id,
                        profile_version_id, score_engine_version_id,
-                       features_snapshot, features_captured_at, feature_hash,
+                       features_snapshot, feature_source_at, feature_source_times,
+                       features_captured_at, feature_hash,
                        feature_extractor_version, feature_schema_version,
                        capture_contract_version, lineage_status,
-                       eligible_for_training, created_at, completed_at
+                       eligible_for_training, entry_timestamp,
+                       created_at, completed_at
                 FROM shadow_trades
                 WHERE created_at >= :start
                   AND created_at <= :audit_query_cutoff
@@ -283,6 +296,7 @@ async def audit_native_capture(
         ),
         "missing_snapshot": count_error("missing_features_snapshot"),
         "missing_timestamp": count_error("missing_features_captured_at"),
+        "missing_source_timestamp": count_error("missing_feature_source_at"),
         "missing_hash": count_error("missing_feature_hash"),
         "missing_versions": count_error("missing_feature_extractor_version")
         + count_error("missing_feature_schema_version"),

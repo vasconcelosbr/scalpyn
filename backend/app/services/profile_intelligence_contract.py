@@ -12,15 +12,17 @@ from uuid import UUID
 from sqlalchemy import text
 
 from ..ml.native_capture_governance import official_row_errors
+from ..ml.feature_contract_v2 import CAPTURE_CONTRACT_VERSION
 
 
-DATASET_VERSION = "pi-native-point-in-time-v1"
+DATASET_VERSION = "pi-native-point-in-time-v2"
 LABEL_VERSION = "shadow_outcome-v1"
-CAPTURE_CONTRACT_VERSION = "point-in-time-v1"
 LABEL_CONTRACT_VERSION = "positive_net_return_v1"
 
 OFFICIAL_CAPTURE_COLUMNS = """
     {alias}.decision_id,
+    {alias}.feature_source_at,
+    {alias}.feature_source_times,
     {alias}.features_captured_at,
     {alias}.feature_hash,
     {alias}.feature_extractor_version,
@@ -51,7 +53,12 @@ def official_where(alias: str = "st") -> str:
         AND {alias}.label_contract_version = '{LABEL_CONTRACT_VERSION}'
         AND {alias}.features_snapshot IS NOT NULL
         AND {alias}.features_snapshot != '{{}}'::jsonb
+        AND {alias}.feature_source_at IS NOT NULL
+        AND {alias}.feature_source_times IS NOT NULL
+        AND {alias}.feature_source_times != '{{}}'::jsonb
         AND {alias}.features_captured_at IS NOT NULL
+        AND {alias}.feature_source_at <= {alias}.entry_timestamp
+        AND {alias}.feature_source_at <= {alias}.features_captured_at
         AND {alias}.feature_hash IS NOT NULL
         AND {alias}.feature_extractor_version IS NOT NULL
         AND {alias}.feature_schema_version IS NOT NULL

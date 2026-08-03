@@ -38,6 +38,9 @@ def test_validated_suggestion_with_rollback_is_applicable():
         rollback_payload={"action": "archive_generated_profile"},
         validation_status="validated",
         actionability_status="validated",
+        dataset_version="pi-native-point-in-time-v2:test-run",
+        feature_schema_version="entry_features_v2",
+        label_version="shadow_outcome-v1",
     )
     assert suggestion_registry_block_reasons(suggestion) == []
 

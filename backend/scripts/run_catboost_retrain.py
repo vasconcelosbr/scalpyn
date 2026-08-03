@@ -23,6 +23,7 @@ Dataset policy (L3_PROFILE_STRICT):
       colapso de AUC em v42 — treinar L3 ou L3_LAB separado, ou fonte única)
 """
 
+import argparse
 import asyncio
 import logging
 import os
@@ -44,7 +45,26 @@ logging.basicConfig(
 )
 logger = logging.getLogger("catboost_retrain")
 
-DRY_RUN = "--dry-run" in sys.argv
+def _parse_args():
+    parser = argparse.ArgumentParser(description="Causal CatBoost candidate retrain")
+    parser.add_argument("--lane", choices=("L3_PROFILE",), default="L3_PROFILE")
+    parser.add_argument("--days", type=int, default=30)
+    parser.add_argument("--trials", type=int)
+    parser.add_argument("--timeout", type=int)
+    parser.add_argument("--dataset-cutoff")
+    parser.add_argument("--candidate-only", action="store_true")
+    parser.add_argument("--save-logs", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+    if args.days <= 0:
+        parser.error("--days must be positive")
+    if not args.dry_run and not args.candidate_only:
+        parser.error("--candidate-only is required; production authority is forbidden")
+    return args
+
+
+ARGS = _parse_args()
+DRY_RUN = ARGS.dry_run
 
 USER_ID = UUID("8080110c-ee9d-4a2b-a53f-6bef86dd8867")
 # Fase 1 B.3 — win threshold vem EXCLUSIVAMENTE da config ml ativa
@@ -118,11 +138,21 @@ async def main():
     engine = create_async_engine(db_url, pool_pre_ping=True)
     AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
+    dataset_query_cutoff = (
+        datetime.fromisoformat(ARGS.dataset_cutoff.replace("Z", "+00:00"))
+        if ARGS.dataset_cutoff else datetime.now(timezone.utc)
+    )
+    if dataset_query_cutoff.tzinfo is None:
+        raise ValueError("invalid_dataset_cutoff_timezone")
+
     logger.info("DB: %s", db_url.split("@")[-1])
     logger.info(
         "DRY_RUN=%s  USER_ID=%s  SOURCES=%s  ADVISORY_INTELLIGENCE=%s "
+        "LANE=%s DAYS=%d CUTOFF=%s CANDIDATE_ONLY=%s SAVE_LOGS=%s "
         "(win threshold: config ml_win_fast_threshold_seconds)",
         DRY_RUN, USER_ID, CATBOOST_SOURCES, ADVISORY_INTELLIGENCE,
+        ARGS.lane, ARGS.days, dataset_query_cutoff.isoformat(),
+        ARGS.candidate_only, ARGS.save_logs,
     )
 
     async with AsyncSessionLocal() as db:
@@ -132,14 +162,25 @@ async def main():
         )
 
         svc = MLChallengerService()
+        ml_config = await svc._load_ml_config(db)
+        config_trials = _require_positive_int_config(ml_config, "ml_optuna_max_trials")
+        config_timeout = _require_positive_int_config(
+            ml_config, "ml_optuna_timeout_seconds"
+        )
+        if ARGS.trials is not None and ARGS.trials != config_trials:
+            raise ValueError(
+                f"trials_divergent: caller={ARGS.trials} config={config_trials}"
+            )
+        if ARGS.timeout is not None and ARGS.timeout != config_timeout:
+            raise ValueError(
+                f"timeout_divergent: caller={ARGS.timeout} config={config_timeout}"
+            )
 
         if DRY_RUN:
             logger.info("[DRY-RUN] Carregando dataset L3_PROFILE apenas — sem treino nem persistencia")
-            ml_config = await svc._load_ml_config(db)
             min_required = _require_positive_int_config(
                 ml_config, "ml_catboost_retrain_min_eligible_rows"
             )
-            dataset_query_cutoff = datetime.now(timezone.utc)
             maturity_margin = ml_config.get("ml_maturity_embargo_margin_minutes")
             blocked_reason = svc._check_mixed_source_gate(CATBOOST_SOURCES)
             if blocked_reason:
@@ -153,7 +194,7 @@ async def main():
             records, gate_meta = await svc._prepare_catboost_gate_records(
                 db,
                 USER_ID,
-                lookback_days=90,
+                lookback_days=ARGS.days,
                 cb_sources=CATBOOST_SOURCES,
                 dataset_query_cutoff=dataset_query_cutoff,
                 ml_config=ml_config,
@@ -191,12 +232,19 @@ async def main():
                 holding_seconds=built[7],
                 group_ids=built[8],
                 embargo_seconds=int(ml_config["ml_split_embargo_seconds"]),
-                min_train_size=min_required,
+                val_fraction=float(ml_config["ml_catboost_validation_size_ratio"]),
+                test_fraction=float(ml_config["ml_catboost_test_size_ratio"]),
+                min_train_size=_require_positive_int_config(
+                    ml_config, "ml_catboost_min_train_samples"
+                ),
                 min_validation_size=_require_positive_int_config(
-                    ml_config, "ml_threshold_min_positives"
+                    ml_config, "ml_catboost_min_validation_samples"
                 ),
                 min_test_size=_require_positive_int_config(
-                    ml_config, "ml_promotion_min_test_samples"
+                    ml_config, "ml_catboost_min_test_samples"
+                ),
+                max_boundary_candidates=_require_positive_int_config(
+                    ml_config, "ml_catboost_max_boundary_candidates"
                 ),
             )
             split_readiness = {
@@ -225,7 +273,8 @@ async def main():
             catboost_source_filter=CATBOOST_SOURCES,
             allow_mixed_source=False,
             advisory_intelligence=ADVISORY_INTELLIGENCE,
-            lookback_days=90,
+            lookback_days=ARGS.days,
+            dataset_query_cutoff=dataset_query_cutoff,
         )
 
         logger.info("Resultado: %s", result)
