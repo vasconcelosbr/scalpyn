@@ -130,7 +130,11 @@ async def main():
     from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
     from sqlalchemy.orm import sessionmaker
 
-    db_url = os.getenv("DATABASE_URL") or os.getenv("DATABASE_PUBLIC_URL")
+    # The one-shot operator command runs outside Railway's private DNS even
+    # when variables are injected with `railway run`; prefer the public URL.
+    # In a service container DATABASE_PUBLIC_URL is also valid, while the
+    # internal URL remains the fallback for environments that expose only it.
+    db_url = os.getenv("DATABASE_PUBLIC_URL") or os.getenv("DATABASE_URL")
     if not db_url:
         raise RuntimeError("missing_DATABASE_URL")
     if db_url.startswith("postgresql://"):
