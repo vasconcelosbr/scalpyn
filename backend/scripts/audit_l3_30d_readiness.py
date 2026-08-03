@@ -102,6 +102,36 @@ async def _audit(cutoff_text: str | None) -> dict:
                 window_start,
                 cutoff,
             )
+            model_row = await conn.fetchrow(
+                """
+                SELECT
+                  COUNT(*)::int AS catboost_models_created_since_cutoff,
+                  COUNT(*) FILTER (WHERE execution_authority IS TRUE)::int
+                    AS execution_authority_true_since_cutoff,
+                  MAX(version)::int AS latest_catboost_version,
+                  MAX(created_at) AS latest_catboost_created_at
+                FROM ml_models
+                WHERE model_lane = 'L3_PROFILE'
+                  AND created_at >= $1
+                """,
+                cutoff,
+            )
+            comparison_rows = await conn.fetch(
+                """
+                SELECT version, status, model_lane,
+                       train_samples, val_samples, test_samples,
+                       NULLIF(metrics_json->'test'->>'roc_auc', '')::double precision
+                         AS test_roc_auc,
+                       NULLIF(metrics_json->'test'->>'net_ev', '')::double precision
+                         AS test_net_ev,
+                       NULLIF(metrics_json->'test'->>'fpr', '')::double precision
+                         AS test_fpr
+                FROM ml_models
+                WHERE version::text = ANY($1::text[])
+                ORDER BY version DESC
+                """,
+                ["95", "89", "88"],
+            )
             config_keys = (
                 "ml_l3_training_contract_version",
                 "ml_catboost_retrain_min_eligible_rows",
@@ -128,6 +158,11 @@ async def _audit(cutoff_text: str | None) -> dict:
                     key: value.isoformat() if isinstance(value, datetime) else value
                     for key, value in dict(row).items()
                 },
+                "model_writes_after_cutoff": {
+                    key: value.isoformat() if isinstance(value, datetime) else value
+                    for key, value in dict(model_row).items()
+                },
+                "comparison_models": [dict(item) for item in comparison_rows],
             }
     finally:
         await conn.close()
