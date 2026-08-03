@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
@@ -104,6 +105,7 @@ class EligibleL3Candidate:
     decision_score: float
     buy_threshold: float
     strong_buy_threshold: float
+    rules_snapshot: Optional[dict[str, Any]] = None
     market_structure_score: Optional[float] = None
     momentum_score: Optional[float] = None
     liquidity_score: Optional[float] = None
@@ -197,6 +199,7 @@ def candidate_from_decision(
     profile_id: Optional[Any],
     profile_name: Optional[str],
     profile_version: Optional[datetime],
+    rules_snapshot: Optional[dict[str, Any]],
     watchlist_id: Optional[str],
     watchlist_name: Optional[str],
     watchlist_level: Optional[str],
@@ -217,6 +220,7 @@ def candidate_from_decision(
         profile_id=profile_id,
         profile_name=profile_name,
         profile_version=profile_version,
+        rules_snapshot=deepcopy(rules_snapshot) if rules_snapshot is not None else None,
         decision_score=_as_float(decision.get("score")),
         buy_threshold=_as_float(buy_threshold),
         strong_buy_threshold=_as_float(strong_buy_threshold),
@@ -384,6 +388,9 @@ def _lineage(candidate: EligibleL3Candidate) -> WatchlistLineageContext:
         profile_id=_candidate_profile_id(candidate),
         profile_name=candidate.profile_name,
         profile_version=candidate.profile_version,
+        rules_snapshot=deepcopy(candidate.rules_snapshot)
+        if candidate.rules_snapshot is not None
+        else None,
         lineage_confidence="EXACT",
         lineage_source="l3_profile_consolidation",
         lineage_resolved_at=datetime.now(timezone.utc),

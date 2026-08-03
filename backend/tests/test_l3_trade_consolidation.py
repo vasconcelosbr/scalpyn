@@ -22,6 +22,8 @@ from app.services.l3_trade_consolidation import (
     build_consolidation_event_id,
     candle_open_for_timeframe,
     consolidate_l3_candidates,
+    candidate_from_decision,
+    _lineage,
     rank_candidates,
 )
 
@@ -42,6 +44,7 @@ def candidate(
     momentum_score=None,
     liquidity_score=None,
     signal_score=None,
+    ml_score=None,
     user_id=None,
 ) -> EligibleL3Candidate:
     return EligibleL3Candidate(
@@ -54,6 +57,7 @@ def candidate(
         profile_id=profile_id or uuid4(),
         profile_name=profile_name,
         profile_version=NOW,
+        rules_snapshot={"filters": {"conditions": [{"indicator": "rsi"}]}},
         decision_score=decision_score,
         buy_threshold=buy_threshold,
         strong_buy_threshold=strong_buy_threshold,
@@ -64,6 +68,7 @@ def candidate(
         watchlist_id=str(uuid4()),
         watchlist_name=f"WL_{profile_name}",
         watchlist_level="L3",
+        ml_score=ml_score,
     )
 
 
@@ -178,6 +183,77 @@ def test_feature_flag_defaults_to_legacy_off():
     )
 
 
+def test_winner_lineage_preserves_immutable_profile_rules_snapshot():
+    profile_rules = {
+        "filters": {"conditions": [{"indicator": "rsi", "operator": ">", "value": 55}]},
+        "default_timeframe": "5m",
+    }
+    row = candidate_from_decision(
+        user_id=uuid4(),
+        decision_id=7,
+        decision={"symbol": "ETH_USDT", "direction": "SPOT", "score": 88, "created_at": NOW},
+        buy_threshold=60,
+        strong_buy_threshold=90,
+        profile_id=uuid4(),
+        profile_name="PROFILE_ORIGINAL",
+        profile_version=NOW,
+        rules_snapshot=profile_rules,
+        watchlist_id=str(uuid4()),
+        watchlist_name="WL_PROFILE_ORIGINAL",
+        watchlist_level="L3",
+        source_watchlist_id=None,
+    )
+
+    # Mutating the live profile config after candidate capture cannot alter the
+    # immutable winner snapshot that will be persisted to shadow_trades.
+    profile_rules["filters"]["conditions"][0]["value"] = 99
+    lineage = _lineage(row)
+
+    assert lineage.profile_id == str(row.profile_id)
+    assert lineage.profile_name == "PROFILE_ORIGINAL"
+    assert lineage.profile_version == NOW
+    assert lineage.rules_snapshot["filters"]["conditions"][0]["value"] == 55
+
+
+def test_canonical_shadow_insert_keeps_profile_rules_contract():
+    sql = str(shadow_trade_service._INSERT_SHADOW_SQL)
+    assert "profile_id, profile_version, profile_name, strategy_type, rules_snapshot" in sql
+    assert "CAST(:rules_snapshot AS JSONB)" in sql
+
+
+def test_winner_lineage_preserves_existing_ml_contract_fields():
+    model_id = str(uuid4())
+    ranking_id = str(uuid4())
+    row = candidate(
+        ml_score={
+            "model_id": model_id,
+            "probability": 0.73,
+            "model_lane": "L3",
+            "ranking_id": ranking_id,
+            "model_version": "l3-model-v1",
+            "threshold": 0.61,
+            "score_status": "SCORED",
+            "gate_action": "ALLOW",
+            "reason_codes": ["ABOVE_THRESHOLD"],
+            "orchestrator_payload": {"source": "test"},
+        }
+    )
+
+    lineage = _lineage(row)
+
+    assert lineage.ml_model_id == model_id
+    assert lineage.ml_probability == 0.73
+    assert lineage.model_lane == "L3"
+    assert lineage.ranking_id == ranking_id
+    assert lineage.model_version == "l3-model-v1"
+    assert lineage.threshold_used == 0.61
+    assert lineage.score_status == "SCORED"
+    assert lineage.gate_action == "ALLOW"
+    assert lineage.reason_codes == ["ABOVE_THRESHOLD"]
+    assert lineage.orchestrator_payload == {"source": "test"}
+    assert lineage.ml_gate_enabled is True
+
+
 def test_enabled_consolidation_collects_a_stable_allow_profile():
     assert _ensure_l3_consolidation_candidate_logged(
         {"decision": "ALLOW"},
@@ -215,6 +291,7 @@ class SharedState:
         self.decisions = {}
         self.suppressions = []
         self.created = 0
+        self.last_lineage = None
 
 
 class FakeSession:
@@ -298,6 +375,7 @@ def install_fake_runtime(monkeypatch, shared: SharedState, *, fail_create=False)
             created_at=NOW,
         )
         db.pending_trade = trade
+        shared.last_lineage = _kwargs.get("lineage")
         return trade.id
 
     monkeypatch.setattr(
@@ -386,6 +464,10 @@ async def test_seven_approved_profiles_create_one_trade_and_six_audits(monkeypat
     assert result[0].winner_profile_id == str(rows[-1].profile_id)
     assert shared.created == 1
     assert len(shared.suppressions) == 6
+    assert shared.last_lineage.profile_id == str(rows[-1].profile_id)
+    assert shared.last_lineage.profile_name == rows[-1].profile_name
+    assert shared.last_lineage.profile_version == rows[-1].profile_version
+    assert shared.last_lineage.rules_snapshot == rows[-1].rules_snapshot
     assert {
         row.metrics["reason_code"] for row in shared.suppressions
     } == {REASON_LOWER_PRIORITY}

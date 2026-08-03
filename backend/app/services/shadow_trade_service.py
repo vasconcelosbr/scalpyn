@@ -27,6 +27,7 @@ import hashlib
 import json
 import logging
 import os
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -928,7 +929,7 @@ _INSERT_SHADOW_SQL = text("""
         last_processed_time,
         ttt_enabled, ttt_tp_pct, ttt_timeout_minutes,
         barrier_mode, tp_pct_applied, sl_pct_applied,
-        profile_id, profile_version, profile_name, strategy_type,
+        profile_id, profile_version, profile_name, strategy_type, rules_snapshot,
         watchlist_id, watchlist_name, watchlist_level, source_watchlist_id,
         lineage_confidence, lineage_source, lineage_resolved_at,
         ml_model_id, ml_probability, final_priority_score, model_lane, ranking_id,
@@ -954,6 +955,7 @@ _INSERT_SHADOW_SQL = text("""
         :ttt_enabled, :ttt_tp_pct, :ttt_timeout_minutes,
         :barrier_mode, :tp_pct_applied, :sl_pct_applied,
         :profile_id, :profile_version, :profile_name, :strategy_type,
+        CAST(:rules_snapshot AS JSONB),
         CAST(:watchlist_id AS UUID), :watchlist_name, :watchlist_level,
         CAST(:source_watchlist_id AS UUID),
         :lineage_confidence, :lineage_source, :lineage_resolved_at,
@@ -1066,6 +1068,11 @@ async def _create_from_decision(
         lineage.profile_version
         if lineage and lineage.profile_version
         else getattr(decision, "profile_version", None)
+    )
+    _lin_rules_snapshot = (
+        lineage.rules_snapshot
+        if lineage and lineage.rules_snapshot is not None
+        else getattr(decision, "rules_snapshot", None)
     )
     normalized_source = (
         source if source in _VALID_SHADOW_SOURCES else SHADOW_SOURCE_L3
@@ -1282,6 +1289,11 @@ async def _create_from_decision(
                     "profile_name": _lin_profile_name,
                     "strategy_type": (
                         "PROFILE_L3" if _lin_profile_id else None
+                    ),
+                    "rules_snapshot": (
+                        json.dumps(_lin_rules_snapshot, default=str)
+                        if _lin_rules_snapshot is not None
+                        else None
                     ),
                     "status": initial_status,
                     # skip_reason intencionalmente NULL: textos como NOT_TRADABLE/COOLDOWN
@@ -1708,6 +1720,7 @@ async def create_shadows_for_new_decisions(
     profile_id: Optional[str] = None,
     profile_name: Optional[str] = None,
     profile_version: Optional[datetime] = None,
+    rules_snapshot: Optional[Dict[str, Any]] = None,
     ml_scores_by_symbol: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> int:
     """Inline shadow creation triggered by pipeline_scan immediately after
@@ -1821,6 +1834,9 @@ async def create_shadows_for_new_decisions(
             profile_id=profile_id,
             profile_name=profile_name,
             profile_version=profile_version,
+            rules_snapshot=(
+                deepcopy(rules_snapshot) if rules_snapshot is not None else None
+            ),
             lineage_confidence="EXACT",
             lineage_source="pipeline_scan",
             lineage_resolved_at=_dt.now(_tz.utc),

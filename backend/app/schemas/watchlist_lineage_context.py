@@ -14,7 +14,7 @@ lineage_confidence valores válidos:
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 
 @dataclass
@@ -26,6 +26,10 @@ class WatchlistLineageContext:
     profile_id: Optional[str] = None
     profile_name: Optional[str] = None
     profile_version: Optional[datetime] = None
+    # Immutable profile rules/config captured at the decision boundary.  This
+    # keeps Profile Intelligence and report consumers tied to the exact
+    # winning profile even after the live profile is edited.
+    rules_snapshot: Optional[dict[str, Any]] = None
     profile_version_id: Optional[str] = None
     score_engine_version_id: Optional[str] = None
     score_engine_config_hash: Optional[str] = None

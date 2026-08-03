@@ -3929,6 +3929,7 @@ async def _run_pipeline_scan():
                                             profile_id=wl.profile_id,
                                             profile_name=_wl_profile_name,
                                             profile_version=_wl_profile_version,
+                                            rules_snapshot=profile_config,
                                             watchlist_id=str(wl.id),
                                             watchlist_name=wl.name,
                                             watchlist_level=wl.level,
@@ -3955,6 +3956,7 @@ async def _run_pipeline_scan():
                                     profile_id=str(wl.profile_id) if wl.profile_id else None,
                                     profile_name=_wl_profile_name,
                                     profile_version=_wl_profile_version,
+                                    rules_snapshot=profile_config,
                                     # Fase 8 (audit 2026-06-24): thread the L3 ML
                                     # gate score computed above straight into the
                                     # shadow row at creation time instead of
