@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional
 from uuid import UUID
 
@@ -8,8 +10,10 @@ import jwt as pyjwt
 
 from ..config import settings
 from ..database import get_db
+from ..models.social_intelligence import SocialAssetObservation
 from ..services.config_service import config_service
 from ..services.crypto_ev_config import default_crypto_ev_config
+from ..schemas.social_intelligence import SocialScoreConfig
 
 security = HTTPBearer()
 
@@ -98,6 +102,28 @@ async def update_config(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id)
 ):
+    if config_type == "social_score":
+        validated = SocialScoreConfig.model_validate(payload)
+        if validated.enabled:
+            now = datetime.now(timezone.utc)
+            oldest_allowed = now - timedelta(seconds=validated.max_age_seconds)
+            fresh_observation_id = (
+                await db.execute(
+                    select(SocialAssetObservation.id)
+                    .where(
+                        SocialAssetObservation.window_end >= oldest_allowed,
+                        SocialAssetObservation.window_end <= now,
+                        SocialAssetObservation.collected_at <= now,
+                    )
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if fresh_observation_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Social Score cannot be enabled without a fresh reconciled observation",
+                )
+        payload = validated.model_dump()
     updated = await config_service.update_config(
         db=db,
         config_type=config_type,

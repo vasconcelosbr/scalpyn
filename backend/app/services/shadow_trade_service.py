@@ -1202,6 +1202,14 @@ async def _create_from_decision(
         barrier_contract_version=_barrier_contract_version,
         native_capture=native_capture,
     )
+    # Social Score is immutable decision-time context, not an ML feature in
+    # the current contract. Preserve it in config_snapshot while keeping
+    # features_snapshot limited to canonical technical indicators.
+    _social_context = (decision.metrics or {}).get("social_score")
+    if isinstance(_social_context, dict) and _social_context:
+        config_snap["social_score"] = _social_context
+        config_snap["technical_score"] = (decision.metrics or {}).get("technical_score")
+        config_snap["final_score"] = (decision.metrics or {}).get("final_score")
     # Merge caller-provided metadata (e.g. l3_decision, l3_score, l3_reasons for
     # L3_REJECTED / L3_SIMULATED) into config_snapshot so outcomes can be correlated
     # with gate labels after closure.

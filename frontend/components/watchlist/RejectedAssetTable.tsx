@@ -44,6 +44,9 @@ export interface WatchlistDecisionItem {
   profile_id?: string | null;
   timestamp?: string | null;
   alpha_score?: number | null;
+  technical_score?: number | null;
+  final_score?: number | null;
+  social_score?: SocialScoreSummary | null;
   score_rules?: ScoreRule[];
   failed_indicators: string[];
   conditions: string[];
@@ -55,6 +58,27 @@ export interface WatchlistDecisionItem {
   ml_final_score?: number | null;
   blocked_by_ml?: boolean | null;
   crypto_ev?: CryptoEVSummary | null;
+}
+
+export interface SocialScoreSummary {
+  run_id?: string;
+  sentiment_score?: number;
+  attention_score?: number;
+  confidence?: number;
+  sentiment_adjusted?: number;
+  sentiment_label?: string;
+  recommendation?: string;
+  summary?: string;
+  narratives?: string[];
+  anomalies?: string[];
+  sources?: Array<{ platform?: string; url?: string; title?: string }>;
+  age_seconds?: number;
+  eligible?: boolean;
+  enabled?: boolean;
+  applied?: boolean;
+  fallback_reason?: string | null;
+  technical_score?: number;
+  final_score?: number;
 }
 
 export type RejectedTraceItem = DecisionTraceItem;
@@ -80,12 +104,13 @@ function scoreColor(pct: number | null): string {
   return "#F87171";
 }
 
-function ScoreBar({ value }: { value?: number | null }) {
+function ScoreBar({ value, technical }: { value?: number | null; technical?: number | null }) {
   if (value == null) return <span className="text-[#334155] text-xs">—</span>;
   const pct = Math.min(100, Math.max(0, value));
   const color = scoreColor(pct);
   return (
-    <div className="flex items-center gap-2 min-w-[110px]">
+    <div className="min-w-[120px]">
+      <div className="flex items-center gap-2">
       <div className="relative flex-1 h-1.5 bg-[#1A2035] rounded-full overflow-hidden">
         <div
           className="h-full rounded-full transition-all duration-700"
@@ -95,6 +120,38 @@ function ScoreBar({ value }: { value?: number | null }) {
       <span className="text-sm font-bold tabular-nums w-7 text-right" style={{ color }}>
         {Math.round(value)}
       </span>
+      </div>
+      {technical != null && Math.abs(technical - value) >= 0.05 && (
+        <div className="mt-1 text-[9px] font-mono text-[#64748B]">T {technical.toFixed(1)} → F {value.toFixed(1)}</div>
+      )}
+    </div>
+  );
+}
+
+function SocialScoreCell({ value }: { value?: SocialScoreSummary | null }) {
+  if (!value || value.sentiment_score == null) return <span className="text-[#334155]">—</span>;
+  const ageHours = value.age_seconds == null ? null : value.age_seconds / 3600;
+  const live = value.eligible === true;
+  const sentiment = Number(value.sentiment_score);
+  const color = sentiment >= 60 ? "text-[#50D5A8]" : sentiment <= 40 ? "text-[#F87171]" : "text-[#FBBF24]";
+  const title = [
+    `Sentimento ${sentiment.toFixed(1)}`,
+    value.attention_score != null ? `Atenção ${Number(value.attention_score).toFixed(1)}` : null,
+    value.confidence != null ? `Confiança ${(Number(value.confidence) * 100).toFixed(0)}%` : null,
+    ageHours != null ? `Idade ${ageHours.toFixed(1)}h` : null,
+    value.applied ? "Aplicado ao score" : `Fallback: ${value.fallback_reason ?? "não aplicado"}`,
+  ].filter(Boolean).join(" | ");
+  return (
+    <div className="min-w-[145px]" title={title}>
+      <div className="flex items-center gap-1.5">
+        <span className={`font-mono text-xs font-bold ${color}`}>S {sentiment.toFixed(0)}</span>
+        <span className={`rounded border px-1 py-0.5 text-[8px] font-semibold ${live ? "border-[#2EC99A]/25 bg-[#2EC99A]/10 text-[#62DDB7]" : "border-[#475569]/30 bg-[#1E293B]/40 text-[#64748B]"}`}>
+          {live ? (value.applied ? "LIVE" : "FRESH") : "STALE"}
+        </span>
+      </div>
+      <div className="mt-1 font-mono text-[9px] text-[#64748B]">
+        A {value.attention_score == null ? "—" : Number(value.attention_score).toFixed(0)} · C {value.confidence == null ? "—" : `${(Number(value.confidence) * 100).toFixed(0)}%`} · {ageHours == null ? "—" : `${ageHours.toFixed(1)}h`}
+      </div>
     </div>
   );
 }
@@ -356,8 +413,8 @@ export function WatchlistDecisionTable({
           // Column count: chevron + Symbol + [Score] + ML + [dynCols] + Exaustão + Stage + Status + Timestamp
           //          OR  chevron + Symbol + [Score] + ML + Exaustão + Stage + Status + Indicators + Conditions + Timestamp
           const scoreCol = showScore ? 1 : 0;
-          const totalCols = useDynamic ? 8 + scoreCol + dynCols.length : 10 + scoreCol;
-          const minWidth = useDynamic ? Math.max(870, 570 + dynCols.length * 110) : 1190;
+          const totalCols = useDynamic ? 9 + scoreCol + dynCols.length : 11 + scoreCol;
+          const minWidth = useDynamic ? Math.max(1040, 740 + dynCols.length * 110) : 1360;
           return (
         <div className="overflow-x-auto">
           <table className="w-full text-xs" style={{ minWidth: `${minWidth}px` }}>
@@ -375,6 +432,7 @@ export function WatchlistDecisionTable({
                     </button>
                   </th>
                 )}
+                <th className="px-3 py-2.5 text-left text-[#4B5563] whitespace-nowrap">Social</th>
                 <th className="px-3 py-2.5 text-center text-[#4B5563] whitespace-nowrap">
                   <button onClick={() => toggleSort("ml")} className="flex items-center gap-1 justify-center hover:text-[#94A3B8] transition-colors w-full">
                     ML
@@ -447,7 +505,8 @@ export function WatchlistDecisionTable({
                         {isExpanded ? <ChevronDown size={13} className="text-[#60A5FA]" /> : <ChevronRight size={13} />}
                       </td>
                       <td className="px-3 py-2.5 font-semibold text-[#E2E8F0]">{item.symbol}</td>
-                      {showScore && <td className="px-3 py-2.5"><ScoreBar value={item.alpha_score} /></td>}
+                      {showScore && <td className="px-3 py-2.5"><ScoreBar value={item.final_score ?? item.alpha_score} technical={item.technical_score} /></td>}
+                      <td className="px-3 py-2.5"><SocialScoreCell value={item.social_score} /></td>
                       <td className="px-3 py-2.5 text-center">
                         {item.ml_probability != null ? (
                           <span
@@ -526,6 +585,35 @@ export function WatchlistDecisionTable({
                               items={item.details.evaluation_trace.filter((trace) => trace.type === "signal")}
                             />
                           </div>
+                          {item.social_score?.sentiment_score != null && (
+                            <div className="mt-4 rounded-xl border border-[#1D3B36] bg-[#07130F] p-4">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <span className="text-[11px] font-semibold uppercase tracking-wider text-[#55D8B0]">Social Intelligence</span>
+                                <span className="font-mono text-[10px] text-[#6B8C82]">run {item.social_score.run_id ?? "—"}</span>
+                              </div>
+                              <p className="mt-2 text-xs leading-5 text-[#A7B8B1]">{item.social_score.summary ?? "Sem resumo estruturado."}</p>
+                              <div className="mt-3 flex flex-wrap gap-2 text-[10px] text-[#779087]">
+                                <span>sentimento: {item.social_score.sentiment_label ?? item.social_score.sentiment_score}</span>
+                                <span>recomendação: {item.social_score.recommendation ?? "—"}</span>
+                                <span>status: {item.social_score.applied ? "aplicado" : item.social_score.fallback_reason ?? "observacional"}</span>
+                              </div>
+                              {(item.social_score.sources?.length ?? 0) > 0 && (
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                  {item.social_score.sources?.slice(0, 5).map((source, index) => (
+                                    <a
+                                      key={`${source.url ?? source.platform}-${index}`}
+                                      href={source.url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="rounded border border-[#285046] px-2 py-1 text-[9px] text-[#62CBAA] hover:bg-[#123028]"
+                                    >
+                                      {source.platform ?? source.title ?? `fonte ${index + 1}`}
+                                    </a>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
                           {/* Entry Exhaustion Score — Fase 1 Shadow Mode (observacional) */}
                           {(() => {
                             const raw = item.current_values?.entry_exhaustion_score;

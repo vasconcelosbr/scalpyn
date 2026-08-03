@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     # broadcast to per-user webhooks (would leak one tenant's
     # symbol/score data into another tenant's Slack).
     ROBUST_ALERTS_OPS_WEBHOOK_URL: str = ""
+    # Dedicated machine-to-machine token for the Claude Social Intelligence
+    # agent. When unset, the ingestion route intentionally returns 404.
+    SOCIAL_INTELLIGENCE_INGEST_TOKEN: str = ""
 
     # Maximum seconds a trade may remain open before the Trade Monitor closes
     # it with outcome = "timeout".  Override via the TRADE_MONITOR_TIMEOUT_SECONDS
