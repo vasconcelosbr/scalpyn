@@ -38,6 +38,9 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 os.environ.setdefault("OPTUNA_VERBOSITY", "WARNING")
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
