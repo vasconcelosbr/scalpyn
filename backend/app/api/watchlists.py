@@ -782,6 +782,7 @@ def _asset_to_dict(a: PipelineWatchlistAsset, indicators: Optional[Dict[str, Any
     from ..utils.blocking_rules import check_anti_bad_entry
     _blocked, block_reasons = check_anti_bad_entry({"indicators": ind_out})
 
+    _analysis = a.analysis_snapshot or {}
     return {
         "id":               str(a.id),
         "watchlist_id":     str(a.watchlist_id),
@@ -798,7 +799,10 @@ def _asset_to_dict(a: PipelineWatchlistAsset, indicators: Optional[Dict[str, Any
         "level_direction":  a.level_direction,
         "blocked":          _blocked,
         "block_reasons":    block_reasons,
-        "analysis_snapshot": a.analysis_snapshot or {},
+        "analysis_snapshot": _analysis,
+        "technical_score": _analysis.get("technical_score"),
+        "final_score": _analysis.get("final_score"),
+        "social_score": _analysis.get("social_score"),
         "indicators": ind_out,
     }
 
@@ -862,6 +866,9 @@ def _normalize_decision_snapshot(
         "expected_values": dict(raw_snapshot.get("expected_values") or details["expected_values"]),
         "details": details,
         "timestamp": raw_snapshot.get("timestamp") or timestamp,
+        "technical_score": raw_snapshot.get("technical_score"),
+        "final_score": raw_snapshot.get("final_score", resolved_alpha),
+        "social_score": raw_snapshot.get("social_score"),
     }
 
 

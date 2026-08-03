@@ -7,6 +7,7 @@ import {
   WatchlistDecisionTable,
   type RejectedAssetItem,
   type IndicatorColumnSpec,
+  type SocialScoreSummary,
 } from '@/components/watchlist/RejectedAssetTable';
 import { apiFetch } from '@/lib/api';
 import { useWebSocket, getCurrentUserId } from '@/hooks/useWebSocket';
@@ -695,6 +696,9 @@ interface FuturesAsset {
   entry_short_blocked: boolean;
   // Standard alpha score (base spot score — always present)
   alpha_score?: number | null;
+  technical_score?: number | null;
+  final_score?: number | null;
+  social_score?: SocialScoreSummary | null;
   // Backend returns current_price / price_change_24h (matching _asset_to_dict)
   current_price?: number | null;
   price_change_24h?: number | null;
@@ -720,6 +724,31 @@ function ScorePill({ value, color }: { value: number | null; color: string }) {
         />
       </div>
       <span className="text-[10px] text-[#94A3B8] tabular-nums w-7 text-right">{value.toFixed(0)}</span>
+    </div>
+  );
+}
+
+function FuturesSocialCell({ value }: { value?: SocialScoreSummary | null }) {
+  if (!value || value.sentiment_score == null) return <span className="text-[#334155]">—</span>;
+  const score = Number(value.sentiment_score);
+  const attention = value.attention_score == null ? null : Number(value.attention_score);
+  const confidence = value.confidence == null ? null : Number(value.confidence);
+  const ageHours = value.age_seconds == null ? null : value.age_seconds / 3600;
+  const scoreClass = score >= 60 ? 'text-emerald-400' : score <= 40 ? 'text-red-400' : 'text-amber-400';
+  return (
+    <div
+      className="min-w-[130px]"
+      title={`${value.summary ?? ''} | ${value.applied ? 'aplicado' : value.fallback_reason ?? 'observacional'}`}
+    >
+      <div className="flex items-center gap-1.5">
+        <span className={`font-mono text-[10px] font-bold ${scoreClass}`}>S {score.toFixed(0)}</span>
+        <span className={`rounded border px-1 py-0.5 text-[8px] ${value.eligible ? 'border-emerald-500/25 text-emerald-400' : 'border-slate-600/30 text-slate-500'}`}>
+          {value.applied ? 'LIVE' : value.eligible ? 'FRESH' : 'STALE'}
+        </span>
+      </div>
+      <div className="mt-1 font-mono text-[8px] text-[#64748B]">
+        A {attention == null ? '—' : attention.toFixed(0)} · C {confidence == null ? '—' : `${(confidence * 100).toFixed(0)}%`} · {ageHours == null ? '—' : `${ageHours.toFixed(1)}h`}
+      </div>
     </div>
   );
 }
@@ -909,13 +938,14 @@ function FuturesAssetTable({
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full text-xs min-w-[760px]">
+          <table className="w-full text-xs min-w-[920px]">
             <thead>
               <tr className="border-b border-[#1A2035] bg-[#060810]">
                 <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium w-6"></th>
                 <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium">Symbol</th>
                 <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium">Direção</th>
                 <th className="px-3 py-2.5 text-right text-[#4B5563] font-medium">Base α</th>
+                <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium">Social</th>
                 <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium min-w-[110px]">Score LONG</th>
                 <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium min-w-[110px]">Score SHORT</th>
                 <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium min-w-[110px]">Confidence</th>
@@ -962,7 +992,11 @@ function FuturesAssetTable({
                       </td>
                       <td className="px-3 py-2.5 text-right tabular-nums text-[#94A3B8]">
                         {asset.alpha_score != null ? asset.alpha_score.toFixed(1) : '—'}
+                        {asset.technical_score != null && asset.final_score != null && Math.abs(asset.technical_score - asset.final_score) >= 0.05 && (
+                          <div className="font-mono text-[8px] text-[#4B5563]">T {asset.technical_score.toFixed(1)} → F {asset.final_score.toFixed(1)}</div>
+                        )}
                       </td>
+                      <td className="px-3 py-2.5"><FuturesSocialCell value={asset.social_score} /></td>
                       <td className="px-3 py-2.5"><ScorePill value={asset.score_long}       color="bg-emerald-500" /></td>
                       <td className="px-3 py-2.5"><ScorePill value={asset.score_short}      color="bg-red-500"     /></td>
                       <td className="px-3 py-2.5"><ScorePill value={asset.confidence_score} color="bg-[#F472B6]"   /></td>
@@ -1008,7 +1042,7 @@ function FuturesAssetTable({
                     </tr>
                     {isOpen && (
                       <tr key={`${asset.symbol}-drilldown`} className="border-b border-[#1A2035]/60">
-                        <td colSpan={13} className="p-0">
+                        <td colSpan={14} className="p-0">
                           <FuturesDrilldown asset={asset} />
                         </td>
                       </tr>

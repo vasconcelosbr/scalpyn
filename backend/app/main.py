@@ -36,6 +36,7 @@ from .api import (
     futures_engine,
     system,
     metrics as metrics_api,
+    social_intelligence,
 )
 
 
@@ -422,6 +423,7 @@ app.include_router(live_log_stream.router)
 # Machine Learning
 app.include_router(ml.router)
 app.include_router(crypto_ev.router)
+app.include_router(social_intelligence.router)
 
 # Notifications
 app.include_router(notifications.router)

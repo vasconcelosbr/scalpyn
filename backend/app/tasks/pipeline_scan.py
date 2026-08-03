@@ -1314,6 +1314,11 @@ def _decision_metrics(asset: dict, processed: dict) -> dict:
         "score_components": score_components,
         "score_classification": score.get("classification"),
         "signal_direction": (processed.get("signal") or {}).get("direction"),
+        # Observational lineage only. These keys remain top-level and are
+        # deliberately excluded from indicators_snapshot/features_snapshot.
+        "technical_score": asset.get("_technical_score", asset.get("_score")),
+        "final_score": asset.get("_score"),
+        "social_score": dict(asset.get("_social_score") or {}),
     }
 
     # Task #215 / P0-empty-metrics fix:
@@ -2058,6 +2063,7 @@ async def _apply_robust_authoritative_scoring(
 
         if new_score is None:
             counters["fallbacks"] += 1
+            asset["_technical_score"] = 0.0
             asset["_score"] = 0.0
             asset["score"] = 0.0
             asset["alpha_score"] = 0.0
@@ -2082,6 +2088,8 @@ async def _apply_robust_authoritative_scoring(
             asset["score_short"] = round(
                 max(0.0, min(100.0, new_score * short_mult)), 2
             )
+            asset["_technical_score_long"] = asset["score_long"]
+            asset["_technical_score_short"] = asset["score_short"]
             # Direction tag derived from the robust bias — replaces the
             # legacy ``futures_direction`` field that used to come from
             # ``score_futures``. Threshold mirrors the spirit of the old
@@ -2103,6 +2111,7 @@ async def _apply_robust_authoritative_scoring(
             # NULL no path SPOT, o que travava o gate Shadow Portfolio
             # que filtra por direction IN ('SPOT','LONG')).
             asset["futures_direction"] = "SPOT"
+        asset["_technical_score"] = new_score
         asset["_score"] = new_score
         asset["score"] = new_score
         asset["alpha_score"] = new_score
@@ -2958,6 +2967,26 @@ async def _run_pipeline_scan():
                                     if asset.get("score_short") is not None:
                                         asset["score_short"] = 0.0
 
+                    # Load immutable social lineage once per scored watchlist.
+                    # This step is observational only: technical/profile gates
+                    # below still run against the untouched robust score.
+                    if not _no_score and effective_level in {"L2", "L3", "custom"}:
+                        try:
+                            from ..services.social_intelligence_service import attach_social_context
+                            await attach_social_context(
+                                db,
+                                assets,
+                                user_id=wl.user_id,
+                                is_futures=is_futures,
+                                as_of=datetime.now(timezone.utc),
+                            )
+                        except Exception as _social_context_exc:
+                            logger.warning(
+                                "[SocialScore] wl=%s context unavailable (%s) — technical score preserved",
+                                wl.name,
+                                _social_context_exc,
+                            )
+
                     if effective_level == "custom":
                         existing_symbols = {a.get("symbol") for a in assets}
                         missing_symbols = [sym for sym in symbols if sym not in existing_symbols]
@@ -2993,6 +3022,28 @@ async def _run_pipeline_scan():
                                     "[PipelineScan] custom min_alpha_score gate (%.1f): %d → %d approved",
                                     _wl_min_score, _pre, len(monitored),
                                 )
+                        try:
+                            from ..services.social_intelligence_service import apply_social_score_to_asset
+                            _social_technical_threshold = float(
+                                ((score_config or {}).get("thresholds") or {}).get("buy", 0)
+                            )
+                            for _asset in monitored:
+                                apply_social_score_to_asset(
+                                    _asset,
+                                    is_futures=is_futures,
+                                    technical_threshold=max(_wl_min_score, _social_technical_threshold),
+                                )
+                            if _wl_min_score > 0:
+                                monitored = [
+                                    _asset for _asset in monitored
+                                    if float(_asset.get("_score") or 0) >= _wl_min_score
+                                ]
+                        except Exception as _social_apply_exc:
+                            logger.warning(
+                                "[SocialScore] wl=%s modifier failed (%s) — technical score preserved",
+                                wl.name,
+                                _social_apply_exc,
+                            )
                         await _replace_rejection_snapshot(
                             db, wl_id, wl.user_id, wl.profile_id, [], execution_id=execution_id
                         )
@@ -3039,6 +3090,52 @@ async def _run_pipeline_scan():
                             score_config=score_config,
                             apply_profile_filters=False,
                         )
+                        if effective_level == "L2":
+                            try:
+                                from ..services.social_intelligence_service import apply_social_score_to_asset
+                                _profile_min_score = float(
+                                    ((effective_profile_config or {}).get("filters") or {}).get("min_score", 0)
+                                )
+                                _configured_min_score = (score_config or {}).get("minimum_score")
+                                _buy_threshold = float(
+                                    ((score_config or {}).get("thresholds") or {}).get("buy", 0)
+                                )
+                                _social_threshold = max(
+                                    _profile_min_score,
+                                    float(_configured_min_score) if _configured_min_score is not None else _buy_threshold,
+                                )
+                                _social_blocked = []
+                                _social_passed = []
+                                for _asset in passed:
+                                    _context = apply_social_score_to_asset(
+                                        _asset,
+                                        is_futures=is_futures,
+                                        technical_threshold=_social_threshold,
+                                    )
+                                    if _context.get("applied") and float(_asset.get("_score") or 0) < _social_threshold:
+                                        _social_blocked.append(_asset)
+                                    else:
+                                        _social_passed.append(_asset)
+                                passed = _social_passed
+                                for _asset in _social_blocked:
+                                    rejected_rows.append({
+                                        "symbol": _asset.get("symbol", ""),
+                                        "score": _asset.get("_score") or 0,
+                                        "stage": "L2",
+                                        "status": "rejected",
+                                        "failed_type": "social_score_gate",
+                                        "failed_indicator": "social_score",
+                                        "condition": f"final score >= {_social_threshold:g}",
+                                        "current_value": _asset.get("_score") or 0,
+                                        "expected": f">= {_social_threshold:g}",
+                                        "analysis_snapshot": _asset.get("analysis_snapshot") or {},
+                                    })
+                            except Exception as _social_apply_exc:
+                                logger.warning(
+                                    "[SocialScore] wl=%s L2 modifier failed (%s) — technical score preserved",
+                                    wl.name,
+                                    _social_apply_exc,
+                                )
                         await _replace_rejection_snapshot(
                             db,
                             wl_id,
@@ -3190,6 +3287,67 @@ async def _run_pipeline_scan():
                         user_id=wl.user_id,
                         pool_id=wl.source_pool_id,
                     )
+                    # Technical filters/signals have now passed. Only at this
+                    # point may Social Score change ranking or block a final
+                    # score; it can never rescue a technical rejection.
+                    try:
+                        from ..services.social_intelligence_service import apply_social_score_to_asset
+                        _buy_threshold = float(
+                            ((score_config or {}).get("thresholds") or {}).get("buy", 0)
+                        )
+                        _social_threshold = max(_wl_min_score, _buy_threshold)
+                        _social_rejected_rows = []
+                        for _decision in decisions:
+                            if _decision.get("decision") != "ALLOW":
+                                continue
+                            _asset = _decision.get("_asset") or {}
+                            _context = apply_social_score_to_asset(
+                                _asset,
+                                is_futures=is_futures,
+                                technical_threshold=_social_threshold,
+                            )
+                            _decision["score"] = float(_asset.get("_score") or _decision.get("score") or 0)
+                            _decision["metrics"] = _decision_metrics(
+                                _asset,
+                                _decision.get("_processed") or {},
+                            )
+                            _decision.setdefault("reasons", {})["social_score"] = {
+                                "applied": bool(_context.get("applied")),
+                                "fallback_reason": _context.get("fallback_reason"),
+                                "technical_score": _context.get("technical_score"),
+                                "final_score": _context.get("final_score"),
+                            }
+                            if _context.get("applied") and _decision["score"] < _social_threshold:
+                                _decision["decision"] = "BLOCK"
+                                _decision["l3_pass"] = False
+                                _social_rejected_rows.append({
+                                    "symbol": _decision.get("symbol", ""),
+                                    "score": _decision["score"],
+                                    "stage": "L3",
+                                    "status": "rejected",
+                                    "failed_type": "social_score_gate",
+                                    "failed_indicator": "social_score",
+                                    "condition": f"final score >= {_social_threshold:g}",
+                                    "current_value": _decision["score"],
+                                    "expected": f">= {_social_threshold:g}",
+                                    "analysis_snapshot": _asset.get("analysis_snapshot") or {},
+                                })
+                        if _social_rejected_rows:
+                            rejected_rows.extend(_social_rejected_rows)
+                            await _replace_rejection_snapshot(
+                                db,
+                                wl_id,
+                                wl.user_id,
+                                wl.profile_id,
+                                rejected_rows,
+                                execution_id=execution_id,
+                            )
+                    except Exception as _social_apply_exc:
+                        logger.warning(
+                            "[SocialScore] wl=%s L3 modifier failed (%s) — technical score preserved",
+                            wl.name,
+                            _social_apply_exc,
+                        )
                     # Inject gate-rejected assets as BLOCK decisions so they flow through
                     # the L3_REJECTED edge trigger → decisions_log → shadow trade (ML data).
                     # Uses _decision_metrics with empty processed ({}) — indicators are

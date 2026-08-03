@@ -24,6 +24,7 @@ import {
   Activity,
   CandlestickChart,
   TestTube2,
+  Radio,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -74,6 +75,7 @@ export const BACKOFFICE_ITEMS: NavItem[] = [
 export const CONFIG_ITEMS: NavItem[] = [
   { name: "General", href: "/settings/general", icon: Settings },
   { name: "Score Engine", href: "/settings/score", icon: Target },
+  { name: "Social Score", href: "/settings/social-score", icon: Radio },
   { name: "Signal Rules", href: "/settings/signal", icon: Zap },
   { name: "Risk Management", href: "/settings/risk", icon: Shield },
   { name: "Strategies", href: "/settings/strategies", icon: Brain },

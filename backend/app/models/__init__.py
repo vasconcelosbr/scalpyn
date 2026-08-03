@@ -24,6 +24,7 @@ from .shadow_trade_analysis import (
 )
 from .crypto_ev import CryptoEVL3ReplayFlag, CryptoEVSnapshot
 from .opportunity_snapshot import OpportunitySnapshot
+from .social_intelligence import SocialAssetObservation, SocialIntelligenceRun
 from .profile_metrics import ProfileMetrics
 from .rule_contribution import RuleContribution
 from .profile_audit_log import ProfileAuditLog
@@ -83,6 +84,8 @@ __all__ = [
     "CryptoEVL3ReplayFlag",
     "CryptoEVSnapshot",
     "OpportunitySnapshot",
+    "SocialAssetObservation",
+    "SocialIntelligenceRun",
     "ProfileMetrics",
     "RuleContribution",
     "ProfileAuditLog",
