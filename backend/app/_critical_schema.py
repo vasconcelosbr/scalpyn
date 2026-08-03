@@ -83,4 +83,9 @@ CRITICAL_COLUMNS: List[Tuple[str, str]] = [
     # The table is never touched by ORM models, so it was absent from this list
     # until the Rule N/N+1 promotion window (Task #224 / Task #225).
     ("trade_simulations", "id"),
+    # Added by migration 142. The L3 causal dataset loader and every new
+    # native Shadow writer require both the aggregate timestamp and the exact
+    # per-feature lineage map; missing either must fail at boot, not at train.
+    ("shadow_trades", "feature_source_at"),
+    ("shadow_trades", "feature_source_times"),
 ]
