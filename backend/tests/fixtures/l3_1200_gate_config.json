@@ -1,0 +1,10 @@
+{
+  "ml_catboost_retrain_min_eligible_rows": 1200,
+  "ml_catboost_train_size_ratio": 0.60,
+  "ml_catboost_validation_size_ratio": 0.20,
+  "ml_catboost_test_size_ratio": 0.20,
+  "ml_catboost_min_train_samples": 600,
+  "ml_catboost_min_validation_samples": 200,
+  "ml_catboost_min_test_samples": 200,
+  "ml_promotion_min_test_samples": 300
+}
