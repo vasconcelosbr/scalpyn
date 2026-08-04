@@ -19,9 +19,10 @@ import json
 import logging
 import math
 import os
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, Iterable, List, Mapping, Optional
 from uuid import UUID, uuid4
 
 # Q2 council 2026-06-29: hard ceiling on completed_at to exclude shadow monitor
@@ -278,6 +279,7 @@ def _apply_feature_contract(
     lane_contract: Optional[Dict[str, Any]],
     feature_ranges: Optional[Dict[str, Any]],
     lane_name: str = "",
+    neutralized_features_by_index: Optional[Mapping[int, Iterable[str]]] = None,
 ):
     """E7: Apply per-lane feature contract to a training DataFrame.
 
@@ -292,25 +294,39 @@ def _apply_feature_contract(
         return df, 0
 
     mask = np.ones(len(df), dtype=bool)
+    neutralized_by_index = {
+        int(index): {str(feature) for feature in features}
+        for index, features in (neutralized_features_by_index or {}).items()
+    }
+
+    def neutralized_mask(feature_name: str):
+        return np.asarray(
+            [
+                feature_name in neutralized_by_index.get(int(index), set())
+                for index in df.index
+            ],
+            dtype=bool,
+        )
 
     if lane_contract:
         for feat in lane_contract.get("required", []):
             if feat in df.columns:
-                mask &= df[feat].notna().values
+                mask &= df[feat].notna().values | neutralized_mask(feat)
 
     if feature_ranges:
         for feat, rules in feature_ranges.items():
             if feat not in df.columns:
                 continue
             col = df[feat]
+            allowed_neutralized = neutralized_mask(feat)
             if "gt" in rules:
-                mask &= (col > rules["gt"]).fillna(False).values
+                mask &= (col > rules["gt"]).fillna(False).values | allowed_neutralized
             if "gte" in rules:
-                mask &= (col >= rules["gte"]).fillna(False).values
+                mask &= (col >= rules["gte"]).fillna(False).values | allowed_neutralized
             if "lt" in rules:
-                mask &= (col < rules["lt"]).fillna(False).values
+                mask &= (col < rules["lt"]).fillna(False).values | allowed_neutralized
             if "lte" in rules:
-                mask &= (col <= rules["lte"]).fillna(False).values
+                mask &= (col <= rules["lte"]).fillna(False).values | allowed_neutralized
 
     n_rejected = int((~mask).sum())
     if n_rejected > 0:
@@ -1132,6 +1148,194 @@ class MLChallengerService:
                 )
         return records
 
+    async def _load_l3_historical_shadow_data(
+        self,
+        db: AsyncSession,
+        user_id: UUID,
+        lookback_days: int,
+        *,
+        dataset_valid_from: datetime,
+        dataset_query_cutoff: datetime,
+        maturity_embargo_margin_minutes: int,
+        ml_config: Mapping[str, Any],
+    ) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """Resolve immutable L3 v1 rows through their parent decision snapshot."""
+        if ml_config.get("ml_l3_historical_lineage_enabled") is not True:
+            return [], {"enabled": False, "included_rows": 0}
+
+        contract_version = str(
+            ml_config.get("ml_l3_historical_lineage_contract_version") or ""
+        ).strip()
+        if not contract_version:
+            raise ValueError("missing_ml_l3_historical_lineage_contract_version")
+        supported_contracts = ml_config.get(
+            "ml_l3_historical_capture_contracts"
+        )
+        if not isinstance(supported_contracts, list) or not supported_contracts:
+            raise ValueError("missing_ml_l3_historical_capture_contracts")
+        neutralized_features = ml_config.get(
+            "ml_l3_historical_neutralized_features"
+        )
+        if not isinstance(neutralized_features, list):
+            raise ValueError("missing_ml_l3_historical_neutralized_features")
+        untrusted_groups = ml_config.get(
+            "ml_l3_historical_untrusted_source_groups"
+        )
+        if not isinstance(untrusted_groups, list) or not untrusted_groups:
+            raise ValueError("missing_ml_l3_historical_untrusted_source_groups")
+        if ml_config.get("ml_l3_historical_label_anchor") != "decision_created_at":
+            raise ValueError("unsupported_ml_l3_historical_label_anchor")
+        if ml_config.get("ml_l3_historical_unresolved_feature_policy") != "neutralize":
+            raise ValueError("unsupported_ml_l3_historical_unresolved_feature_policy")
+
+        from app.ml.feature_extractor import FEATURE_COLUMNS
+        from app.ml.historical_l3_lineage import (
+            TIMESTAMP_ALIASES,
+            resolve_historical_l3_record,
+        )
+        timestamp_aliases = ml_config.get("ml_l3_historical_timestamp_aliases")
+        if tuple(timestamp_aliases or ()) != TIMESTAMP_ALIASES:
+            raise ValueError("invalid_ml_l3_historical_timestamp_aliases")
+
+        contract_params = {
+            f"historical_contract_{index}": str(value)
+            for index, value in enumerate(supported_contracts)
+        }
+        contract_placeholders = ", ".join(
+            f":{name}" for name in contract_params
+        )
+        cutoff_clause = ""
+        cutoff_params: dict[str, Any] = {}
+        if _TRAIN_CUTOFF_AT:
+            cutoff_at = datetime.fromisoformat(_TRAIN_CUTOFF_AT).replace(
+                tzinfo=timezone.utc
+            )
+            cutoff_clause = "AND st.completed_at < :train_cutoff_at"
+            cutoff_params["train_cutoff_at"] = cutoff_at
+
+        params = {
+            "uid": str(user_id),
+            "window_start": max(
+                dataset_valid_from,
+                dataset_query_cutoff - timedelta(days=lookback_days),
+            ),
+            "dataset_valid_from": dataset_valid_from,
+            "dataset_query_cutoff": dataset_query_cutoff,
+            "maturity_embargo_margin_minutes": int(
+                maturity_embargo_margin_minutes
+            ),
+            **contract_params,
+            **cutoff_params,
+        }
+        rows = (await db.execute(text(f"""
+            SELECT
+                st.id::text AS shadow_id,
+                st.symbol,
+                st.source,
+                st.pnl_pct,
+                st.net_return_pct,
+                st.holding_seconds,
+                st.outcome,
+                st.features_snapshot,
+                st.config_snapshot,
+                st.barrier_mode,
+                st.barrier_contract_version,
+                st.tp_pct_applied,
+                st.sl_pct_applied,
+                st.entry_timestamp,
+                st.created_at,
+                st.feature_source_at,
+                st.feature_source_times,
+                st.features_captured_at,
+                st.capture_contract_version,
+                st.timeframe,
+                st.exchange,
+                st.profile_id::text AS profile_id,
+                st.event_id::text AS event_id,
+                st.snapshot_id::text AS snapshot_id,
+                st.profile_version_id::text AS profile_version_id,
+                st.score_engine_version_id::text AS score_engine_version_id,
+                st.label_resolved_at,
+                st.completed_at,
+                st.ttt_timeout_minutes,
+                st.exit_timestamp,
+                st.barrier_touched_at,
+                dl.created_at AS decision_created_at,
+                dl.metrics->'indicators_snapshot' AS decision_indicator_snapshot,
+                CASE
+                  WHEN st.outcome IN ('TP_HIT', 'SL_HIT')
+                    THEN st.barrier_touched_at
+                  WHEN st.outcome = 'TIMEOUT'
+                    THEN st.exit_timestamp
+                  ELSE NULL
+                END AS historical_label_event_at
+            FROM shadow_trades st
+            JOIN decisions_log dl ON dl.id = st.decision_id
+            WHERE st.user_id = :uid
+              AND st.source = 'L3'
+              AND st.capture_contract_version IN ({contract_placeholders})
+              AND st.outcome IN ('TP_HIT', 'SL_HIT', 'TIMEOUT')
+              AND st.pnl_pct IS NOT NULL
+              AND st.features_snapshot IS NOT NULL
+              AND st.features_snapshot <> '{{}}'::jsonb
+              AND st.feature_extractor_version IS NOT NULL
+              AND st.feature_schema_version IS NOT NULL
+              AND st.feature_hash IS NOT NULL
+              AND st.lineage_status = 'EXACT'
+              AND st.eligible_for_training IS TRUE
+              AND dl.created_at >= :window_start
+              AND dl.created_at >= :dataset_valid_from
+              AND dl.created_at <= :dataset_query_cutoff
+              AND COALESCE(st.label_resolved_at, st.completed_at) IS NOT NULL
+              AND COALESCE(st.label_resolved_at, st.completed_at)
+                    <= :dataset_query_cutoff
+              AND dl.created_at <= :dataset_query_cutoff - make_interval(
+                    mins => COALESCE(st.ttt_timeout_minutes, 0)
+                          + :maturity_embargo_margin_minutes
+                  )
+              AND CASE
+                    WHEN st.outcome IN ('TP_HIT', 'SL_HIT')
+                      THEN st.barrier_touched_at
+                    WHEN st.outcome = 'TIMEOUT'
+                      THEN st.exit_timestamp
+                    ELSE NULL
+                  END > dl.created_at
+              {cutoff_clause}
+            ORDER BY dl.created_at ASC
+        """), params)).fetchall()
+
+        resolved: List[Dict[str, Any]] = []
+        exclusions: Counter[str] = Counter()
+        neutralized_counts: Counter[str] = Counter()
+        for row in rows:
+            raw = dict(row._mapping) if hasattr(row, "_mapping") else dict(row)
+            result = resolve_historical_l3_record(
+                raw,
+                model_feature_columns=FEATURE_COLUMNS,
+                contract_version=contract_version,
+                configured_neutralized_features=neutralized_features,
+                untrusted_source_groups=untrusted_groups,
+            )
+            if result.record is None:
+                exclusions[result.exclusion_reason or "unknown"] += 1
+                continue
+            resolved.append(result.record)
+            neutralized_counts.update(result.neutralized_features)
+
+        diagnostics = {
+            "enabled": True,
+            "contract_version": contract_version,
+            "source_capture_contracts": [str(v) for v in supported_contracts],
+            "queried_rows": len(rows),
+            "included_rows": len(resolved),
+            "excluded_rows": len(rows) - len(resolved),
+            "exclusion_reasons": dict(sorted(exclusions.items())),
+            "neutralized_feature_rows": dict(sorted(neutralized_counts.items())),
+            "label_anchor": "decision_created_at",
+            "shadow_mutations": 0,
+        }
+        return resolved, diagnostics
+
     @staticmethod
     def _l3_strict_meta(
         all_records: List[Dict[str, Any]],
@@ -1282,9 +1486,42 @@ class MLChallengerService:
             df.attrs.get("rows_with_backfill_neutralized", 0)
         )
 
+        historical_neutralized_rows = 0
+        historical_neutralized_cells = 0
+        neutralized_features_by_index: Dict[int, set[str]] = {}
+        for row_index, record in enumerate(valid_records[: len(df)]):
+            feature_names = record.get("historical_neutralized_features") or []
+            neutralized_features_by_index[row_index] = {
+                str(feature_name) for feature_name in feature_names
+            }
+            applied = False
+            for feature_name in feature_names:
+                if feature_name in df.columns:
+                    df.at[row_index, feature_name] = float("nan")
+                    historical_neutralized_cells += 1
+                    applied = True
+            if applied:
+                historical_neutralized_rows += 1
+        self._last_rows_with_historical_lineage_neutralized = (
+            historical_neutralized_rows
+        )
+        self._last_historical_lineage_neutralized_cells = (
+            historical_neutralized_cells
+        )
+        if historical_neutralized_rows:
+            logger.info(
+                "HISTORICAL_LINEAGE_NEUTRALIZATION|rows=%d|cells=%d",
+                historical_neutralized_rows,
+                historical_neutralized_cells,
+            )
+
         # E7: Row-level contract validation (required features + range checks)
         df, rows_rejected_by_contract = _apply_feature_contract(
-            df, lane_contract, feature_ranges, lane_name=lane_name
+            df,
+            lane_contract,
+            feature_ranges,
+            lane_name=lane_name,
+            neutralized_features_by_index=neutralized_features_by_index,
         )
         # Re-align valid_records to match filtered df rows
         valid_records = [valid_records[i] for i in df.index]
@@ -2377,7 +2614,7 @@ class MLChallengerService:
         else:
             cb_dataset_valid_from = l3_dataset_valid_from
 
-        cb_all_records = await self._load_shadow_data(
+        native_records = await self._load_shadow_data(
             db,
             user_id,
             lookback_days,
@@ -2389,7 +2626,34 @@ class MLChallengerService:
             ),
             collect_diagnostics=collect_diagnostics,
         )
-        maturity_diagnostics = dict(self._last_shadow_load_diagnostics)
+        native_maturity_diagnostics = dict(self._last_shadow_load_diagnostics)
+        historical_records: List[Dict[str, Any]] = []
+        historical_diagnostics: Dict[str, Any] = {"enabled": False, "included_rows": 0}
+        if cb_lane == "L3_PROFILE" and cb_sources == ["L3"]:
+            historical_records, historical_diagnostics = (
+                await self._load_l3_historical_shadow_data(
+                    db,
+                    user_id,
+                    lookback_days,
+                    dataset_valid_from=cb_dataset_valid_from,
+                    dataset_query_cutoff=dataset_query_cutoff,
+                    maturity_embargo_margin_minutes=int(
+                        ml_config.get("ml_maturity_embargo_margin_minutes")
+                    ),
+                    ml_config=ml_config,
+                )
+            )
+        cb_all_records = sorted(
+            [*native_records, *historical_records],
+            key=lambda record: record.get("created_at") or datetime.min.replace(
+                tzinfo=timezone.utc
+            ),
+        )
+        maturity_diagnostics = {
+            "native": native_maturity_diagnostics,
+            "historical": historical_diagnostics,
+            "records_after_lineage_resolution": len(cb_all_records),
+        }
         cb_profile_records = [r for r in cb_all_records if r.get("profile_id")]
         barrier_meta: Dict[str, Any] = {}
         # L3_LAB incluído (2026-07-25): a migração do lab para o contrato
@@ -2419,6 +2683,9 @@ class MLChallengerService:
         l3_meta["dataset_policy"] = cb_dataset_policy
         l3_meta["included_trade_count"] = len(cb_records)
         l3_meta["dataset_valid_from"] = cb_dataset_valid_from.isoformat()
+        l3_meta["historical_lineage"] = historical_diagnostics
+        l3_meta["native_record_count"] = len(native_records)
+        l3_meta["historical_record_count"] = len(historical_records)
         return cb_records, {
             "lane": cb_lane,
             "dataset_policy": cb_dataset_policy,
@@ -3134,6 +3401,20 @@ class MLChallengerService:
                                 "sources": cb_sources,
                                 "rows_with_backfill_neutralized": int(
                                     getattr(self, "_last_rows_with_backfill_neutralized", 0)
+                                ),
+                                "rows_with_historical_lineage_neutralized": int(
+                                    getattr(
+                                        self,
+                                        "_last_rows_with_historical_lineage_neutralized",
+                                        0,
+                                    )
+                                ),
+                                "historical_lineage_neutralized_cells": int(
+                                    getattr(
+                                        self,
+                                        "_last_historical_lineage_neutralized_cells",
+                                        0,
+                                    )
                                 ),
                                 "metrics": cb_result["metrics"],
                                 "test_metrics": cb_result.get("test_metrics"),

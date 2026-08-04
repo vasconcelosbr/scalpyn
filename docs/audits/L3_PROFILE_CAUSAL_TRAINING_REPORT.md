@@ -1,139 +1,93 @@
-# Relatório de ajuste, deploy e tentativa de treinamento — L3_PROFILE
+# Relatório consolidado — correção causal e treinamento L3_PROFILE
 
 ## Resultado executivo
 
-O ajuste foi implantado em produção como contrato de treinamento causal e `CANDIDATE_ONLY`. O comando de treinamento solicitado foi executado contra o banco produtivo com cutoff congelado em `2026-08-03T13:04:54.655394Z` `[query]`.
+A ausência física de `feature_source_at` nos shadows históricos não significa ausência total de evidência temporal. O snapshot pai em `decisions_log.metrics.indicators_snapshot`, ligado por `shadow_trades.decision_id`, preserva envelopes com `ts` ou `timestamp` para parte das features `[query]`.
 
-O treino foi corretamente interrompido pelo gate `insufficient_retrain_eligible_rows`: havia `0` `[query]` outcomes L3_PROFILE elegíveis sob o novo contrato causal, contra o mínimo de `2.000` `[config: ml]`. Nenhum modelo foi criado e nenhuma autoridade de execução foi concedida: `0` `[query]` escritas CatBoost e `0` `[query]` modelos com `execution_authority=true` após o cutoff.
+A correção monta uma projeção causal somente em memória: lê os dois aliases, calcula `feature_source_at = max(feature_source_times)` e nunca atualiza `shadow_trades`. Features sem origem exata são convertidas para `NaN` no dataset, sem fabricar timestamps ou valores.
 
-## Por que apareceu “apenas 10 amostras”
+## Contrato implementado
 
-O modelo v95 **não foi treinado com 10 amostras**. A persistência produtiva mostra:
+- Join explícito: `JOIN decisions_log dl ON dl.id = st.decision_id` `[código/teste]`.
+- Aliases aceitos: `ts` e `timestamp` `[config: ml]`.
+- Fonte temporal agregada: máximo dos timestamps válidos por feature `[código/teste]`.
+- Imutabilidade: `0` escritas em `shadow_trades` no carregador e `shadow_mutations=0` no diagnóstico `[teste/query]`.
+- Grupos sem proveniência confiável: `live_injection` `[config: ml]`.
+- Features sempre neutralizadas: `taker_ratio`, `volume_delta`, `flow_strength` e `delta_normalized` `[config: ml]`.
+- Features adicionais presentes no modelo, mas sem envelope temporal conciliável, também são neutralizadas por linha `[código]`.
+- Âncora histórica do label: instante real da decisão, `decisions_log.created_at` `[config: ml]`.
+- Evento de resolução: `barrier_touched_at` para `TP_HIT`/`SL_HIT` e `exit_timestamp` para `TIMEOUT` `[código]`.
+- Qualquer fonte posterior à decisão, valor divergente ou label não posterior à decisão falha de forma fechada `[teste]`.
 
-| Partição | Amostras |
+## Evidência produtiva congelada antes do deploy
+
+Cutoff: `2026-08-04T13:31:07.131406+00:00` `[query]`.
+
+| Verificação | Resultado |
 |---|---:|
-| Treino | `205` `[query]` |
-| Validação | `10` `[query]` |
-| Teste | `315` `[query]` |
-| Total particionado | `530` `[calc: 205+10+315]` |
+| Shadows históricos consultados | `1.226` `[query]` |
+| Labels posteriores à decisão | `1.226` `[query]` |
+| Labels não posteriores à decisão | `0` `[query]` |
+| Registros resolvidos pelo novo contrato | `1.225` `[query]` |
+| Registros excluídos | `1` `[query]` |
+| Motivo da exclusão | `no_resolved_model_feature_sources` `[query]` |
+| Linhas construídas no dataset | `1.225` `[query]` |
+| Labels positivos | `483` `[query]` |
+| Linhas com neutralização | `1.225` `[query]` |
+| Células neutralizadas | `9.800` `[query]` |
+| Fonte de feature posterior à decisão | `0` `[query]` |
+| Label não posterior à decisão | `0` `[query]` |
+| Mutações em shadows | `0` `[query]` |
 
-A causa técnica foi uma colisão semântica na chamada do split: `ml_threshold_min_positives=10` `[config: ml anterior]`, destinado à calibração do threshold, também era passado como `min_validation_size`. Depois do agrupamento temporal, purge e embargo, uma fronteira com apenas `10` `[query]` casos de validação ainda era considerada válida.
+As `9.800` células neutralizadas resultam de `1.225 × 8` `[calc: linhas × features neutralizadas]`. Além das quatro features configuradas de injeção ao vivo, quatro scores de contexto sem envelope conciliável nesta população foram neutralizados: `liquidity_score`, `market_structure_score`, `momentum_score` e `signal_score` `[query]`.
 
-Usar `100%` `[inferência técnica]` do volume para ajustar o modelo também não seria correto: isso eliminaria o holdout independente e impediria medir generalização. O volume elegível deve ser integralmente aproveitado **entre** treino, validação e teste, mas somente a partição de treino pode ajustar os parâmetros. O contrato novo fixa `60%` / `20%` / `20%` `[config: ml]`, preservando validação e teste fora do fit.
+## Reavaliação temporal dos labels
 
-## Correção implantada
+A auditoria comparou o instante da decisão com os timestamps históricos:
 
-- Dataset L3_PROFILE dos últimos `30` `[comando]` dias, com cutoff imutável.
-- Contrato de captura `point-in-time-v2` `[deploy]`, exigindo `feature_source_at` e um mapa `feature_source_times` por feature.
-- Split `60%` / `20%` / `20%` `[config: ml]`.
-- Mínimo total: `2.000` `[config: ml]`.
-- Mínimo pós-purge no treino: `1.000` `[config: ml]`.
-- Mínimos de validação e teste: `200` `[config: ml]` em cada partição.
-- `ml_threshold_min_positives=10` `[config: ml]` mantido somente para calibração econômica do threshold.
-- Optuna: `100` `[config: ml]` trials, timeout de `600` `[config: ml]` segundos e seed `42` `[config: ml]`.
-- Early stopping: `30` `[config: ml]` rounds.
-- CatBoost `CPU`, `Logloss`, `AUC`, `MVS`, subsample `0,8` `[config: ml]`, `use_best_model=true`.
-- Overlap de trades entre partições validado como zero pelo contrato de membership; hashes exatos de dataset e partições são persistidos quando um modelo chega a ser treinado.
-- O teste permanece fora da seleção de hiperparâmetros; Optuna continua selecionando pelo net EV da validação.
-
-O requisito do prompt de `500` `[ABERTO: prompt]` amostras mínimas de treino conflitava com o checklist posterior de `1.000` `[config: ml adotada]`. Foi adotado o valor mais conservador.
-
-## População produtiva
-
-Na auditoria pré-deploy do contrato anterior, o funil possuía `1.221` `[query]` outcomes L3 maduros/elegíveis, distribuídos em `25` `[query]` ativos e `25` `[query]` perfis. Desses, `479` `[query]` tinham retorno positivo e `742` `[query]` retorno não positivo.
-
-Entretanto, `0` `[query]` desses snapshots históricos possuíam a linhagem temporal por feature exigida. Aceitá-los retroativamente exigiria inventar source time ou mutar snapshots point-in-time, ambos proibidos. Por isso, após a ativação do contrato novo, a população causal é:
-
-| Campo | Valor |
+| Relação temporal | Resultado |
 |---|---:|
-| Elegíveis | `0` `[query]` |
-| Ativos | `0` `[query]` |
-| Perfis | `0` `[query]` |
-| Positivos | `0` `[query]` |
-| Não positivos | `0` `[query]` |
+| `entry_timestamp < decisão` | `1.218` `[query]` |
+| `entry_timestamp > decisão` | `8` `[query]` |
+| `entry_timestamp = decisão` | `0` `[query]` |
+| TP/SL com `barrier_touched_at` | `1.223` de `1.223` `[query]` |
+| `exit_timestamp > decisão` | `1.226` `[query]` |
 
-Isso não significa descarte físico do histórico. As linhas antigas permanecem preservadas, mas não podem ser usadas como evidência causal no novo treinamento.
+Consequentemente, `entry_timestamp` não é uma âncora histórica consistente. Na projeção do dataset, `entry_timestamp` e `created_at` são reancorados para `decisions_log.created_at`; `holding_seconds` é recalculado entre a decisão e o evento real do label. Os valores originais ficam preservados somente na projeção como `*_original`; nenhuma linha histórica é alterada.
 
-## Execução do treino
+## Gates preservados
 
-Comando executado:
+O reparo aumenta a população causal recuperável, mas não reduz o gate mínimo. O contrato continua exigindo `2.000` registros elegíveis `[config: ml]`; a população pré-deploy resolvida é `1.225` `[query]`. Portanto, um treino candidato deve ser interrompido por insuficiência de dados até que a população alcance o mínimo. Não há autorização para promoção, ativação ou execução real.
 
-```powershell
-python scripts/run_catboost_retrain.py --lane L3_PROFILE --days 30 --trials 100 --timeout 600 --candidate-only --save-logs --dataset-cutoff 2026-08-03T13:04:54.655394Z
-```
+## Validação local
 
-Resultado literal relevante:
+- Suíte focal da correção e contratos relacionados: `38 passed` `[pytest]`.
+- Suíte compatível ampliada: `83 passed; 2 failed` `[pytest]`. As duas falhas são de testes legados desatualizados: mock sem `ml_win_fast_threshold_seconds` e expectativa de caminho antigo de migração; não indicam falha do resolver novo.
+- Contratos de retrain isolados: `12 passed; 4 failed` `[pytest]`. As quatro falhas também são mocks legados incompletos para chaves de governança já exigidas.
+- Compilação Python: concluída sem erro `[compileall]`.
+- Auditoria de schema produtivo antes da publicação: `32/32` colunas críticas presentes `[query]`.
 
-```json
-{
-  "status": "skipped",
-  "reason": "insufficient_retrain_eligible_rows",
-  "records": 0,
-  "min_required": 2000,
-  "deficit": 2000,
-  "sources": ["L3"],
-  "dataset_query_cutoff": "2026-08-03T13:04:54.655394+00:00"
-}
-```
+## Publicação e treino
 
-Como o gate ocorreu antes do split e do Optuna, métricas, hiperparâmetros vencedores e versão CatBoost de um novo artefato estão `NÃO DISPONÍVEIS`. Não existe um “novo modelo ruim”; não existe novo modelo.
-
-## Comparação produtiva disponível
-
-| Modelo | Treino | Validação | Teste | Test AUC | Test EV | Test FPR | Status |
-|---|---:|---:|---:|---:|---:|---:|---|
-| v95 | `205` `[query]` | `10` `[query]` | `315` `[query]` | `0,5056099463` `[query]` | `-0,4423488764` `[query]` | `0,8341708543` `[query]` | candidate |
-| v89 | `241` `[query]` | `109` `[query]` | `303` `[query]` | `0,4914996026` `[query]` | `-0,4519935484` `[query]` | `0,1005917160` `[query]` | candidate |
-| v88 | `241` `[query]` | `109` `[query]` | `303` `[query]` | `0,2999205158` `[query]` | `-0,3291200000` `[query]` | `0,1420118343` `[query]` | candidate |
-| Novo | `NÃO DISPONÍVEL` | `NÃO DISPONÍVEL` | `NÃO DISPONÍVEL` | `NÃO DISPONÍVEL` | `NÃO DISPONÍVEL` | `NÃO DISPONÍVEL` | não criado |
-
-## Evidência de deploy
-
-- Alembic ativo: `143_l3_training_governance` `[query/deploy log]`.
-- Gate de schema: `32/32` `[HTTP: /api/health/schema]` colunas críticas presentes.
-- HTTP da API: `200` `[HTTP: /api/health]` e `200` `[HTTP: /api/health/schema]`.
-- Deploys `SUCCESS` `[Railway]`: API, worker estrutural, worker de compute, worker de execução, worker de microestrutura e beat.
-- `ML_GATE_ENABLED=false` `[Railway config]`.
-- Migrações de linhagem e configuração foram auditadas em `config_audit_log` pelo próprio upgrade.
-- Checkout original sujo permaneceu intocado; implementação realizada em worktree isolado.
-
-Validação local:
-
-- `81 passed` `[pytest]` no conjunto focal de ML, captura, Strategy Lab e Profile Intelligence.
-- `5 passed` `[pytest]` nos testes direcionados adicionais de governança/configuração.
-- `2 passed` `[pytest]` no gate de schema crítico.
-- Alembic possui `1` `[alembic heads]` head: `143_l3_training_governance` `[alembic heads]`.
-- Graphify atualizado após as alterações.
-
-## Recomendação
-
-- Não promover modelo: nenhum candidato novo foi criado.
-- Manter coleta causal ativa até alcançar `2.000` `[config: ml]` outcomes maduros e elegíveis.
-- Executar novamente o mesmo comando com um novo cutoff somente após o gate de readiness confirmar os mínimos.
-- Não redefinir a fronteira nem fabricar timestamps para aproveitar linhas antigas.
-- Manter `execution_authority=false` e exigir decisão humana para qualquer promoção futura.
+Esta seção será preenchida com a revisão Alembic ativa, deploys, saúde HTTP, resultado literal do treino candidato e reconciliação de escritas após a implantação.
 
 ## Ledger de Evidências
 
 | NÚMERO REPORTADO | ORIGEM | VALOR LITERAL DA FONTE |
 |---|---|---|
-| cutoff produtivo | `[query/comando]` | `2026-08-03T13:04:54.655394Z` |
-| contrato ativo | `[query/deploy log]` | `143_l3_training_governance` |
-| schema crítico | `[HTTP]` | `checked_count=32; missing=[]` |
-| HTTP API/schema | `[HTTP]` | `status=200; status=200` |
-| população causal | `[query]` | `eligible_rows=0; assets=0; profiles=0; positive_rows=0; nonpositive_rows=0` |
-| população anterior | `[query]` | `eligible=1221; assets=25; profiles=25; positive=479; nonpositive=742; source_time=0` |
-| gate total | `[config: ml]` | `ml_catboost_retrain_min_eligible_rows=2000` |
-| mínimos das partições | `[config: ml]` | `train=1000; validation=200; test=200` |
-| proporções | `[config: ml]` | `train=0.60; validation=0.20; test=0.20` |
-| calibração | `[config: ml]` | `ml_threshold_min_positives=10` |
-| Optuna | `[config: ml]` | `trials=100; timeout=600; seed=42` |
-| early stopping/subsample | `[config: ml]` | `rounds=30; subsample=0.8` |
-| resultado do comando | `[comando]` | `records=0; min_required=2000; deficit=2000; status=skipped` |
-| escritas pós-cutoff | `[query]` | `catboost_models_created_since_cutoff=0; execution_authority_true_since_cutoff=0` |
-| v95 | `[query]` | `train=205; val=10; test=315; auc=0.5056099462831398; ev=-0.4423488764044959; fpr=0.8341708542713567` |
-| v89 | `[query]` | `train=241; val=109; test=303; auc=0.4914996025788219; ev=-0.45199354838710104; fpr=0.10059171597633136` |
-| v88 | `[query]` | `train=241; val=109; test=303; auc=0.2999205157643734; ev=-0.3291200000000009; fpr=0.14201183431952663` |
-| total particionado v95 | `[calc: 205+10+315]` | `530` |
-| testes focais | `[pytest]` | `81 passed; 5 passed; 2 passed` |
-| heads Alembic | `[alembic heads]` | `1 head: 143_l3_training_governance` |
+| cutoff pré-deploy | `[query]` | `2026-08-04T13:31:07.131406+00:00` |
+| shadows consultados | `[query]` | `queried_rows=1226` |
+| população resolvida | `[query]` | `included_rows=1225; excluded_rows=1` |
+| causa da exclusão | `[query]` | `no_resolved_model_feature_sources=1` |
+| dataset montado | `[query]` | `gate_records=1225; built_rows=1225; positive_labels=483` |
+| neutralização | `[query]` | `rows_neutralized=1225; neutralized_cells=9800` |
+| conta da neutralização | `[calc: 1225×8]` | `9800` |
+| causalidade | `[query]` | `source_at_after_decision=0; label_not_after_decision=0` |
+| imutabilidade | `[query]` | `shadow_mutations=0` |
+| relação entrada/decisão | `[query]` | `entry_before=1218; entry_after=8; entry_equal=0` |
+| barreiras TP/SL | `[query]` | `tp_sl_rows=1223; with_barrier_touched_at=1223` |
+| saída posterior | `[query]` | `exit_after_decision=1226` |
+| gate de treino | `[config: ml]` | `ml_catboost_retrain_min_eligible_rows=2000` |
+| testes focais | `[pytest]` | `38 passed` |
+| testes ampliados | `[pytest]` | `83 passed; 2 failed` |
+| schema crítico | `[query]` | `32/32 present` |
