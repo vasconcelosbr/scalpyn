@@ -5,11 +5,19 @@ import pytest
 
 from app.ml.historical_l3_lineage import resolve_historical_l3_record
 from app.services.ml_challenger_service import MLChallengerService
+from scripts.audit_l3_30d_readiness import _decode_jsonb
 
 
 DECISION_AT = datetime(2026, 7, 25, 12, 0, tzinfo=timezone.utc)
 SOURCE_AT = DECISION_AT - timedelta(minutes=1)
 LABEL_AT = DECISION_AT + timedelta(minutes=8)
+
+
+def test_audit_jsonb_decoder_normalizes_asyncpg_text_codec():
+    assert _decode_jsonb('{"rsi":{"value":55.0}}') == {
+        "rsi": {"value": 55.0}
+    }
+    assert _decode_jsonb("not-json") == "not-json"
 
 
 def _raw_record():

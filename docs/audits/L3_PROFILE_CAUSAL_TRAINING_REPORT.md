@@ -61,7 +61,7 @@ O reparo aumenta a população causal recuperável, mas não reduz o gate mínim
 
 ## Validação local
 
-- Suíte focal da correção e contratos relacionados: `38 passed` `[pytest]`.
+- Suíte focal da correção e contratos relacionados: `39 passed` `[pytest]`.
 - Suíte compatível ampliada: `83 passed; 2 failed` `[pytest]`. As duas falhas são de testes legados desatualizados: mock sem `ml_win_fast_threshold_seconds` e expectativa de caminho antigo de migração; não indicam falha do resolver novo.
 - Contratos de retrain isolados: `12 passed; 4 failed` `[pytest]`. As quatro falhas também são mocks legados incompletos para chaves de governança já exigidas.
 - Compilação Python: concluída sem erro `[compileall]`.
@@ -69,7 +69,50 @@ O reparo aumenta a população causal recuperável, mas não reduz o gate mínim
 
 ## Publicação e treino
 
-Esta seção será preenchida com a revisão Alembic ativa, deploys, saúde HTTP, resultado literal do treino candidato e reconciliação de escritas após a implantação.
+Revisão de código publicada: `ddd250091e2ba12f150d767825c38376c54bb068` `[git]`.
+
+A cadeia Alembic foi reconciliada com a revisão social já ativa. O head final é `145_l3_historical_lineage`, descendente de `144_social_intelligence`, sem head paralelo `[alembic/query]`.
+
+Os sete deploys explícitos concluíram com `SUCCESS` `[Railway]`:
+
+| Serviço | Deployment |
+|---|---|
+| `scalpyn` | `be6ac495-695f-437f-a9e3-aa9bae29a852` `[Railway]` |
+| `scalpyn-beat` | `c156b86d-2b52-4b0e-932d-b38fdd841d34` `[Railway]` |
+| `scalpyn-ml-trainer` | `855f1826-6530-4caf-97fe-094683227f15` `[Railway]` |
+| `scalpyn-worker-compute` | `9e8a815f-644f-4bd1-bdaf-f363e5c3564d` `[Railway]` |
+| `scalpyn-worker-execution` | `f777c052-7bee-491b-8466-44f09d518657` `[Railway]` |
+| `scalpyn-worker-micro` | `c7107f11-31a4-4a2d-a722-7cf769622aaa` `[Railway]` |
+| `scalpyn-worker-structural` | `3f86ff21-ef4f-4f90-aa5b-d4bbc9fc2c06` `[Railway]` |
+
+Saúde pós-deploy: `/api/health` retornou `200` e `/api/health/schema` retornou `200`, `schema_ok=true`, `checked_count=32`, `missing=[]` `[HTTP]`. O log da API registra a aplicação `144_social_intelligence -> 145_l3_historical_lineage` e a conclusão do startup `[Railway logs]`.
+
+Cutoff congelado do treino: `2026-08-04T14:00:23.648128+00:00` `[query/comando]`.
+
+Comando executado:
+
+```powershell
+python scripts/run_catboost_retrain.py --lane L3_PROFILE --days 30 --trials 100 --timeout 600 --candidate-only --save-logs --dataset-cutoff 2026-08-04T14:00:23.648128+00:00
+```
+
+Resultado literal relevante:
+
+```json
+{
+  "status": "skipped",
+  "reason": "insufficient_retrain_eligible_rows",
+  "records": 1225,
+  "min_required": 2000,
+  "deficit": 775,
+  "dataset_query_cutoff": "2026-08-04T14:00:23.648128+00:00",
+  "historical_record_count": 1225,
+  "shadow_mutations": 0
+}
+```
+
+O gate interrompeu o fluxo antes de Optuna e do fit. Não foi criado, ativado nem promovido modelo: `l3_models_created_since_cutoff=0`, `active_models_created_since_cutoff=0` e `execution_authority_true_since_cutoff=0` `[query]`.
+
+Os logs pós-deploy também mostram ocorrências operacionais fora deste escopo: o worker estrutural recusou criar alguns shadows de rejeição por `barrier_v2_atr_unavailable` quando `atr_pct=0.0`, e o worker de execução registrou uma falha de assinatura WebSocket `spot.orders` `[Railway logs]`. Esses eventos não são causados pelo resolver histórico e não foram alterados nesta correção.
 
 ## Ledger de Evidências
 
@@ -88,6 +131,13 @@ Esta seção será preenchida com a revisão Alembic ativa, deploys, saúde HTTP
 | barreiras TP/SL | `[query]` | `tp_sl_rows=1223; with_barrier_touched_at=1223` |
 | saída posterior | `[query]` | `exit_after_decision=1226` |
 | gate de treino | `[config: ml]` | `ml_catboost_retrain_min_eligible_rows=2000` |
-| testes focais | `[pytest]` | `38 passed` |
+| testes focais | `[pytest]` | `39 passed` |
 | testes ampliados | `[pytest]` | `83 passed; 2 failed` |
 | schema crítico | `[query]` | `32/32 present` |
+| head Alembic | `[query]` | `145_l3_historical_lineage` |
+| configuração auditada | `[query]` | `active_ml_config_count=1; config_audit_rows=1` |
+| deploys | `[Railway]` | `7 SUCCESS` |
+| saúde HTTP | `[HTTP]` | `health=200; schema=200; schema_ok=true; checked_count=32; missing=[]` |
+| treino candidato | `[comando]` | `status=skipped; records=1225; min_required=2000; deficit=775` |
+| déficit | `[calc: 2000-1225]` | `775` |
+| modelos pós-cutoff | `[query]` | `created=0; active=0; execution_authority=0` |

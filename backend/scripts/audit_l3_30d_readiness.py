@@ -13,6 +13,16 @@ import os
 REQUIRED_COLUMNS = ("feature_source_at", "feature_source_times")
 
 
+def _decode_jsonb(value):
+    """Normalize asyncpg's text JSONB codec without weakening fail-closed checks."""
+    if not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError):
+        return value
+
+
 def _parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--cutoff", help="Frozen ISO-8601 cutoff; default DB clock")
@@ -181,8 +191,18 @@ async def _audit(cutoff_text: str | None) -> dict:
                 neutralized: Counter[str] = Counter()
                 included = 0
                 for historical_row in historical_rows:
+                    raw_record = dict(historical_row)
+                    for jsonb_field in (
+                        "features_snapshot",
+                        "config_snapshot",
+                        "feature_source_times",
+                        "decision_indicator_snapshot",
+                    ):
+                        raw_record[jsonb_field] = _decode_jsonb(
+                            raw_record.get(jsonb_field)
+                        )
                     resolved = resolve_historical_l3_record(
-                        dict(historical_row),
+                        raw_record,
                         model_feature_columns=FEATURE_COLUMNS,
                         contract_version=config[
                             "ml_l3_historical_lineage_contract_version"
