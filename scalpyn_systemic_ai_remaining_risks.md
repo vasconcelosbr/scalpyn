@@ -6,4 +6,4 @@
 4. **The Spot invariant remains human-owned.** Production exposed `"never_sell_at_loss": false` and AI consultation disabled `[config: spot_engine]`. The systemic validator blocks AI authority for the conflict; this rollout does not alter the trading configuration.
 5. **No external provider was called by the canary.** Auth, credit, rate-limit and malformed-response handling remain deterministic test evidence, not a billable runtime call.
 6. **Repository-wide quality debt predates this change.** Global frontend lint and backend global collection have documented unrelated failures; the changed component and the critical suites pass.
-7. **Authenticated end-to-end UI evidence is pending until the production frontend is promoted.** The staging database canary proves persistence and guards, while the user-facing route still requires post-deploy verification.
+7. **Authenticated visual evidence remains unavailable.** Production routes and deployment aliases are verified, but both available browser sessions redirected to `/login`. A signed-in human session is required for a truthful screenshot of the protected Shadow Portfolio workspace.

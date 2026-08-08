@@ -71,8 +71,33 @@
     "database_rows": "PASS",
     "worker_logs": "NOT_APPLICABLE_FAKE_IN_PROCESS_ADAPTER",
     "api_responses": "NOT_VERIFIED",
-    "authenticated_ui_screenshots": "NOT_VERIFIED",
+    "authenticated_ui_screenshots": "NOT_VERIFIED_BROWSER_SESSIONS_REDIRECTED_TO_LOGIN",
     "provider_cost_usage": "NOT_APPLICABLE_NO_EXTERNAL_PROVIDER_CALL"
   },
-  "production_rollout_attempted": false
+  "production_rollout_attempted": true,
+  "production_rollout": {
+    "alembic_head": "147_systemic_ai_foundation",
+    "approved_prompt_versions": 4,
+    "non_prompt_systemic_rows": 0,
+    "api_deployment_id": "cc3504b6-321b-4436-8c25-80f59c41c983",
+    "worker_compute_deployment_id": "0d5d8cd5-2212-499e-99fe-c37488b0baaa",
+    "worker_structural_deployment_id": "43752f3e-526f-4ddd-86b4-674f6a9a0a53",
+    "worker_execution_deployment_id": "a8190d5a-cb5f-4468-9f7e-35ecb2da6ef5",
+    "beat_deployment_id": "b0ee107f-d29b-46d0-a3f0-66ccf7016eb1",
+    "railway_deployments_status": "SUCCESS",
+    "api_health_http_status": 200,
+    "schema_health_http_status": 200,
+    "schema_checked_columns": 32,
+    "schema_missing_columns": 0,
+    "vercel_deployment_id": "dpl_8q7uNekZ2nZT8sq8YqYYJUZHt1Xi",
+    "vercel_status": "READY",
+    "production_alias": "https://scalpyn.vercel.app",
+    "critical_frontend_routes_http_200": 6,
+    "active_profiles": 53,
+    "live_trading_enabled_profiles": 0,
+    "autopilot_enabled_profiles": 0,
+    "shadow_only_profiles": 0,
+    "authenticated_ui": "NOT_VERIFIED_REDIRECTED_TO_LOGIN",
+    "source_label": "[query]"
+  }
 }

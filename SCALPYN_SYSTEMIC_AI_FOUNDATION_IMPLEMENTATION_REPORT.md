@@ -4,7 +4,7 @@
 
 `SYSTEMIC_AI_FOUNDATION_STAGING_PROVEN`
 
-The additive foundation, reversible database migration and an analysis-only persistent canary passed in an isolated Railway staging database built from the production schema without business rows. Production promotion remains a separate recorded checkpoint.
+The additive foundation, reversible database migration and an analysis-only persistent canary passed in an isolated Railway staging database built from the production schema without business rows. Revision 147, the affected Railway services and Vercel deployment were then promoted and verified in production.
 
 ## Revision and environment
 
@@ -85,13 +85,26 @@ The global frontend lint debt and backend import-time CatBoost collection failur
 
 The authoritative list is `scalpyn_systemic_ai_remaining_risks.md`. The material open items are complete canonical adoption in legacy entrypoints, explicit reconciliation of the invalid provider model, historical dataset conflicts, the human-owned Spot invariant and post-deploy authenticated UI/runtime evidence.
 
-## Production rollout plan
+## Production rollout result
 
-1. Commit and push the reviewed branch.
-2. Apply revision 147 explicitly to production and verify the head/tables/bridges read-only.
-3. Deploy the affected Railway API/workers and verify health plus bounded logs.
-4. Link the clean frontend to Vercel project `scalpyn`, publish a candidate, verify critical routes and promote its alias.
-5. Re-query live/Auto-Pilot invariants and record deployment identifiers in this report.
+- Commit: `0d712e03a1b9399f49aeb62379e4682bf2cc2ade` `[query]`.
+- Production Alembic head: `147_systemic_ai_foundation` `[query]`.
+- Approved prompts: `4` `[query]`; all other new systemic tables remained empty immediately after rollout `[query]`.
+- Railway API deployment: `cc3504b6-321b-4436-8c25-80f59c41c983`, status `SUCCESS` `[query]`.
+- Railway compute: `0d5d8cd5-2212-499e-99fe-c37488b0baaa`, status `SUCCESS` `[query]`.
+- Railway structural: `43752f3e-526f-4ddd-86b4-674f6a9a0a53`, status `SUCCESS` `[query]`.
+- Railway execution: `a8190d5a-cb5f-4468-9f7e-35ecb2da6ef5`, status `SUCCESS` `[query]`.
+- Railway beat: `b0ee107f-d29b-46d0-a3f0-66ccf7016eb1`, status `SUCCESS` `[query]`.
+- API health `/api/health`: HTTP `200` `[query]`.
+- Schema health `/api/health/schema`: HTTP `200`, `schema_ok=true`, checked=`32`, missing=`0` `[query]`.
+- Vercel deployment: `dpl_8q7uNekZ2nZT8sq8YqYYJUZHt1Xi`, status `Ready` `[query]`.
+- Operational alias: `https://scalpyn.vercel.app` points to the new deployment `[query]`.
+- Critical frontend routes: HTTP `200` for Shadow Portfolio, Social Score, Risk, Strategies, Profile Intelligence and Co-Pilot `[query]`.
+- Production profiles after rollout: active=`53`, live-trading=`0`, Auto-Pilot=`0`, shadow-only=`0` `[query]`.
+
+The API startup explicitly reported the AI encryption key present, migration head current, critical schema valid and Redis connected. All deployed workers reached ready state. The structural worker continued to reject rows with unavailable ATR under its existing fail-closed barrier; no systemic-orchestration error was found in its bounded logs.
+
+Authenticated visual proof is `NÃO VERIFICADO`: both available browser sessions redirected to the login page. No credential was requested, inspected or inferred. Route-level, deployment-level and backend runtime proof is complete.
 
 ## Evidence ledger
 

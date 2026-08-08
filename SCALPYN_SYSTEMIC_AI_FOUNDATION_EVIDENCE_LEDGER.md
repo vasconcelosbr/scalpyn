@@ -30,4 +30,12 @@
 | Spot invariant | `[config: spot_engine]` production JSON | `"selling":{"never_sell_at_loss":false}; "enable_ai_consultation":false` |
 | Profile Intelligence model | `[config: profile_intelligence]` production JSON | `"ai_model":"claude-fable-5"; "ai_provider":"anthropic"` |
 
-Production deployment identifiers, post-migration counts, worker logs and authenticated UI evidence remain `NÃO DISPONÍVEL` until the production rollout steps complete.
+| approved production prompts=`4` | `[query]` post-rollout probe | four versioned keys at `1.0.0` |
+| other systemic production rows=`0` | `[query]` post-rollout probe | all eighteen non-prompt systemic tables=`0` |
+| production health=`200` | `[query]` HTTP | `/api/health` returned `200` |
+| schema checked=`32`; missing=`0` | `[query]` HTTP | `schema_ok=true; checked_count=32; missing=[]` |
+| Railway deployments=`5 SUCCESS` | `[query]` deployment list | API, compute, structural, execution and beat=`SUCCESS` |
+| Vercel critical routes=`6/6 HTTP 200` | `[query]` protected deployment curl | six listed routes returned `200` |
+| production profiles after rollout=`53` | `[query]` post-rollout probe | `active=53; live=0; autopilot=0; shadow_only=0` |
+
+Authenticated UI screenshot remains `NÃO DISPONÍVEL`: both available browser sessions redirected to `/login` and no credentials were supplied or inspected.

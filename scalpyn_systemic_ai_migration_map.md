@@ -31,6 +31,6 @@ The isolated Railway staging database was built from a production schema-only ar
 
 The approved-prompt trigger rejected a content mutation inside a rolled-back savepoint `[query]`. Offline generation also passed with `25037` characters `[test]`.
 
-## Production checkpoint
+## Production result
 
-Before production promotion, the read-only probe reported revision `146_l3_1200_validation`, both required extensions installed, no systemic tables and no revision-147 bridge columns `[query]`. Production migration is recorded separately after execution; no downgrade is authorized there.
+Before promotion, the read-only probe reported revision `146_l3_1200_validation`, both required extensions installed, no systemic tables and no revision-147 bridge columns `[query]`. The explicit upgrade then completed transactionally. The post-rollout probe reported revision `147_systemic_ai_foundation`, systemic tables=`19`, expected bridge columns=`16`, approved prompts=`4` and all non-prompt systemic tables empty `[query]`. No production downgrade was executed.

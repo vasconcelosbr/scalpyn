@@ -63,6 +63,16 @@
     "live_state_unchanged": true,
     "source_label": "[query]"
   },
+  "production_rollout": {
+    "status": "PASS_WITH_AUTHENTICATED_UI_NOT_VERIFIED",
+    "railway_deployments_success": 5,
+    "api_health_http_status": 200,
+    "schema_health_http_status": 200,
+    "vercel_status": "READY",
+    "critical_routes_http_200": 6,
+    "post_rollout_live_and_autopilot_enabled": 0,
+    "source_label": "[query]"
+  },
   "compile": {
     "status": "PASS",
     "evidence": "COMPILE_OK",

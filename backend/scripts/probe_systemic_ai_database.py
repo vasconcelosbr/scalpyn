@@ -6,6 +6,7 @@ import json
 import os
 
 import psycopg2
+from psycopg2 import sql
 from psycopg2.extensions import make_dsn
 
 
@@ -64,6 +65,43 @@ def main() -> None:
                 (list(expected_tables),),
             )
             existing_systemic_tables = [row[0] for row in cursor.fetchall()]
+            systemic_table_counts = {}
+            for table_name in existing_systemic_tables:
+                cursor.execute(
+                    sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(table_name))
+                )
+                systemic_table_counts[table_name] = cursor.fetchone()[0]
+            approved_prompt_keys = []
+            if "ai_prompt_versions" in existing_systemic_tables:
+                cursor.execute(
+                    """
+                    SELECT prompt_key, semantic_version
+                    FROM ai_prompt_versions
+                    WHERE status = 'APPROVED'
+                    ORDER BY prompt_key, semantic_version
+                    """
+                )
+                approved_prompt_keys = [f"{row[0]}@{row[1]}" for row in cursor.fetchall()]
+            profile_invariants = None
+            cursor.execute("SELECT to_regclass('public.profiles')::text")
+            if cursor.fetchone()[0]:
+                cursor.execute(
+                    """
+                    SELECT
+                        count(*) FILTER (WHERE is_active = true),
+                        count(*) FILTER (WHERE live_trading_enabled = true),
+                        count(*) FILTER (WHERE auto_pilot_enabled = true),
+                        count(*) FILTER (WHERE is_shadow_only = true)
+                    FROM profiles
+                    """
+                )
+                active, live, autopilot, shadow_only = cursor.fetchone()
+                profile_invariants = {
+                    "active": active,
+                    "live_trading_enabled": live,
+                    "auto_pilot_enabled": autopilot,
+                    "shadow_only": shadow_only,
+                }
             cursor.execute(
                 """
                 SELECT table_name, column_name
@@ -94,6 +132,9 @@ def main() -> None:
                     "alembic_table": alembic_table,
                     "alembic_head": alembic_head,
                     "existing_systemic_tables": existing_systemic_tables,
+                    "systemic_table_counts": systemic_table_counts,
+                    "approved_prompt_keys": approved_prompt_keys,
+                    "profile_invariants": profile_invariants,
                     "existing_bridge_columns": existing_bridge_columns,
                 },
                 sort_keys=True,
