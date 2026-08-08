@@ -202,13 +202,11 @@ def test_no_routes_for_unknown_tasks() -> None:
 
 
 def test_no_silent_default_queue_fallback() -> None:
-    """Operator spec part 4: there must be NO declared default queue an
-    unrouted task can silently land on. The defaults are pinned to a
-    sentinel name that is never declared in ``task_queues``, and
-    ``task_create_missing_queues=False`` so an attempted dispatch of a
-    task missing from ``TASK_ROUTES`` raises immediately rather than
-    creating a ghost queue with no consumer."""
-    from app.tasks.celery_app import celery_app, ALL_QUEUES
+    """Operator spec part 4: the declared sentinel has no consumer and
+    every attempt to publish to it is rejected before reaching Redis."""
+    from app.tasks.celery_app import (
+        celery_app, ALL_QUEUES, reject_unrouted_task_publish,
+    )
 
     conf = celery_app.conf
     sentinel = "__no_default__"
@@ -225,13 +223,13 @@ def test_no_silent_default_queue_fallback() -> None:
         "contract."
     )
     declared = {q.name for q in conf.task_queues}
-    assert sentinel not in declared, (
-        f"Sentinel {sentinel!r} must not be a declared queue."
+    assert declared == set(ALL_QUEUES) | {sentinel}, (
+        f"Declared queues drifted: {declared}"
     )
-    assert declared == set(ALL_QUEUES), (
-        f"Declared queues drifted from ALL_QUEUES: {declared} != "
-        f"{set(ALL_QUEUES)}"
-    )
+    with pytest.raises(RuntimeError, match="CELERY_TASK_ROUTE_REQUIRED"):
+        reject_unrouted_task_publish(
+            sender="app.tasks.unrouted", exchange=sentinel, routing_key=sentinel,
+        )
 
 
 # ── Invariant #5 (Task #232): split ingestion vs execution gate ────────────

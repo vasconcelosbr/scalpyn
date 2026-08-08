@@ -54,6 +54,7 @@ are actually used; ``max_retries`` here is the upper bound.
 import os
 
 from celery import Celery
+from celery.signals import before_task_publish
 from celery.schedules import crontab
 from kombu import Exchange, Queue
 
@@ -249,8 +250,17 @@ TASK_ROUTES = {
 _NO_DEFAULT_QUEUE_NAME = "__no_default__"
 TASK_QUEUES = tuple(
     Queue(name, Exchange(name), routing_key=name)
-    for name in ALL_QUEUES
+    for name in (*ALL_QUEUES, _NO_DEFAULT_QUEUE_NAME)
 )
+
+
+@before_task_publish.connect
+def reject_unrouted_task_publish(
+    sender=None, exchange=None, routing_key=None, **_kwargs
+):
+    """Fail closed if routing resolves to the non-consumed sentinel queue."""
+    if exchange == _NO_DEFAULT_QUEUE_NAME or routing_key == _NO_DEFAULT_QUEUE_NAME:
+        raise RuntimeError(f"CELERY_TASK_ROUTE_REQUIRED: {sender or 'unknown'}")
 
 # ── Per-task cost guards (invariant: no unbounded work) ──────────────────────
 # Microstructure: short, predictable, must fit inside the 5-min tick.
@@ -513,11 +523,10 @@ celery_app.conf.update(
 
     # ── Queue topology (no fallback queue — invariant #4) ────────────────
     # Operator spec part 4: an unrouted task MUST fail loudly, not silently
-    # land on a default queue. Setting the defaults to a never-declared
-    # sentinel (``__no_default__``) means any task that escapes
-    # ``TASK_ROUTES`` raises ``NoRoute``/``UndeliverableTask`` at dispatch
-    # time and is loud in logs (caught by the lint test
-    # ``test_every_registered_task_is_routed`` long before runtime).
+    # land on a consumed queue. Celery >= 5.6 requires the default queue to
+    # exist while constructing every producer, even when a task has an
+    # explicit route. The declared sentinel has no consumer, and the
+    # before_task_publish guard above rejects any task that resolves to it.
     task_queues=TASK_QUEUES,
     task_routes=TASK_ROUTES,
     task_annotations=TASK_ANNOTATIONS,
