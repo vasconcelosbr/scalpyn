@@ -302,6 +302,10 @@ if [ "${K_SERVICE:-}" = "scalpyn-beat" ] && [ -z "${WORKER_QUEUES+x}" ]; then
 else
     WORKER_QUEUES="${WORKER_QUEUES-microstructure,structural,execution}"
 fi
+if [ "$WORKER_QUEUES" = "__none__" ]; then
+    echo "==> [queue] WORKER_QUEUES=__none__ - API-only mode"
+    WORKER_QUEUES=""
+fi
 RUN_BEAT="${RUN_BEAT:-1}"
 
 # ── Safe concurrency defaults per Cloud Run service (Task #216 follow-up) ────
