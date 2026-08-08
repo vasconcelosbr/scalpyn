@@ -13,6 +13,10 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..ai_orchestration.provider_adapters import HTTPProviderAdapter
+from ..ai_orchestration.sanitizer import TrustLabel, structured_block
+from ..ai_orchestration.provider_registry import default_registry
+
 logger = logging.getLogger(__name__)
 
 
@@ -25,10 +29,13 @@ async def get_anthropic_key(db: AsyncSession, user_id: UUID) -> Optional[str]:
                 AIProviderKey.user_id == user_id,
                 AIProviderKey.provider == "anthropic",
                 AIProviderKey.is_active == True,
+                AIProviderKey.is_validated == True,
             )
         )
         rec = result.scalars().first()
         if not rec:
+            return None
+        if rec.monthly_token_limit is None or int(rec.tokens_used_month or 0) >= int(rec.monthly_token_limit):
             return None
         from .ai_keys_service import decrypt_value
         return decrypt_value(bytes(rec.api_key_encrypted))
@@ -98,9 +105,12 @@ class ProfileAIExplanationService:
 
     async def _call_anthropic(self, api_key: str, suggestion) -> str:
         """Call Anthropic API with sanitized metrics (no fabrication)."""
-        import anthropic
-
         evidence = suggestion.evidence_summary_json or {}
+        resolution = default_registry().resolve(
+            requested_provider=None, requested_model=None,
+            configured_provider="anthropic", configured_model=self.MODEL,
+            required_capabilities={"text", "structured_output"},
+        )
         rules = suggestion.suggested_signals_json or {}
         quant = suggestion.quantitative_explanation or ""
 
@@ -125,13 +135,15 @@ Responda:
 
 IMPORTANTE: Não invente métricas. Use apenas os dados fornecidos acima."""
 
-        client = anthropic.AsyncAnthropic(api_key=api_key)
-        response = await client.messages.create(
-            model=self.MODEL,
-            max_tokens=self.MAX_TOKENS,
-            messages=[{"role": "user", "content": prompt}],
+        prompt += '\nRetorne JSON: {"analysis":{"explanation":"texto"},"recommendations":[]}.'
+        response = await HTTPProviderAdapter().execute(
+            provider=resolution.effective_provider, model=resolution.effective_model,
+            system_prompt="You explain Scalpyn profile suggestions using only supplied evidence. Never invent metrics.",
+            user_prompt=structured_block(TrustLabel.DATABASE_UNTRUSTED_TEXT, prompt),
+            tools=[], api_key=api_key, request_id=f"profile-suggestion:{suggestion.id}",
         )
-        return response.content[0].text if response.content else ""
+        analysis = response.output.get("analysis") or {}
+        return str(analysis.get("explanation") or analysis.get("summary") or "")
 
     def _fallback_explanation(self, suggestion) -> str:
         """Generate deterministic explanation when Anthropic is unavailable."""

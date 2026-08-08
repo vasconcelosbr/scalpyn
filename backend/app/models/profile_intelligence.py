@@ -161,6 +161,8 @@ class ProfileSuggestion(Base):
     )
 
     id                                 = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id                          = Column(UUID(as_uuid=True), nullable=True)
+    ai_request_id                      = Column(UUID(as_uuid=True), nullable=True)
     user_id                            = Column(UUID(as_uuid=True), nullable=False)
     run_id                             = Column(UUID(as_uuid=True),
                                                 ForeignKey("profile_intelligence_runs.id", ondelete="CASCADE"),
@@ -512,6 +514,8 @@ class ProfileAiReview(Base):
     __tablename__ = "profile_ai_reviews"
 
     id               = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id        = Column(UUID(as_uuid=True), nullable=True)
+    ai_request_id    = Column(UUID(as_uuid=True), nullable=True)
     run_id           = Column(UUID(as_uuid=True), nullable=True)
     status           = Column(String(30), nullable=False, default="PENDING")
     requested_at     = Column(TIMESTAMP(timezone=True), nullable=False,

@@ -1,0 +1,46 @@
+{
+  "registry_version": "1.0.0",
+  "immutability": "Database trigger rejects content mutation after APPROVED",
+  "prompts": [
+    {
+      "id": "3753772b-72a9-5a8e-804c-c43743cb67c4",
+      "prompt_key": "profile-suggestion-explanation",
+      "semantic_version": "1.0.0",
+      "status": "APPROVED",
+      "content_hash": "025298155cbb1ebda6462f40d1832d5cae41380ebe2d83cf332a550cf3eefb70",
+      "tool_allowlist": [],
+      "live_write": false,
+      "required_capabilities": ["text", "structured_output"]
+    },
+    {
+      "id": "ec917cc2-fd51-5d96-b0a3-8f7fb4c79a54",
+      "prompt_key": "shadow-detailed-analysis",
+      "semantic_version": "1.0.0",
+      "status": "APPROVED",
+      "content_hash": "1ac42def5ba244dab9b4208a7b61267000945822f54a244d19f6f9db286f5918",
+      "tool_allowlist": [],
+      "live_write": false,
+      "required_capabilities": ["text", "structured_output"]
+    },
+    {
+      "id": "004029aa-80b1-5701-8d15-8b98f3261ace",
+      "prompt_key": "ai-critic",
+      "semantic_version": "1.0.0",
+      "status": "APPROVED",
+      "content_hash": "c25a857c6bf0eac5a737f0f7f79d87ea8d8c75342290bf5bbf4e62fb85b6733a",
+      "tool_allowlist": [],
+      "live_write": false,
+      "required_capabilities": ["text", "structured_output"]
+    },
+    {
+      "id": "f59cf24c-d9d1-52de-96fa-79f61c8a1ce0",
+      "prompt_key": "copilot",
+      "semantic_version": "1.0.0",
+      "status": "APPROVED",
+      "content_hash": "c610df011b2d59d2bbe4f37d63d6302281406313972e4c135393b051df416331",
+      "tool_allowlist": ["shadow.get_performance_summary", "profiles.get_effective_configuration", "audit.get_change_lineage"],
+      "live_write": false,
+      "required_capabilities": ["text", "structured_output"]
+    }
+  ]
+}

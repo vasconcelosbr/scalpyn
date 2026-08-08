@@ -25,6 +25,19 @@ from .shadow_trade_analysis import (
 from .crypto_ev import CryptoEVL3ReplayFlag, CryptoEVSnapshot
 from .opportunity_snapshot import OpportunitySnapshot
 from .social_intelligence import SocialAssetObservation, SocialIntelligenceRun
+from .systemic_ai import (
+    AIBudgetPolicyRecord,
+    AIConfigurationBundleRecord,
+    AIDatasetSnapshotRecord,
+    AIJobRecord,
+    AIModelAlias,
+    AIModelResolutionRecord,
+    AIPromptVersion,
+    AIRequestRecord,
+    AIResultRecord,
+    AIToolCallAudit,
+    AIUsageRecord,
+)
 from .profile_metrics import ProfileMetrics
 from .rule_contribution import RuleContribution
 from .profile_audit_log import ProfileAuditLog
@@ -86,6 +99,17 @@ __all__ = [
     "OpportunitySnapshot",
     "SocialAssetObservation",
     "SocialIntelligenceRun",
+    "AIBudgetPolicyRecord",
+    "AIConfigurationBundleRecord",
+    "AIDatasetSnapshotRecord",
+    "AIJobRecord",
+    "AIModelAlias",
+    "AIModelResolutionRecord",
+    "AIPromptVersion",
+    "AIRequestRecord",
+    "AIResultRecord",
+    "AIToolCallAudit",
+    "AIUsageRecord",
     "ProfileMetrics",
     "RuleContribution",
     "ProfileAuditLog",

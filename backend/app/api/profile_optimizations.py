@@ -168,7 +168,7 @@ async def optimization_from_analysis(
             "constraints": {
                 "preserve_profile_id": True,
                 "preserve_profile_name": True,
-                "preserve_profile_version": True,
+                "preserve_profile_version": False,
                 "create_profile": False,
             },
         }

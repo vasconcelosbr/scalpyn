@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "contract_version": "1.0.0",
+  "source": "backend/app/ai_orchestration/contracts.py",
+  "$defs": {
+    "Authority": {
+      "type": "string",
+      "enum": ["ANALYSIS_ONLY", "PROPOSAL_ONLY", "CANDIDATE_ONLY", "SHADOW_ONLY"]
+    },
+    "AnalysisMode": {
+      "type": "string",
+      "enum": ["LOCAL", "SYSTEMIC", "REGENERATIVE", "ROOT_CAUSE_AUDIT"]
+    },
+    "AIRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ai_request_id", "tenant_id", "origin_module", "analysis_mode", "authority",
+        "provider_request", "prompt_key", "dataset_request", "configuration_scope",
+        "question", "correlation_id"
+      ],
+      "properties": {
+        "ai_request_id": {"type": "string", "format": "uuid"},
+        "tenant_id": {"type": "string", "format": "uuid"},
+        "requested_by_user_id": {"type": ["string", "null"], "format": "uuid"},
+        "origin_module": {"type": "string", "minLength": 1, "maxLength": 120},
+        "origin_view": {"type": ["string", "null"], "maxLength": 200},
+        "analysis_mode": {"$ref": "#/$defs/AnalysisMode"},
+        "authority": {"$ref": "#/$defs/Authority"},
+        "provider_request": {
+          "type": "object",
+          "required": ["allow_request_override", "required_capabilities"],
+          "properties": {
+            "provider": {"type": ["string", "null"]},
+            "model": {"type": ["string", "null"]},
+            "required_capabilities": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "allow_request_override": {"type": "boolean"}
+          }
+        },
+        "prompt_key": {"type": "string", "minLength": 1, "maxLength": 160},
+        "prompt_version": {"type": ["string", "null"], "maxLength": 40},
+        "dataset_request": {
+          "type": "object",
+          "required": ["domain", "window_start", "window_end", "source_labels", "time_anchor", "outcome_contract", "event_identity_contract"],
+          "properties": {
+            "domain": {"enum": ["SHADOW_PORTFOLIO", "PROFILE_INTELLIGENCE", "CALIBRATION", "ML_BAYESIAN", "MARKET_REGIME"]},
+            "window_start": {"type": "string", "format": "date-time"},
+            "window_end": {"type": "string", "format": "date-time"},
+            "source_labels": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+            "time_anchor": {"type": "string"},
+            "outcome_contract": {"type": "string"},
+            "event_identity_contract": {"type": "string"},
+            "filters": {"type": "object"},
+            "exclusions": {"type": "array", "items": {"type": "object"}}
+          }
+        },
+        "configuration_scope": {
+          "type": "object",
+          "required": ["require_complete_bundle"],
+          "properties": {
+            "profile_id": {"type": ["string", "null"], "format": "uuid"},
+            "require_complete_bundle": {"type": "boolean"}
+          }
+        },
+        "question": {"type": "string", "minLength": 1, "maxLength": 20000},
+        "tool_allowlist": {"type": "array", "items": {"type": "string"}},
+        "correlation_id": {"type": "string", "minLength": 1, "maxLength": 160}
+      }
+    },
+    "AIResult": {
+      "type": "object",
+      "required": [
+        "ai_request_id", "status", "tenant_id", "provider", "effective_model",
+        "model_resolution_id", "prompt_version_id", "prompt_hash", "dataset_snapshot_id",
+        "dataset_hash", "configuration_bundle_id", "configuration_bundle_hash", "analysis", "usage"
+      ],
+      "properties": {
+        "ai_request_id": {"type": "string", "format": "uuid"},
+        "status": {"type": "string"},
+        "tenant_id": {"type": "string", "format": "uuid"},
+        "provider": {"type": "string"},
+        "requested_model": {"type": ["string", "null"]},
+        "configured_model": {"type": ["string", "null"]},
+        "effective_model": {"type": "string"},
+        "analysis": {"type": "object"},
+        "recommendations": {"type": "array", "items": {"type": "object"}},
+        "warnings": {"type": "array", "items": {"type": "string"}},
+        "limitations": {"type": "array", "items": {"type": "string"}},
+        "terminal_reason": {"type": ["string", "null"]}
+      }
+    },
+    "AIError": {
+      "type": "object",
+      "required": ["code", "retryable", "http_status", "operator_action", "safe_message", "attempt"],
+      "properties": {
+        "code": {"type": "string"},
+        "retryable": {"type": "boolean"},
+        "http_status": {"type": "integer"},
+        "operator_action": {"type": "string"},
+        "safe_message": {"type": "string"},
+        "internal_detail_redacted": {"type": ["string", "null"]},
+        "provider_error_code": {"type": ["string", "null"]},
+        "attempt": {"type": "integer", "minimum": 1}
+      }
+    }
+  }
+}

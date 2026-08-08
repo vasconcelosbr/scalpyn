@@ -65,6 +65,8 @@ class ShadowTradeAnalysisJob(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    tenant_id = Column(UUID(as_uuid=True), nullable=True)
+    ai_request_id = Column(UUID(as_uuid=True), nullable=True)
     scope = Column(String(30), nullable=False)  # TRADE | REPORT
     shadow_trade_id = Column(
         UUID(as_uuid=True),
@@ -88,4 +90,13 @@ class ShadowTradeAnalysisJob(Base):
     error = Column(Text, nullable=True)
     created_at = Column(TIMESTAMP(timezone=True), nullable=False, default=_now)
     started_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    heartbeat_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    lease_owner = Column(String(160), nullable=True)
+    lease_expires_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    attempt = Column(Integer, nullable=False, default=0)
+    max_attempts = Column(Integer, nullable=False, default=3)
+    retry_after = Column(TIMESTAMP(timezone=True), nullable=True)
     completed_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    terminal_reason = Column(String(160), nullable=True)
+    last_error_code = Column(String(80), nullable=True)
+    last_error_safe_message = Column(Text, nullable=True)

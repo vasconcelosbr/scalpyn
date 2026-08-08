@@ -1,0 +1,23 @@
+{
+  "registry_version": "1.0.0",
+  "live_write_policy": "DENY_ALWAYS",
+  "authority_side_effect_matrix": {
+    "ANALYSIS_ONLY": ["NONE", "AUDIT_WRITE"],
+    "PROPOSAL_ONLY": ["NONE", "AUDIT_WRITE", "PROPOSAL_WRITE"],
+    "CANDIDATE_ONLY": ["NONE", "AUDIT_WRITE", "PROPOSAL_WRITE", "CANDIDATE_WRITE"],
+    "SHADOW_ONLY": ["NONE", "AUDIT_WRITE", "PROPOSAL_WRITE", "CANDIDATE_WRITE", "SHADOW_WRITE"]
+  },
+  "tools": [
+    {"name": "audit.get_change_lineage", "version": "1.0.0", "domain": "audit", "side_effect": "NONE", "tenant_scoped": true, "permission": "ai:analyze", "max_runtime_seconds": 30, "max_rows": 1000},
+    {"name": "bayesian.get_readonly_evidence", "version": "1.0.0", "domain": "bayesian", "side_effect": "NONE", "tenant_scoped": true, "permission": "ai:analyze", "max_runtime_seconds": 30, "max_rows": 5000},
+    {"name": "calibration.get_evidence", "version": "1.0.0", "domain": "calibration", "side_effect": "NONE", "tenant_scoped": true, "permission": "ai:analyze", "max_runtime_seconds": 30, "max_rows": 5000},
+    {"name": "market_regime.get_history", "version": "1.0.0", "domain": "market_regime", "side_effect": "NONE", "tenant_scoped": true, "permission": "ai:analyze", "max_runtime_seconds": 30, "max_rows": 5000},
+    {"name": "ml.get_authority_status", "version": "1.0.0", "domain": "ml", "side_effect": "NONE", "tenant_scoped": true, "permission": "ai:analyze", "max_runtime_seconds": 30, "max_rows": 100},
+    {"name": "profiles.get_effective_configuration", "version": "1.0.0", "domain": "profiles", "side_effect": "NONE", "tenant_scoped": true, "permission": "ai:analyze", "max_runtime_seconds": 30, "max_rows": 1},
+    {"name": "profiles.get_version_history", "version": "1.0.0", "domain": "profiles", "side_effect": "NONE", "tenant_scoped": true, "permission": "ai:analyze", "max_runtime_seconds": 30, "max_rows": 500},
+    {"name": "scores.get_effective_configuration", "version": "1.0.0", "domain": "scores", "side_effect": "NONE", "tenant_scoped": true, "permission": "ai:analyze", "max_runtime_seconds": 30, "max_rows": 1},
+    {"name": "scores.get_version_history", "version": "1.0.0", "domain": "scores", "side_effect": "NONE", "tenant_scoped": true, "permission": "ai:analyze", "max_runtime_seconds": 30, "max_rows": 500},
+    {"name": "shadow.get_frozen_report", "version": "1.0.0", "domain": "shadow", "side_effect": "NONE", "tenant_scoped": true, "permission": "ai:analyze", "max_runtime_seconds": 30, "max_rows": 10000},
+    {"name": "shadow.get_performance_summary", "version": "1.0.0", "domain": "shadow", "side_effect": "NONE", "tenant_scoped": true, "permission": "ai:analyze", "max_runtime_seconds": 30, "max_rows": 5000}
+  ]
+}

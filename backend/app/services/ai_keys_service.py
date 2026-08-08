@@ -21,9 +21,24 @@ logger = logging.getLogger(__name__)
 
 # ── Encryption helpers ────────────────────────────────────────────────────────
 
+def validate_encryption_key_configuration(environment: str | None = None) -> str | None:
+    """Fail closed outside development when the encryption key is missing."""
+    environment = (
+        environment
+        or os.getenv("APP_ENV")
+        or os.getenv("ENVIRONMENT")
+        or os.getenv("RAILWAY_ENVIRONMENT_NAME")
+        or "development"
+    ).lower()
+    key = os.getenv("AI_KEYS_ENCRYPTION_KEY")
+    if not key and environment not in {"development", "dev", "test", "local"}:
+        raise RuntimeError("AI_KEYS_ENCRYPTION_KEY is required outside development")
+    return key
+
+
 def _fernet():
     from cryptography.fernet import Fernet
-    key = os.getenv("AI_KEYS_ENCRYPTION_KEY")
+    key = validate_encryption_key_configuration()
     if not key:
         logger.warning("[AIKeys] AI_KEYS_ENCRYPTION_KEY not set — generating ephemeral key (dev only).")
         key = Fernet.generate_key().decode()

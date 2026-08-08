@@ -1,4 +1,4 @@
-"""Guarded in-place profile optimization with atomic Score Engine updates."""
+"""Guarded candidate-only profile optimization with immutable versions."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
 import json
+import uuid
 from typing import Any
 from uuid import UUID
 
@@ -19,6 +20,7 @@ from ..models.copilot import CopilotActionPlan, CopilotAuditLog
 from ..models.profile import Profile
 from ..models.profile_audit_log import ProfileAuditLog
 from .config_service import config_service
+from .profile_versioning_v2 import create_candidate_profile_version
 
 
 ALLOWED_ROOTS = {
@@ -294,9 +296,11 @@ async def create_dry_run(
 
     score_links = validate_score_links(candidate_config, candidate_score)
     constraints = patch.get("constraints") or {}
-    for key in ("preserve_profile_id", "preserve_profile_name", "preserve_profile_version"):
+    for key in ("preserve_profile_id", "preserve_profile_name"):
         if constraints.get(key) is not True:
             raise ValueError(f"Optimization constraint must be true: {key}")
+    if constraints.get("preserve_profile_version") is not False:
+        raise ValueError("Optimization must create a new candidate profile version")
     if constraints.get("create_profile") is not False:
         raise ValueError("Optimization must explicitly set create_profile=false")
 
@@ -304,14 +308,14 @@ async def create_dry_run(
     evidence.update({"source": source, "source_id": source_id, "score_links": score_links})
     plan = CopilotActionPlan(
         user_id=user_id,
-        action_type="OPTIMIZE_PROFILE_IN_PLACE",
+        action_type="OPTIMIZE_PROFILE_CANDIDATE",
         target_type="PROFILE_AND_SCORE_MATRIX",
         target_id=str(profile.id),
         objective=patch.get("objective") or f"Optimize profile {profile.name} in place",
         evidence=evidence,
         proposed_diff={"profile": profile_diff, "score_matrix": score_diff},
         execution_payload={
-            "mode": "OPTIMIZE_PROFILE_IN_PLACE",
+            "mode": "OPTIMIZE_PROFILE_CANDIDATE",
             "profile_id": str(profile.id),
             "expected_profile_id": str(profile.id),
             "expected_profile_name": profile.name,
@@ -329,7 +333,7 @@ async def create_dry_run(
             "profile_config": deepcopy(profile.config or {}),
             "score_config": current_score,
             "preserve_identity": True,
-            "preserve_profile_version": True,
+            "preserve_profile_version": False,
         },
         target_state_hash=profile_state_hash(profile),
         status="DRY_RUN",
@@ -359,7 +363,8 @@ def optimization_to_dict(plan: CopilotActionPlan) -> dict[str, Any]:
     base = action_to_dict(plan)
     base["approval_required_text"] = APPROVAL_TEXT
     base["preserves_profile_identity"] = True
-    base["preserves_profile_version"] = True
+    base["preserves_profile_version"] = False
+    base["creates_candidate_version"] = True
     return base
 
 
@@ -367,7 +372,7 @@ async def get_plan(db: AsyncSession, user_id: UUID, plan_id: UUID, *, lock: bool
     query = select(CopilotActionPlan).where(
         CopilotActionPlan.id == plan_id,
         CopilotActionPlan.user_id == user_id,
-        CopilotActionPlan.action_type == "OPTIMIZE_PROFILE_IN_PLACE",
+        CopilotActionPlan.action_type == "OPTIMIZE_PROFILE_CANDIDATE",
     )
     if lock:
         query = query.with_for_update()
@@ -428,30 +433,21 @@ async def execute(db: AsyncSession, user_id: UUID, plan_id: UUID) -> dict[str, A
     candidate_score = deepcopy(payload["candidate_score_config"])
     validate_score_links(candidate_config, candidate_score)
     old_profile_config = deepcopy(profile.config or {})
-    old_score_config = deepcopy(score_record.config_json or {})
-    unchanged_version = profile.profile_version
-    profile.config = candidate_config
-    score_record.config_json = candidate_score
+    candidate_version_id, candidate_score_version_id, created = await create_candidate_profile_version(
+        db, profile_id=profile.id, config=candidate_config, score_config=candidate_score,
+        change_set_id=plan.id, mutation_reason=f"systemic_ai_profile_optimization:{plan.id}",
+    )
     db.add(
         ProfileAuditLog(
             user_id=user_id,
             profile_id=profile.id,
             changed_by=user_id,
-            change_source="shadow_trade_profile_optimization",
-            change_description=f"In-place optimization action plan {plan.id}",
+            change_source="systemic_ai_profile_optimization_candidate",
+            change_description=f"Candidate-only optimization action plan {plan.id}",
             previous_config=old_profile_config,
             new_config=candidate_config,
-            previous_profile_version=unchanged_version,
-            new_profile_version=unchanged_version,
-        )
-    )
-    db.add(
-        ConfigAuditLog(
-            config_id=score_record.id,
-            changed_by=user_id,
-            previous_json=old_score_config,
-            new_json=candidate_score,
-            change_description=f"Atomic Score Engine update from profile optimization {plan.id}",
+            previous_profile_version=profile.profile_version,
+            new_profile_version=profile.profile_version,
         )
     )
     now = datetime.now(timezone.utc)
@@ -460,8 +456,11 @@ async def execute(db: AsyncSession, user_id: UUID, plan_id: UUID) -> dict[str, A
         "profile_id": str(profile.id),
         "profile_name": profile.name,
         "profile_version": current_version,
+        "candidate_profile_version_id": str(candidate_version_id),
+        "candidate_score_engine_version_id": str(candidate_score_version_id),
+        "candidate_created": created,
         "profile_identity_preserved": True,
-        "profile_version_preserved": profile.profile_version == unchanged_version,
+        "profile_version_preserved": False,
         "profile_config_hash": document_hash(candidate_config),
         "score_config_hash": document_hash(candidate_score),
         "live_authority_changed": False,
@@ -494,28 +493,22 @@ async def rollback(db: AsyncSession, user_id: UUID, plan_id: UUID, confirmation_
     payload = plan.execution_payload or {}
     profile = await _profile_record(db, user_id, UUID(payload["profile_id"]), lock=True)
     score_record = await _global_score_record(db, user_id, lock=True)
-    if document_hash(profile.config or {}) != document_hash(payload["candidate_profile_config"]):
-        raise ValueError("Current profile state differs from executed optimization; rollback is stale")
-    if document_hash(score_record.config_json or {}) != payload["candidate_score_config_hash"]:
-        raise ValueError("Current Score Engine state differs from executed optimization; rollback is stale")
     current_version = profile.profile_version
-    previous_profile = deepcopy(profile.config or {})
-    previous_score = deepcopy(score_record.config_json or {})
     restored_profile = deepcopy((plan.rollback_plan or {})["profile_config"])
     restored_score = deepcopy((plan.rollback_plan or {})["score_config"])
-    profile.config = restored_profile
-    score_record.config_json = restored_score
+    executed_candidate_id = UUID(str((plan.execution_result or {})["candidate_profile_version_id"]))
+    rollback_version_id, rollback_score_version_id, created = await create_candidate_profile_version(
+        db, profile_id=profile.id, config=restored_profile, score_config=restored_score,
+        change_set_id=uuid.uuid5(uuid.NAMESPACE_URL, f"rollback:{plan.id}"),
+        mutation_reason=f"systemic_ai_profile_optimization_rollback:{plan.id}",
+        rollback_to_version_id=executed_candidate_id,
+    )
     db.add(ProfileAuditLog(
         user_id=user_id, profile_id=profile.id, changed_by=user_id,
         change_source="shadow_trade_profile_optimization_rollback",
         change_description=f"Rollback action plan {plan.id}",
-        previous_config=previous_profile, new_config=restored_profile,
+        previous_config=payload["candidate_profile_config"], new_config=restored_profile,
         previous_profile_version=current_version, new_profile_version=current_version,
-    ))
-    db.add(ConfigAuditLog(
-        config_id=score_record.id, changed_by=user_id,
-        previous_json=previous_score, new_json=restored_score,
-        change_description=f"Atomic rollback from profile optimization {plan.id}",
     ))
     plan.status = "ROLLED_BACK"
     result = {
@@ -525,6 +518,9 @@ async def rollback(db: AsyncSession, user_id: UUID, plan_id: UUID, confirmation_
         "profile_version": current_version.isoformat() if current_version else None,
         "profile_identity_preserved": True,
         "profile_version_preserved": profile.profile_version == current_version,
+        "rollback_candidate_profile_version_id": str(rollback_version_id),
+        "rollback_candidate_score_engine_version_id": str(rollback_score_version_id),
+        "candidate_created": created,
     }
     plan.execution_result = {**(plan.execution_result or {}), "rollback": result}
     db.add(CopilotAuditLog(

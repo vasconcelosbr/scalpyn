@@ -1,7 +1,7 @@
 """Celery task for durable Shadow Trade AI analyses."""
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from sqlalchemy import select
@@ -29,8 +29,20 @@ async def _load_job_input(db, job_id: UUID):
         raise LookupError("Shadow analysis job not found")
     if job.status == "COMPLETED":
         return None
+    now = datetime.now(timezone.utc)
+    if job.status in {"LEASED", "RUNNING"} and job.lease_expires_at and job.lease_expires_at > now:
+        return None
+    if int(job.attempt or 0) >= int(job.max_attempts or 3):
+        job.status = "FAILED_TERMINAL"
+        job.terminal_reason = "MAX_ATTEMPTS_EXCEEDED"
+        job.completed_at = now
+        return None
     job.status = "RUNNING"
-    job.started_at = datetime.now(timezone.utc)
+    job.started_at = job.started_at or now
+    job.heartbeat_at = now
+    job.lease_owner = f"celery:{job_id}"
+    job.lease_expires_at = now + timedelta(minutes=5)
+    job.attempt = int(job.attempt or 0) + 1
 
     if job.scope == "TRADE":
         trade = (
@@ -140,6 +152,8 @@ async def _store_success(db, job_id: UUID, result, raw, usage):
     job.usage = usage
     job.error = None
     job.completed_at = datetime.now(timezone.utc)
+    job.heartbeat_at = job.completed_at
+    job.lease_expires_at = None
     key = (
         await db.execute(
             select(AIProviderKey).where(
@@ -161,8 +175,12 @@ async def _store_failure(db, job_id: UUID, error: str):
         )
     ).scalar_one_or_none()
     if job:
-        job.status = "FAILED"
+        job.status = "FAILED_TERMINAL"
         job.error = error[:8000]
+        job.last_error_code = "INTERNAL_ERROR"
+        job.last_error_safe_message = "A análise não pôde ser concluída"
+        job.terminal_reason = "PROVIDER_OR_VALIDATION_FAILURE"
+        job.lease_expires_at = None
         job.completed_at = datetime.now(timezone.utc)
 
 

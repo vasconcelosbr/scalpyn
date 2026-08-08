@@ -17,6 +17,8 @@ from ..database import get_db
 from ..models.ai_provider_key import AIProviderKey
 from ..models.shadow_trade import ShadowTrade
 from ..models.shadow_trade_analysis import ShadowTradeAnalysisJob, ShadowTradeReportRun
+from ..ai_orchestration.errors import AIOrchestrationError
+from ..ai_orchestration.provider_registry import default_registry
 from .config import get_current_user_id
 
 
@@ -57,8 +59,18 @@ async def create_analysis_job(
     ).scalar_one_or_none()
     if key is None:
         raise HTTPException(status_code=409, detail="Provider precisa estar configurado e validado em Integrações de IA")
-    if key.monthly_token_limit is not None and int(key.tokens_used_month or 0) >= int(key.monthly_token_limit):
+    if key.monthly_token_limit is None:
+        raise HTTPException(status_code=429, detail="Defina um orçamento mensal explícito antes de usar IA")
+    if int(key.tokens_used_month or 0) >= int(key.monthly_token_limit):
         raise HTTPException(status_code=429, detail="Limite mensal de tokens do provider atingido")
+    try:
+        resolution = default_registry().resolve(
+            requested_provider=payload.provider, requested_model=payload.model,
+            configured_provider=payload.provider, configured_model=payload.model,
+            allow_request_override=True, required_capabilities={"text", "structured_output"},
+        )
+    except AIOrchestrationError as exc:
+        raise HTTPException(status_code=exc.detail.http_status, detail=exc.detail.model_dump(mode="json")) from exc
 
     if payload.scope == "TRADE":
         target = (
@@ -85,7 +97,7 @@ async def create_analysis_job(
         input_hash = target.trade_ids_hash
 
     idempotency = hashlib.sha256(
-        f"{user_id}:{payload.scope}:{payload.trade_id or payload.report_run_id}:{payload.provider}:{payload.model}:{input_hash}".encode()
+        f"{user_id}:{payload.scope}:{payload.trade_id or payload.report_run_id}:{resolution.effective_provider}:{resolution.effective_model}:shadow-detailed-analysis:1.0.0:{input_hash}".encode()
     ).hexdigest()
     existing = (
         await db.execute(
@@ -100,14 +112,16 @@ async def create_analysis_job(
 
     job = ShadowTradeAnalysisJob(
         user_id=user_id,
+        tenant_id=user_id,
         scope=payload.scope,
         shadow_trade_id=payload.trade_id,
         report_run_id=payload.report_run_id,
-        provider=payload.provider,
-        model=payload.model,
+        provider=resolution.effective_provider,
+        model=resolution.effective_model,
+        prompt_version="1.0.0",
         input_hash=input_hash,
         idempotency_key=idempotency,
-        status="PENDING",
+        status="QUEUED",
     )
     db.add(job)
     await db.commit()
@@ -117,8 +131,11 @@ async def create_analysis_job(
 
         run.apply_async(args=[str(job.id)], queue="structural_compute")
     except Exception as exc:
-        job.status = "FAILED"
+        job.status = "FAILED_TERMINAL"
         job.error = f"Dispatch failed: {exc}"
+        job.terminal_reason = "DISPATCH_FAILED"
+        job.last_error_code = "INTERNAL_ERROR"
+        job.last_error_safe_message = "Falha ao enfileirar análise"
         await db.commit()
         raise HTTPException(status_code=503, detail="Falha ao enfileirar análise") from exc
     return _job_dict(job)
@@ -133,6 +150,15 @@ def _job_dict(job: ShadowTradeAnalysisJob) -> dict:
             "report_run_id": job.report_run_id,
             "provider": job.provider,
             "model": job.model,
+            "configured_provider": job.provider,
+            "configured_model": job.model,
+            "effective_provider": job.provider,
+            "effective_model": job.model,
+            "model_resolution_reason": "validated_request_override",
+            "prompt_key": "shadow-detailed-analysis",
+            "prompt_version": job.prompt_version,
+            "authority": "ANALYSIS_ONLY",
+            "tenant_context": str(job.tenant_id or job.user_id),
             "status": job.status,
             "result": job.result_json,
             "usage": job.usage,
@@ -140,6 +166,14 @@ def _job_dict(job: ShadowTradeAnalysisJob) -> dict:
             "created_at": job.created_at,
             "started_at": job.started_at,
             "completed_at": job.completed_at,
+            "heartbeat_at": job.heartbeat_at,
+            "lease_owner": job.lease_owner,
+            "lease_expires_at": job.lease_expires_at,
+            "attempt": job.attempt,
+            "max_attempts": job.max_attempts,
+            "retry_after": job.retry_after,
+            "terminal_reason": job.terminal_reason,
+            "last_error_code": job.last_error_code,
         }
     )
 

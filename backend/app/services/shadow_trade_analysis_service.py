@@ -6,7 +6,7 @@ import json
 import os
 from typing import Any
 
-import httpx
+from ..ai_orchestration.provider_adapters import HTTPProviderAdapter
 
 
 SYSTEM_PROMPT = """Você é um auditor quantitativo de Shadow Trades do Scalpyn.
@@ -64,59 +64,12 @@ def _extract_json(text: str) -> dict[str, Any]:
 
 
 async def _call_provider(provider: str, api_key: str, model: str, prompt: str) -> tuple[str, dict[str, Any]]:
-    async with httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=20.0)) as client:
-        if provider == "openai":
-            response = await client.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": model,
-                    "temperature": 0,
-                    "response_format": {"type": "json_object"},
-                    "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt},
-                    ],
-                },
-            )
-            response.raise_for_status()
-            payload = response.json()
-            return payload["choices"][0]["message"]["content"], payload.get("usage") or {}
-        if provider == "anthropic":
-            response = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
-                    "model": model,
-                    "max_tokens": 6000,
-                    "temperature": 0,
-                    "system": SYSTEM_PROMPT,
-                    "messages": [{"role": "user", "content": prompt}],
-                },
-            )
-            response.raise_for_status()
-            payload = response.json()
-            text = "\n".join(block.get("text", "") for block in payload.get("content", []) if block.get("type") == "text")
-            return text, payload.get("usage") or {}
-        if provider == "gemini":
-            response = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                params={"key": api_key},
-                json={
-                    "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-                    "generationConfig": {"temperature": 0, "responseMimeType": "application/json"},
-                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                },
-            )
-            response.raise_for_status()
-            payload = response.json()
-            text = payload["candidates"][0]["content"]["parts"][0]["text"]
-            return text, payload.get("usageMetadata") or {}
-    raise ValueError(f"Unsupported AI provider: {provider}")
+    response = await HTTPProviderAdapter().execute(
+        provider=provider, model=model, system_prompt=SYSTEM_PROMPT, user_prompt=prompt,
+        tools=[], api_key=api_key, request_id="legacy-shadow-bridge",
+    )
+    usage = {"input_tokens": response.tokens_input, "output_tokens": response.tokens_output}
+    return json.dumps(response.output, ensure_ascii=False), usage
 
 
 def _chunks(documents: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:

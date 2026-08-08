@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import uuid
+from uuid import UUID
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -31,6 +32,9 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .ai_review_safety_service import completed_review_contract_is_valid
+from ..ai_orchestration.provider_adapters import AnthropicSDKTextAdapter
+from ..ai_orchestration.initial_prompts import initial_prompt_registry
+from ..ai_orchestration.provider_registry import default_registry
 from .profile_intelligence_contract import (
     DATASET_VERSION,
     LABEL_VERSION,
@@ -981,7 +985,7 @@ def _strip_json_codeblock(raw: str) -> str:
     return raw.strip()
 
 
-async def run_ai_review_cycle(db: AsyncSession) -> dict:
+async def run_ai_review_cycle(db: AsyncSession, tenant_id: UUID | None = None) -> dict:
     """AI Critic loop: compile auditable analysis_context, call Claude, save review.
 
     Every review persists analysis_context with dataset, window, sample, and metrics.
@@ -1010,9 +1014,10 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
           AND status = 'COMPLETED'
           AND pnl_pct IS NOT NULL
           AND profile_id IS NOT NULL
+          AND (CAST(:tenant_id AS uuid) IS NULL OR user_id = CAST(:tenant_id AS uuid))
           AND created_at >= :window_start
           AND created_at < :window_end
-    """), {"sources": _AI_SOURCES, "window_start": window_start, "window_end": window_end})
+    """), {"sources": _AI_SOURCES, "window_start": window_start, "window_end": window_end, "tenant_id": str(tenant_id) if tenant_id else None})
     agg = agg_row.fetchone()
 
     # Per-source breakdown
@@ -1022,13 +1027,29 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
         WHERE source = ANY(:sources)
           AND status = 'COMPLETED'
           AND pnl_pct IS NOT NULL
+          AND (CAST(:tenant_id AS uuid) IS NULL OR user_id = CAST(:tenant_id AS uuid))
           AND created_at >= :window_start
           AND created_at < :window_end
         GROUP BY source
         ORDER BY source
-    """), {"sources": _AI_SOURCES, "window_start": window_start, "window_end": window_end})
-    source_breakdown = {r.source: {"trades": r.trades, "profiles": r.profiles}
-                        for r in src_row.fetchall()}
+    """), {"sources": _AI_SOURCES, "window_start": window_start, "window_end": window_end, "tenant_id": str(tenant_id) if tenant_id else None})
+    def _row_value(row, name: str, index: int, default=0):
+        if row is None:
+            return default
+        if hasattr(row, name):
+            return getattr(row, name)
+        try:
+            return row[index]
+        except (IndexError, KeyError, TypeError):
+            return default
+
+    source_breakdown = {
+        _row_value(row, "source", 0, "UNKNOWN"): {
+            "trades": _row_value(row, "trades", 1),
+            "profiles": _row_value(row, "profiles", 2),
+        }
+        for row in src_row.fetchall()
+    }
 
     # Negative profiles (avg_pnl < 0, min 5 trades)
     neg_row = await db.execute(text("""
@@ -1038,19 +1059,23 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
             WHERE source = ANY(:sources)
               AND status = 'COMPLETED'
               AND profile_id IS NOT NULL
+              AND (CAST(:tenant_id AS uuid) IS NULL OR user_id = CAST(:tenant_id AS uuid))
               AND created_at >= :window_start
               AND created_at < :window_end
             GROUP BY profile_id
             HAVING COUNT(*) >= 5
         ) t WHERE avg_pnl < 0
-    """), {"sources": _AI_SOURCES, "window_start": window_start, "window_end": window_end})
+    """), {"sources": _AI_SOURCES, "window_start": window_start, "window_end": window_end, "tenant_id": str(tenant_id) if tenant_id else None})
     negative_profiles = int(neg_row.scalar() or 0)
 
     # Hard negatives
     hn_row = await db.execute(text("""
         SELECT COUNT(*) FROM profile_hard_negative_patterns
         WHERE created_at >= :window_start AND created_at < :window_end
-    """), {"window_start": window_start, "window_end": window_end})
+          AND (CAST(:tenant_id AS uuid) IS NULL OR profile_id IN (
+              SELECT id FROM profiles WHERE user_id = CAST(:tenant_id AS uuid)
+          ))
+    """), {"window_start": window_start, "window_end": window_end, "tenant_id": str(tenant_id) if tenant_id else None})
     hard_negatives = int(hn_row.scalar() or 0)
 
     # Pending suggestions
@@ -1058,16 +1083,19 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
         SELECT suggestion_type, COUNT(*) AS cnt
         FROM profile_adjustment_suggestions
         WHERE status = 'PENDING_SHADOW_VALIDATION'
+          AND (CAST(:tenant_id AS uuid) IS NULL OR profile_id IN (
+              SELECT id FROM profiles WHERE user_id = CAST(:tenant_id AS uuid)
+          ))
         GROUP BY suggestion_type ORDER BY cnt DESC LIMIT 5
-    """))
+    """), {"tenant_id": str(tenant_id) if tenant_id else None})
     pending_suggestions = [{"type": r[0], "count": r[1]} for r in sugg_row.fetchall()]
 
-    completed_trades = int(agg.completed_trades or 0)
-    profiles_count = int(agg.profiles or 0)
-    symbols_count = int(agg.symbols or 0)
-    avg_pnl = float(agg.avg_pnl or 0)
-    win_rate = float(agg.win_rate or 0)
-    pnl_total_usdt = float(agg.pnl_total_usdt or 0)
+    completed_trades = int(_row_value(agg, "completed_trades", 0) or 0)
+    profiles_count = int(_row_value(agg, "profiles", 1) or 0)
+    symbols_count = int(_row_value(agg, "symbols", 2) or 0)
+    avg_pnl = float(_row_value(agg, "avg_pnl", 3) or 0)
+    win_rate = float(_row_value(agg, "win_rate", 4) or 0)
+    pnl_total_usdt = float(_row_value(agg, "pnl_total_usdt", 5) or 0)
 
     analysis_context = {
         "dataset": {
@@ -1161,22 +1189,24 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
             "mutation_applied": False,
         },
     }
-    prompt_hash = hashlib.md5(json.dumps(payload, sort_keys=True, cls=_SafeEncoder).encode()).hexdigest()
+    approved_prompt = initial_prompt_registry().resolve("ai-critic", "1.0.0")
+    prompt_hash = approved_prompt.content_hash
 
     next_review_at = datetime.now(timezone.utc) + timedelta(hours=_AI_REVIEW_INTERVAL_H)
 
     await db.execute(text("""
         INSERT INTO profile_ai_reviews
-            (id, status, requested_at, next_review_at, model_name, prompt_hash,
+            (id, tenant_id, status, requested_at, next_review_at, model_name, prompt_hash,
              findings, recommendations, contradictions, risk_flags,
              analysis_context, context_payload_hash, context_query_hash, created_at)
         VALUES
-            (:id, 'SCHEDULED', now(), :next_review_at, null, :prompt_hash,
+            (:id, :tenant_id, 'SCHEDULED', now(), :next_review_at, null, :prompt_hash,
              '{}', '[]', '[]', '[]',
              CAST(:analysis_context AS jsonb), :context_payload_hash, :context_query_hash,
              now())
     """), {
         "id": str(review_id),
+        "tenant_id": str(tenant_id) if tenant_id else None,
         "next_review_at": next_review_at,
         "prompt_hash": prompt_hash,
         "analysis_context": json.dumps(analysis_context, cls=_SafeEncoder),
@@ -1192,7 +1222,7 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
                                  "context_payload_hash": context_payload_hash})
 
     # ── Key resolution ─────────────────────────────────────────────────────────
-    ai_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    ai_key = os.environ.get("ANTHROPIC_API_KEY", "") if tenant_id is None else ""
     key_source = "env" if ai_key else None
     if not ai_key:
         try:
@@ -1200,9 +1230,12 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
             key_row = await db.execute(text("""
                 SELECT api_key_encrypted FROM ai_provider_keys
                 WHERE provider = 'anthropic' AND is_active = true AND is_validated = true
+                  AND (CAST(:tenant_id AS uuid) IS NULL OR user_id = CAST(:tenant_id AS uuid))
+                  AND monthly_token_limit IS NOT NULL
+                  AND tokens_used_month < monthly_token_limit
                 ORDER BY last_tested_at DESC NULLS LAST
                 LIMIT 1
-            """))
+            """), {"tenant_id": str(tenant_id) if tenant_id else None})
             enc = key_row.scalar_one_or_none()
             if enc:
                 ai_key = decrypt_value(bytes(enc) if not isinstance(enc, bytes) else enc)
@@ -1238,9 +1271,13 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
                                 phase="ai", message="Consultando AI Critic...")
             await db.commit()
 
-            import anthropic  # type: ignore
-            client = anthropic.AsyncAnthropic(api_key=ai_key)
-            model_used = os.environ.get("PI_AI_MODEL", "claude-haiku-4-5-20251001")
+            configured_model = os.environ.get("PI_AI_MODEL", "claude-haiku-4-5-20251001")
+            model_resolution = default_registry().resolve(
+                requested_provider=None, requested_model=None,
+                configured_provider="anthropic", configured_model=configured_model,
+                required_capabilities={"text", "structured_output"},
+            )
+            model_used = model_resolution.effective_model
             prompt_text = (
                 "You are an analytical AI critic for a trading algorithm profile intelligence system. "
                 "Review the following shadow trade statistics and suggest improvements.\n\n"
@@ -1250,14 +1287,12 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
                 "and risk flags. Format as JSON with keys: summary, findings, recommendations, "
                 "contradictions, risk_flags. Return ONLY the JSON, no markdown code blocks."
             )
-            response = await client.messages.create(
-                model=model_used,
-                max_tokens=1000,
-                messages=[{"role": "user", "content": prompt_text}],
+            response = await AnthropicSDKTextAdapter().execute(
+                api_key=ai_key, model=model_used, prompt=prompt_text, max_tokens=1000,
             )
-            raw = response.content[0].text if response.content else ""
-            tokens_in = response.usage.input_tokens if response.usage else 0
-            tokens_out = response.usage.output_tokens if response.usage else 0
+            raw = response.text
+            tokens_in = response.tokens_input
+            tokens_out = response.tokens_output
 
             try:
                 parsed = json.loads(_strip_json_codeblock(raw))

@@ -1,5 +1,4 @@
 import json
-import logging
 import os
 from typing import Any
 from uuid import UUID
@@ -8,7 +7,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.profile import Profile
+from ..models.ai_provider_key import AIProviderKey
 from ..services.ai_keys_service import get_decrypted_api_key
+from ..ai_orchestration.provider_adapters import CopilotProviderTransport
+from ..ai_orchestration.initial_prompts import initial_prompt_registry
+from ..ai_orchestration.provider_registry import default_registry
 from .action_service import action_service
 from .prompt import BASE_PROMPT
 from .query_executor import QueryExecutor
@@ -16,7 +19,6 @@ from .schema_analyzer import SchemaAnalyzer
 from .skill_service import skill_service
 
 
-logger = logging.getLogger(__name__)
 MAX_TOOL_ROUNDS = 6
 FINAL_SYNTHESIS_INSTRUCTION = (
     "\n\nO limite de uso de ferramentas foi atingido. Não use mais ferramentas. "
@@ -58,13 +60,46 @@ class CopilotAgent:
 
     async def run(self, db: AsyncSession, user_id: UUID, message: str, *, session_id: UUID,
                   context: dict[str, Any], provider: str, model: str | None = None):
+        configured_model = model or (
+            os.getenv("COPILOT_OPENAI_MODEL", "gpt-4.1-mini") if provider == "openai"
+            else os.getenv("COPILOT_ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
+        )
+        resolution = default_registry().resolve(
+            requested_provider=provider, requested_model=model,
+            configured_provider=provider, configured_model=configured_model,
+            allow_request_override=model is not None, required_capabilities={"text", "tool_use"},
+        )
+        key_policy = (await db.execute(select(AIProviderKey).where(
+            AIProviderKey.user_id == user_id,
+            AIProviderKey.provider == resolution.effective_provider,
+            AIProviderKey.is_active.is_(True),
+            AIProviderKey.is_validated.is_(True),
+        ))).scalar_one_or_none()
+        if key_policy is None or key_policy.monthly_token_limit is None:
+            raise ValueError("A validated tenant-scoped key and explicit monthly AI budget are required")
+        if int(key_policy.tokens_used_month or 0) >= int(key_policy.monthly_token_limit):
+            raise ValueError("Monthly AI budget exhausted")
+        provider = resolution.effective_provider
+        model = resolution.effective_model
+        prompt_version = initial_prompt_registry().resolve("copilot", "1.0.0")
         skills = await skill_service.retrieve(db, user_id, message)
         system = BASE_PROMPT + "\nContexto da tela:\n" + json.dumps(context, ensure_ascii=False)
         if skills:
             system += "\n\nSkills recuperadas:\n" + "\n".join(
                 f"- [{item['skill_type']} v{item['version']}] {item['name']}: {item['content']}" for item in skills
             )
-        trace = {"queries": [], "evidence": [], "action_plan": None, "skills_used": skills}
+        trace = {
+            "queries": [], "evidence": [], "action_plan": None, "skills_used": skills,
+            "tenant_id": str(user_id), "authority": "PROPOSAL_ONLY",
+            "configured_provider": resolution.configured_provider,
+            "configured_model": resolution.configured_model,
+            "effective_provider": resolution.effective_provider,
+            "effective_model": resolution.effective_model,
+            "model_resolution_reason": resolution.resolution_reason,
+            "prompt_key": prompt_version.prompt_key,
+            "prompt_version": prompt_version.semantic_version,
+            "prompt_hash": prompt_version.content_hash,
+        }
         if provider == "openai":
             answer = await self._run_openai(db, user_id, message, session_id, system, model, trace)
         else:
@@ -117,84 +152,28 @@ class CopilotAgent:
         raise ValueError(f"Tool desconhecida: {name}")
 
     async def _run_anthropic(self, db, user_id, message, session_id, system, model, trace):
-        api_key = await get_decrypted_api_key(db, user_id, "anthropic") or os.getenv("ANTHROPIC_API_KEY")
+        api_key = await get_decrypted_api_key(db, user_id, "anthropic")
         if not api_key:
-            raise ValueError("Configure uma chave Anthropic em Settings → AI Integrations")
-        import anthropic
-        client = anthropic.AsyncAnthropic(api_key=api_key)
-        messages: list[dict[str, Any]] = [{"role": "user", "content": message}]
+            raise ValueError("Configure an Anthropic key in AI Integrations")
         selected_model = model or os.getenv("COPILOT_ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
-        for _ in range(MAX_TOOL_ROUNDS):
-            response = await client.messages.create(
-                model=selected_model, max_tokens=3000, system=system, tools=TOOLS, messages=messages,
-            )
-            blocks = [block.model_dump() if hasattr(block, "model_dump") else block for block in response.content]
-            messages.append({"role": "assistant", "content": blocks})
-            tool_uses = [block for block in response.content if getattr(block, "type", None) == "tool_use"]
-            if not tool_uses:
-                return "\n".join(getattr(block, "text", "") for block in response.content if getattr(block, "type", None) == "text").strip()
-            results = []
-            for use in tool_uses:
-                try:
-                    value = await self._tool(db, user_id, session_id, use.name, dict(use.input), trace)
-                    content = json.dumps(value, ensure_ascii=False, default=str)
-                    results.append({"type": "tool_result", "tool_use_id": use.id, "content": content})
-                except Exception as exc:
-                    results.append({"type": "tool_result", "tool_use_id": use.id,
-                                    "content": f"{type(exc).__name__}: {exc}", "is_error": True})
-            messages.append({"role": "user", "content": results})
-        logger.warning("Copilot Anthropic atingiu o limite de ferramentas; forçando síntese final")
-        response = await client.messages.create(
-            model=selected_model, max_tokens=3000,
-            system=system + FINAL_SYNTHESIS_INSTRUCTION, messages=messages,
+        async def callback(name, payload):
+            return await self._tool(db, user_id, session_id, name, payload, trace)
+        return await CopilotProviderTransport().anthropic(
+            api_key=api_key, model=selected_model, system=system, message=message, tools=TOOLS,
+            tool_callback=callback, max_rounds=MAX_TOOL_ROUNDS, final_instruction=FINAL_SYNTHESIS_INSTRUCTION,
         )
-        return "\n".join(
-            getattr(block, "text", "") for block in response.content
-            if getattr(block, "type", None) == "text"
-        ).strip() or "Não foi possível concluir com as evidências disponíveis."
 
     async def _run_openai(self, db, user_id, message, session_id, system, model, trace):
-        api_key = await get_decrypted_api_key(db, user_id, "openai") or os.getenv("OPENAI_API_KEY")
+        api_key = await get_decrypted_api_key(db, user_id, "openai")
         if not api_key:
-            raise ValueError("Configure uma chave OpenAI em Settings → AI Integrations")
-        import httpx
+            raise ValueError("Configure an OpenAI key in AI Integrations")
         selected_model = model or os.getenv("COPILOT_OPENAI_MODEL", "gpt-4.1-mini")
-        tools = [{"type": "function", "function": {
-            "name": tool["name"], "description": tool["description"], "parameters": tool["input_schema"]
-        }} for tool in TOOLS]
-        messages: list[dict[str, Any]] = [{"role": "system", "content": system}, {"role": "user", "content": message}]
-        async with httpx.AsyncClient(timeout=90) as client:
-            for _ in range(MAX_TOOL_ROUNDS):
-                response = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    json={"model": selected_model, "messages": messages, "tools": tools, "tool_choice": "auto"},
-                )
-                response.raise_for_status()
-                assistant = response.json()["choices"][0]["message"]
-                messages.append(assistant)
-                calls = assistant.get("tool_calls") or []
-                if not calls:
-                    return assistant.get("content") or ""
-                for call in calls:
-                    try:
-                        payload = json.loads(call["function"]["arguments"] or "{}")
-                        value = await self._tool(db, user_id, session_id, call["function"]["name"], payload, trace)
-                        content = json.dumps(value, ensure_ascii=False, default=str)
-                    except Exception as exc:
-                        content = f"{type(exc).__name__}: {exc}"
-                    messages.append({"role": "tool", "tool_call_id": call["id"], "content": content})
-            logger.warning("Copilot OpenAI atingiu o limite de ferramentas; forçando síntese final")
-            messages[0]["content"] += FINAL_SYNTHESIS_INSTRUCTION
-            response = await client.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={"model": selected_model, "messages": messages, "tools": tools, "tool_choice": "none"},
-            )
-            response.raise_for_status()
-            return response.json()["choices"][0]["message"].get("content") or (
-                "Não foi possível concluir com as evidências disponíveis."
-            )
+        async def callback(name, payload):
+            return await self._tool(db, user_id, session_id, name, payload, trace)
+        return await CopilotProviderTransport().openai(
+            api_key=api_key, model=selected_model, system=system, message=message, tools=TOOLS,
+            tool_callback=callback, max_rounds=MAX_TOOL_ROUNDS, final_instruction=FINAL_SYNTHESIS_INSTRUCTION,
+        )
 
 
 copilot_agent = CopilotAgent()

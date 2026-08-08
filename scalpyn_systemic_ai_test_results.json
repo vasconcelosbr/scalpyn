@@ -1,0 +1,74 @@
+{
+  "generated_at": "2026-08-07T21:16:11-03:00",
+  "verdict": "SYSTEMIC_AI_FOUNDATION_STAGING_PROVEN",
+  "critical_backend": {
+    "status": "PASS",
+    "evidence": "63 passed in 6.35s",
+    "source_label": "[test]",
+    "files": [
+      "backend/tests/test_systemic_ai_foundation.py",
+      "backend/tests/test_ai_critic_hollow_prevention.py",
+      "backend/tests/test_ai_review_analysis_context.py",
+      "backend/tests/test_shadow_detailed_report_contracts.py",
+      "backend/tests/test_copilot_services.py"
+    ]
+  },
+  "minimum_named_foundation_tests": {
+    "status": "PASS",
+    "evidence": "27 passed in 1.06s",
+    "source_label": "[test]",
+    "skipped": 0
+  },
+  "frontend_unit": {
+    "status": "PASS",
+    "evidence": "23 passed, 0 failed",
+    "source_label": "[test]"
+  },
+  "frontend_changed_component_lint": {
+    "status": "PASS",
+    "evidence": "eslint exit 0",
+    "source_label": "[test]"
+  },
+  "frontend_build_and_typecheck": {
+    "status": "PASS",
+    "evidence": "Next.js production build compiled, TypeScript completed, 43 pages generated",
+    "source_label": "[test]"
+  },
+  "frontend_global_lint": {
+    "status": "PREEXISTING_FAILURES",
+    "evidence": "433 problems: 371 errors and 62 warnings across unrelated existing files",
+    "source_label": "[test]",
+    "changed_component_clean": true
+  },
+  "backend_global_suite": {
+    "status": "COLLECTION_BLOCKED_PREEXISTING",
+    "evidence": "146 items collected, then backend/scripts/run_catboost_retrain.py parsed pytest argv during import and raised SystemExit",
+    "source_label": "[test]"
+  },
+  "migration": {
+    "single_head": "147_systemic_ai_foundation",
+    "offline_sql": "PASS",
+    "offline_sql_characters": 25037,
+    "online_upgrade_146_to_147": "PASS",
+    "online_downgrade_147_to_146": "PASS",
+    "online_final_upgrade_146_to_147": "PASS",
+    "staging_final_head": "147_systemic_ai_foundation",
+    "source_label": "[test][query]"
+  },
+  "staging_canary": {
+    "status": "PASS",
+    "verdict": "SYSTEMIC_AI_FOUNDATION_STAGING_PROVEN",
+    "synthetic_tenant_persisted_table_groups": 8,
+    "external_provider_calls": 0,
+    "live_state_unchanged": true,
+    "source_label": "[query]"
+  },
+  "compile": {
+    "status": "PASS",
+    "evidence": "COMPILE_OK",
+    "source_label": "[test]"
+  },
+  "json_parse": "PASS",
+  "git_diff_check": "PASS",
+  "graphify_update": "PASS"
+}

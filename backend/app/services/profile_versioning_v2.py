@@ -224,3 +224,88 @@ async def create_shadow_profile_version(
         "idempotency_key": idempotency_key,
     })
     return version_id
+
+
+async def create_candidate_profile_version(
+    db: AsyncSession,
+    *,
+    profile_id: UUID,
+    config: dict,
+    score_config: dict,
+    change_set_id: UUID,
+    mutation_reason: str,
+    rollback_to_version_id: UUID | None = None,
+) -> tuple[UUID, UUID, bool]:
+    """Create an immutable CANDIDATE snapshot without mutating profile runtime state."""
+    await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:profile_id))"), {"profile_id": str(profile_id)})
+    profile_hash = content_hash(config)
+    score_hash = content_hash(score_config)
+    idempotency_key = f"systemic-ai-candidate:{change_set_id}:{profile_hash}:{score_hash}"
+    existing = await db.scalar(text(
+        "SELECT id FROM profile_versions WHERE idempotency_key = :key"
+    ), {"key": idempotency_key})
+    if existing:
+        score_id = await db.scalar(text(
+            "SELECT score_engine_version_id FROM profile_versions WHERE id = :id"
+        ), {"id": str(existing)})
+        return existing, score_id, False
+
+    score_engine_version_id = uuid4()
+    await db.execute(text("""
+        INSERT INTO score_engine_versions (
+            id, parent_version_id, config_hash, rules, weights, thresholds,
+            selected_rule_ids, status
+        ) VALUES (
+            :id,
+            (SELECT id FROM score_engine_versions ORDER BY created_at DESC LIMIT 1),
+            :config_hash, CAST(:rules AS JSONB), CAST(:weights AS JSONB),
+            CAST(:thresholds AS JSONB), CAST(:selected_rule_ids AS JSONB), 'CANDIDATE'
+        )
+        ON CONFLICT (config_hash) DO UPDATE SET config_hash = EXCLUDED.config_hash
+        RETURNING id
+    """), {
+        "id": str(score_engine_version_id), "config_hash": score_hash,
+        "rules": json.dumps(score_config.get("rules") or score_config.get("generated_rules") or []),
+        "weights": json.dumps(score_config.get("weights") or {}),
+        "thresholds": json.dumps(score_config.get("thresholds") or {}),
+        "selected_rule_ids": json.dumps(score_config.get("selected_rule_ids") or []),
+    })
+    score_engine_version_id = await db.scalar(text(
+        "SELECT id FROM score_engine_versions WHERE config_hash = :hash"
+    ), {"hash": score_hash})
+    parent_id = await db.scalar(text("""
+        SELECT id FROM profile_versions
+         WHERE profile_id = :profile_id
+         ORDER BY version_number DESC LIMIT 1
+    """), {"profile_id": str(profile_id)})
+    version_number = int(await db.scalar(text("""
+        SELECT COALESCE(MAX(version_number), 0) + 1 FROM profile_versions
+         WHERE profile_id = :profile_id
+    """), {"profile_id": str(profile_id)}) or 1)
+    await db.execute(text("""
+        UPDATE profile_versions
+           SET status = 'ARCHIVED', is_active = false, deactivated_at = now()
+         WHERE profile_id = :profile_id AND status = 'CANDIDATE'
+    """), {"profile_id": str(profile_id)})
+    version_id = uuid4()
+    await db.execute(text("""
+        INSERT INTO profile_versions (
+            id, profile_id, version_number, config, mutation_reason, is_active,
+            parent_version_id, config_hash, score_engine_version_id, status,
+            activated_at, rollback_to_version_id, source_recommendation_ids,
+            idempotency_key
+        ) VALUES (
+            :id, :profile_id, :version_number, CAST(:config AS JSONB),
+            :mutation_reason, false, :parent_version_id, :config_hash,
+            :score_engine_version_id, 'CANDIDATE', now(), :rollback_to_version_id,
+            '[]'::jsonb, :idempotency_key
+        )
+    """), {
+        "id": str(version_id), "profile_id": str(profile_id), "version_number": version_number,
+        "config": json.dumps(config), "mutation_reason": mutation_reason,
+        "parent_version_id": str(parent_id) if parent_id else None, "config_hash": profile_hash,
+        "score_engine_version_id": str(score_engine_version_id),
+        "rollback_to_version_id": str(rollback_to_version_id) if rollback_to_version_id else None,
+        "idempotency_key": idempotency_key,
+    })
+    return version_id, score_engine_version_id, True

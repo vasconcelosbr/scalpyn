@@ -45,6 +45,12 @@ async def lifespan(app: FastAPI):
     import logging
     _log = logging.getLogger(__name__)
 
+    # AI provider credentials are tenant-scoped and encrypted.  A deployed
+    # non-development process must never fall back to an ephemeral key because
+    # that would make previously stored tenant credentials undecryptable.
+    from .services.ai_keys_service import validate_encryption_key_configuration
+    validate_encryption_key_configuration()
+
     # Schema bootstrap is owned by start.sh in production via `alembic upgrade
     # head` (the only gate).  Migration 021 mirrors init_db.py 1:1, so Alembic
     # alone converges the schema.  In dev, the workflow command runs uvicorn

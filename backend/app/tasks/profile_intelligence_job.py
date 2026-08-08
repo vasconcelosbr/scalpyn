@@ -14,6 +14,8 @@ import asyncio
 import logging
 import os
 
+from sqlalchemy import text
+
 from .celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -441,8 +443,12 @@ async def _run_feedback_loop():
         engine, factory = _live_nullpool_session()
         try:
             async with factory() as db:
-                result = await run_ai_review_cycle(db)
-            logger.info("[PILive] AI review done: %s", result)
+                tenant_ids = (await db.execute(text("""
+                    SELECT DISTINCT user_id FROM ai_provider_keys
+                     WHERE provider = 'anthropic' AND is_active = true AND is_validated = true
+                """))).scalars().all()
+                results = [await run_ai_review_cycle(db, tenant_id=tenant_id) for tenant_id in tenant_ids]
+            logger.info("[PILive] tenant-scoped AI reviews done: %s", results)
         except Exception as exc:
             logger.error("[PILive] AI review failed (non-fatal): %s", exc)
         finally:
