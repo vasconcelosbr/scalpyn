@@ -28,8 +28,9 @@ async def bootstrap(raw_url: str | None = None) -> dict:
     ) as connection:
         row = await (await connection.execute("SHOW search_path")).fetchone()
         observed = str(row["search_path"]).replace('"', "")
-        expected = f"{settings.checkpoint_schema}, public"
-        if observed != expected:
+        observed_schemas = [part.strip() for part in observed.split(",")]
+        expected_schemas = [settings.checkpoint_schema, "public"]
+        if observed_schemas != expected_schemas:
             raise RuntimeError(f"CHECKPOINTER_SEARCH_PATH_INVALID: {observed}")
 
     async with AsyncPostgresSaver.from_conn_string(
