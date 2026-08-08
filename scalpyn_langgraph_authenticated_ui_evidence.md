@@ -1,7 +1,13 @@
 # Authenticated UI evidence
 
-Status: `PENDING_STAGING_DEPLOYMENT`.
+Status: `PROVEN_STAGING_PREVIEW`.
 
-Local build proves the `/intelligence-runs` route compiles and prerenders. The page uses the shared authenticated API client, shows tenant-scoped runs, execution trace, interrupts, approve/reject/edit controls and the explicit `live write: denied` envelope `[test/build]`.
+- Vercel project: `scalpyn`.
+- Protected preview deployment: `dpl_6kzMikShU243HmJX2HKHwpgAaXuU` (`READY`).
+- Route verified after authenticated login: `/intelligence-runs`.
+- Selected run: `a6a0b87c-64d2-4039-a2cf-b4d139afa1c8`.
+- The screen rendered the full timeline, all three interrupt/resume stages, `SHADOW_ONLY`, runtime `langgraph`, enabled staging entrypoints, disabled real-provider canary, strict checkpoints and `live write: denied` `[authenticated browser verification]`.
+- The preview backend was the isolated Railway staging API. Four tenant-scoped canary runs were visible at verification time `[authenticated browser verification]`.
+- The only browser-console error was an unrelated Google GSI/FedCM token retrieval warning; the LangGraph route and API requests completed `[browser console]`.
 
-An authenticated screenshot against isolated staging is still required. Local compilation alone is not user-facing production proof.
+The temporary Vercel automation bypass used for verification was revoked. Deployment protection remains enabled. This proves staging UI behavior, not the production alias.

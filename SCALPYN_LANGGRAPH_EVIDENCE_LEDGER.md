@@ -2,33 +2,34 @@
 
 | Claim | Evidence | Status |
 |---|---|---|
-| Exact primary dependencies installed | `backend/requirements.txt`, PyPI verification, pip dry-run report | PROVEN LOCAL |
-| Complete transitive lock with hashes | `backend/requirements-langgraph.lock`, `--require-hashes` dry run | PROVEN LOCAL |
-| SBOM generated | `scalpyn_langgraph_sbom.cdx.json` | PROVEN LOCAL |
-| Dedicated migration head | `alembic heads` returned `148_langgraph_runtime (head)` | PROVEN LOCAL |
-| Registry equals migration seed | comparison returned `registry_migration_match=4` | PROVEN LOCAL |
-| Strict state rejects secrets | mandatory named test passed | PROVEN LOCAL |
-| Restart does not repeat completed node | MemorySaver crash/resume unit test passed | PROVEN LOCAL ONLY |
-| PostgreSQL restart recovery | staging crash test | NOT YET VERIFIED |
-| Full backend collection no CatBoost import crash | `1573 tests collected` | PROVEN LOCAL |
-| Critical suite | `85 passed` | PROVEN LOCAL |
-| Frontend production route | Next production build lists `/intelligence-runs` | PROVEN LOCAL |
-| Authenticated UI | staging screenshot | NOT YET VERIFIED |
-| AsyncPostgresSaver operational | staging migration/bootstrap/run | NOT YET VERIFIED |
-| Fake analysis canary | isolated staging | NOT YET VERIFIED |
+| Exact dependencies and hash lock | requirements, resolution report, SBOM and `--require-hashes` dry run | PROVEN LOCAL |
+| Scoped dependency security | 40-package `pip-audit` after upgrade to checkpoint-postgres 3.1.2 | PROVEN LOCAL |
+| Dedicated migration and immutable registry | migration head 148 and four approved definitions | PROVEN STAGING |
+| AsyncPostgresSaver and strict serialization | setup, persisted checkpoints and staging executions | PROVEN STAGING |
+| PostgreSQL recovery after worker restart | run `1ca42bb8-a0e5-4705-9423-4cc34df99a1c` resumed to completion | PROVEN STAGING |
+| Fake analysis canary | run `340cbd93-18e3-44b2-aebd-3d0da8c5fc35` | PROVEN STAGING |
+| Regenerative SHADOW_ONLY cycle | run `64e00a75-d41c-41dc-b396-ea49dc29ba70`, three resolved interrupts | PROVEN STAGING |
+| Authenticated UI | protected Vercel preview `/intelligence-runs` | PROVEN STAGING |
 | Real provider/model canary | paid analysis-only request | NOT AUTHORIZED |
-| Regenerative SHADOW_ONLY cycle | isolated staging with three interrupts | NOT YET VERIFIED |
+| Spot invariant resolution | separate semantic decision and immutable configuration version | BLOCKED HUMAN DECISION |
+| Global lint/full suite | recorded legacy failures | NOT GREEN |
 | Production deployment | post-checkpoint only | NOT EXECUTED |
-| No live mutation | flags default false and no prod action | PROVEN THROUGH CHECKPOINT |
+| Live mutation | live-write denial, shadow-only authority and unchanged production | NOT EXECUTED |
 
 ## Numeric evidence
 
 | NÚMERO REPORTADO | ORIGEM | VALOR LITERAL DA FONTE |
 |---|---|---|
 | `langgraph=1.2.9` | `[config: requirements]` | `langgraph==1.2.9` |
-| `checkpoint-postgres=3.1.0` | `[config: requirements]` | `langgraph-checkpoint-postgres==3.1.0` |
+| `checkpoint-postgres=3.1.2` | `[config: requirements]` | `langgraph-checkpoint-postgres==3.1.2` |
 | `psycopg=3.3.4` | `[config: requirements]` | `psycopg[binary,pool]==3.3.4` |
-| critical pass=`85` | `[test]` | `85 passed` |
-| collection=`1573` | `[test]` | `1573 tests collected` |
-| frontend pass=`23` | `[test]` | `pass 23` |
-| cost=`NÃO DISPONÍVEL` | `[ABERTO]` | real provider canary not authorized |
+| mandatory pass=`39` | `[test]` | `39 passed, 1 warning` |
+| critical pass=`87` | `[test]` | `87 passed, 1 warning` |
+| collection=`1573` | `[test]` | `1573 tests collected; 0 collection errors` |
+| frontend pass=`23` | `[test]` | `pass 23; fail 0` |
+| schema checks=`32` | `[staging]` | `schema_ok=true; checked_count=32; missing=[]` |
+| latest analysis events=`18` | `[staging]` | `event_count=18` |
+| latest regenerative events=`24` | `[staging]` | `event_count=24` |
+| resolved interrupts=`3` | `[staging]` | `CANDIDATE_APPROVAL, SHADOW_EVIDENCE, FINAL_DECISION: RESOLVED` |
+| fake-provider cost=`USD 0` | `[staging]` | `cost_usd="0"` |
+| real-provider cost=`NÃO DISPONÍVEL` | `[ABERTO]` | separate cost approval not granted |

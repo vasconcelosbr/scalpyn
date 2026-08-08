@@ -1,92 +1,50 @@
 # Scalpyn LangGraph implementation report
 
-Verdict before staging: `PARTIALLY_IMPLEMENTED_BLOCKED_BY_INFRA`.
+Verdict: `PARTIALLY_IMPLEMENTED_BLOCKED_BY_PROVIDER`.
 
 ## Outcome
 
-LangGraph is installed above the existing systemic AI foundation without replacing canonical DB records, Celery or provider adapters. The implementation adds exact dependency pins plus a hash lock, a dedicated PostgreSQL checkpoint schema, immutable graph registry, four graphs, five canonical graph tables, five durable Celery tasks on an isolated queue, tenant-safe APIs, human interrupts, recovery/cancel paths, event reconciliation, telemetry, retention administration and the authenticated “Intelligence Runs” frontend.
+LangGraph was added above the canonical systemic AI foundation without replacing canonical database records, Celery or provider adapters. The implementation contains an exact hash lock, dedicated PostgreSQL checkpoint schema, immutable registry, four graphs, canonical run/event/interrupt records, five durable tasks on the isolated `ai_orchestration` queue, tenant-safe APIs, human interrupts, crash recovery, event reconciliation, observability and the authenticated `/intelligence-runs` page.
 
-Runtime defaults remain `native` with every LangGraph feature flag false. `LIVE_WRITE` is denied. No production configuration, model champion, Auto-Pilot flag, order or real position has been changed.
+The production runtime remains unchanged. No production migration, flag, model champion, Auto-Pilot state, order or real position was changed. `LIVE_WRITE` remains denied.
 
-## Runtime architecture
+At the checkpoint revalidation, the existing Railway production API deployment remained `cc3504b6-321b-4436-8c25-80f59c41c983` (`SUCCESS`) and the Vercel production deployment remained `dpl_8q7uNekZ2nZT8sq8YqYYJUZHt1Xi` (`READY`) `[production read-only check]`.
 
-```mermaid
-flowchart LR
-    UI["Intelligence Runs"] --> API["Tenant-scoped graph API"]
-    API --> CANON["Canonical AI request and graph run"]
-    CANON --> Q["ai_orchestration queue"]
-    Q --> WORKER["Dedicated worker"]
-    WORKER --> GRAPH["Versioned LangGraph"]
-    GRAPH --> CHECK["AsyncPostgresSaver / langgraph_runtime"]
-    GRAPH --> AUDIT["Canonical events, interrupts, results and usage"]
-```
+## Dependency result
 
-## Systemic analysis graph
+- `langgraph==1.2.9` `[config]`.
+- `langgraph-checkpoint-postgres==3.1.2` `[config]`; upgraded from the prompt's reference patch after the upstream security fix became available.
+- `psycopg[binary,pool]==3.3.4` `[config]`.
+- Hash-locked resolution, `pip check` and scoped security audit passed `[test]`.
 
-```mermaid
-flowchart TD
-    START --> load_request --> authorize_tenant --> resolve_provider_model --> resolve_prompt
-    resolve_prompt --> freeze_canonical_dataset --> resolve_configuration_bundle --> run_data_quality_gate
-    run_data_quality_gate --> retrieve_decision_memory --> plan_typed_tools --> execute_readonly_tools
-    execute_readonly_tools --> assemble_evidence --> invoke_provider --> validate_structured_output
-    validate_structured_output --> persist_result_usage_audit --> complete --> END
-```
+## Staging result
 
-## Root-cause graph
+- Railway API deployment `34489a41-da33-46a6-9e8e-ca036e6d877c`: `SUCCESS` `[staging]`.
+- Railway worker deployment `d438715c-b5ca-4546-a212-43c578c41c8b`: `SUCCESS`, consuming only `ai_orchestration` `[staging]`.
+- Health is `ok`; schema gate checked 32 items with none missing `[staging]`.
+- Analysis run `340cbd93-18e3-44b2-aebd-3d0da8c5fc35`: `COMPLETED`, `ANALYSIS_ONLY`, 18 events `[staging]`.
+- Regenerative run `64e00a75-d41c-41dc-b396-ea49dc29ba70`: `COMPLETED`, `SHADOW_ONLY`, 24 events and all three interrupts resolved `[staging]`.
+- Actual worker-restart recovery run `1ca42bb8-a0e5-4705-9423-4cc34df99a1c`: `COMPLETED`, with zero duplicate event keys and zero duplicate completed nodes `[staging]`.
+- Protected Vercel preview deployment `dpl_6kzMikShU243HmJX2HKHwpgAaXuU`: `READY`; authenticated `/intelligence-runs` proof completed `[staging]`.
+- Fake provider cost was USD 0. The real-provider canary was not run because separate cost approval is absent `[ABERTO]`.
 
-```mermaid
-flowchart TD
-    START --> identify_change_window --> load_before_after_versions --> validate_comparability
-    validate_comparability --> compare_market_regime --> compare_data_quality --> compare_symbol_profile_concentration
-    compare_symbol_profile_concentration --> compare_exit_policy --> compare_model_feature_contract
-    compare_model_feature_contract --> run_paired_replay_when_available --> classify_root_cause
-    classify_root_cause --> generate_evidence_bound_diagnosis --> persist_result_usage_audit --> END
-```
+## Tests
 
-## Regenerative shadow graph
+- Mandatory LangGraph suite: 39 passed `[test]`.
+- Critical dependency/runtime suite: 87 passed `[test]`.
+- Backend collection: 1573 collected, zero collection errors `[test]`.
+- Frontend: 23 tests passed, typecheck passed, production build passed with `/intelligence-runs` among 44 routes `[test]`.
+- Global lint remains at 371 errors and 62 warnings in legacy code `[test]`.
+- Full backend execution stopped at 20 failures after 278 passes; the captured failures are legacy migration-path, stale CatBoost fixtures and database-dependent cases `[test]`.
 
-```mermaid
-flowchart TD
-    START --> validate_dataset_and_bundle --> classify_root_cause --> create_hypothesis
-    create_hypothesis --> retrieve_similar_decision_memory --> check_do_not_repeat_context
-    check_do_not_repeat_context --> design_ablation_candidates --> H1{"Human candidate approval"}
-    H1 -->|reject| END
-    H1 -->|approve/edit| create_immutable_candidate_versions --> start_shadow_experiment
-    start_shadow_experiment --> H2{"Wait for shadow evidence"}
-    H2 --> evaluate_champion_challenger --> propose_keep_reject_or_rollback --> H3{"Final human decision"}
-    H3 -->|reject| END
-    H3 -->|approve/edit| shadow_only_change_set --> persist_experiment_outcome --> persist_decision_memory --> END
-```
+## Why the verdict is not PROVEN
 
-## Verification state
-
-- Mandatory LangGraph suite: `37 passed` `[test]`.
-- Combined critical suite: `85 passed` `[test]`.
-- Full backend collection: `1573 collected, 0 collection errors` `[test]`.
-- Frontend tests: `23 passed` `[test]`.
-- TypeScript: passed `[test]`.
-- Production build: passed; `/intelligence-runs` present `[test]`.
-- Scoped lint for changed frontend files: `0 errors` `[test]`.
-- Global lint: `371 errors, 62 warnings` in legacy baseline `[test]`.
-- Full backend execution stopped at `20 failures` after `278 passed`; failures are recorded verbatim in `LANGGRAPH_BACKEND_FULL_SUITE.txt` `[test]`.
-- Hash-locked dependency resolution and `pip check`: passed `[test]`.
-
-## Deployment status
-
-Isolated staging resources are being prepared. Production is deliberately stopped at the explicit human checkpoint defined by the prompt. Paid provider canary is not authorized; it will not run on inferred consent.
+The prompt's acceptance criteria still require a separately approved real-provider canary, a human Spot-invariant decision, globally green lint/full tests and controlled production proof. Staging infrastructure, persistent checkpoints, restart recovery, shadow regeneration and authenticated UI are proven; those remaining items are not.
 
 ## Rollback
 
-Keep all flags false to make the new paths inert. If staging fails, stop the dedicated worker and restore the prior service deployment. Database rollback requires a backup because downgrade deletes checkpoint history. Application canonical records should be retained for audit even if checkpoint rows are removed under an approved retention policy.
+Keep all flags false to make the new paths inert. For production, take a database backup before migration, retain the previous API/worker/frontend deployment identifiers, and roll application services back first if health fails. Migration downgrade deletes checkpoint history and therefore requires explicit confirmation plus the backup; canonical audit records should be retained.
 
 ## Ledger de evidências
 
-| NÚMERO REPORTADO | ORIGEM | VALOR LITERAL DA FONTE |
-|---|---|---|
-| critical tests=`85` | `[test] pytest` | `85 passed` |
-| mandatory tests=`37` | `[test] named suite` | `37 passed` |
-| backend collected=`1573` | `[test] collect-only` | `1573 tests collected` |
-| frontend tests=`23` | `[test] npm test` | `pass 23; fail 0` |
-| frontend routes=`44` | `[test] next build` | `Generating static pages (44/44)` |
-| graph definitions=`4` | `[test] registry/migration comparison` | `registry_migration_match=4` |
-| production orders=`0` | `[config reconciliation]` | no production actions executed before checkpoint |
+See `SCALPYN_LANGGRAPH_EVIDENCE_LEDGER.md` for the complete claim and numeric-source mapping.

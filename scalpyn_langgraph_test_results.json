@@ -1,12 +1,17 @@
 {
-  "critical_suite": {"status": "PASSED", "passed": 85, "failed": 0, "critical_skipped": 0, "source": "[test] pytest critical LangGraph + foundation + Celery"},
-  "mandatory_langgraph_tests": {"status": "PASSED", "passed": 37, "failed": 0, "source": "[test] backend/tests/test_langgraph_systemic_runtime.py"},
+  "mandatory_langgraph_tests": {"status": "PASSED", "passed": 39, "failed": 0, "warnings": 1, "source": "[test] backend/tests/test_langgraph_systemic_runtime.py"},
+  "critical_dependency_runtime_suite": {"status": "PASSED", "passed": 87, "failed": 0, "warnings": 1, "source": "[test] LangGraph + Celery routing + systemic foundation"},
   "backend_collection": {"status": "PASSED", "collected": 1573, "collection_errors": 0, "source": "[test] LANGGRAPH_BACKEND_COLLECTION.txt"},
   "backend_full_suite": {"status": "FAILED_LEGACY_BASELINE", "passed_before_stop": 278, "failed_before_stop": 20, "maxfail": 20, "source": "[test] LANGGRAPH_BACKEND_FULL_SUITE.txt", "classification": ["legacy migration path test", "stale CatBoost fixtures", "database-dependent tests without reachable test database"]},
   "frontend_tests": {"status": "PASSED", "passed": 23, "failed": 0, "source": "[test] npm test"},
   "frontend_typecheck": {"status": "PASSED", "source": "[test] tsc --noEmit"},
   "frontend_production_build": {"status": "PASSED", "routes": 44, "intelligence_runs_route": true, "source": "[test] next build"},
-  "frontend_global_lint": {"status": "FAILED_LEGACY_BASELINE", "errors": 371, "warnings": 62, "new_files_errors": 0, "source": "[test] eslint global and scoped"},
+  "frontend_scoped_lint": {"status": "PASSED", "errors": 0, "source": "[test] changed UI and navigation files"},
+  "frontend_global_lint": {"status": "FAILED_LEGACY_BASELINE", "errors": 371, "warnings": 62, "source": "[test] eslint global"},
   "pip_check": {"status": "PASSED", "source": "[test] pip check"},
+  "hash_lock_dry_run": {"status": "PASSED", "source": "[test] pip --require-hashes --dry-run"},
+  "scoped_security_audit": {"status": "PASSED", "dependencies": 40, "known_vulnerabilities": 0, "source": "[security scan] pip-audit requirements-langgraph.lock"},
+  "staging_api_health": {"status": "PASSED", "schema_ok": true, "checked_count": 32, "missing": 0, "source": "[staging] /api/health and /api/health/schema"},
+  "staging_canary": {"status": "PASSED", "analysis_run": "340cbd93-18e3-44b2-aebd-3d0da8c5fc35", "regenerative_run": "64e00a75-d41c-41dc-b396-ea49dc29ba70", "source": "[staging] tenant-authenticated API"},
   "git_diff_check": {"status": "PASSED", "source": "[test] git diff --check"}
 }

@@ -1,9 +1,42 @@
 {
-  "status": "PENDING_STAGING_DEPLOYMENT",
+  "status": "COMPLETED",
   "environment": "systemic-ai-staging-20260807",
+  "api_url": "https://scalpyn-langgraph-staging-api-systemic-ai-staging-20260807.up.railway.app",
+  "api_deployment_id": "34489a41-da33-46a6-9e8e-ca036e6d877c",
+  "worker_deployment_id": "d438715c-b5ca-4546-a212-43c578c41c8b",
+  "dependencies": {
+    "langgraph": "1.2.9",
+    "langgraph_checkpoint_postgres": "3.1.2",
+    "psycopg": "3.3.4",
+    "strict_msgpack": true
+  },
+  "health": {
+    "status": "ok",
+    "schema_ok": true,
+    "checked_count": 32,
+    "missing": []
+  },
+  "analysis_run": {
+    "id": "340cbd93-18e3-44b2-aebd-3d0da8c5fc35",
+    "status": "COMPLETED",
+    "authority": "ANALYSIS_ONLY",
+    "current_node": "complete",
+    "event_count": 18
+  },
+  "regenerative_run": {
+    "id": "64e00a75-d41c-41dc-b396-ea49dc29ba70",
+    "status": "COMPLETED",
+    "authority": "SHADOW_ONLY",
+    "current_node": "complete",
+    "event_count": 24,
+    "interrupt_count": 3
+  },
   "provider": "fake",
+  "configured_model": "fake-analysis-v1",
+  "effective_model": "fake-analysis-v1",
   "cost_usd": "0",
-  "real_provider_canary": "NOT_RUN_REQUIRES_COST_APPROVAL",
+  "real_provider_canary": "NOT_RUN_REQUIRES_SEPARATE_COST_APPROVAL",
   "live_write": false,
-  "evidence": []
+  "model_promotion": false,
+  "order_execution": false
 }

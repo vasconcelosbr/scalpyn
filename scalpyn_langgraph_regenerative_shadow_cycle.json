@@ -1,7 +1,24 @@
 {
-  "status": "PENDING_STAGING_DEPLOYMENT",
+  "status": "COMPLETED",
+  "environment": "systemic-ai-staging-20260807",
+  "graph_run_id": "64e00a75-d41c-41dc-b396-ea49dc29ba70",
   "authority": "SHADOW_ONLY",
-  "interrupts_expected": ["CANDIDATE_APPROVAL", "SHADOW_EVIDENCE", "FINAL_DECISION"],
+  "current_node": "complete",
+  "terminal_reason": "GRAPH_COMPLETED",
+  "event_count": 24,
+  "interrupts": [
+    {"type": "CANDIDATE_APPROVAL", "status": "RESOLVED"},
+    {"type": "SHADOW_EVIDENCE", "status": "RESOLVED"},
+    {"type": "FINAL_DECISION", "status": "RESOLVED"}
+  ],
+  "post_restart_recovery_run_id": "1ca42bb8-a0e5-4705-9423-4cc34df99a1c",
+  "post_restart_recovery": {
+    "status": "COMPLETED",
+    "checkpoint_count": 21,
+    "event_count": 25,
+    "duplicate_event_keys": 0,
+    "duplicate_completed_nodes": 0
+  },
   "live_pointer_mutation": false,
   "model_promotion": false,
   "order_execution": false
