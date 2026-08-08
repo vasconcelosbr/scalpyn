@@ -6,9 +6,7 @@ Verdict: `PARTIALLY_IMPLEMENTED_BLOCKED_BY_PROVIDER`.
 
 LangGraph was added above the canonical systemic AI foundation without replacing canonical database records, Celery or provider adapters. The implementation contains an exact hash lock, dedicated PostgreSQL checkpoint schema, immutable registry, four graphs, canonical run/event/interrupt records, five durable tasks on the isolated `ai_orchestration` queue, tenant-safe APIs, human interrupts, crash recovery, event reconciliation, observability and the authenticated `/intelligence-runs` page.
 
-The production runtime remains unchanged. No production migration, flag, model champion, Auto-Pilot state, order or real position was changed. `LIVE_WRITE` remains denied.
-
-At the checkpoint revalidation, the existing Railway production API deployment remained `cc3504b6-321b-4436-8c25-80f59c41c983` (`SUCCESS`) and the Vercel production deployment remained `dpl_8q7uNekZ2nZT8sq8YqYYJUZHt1Xi` (`READY`) `[production read-only check]`.
+The controlled production deployment is installed but inert. Migration `148`, the checkpointer, the API, an isolated worker and the frontend are deployed. Runtime, entrypoints, regeneration and provider canaries remain explicitly false. No model champion, Auto-Pilot state, order or real position was changed. `LIVE_WRITE` remains denied.
 
 ## Dependency result
 
@@ -28,6 +26,18 @@ At the checkpoint revalidation, the existing Railway production API deployment r
 - Protected Vercel preview deployment `dpl_6kzMikShU243HmJX2HKHwpgAaXuU`: `READY`; authenticated `/intelligence-runs` proof completed `[staging]`.
 - Fake provider cost was USD 0. The real-provider canary was not run because separate cost approval is absent `[ABERTO]`.
 
+## Controlled production result
+
+- Verified backup: `2491960498` bytes, `1086` restore entries, full archive read `OK`, SHA-256 `3d2966588b76fcc9960e3308f004d6f7ec5d90fc7641e1bb43eb0f949bdb6ae2` `[backup]`.
+- Migration head: `147_systemic_ai_foundation` to `148_langgraph_runtime` `[query]`.
+- Checkpointer bootstrap: `COMPLETED`, four internal tables, four approved definitions and strict MessagePack `[query]`.
+- Railway API `92a4a71b-18d7-49c7-9fd9-eb91b976b7ab`: `SUCCESS`; health and schema are green `[production]`.
+- Railway worker `b799b590-a114-4f31-8abe-41c846672fcd`: `SUCCESS`; only `ai_orchestration`, concurrency one, no beat `[production]`.
+- Vercel `dpl_EHYzvWjfaPU6MVEtbzgPmQ8YXwsh`: `READY`, aliased to `https://scalpyn.vercel.app` `[production]`.
+- `/intelligence-runs`, `/settings/social-score`, `/settings/risk` and `/settings/strategies` return HTTP 200 `[production]`.
+- Canonical reconciliation: zero graph runs/events/interrupts; 53 active profiles; zero live-trading, Auto-Pilot and shadow-only profiles `[query]`.
+- The protected browser reached the new production route but the saved login session expired; authenticated page proof awaits user re-login `[ABERTO]`.
+
 ## Tests
 
 - Mandatory LangGraph suite: 39 passed `[test]`.
@@ -39,7 +49,7 @@ At the checkpoint revalidation, the existing Railway production API deployment r
 
 ## Why the verdict is not PROVEN
 
-The prompt's acceptance criteria still require a separately approved real-provider canary, a human Spot-invariant decision, globally green lint/full tests and controlled production proof. Staging infrastructure, persistent checkpoints, restart recovery, shadow regeneration and authenticated UI are proven; those remaining items are not.
+The prompt's acceptance criteria still require a separately approved real-provider canary, a human Spot-invariant decision, globally green lint/full tests and authenticated proof on the newly deployed production page. Controlled deployment, persistent checkpoints and inert production reconciliation are proven; those remaining items are not.
 
 ## Rollback
 

@@ -11,3 +11,11 @@ Status: `PROVEN_STAGING_PREVIEW`.
 - The only browser-console error was an unrelated Google GSI/FedCM token retrieval warning; the LangGraph route and API requests completed `[browser console]`.
 
 The temporary Vercel automation bypass used for verification was revoked. Deployment protection remains enabled. This proves staging UI behavior, not the production alias.
+
+## Production deployment
+
+Status: `PENDING_USER_RELOGIN`.
+
+Deployment `dpl_EHYzvWjfaPU6MVEtbzgPmQ8YXwsh` is `READY` and aliased to `https://scalpyn.vercel.app`. The browser loaded the new navigation item and `/intelligence-runs`, then redirected to `/login` because the saved production session had expired `[authenticated-browser attempt]`.
+
+No password was read, inferred, reset or submitted. The login tab was left open for the user. This is route and authentication-gate proof, not authenticated page-content proof.

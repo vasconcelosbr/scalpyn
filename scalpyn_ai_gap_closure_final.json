@@ -18,7 +18,7 @@
     {"gap_id":"GAP-014","status":"PARTIAL","reason":"lossless reconciliation contract implemented; historical production rows not migrated"},
     {"gap_id":"GAP-015","status":"BLOCKED_BY_TESTS","reason":"critical suite and collection pass; global backend suite and global lint remain non-green"},
     {"gap_id":"GAP-016","status":"CLOSED_STAGING_PROVEN","reason":"regenerative ledger, graph, interrupts and decision-memory paths proven"},
-    {"gap_id":"GAP-017","status":"PARTIAL","reason":"clean branch and staging provenance proven; production waits at checkpoint"},
+    {"gap_id":"GAP-017","status":"CLOSED_PRODUCTION_DEPLOYED_INERT","reason":"clean provenance, backup, migration, API, isolated worker and frontend proven with flags false"},
     {"gap_id":"GAP-018","status":"CLOSED_FOUNDATION","reason":"non-development secret validation retained"},
     {"gap_id":"GAP-019","status":"BLOCKED_HUMAN_DECISION","reason":"hard invariant guard exists; production Spot semantic conflict was not changed"},
     {"gap_id":"GAP-020","status":"PARTIAL","reason":"typed tool registry and live-write denial exist; legacy side-effect semantics need full migration proof"}

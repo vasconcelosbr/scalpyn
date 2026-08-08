@@ -1,11 +1,71 @@
 {
-  "status": "NOT_EXECUTED_HUMAN_CHECKPOINT_REQUIRED",
-  "migration": "NOT_EXECUTED",
-  "api_deploy": "NOT_EXECUTED",
-  "worker_deploy": "NOT_EXECUTED",
-  "frontend_deploy": "NOT_EXECUTED",
-  "real_provider_cost": "NOT_AUTHORIZED",
+  "status": "DEPLOYED_INERT_AUTHENTICATED_UI_RELOGIN_REQUIRED",
+  "environment": "production",
+  "backup": {
+    "path": "C:\\Users\\ricar\\Documents\\Codex\\2026-08-08\\scalpyn-production-backups\\scalpyn_prod_pre_langgraph_20260808.dump",
+    "size_bytes": 2491960498,
+    "sha256": "3d2966588b76fcc9960e3308f004d6f7ec5d90fc7641e1bb43eb0f949bdb6ae2",
+    "restore_list_entries": 1086,
+    "full_archive_read": "OK"
+  },
+  "migration": {
+    "before": "147_systemic_ai_foundation",
+    "after": "148_langgraph_runtime"
+  },
+  "checkpointer_bootstrap": {
+    "status": "COMPLETED",
+    "langgraph": "1.2.9",
+    "checkpoint_postgres": "3.1.2",
+    "psycopg": "3.3.4",
+    "strict_msgpack": true,
+    "internal_tables": 4,
+    "approved_graph_definitions": 4
+  },
+  "api_deployment": {
+    "id": "92a4a71b-18d7-49c7-9fd9-eb91b976b7ab",
+    "status": "SUCCESS",
+    "health": "ok",
+    "schema_ok": true,
+    "schema_checked_count": 32,
+    "schema_missing": []
+  },
+  "worker_deployment": {
+    "id": "b799b590-a114-4f31-8abe-41c846672fcd",
+    "status": "SUCCESS",
+    "queue": "ai_orchestration",
+    "concurrency": 1,
+    "beat": false
+  },
+  "frontend_deployment": {
+    "id": "dpl_EHYzvWjfaPU6MVEtbzgPmQ8YXwsh",
+    "status": "READY",
+    "alias": "https://scalpyn.vercel.app",
+    "intelligence_runs_route": 200,
+    "preserved_routes": {
+      "/settings/social-score": 200,
+      "/settings/risk": 200,
+      "/settings/strategies": 200
+    }
+  },
+  "feature_flags": {
+    "LANGGRAPH_RUNTIME_ENABLED": false,
+    "LANGGRAPH_ENTRYPOINTS_ENABLED": false,
+    "LANGGRAPH_REGENERATIVE_SHADOW_ENABLED": false,
+    "LANGGRAPH_REAL_PROVIDER_CANARY_ENABLED": false,
+    "LANGGRAPH_FAKE_PROVIDER_CANARY_ENABLED": false
+  },
+  "reconciliation": {
+    "graph_runs": 0,
+    "graph_events": 0,
+    "graph_interrupts": 0,
+    "active_profiles": 53,
+    "live_trading_profiles": 0,
+    "autopilot_profiles": 0,
+    "shadow_only_profiles": 0
+  },
+  "authenticated_ui": "PENDING_USER_RELOGIN",
+  "real_provider_canary": "NOT_RUN_REQUIRES_SEPARATE_COST_APPROVAL",
   "live_write": false,
-  "orders_executed": 0,
-  "models_promoted": 0
+  "orders_executed_by_deployment": "NOT_RUN",
+  "models_promoted_by_deployment": "NOT_RUN"
 }

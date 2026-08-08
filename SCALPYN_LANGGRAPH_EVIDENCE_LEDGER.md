@@ -13,7 +13,8 @@
 | Real provider/model canary | paid analysis-only request | NOT AUTHORIZED |
 | Spot invariant resolution | separate semantic decision and immutable configuration version | BLOCKED HUMAN DECISION |
 | Global lint/full suite | recorded legacy failures | NOT GREEN |
-| Production deployment | post-checkpoint only | NOT EXECUTED |
+| Production deployment | backup, migration, API, isolated worker and Vercel deployment | PROVEN CONTROLLED / FLAGS FALSE |
+| Production authenticated UI | new route reached, browser redirected after expired session | PENDING USER RELOGIN |
 | Live mutation | live-write denial, shadow-only authority and unchanged production | NOT EXECUTED |
 
 ## Numeric evidence
@@ -33,3 +34,8 @@
 | resolved interrupts=`3` | `[staging]` | `CANDIDATE_APPROVAL, SHADOW_EVIDENCE, FINAL_DECISION: RESOLVED` |
 | fake-provider cost=`USD 0` | `[staging]` | `cost_usd="0"` |
 | real-provider cost=`NÃO DISPONÍVEL` | `[ABERTO]` | separate cost approval not granted |
+| backup size=`2491960498` bytes | `[backup]` | full archive read `OK` |
+| backup restore entries=`1086` | `[backup]` | `restore_list_entries=1086` |
+| production schema checks=`32` | `[production]` | `schema_ok=true; checked_count=32; missing=[]` |
+| production graph runs=`0` | `[query]` | `graph_runs=0` |
+| production live profiles=`0` | `[query]` | `live_trading_profiles=0` |
