@@ -516,6 +516,17 @@ cleanup() {
 }
 trap cleanup TERM INT
 
+# Dedicated queue services do not host HTTP or application-lifespan schedulers.
+if [ "${SERVICE_MODE:-api}" = "worker" ]; then
+    if [ -z "$CELERY_WORKER_PID" ]; then
+        echo "ERROR: SERVICE_MODE=worker requires a non-empty WORKER_QUEUES value" >&2
+        exit 1
+    fi
+    echo "==> SERVICE_MODE=worker - waiting on isolated Celery worker"
+    wait "$CELERY_WORKER_PID"
+    exit $?
+fi
+
 # ── Start uvicorn (schema is already up-to-date, OR coming up async) ────────
 echo "==> Starting uvicorn..."
 exec uvicorn app.main:app \
