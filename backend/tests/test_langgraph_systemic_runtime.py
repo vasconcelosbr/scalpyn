@@ -50,7 +50,7 @@ def request(*, authority: Authority = Authority.ANALYSIS_ONLY, question: str = "
 def test_langgraph_dependencies_are_pinned():
     requirements = source("backend/requirements.txt")
     assert "langgraph==1.2.9" in requirements
-    assert "langgraph-checkpoint-postgres==3.1.0" in requirements
+    assert "langgraph-checkpoint-postgres==3.1.2" in requirements
     assert "psycopg[binary,pool]==3.3.4" in requirements
 
 

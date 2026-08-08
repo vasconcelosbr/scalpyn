@@ -193,7 +193,7 @@
     },
     {
       "bom-ref": "requirements-L20",
-      "description": "requirements line 20: langgraph-checkpoint-postgres==3.1.0",
+      "description": "requirements line 20: langgraph-checkpoint-postgres==3.1.2",
       "externalReferences": [
         {
           "comment": "implicit dist url",
@@ -202,9 +202,9 @@
         }
       ],
       "name": "langgraph-checkpoint-postgres",
-      "purl": "pkg:pypi/langgraph-checkpoint-postgres@3.1.0",
+      "purl": "pkg:pypi/langgraph-checkpoint-postgres@3.1.2",
       "type": "library",
-      "version": "3.1.0"
+      "version": "3.1.2"
     },
     {
       "bom-ref": "requirements-L32",
