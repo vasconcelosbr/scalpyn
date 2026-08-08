@@ -344,3 +344,12 @@ def test_no_live_autopilot_or_model_promotion_flags_changed(monkeypatch):
     assert settings.runtime_enabled is False
     assert settings.entrypoints_enabled is False
     assert settings.regenerative_shadow_enabled is False
+
+
+def test_candidate_idempotency_key_fits_database_contract():
+    from app.services.profile_versioning_v2 import candidate_idempotency_key
+
+    change_set_id = UUID("00000000-0000-0000-0000-000000000001")
+    key = candidate_idempotency_key(change_set_id, "a" * 64, "b" * 64)
+    assert len(key) <= 160
+    assert key == candidate_idempotency_key(change_set_id, "a" * 64, "b" * 64)

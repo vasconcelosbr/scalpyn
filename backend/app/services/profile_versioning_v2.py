@@ -16,6 +16,18 @@ def content_hash(payload: Any) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def candidate_idempotency_key(change_set_id: UUID, profile_hash: str, score_hash: str) -> str:
+    """Return a deterministic key that fits the canonical varchar(160) contract."""
+    digest = content_hash(
+        {
+            "change_set_id": str(change_set_id),
+            "profile_hash": profile_hash,
+            "score_hash": score_hash,
+        }
+    )
+    return f"systemic-ai-candidate:{digest}"
+
+
 def score_payload_from_profile(config: dict) -> dict:
     """Return the immutable scoring subset used by one profile version."""
     scoring = config.get("scoring") or {}
@@ -240,7 +252,7 @@ async def create_candidate_profile_version(
     await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:profile_id))"), {"profile_id": str(profile_id)})
     profile_hash = content_hash(config)
     score_hash = content_hash(score_config)
-    idempotency_key = f"systemic-ai-candidate:{change_set_id}:{profile_hash}:{score_hash}"
+    idempotency_key = candidate_idempotency_key(change_set_id, profile_hash, score_hash)
     existing = await db.scalar(text(
         "SELECT id FROM profile_versions WHERE idempotency_key = :key"
     ), {"key": idempotency_key})
