@@ -36,7 +36,8 @@ The controlled production deployment is installed but inert. Migration `148`, th
 - Vercel `dpl_EHYzvWjfaPU6MVEtbzgPmQ8YXwsh`: `READY`, aliased to `https://scalpyn.vercel.app` `[production]`.
 - `/intelligence-runs`, `/settings/social-score`, `/settings/risk` and `/settings/strategies` return HTTP 200 `[production]`.
 - Canonical reconciliation: zero graph runs/events/interrupts; 53 active profiles; zero live-trading, Auto-Pilot and shadow-only profiles `[query]`.
-- The protected browser reached the new production route but the saved login session expired; authenticated page proof awaits user re-login `[ABERTO]`.
+- Authenticated `/intelligence-runs` proof completed on the production alias. The page showed runtime `langgraph`, entrypoints and provider canary disabled, strict checkpoints, `live write: denied` and zero records `[authenticated browser]`.
+- No application-origin console error was observed; one error came from the separate `vercel.live` feedback overlay bundle and did not prevent the page from rendering `[browser console]`.
 
 ## Tests
 
@@ -49,7 +50,7 @@ The controlled production deployment is installed but inert. Migration `148`, th
 
 ## Why the verdict is not PROVEN
 
-The prompt's acceptance criteria still require a separately approved real-provider canary, a human Spot-invariant decision, globally green lint/full tests and authenticated proof on the newly deployed production page. Controlled deployment, persistent checkpoints and inert production reconciliation are proven; those remaining items are not.
+The prompt's acceptance criteria still require a separately approved real-provider canary, a human Spot-invariant decision and globally green lint/full tests. Controlled deployment, persistent checkpoints, inert production reconciliation and authenticated production UI are proven; those remaining items are not.
 
 ## Rollback
 

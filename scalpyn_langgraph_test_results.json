@@ -16,6 +16,6 @@
   "production_backup": {"status": "PASSED", "size_bytes": 2491960498, "restore_list_entries": 1086, "full_archive_read": true, "source": "[backup] pg_dump and pg_restore"},
   "production_schema": {"status": "PASSED", "migration_head": "148_langgraph_runtime", "checkpointer_tables": 4, "approved_graph_definitions": 4, "source": "[query] production PostgreSQL"},
   "production_services": {"status": "PASSED", "api_deployment": "92a4a71b-18d7-49c7-9fd9-eb91b976b7ab", "worker_deployment": "b799b590-a114-4f31-8abe-41c846672fcd", "frontend_deployment": "dpl_EHYzvWjfaPU6MVEtbzgPmQ8YXwsh", "source": "[production] Railway and Vercel"},
-  "production_authenticated_ui": {"status": "PENDING_USER_RELOGIN", "source": "[browser] expired saved session redirected to login"},
+  "production_authenticated_ui": {"status": "PASSED", "route": "/intelligence-runs", "runtime": "langgraph", "entrypoints": "disabled", "provider_canary": "disabled", "live_write": "denied", "records": 0, "application_origin_console_errors": 0, "vercel_live_overlay_errors": 1, "source": "[authenticated browser] production alias"},
   "git_diff_check": {"status": "PASSED", "source": "[test] git diff --check"}
 }

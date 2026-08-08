@@ -14,7 +14,7 @@
 | Spot invariant resolution | separate semantic decision and immutable configuration version | BLOCKED HUMAN DECISION |
 | Global lint/full suite | recorded legacy failures | NOT GREEN |
 | Production deployment | backup, migration, API, isolated worker and Vercel deployment | PROVEN CONTROLLED / FLAGS FALSE |
-| Production authenticated UI | new route reached, browser redirected after expired session | PENDING USER RELOGIN |
+| Production authenticated UI | authenticated `/intelligence-runs`; runtime `langgraph`, entrypoints/provider canary disabled and live-write denied | PROVEN PRODUCTION |
 | Live mutation | live-write denial, shadow-only authority and unchanged production | NOT EXECUTED |
 
 ## Numeric evidence

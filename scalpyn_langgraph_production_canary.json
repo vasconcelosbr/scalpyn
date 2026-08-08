@@ -1,5 +1,5 @@
 {
-  "status": "DEPLOYED_INERT_AUTHENTICATED_UI_RELOGIN_REQUIRED",
+  "status": "DEPLOYED_INERT_VERIFIED",
   "environment": "production",
   "backup": {
     "path": "C:\\Users\\ricar\\Documents\\Codex\\2026-08-08\\scalpyn-production-backups\\scalpyn_prod_pre_langgraph_20260808.dump",
@@ -63,7 +63,7 @@
     "autopilot_profiles": 0,
     "shadow_only_profiles": 0
   },
-  "authenticated_ui": "PENDING_USER_RELOGIN",
+  "authenticated_ui": "PROVEN_PRODUCTION_AUTHENTICATED",
   "real_provider_canary": "NOT_RUN_REQUIRES_SEPARATE_COST_APPROVAL",
   "live_write": false,
   "orders_executed_by_deployment": "NOT_RUN",

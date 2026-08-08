@@ -14,8 +14,13 @@ The temporary Vercel automation bypass used for verification was revoked. Deploy
 
 ## Production deployment
 
-Status: `PENDING_USER_RELOGIN`.
+Status: `PROVEN_PRODUCTION_AUTHENTICATED`.
 
-Deployment `dpl_EHYzvWjfaPU6MVEtbzgPmQ8YXwsh` is `READY` and aliased to `https://scalpyn.vercel.app`. The browser loaded the new navigation item and `/intelligence-runs`, then redirected to `/login` because the saved production session had expired `[authenticated-browser attempt]`.
+Deployment `dpl_EHYzvWjfaPU6MVEtbzgPmQ8YXwsh` is `READY` and aliased to `https://scalpyn.vercel.app`. After the user completed login, the authenticated browser rendered `/intelligence-runs` for `Ricardo T.` with the `Admin` role `[authenticated browser verification]`.
 
-No password was read, inferred, reset or submitted. The login tab was left open for the user. This is route and authentication-gate proof, not authenticated page-content proof.
+- The production navigation contains `Intelligence Runs`, and the page heading and orchestration ledger rendered successfully `[authenticated browser verification]`.
+- The visible authority envelope reports runtime `langgraph`, entrypoints `disabled`, provider canary `disabled`, `checkpoint strict` and `live write: denied` `[authenticated browser verification]`.
+- The page reports `0 records` and `Nenhuma execução registrada`, consistent with the production database reconciliation `[authenticated browser verification]`.
+- No application-origin console error was observed. One `InvalidNodeTypeError` originated from the `vercel.live` feedback overlay bundle; the Scalpyn page and authenticated content remained rendered `[browser console]`.
+
+No password was read, inferred, reset or submitted. No form, execution, configuration or live-trading control was activated during verification.
