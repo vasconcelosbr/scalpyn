@@ -1,0 +1,9 @@
+{
+  "status": "PENDING_STAGING_DEPLOYMENT",
+  "environment": "systemic-ai-staging-20260807",
+  "provider": "fake",
+  "cost_usd": "0",
+  "real_provider_canary": "NOT_RUN_REQUIRES_COST_APPROVAL",
+  "live_write": false,
+  "evidence": []
+}

@@ -38,6 +38,13 @@ from .systemic_ai import (
     AIToolCallAudit,
     AIUsageRecord,
 )
+from .ai_graph import (
+    AIGraphDefinition,
+    AIGraphEvent,
+    AIGraphInterrupt,
+    AIGraphRun,
+    AIGraphRuntimeMetadata,
+)
 from .profile_metrics import ProfileMetrics
 from .rule_contribution import RuleContribution
 from .profile_audit_log import ProfileAuditLog
@@ -110,6 +117,11 @@ __all__ = [
     "AIResultRecord",
     "AIToolCallAudit",
     "AIUsageRecord",
+    "AIGraphDefinition",
+    "AIGraphEvent",
+    "AIGraphInterrupt",
+    "AIGraphRun",
+    "AIGraphRuntimeMetadata",
     "ProfileMetrics",
     "RuleContribution",
     "ProfileAuditLog",

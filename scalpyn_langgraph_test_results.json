@@ -1,0 +1,12 @@
+{
+  "critical_suite": {"status": "PASSED", "passed": 85, "failed": 0, "critical_skipped": 0, "source": "[test] pytest critical LangGraph + foundation + Celery"},
+  "mandatory_langgraph_tests": {"status": "PASSED", "passed": 37, "failed": 0, "source": "[test] backend/tests/test_langgraph_systemic_runtime.py"},
+  "backend_collection": {"status": "PASSED", "collected": 1573, "collection_errors": 0, "source": "[test] LANGGRAPH_BACKEND_COLLECTION.txt"},
+  "backend_full_suite": {"status": "FAILED_LEGACY_BASELINE", "passed_before_stop": 278, "failed_before_stop": 20, "maxfail": 20, "source": "[test] LANGGRAPH_BACKEND_FULL_SUITE.txt", "classification": ["legacy migration path test", "stale CatBoost fixtures", "database-dependent tests without reachable test database"]},
+  "frontend_tests": {"status": "PASSED", "passed": 23, "failed": 0, "source": "[test] npm test"},
+  "frontend_typecheck": {"status": "PASSED", "source": "[test] tsc --noEmit"},
+  "frontend_production_build": {"status": "PASSED", "routes": 44, "intelligence_runs_route": true, "source": "[test] next build"},
+  "frontend_global_lint": {"status": "FAILED_LEGACY_BASELINE", "errors": 371, "warnings": 62, "new_files_errors": 0, "source": "[test] eslint global and scoped"},
+  "pip_check": {"status": "PASSED", "source": "[test] pip check"},
+  "git_diff_check": {"status": "PASSED", "source": "[test] git diff --check"}
+}

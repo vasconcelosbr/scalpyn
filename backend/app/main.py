@@ -502,6 +502,10 @@ app.include_router(calibration_evolution_v2_api.router)
 from .copilot import router as copilot_api  # noqa: E402
 app.include_router(copilot_api.router)
 
+# Durable tenant-scoped systemic AI graph runtime and human interrupts.
+from .api import ai_graphs as ai_graphs_api  # noqa: E402
+app.include_router(ai_graphs_api.router)
+
 # WebSocket
 app.include_router(websocket.router)
 

@@ -64,8 +64,12 @@ QUEUE_MICROSTRUCTURE = "microstructure"
 QUEUE_STRUCTURAL = "structural"
 QUEUE_STRUCTURAL_COMPUTE = "structural_compute"
 QUEUE_EXECUTION = "execution"
+QUEUE_AI_ORCHESTRATION = "ai_orchestration"
 
-ALL_QUEUES = (QUEUE_MICROSTRUCTURE, QUEUE_STRUCTURAL, QUEUE_STRUCTURAL_COMPUTE, QUEUE_EXECUTION)
+ALL_QUEUES = (
+    QUEUE_MICROSTRUCTURE, QUEUE_STRUCTURAL, QUEUE_STRUCTURAL_COMPUTE,
+    QUEUE_EXECUTION, QUEUE_AI_ORCHESTRATION,
+)
 
 celery_app = Celery(
     "scalpyn_tasks",
@@ -103,6 +107,7 @@ celery_app = Celery(
         "app.tasks.crypto_ev_score",
         "app.tasks.ml_data_certification",
         "app.tasks.prune_indicator_snapshots",
+        "app.tasks.ai_orchestration",
     ],
 )
 
@@ -221,6 +226,11 @@ TASK_ROUTES = {
     # captura; falha aqui nunca afeta scan/persist_snapshot. DELETE em lotes
     # apenas em indicator_snapshots.
     "app.tasks.prune_indicator_snapshots.run": {"queue": QUEUE_STRUCTURAL_COMPUTE},
+    "app.tasks.ai_orchestration.start_graph_run": {"queue": QUEUE_AI_ORCHESTRATION},
+    "app.tasks.ai_orchestration.resume_graph_run": {"queue": QUEUE_AI_ORCHESTRATION},
+    "app.tasks.ai_orchestration.recover_stale_graph_runs": {"queue": QUEUE_AI_ORCHESTRATION},
+    "app.tasks.ai_orchestration.cancel_graph_run": {"queue": QUEUE_AI_ORCHESTRATION},
+    "app.tasks.ai_orchestration.dispatch_shadow_resume_events": {"queue": QUEUE_AI_ORCHESTRATION},
 }
 
 # Static queue declarations so beat / dispatch never rely on an "implicit"
@@ -239,7 +249,7 @@ TASK_ROUTES = {
 _NO_DEFAULT_QUEUE_NAME = "__no_default__"
 TASK_QUEUES = tuple(
     Queue(name, Exchange(name), routing_key=name)
-    for name in (*ALL_QUEUES, _NO_DEFAULT_QUEUE_NAME)
+    for name in ALL_QUEUES
 )
 
 # ── Per-task cost guards (invariant: no unbounded work) ──────────────────────
@@ -447,6 +457,23 @@ TASK_ANNOTATIONS = {
         "time_limit": 300,
         "soft_time_limit": 270,
         "max_retries": 0,
+        **_NO_REQUEUE_ON_WORKER_LOSS,
+    },
+    "app.tasks.ai_orchestration.start_graph_run": {
+        "time_limit": 900, "soft_time_limit": 840, "rate_limit": "12/m", "max_retries": 0,
+    },
+    "app.tasks.ai_orchestration.resume_graph_run": {
+        "time_limit": 900, "soft_time_limit": 840, "rate_limit": "12/m", "max_retries": 0,
+    },
+    "app.tasks.ai_orchestration.recover_stale_graph_runs": {
+        "time_limit": 120, "soft_time_limit": 100, "rate_limit": "2/m", "max_retries": 0,
+        **_NO_REQUEUE_ON_WORKER_LOSS,
+    },
+    "app.tasks.ai_orchestration.cancel_graph_run": {
+        "time_limit": 120, "soft_time_limit": 100, "rate_limit": "12/m", "max_retries": 0,
+    },
+    "app.tasks.ai_orchestration.dispatch_shadow_resume_events": {
+        "time_limit": 120, "soft_time_limit": 100, "rate_limit": "2/m", "max_retries": 0,
         **_NO_REQUEUE_ON_WORKER_LOSS,
     },
 }
@@ -695,6 +722,16 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.prune_indicator_snapshots.run",
         "schedule": crontab(minute=0),
         "options": {"queue": QUEUE_STRUCTURAL_COMPUTE},
+    },
+    "ai_orchestration_recover_stale_runs": {
+        "task": "app.tasks.ai_orchestration.recover_stale_graph_runs",
+        "schedule": 60.0,
+        "options": {"queue": QUEUE_AI_ORCHESTRATION},
+    },
+    "ai_orchestration_shadow_resume_events": {
+        "task": "app.tasks.ai_orchestration.dispatch_shadow_resume_events",
+        "schedule": 60.0,
+        "options": {"queue": QUEUE_AI_ORCHESTRATION},
     },
 }
 

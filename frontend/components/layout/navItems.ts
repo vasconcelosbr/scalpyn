@@ -25,6 +25,7 @@ import {
   CandlestickChart,
   TestTube2,
   Radio,
+  Workflow,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -59,6 +60,7 @@ export const BACKOFFICE_ITEMS: NavItem[] = [
   { name: "Auto-Pilot", href: "/autopilot", icon: Bot },
   { name: "Profile Intelligence", href: "/profile-intelligence", icon: Brain },
   { name: "Co-Pilot", href: "/profile-intelligence/copilot", icon: Sparkles },
+  { name: "Intelligence Runs", href: "/intelligence-runs", icon: Workflow },
   { name: "ML Models", href: "/ml-models", icon: Brain },
   { name: "Performance", href: "/dashboard/performance", icon: Activity },
   { name: "Ranking de Watchlists", href: "/dashboard/watchlist-performance", icon: BarChart2 },

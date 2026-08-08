@@ -1,0 +1,8 @@
+{
+  "status": "PENDING_STAGING_DEPLOYMENT",
+  "authority": "SHADOW_ONLY",
+  "interrupts_expected": ["CANDIDATE_APPROVAL", "SHADOW_EVIDENCE", "FINAL_DECISION"],
+  "live_pointer_mutation": false,
+  "model_promotion": false,
+  "order_execution": false
+}

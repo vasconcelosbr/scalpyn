@@ -21,6 +21,7 @@ def _load_migration_module():
             "..",
             "alembic",
             "versions",
+            "legacy",
             "023_taker_ratio_scale_v2.py",
         )
     )

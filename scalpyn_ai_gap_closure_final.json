@@ -1,0 +1,26 @@
+{
+  "generated_at": "2026-08-08",
+  "verdict": "PARTIALLY_IMPLEMENTED_BLOCKED_BY_INFRA",
+  "gaps": [
+    {"gap_id":"GAP-001","status":"PARTIAL","reason":"generic leased graph/job recovery implemented; legacy stale AI Critic row not reconciled"},
+    {"gap_id":"GAP-002","status":"PARTIAL","reason":"canonical resolver exists; claude-fable-5 remains unresolved until live catalog query and human selection"},
+    {"gap_id":"GAP-003","status":"PARTIAL","reason":"new graph boundary is tenant-safe; complete legacy AI Critic production proof pending"},
+    {"gap_id":"GAP-004","status":"PARTIAL","reason":"shared foundation and LangGraph runtime exist; paid provider execution remains gated"},
+    {"gap_id":"GAP-005","status":"PARTIAL","reason":"new candidate path is immutable; legacy in-place optimization path remains"},
+    {"gap_id":"GAP-006","status":"CLOSED_CODE_STAGING_PENDING","reason":"configuration bundle and graph linkage implemented"},
+    {"gap_id":"GAP-007","status":"CLOSED_CODE_STAGING_PENDING","reason":"canonical dataset contract and quality gate implemented"},
+    {"gap_id":"GAP-008","status":"BLOCKED_BY_PROVIDER","reason":"real model canary requires cost approval and catalog validation"},
+    {"gap_id":"GAP-009","status":"PARTIAL","reason":"common budget service exists; all legacy provider paths need live conformance proof"},
+    {"gap_id":"GAP-010","status":"PARTIAL","reason":"trust labels and secret checkpoint policy exist; legacy prompt paths remain"},
+    {"gap_id":"GAP-011","status":"CLOSED_CODE_STAGING_PENDING","reason":"central adapter reliability and durable terminalization implemented"},
+    {"gap_id":"GAP-012","status":"OPEN","reason":"Spot sell AI control remains unavailable/unproven"},
+    {"gap_id":"GAP-013","status":"OPEN","reason":"ai-settings alias precedence not migrated"},
+    {"gap_id":"GAP-014","status":"PARTIAL","reason":"lossless reconciliation contract implemented; historical production rows not migrated"},
+    {"gap_id":"GAP-015","status":"PARTIAL","reason":"critical suite and collection pass; global full suite remains non-green"},
+    {"gap_id":"GAP-016","status":"CLOSED_CODE_STAGING_PENDING","reason":"regenerative ledger, graph, interrupts and memory paths implemented"},
+    {"gap_id":"GAP-017","status":"PARTIAL","reason":"clean branch/worktree established; staging and production deployment proof pending"},
+    {"gap_id":"GAP-018","status":"CLOSED_FOUNDATION","reason":"non-development secret validation already implemented and retained"},
+    {"gap_id":"GAP-019","status":"BLOCKED_HUMAN_DECISION","reason":"hard invariant guard exists; production Spot semantic conflict not changed"},
+    {"gap_id":"GAP-020","status":"PARTIAL","reason":"typed tool registry and live-write denial exist; legacy side-effect semantics need full migration proof"}
+  ]
+}

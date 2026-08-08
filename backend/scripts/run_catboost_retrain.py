@@ -66,8 +66,8 @@ def _parse_args():
     return args
 
 
-ARGS = _parse_args()
-DRY_RUN = ARGS.dry_run
+ARGS = None
+DRY_RUN = False
 
 USER_ID = UUID("8080110c-ee9d-4a2b-a53f-6bef86dd8867")
 # Fase 1 B.3 — win threshold vem EXCLUSIVAMENTE da config ml ativa
@@ -129,7 +129,10 @@ def _dry_run_gate_payload(
     }
 
 
-async def main():
+async def main(args=None):
+    global ARGS, DRY_RUN
+    ARGS = args or _parse_args()
+    DRY_RUN = ARGS.dry_run
     from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
     from sqlalchemy.orm import sessionmaker
 
@@ -291,7 +294,7 @@ async def main():
 
 
 if __name__ == "__main__":
-    result = asyncio.run(main())
+    result = asyncio.run(main(_parse_args()))
     import json
     print("\n=== RESULTADO FINAL ===")
     print(json.dumps(result, indent=2, default=str))

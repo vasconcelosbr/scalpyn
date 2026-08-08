@@ -14,6 +14,11 @@ pydantic>=2.7.4
 pydantic-settings>=2.3.4
 pydantic[email]>=2.7.4
 jsonschema>=4.23.0
+# LangGraph runtime pins are intentionally exact. langchain-core/langsmith are
+# transitive requirements of langgraph 1.2.9; external tracing remains disabled.
+langgraph==1.2.9
+langgraph-checkpoint-postgres==3.1.0
+psycopg[binary,pool]==3.3.4
 websockets>=12.0
 python-multipart>=0.0.9
 httpx>=0.27.0

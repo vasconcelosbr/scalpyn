@@ -1,0 +1,23 @@
+{
+  "generated_at": "2026-08-08T03:00:00-03:00",
+  "python_runtime_tested": "3.14.3",
+  "required": {
+    "langgraph": {"version": "1.2.9", "sha256": "c2d98ad94333937922ba04148641c1da2bfe45b5b8e55d7b6dcb0bb2df809e76"},
+    "langgraph-checkpoint-postgres": {"version": "3.1.0", "sha256": "814cce2ef35d792bf07b090a95eed004f1acac0724fe6605536b13f6d1e7032c"},
+    "psycopg": {"version": "3.3.4", "sha256": "b6bbc25ccf05c8fad3b061d9db2ef0909a555171b84b07f29458a447253d679a"},
+    "psycopg-binary": {"version": "3.3.4", "sha256": "c37e024c07308cd06cf3ec51bfd0e7f6157585a4d84d1bce4a7f5f7913719bf8"}
+  },
+  "lock_file": "backend/requirements-langgraph.lock",
+  "resolution_report": "scalpyn_langgraph_pip_resolution.json",
+  "sbom": "scalpyn_langgraph_sbom.cdx.json",
+  "hash_install_check": "PASSED",
+  "pip_check": "PASSED",
+  "mandatory_transitive_note": "langchain-core and langsmith are mandatory transitive dependencies of langgraph 1.2.9; external tracing remains disabled",
+  "security_audit": {
+    "finding": "CVE-2026-71433 reported against checkpoint-postgres 3.1.0",
+    "applicability": "NOT_APPLICABLE_TO_CURRENT_USAGE_WITH_MITIGATIONS",
+    "reason": "Scalpyn uses AsyncPostgresSaver, not PostgresStore namespace search; canonical tenant authorization is outside checkpoint namespace; thread identifiers are server-generated UUIDs",
+    "upstream_fix_status": "3.1.1 named by advisory but not available on PyPI at validation time"
+  },
+  "evidence_source": "[command] pip dry-run report, require-hashes dry-run, pip check, pip-audit"
+}

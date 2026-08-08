@@ -1,0 +1,45 @@
+{
+  "registry_version": "1.0.0",
+  "state_schema_version": "scalpyn-graph-state-v1",
+  "tool_policy_version": "systemic-tool-policy-v1",
+  "source": "backend/app/ai_orchestration/langgraph/registry.py",
+  "graphs": [
+    {
+      "graph_key": "systemic-analysis-v1",
+      "id": "26661c86-7e18-55f3-aa15-53493fe59ed5",
+      "semantic_version": "1.0.0",
+      "status": "APPROVED",
+      "content_hash": "f925c93a8ddf4a8b47c79432a11932de8354b5847fccdded2f72e0db3463abe5",
+      "node_count": 16
+    },
+    {
+      "graph_key": "root-cause-audit-v1",
+      "id": "d008818c-608e-5a47-8b91-06e7f136225d",
+      "semantic_version": "1.0.0",
+      "status": "APPROVED",
+      "content_hash": "006d508c3d1c0abded63ec4e10c952d81c56a58c40cf18753ce8e84195fb4c2c",
+      "node_count": 15
+    },
+    {
+      "graph_key": "regenerative-shadow-v1",
+      "id": "8f173a3c-2bc0-52c1-bad0-f73d5c3eed56",
+      "semantic_version": "1.0.0",
+      "status": "APPROVED",
+      "content_hash": "93e34e8e415fff2769855ef9cbb52b802a783e06b9f77c640e6c241989cbf055",
+      "node_count": 19,
+      "interrupt_count": 3
+    },
+    {
+      "graph_key": "copilot-systemic-v1",
+      "id": "007991c3-1716-5011-ab8d-fbd61cb0a5f2",
+      "semantic_version": "1.0.0",
+      "status": "APPROVED",
+      "content_hash": "b87150daf0f6d0691520a694fc4a929aec6340e770f54c13c2a85c366a6db447",
+      "node_count": 13
+    }
+  ],
+  "evidence": {
+    "registry_migration_match": 4,
+    "source_tag": "[test] migration _definition_rows compared to registry"
+  }
+}

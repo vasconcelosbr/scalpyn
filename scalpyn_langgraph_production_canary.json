@@ -1,0 +1,11 @@
+{
+  "status": "NOT_EXECUTED_HUMAN_CHECKPOINT_REQUIRED",
+  "migration": "NOT_EXECUTED",
+  "api_deploy": "NOT_EXECUTED",
+  "worker_deploy": "NOT_EXECUTED",
+  "frontend_deploy": "NOT_EXECUTED",
+  "real_provider_cost": "NOT_AUTHORIZED",
+  "live_write": false,
+  "orders_executed": 0,
+  "models_promoted": 0
+}
