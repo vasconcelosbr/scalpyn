@@ -353,3 +353,11 @@ def test_candidate_idempotency_key_fits_database_contract():
     key = candidate_idempotency_key(change_set_id, "a" * 64, "b" * 64)
     assert len(key) <= 160
     assert key == candidate_idempotency_key(change_set_id, "a" * 64, "b" * 64)
+
+
+def test_staging_canary_email_passes_api_validation():
+    from pydantic import EmailStr, TypeAdapter
+
+    from app.ai_orchestration.langgraph.staging_canary import CANARY_EMAIL
+
+    assert str(TypeAdapter(EmailStr).validate_python(CANARY_EMAIL)) == CANARY_EMAIL

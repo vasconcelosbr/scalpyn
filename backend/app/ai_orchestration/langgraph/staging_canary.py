@@ -26,7 +26,7 @@ from ...tasks.ai_orchestration import execute_graph_run
 from .config import get_langgraph_settings
 
 
-CANARY_EMAIL = "langgraph-canary@staging.invalid"
+CANARY_EMAIL = "langgraph-canary@staging.scalpyn.com.br"
 
 
 def _hash(value) -> str:
