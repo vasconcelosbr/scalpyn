@@ -11,6 +11,8 @@ import uuid
 GRAPH_NAMESPACE = uuid.UUID("a42c5ab1-1bda-5e45-ae66-554315834a7d")
 STATE_SCHEMA_VERSION = "scalpyn-graph-state-v1"
 TOOL_POLICY_VERSION = "systemic-tool-policy-v1"
+STATE_SCHEMA_VERSION_V2 = "scalpyn-graph-state-v2"
+TOOL_POLICY_VERSION_V2 = "systemic-multimodule-tool-policy-v1"
 
 SYSTEMIC_NODES = (
     "load_request", "authorize_tenant", "resolve_provider_model", "resolve_prompt",
@@ -44,6 +46,42 @@ COPILOT_NODES = (
     "validate_structured_output", "persist_result_usage_audit", "complete",
 )
 
+SYSTEMIC_V2_NODES = (
+    "load_request", "authorize_tenant", "resolve_origin_module",
+    "resolve_module_dependency_plan", "resolve_provider_model", "resolve_prompt",
+    "freeze_dataset", "resolve_configuration_bundle", "run_data_quality_gate",
+    "load_strategy_profiles", "load_shadow", "load_score_engine", "load_global_risk",
+    "load_strategies", "load_ml_evidence", "load_social_score", "load_market_regime",
+    "load_audit_memory", "run_module_conflict_checks", "plan_tools", "execute_tools",
+    "assemble_evidence", "invoke_provider", "validate_output", "persist_result", "complete",
+)
+ROOT_CAUSE_V2_NODES = (
+    "load_request", "authorize_tenant", "identify_change_set", "load_before_after",
+    "validate_contract_equivalence", "compare_data_quality", "compare_market_regime",
+    "compare_social_context", "compare_profile_version", "compare_score_version",
+    "compare_risk_policy", "compare_strategy_policy", "compare_ml_authority",
+    "run_paired_replay", "classify_root_cause", "assemble_evidence", "invoke_provider",
+    "validate_output", "persist_result", "complete",
+)
+REGENERATIVE_V2_NODES = (
+    "receive_degradation", "freeze_comparable_dataset", "resolve_bundle",
+    "classify_root_cause", "create_hypothesis", "retrieve_contextual_memory",
+    "block_repeated_failed_path", "design_ablation", "validate_risk_and_strategy",
+    "interrupt_candidate_approval", "create_profile_candidate_version",
+    "create_score_candidate_version", "start_shadow_experiment", "interrupt_wait_evidence",
+    "resume_from_shadow_event", "evaluate_deterministically", "interrupt_final_decision",
+    "keep_reject_or_create_rollback_version", "persist_outcome",
+    "persist_contextual_memory", "complete",
+)
+COPILOT_V2_NODES = (
+    "load_request", "authorize_tenant", "resolve_origin_module",
+    "resolve_module_dependency_plan", "resolve_provider_model", "resolve_prompt",
+    "load_strategy_profiles", "load_shadow", "load_score_engine", "load_global_risk",
+    "load_strategies", "load_ml_evidence", "load_social_score", "load_market_regime",
+    "load_audit_memory", "plan_tools", "execute_tools", "assemble_evidence",
+    "invoke_provider", "validate_output", "persist_result", "complete",
+)
+
 
 @dataclass(frozen=True)
 class GraphDefinition:
@@ -68,31 +106,34 @@ class GraphDefinition:
 
 
 def _definition(graph_key: str, nodes: tuple[str, ...]) -> GraphDefinition:
-    version = "1.0.0"
+    is_v2 = graph_key.endswith("-v2")
+    version = "2.0.0" if is_v2 else "1.0.0"
+    state_schema_version = STATE_SCHEMA_VERSION_V2 if is_v2 else STATE_SCHEMA_VERSION
+    tool_policy_version = TOOL_POLICY_VERSION_V2 if is_v2 else TOOL_POLICY_VERSION
     edges = tuple((nodes[index], nodes[index + 1]) for index in range(len(nodes) - 1))
     payload = {
         "graph_key": graph_key,
         "semantic_version": version,
-        "state_schema_version": STATE_SCHEMA_VERSION,
+        "state_schema_version": state_schema_version,
         "node_manifest": list(nodes),
         "edge_manifest": [list(edge) for edge in edges],
-        "tool_policy_version": TOOL_POLICY_VERSION,
+        "tool_policy_version": tool_policy_version,
     }
     content_hash = hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
-    approved_at = datetime(2026, 8, 7, tzinfo=timezone.utc)
+    approved_at = datetime(2026, 8, 8 if is_v2 else 7, tzinfo=timezone.utc)
     return GraphDefinition(
         id=uuid.uuid5(GRAPH_NAMESPACE, f"{graph_key}@{version}"),
         graph_key=graph_key,
         semantic_version=version,
-        state_schema_version=STATE_SCHEMA_VERSION,
+        state_schema_version=state_schema_version,
         status="APPROVED",
         content_hash=content_hash,
-        code_revision="148_langgraph_runtime",
+        code_revision="149_systemic_multimodule_langgraph" if is_v2 else "148_langgraph_runtime",
         node_manifest=nodes,
         edge_manifest=edges,
-        tool_policy_version=TOOL_POLICY_VERSION,
+        tool_policy_version=tool_policy_version,
         created_at=approved_at,
         approved_at=approved_at,
     )
@@ -105,6 +146,10 @@ _REGISTRY = {
         _definition("root-cause-audit-v1", ROOT_CAUSE_NODES),
         _definition("regenerative-shadow-v1", REGENERATIVE_NODES),
         _definition("copilot-systemic-v1", COPILOT_NODES),
+        _definition("systemic-analysis-v2", SYSTEMIC_V2_NODES),
+        _definition("root-cause-audit-v2", ROOT_CAUSE_V2_NODES),
+        _definition("regenerative-shadow-v2", REGENERATIVE_V2_NODES),
+        _definition("copilot-systemic-v2", COPILOT_V2_NODES),
     )
 }
 graph_registry = MappingProxyType(_REGISTRY)

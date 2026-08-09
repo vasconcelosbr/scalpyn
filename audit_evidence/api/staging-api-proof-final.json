@@ -1,0 +1,965 @@
+{
+    "captured_at":  "2026-08-09T00:41:35.8941912Z",
+    "environment":  "systemic-ai-staging-20260807",
+    "analysis_context":  {
+                             "run":  {
+                                         "id":  "1040d772-4cf4-463c-8a8c-bc165e0fa433",
+                                         "ai_request_id":  "a8bb1189-0e02-4482-aeca-c387411656ac",
+                                         "graph_definition_id":  "21e02f49-fb91-5d59-8a92-88807b301021",
+                                         "status":  "COMPLETED",
+                                         "current_node":  "complete",
+                                         "authority":  "ANALYSIS_ONLY",
+                                         "state_schema_version":  "scalpyn-graph-state-v2",
+                                         "started_at":  "2026-08-09T00:41:14.602274+00:00",
+                                         "completed_at":  "2026-08-09T00:41:16.744627+00:00",
+                                         "terminal_reason":  "GRAPH_COMPLETED",
+                                         "last_error_code":  null,
+                                         "last_error_safe_message":  null,
+                                         "created_at":  "2026-08-09T00:41:14.482090+00:00",
+                                         "updated_at":  "2026-08-09T00:41:16.744627+00:00",
+                                         "origin_module":  "shadow_portfolio",
+                                         "origin_view":  "/intelligence-runs",
+                                         "graph_key":  "systemic-analysis-v2",
+                                         "graph_version":  "2.0.0"
+                                     },
+                             "model":  {
+                                           "configured_provider":  "fake",
+                                           "configured_model":  "fake-analysis-v1",
+                                           "effective_provider":  "fake",
+                                           "effective_model":  "fake-analysis-v1",
+                                           "resolution_reason":  "isolated_zero_cost_canary"
+                                       },
+                             "prompt":  {
+                                            "key":  "systemic-multimodule",
+                                            "version":  "2.0.0",
+                                            "hash":  "34eb1f1bc64910ddec313b7f1e308c88fb68c33bbf36e770d931e8301193ffa1"
+                                        },
+                             "dataset":  {
+                                             "id":  "20eb8f14-a355-449d-8661-112354a99b32",
+                                             "hash":  "9b6c9becd25663f68e599f32d4822ec28b893278e0f017b7303ffc839ffb44f4",
+                                             "contract_version":  "staging-canary-v1",
+                                             "quality_status":  "PASS",
+                                             "row_count":  1,
+                                             "module_context_refs":  null,
+                                             "context_manifest":  {
+                                                                      "evidence_ids":  [
+                                                                                           "99fd8d8d-ad33-4cf3-a6d4-e2599f1fa686",
+                                                                                           "82761859-f3a4-4229-ad5d-01d60e240618",
+                                                                                           "058383a4-d404-4e17-80bf-b75927667982",
+                                                                                           "5f406bde-2d76-4a44-812e-2bcfca454d78",
+                                                                                           "63daa43e-9b42-4522-b30a-6d999869f32e",
+                                                                                           "2e7fd010-9896-4797-b743-74a08ed8a58a",
+                                                                                           "1db0e0ea-9ce6-45cb-8298-fea4d76989e5",
+                                                                                           "12ff7863-7a93-4fe3-b81e-c52b80de8d92",
+                                                                                           "1b387a62-7b2d-46b9-955b-a82dfa53950f",
+                                                                                           "8e8e48ce-abdf-4f8b-9872-1c47f3d22ca8"
+                                                                                       ],
+                                                                      "tools_called":  [
+                                                                                           "strategy_profiles.get_profile",
+                                                                                           "ml_models.get_authority_status",
+                                                                                           "shadow.get_performance_summary",
+                                                                                           "score_engine.get_effective_configuration_at",
+                                                                                           "global_risk.validate_recommendation",
+                                                                                           "strategies.validate_recommendation",
+                                                                                           "intelligence_runs.list_runs",
+                                                                                           "social_score.get_snapshot",
+                                                                                           "market_regime.get_current",
+                                                                                           "audit_memory.find_similar_decisions"
+                                                                                       ]
+                                                                  }
+                                         },
+                             "bundle":  {
+                                            "id":  "847097fd-b80d-4887-a149-819866bf6399",
+                                            "hash":  "98ef43c45ad4e799ffc1d8015778e0304fee7c3d596b466f867a2ddef1438e87",
+                                            "lineage_status":  "COMPLETE",
+                                            "lineage_refs":  {
+                                                                 "source":  "staging_canary"
+                                                             }
+                                        },
+                             "result":  {
+                                            "status":  "COMPLETED",
+                                            "warnings":  [
+
+                                                         ],
+                                            "limitations":  [
+                                                                "isolated fake adapter; no provider claim"
+                                                            ],
+                                            "memory_hits":  [
+
+                                                            ]
+                                        },
+                             "usage":  {
+                                           "tokens_input":  0,
+                                           "tokens_output":  0,
+                                           "actual_cost":  "0E-8",
+                                           "currency":  "USD",
+                                           "pricing_snapshot_version":  "ZERO_COST_FAKE_STAGING"
+                                       },
+                             "tool_evidence":  [
+                                                   {
+                                                       "id":  "31df2718-94b3-45d2-97d5-dda36c573133",
+                                                       "tool_call_audit_id":  "99fd8d8d-ad33-4cf3-a6d4-e2599f1fa686",
+                                                       "module_key":  "strategy_profiles",
+                                                       "tool_name":  "strategy_profiles.get_profile",
+                                                       "output_hash":  "e681315bf8169ad9223d05f00bd3ed3db1bb28ad4ac88420dc6d0cdfd827a979",
+                                                       "freshness":  {
+                                                                         "sla_seconds":  300,
+                                                                         "dataset_hash":  "9b6c9becd25663f68e599f32d4822ec28b893278e0f017b7303ffc839ffb44f4",
+                                                                         "dataset_window_end":  "2026-08-09T00:41:14.452740+00:00"
+                                                                     },
+                                                       "quality":  "PASS_WITH_MISSINGNESS",
+                                                       "created_at":  "2026-08-09T00:41:16.203946+00:00"
+                                                   },
+                                                   {
+                                                       "id":  "d1a655ea-67c7-43fa-bb39-6e987955a879",
+                                                       "tool_call_audit_id":  "82761859-f3a4-4229-ad5d-01d60e240618",
+                                                       "module_key":  "ml_models",
+                                                       "tool_name":  "ml_models.get_authority_status",
+                                                       "output_hash":  "39a8f01f1ea9e3e13da3047481061b79638bed0e727004c35e5d51aa8f29885c",
+                                                       "freshness":  {
+                                                                         "sla_seconds":  900,
+                                                                         "dataset_hash":  "9b6c9becd25663f68e599f32d4822ec28b893278e0f017b7303ffc839ffb44f4",
+                                                                         "dataset_window_end":  "2026-08-09T00:41:14.452740+00:00"
+                                                                     },
+                                                       "quality":  "NO_DATA",
+                                                       "created_at":  "2026-08-09T00:41:16.220760+00:00"
+                                                   },
+                                                   {
+                                                       "id":  "a254cc76-914c-4fb1-a0a0-272b9c653080",
+                                                       "tool_call_audit_id":  "058383a4-d404-4e17-80bf-b75927667982",
+                                                       "module_key":  "shadow_portfolio",
+                                                       "tool_name":  "shadow.get_performance_summary",
+                                                       "output_hash":  "42417688b801a5657f15a41c812200d502c2dcbf0653c4435683c1b9b3ed6938",
+                                                       "freshness":  {
+                                                                         "sla_seconds":  120,
+                                                                         "dataset_hash":  "9b6c9becd25663f68e599f32d4822ec28b893278e0f017b7303ffc839ffb44f4",
+                                                                         "dataset_window_end":  "2026-08-09T00:41:14.452740+00:00"
+                                                                     },
+                                                       "quality":  "NO_DATA",
+                                                       "created_at":  "2026-08-09T00:41:16.238662+00:00"
+                                                   },
+                                                   {
+                                                       "id":  "26017676-8852-4ad2-91fd-3df23246c970",
+                                                       "tool_call_audit_id":  "5f406bde-2d76-4a44-812e-2bcfca454d78",
+                                                       "module_key":  "score_engine",
+                                                       "tool_name":  "score_engine.get_effective_configuration_at",
+                                                       "output_hash":  "a747e7e2810c0edcd6714bbf350ba365f6aadb9fecbec3630a238a0b3acd581a",
+                                                       "freshness":  {
+                                                                         "sla_seconds":  300,
+                                                                         "dataset_hash":  "9b6c9becd25663f68e599f32d4822ec28b893278e0f017b7303ffc839ffb44f4",
+                                                                         "dataset_window_end":  "2026-08-09T00:41:14.452740+00:00"
+                                                                     },
+                                                       "quality":  "NO_DATA",
+                                                       "created_at":  "2026-08-09T00:41:16.252350+00:00"
+                                                   },
+                                                   {
+                                                       "id":  "96593ad8-957b-477f-af0a-11e97ab25a4f",
+                                                       "tool_call_audit_id":  "63daa43e-9b42-4522-b30a-6d999869f32e",
+                                                       "module_key":  "global_risk",
+                                                       "tool_name":  "global_risk.validate_recommendation",
+                                                       "output_hash":  "9e5fc22ea83271bb4a0e521c3d467696fe13552bf76107671f7788eaad748070",
+                                                       "freshness":  {
+                                                                         "sla_seconds":  60,
+                                                                         "dataset_hash":  "9b6c9becd25663f68e599f32d4822ec28b893278e0f017b7303ffc839ffb44f4",
+                                                                         "dataset_window_end":  "2026-08-09T00:41:14.452740+00:00"
+                                                                     },
+                                                       "quality":  "NO_DATA",
+                                                       "created_at":  "2026-08-09T00:41:16.264878+00:00"
+                                                   },
+                                                   {
+                                                       "id":  "6e10f51a-f60a-4aff-8951-12ce665626c5",
+                                                       "tool_call_audit_id":  "2e7fd010-9896-4797-b743-74a08ed8a58a",
+                                                       "module_key":  "strategies",
+                                                       "tool_name":  "strategies.validate_recommendation",
+                                                       "output_hash":  "f87592004698f79c45f168fe31bdc959833c71fd35cc4112edc9960ab09d7f00",
+                                                       "freshness":  {
+                                                                         "sla_seconds":  300,
+                                                                         "dataset_hash":  "9b6c9becd25663f68e599f32d4822ec28b893278e0f017b7303ffc839ffb44f4",
+                                                                         "dataset_window_end":  "2026-08-09T00:41:14.452740+00:00"
+                                                                     },
+                                                       "quality":  "NO_DATA",
+                                                       "created_at":  "2026-08-09T00:41:16.276976+00:00"
+                                                   },
+                                                   {
+                                                       "id":  "684ccc19-e255-4fb5-bbc1-15170fc06700",
+                                                       "tool_call_audit_id":  "1db0e0ea-9ce6-45cb-8298-fea4d76989e5",
+                                                       "module_key":  "intelligence_runs",
+                                                       "tool_name":  "intelligence_runs.list_runs",
+                                                       "output_hash":  "965f680f35e1c761efc5f8649e8ea49aef6ab1bf059cbe0e623b75f5d0518183",
+                                                       "freshness":  {
+                                                                         "sla_seconds":  30,
+                                                                         "dataset_hash":  "9b6c9becd25663f68e599f32d4822ec28b893278e0f017b7303ffc839ffb44f4",
+                                                                         "dataset_window_end":  "2026-08-09T00:41:14.452740+00:00"
+                                                                     },
+                                                       "quality":  "PASS_WITH_MISSINGNESS",
+                                                       "created_at":  "2026-08-09T00:41:16.288681+00:00"
+                                                   },
+                                                   {
+                                                       "id":  "ef4da75d-d062-4fe5-ad63-459ea19c7f1c",
+                                                       "tool_call_audit_id":  "12ff7863-7a93-4fe3-b81e-c52b80de8d92",
+                                                       "module_key":  "social_score",
+                                                       "tool_name":  "social_score.get_snapshot",
+                                                       "output_hash":  "ea9e73f064b89eb26ae2ff5ab38d2a71b9088b796fa09d19923f12d6444f320d",
+                                                       "freshness":  {
+                                                                         "sla_seconds":  300,
+                                                                         "dataset_hash":  "9b6c9becd25663f68e599f32d4822ec28b893278e0f017b7303ffc839ffb44f4",
+                                                                         "dataset_window_end":  "2026-08-09T00:41:14.452740+00:00"
+                                                                     },
+                                                       "quality":  "NO_DATA",
+                                                       "created_at":  "2026-08-09T00:41:16.301226+00:00"
+                                                   },
+                                                   {
+                                                       "id":  "6c65175b-1546-4f81-8122-59f08d210804",
+                                                       "tool_call_audit_id":  "1b387a62-7b2d-46b9-955b-a82dfa53950f",
+                                                       "module_key":  "market_regime",
+                                                       "tool_name":  "market_regime.get_current",
+                                                       "output_hash":  "703a7369d332cd286279489fb2267eb5298dffd93a9db799625a624230ff8c54",
+                                                       "freshness":  {
+                                                                         "sla_seconds":  300,
+                                                                         "dataset_hash":  "9b6c9becd25663f68e599f32d4822ec28b893278e0f017b7303ffc839ffb44f4",
+                                                                         "dataset_window_end":  "2026-08-09T00:41:14.452740+00:00"
+                                                                     },
+                                                       "quality":  "NO_DATA",
+                                                       "created_at":  "2026-08-09T00:41:16.312759+00:00"
+                                                   },
+                                                   {
+                                                       "id":  "ea4918ba-35a0-4a14-b29e-be7cb5ab61b6",
+                                                       "tool_call_audit_id":  "8e8e48ce-abdf-4f8b-9872-1c47f3d22ca8",
+                                                       "module_key":  "audit_version_memory",
+                                                       "tool_name":  "audit_memory.find_similar_decisions",
+                                                       "output_hash":  "d5136846afb8d069fd052b3837f54a6c54d3a7e4f93c34e634e7873d5717f44f",
+                                                       "freshness":  {
+                                                                         "sla_seconds":  null,
+                                                                         "dataset_hash":  "9b6c9becd25663f68e599f32d4822ec28b893278e0f017b7303ffc839ffb44f4",
+                                                                         "dataset_window_end":  "2026-08-09T00:41:14.452740+00:00"
+                                                                     },
+                                                       "quality":  "PASS_WITH_MISSINGNESS",
+                                                       "created_at":  "2026-08-09T00:41:16.324721+00:00"
+                                                   }
+                                               ]
+                         },
+    "analysis_timeline":  {
+                              "items":  [
+                                            {
+                                                "id":  273,
+                                                "event_type":  "REQUESTED",
+                                                "node_name":  null,
+                                                "status":  "QUEUED",
+                                                "payload":  {
+                                                                "graph_key":  "systemic-analysis-v2",
+                                                                "graph_version":  "2.0.0"
+                                                            },
+                                                "created_at":  "2026-08-09T00:41:14.487532+00:00"
+                                            },
+                                            {
+                                                "id":  275,
+                                                "event_type":  "NODE_COMPLETED",
+                                                "node_name":  "load_request",
+                                                "status":  "RUNNING",
+                                                "payload":  {
+                                                                "state_schema_version":  "scalpyn-graph-state-v2"
+                                                            },
+                                                "created_at":  "2026-08-09T00:41:14.899218+00:00"
+                                            },
+                                            {
+                                                "id":  276,
+                                                "event_type":  "NODE_COMPLETED",
+                                                "node_name":  "authorize_tenant",
+                                                "status":  "RUNNING",
+                                                "payload":  {
+                                                                "state_schema_version":  "scalpyn-graph-state-v2"
+                                                            },
+                                                "created_at":  "2026-08-09T00:41:14.956247+00:00"
+                                            },
+                                            {
+                                                "id":  277,
+                                                "event_type":  "NODE_COMPLETED",
+                                                "node_name":  "resolve_origin_module",
+                                                "status":  "RUNNING",
+                                                "payload":  {
+                                                                "state_schema_version":  "scalpyn-graph-state-v2"
+                                                            },
+                                                "created_at":  "2026-08-09T00:41:15.017000+00:00"
+                                            },
+                                            {
+                                                "id":  278,
+                                                "event_type":  "NODE_COMPLETED",
+                                                "node_name":  "resolve_module_dependency_plan",
+                                                "status":  "RUNNING",
+                                                "payload":  {
+                                                                "state_schema_version":  "scalpyn-graph-state-v2"
+                                                            },
+                                                "created_at":  "2026-08-09T00:41:15.074944+00:00"
+                                            },
+                                            {
+                                                "id":  279,
+                                                "event_type":  "NODE_COMPLETED",
+                                                "node_name":  "resolve_provider_model",
+                                                "status":  "RUNNING",
+                                                "payload":  {
+                                                                "state_schema_version":  "scalpyn-graph-state-v2"
+                                                            },
+                                                "created_at":  "2026-08-09T00:41:15.138818+00:00"
+                                            },
+                                            {
+                                                "id":  280,
+                                                "event_type":  "NODE_COMPLETED",
+                                                "node_name":  "resolve_prompt",
+                                                "status":  "RUNNING",
+                                                "payload":  {
+                                                                "state_schema_version":  "scalpyn-graph-state-v2"
+                                                            },
+                                                "created_at":  "2026-08-09T00:41:15.201179+00:00"
+                                            },
+                                            {
+                                                "id":  281,
+                                                "event_type":  "NODE_COMPLETED",
+                                                "node_name":  "freeze_dataset",
+                                                "status":  "RUNNING",
+                                                "payload":  {
+                                                                "state_schema_version":  "scalpyn-graph-state-v2"
+                                                            },
+                                                "created_at":  "2026-08-09T00:41:15.261723+00:00"
+                                            },
+                                            {
+                                                "id":  282,
+                                                "event_type":  "NODE_COMPLETED",
+                                                "node_name":  "resolve_configuration_bundle",
+                                                "status":  "RUNNING",
+                                                "payload":  {
+                                                                "state_schema_version":  "scalpyn-graph-state-v2"
+                                                            },
+                                                "created_at":  "2026-08-09T00:41:15.328181+00:00"
+                                            },
+                                            {
+                                                "id":  283,
+                                                "event_type":  "NODE_COMPLETED",
+                                                "node_name":  "run_data_quality_gate",
+                                                "status":  "RUNNING",
+                                                "payload":  {
+                                                                "state_schema_version":  "scalpyn-graph-state-v2"
+                                                            },
+                                                "created_at":  "2026-08-09T00:41:15.398629+00:00"
+                                            },
+                                            {
+                                                "id":  284,
+                                                "event_type":  "NODE_COMPLETED",
+                                                "node_name":  "load_strategy_profiles",
+                                                "status":  "RUNNING",
+                                                "payload":  {
+                                                                "state_schema_version":  "scalpyn-graph-state-v2"
+                                                            },
+                                                "created_at":  "2026-08-09T00:41:15.454974+00:00"
+                                            },
+                                            {
+                                                "id":  285,
+                                                "event_type":  "NODE_COMPLETED",
+                                                "node_name":  "load_shadow",
+                                                "status":  "RUNNING",
+                                                "payload":  {
+                                                                "state_schema_version":  "scalpyn-graph-state-v2"
+                                                            },
+                                                "created_at":  "2026-08-09T00:41:15.518307+00:00"
+                                            },
+                                            {
+                                                "id":  286,
+                                                "event_type":  "NODE_COMPLETED",
+                                                "node_name":  "load_score_engine",
+                                                "status":  "RUNNING",
+                                                "payload":  {
+                                                                "state_schema_version":  "scalpyn-graph-state-v2"
+                                                            },
+                                                "created_at":  "2026-08-09T00:41:15.580862+00:00"
+                                            },
+                                            {
+                                                "id":  287,
+                                                "event_type":  "NODE_COMPLETED",
+                                                "node_name":  "load_global_risk",
+                                                "status":  "RUNNING",
+                                                "payload":  {
+                                                                "state_schema_version":  "scalpyn-graph-state-v2"
+                                                            },
+                                                "created_at":  "2026-08-09T00:41:15.643905+00:00"
+                                            },
+                                            {
+                                                "id":  288,
+                                                "event_type":  "NODE_COMPLETED",
+                                                "node_name":  "load_strategies",
+                                                "status":  "RUNNING",
+                                                "payload":  {
+                                                                "state_schema_version":  "scalpyn-graph-state-v2"
+                                                            },
+                                                "created_at":  "2026-08-09T00:41:15.700535+00:00"
+                                            },
+                                            {
+                                                "id":  289,
+                                                "event_type":  "NODE_COMPLETED",
+                                                "node_name":  "load_ml_evidence",
+                                                "status":  "RUNNING",
+                                                "payload":  {
+                                                                "state_schema_version":  "scalpyn-graph-state-v2"
+                                                            },
+                                                "created_at":  "2026-08-09T00:41:15.762487+00:00"
+                                            },
+                                            {
+                                                "id":  290,
+                                                "event_type":  "NODE_COMPLETED",
+                                                "node_name":  "load_social_score",
+                                                "status":  "RUNNING",
+                                                "payload":  {
+                                                                "state_schema_version":  "scalpyn-graph-state-v2"
+                                                            },
+                                                "created_at":  "2026-08-09T00:41:15.830793+00:00"
+                                            },
+                                            {
+                                                "id":  291,
+                                                "event_type":  "NODE_COMPLETED",
+                                                "node_name":  "load_market_regime",
+                                                "status":  "RUNNING",
+                                                "payload":  {
+                                                                "state_schema_version":  "scalpyn-graph-state-v2"
+                                                            },
+                                                "created_at":  "2026-08-09T00:41:15.896363+00:00"
+                                            },
+                                            {
+                                                "id":  292,
+                                                "event_type":  "NODE_COMPLETED",
+                                                "node_name":  "load_audit_memory",
+                                                "status":  "RUNNING",
+                                                "payload":  {
+                                                                "state_schema_version":  "scalpyn-graph-state-v2"
+                                                            },
+                                                "created_at":  "2026-08-09T00:41:15.988017+00:00"
+                                            },
+                                            {
+                                                "id":  293,
+                                                "event_type":  "NODE_COMPLETED",
+                                                "node_name":  "run_module_conflict_checks",
+                                                "status":  "RUNNING",
+                                                "payload":  {
+                                                                "state_schema_version":  "scalpyn-graph-state-v2"
+                                                            },
+                                                "created_at":  "2026-08-09T00:41:16.050536+00:00"
+                                            },
+                                            {
+                                                "id":  294,
+                                                "event_type":  "NODE_COMPLETED",
+                                                "node_name":  "plan_tools",
+                                                "status":  "RUNNING",
+                                                "payload":  {
+                                                                "state_schema_version":  "scalpyn-graph-state-v2"
+                                                            },
+                                                "created_at":  "2026-08-09T00:41:16.106662+00:00"
+                                            },
+                                            {
+                                                "id":  295,
+                                                "event_type":  "NODE_COMPLETED",
+                                                "node_name":  "execute_tools",
+                                                "status":  "RUNNING",
+                                                "payload":  {
+                                                                "state_schema_version":  "scalpyn-graph-state-v2"
+                                                            },
+                                                "created_at":  "2026-08-09T00:41:16.332073+00:00"
+                                            },
+                                            {
+                                                "id":  296,
+                                                "event_type":  "NODE_COMPLETED",
+                                                "node_name":  "assemble_evidence",
+                                                "status":  "RUNNING",
+                                                "payload":  {
+                                                                "state_schema_version":  "scalpyn-graph-state-v2"
+                                                            },
+                                                "created_at":  "2026-08-09T00:41:16.389607+00:00"
+                                            },
+                                            {
+                                                "id":  297,
+                                                "event_type":  "NODE_COMPLETED",
+                                                "node_name":  "invoke_provider",
+                                                "status":  "RUNNING",
+                                                "payload":  {
+                                                                "state_schema_version":  "scalpyn-graph-state-v2"
+                                                            },
+                                                "created_at":  "2026-08-09T00:41:16.481062+00:00"
+                                            },
+                                            {
+                                                "id":  298,
+                                                "event_type":  "NODE_COMPLETED",
+                                                "node_name":  "validate_output",
+                                                "status":  "RUNNING",
+                                                "payload":  {
+                                                                "state_schema_version":  "scalpyn-graph-state-v2"
+                                                            },
+                                                "created_at":  "2026-08-09T00:41:16.541111+00:00"
+                                            },
+                                            {
+                                                "id":  299,
+                                                "event_type":  "NODE_COMPLETED",
+                                                "node_name":  "persist_result",
+                                                "status":  "RUNNING",
+                                                "payload":  {
+                                                                "state_schema_version":  "scalpyn-graph-state-v2"
+                                                            },
+                                                "created_at":  "2026-08-09T00:41:16.628950+00:00"
+                                            },
+                                            {
+                                                "id":  300,
+                                                "event_type":  "NODE_COMPLETED",
+                                                "node_name":  "complete",
+                                                "status":  "RUNNING",
+                                                "payload":  {
+                                                                "state_schema_version":  "scalpyn-graph-state-v2"
+                                                            },
+                                                "created_at":  "2026-08-09T00:41:16.687772+00:00"
+                                            },
+                                            {
+                                                "id":  301,
+                                                "event_type":  "COMPLETED",
+                                                "node_name":  "complete",
+                                                "status":  "COMPLETED",
+                                                "payload":  {
+                                                                "terminal_reason":  "GRAPH_COMPLETED"
+                                                            },
+                                                "created_at":  "2026-08-09T00:41:16.751211+00:00"
+                                            }
+                                        ],
+                              "limit":  200,
+                              "offset":  0
+                          },
+    "regenerative_context":  {
+                                 "run":  {
+                                             "id":  "b9d2ba1f-16f9-4ab5-85a1-335feab96873",
+                                             "ai_request_id":  "6ca5e830-58f9-4ede-8a30-c2bc10d5f684",
+                                             "graph_definition_id":  "b334ff1f-b207-5d2b-a602-8f86cfe08180",
+                                             "status":  "COMPLETED",
+                                             "current_node":  "complete",
+                                             "authority":  "SHADOW_ONLY",
+                                             "state_schema_version":  "scalpyn-graph-state-v2",
+                                             "started_at":  "2026-08-09T00:41:16.799159+00:00",
+                                             "completed_at":  "2026-08-09T00:41:18.770661+00:00",
+                                             "terminal_reason":  "GRAPH_COMPLETED",
+                                             "last_error_code":  null,
+                                             "last_error_safe_message":  null,
+                                             "created_at":  "2026-08-09T00:41:14.496606+00:00",
+                                             "updated_at":  "2026-08-09T00:41:18.770661+00:00",
+                                             "origin_module":  "shadow_portfolio",
+                                             "origin_view":  "/intelligence-runs",
+                                             "graph_key":  "regenerative-shadow-v2",
+                                             "graph_version":  "2.0.0"
+                                         },
+                                 "model":  {
+                                               "configured_provider":  "fake",
+                                               "configured_model":  "fake-analysis-v1",
+                                               "effective_provider":  "fake",
+                                               "effective_model":  "fake-analysis-v1",
+                                               "resolution_reason":  "isolated_zero_cost_canary"
+                                           },
+                                 "prompt":  {
+                                                "key":  "systemic-multimodule",
+                                                "version":  "2.0.0",
+                                                "hash":  "34eb1f1bc64910ddec313b7f1e308c88fb68c33bbf36e770d931e8301193ffa1"
+                                            },
+                                 "dataset":  {
+                                                 "id":  "20eb8f14-a355-449d-8661-112354a99b32",
+                                                 "hash":  "9b6c9becd25663f68e599f32d4822ec28b893278e0f017b7303ffc839ffb44f4",
+                                                 "contract_version":  "staging-canary-v1",
+                                                 "quality_status":  "PASS",
+                                                 "row_count":  1,
+                                                 "module_context_refs":  null,
+                                                 "context_manifest":  {
+                                                                          "evidence_ids":  [
+                                                                                               "99fd8d8d-ad33-4cf3-a6d4-e2599f1fa686",
+                                                                                               "82761859-f3a4-4229-ad5d-01d60e240618",
+                                                                                               "058383a4-d404-4e17-80bf-b75927667982",
+                                                                                               "5f406bde-2d76-4a44-812e-2bcfca454d78",
+                                                                                               "63daa43e-9b42-4522-b30a-6d999869f32e",
+                                                                                               "2e7fd010-9896-4797-b743-74a08ed8a58a",
+                                                                                               "1db0e0ea-9ce6-45cb-8298-fea4d76989e5",
+                                                                                               "12ff7863-7a93-4fe3-b81e-c52b80de8d92",
+                                                                                               "1b387a62-7b2d-46b9-955b-a82dfa53950f",
+                                                                                               "8e8e48ce-abdf-4f8b-9872-1c47f3d22ca8"
+                                                                                           ],
+                                                                          "tools_called":  [
+                                                                                               "strategy_profiles.get_profile",
+                                                                                               "ml_models.get_authority_status",
+                                                                                               "shadow.get_performance_summary",
+                                                                                               "score_engine.get_effective_configuration_at",
+                                                                                               "global_risk.validate_recommendation",
+                                                                                               "strategies.validate_recommendation",
+                                                                                               "intelligence_runs.list_runs",
+                                                                                               "social_score.get_snapshot",
+                                                                                               "market_regime.get_current",
+                                                                                               "audit_memory.find_similar_decisions"
+                                                                                           ]
+                                                                      }
+                                             },
+                                 "bundle":  {
+                                                "id":  "847097fd-b80d-4887-a149-819866bf6399",
+                                                "hash":  "98ef43c45ad4e799ffc1d8015778e0304fee7c3d596b466f867a2ddef1438e87",
+                                                "lineage_status":  "COMPLETE",
+                                                "lineage_refs":  {
+                                                                     "source":  "staging_canary"
+                                                                 }
+                                            },
+                                 "result":  {
+                                                "status":  null,
+                                                "warnings":  [
+
+                                                             ],
+                                                "limitations":  [
+
+                                                                ],
+                                                "memory_hits":  [
+
+                                                                ]
+                                            },
+                                 "usage":  {
+                                               "tokens_input":  null,
+                                               "tokens_output":  null,
+                                               "actual_cost":  null,
+                                               "currency":  null,
+                                               "pricing_snapshot_version":  null
+                                           },
+                                 "tool_evidence":  [
+
+                                                   ]
+                             },
+    "regenerative_timeline":  {
+                                  "items":  [
+                                                {
+                                                    "id":  274,
+                                                    "event_type":  "REQUESTED",
+                                                    "node_name":  null,
+                                                    "status":  "QUEUED",
+                                                    "payload":  {
+                                                                    "graph_key":  "regenerative-shadow-v2",
+                                                                    "graph_version":  "2.0.0"
+                                                                },
+                                                    "created_at":  "2026-08-09T00:41:14.499604+00:00"
+                                                },
+                                                {
+                                                    "id":  302,
+                                                    "event_type":  "NODE_COMPLETED",
+                                                    "node_name":  "receive_degradation",
+                                                    "status":  "RUNNING",
+                                                    "payload":  {
+                                                                    "state_schema_version":  "scalpyn-graph-state-v2"
+                                                                },
+                                                    "created_at":  "2026-08-09T00:41:16.922002+00:00"
+                                                },
+                                                {
+                                                    "id":  303,
+                                                    "event_type":  "NODE_COMPLETED",
+                                                    "node_name":  "freeze_comparable_dataset",
+                                                    "status":  "RUNNING",
+                                                    "payload":  {
+                                                                    "state_schema_version":  "scalpyn-graph-state-v2"
+                                                                },
+                                                    "created_at":  "2026-08-09T00:41:16.987479+00:00"
+                                                },
+                                                {
+                                                    "id":  304,
+                                                    "event_type":  "NODE_COMPLETED",
+                                                    "node_name":  "resolve_bundle",
+                                                    "status":  "RUNNING",
+                                                    "payload":  {
+                                                                    "state_schema_version":  "scalpyn-graph-state-v2"
+                                                                },
+                                                    "created_at":  "2026-08-09T00:41:17.048160+00:00"
+                                                },
+                                                {
+                                                    "id":  305,
+                                                    "event_type":  "NODE_COMPLETED",
+                                                    "node_name":  "classify_root_cause",
+                                                    "status":  "RUNNING",
+                                                    "payload":  {
+                                                                    "state_schema_version":  "scalpyn-graph-state-v2"
+                                                                },
+                                                    "created_at":  "2026-08-09T00:41:17.108223+00:00"
+                                                },
+                                                {
+                                                    "id":  306,
+                                                    "event_type":  "NODE_COMPLETED",
+                                                    "node_name":  "create_hypothesis",
+                                                    "status":  "RUNNING",
+                                                    "payload":  {
+                                                                    "state_schema_version":  "scalpyn-graph-state-v2"
+                                                                },
+                                                    "created_at":  "2026-08-09T00:41:17.170848+00:00"
+                                                },
+                                                {
+                                                    "id":  307,
+                                                    "event_type":  "NODE_COMPLETED",
+                                                    "node_name":  "retrieve_contextual_memory",
+                                                    "status":  "RUNNING",
+                                                    "payload":  {
+                                                                    "state_schema_version":  "scalpyn-graph-state-v2"
+                                                                },
+                                                    "created_at":  "2026-08-09T00:41:17.231974+00:00"
+                                                },
+                                                {
+                                                    "id":  308,
+                                                    "event_type":  "NODE_COMPLETED",
+                                                    "node_name":  "block_repeated_failed_path",
+                                                    "status":  "RUNNING",
+                                                    "payload":  {
+                                                                    "state_schema_version":  "scalpyn-graph-state-v2"
+                                                                },
+                                                    "created_at":  "2026-08-09T00:41:17.292332+00:00"
+                                                },
+                                                {
+                                                    "id":  309,
+                                                    "event_type":  "NODE_COMPLETED",
+                                                    "node_name":  "design_ablation",
+                                                    "status":  "RUNNING",
+                                                    "payload":  {
+                                                                    "state_schema_version":  "scalpyn-graph-state-v2"
+                                                                },
+                                                    "created_at":  "2026-08-09T00:41:17.354467+00:00"
+                                                },
+                                                {
+                                                    "id":  310,
+                                                    "event_type":  "NODE_COMPLETED",
+                                                    "node_name":  "validate_risk_and_strategy",
+                                                    "status":  "RUNNING",
+                                                    "payload":  {
+                                                                    "state_schema_version":  "scalpyn-graph-state-v2"
+                                                                },
+                                                    "created_at":  "2026-08-09T00:41:17.410870+00:00"
+                                                },
+                                                {
+                                                    "id":  311,
+                                                    "event_type":  "INTERRUPTED",
+                                                    "node_name":  "interrupt_candidate_approval",
+                                                    "status":  "INTERRUPTED",
+                                                    "payload":  {
+                                                                    "interrupt_type":  "CANDIDATE_APPROVAL"
+                                                                },
+                                                    "created_at":  "2026-08-09T00:41:17.478846+00:00"
+                                                },
+                                                {
+                                                    "id":  312,
+                                                    "event_type":  "RESUMED",
+                                                    "node_name":  null,
+                                                    "status":  "QUEUED",
+                                                    "payload":  {
+                                                                    "decision":  "approve",
+                                                                    "interrupt_id":  "c0ac5559-5059-4c12-ae82-d7ab0c5208a0"
+                                                                },
+                                                    "created_at":  "2026-08-09T00:41:17.522568+00:00"
+                                                },
+                                                {
+                                                    "id":  313,
+                                                    "event_type":  "NODE_COMPLETED",
+                                                    "node_name":  "create_profile_candidate_version",
+                                                    "status":  "RUNNING",
+                                                    "payload":  {
+                                                                    "state_schema_version":  "scalpyn-graph-state-v2"
+                                                                },
+                                                    "created_at":  "2026-08-09T00:41:17.739668+00:00"
+                                                },
+                                                {
+                                                    "id":  314,
+                                                    "event_type":  "NODE_COMPLETED",
+                                                    "node_name":  "create_score_candidate_version",
+                                                    "status":  "RUNNING",
+                                                    "payload":  {
+                                                                    "state_schema_version":  "scalpyn-graph-state-v2"
+                                                                },
+                                                    "created_at":  "2026-08-09T00:41:17.801102+00:00"
+                                                },
+                                                {
+                                                    "id":  315,
+                                                    "event_type":  "NODE_COMPLETED",
+                                                    "node_name":  "start_shadow_experiment",
+                                                    "status":  "RUNNING",
+                                                    "payload":  {
+                                                                    "state_schema_version":  "scalpyn-graph-state-v2"
+                                                                },
+                                                    "created_at":  "2026-08-09T00:41:17.862683+00:00"
+                                                },
+                                                {
+                                                    "id":  316,
+                                                    "event_type":  "INTERRUPTED",
+                                                    "node_name":  "interrupt_wait_for_shadow_evidence",
+                                                    "status":  "WAITING_SHADOW",
+                                                    "payload":  {
+                                                                    "interrupt_type":  "SHADOW_EVIDENCE"
+                                                                },
+                                                    "created_at":  "2026-08-09T00:41:17.935082+00:00"
+                                                },
+                                                {
+                                                    "id":  317,
+                                                    "event_type":  "RESUMED",
+                                                    "node_name":  null,
+                                                    "status":  "QUEUED",
+                                                    "payload":  {
+                                                                    "decision":  "approve",
+                                                                    "interrupt_id":  "7767ec1f-ba06-4747-8e94-aee11d7d7cc0"
+                                                                },
+                                                    "created_at":  "2026-08-09T00:41:17.976263+00:00"
+                                                },
+                                                {
+                                                    "id":  318,
+                                                    "event_type":  "NODE_COMPLETED",
+                                                    "node_name":  "resume_from_shadow_event",
+                                                    "status":  "RUNNING",
+                                                    "payload":  {
+                                                                    "state_schema_version":  "scalpyn-graph-state-v2"
+                                                                },
+                                                    "created_at":  "2026-08-09T00:41:18.161273+00:00"
+                                                },
+                                                {
+                                                    "id":  319,
+                                                    "event_type":  "NODE_COMPLETED",
+                                                    "node_name":  "evaluate_deterministically",
+                                                    "status":  "RUNNING",
+                                                    "payload":  {
+                                                                    "state_schema_version":  "scalpyn-graph-state-v2"
+                                                                },
+                                                    "created_at":  "2026-08-09T00:41:18.219130+00:00"
+                                                },
+                                                {
+                                                    "id":  320,
+                                                    "event_type":  "INTERRUPTED",
+                                                    "node_name":  "interrupt_final_decision",
+                                                    "status":  "INTERRUPTED",
+                                                    "payload":  {
+                                                                    "interrupt_type":  "FINAL_DECISION"
+                                                                },
+                                                    "created_at":  "2026-08-09T00:41:18.286910+00:00"
+                                                },
+                                                {
+                                                    "id":  321,
+                                                    "event_type":  "RESUMED",
+                                                    "node_name":  null,
+                                                    "status":  "QUEUED",
+                                                    "payload":  {
+                                                                    "decision":  "approve",
+                                                                    "interrupt_id":  "2e38413c-e54f-4b07-b637-f7e35ac8b678"
+                                                                },
+                                                    "created_at":  "2026-08-09T00:41:18.320303+00:00"
+                                                },
+                                                {
+                                                    "id":  322,
+                                                    "event_type":  "NODE_COMPLETED",
+                                                    "node_name":  "keep_reject_or_create_rollback_version",
+                                                    "status":  "RUNNING",
+                                                    "payload":  {
+                                                                    "state_schema_version":  "scalpyn-graph-state-v2"
+                                                                },
+                                                    "created_at":  "2026-08-09T00:41:18.494309+00:00"
+                                                },
+                                                {
+                                                    "id":  323,
+                                                    "event_type":  "NODE_COMPLETED",
+                                                    "node_name":  "persist_outcome",
+                                                    "status":  "RUNNING",
+                                                    "payload":  {
+                                                                    "state_schema_version":  "scalpyn-graph-state-v2"
+                                                                },
+                                                    "created_at":  "2026-08-09T00:41:18.556501+00:00"
+                                                },
+                                                {
+                                                    "id":  324,
+                                                    "event_type":  "NODE_COMPLETED",
+                                                    "node_name":  "persist_contextual_memory",
+                                                    "status":  "RUNNING",
+                                                    "payload":  {
+                                                                    "state_schema_version":  "scalpyn-graph-state-v2"
+                                                                },
+                                                    "created_at":  "2026-08-09T00:41:18.620319+00:00"
+                                                },
+                                                {
+                                                    "id":  325,
+                                                    "event_type":  "NODE_COMPLETED",
+                                                    "node_name":  "complete",
+                                                    "status":  "RUNNING",
+                                                    "payload":  {
+                                                                    "state_schema_version":  "scalpyn-graph-state-v2"
+                                                                },
+                                                    "created_at":  "2026-08-09T00:41:18.712602+00:00"
+                                                },
+                                                {
+                                                    "id":  326,
+                                                    "event_type":  "COMPLETED",
+                                                    "node_name":  "complete",
+                                                    "status":  "COMPLETED",
+                                                    "payload":  {
+                                                                    "terminal_reason":  "GRAPH_COMPLETED"
+                                                                },
+                                                    "created_at":  "2026-08-09T00:41:18.775477+00:00"
+                                                }
+                                            ],
+                                  "limit":  200,
+                                  "offset":  0
+                              },
+    "interrupts":  {
+                       "items":  [
+                                     {
+                                         "id":  "c0ac5559-5059-4c12-ae82-d7ab0c5208a0",
+                                         "interrupt_type":  "CANDIDATE_APPROVAL",
+                                         "status":  "RESOLVED",
+                                         "payload":  {
+                                                         "authority":  "SHADOW_ONLY",
+                                                         "graph_run_id":  "b9d2ba1f-16f9-4ab5-85a1-335feab96873",
+                                                         "interrupt_type":  "CANDIDATE_APPROVAL",
+                                                         "allowed_decisions":  [
+                                                                                   "approve",
+                                                                                   "reject",
+                                                                                   "edit"
+                                                                               ]
+                                                     },
+                                         "allowed_edit_fields":  [
+                                                                     "candidate_version_ids",
+                                                                     "hypothesis_notes"
+                                                                 ],
+                                         "decision":  "approve",
+                                         "created_at":  "2026-08-09T00:41:17.469520+00:00",
+                                         "resolved_at":  "2026-08-09T00:41:17.522269+00:00"
+                                     },
+                                     {
+                                         "id":  "7767ec1f-ba06-4747-8e94-aee11d7d7cc0",
+                                         "interrupt_type":  "SHADOW_EVIDENCE",
+                                         "status":  "RESOLVED",
+                                         "payload":  {
+                                                         "authority":  "SHADOW_ONLY",
+                                                         "graph_run_id":  "b9d2ba1f-16f9-4ab5-85a1-335feab96873",
+                                                         "interrupt_type":  "SHADOW_EVIDENCE",
+                                                         "allowed_decisions":  [
+                                                                                   "approve",
+                                                                                   "reject",
+                                                                                   "edit"
+                                                                               ]
+                                                     },
+                                         "allowed_edit_fields":  [
+
+                                                                 ],
+                                         "decision":  "approve",
+                                         "created_at":  "2026-08-09T00:41:17.925518+00:00",
+                                         "resolved_at":  "2026-08-09T00:41:17.975943+00:00"
+                                     },
+                                     {
+                                         "id":  "2e38413c-e54f-4b07-b637-f7e35ac8b678",
+                                         "interrupt_type":  "FINAL_DECISION",
+                                         "status":  "RESOLVED",
+                                         "payload":  {
+                                                         "authority":  "SHADOW_ONLY",
+                                                         "graph_run_id":  "b9d2ba1f-16f9-4ab5-85a1-335feab96873",
+                                                         "interrupt_type":  "FINAL_DECISION",
+                                                         "allowed_decisions":  [
+                                                                                   "approve",
+                                                                                   "reject",
+                                                                                   "edit"
+                                                                               ]
+                                                     },
+                                         "allowed_edit_fields":  [
+                                                                     "decision_notes",
+                                                                     "rollback_reason"
+                                                                 ],
+                                         "decision":  "approve",
+                                         "created_at":  "2026-08-09T00:41:18.277631+00:00",
+                                         "resolved_at":  "2026-08-09T00:41:18.320009+00:00"
+                                     }
+                                 ]
+                   }
+}

@@ -9,9 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.profile import Profile
 from ..models.ai_provider_key import AIProviderKey
 from ..services.ai_keys_service import get_decrypted_api_key
-from ..ai_orchestration.provider_adapters import CopilotProviderTransport
 from ..ai_orchestration.initial_prompts import initial_prompt_registry
+from ..ai_orchestration.hashing import canonical_hash
 from ..ai_orchestration.provider_registry import default_registry
+from ..services.systemic_langgraph_bridge import SystemicLangGraphBridge
 from .action_service import action_service
 from .prompt import BASE_PROMPT
 from .query_executor import QueryExecutor
@@ -100,6 +101,30 @@ class CopilotAgent:
             "prompt_version": prompt_version.semantic_version,
             "prompt_hash": prompt_version.content_hash,
         }
+        graph_run = await SystemicLangGraphBridge.create_legacy_run_if_enabled(
+            db,
+            tenant_id=user_id,
+            user_id=user_id,
+            origin_module="strategy_profiles",
+            origin_view="copilot-chat",
+            entity_ids=tuple(
+                [str(context["profile_id"])] if context.get("profile_id") else []
+            ),
+            filters={"session_id": str(session_id), "screen_context": context},
+            analysis_mode="SYSTEMIC",
+            question=message,
+            authority="PROPOSAL_ONLY",
+            provider=provider,
+            model=model,
+            correlation_identity=f"{session_id}:{canonical_hash(message)}",
+            graph_key_override="copilot-systemic-v2",
+        )
+        if graph_run is not None:
+            return {
+                "answer": f"Intelligence Run criada: {graph_run.id}",
+                "graph_run_id": str(graph_run.id),
+                **trace,
+            }
         if provider == "openai":
             answer = await self._run_openai(db, user_id, message, session_id, system, model, trace)
         else:
@@ -158,8 +183,8 @@ class CopilotAgent:
         selected_model = model or os.getenv("COPILOT_ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
         async def callback(name, payload):
             return await self._tool(db, user_id, session_id, name, payload, trace)
-        return await CopilotProviderTransport().anthropic(
-            api_key=api_key, model=selected_model, system=system, message=message, tools=TOOLS,
+        return await SystemicLangGraphBridge.execute_copilot(
+            provider="anthropic", api_key=api_key, model=selected_model, system=system, message=message, tools=TOOLS,
             tool_callback=callback, max_rounds=MAX_TOOL_ROUNDS, final_instruction=FINAL_SYNTHESIS_INSTRUCTION,
         )
 
@@ -170,8 +195,8 @@ class CopilotAgent:
         selected_model = model or os.getenv("COPILOT_OPENAI_MODEL", "gpt-4.1-mini")
         async def callback(name, payload):
             return await self._tool(db, user_id, session_id, name, payload, trace)
-        return await CopilotProviderTransport().openai(
-            api_key=api_key, model=selected_model, system=system, message=message, tools=TOOLS,
+        return await SystemicLangGraphBridge.execute_copilot(
+            provider="openai", api_key=api_key, model=selected_model, system=system, message=message, tools=TOOLS,
             tool_callback=callback, max_rounds=MAX_TOOL_ROUNDS, final_instruction=FINAL_SYNTHESIS_INSTRUCTION,
         )
 

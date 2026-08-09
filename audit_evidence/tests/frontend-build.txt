@@ -1,0 +1,83 @@
+
+> frontend@0.1.0 build
+> next build
+
+▲ Next.js 16.3.0 (Turbopack)
+✓ Running next.config.ts took 41ms
+
+  Creating an optimized production build ...
+✓ Compiled successfully in 11.2s
+  Running TypeScript ...
+  Finished TypeScript in 17.7s ...
+  Collecting page data using 11 workers ...
+  Generating static pages using 11 workers (0/44) ...
+  Generating static pages using 11 workers (11/44)
+  Generating static pages using 11 workers (22/44)
+node.exe : The width(-1) and height(-1) of chart should be greater than 0,
+No linha:1 caractere:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (The width(-1) a...greater than 0,:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+
+       please check the style of container, or the props width(100%) and height(100%),
+       or add a minWidth(0) or minHeight(undefined) or use aspect(undefined) to control the
+       height and width.
+  Generating static pages using 11 workers (33/44)
+✓ Generating static pages using 11 workers (44/44) in 1290ms
+  Finalizing page optimization ...
+
+Route (app)
+┌ ○ /
+├ ○ /_not-found
+├ ○ /admin
+├ ○ /alerts
+├ ○ /analytics
+├ ƒ /api/[...path]
+├ ○ /assets
+├ ○ /autopilot
+├ ○ /backoffice
+├ ○ /dashboard
+├ ○ /dashboard/operations
+├ ○ /dashboard/performance
+├ ○ /dashboard/shadow-portfolio
+├ ƒ /dashboard/shadow-portfolio/[shadowId]
+├ ○ /dashboard/watchlist-performance
+├ ○ /data
+├ ○ /decisions
+├ ○ /intelligence-runs
+├ ○ /login
+├ ○ /ml-models
+├ ○ /pools
+├ ƒ /pools/[id]
+├ ○ /profile-intelligence
+├ ○ /profile-intelligence/copilot
+├ ○ /profiles
+├ ƒ /profiles/[id]
+├ ○ /register
+├ ○ /replay
+├ ○ /reports
+├ ○ /settings/block
+├ ○ /settings/exchanges
+├ ○ /settings/filters
+├ ○ /settings/general
+├ ○ /settings/notifications
+├ ○ /settings/risk
+├ ○ /settings/score
+├ ○ /settings/signal
+├ ○ /settings/skills
+├ ○ /settings/social-score
+├ ○ /settings/strategies
+├ ○ /trades
+├ ○ /trading-desk/diagnostics
+├ ○ /trading-desk/futures
+├ ○ /trading-desk/history
+├ ○ /trading-desk/positions
+├ ○ /trading-desk/spot
+└ ○ /watchlist
+
+
+ƒ Proxy (Middleware)
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand

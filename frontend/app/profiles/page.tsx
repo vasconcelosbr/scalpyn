@@ -7,6 +7,7 @@ import { ProfileBuilder } from "@/components/profiles/ProfileBuilder";
 import { ProfileCard } from "@/components/profiles/ProfileCard";
 import { BulkProfileBuilder } from "@/components/profiles/BulkProfileBuilder";
 import { JsonImportBuilder } from "@/components/profiles/JsonImportBuilder";
+import { ModuleAIAnalysisAction } from "@/components/ai/ModuleAIAnalysisAction";
 
 interface Profile {
   id: string;
@@ -191,6 +192,12 @@ export default function ProfilesPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          <ModuleAIAnalysisAction
+            originModule="strategy_profiles"
+            originView="profiles-list"
+            entityIds={Array.from(selectedProfiles)}
+            supportsRegenerative
+          />
           {selectedProfiles.size > 0 && (
             <div className="flex items-center gap-3 mr-4">
               <span className="text-[13px] text-[var(--text-secondary)] font-medium">
@@ -245,7 +252,7 @@ export default function ProfilesPage() {
             <h3 className="text-lg font-bold mb-4 text-[var(--text-primary)]">
               Test Results: {testResults.profile_name}
             </h3>
-            
+
             <div className="grid grid-cols-2 gap-4 mb-4">
               <div className="bg-[var(--bg-secondary)] p-4 rounded-lg">
                 <div className="text-[var(--text-tertiary)] text-xs mb-1">Assets Analyzed</div>

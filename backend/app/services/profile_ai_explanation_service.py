@@ -13,9 +13,8 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..ai_orchestration.provider_adapters import HTTPProviderAdapter
-from ..ai_orchestration.sanitizer import TrustLabel, structured_block
 from ..ai_orchestration.provider_registry import default_registry
+from .systemic_langgraph_bridge import SystemicLangGraphBridge
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +68,30 @@ class ProfileAIExplanationService:
         suggestion = result.scalars().first()
         if not suggestion:
             return ""
+
+        graph_run = await SystemicLangGraphBridge.create_legacy_run_if_enabled(
+            db,
+            tenant_id=user_id,
+            user_id=user_id,
+            origin_module="strategy_profiles",
+            origin_view="profile-suggestion-explanation",
+            entity_ids=(),
+            filters={"suggestion_id": str(suggestion_id)},
+            analysis_mode="SYSTEMIC",
+            question=(
+                "Explique a sugestão de perfil usando somente evidências canônicas, "
+                "declare limitações e não proponha qualquer alteração live."
+            ),
+            authority="ANALYSIS_ONLY",
+            provider="anthropic",
+            model=self.MODEL,
+            correlation_identity=str(suggestion_id),
+        )
+        if graph_run is not None:
+            explanation = f"Intelligence Run criada: {graph_run.id}"
+            suggestion.ai_explanation = explanation
+            await db.flush()
+            return explanation
 
         api_key = await get_anthropic_key(db, user_id)
         if not api_key:
@@ -136,11 +159,11 @@ Responda:
 IMPORTANTE: Não invente métricas. Use apenas os dados fornecidos acima."""
 
         prompt += '\nRetorne JSON: {"analysis":{"explanation":"texto"},"recommendations":[]}.'
-        response = await HTTPProviderAdapter().execute(
+        response = await SystemicLangGraphBridge.execute_json_provider(
             provider=resolution.effective_provider, model=resolution.effective_model,
             system_prompt="You explain Scalpyn profile suggestions using only supplied evidence. Never invent metrics.",
-            user_prompt=structured_block(TrustLabel.DATABASE_UNTRUSTED_TEXT, prompt),
-            tools=[], api_key=api_key, request_id=f"profile-suggestion:{suggestion.id}",
+            user_prompt=prompt, api_key=api_key, request_id=f"profile-suggestion:{suggestion.id}",
+            max_output_tokens=self.MAX_TOKENS,
         )
         analysis = response.output.get("analysis") or {}
         return str(analysis.get("explanation") or analysis.get("summary") or "")

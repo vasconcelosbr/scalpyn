@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Activity, Clock3, Radio, Save, ShieldCheck } from "lucide-react";
 
 import { useConfig } from "@/hooks/useConfig";
+import { ModuleAIAnalysisAction } from "@/components/ai/ModuleAIAnalysisAction";
 
 interface SocialScoreConfig {
   enabled: boolean;
@@ -93,6 +94,8 @@ export default function SocialScoreSettingsPage() {
                 Modificador pós-gates técnicos. Atenção é observacional; somente sentimento ajustado pela confiança entra no score.
               </p>
             </div>
+            <div className="flex flex-col items-stretch gap-2 sm:items-end">
+            <ModuleAIAnalysisAction originModule="social_score" originView="settings-social-score" compact />
             <button
               type="button"
               onClick={() => setOverrides((current) => ({ ...current, enabled: !form.enabled }))}
@@ -108,6 +111,7 @@ export default function SocialScoreSettingsPage() {
                 <span className="block text-[10px] opacity-70">Clique para alternar</span>
               </span>
             </button>
+            </div>
           </div>
         </header>
 

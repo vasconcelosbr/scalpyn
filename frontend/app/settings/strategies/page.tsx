@@ -7,6 +7,7 @@ import {
   ShoppingCart, AlertTriangle, BarChart3, Gauge,
 } from "lucide-react";
 import { useConfig } from "@/hooks/useConfig";
+import { ModuleAIAnalysisAction } from "@/components/ai/ModuleAIAnalysisAction";
 
 // ─── Type Definitions ─────────────────────────────────────────────────────────
 
@@ -367,10 +368,13 @@ export default function StrategySettings() {
             Pipeline completo: Scanner → Compra → 5 camadas de saída. Zero hardcode.
           </p>
         </div>
+        <div className="flex items-center gap-2">
+        <ModuleAIAnalysisAction originModule="strategies" originView="settings-strategies" compact />
         <button onClick={handleSave} disabled={saving} className={`btn ${saved ? "btn-success" : "btn-primary"} flex-shrink-0`}>
           {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
           {saving ? "Salvando..." : saved ? "Salvo!" : "Salvar Tudo"}
         </button>
+        </div>
       </div>
 
       {/* ── Scanner Config ── */}

@@ -72,11 +72,7 @@ ALL_QUEUES = (
     QUEUE_EXECUTION, QUEUE_AI_ORCHESTRATION,
 )
 
-celery_app = Celery(
-    "scalpyn_tasks",
-    broker=settings.REDIS_URL,
-    backend=settings.REDIS_URL,
-    include=[
+_ALL_TASK_MODULES = (
         "app.tasks.collect_market_data",
         "app.tasks.collect_structural_30m",
         "app.tasks.compute_indicators",
@@ -109,7 +105,24 @@ celery_app = Celery(
         "app.tasks.ml_data_certification",
         "app.tasks.prune_indicator_snapshots",
         "app.tasks.ai_orchestration",
-    ],
+)
+
+
+def _configured_task_modules() -> tuple[str, ...]:
+    """Keep the dedicated AI worker isolated from live-trading task imports."""
+    queues = tuple(
+        item.strip() for item in os.getenv("WORKER_QUEUES", "").split(",") if item.strip()
+    )
+    if queues == (QUEUE_AI_ORCHESTRATION,):
+        return ("app.tasks.ai_orchestration",)
+    return _ALL_TASK_MODULES
+
+
+celery_app = Celery(
+    "scalpyn_tasks",
+    broker=settings.REDIS_URL,
+    backend=settings.REDIS_URL,
+    include=list(_configured_task_modules()),
 )
 
 # ── Task → queue routing (invariant #4) ──────────────────────────────────────
@@ -228,6 +241,7 @@ TASK_ROUTES = {
     # apenas em indicator_snapshots.
     "app.tasks.prune_indicator_snapshots.run": {"queue": QUEUE_STRUCTURAL_COMPUTE},
     "app.tasks.ai_orchestration.start_graph_run": {"queue": QUEUE_AI_ORCHESTRATION},
+    "app.tasks.ai_orchestration.dispatch_queued_graph_runs": {"queue": QUEUE_AI_ORCHESTRATION},
     "app.tasks.ai_orchestration.resume_graph_run": {"queue": QUEUE_AI_ORCHESTRATION},
     "app.tasks.ai_orchestration.recover_stale_graph_runs": {"queue": QUEUE_AI_ORCHESTRATION},
     "app.tasks.ai_orchestration.cancel_graph_run": {"queue": QUEUE_AI_ORCHESTRATION},
@@ -471,6 +485,10 @@ TASK_ANNOTATIONS = {
     },
     "app.tasks.ai_orchestration.start_graph_run": {
         "time_limit": 900, "soft_time_limit": 840, "rate_limit": "12/m", "max_retries": 0,
+    },
+    "app.tasks.ai_orchestration.dispatch_queued_graph_runs": {
+        "time_limit": 120, "soft_time_limit": 100, "rate_limit": "12/m", "max_retries": 0,
+        **_NO_REQUEUE_ON_WORKER_LOSS,
     },
     "app.tasks.ai_orchestration.resume_graph_run": {
         "time_limit": 900, "soft_time_limit": 840, "rate_limit": "12/m", "max_retries": 0,
@@ -735,6 +753,11 @@ celery_app.conf.beat_schedule = {
     "ai_orchestration_recover_stale_runs": {
         "task": "app.tasks.ai_orchestration.recover_stale_graph_runs",
         "schedule": 60.0,
+        "options": {"queue": QUEUE_AI_ORCHESTRATION},
+    },
+    "ai_orchestration_dispatch_queued_runs": {
+        "task": "app.tasks.ai_orchestration.dispatch_queued_graph_runs",
+        "schedule": float(os.getenv("AI_ORCHESTRATION_DISPATCH_SECONDS", "15")),
         "options": {"queue": QUEUE_AI_ORCHESTRATION},
     },
     "ai_orchestration_shadow_resume_events": {

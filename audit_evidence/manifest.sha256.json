@@ -1,0 +1,135 @@
+{
+    "generated_at":  "2026-08-09T01:09:51.9235164Z",
+    "files":  [
+                  {
+                      "path":  "audit_evidence/api/health-final.json",
+                      "sha256":  "8a8019a019efe7102947408ec3b0c1918b2b214a09b12a968c4f328c93d25390",
+                      "bytes":  52
+                  },
+                  {
+                      "path":  "audit_evidence/api/staging-api-proof-final.json",
+                      "sha256":  "222a1e2be96fd7b3e87264930e5bdaf6143807b01ee20ba49206157d063e4922",
+                      "bytes":  76894
+                  },
+                  {
+                      "path":  "audit_evidence/canary/staging-canary-final.json",
+                      "sha256":  "6ec50f60616fc50e95b32b838e1127a5f102b174d82a75d46ef7d1924fca7121",
+                      "bytes":  39297
+                  },
+                  {
+                      "path":  "audit_evidence/db/alembic-heads.txt",
+                      "sha256":  "0e9529dc38f11371c326330a8e5b8a753b6d37188901ed02036252440f7ce8ee",
+                      "bytes":  33
+                  },
+                  {
+                      "path":  "audit_evidence/db/alembic-upgrade-head.sql",
+                      "sha256":  "690498de82920291278e4121619f27e45bb0dfd7382e499bd55e0eb024d51b63",
+                      "bytes":  304140
+                  },
+                  {
+                      "path":  "audit_evidence/db/runtime-persistence-proof.json",
+                      "sha256":  "6ec50f60616fc50e95b32b838e1127a5f102b174d82a75d46ef7d1924fca7121",
+                      "bytes":  39297
+                  },
+                  {
+                      "path":  "audit_evidence/logs/api-final.jsonl",
+                      "sha256":  "64722f759f695f62ee44eda83e674169f2b8f67fc43fbfc1753f65ea1766e093",
+                      "bytes":  11576
+                  },
+                  {
+                      "path":  "audit_evidence/logs/worker-final.jsonl",
+                      "sha256":  "45f4fe330f6356de772b81f08b5378e72ed7b5ffa8fca609592af3f15d3db25a",
+                      "bytes":  7321
+                  },
+                  {
+                      "path":  "audit_evidence/railway/api-deployments.json",
+                      "sha256":  "c100e301507beaac6e864d9e19ea4d27362ab271717c1796c5bc941a9452fcf7",
+                      "bytes":  35926
+                  },
+                  {
+                      "path":  "audit_evidence/railway/status.json",
+                      "sha256":  "ab49a43cde734ffd28a1cda28a2007539b72949e954d233e3a99a44925c25577",
+                      "bytes":  149233
+                  },
+                  {
+                      "path":  "audit_evidence/railway/worker-deployments.json",
+                      "sha256":  "fe1d19ef1caf9ad928a819cd0dd8b4735516ed9cf7c7838f6d7a9f417c8ef6c0",
+                      "bytes":  20044
+                  },
+                  {
+                      "path":  "audit_evidence/tests/deliverable-generation.txt",
+                      "sha256":  "2ac44050d6981682e1e10b906a5af2dbffaaffccb45b71817e5b6120387f9ab9",
+                      "bytes":  99
+                  },
+                  {
+                      "path":  "audit_evidence/tests/direct-provider-classification.md",
+                      "sha256":  "ce7f709fb5a92af9c3b859a63d98820df782c1bc333059d765850cfd816e2488",
+                      "bytes":  535
+                  },
+                  {
+                      "path":  "audit_evidence/tests/direct-provider-scan.txt",
+                      "sha256":  "a9eddc62eaee236d7e506bdb5af4c418f900d57449e811bf88bdcf314e002731",
+                      "bytes":  1695
+                  },
+                  {
+                      "path":  "audit_evidence/tests/focused-backend.txt",
+                      "sha256":  "476a8fc405844de4bc67934141ef18cd70d50dd6bfc74d5b9bff3811c4860956",
+                      "bytes":  750
+                  },
+                  {
+                      "path":  "audit_evidence/tests/focused-backend.xml",
+                      "sha256":  "aed463046894d1f7ea42d9590ae1eabb7f0dd5dc0924607df5a15ab4214cec76",
+                      "bytes":  10587
+                  },
+                  {
+                      "path":  "audit_evidence/tests/frontend-build.txt",
+                      "sha256":  "fc5a944a68d46885a138d34c7c15509bc357416a61dad9dc29e6238737d97acc",
+                      "bytes":  2538
+                  },
+                  {
+                      "path":  "audit_evidence/tests/frontend-lint.txt",
+                      "sha256":  "af8f7442a1aef7e63cc1b63e03e6d508a52121d337759659e06ed749d4f0fe25",
+                      "bytes":  230017
+                  },
+                  {
+                      "path":  "audit_evidence/tests/frontend-tests.txt",
+                      "sha256":  "1dd744908dc2eab8290063323bde9a3adc74730c42bac78d887ac4fc0e0ff20c",
+                      "bytes":  2328
+                  },
+                  {
+                      "path":  "audit_evidence/tests/full-backend.xml",
+                      "sha256":  "1c9a79708ecb8442ba898ba0fa67882daa455ee4073b2f993d46a0c58aa41a82",
+                      "bytes":  1215492
+                  },
+                  {
+                      "path":  "audit_evidence/tests/git-diff-check.txt",
+                      "sha256":  "7648cb9746a02c905721069d1b595fee77ccb04e4faa6bed1db4962f96a432cc",
+                      "bytes":  5565
+                  },
+                  {
+                      "path":  "audit_evidence/tests/graphify-update.txt",
+                      "sha256":  "2144631561f1f8aecad4376603e191de6ced94e51e533aed8b28ae3bfcd54bd4",
+                      "bytes":  1273
+                  },
+                  {
+                      "path":  "audit_evidence/tests/npm-audit.json",
+                      "sha256":  "69f18235403ebaa40ca411cdcb400011eecd0df13ab587e837484c950cec2fe3",
+                      "bytes":  1222
+                  },
+                  {
+                      "path":  "audit_evidence/tests/pip-check.txt",
+                      "sha256":  "9261363b733079a641c2e4cc9bc46ffa1d8336945a87f807b6cf68847dbc9b09",
+                      "bytes":  30
+                  },
+                  {
+                      "path":  "audit_evidence/tests/vercel-cli-validation.json",
+                      "sha256":  "2a66ccf41a7d2b8f6340cd0ed40039516a4fe496ceb2ea4528c1bbaacbebc07d",
+                      "bytes":  102
+                  },
+                  {
+                      "path":  "audit_evidence/ui/ui-intelligence-runs.png",
+                      "sha256":  "292d62a2e02d7715ea167f2062d6aea68400fb35e3f4a9432802b027bee51b88",
+                      "bytes":  75313
+                  }
+              ]
+}

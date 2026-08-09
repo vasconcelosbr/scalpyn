@@ -146,6 +146,8 @@ async def _mark_interrupted(db, run_id: UUID, interrupt_value):
         "SHADOW_EVIDENCE": "interrupt_wait_for_shadow_evidence",
         "FINAL_DECISION": "interrupt_final_decision",
     }.get(interrupt_type)
+    if interrupt_type == "SHADOW_EVIDENCE" and run.current_node is None:
+        run.current_node = "interrupt_wait_evidence"
     run.lease_owner = None
     run.lease_expires_at = None
     run.updated_at = _now()
@@ -247,6 +249,27 @@ async def execute_graph_run(run_id: UUID, *, resume_payload: dict | None = None)
 @celery_app.task(name="app.tasks.ai_orchestration.start_graph_run")
 def start_graph_run(run_id: str) -> dict:
     return asyncio.run(execute_graph_run(UUID(run_id)))
+
+
+@celery_app.task(name="app.tasks.ai_orchestration.dispatch_queued_graph_runs")
+def dispatch_queued_graph_runs() -> dict:
+    """Transactional outbox dispatcher for API and legacy-created graph runs."""
+    async def _queued(db):
+        rows = list((await db.execute(select(AIGraphRun.id).where(
+            AIGraphRun.status == "QUEUED",
+        ).order_by(AIGraphRun.created_at).limit(50))).scalars().all())
+        return [str(value) for value in rows]
+
+    run_ids = asyncio.run(run_db_task(_queued, celery=True))
+    for run_id in run_ids:
+        enqueue(
+            "app.tasks.ai_orchestration.start_graph_run",
+            dedup_key=f"ai-graph-queued:{run_id}",
+            ttl_seconds=600,
+            queue="ai_orchestration",
+            args=(run_id,),
+        )
+    return {"status": "COMPLETED", "dispatched": len(run_ids)}
 
 
 @celery_app.task(name="app.tasks.ai_orchestration.resume_graph_run")

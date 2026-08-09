@@ -1,0 +1,12 @@
+{
+  "status": "PROVEN_IN_STAGING",
+  "run_b_reused_run_a": true,
+  "run_b_memory_hit_ids": [
+    "6261b945-0920-49bc-a425-ea3a039b7c90"
+  ],
+  "run_c_avoided_global_block": true,
+  "run_c_different_context_memory_hit_ids": [],
+  "context_fingerprint_ab": "e96530e8dada73b9cba12b352c47c0f90ce4c7c1887419e2fafb2b9443feff87",
+  "context_fingerprint_c": "f1a44eb7b7065e54382de9fedff8328dc0f5086c5b8c5bef12f69a43de31c42d",
+  "mutation_fingerprint": "e5928628d7d46e3eb1da8a8f4049935eabe257facf5dbca7d96dc3b2015beb13"
+}

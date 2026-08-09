@@ -55,6 +55,12 @@ class ProviderModelRegistry:
             entry.model_dump(mode="json") for entry in sorted(self._entries.values(), key=lambda x: (x.provider, x.model_id))
         ])
 
+    def get_entry(self, provider: str, model_id: str) -> ModelCatalogEntry:
+        entry = self._entries.get((provider, model_id))
+        if entry is None or not entry.allowed:
+            raise fail(AIErrorCode.MODEL_UNKNOWN, f"Unknown model for provider {provider}")
+        return entry
+
     def resolve(self, *, requested_provider: str | None, requested_model: str | None,
                 configured_provider: str | None, configured_model: str | None,
                 tenant_default: tuple[str, str] | None = None,

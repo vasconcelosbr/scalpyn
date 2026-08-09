@@ -26,6 +26,8 @@ from .crypto_ev import CryptoEVL3ReplayFlag, CryptoEVSnapshot
 from .opportunity_snapshot import OpportunitySnapshot
 from .social_intelligence import SocialAssetObservation, SocialIntelligenceRun
 from .systemic_ai import (
+    AIModuleCapabilityRecord,
+    AIModelApprovalRecord,
     AIBudgetPolicyRecord,
     AIConfigurationBundleRecord,
     AIDatasetSnapshotRecord,
@@ -36,6 +38,7 @@ from .systemic_ai import (
     AIRequestRecord,
     AIResultRecord,
     AIToolCallAudit,
+    AIToolEvidenceRecord,
     AIUsageRecord,
 )
 from .ai_graph import (
@@ -107,6 +110,8 @@ __all__ = [
     "SocialAssetObservation",
     "SocialIntelligenceRun",
     "AIBudgetPolicyRecord",
+    "AIModuleCapabilityRecord",
+    "AIModelApprovalRecord",
     "AIConfigurationBundleRecord",
     "AIDatasetSnapshotRecord",
     "AIJobRecord",
@@ -116,6 +121,7 @@ __all__ = [
     "AIRequestRecord",
     "AIResultRecord",
     "AIToolCallAudit",
+    "AIToolEvidenceRecord",
     "AIUsageRecord",
     "AIGraphDefinition",
     "AIGraphEvent",

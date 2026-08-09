@@ -44,12 +44,20 @@ async def inspect_metadata(tenant_id: UUID, thread_id: UUID) -> dict:
         lambda db: _authorized_run(db, tenant_id=tenant_id, thread_id=thread_id)
     )
     async with postgres_checkpointer() as saver:
-        config = {"configurable": {"thread_id": str(thread_id), "checkpoint_ns": "scalpyn"}}
+        # The root graph can persist under the runtime's effective namespace
+        # (currently the empty root namespace). Authorization is anchored to
+        # the canonical tenant/thread row above, so enumerate every namespace
+        # for that single authorized thread instead of assuming one.
+        config = {"configurable": {"thread_id": str(thread_id)}}
         checkpoints = [item async for item in saver.alist(config, limit=100)]
     metadata["checkpoint_count"] = len(checkpoints)
     metadata["checkpoint_ids"] = [
         item.config.get("configurable", {}).get("checkpoint_id") for item in checkpoints
     ]
+    metadata["checkpoint_namespaces"] = sorted({
+        str(item.config.get("configurable", {}).get("checkpoint_ns", ""))
+        for item in checkpoints
+    })
     return metadata
 
 

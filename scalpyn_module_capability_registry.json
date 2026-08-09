@@ -1,0 +1,317 @@
+{
+  "generated_at": "2026-08-09T01:08:49.549813+00:00",
+  "source": "backend/app/ai_orchestration/module_registry.py",
+  "immutability": "APPROVED rows and registry values are immutable",
+  "count": 10,
+  "items": [
+    {
+      "module_key": "audit_version_memory",
+      "version": "1.0.0",
+      "entities": [
+        "decision_memory",
+        "decision_hypotheses",
+        "ai_change_sets",
+        "config_audit_log"
+      ],
+      "read_tools": [
+        "audit_memory.get_change_lineage",
+        "audit_memory.get_profile_changes",
+        "audit_memory.get_score_changes",
+        "audit_memory.get_rollbacks",
+        "audit_memory.get_experiment_history",
+        "audit_memory.find_similar_decisions"
+      ],
+      "write_tools": [
+        "audit_memory.persist_hypothesis",
+        "audit_memory.persist_decision_memory"
+      ],
+      "dependencies": [],
+      "freshness_sla_seconds": null,
+      "risk_class": "AUDIT_WRITE",
+      "tenant_scoped": true,
+      "content_hash": "de13ec2cb4f249a83a99ddadd82c526073844a7c2bca960eb2d901ea82f8eb6e",
+      "status": "APPROVED"
+    },
+    {
+      "module_key": "global_risk",
+      "version": "1.0.0",
+      "entities": [
+        "config_profiles",
+        "positions",
+        "trades",
+        "pools"
+      ],
+      "read_tools": [
+        "global_risk.get_effective_policy",
+        "global_risk.get_policy_version",
+        "global_risk.get_current_exposure",
+        "global_risk.validate_recommendation",
+        "global_risk.explain_conflicts",
+        "global_risk.get_circuit_breaker_state"
+      ],
+      "write_tools": [],
+      "dependencies": [
+        "strategies",
+        "current_exposure"
+      ],
+      "freshness_sla_seconds": 60,
+      "risk_class": "HARD_VETO_READ_ONLY",
+      "tenant_scoped": true,
+      "content_hash": "7a3a4e44e08006cffee636741454713fd1fa4a880e5b84e17863dd1ecb01a98e",
+      "status": "APPROVED"
+    },
+    {
+      "module_key": "intelligence_runs",
+      "version": "1.0.0",
+      "entities": [
+        "ai_graph_runs",
+        "ai_graph_events",
+        "ai_graph_interrupts"
+      ],
+      "read_tools": [
+        "intelligence_runs.get_run",
+        "intelligence_runs.list_runs",
+        "intelligence_runs.get_timeline",
+        "intelligence_runs.get_interrupts"
+      ],
+      "write_tools": [],
+      "dependencies": [
+        "audit_version_memory"
+      ],
+      "freshness_sla_seconds": 30,
+      "risk_class": "READ_ONLY",
+      "tenant_scoped": true,
+      "content_hash": "441818b7d9fc0e62ff38a98ae6d880dd2d7cc4f09dcd6ea577a6cce5bdd2b526",
+      "status": "APPROVED"
+    },
+    {
+      "module_key": "market_regime",
+      "version": "1.0.0",
+      "entities": [
+        "regime_history",
+        "indicator_snapshots"
+      ],
+      "read_tools": [
+        "market_regime.get_current",
+        "market_regime.get_history",
+        "market_regime.compare_windows",
+        "market_regime.get_confidence",
+        "market_regime.get_features"
+      ],
+      "write_tools": [],
+      "dependencies": [
+        "indicator_snapshots"
+      ],
+      "freshness_sla_seconds": 300,
+      "risk_class": "READ_ONLY",
+      "tenant_scoped": true,
+      "content_hash": "050742182e64b2d63cf28b9434350d699f65eef99c32b73a2890115df6a26c19",
+      "status": "APPROVED"
+    },
+    {
+      "module_key": "ml_models",
+      "version": "1.0.0",
+      "entities": [
+        "ml_model_registry",
+        "ml_evidence_registry",
+        "algorithm_forward_validations"
+      ],
+      "read_tools": [
+        "ml_models.get_registry",
+        "ml_models.get_active_models",
+        "ml_models.get_model_metrics",
+        "ml_models.get_feature_contract",
+        "ml_models.get_label_contract",
+        "ml_models.get_training_window",
+        "ml_models.get_drift_status",
+        "ml_models.get_authority_status",
+        "ml_models.get_recent_experiments"
+      ],
+      "write_tools": [],
+      "dependencies": [
+        "shadow_portfolio",
+        "strategy_profiles",
+        "dataset_quality",
+        "audit_version_memory"
+      ],
+      "freshness_sla_seconds": 900,
+      "risk_class": "READ_ONLY",
+      "tenant_scoped": true,
+      "content_hash": "69ec7202186afb96e593898c604d56cda6197a08b742faa2c1218d1f01fe05ea",
+      "status": "APPROVED"
+    },
+    {
+      "module_key": "score_engine",
+      "version": "1.0.0",
+      "entities": [
+        "score_engine_versions",
+        "rule_contribution",
+        "config_profiles"
+      ],
+      "read_tools": [
+        "score_engine.get_effective_configuration_at",
+        "score_engine.get_version_history",
+        "score_engine.explain_score",
+        "score_engine.get_component_contributions",
+        "score_engine.get_rule_impact",
+        "score_engine.compare_versions",
+        "score_engine.estimate_coverage_impact",
+        "score_engine.validate_change_set"
+      ],
+      "write_tools": [
+        "score_engine.create_candidate_version"
+      ],
+      "dependencies": [
+        "strategy_profiles",
+        "shadow_portfolio",
+        "global_risk",
+        "strategies",
+        "market_regime",
+        "social_score",
+        "audit_version_memory"
+      ],
+      "freshness_sla_seconds": 300,
+      "risk_class": "CANDIDATE_ONLY",
+      "tenant_scoped": true,
+      "content_hash": "34139e4f901b51091f3d8de855c8418abe32c856193a10881187a6a516248c70",
+      "status": "APPROVED"
+    },
+    {
+      "module_key": "shadow_portfolio",
+      "version": "1.0.0",
+      "entities": [
+        "shadow_trades",
+        "shadow_trade_report_runs",
+        "shadow_experiments"
+      ],
+      "read_tools": [
+        "shadow.freeze_analysis_dataset",
+        "shadow.get_performance_summary",
+        "shadow.get_profile_performance",
+        "shadow.get_score_buckets",
+        "shadow.get_mae_mfe",
+        "shadow.get_delayed_tp",
+        "shadow.get_outcome_horizons",
+        "shadow.get_data_quality",
+        "shadow.compare_champion_candidate",
+        "shadow.get_experiment_status",
+        "shadow.get_experiment_result"
+      ],
+      "write_tools": [
+        "shadow.create_experiment"
+      ],
+      "dependencies": [
+        "strategy_profiles",
+        "score_engine",
+        "global_risk",
+        "strategies",
+        "market_regime",
+        "social_score",
+        "ml_models",
+        "audit_version_memory"
+      ],
+      "freshness_sla_seconds": 120,
+      "risk_class": "SHADOW_ONLY",
+      "tenant_scoped": true,
+      "content_hash": "94b4dbd6e6884041fed8695802ef269365d2aa36e22c2f68c77f9843237d5276",
+      "status": "APPROVED"
+    },
+    {
+      "module_key": "social_score",
+      "version": "1.0.0",
+      "entities": [
+        "social_intelligence_runs",
+        "social_asset_observations"
+      ],
+      "read_tools": [
+        "social_score.get_snapshot",
+        "social_score.get_source_breakdown",
+        "social_score.get_mentions",
+        "social_score.get_sentiment",
+        "social_score.get_trend",
+        "social_score.get_freshness",
+        "social_score.get_coverage",
+        "social_score.get_anomaly_flags",
+        "social_score.get_data_quality"
+      ],
+      "write_tools": [],
+      "dependencies": [
+        "source_quality",
+        "market_regime"
+      ],
+      "freshness_sla_seconds": 300,
+      "risk_class": "READ_ONLY",
+      "tenant_scoped": true,
+      "content_hash": "78ce098dd57d2d07d8a286b08c63379a8b34b21d6f72a468c41333d5cdbbc53e",
+      "status": "APPROVED"
+    },
+    {
+      "module_key": "strategies",
+      "version": "1.0.0",
+      "entities": [
+        "config_profiles",
+        "trades",
+        "positions"
+      ],
+      "read_tools": [
+        "strategies.get_execution_policy",
+        "strategies.get_entry_execution_rules",
+        "strategies.get_exit_policy",
+        "strategies.get_timeout_policy",
+        "strategies.get_trailing_policy",
+        "strategies.get_spot_policy",
+        "strategies.get_futures_policy",
+        "strategies.validate_recommendation",
+        "strategies.explain_conflicts"
+      ],
+      "write_tools": [],
+      "dependencies": [
+        "global_risk",
+        "spot_invariant"
+      ],
+      "freshness_sla_seconds": 300,
+      "risk_class": "HARD_VETO_READ_ONLY",
+      "tenant_scoped": true,
+      "content_hash": "db656da895b7882ec5bd6b31bdc15ce2788c4ff3f1dba30c25d64af1195d7477",
+      "status": "APPROVED"
+    },
+    {
+      "module_key": "strategy_profiles",
+      "version": "1.0.0",
+      "entities": [
+        "profiles",
+        "profile_versions",
+        "profile_suggestions"
+      ],
+      "read_tools": [
+        "strategy_profiles.get_profile",
+        "strategy_profiles.get_effective_configuration_at",
+        "strategy_profiles.get_version_history",
+        "strategy_profiles.get_signals",
+        "strategy_profiles.get_block_rules",
+        "strategy_profiles.get_filters",
+        "strategy_profiles.get_score_binding",
+        "strategy_profiles.compare_versions",
+        "strategy_profiles.validate_change_set"
+      ],
+      "write_tools": [
+        "strategy_profiles.create_candidate_version"
+      ],
+      "dependencies": [
+        "shadow_portfolio",
+        "score_engine",
+        "global_risk",
+        "strategies",
+        "market_regime",
+        "social_score",
+        "ml_models",
+        "audit_version_memory"
+      ],
+      "freshness_sla_seconds": 300,
+      "risk_class": "CANDIDATE_ONLY",
+      "tenant_scoped": true,
+      "content_hash": "1997269c910ead44ab223e901d8d5e1d728c0f2dd790c12d20ae471406c99d4d",
+      "status": "APPROVED"
+    }
+  ]
+}

@@ -51,6 +51,9 @@ class SQLAlchemyAIPersistence:
             self.dataset_id = value.dataset_snapshot_id
             self.db.add(AIDatasetSnapshotRecord(
                 id=value.dataset_snapshot_id, tenant_id=value.tenant_id, contract_version=value.contract_version,
+                origin_module=value.origin_module,
+                module_context_refs=value.module_context_refs.model_dump(mode="json"),
+                context_manifest=value.context_manifest.model_dump(mode="json") if value.context_manifest else None,
                 source_tables=list(value.source_tables), source_labels=list(value.source_labels),
                 event_identity_contract=value.event_identity_contract, outcome_contract=value.outcome_contract,
                 time_anchor=value.time_anchor, window_start=value.window_start, window_end=value.window_end,

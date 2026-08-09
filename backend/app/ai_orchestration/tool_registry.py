@@ -28,6 +28,7 @@ class ToolCapability(BaseModel):
     side_effect: SideEffect
     required_permissions: tuple[str, ...] = ()
     tenant_scoped: bool = True
+    freshness_sla_seconds: int | None = None
     max_runtime_seconds: int
     max_rows: int | None = None
     requires_human_approval: bool = False
@@ -63,6 +64,12 @@ class ToolRegistry:
         if set(capability.required_permissions) - set(permissions):
             raise fail(AIErrorCode.TOOL_NOT_ALLOWED, "Tool permission is missing", http_status=403)
         return capability
+
+    def handler(self, name: str, version: str) -> Callable[..., Any]:
+        handler = self._handlers.get(f"{name}@{version}")
+        if handler is None:
+            raise fail(AIErrorCode.TOOL_NOT_ALLOWED, "Tool handler is not declared")
+        return handler
 
     def export(self) -> list[dict]:
         return [item.model_dump(mode="json") for item in sorted(self._capabilities.values(), key=lambda x: x.name)]

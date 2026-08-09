@@ -506,6 +506,10 @@ app.include_router(copilot_api.router)
 from .api import ai_graphs as ai_graphs_api  # noqa: E402
 app.include_router(ai_graphs_api.router)
 
+# Seven tenant-scoped module entrypoints; every request becomes a canonical graph run.
+from .api import ai_modules as ai_modules_api  # noqa: E402
+app.include_router(ai_modules_api.router)
+
 # WebSocket
 app.include_router(websocket.router)
 

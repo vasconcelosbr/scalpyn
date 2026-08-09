@@ -1,0 +1,68 @@
+{
+  "generated_at": "2026-08-09T01:08:49.549813+00:00",
+  "verdict": "PARTIALLY_IMPLEMENTED_TEST_GATE_FAILED",
+  "focused_backend": {
+    "tests": 76,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "time_seconds": 4.804,
+    "status": "PASS",
+    "source": ".codex-evidence/tests/focused-backend.xml"
+  },
+  "full_backend": {
+    "tests": 1606,
+    "failures": 68,
+    "errors": 12,
+    "skipped": 0,
+    "time_seconds": 637.564,
+    "status": "FAIL",
+    "source": ".codex-evidence/full-backend.xml"
+  },
+  "frontend_tests": {
+    "tests": 23,
+    "failures": 0,
+    "status": "PASS",
+    "source": ".codex-evidence/tests/frontend-tests.txt"
+  },
+  "frontend_typecheck": {
+    "status": "PASS",
+    "source": ".codex-evidence/tests/frontend-typecheck.txt"
+  },
+  "frontend_lint": {
+    "errors": 0,
+    "warnings": 435,
+    "status": "PASS_WITH_WARNINGS",
+    "source": ".codex-evidence/tests/frontend-lint.txt"
+  },
+  "frontend_build": {
+    "status": "PASS",
+    "source": ".codex-evidence/tests/frontend-build.txt"
+  },
+  "pip_check": {
+    "status": "PASS",
+    "source": ".codex-evidence/tests/pip-check.txt"
+  },
+  "npm_audit": {
+    "status": "PASS_WITH_LOW",
+    "vulnerabilities": {
+      "info": 0,
+      "low": 1,
+      "moderate": 0,
+      "high": 0,
+      "critical": 0,
+      "total": 1
+    },
+    "source": ".codex-evidence/tests/npm-audit.json"
+  },
+  "migration_cycle": {
+    "status": "PASS",
+    "cycle": "149 -> 150 -> 149 -> 150",
+    "source": "local staging-compatible database command evidence"
+  },
+  "alembic_offline_full_history": {
+    "status": "FAIL_HISTORICAL_148_JSONB_LITERAL_RENDER",
+    "source": "audit_evidence/db/alembic-upgrade-head.sql"
+  },
+  "blocking_gate": "full backend collection is not green"
+}

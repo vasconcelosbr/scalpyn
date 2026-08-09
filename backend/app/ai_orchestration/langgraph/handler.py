@@ -23,9 +23,11 @@ from ...models.systemic_ai import (
     AIDatasetSnapshotRecord,
     AIModelResolutionRecord,
     AIPromptVersion,
-    AIRequestRecord,
+    AIRequestRecord, AIToolEvidenceRecord,
     AIResultRecord,
 )
+from ..hashing import canonical_hash
+from ..module_registry import module_capability_registry
 from .config import get_langgraph_settings
 from .metrics import checkpoint_writes, decision_memory_hits, node_duration, node_retries
 from .state import ScalpynGraphState
@@ -72,14 +74,42 @@ class CanonicalGraphNodeHandler:
             run.updated_at = now
             updates = await self._node_updates(db, run, request, node_name, state)
 
+            event_payload: dict[str, Any] = {
+                "state_schema_version": run.state_schema_version,
+            }
+            if node_name in {
+                "retrieve_decision_memory", "retrieve_similar_decision_memory",
+                "retrieve_contextual_memory", "load_audit_memory",
+            }:
+                memory_ids = updates.get("decision_memory_ids") or []
+                event_payload.update({
+                    "decision_memory_ids": memory_ids,
+                    "memory_hit_count": len(memory_ids),
+                })
+            if node_name in {"execute_readonly_tools", "execute_tools", "assemble_evidence"}:
+                tool_call_ids = updates.get("tool_call_ids") or []
+                event_payload.update({
+                    "tool_call_ids": tool_call_ids,
+                    "tool_call_count": len(tool_call_ids),
+                })
+            if node_name in {
+                "create_immutable_candidate_versions", "create_profile_candidate_version",
+                "create_score_candidate_version",
+            }:
+                candidate_ids = updates.get("candidate_version_ids") or []
+                event_payload.update({
+                    "candidate_version_ids": candidate_ids,
+                    "candidate_version_count": len(candidate_ids),
+                })
+
             statement = insert(AIGraphEvent).values(
                 tenant_id=run.tenant_id,
                 graph_run_id=run.id,
                 event_key=f"{run.id}:{node_name}:completed",
                 event_type="NODE_COMPLETED",
                 node_name=node_name,
-                status="RUNNING",
-                payload={"state_schema_version": run.state_schema_version},
+                status="COMPLETED",
+                payload=event_payload,
             ).on_conflict_do_nothing(
                 index_elements=[AIGraphEvent.graph_run_id, AIGraphEvent.event_key]
             )
@@ -91,7 +121,10 @@ class CanonicalGraphNodeHandler:
         checkpoint_writes.inc()
         if node_name in (state.get("completed_nodes") or []):
             node_retries.labels(node_name=node_name).inc()
-        if node_name in {"retrieve_decision_memory", "retrieve_similar_decision_memory"}:
+        if node_name in {
+            "retrieve_decision_memory", "retrieve_similar_decision_memory",
+            "retrieve_contextual_memory", "load_audit_memory",
+        }:
             decision_memory_hits.inc(len(updates.get("decision_memory_ids") or []))
         return updates
 
@@ -99,7 +132,7 @@ class CanonicalGraphNodeHandler:
         self, db, run: AIGraphRun, request: AIRequestRecord,
         node_name: str, state: ScalpynGraphState,
     ) -> dict[str, Any]:
-        if node_name in {"load_request", "detect_or_receive_degradation"}:
+        if node_name in {"load_request", "detect_or_receive_degradation", "receive_degradation"}:
             return {
                 "ai_request_id": str(request.id),
                 "dataset_snapshot_id": str(request.dataset_snapshot_id),
@@ -111,6 +144,25 @@ class CanonicalGraphNodeHandler:
             }:
                 raise RuntimeError("GRAPH_AUTHORITY_DENIED")
             return {"authority": request.authority}
+        if node_name == "resolve_origin_module":
+            capability = module_capability_registry.get(request.origin_module)
+            if capability is None or capability.status != "APPROVED":
+                raise RuntimeError("GRAPH_ORIGIN_MODULE_INVALID")
+            return {"evidence_refs": [{
+                "kind": "module_capability",
+                "reference": request.origin_module,
+                "hash": capability.content_hash,
+            }]}
+        if node_name == "resolve_module_dependency_plan":
+            capability = module_capability_registry[request.origin_module]
+            modules = [request.origin_module, *(
+                item for item in capability.dependencies if item in module_capability_registry
+            )]
+            return {"evidence_refs": [{
+                "kind": "module_dependency_plan",
+                "reference": value,
+                "hash": module_capability_registry[value].content_hash,
+            } for value in modules]}
         if node_name == "resolve_provider_model":
             resolution = await db.get(AIModelResolutionRecord, request.model_resolution_id)
             if resolution is None or resolution.tenant_id != run.tenant_id:
@@ -125,28 +177,69 @@ class CanonicalGraphNodeHandler:
             if prompt is None or prompt.status != "APPROVED":
                 raise RuntimeError("GRAPH_PROMPT_NOT_APPROVED")
             return {"prompt_version_id": str(prompt.id), "prompt_hash": prompt.content_hash}
-        if node_name in {"freeze_canonical_dataset", "validate_dataset_and_bundle", "run_data_quality_gate"}:
+        if node_name in {
+            "freeze_canonical_dataset", "freeze_dataset", "freeze_comparable_dataset",
+            "validate_dataset_and_bundle", "run_data_quality_gate",
+        }:
             dataset = await db.get(AIDatasetSnapshotRecord, request.dataset_snapshot_id)
             if dataset is None or dataset.tenant_id != run.tenant_id:
                 raise RuntimeError("GRAPH_DATASET_TENANT_SCOPE_MISMATCH")
-            if dataset.quality_status not in {"PASS", "PASSED", "APPROVED", "VALID"}:
+            if dataset.quality_status not in {"PASS", "PASS_WITH_WARNINGS", "PASSED", "APPROVED", "VALID"}:
                 raise RuntimeError("GRAPH_DATA_QUALITY_GATE_FAILED")
             return {"dataset_snapshot_id": str(dataset.id)}
-        if node_name == "resolve_configuration_bundle":
+        if node_name in {"resolve_configuration_bundle", "resolve_bundle"}:
             bundle = await db.get(AIConfigurationBundleRecord, request.configuration_bundle_id)
             if bundle is None or bundle.tenant_id != run.tenant_id:
                 raise RuntimeError("GRAPH_CONFIGURATION_BUNDLE_INVALID")
             return {"configuration_bundle_id": str(bundle.id)}
-        if node_name in {"retrieve_decision_memory", "retrieve_similar_decision_memory"}:
+        module_load_nodes = {
+            "load_strategy_profiles": "strategy_profiles",
+            "load_shadow": "shadow_portfolio",
+            "load_score_engine": "score_engine",
+            "load_global_risk": "global_risk",
+            "load_strategies": "strategies",
+            "load_ml_evidence": "ml_models",
+            "load_social_score": "social_score",
+            "load_market_regime": "market_regime",
+        }
+        if node_name in module_load_nodes:
+            module_key = module_load_nodes[node_name]
+            capability = module_capability_registry[module_key]
+            return {"evidence_refs": [{
+                "kind": "module_context_consulted",
+                "reference": module_key,
+                "hash": capability.content_hash,
+            }]}
+        if node_name in {
+            "retrieve_decision_memory", "retrieve_similar_decision_memory",
+            "retrieve_contextual_memory", "load_audit_memory",
+        }:
+            frozen_context = (request.request_json or {}).get("frozen_context") or {}
+            context_fingerprint = frozen_context.get("context_fingerprint")
+            mutation_fingerprint = frozen_context.get("mutation_fingerprint")
+            if not context_fingerprint:
+                return {"decision_memory_ids": [], "memory_hits": []}
             rows = (
                 await db.execute(text("""
-                    SELECT id FROM decision_memory
+                    SELECT id, payload FROM decision_memory
                     WHERE tenant_id = :tenant_id
                       AND status IN ('APPROVED','COMPLETED','ACTIVE')
-                    ORDER BY created_at DESC LIMIT 20
-                """), {"tenant_id": run.tenant_id})
-            ).scalars().all()
-            return {"decision_memory_ids": [str(value) for value in rows]}
+                      AND context_fingerprint = :context_fingerprint
+                      AND (
+                          CAST(:mutation_fingerprint AS text) IS NULL
+                          OR mutation_fingerprint = CAST(:mutation_fingerprint AS text)
+                      )
+                    ORDER BY created_at DESC
+                """), {
+                    "tenant_id": run.tenant_id,
+                    "context_fingerprint": context_fingerprint,
+                    "mutation_fingerprint": mutation_fingerprint,
+                })
+            ).all()
+            return {
+                "decision_memory_ids": [str(row.id) for row in rows],
+                "memory_hits": [{"id": str(row.id), "context_fingerprint": context_fingerprint} for row in rows],
+            }
         if node_name == "classify_root_cause" and not state.get("root_cause_classification"):
             return {"root_cause_classification": "INSUFFICIENT_EVIDENCE"}
         if node_name == "create_hypothesis":
@@ -155,7 +248,7 @@ class CanonicalGraphNodeHandler:
                 status="DRAFT", payload={"classification": state.get("root_cause_classification")},
             )
             return {"hypothesis_id": str(hypothesis_id)}
-        if node_name == "design_ablation_candidates":
+        if node_name in {"design_ablation_candidates", "design_ablation"}:
             candidate_config = (request.request_json or {}).get("candidate_config")
             score_config = (request.request_json or {}).get("score_config")
             if not isinstance(candidate_config, dict) or not isinstance(score_config, dict):
@@ -171,7 +264,7 @@ class CanonicalGraphNodeHandler:
                 },
             )
             return {"change_set_id": str(change_set_id)}
-        if node_name == "create_immutable_candidate_versions":
+        if node_name in {"create_immutable_candidate_versions", "create_profile_candidate_version"}:
             decision = state.get("interrupt_decision") or {}
             candidate_ids = ((decision.get("edits") or {}).get("candidate_version_ids") or [])
             if candidate_ids:
@@ -208,13 +301,20 @@ class CanonicalGraphNodeHandler:
                 or "systemic_regenerative_shadow_ablation",
             )
             return {"candidate_version_ids": [str(version_id)]}
+        if node_name == "create_score_candidate_version":
+            if not state.get("candidate_version_ids"):
+                raise RuntimeError("GRAPH_PROFILE_CANDIDATE_VERSION_REQUIRED")
+            return {"candidate_version_ids": state.get("candidate_version_ids") or []}
         if node_name == "start_shadow_experiment":
             experiment_id = await self._insert_regenerative_record(
                 db, "experiment_links", run, request, status="SHADOW_RUNNING",
                 payload={"candidate_version_ids": state.get("candidate_version_ids") or []},
             )
             return {"experiment_id": str(experiment_id)}
-        if node_name == "apply_shadow_only_pointer_or_create_rollback_version":
+        if node_name in {
+            "apply_shadow_only_pointer_or_create_rollback_version",
+            "keep_reject_or_create_rollback_version",
+        }:
             if run.authority != "SHADOW_ONLY":
                 raise RuntimeError("GRAPH_SHADOW_ONLY_AUTHORITY_REQUIRED")
             change_set_id = await self._insert_regenerative_record(
@@ -226,37 +326,173 @@ class CanonicalGraphNodeHandler:
                 },
             )
             return {"change_set_id": str(change_set_id)}
-        if node_name == "persist_experiment_outcome":
+        if node_name in {"persist_experiment_outcome", "persist_outcome"}:
             await self._insert_regenerative_record(
                 db, "regeneration_runs", run, request, status="COMPLETED_SHADOW_ONLY",
                 payload={"experiment_id": state.get("experiment_id"), "live_write": False},
             )
             return {}
-        if node_name == "persist_decision_memory":
-            memory_id = await self._insert_regenerative_record(
-                db, "decision_memory", run, request, status="DRAFT",
-                payload={
-                    "experiment_id": state.get("experiment_id"),
-                    "root_cause": state.get("root_cause_classification"),
-                    "evidence_refs": state.get("evidence_refs") or [],
-                },
-            )
+        if node_name in {"persist_decision_memory", "persist_contextual_memory"}:
+            frozen_context = (request.request_json or {}).get("frozen_context") or {}
+            memory_id = (
+                await db.execute(text("""
+                    INSERT INTO decision_memory (
+                        tenant_id, ai_request_id, dataset_snapshot_id,
+                        configuration_bundle_id, authority, status, payload,
+                        mutation_fingerprint, context_fingerprint, context_json
+                    ) VALUES (
+                        :tenant_id, :request_id, :dataset_id, :bundle_id,
+                        :authority, 'COMPLETED', CAST(:payload AS jsonb),
+                        :mutation_fingerprint, :context_fingerprint, CAST(:context_json AS jsonb)
+                    ) RETURNING id
+                """), {
+                    "tenant_id": run.tenant_id,
+                    "request_id": request.id,
+                    "dataset_id": request.dataset_snapshot_id,
+                    "bundle_id": request.configuration_bundle_id,
+                    "authority": run.authority,
+                    "mutation_fingerprint": frozen_context.get("mutation_fingerprint"),
+                    "context_fingerprint": frozen_context.get("context_fingerprint"),
+                    "context_json": __import__("json").dumps(frozen_context.get("context") or {}, sort_keys=True),
+                    "payload": __import__("json").dumps({
+                        "experiment_id": state.get("experiment_id"),
+                        "root_cause": state.get("root_cause_classification"),
+                        "evidence_refs": state.get("evidence_refs") or [],
+                    }, sort_keys=True),
+                })
+            ).scalar_one()
             return {"decision_memory_ids": [str(memory_id)]}
+        if node_name in {"plan_typed_tools", "plan_tools"}:
+            allowlist = (request.request_json or {}).get("tool_allowlist") or []
+            declared = {
+                name for capability in module_capability_registry.values()
+                for name in capability.read_tools
+            }
+            if not isinstance(allowlist, list) or any(name not in declared for name in allowlist):
+                raise RuntimeError("GRAPH_TOOL_ALLOWLIST_INVALID")
+            return {"tool_plan": [{
+                "name": name,
+                "version": "1.0.0",
+                "input": {"tenant_id": str(run.tenant_id), "filters": {}},
+            } for name in allowlist]}
+        if node_name in {"execute_readonly_tools", "execute_tools"}:
+            from ..module_tool_runtime import ModuleToolRuntime
+
+            dataset = await db.get(AIDatasetSnapshotRecord, request.dataset_snapshot_id)
+            if dataset is None or dataset.tenant_id != run.tenant_id:
+                raise RuntimeError("GRAPH_DATASET_TENANT_SCOPE_MISMATCH")
+            runtime = ModuleToolRuntime()
+            tool_call_ids: list[str] = []
+            evidence_refs: list[dict[str, Any]] = []
+            tools_called: list[str] = []
+            for planned in state.get("tool_plan") or []:
+                audit, output = await runtime.execute(
+                    db,
+                    tenant_id=run.tenant_id,
+                    request=request,
+                    dataset=dataset,
+                    tool_name=planned["name"],
+                    tool_input=planned["input"],
+                )
+                tool_call_ids.append(str(audit.id))
+                tools_called.append(planned["name"])
+                evidence_refs.append({
+                    "kind": "typed_tool_output",
+                    "reference": str(audit.id),
+                    "hash": canonical_hash(output),
+                })
+            manifest = dict(dataset.context_manifest or {})
+            manifest["tools_called"] = tools_called
+            manifest["evidence_ids"] = list(dict.fromkeys([
+                *(manifest.get("evidence_ids") or []),
+                *tool_call_ids,
+            ]))
+            dataset.context_manifest = manifest
+            return {"tool_call_ids": tool_call_ids, "evidence_refs": evidence_refs}
+        if node_name in {"run_module_conflict_checks", "validate_risk_and_strategy"}:
+            frozen = (request.request_json or {}).get("frozen_context") or {}
+            proposed = frozen.get("proposed_changes") or []
+            if node_name == "validate_risk_and_strategy" and not proposed:
+                raise RuntimeError("GRAPH_REGENERATIVE_PROPOSED_CHANGES_REQUIRED")
+            from ..recommendation_guard import GuardDecision, RecommendationGuard, RecommendationValidation
+
+            risk_decision = GuardDecision.VETO if frozen.get("global_risk_veto") else GuardDecision.PASS
+            strategy_decision = (
+                GuardDecision.INVARIANT_CONFLICT
+                if frozen.get("strategy_invariant_conflict") else GuardDecision.PASS
+            )
+            guard = RecommendationGuard.require_candidate_allowed(
+                RecommendationValidation(module="global_risk", decision=risk_decision),
+                RecommendationValidation(module="strategies", decision=strategy_decision),
+            )
+            if not guard.allowed:
+                raise RuntimeError(guard.terminal_reason)
+            return {"evidence_refs": [{
+                "kind": "risk_strategy_guard",
+                "reference": guard.terminal_reason,
+                "hash": canonical_hash(guard.model_dump(mode="json")),
+            }]}
+        if node_name == "assemble_evidence":
+            if state.get("tool_call_ids"):
+                return {}
+            plan_updates = await self._node_updates(db, run, request, "plan_tools", state)
+            return await self._node_updates(
+                db,
+                run,
+                request,
+                "execute_tools",
+                {**state, **plan_updates},
+            )
         if node_name == "invoke_provider":
-            existing = (
-                await db.execute(select(AIResultRecord).where(
-                    AIResultRecord.tenant_id == run.tenant_id,
-                    AIResultRecord.ai_request_id == request.id,
-                ))
-            ).scalar_one_or_none()
-            if existing is None:
-                raise RuntimeError("GRAPH_PROVIDER_RESULT_NOT_AVAILABLE")
-            return {"result_json": existing.result_json}
-        if node_name == "validate_structured_output":
+            from ...services.systemic_langgraph_bridge import SystemicLangGraphBridge
+            return {"result_json": await SystemicLangGraphBridge.execute_prepared_request(db, request)}
+        if node_name in {"validate_structured_output", "validate_output"}:
             if not isinstance(state.get("result_json"), dict):
                 raise RuntimeError("GRAPH_RESULT_SCHEMA_INVALID")
+            recommendations = state["result_json"].get("recommendations") or []
+            for recommendation in recommendations:
+                side_effect = str(recommendation.get("side_effect_class") or "NONE")
+                target_module = str(recommendation.get("target_module") or "")
+                target_path = str(recommendation.get("target_path") or "")
+                if side_effect == "LIVE_WRITE":
+                    raise RuntimeError("GRAPH_LIVE_WRITE_RECOMMENDATION_DENIED")
+                if target_module in {"global_risk", "strategies"} and side_effect != "NONE":
+                    raise RuntimeError("GRAPH_GUARDRAIL_MODULE_MUTATION_DENIED")
+                if target_module == "ml_models" and side_effect != "NONE":
+                    raise RuntimeError("GRAPH_ML_MUTATION_DENIED")
+                if any(value in target_path.lower() for value in ("train", "promote", "feature_contract", "label_contract")):
+                    raise RuntimeError("GRAPH_ML_CONTRACT_MUTATION_DENIED")
+            if request.authority in {"CANDIDATE_ONLY", "SHADOW_ONLY"} and recommendations:
+                validator_rows = list((await db.execute(select(AIToolEvidenceRecord).where(
+                    AIToolEvidenceRecord.tenant_id == run.tenant_id,
+                    AIToolEvidenceRecord.ai_request_id == request.id,
+                    AIToolEvidenceRecord.tool_name.in_((
+                        "global_risk.validate_recommendation",
+                        "strategies.validate_recommendation",
+                    )),
+                ))).scalars().all())
+                if {row.tool_name for row in validator_rows} != {
+                    "global_risk.validate_recommendation",
+                    "strategies.validate_recommendation",
+                }:
+                    raise RuntimeError("GRAPH_RISK_STRATEGY_VALIDATION_EVIDENCE_REQUIRED")
+                if any(row.quality == "NO_DATA" for row in validator_rows):
+                    raise RuntimeError("GRAPH_RISK_STRATEGY_VALIDATION_DATA_REQUIRED")
+                from ..recommendation_guard import RecommendationGuard
+
+                for recommendation in recommendations:
+                    if recommendation.get("risk_conflicts"):
+                        raise RuntimeError("GLOBAL_RISK_VETO")
+                    if recommendation.get("strategy_conflicts"):
+                        raise RuntimeError("STRATEGY_INVARIANT_CONFLICT")
+                    spot_guard = RecommendationGuard.validate_spot_authority(
+                        target_path=str(recommendation.get("target_path") or ""),
+                        human_decision_id=(request.request_json or {}).get("human_decision_id"),
+                    )
+                    if not spot_guard.allowed:
+                        raise RuntimeError(spot_guard.terminal_reason)
             return {}
-        if node_name == "persist_result_usage_audit":
+        if node_name in {"persist_result_usage_audit", "persist_result"}:
             existing = (
                 await db.execute(select(AIResultRecord.id).where(
                     AIResultRecord.tenant_id == run.tenant_id,

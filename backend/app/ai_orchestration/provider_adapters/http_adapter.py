@@ -30,10 +30,14 @@ class HTTPProviderAdapter:
         self.max_attempts = max_attempts
 
     async def execute(self, *, provider: str, model: str, system_prompt: str, user_prompt: str,
-                      tools: list[dict], api_key: str, request_id: str) -> ProviderResponse:
+                      tools: list[dict], api_key: str, request_id: str,
+                      max_output_tokens: int) -> ProviderResponse:
         async with httpx.AsyncClient(timeout=httpx.Timeout(self.timeout_seconds, connect=20.0)) as client:
             for attempt in range(1, self.max_attempts + 1):
-                response = await self._post(client, provider, model, system_prompt, user_prompt, api_key, request_id)
+                response = await self._post(
+                    client, provider, model, system_prompt, user_prompt, api_key,
+                    request_id, max_output_tokens,
+                )
                 if response.is_success:
                     return self._decode(provider, response.json())
                 retry_after = int(response.headers.get("retry-after", "0") or 0) or None
@@ -49,23 +53,25 @@ class HTTPProviderAdapter:
                 await asyncio.sleep(delays[attempt - 1])
         raise AssertionError("unreachable")
 
-    async def _post(self, client, provider, model, system, user, api_key, request_id):
+    async def _post(self, client, provider, model, system, user, api_key, request_id, max_output_tokens):
         headers = {"x-scalpyn-ai-request-id": request_id}
         if provider == "openai":
             return await client.post("https://api.openai.com/v1/chat/completions",
                 headers={**headers, "Authorization": f"Bearer {api_key}"},
-                json={"model": model, "temperature": 0, "response_format": {"type": "json_object"},
+                json={"model": model, "temperature": 0, "max_tokens": max_output_tokens,
+                      "response_format": {"type": "json_object"},
                       "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]})
         if provider == "anthropic":
             return await client.post("https://api.anthropic.com/v1/messages",
                 headers={**headers, "x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-                json={"model": model, "max_tokens": 6000, "temperature": 0, "system": system,
+                json={"model": model, "max_tokens": max_output_tokens, "temperature": 0, "system": system,
                       "messages": [{"role": "user", "content": user}]})
         if provider == "gemini":
             return await client.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
                 params={"key": api_key}, headers=headers,
                 json={"systemInstruction": {"parts": [{"text": system}]},
-                      "generationConfig": {"temperature": 0, "responseMimeType": "application/json"},
+                      "generationConfig": {"temperature": 0, "maxOutputTokens": max_output_tokens,
+                                           "responseMimeType": "application/json"},
                       "contents": [{"role": "user", "parts": [{"text": user}]}]})
         raise AIOrchestrationError(AIError(
             code=AIErrorCode.PROVIDER_NOT_CONFIGURED, retryable=False, http_status=422,

@@ -23,6 +23,10 @@ type GraphRun = {
   last_error_safe_message: string | null;
   created_at: string;
   updated_at: string;
+  origin_module: string | null;
+  origin_view: string | null;
+  graph_key: string | null;
+  graph_version: string | null;
 };
 
 type GraphEvent = {
@@ -53,6 +57,16 @@ type Capabilities = {
   real_provider_canary_enabled: boolean;
   strict_msgpack: boolean;
   live_write: boolean;
+  module_flags: Record<string, boolean>;
+};
+
+type RunContext = {
+  model: { configured_provider: string | null; configured_model: string | null; effective_provider: string | null; effective_model: string | null; resolution_reason: string | null };
+  prompt: { key: string | null; version: string | null; hash: string | null };
+  dataset: { id: string | null; hash: string | null; contract_version: string | null; quality_status: string | null; row_count: number | null; module_context_refs: Record<string, unknown> | null; context_manifest: { modules_consulted?: string[]; tools_called?: string[]; evidence_ids?: string[] } | null };
+  bundle: { id: string | null; hash: string | null; lineage_status: string | null; lineage_refs: Record<string, unknown> | null };
+  result: { status: string | null; warnings: string[]; limitations: string[]; memory_hits: Array<Record<string, unknown>> };
+  usage: { tokens_input: number | null; tokens_output: number | null; actual_cost: string | null; currency: string | null; pricing_snapshot_version: string | null };
 };
 
 const TERMINAL = new Set(["COMPLETED", "FAILED", "CANCELLED"]);
@@ -80,6 +94,7 @@ export default function IntelligenceRunsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [events, setEvents] = useState<GraphEvent[]>([]);
   const [interrupts, setInterrupts] = useState<GraphInterrupt[]>([]);
+  const [runContext, setRunContext] = useState<RunContext | null>(null);
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionBusy, setActionBusy] = useState(false);
@@ -100,7 +115,8 @@ export default function IntelligenceRunsPage() {
       ]);
       setRuns(runResponse.items);
       setCapabilities(capabilityResponse);
-      setSelectedId((current) => preferredId ?? current ?? runResponse.items[0]?.id ?? null);
+      const linkedRun = typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("run");
+      setSelectedId((current) => preferredId ?? current ?? linkedRun ?? runResponse.items[0]?.id ?? null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Falha ao carregar execuções");
     } finally {
@@ -110,12 +126,14 @@ export default function IntelligenceRunsPage() {
 
   const refreshDetail = useCallback(async (runId: string) => {
     try {
-      const [timeline, interruptResponse] = await Promise.all([
+      const [timeline, interruptResponse, contextResponse] = await Promise.all([
         apiGet<{ items: GraphEvent[] }>(`/ai/graphs/runs/${runId}/timeline?limit=200`),
         apiGet<{ items: GraphInterrupt[] }>(`/ai/graphs/runs/${runId}/interrupts`),
+        apiGet<RunContext>(`/ai/graphs/runs/${runId}/context`),
       ]);
       setEvents(timeline.items);
       setInterrupts(interruptResponse.items);
+      setRunContext(contextResponse);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Falha ao carregar a trilha");
     }
@@ -124,7 +142,7 @@ export default function IntelligenceRunsPage() {
   useEffect(() => { void refresh(); }, [refresh]);
   useEffect(() => {
     if (selectedId) void refreshDetail(selectedId);
-    else { setEvents([]); setInterrupts([]); }
+    else { setEvents([]); setInterrupts([]); setRunContext(null); }
   }, [selectedId, refreshDetail]);
 
   useEffect(() => {
@@ -226,6 +244,7 @@ export default function IntelligenceRunsPage() {
                     <span className="font-mono text-[10px] text-[var(--text-muted)]">{shortId(run.id)}</span>
                   </div>
                   <p className="truncate text-sm font-medium">{run.current_node ?? "queued"}</p>
+                  <p className="mt-1 truncate font-mono text-[10px] text-cyan-300/70">{run.origin_module ?? run.graph_key ?? "canonical"}</p>
                   <div className="mt-2 flex items-center justify-between text-[10px] text-[var(--text-muted)]">
                     <span>{run.authority}</span><span>{when(run.updated_at)}</span>
                   </div>
@@ -275,6 +294,22 @@ export default function IntelligenceRunsPage() {
                 <div className="flex justify-between gap-3"><dt className="text-[var(--text-muted)]">Provider canary</dt><dd>{capabilities?.real_provider_canary_enabled ? "enabled" : "disabled"}</dd></div>
               </dl>
             </section>
+
+            {selected && runContext && (
+              <section className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/90 p-4 text-xs backdrop-blur">
+                <div className="mb-3 flex items-center gap-2 font-medium"><GitBranch size={15} className="text-cyan-300" /> Canonical lineage</div>
+                <dl className="space-y-2 text-[var(--text-muted)]">
+                  <div><dt className="text-[10px] uppercase tracking-wider">Graph</dt><dd className="mt-0.5 font-mono text-[var(--text-primary)]">{selected.graph_key ?? "—"} · {selected.graph_version ?? "—"}</dd></div>
+                  <div><dt className="text-[10px] uppercase tracking-wider">Model</dt><dd className="mt-0.5 font-mono text-[var(--text-primary)]">{runContext.model.configured_provider}/{runContext.model.configured_model}</dd><dd className="font-mono text-cyan-300">effective: {runContext.model.effective_provider}/{runContext.model.effective_model}</dd></div>
+                  <div><dt className="text-[10px] uppercase tracking-wider">Prompt</dt><dd className="mt-0.5 font-mono text-[var(--text-primary)]">{runContext.prompt.key}@{runContext.prompt.version}</dd></div>
+                  <div><dt className="text-[10px] uppercase tracking-wider">Dataset</dt><dd className="mt-0.5 font-mono text-[var(--text-primary)]">{runContext.dataset.quality_status ?? "—"} · rows {runContext.dataset.row_count ?? "—"}</dd><dd className="truncate font-mono">{runContext.dataset.id ?? "—"}</dd></div>
+                  <div><dt className="text-[10px] uppercase tracking-wider">Bundle</dt><dd className="mt-0.5 font-mono text-[var(--text-primary)]">{runContext.bundle.lineage_status ?? "—"}</dd><dd className="truncate font-mono">{runContext.bundle.id ?? "—"}</dd></div>
+                  <div><dt className="text-[10px] uppercase tracking-wider">Modules consulted</dt><dd className="mt-0.5 leading-5 text-[var(--text-primary)]">{runContext.dataset.context_manifest?.modules_consulted?.join(" · ") || "—"}</dd></div>
+                  <div><dt className="text-[10px] uppercase tracking-wider">Tool calls / memory</dt><dd className="mt-0.5 font-mono text-[var(--text-primary)]">{runContext.dataset.context_manifest?.tools_called?.length ?? 0} / {runContext.result.memory_hits.length}</dd></div>
+                  <div><dt className="text-[10px] uppercase tracking-wider">Usage / cost</dt><dd className="mt-0.5 font-mono text-[var(--text-primary)]">{runContext.usage.tokens_input ?? "—"} in · {runContext.usage.tokens_output ?? "—"} out · {runContext.usage.actual_cost ?? "—"} {runContext.usage.currency ?? ""}</dd></div>
+                </dl>
+              </section>
+            )}
 
             <section className={`rounded-2xl border p-4 backdrop-blur ${pendingInterrupt ? "border-amber-400/30 bg-amber-400/[.06]" : "border-[var(--border-subtle)] bg-[var(--bg-surface)]/90"}`}>
               <div className="mb-3 flex items-center justify-between">

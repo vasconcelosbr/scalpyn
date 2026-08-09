@@ -1,0 +1,13 @@
+backend/app\ai_orchestration\provider_adapters\anthropic_sdk.py:19:        response = await anthropic.AsyncAnthropic(api_key=api_key).messages.create(
+backend/app\ai_orchestration\provider_adapters\http_adapter.py:59:            return await client.post("https://api.openai.com/v1/chat/completions",
+backend/app\ai_orchestration\provider_adapters\http_adapter.py:65:            return await client.post("https://api.anthropic.com/v1/messages",
+backend/app\ai_orchestration\provider_adapters\copilot_transport.py:22:            response = await client.messages.create(model=model, max_tokens=3000, system=system, tools=tools, messages=messages)
+backend/app\ai_orchestration\provider_adapters\copilot_transport.py:36:        response = await client.messages.create(model=model, max_tokens=3000, system=system + final_instruction, messages=messages)
+backend/app\ai_orchestration\provider_adapters\copilot_transport.py:47:                response = await client.post("https://api.openai.com/v1/chat/completions",
+backend/app\ai_orchestration\provider_adapters\copilot_transport.py:64:            response = await client.post("https://api.openai.com/v1/chat/completions",
+backend/app\api\ai_keys.py:124:                    "https://api.openai.com/v1/models",
+backend/app\api\ai_keys.py:132:                    "https://api.anthropic.com/v1/models",
+backend/app\api\ai_keys.py:302:                    "https://api.openai.com/v1/models",
+backend/app\services\ai_keys_service.py:227:        client.messages.create(
+backend/app\services\preset_ia_service.py:539:        message = client.messages.create(
+backend/app\services\preset_ia_service.py:676:        message = client.messages.create(

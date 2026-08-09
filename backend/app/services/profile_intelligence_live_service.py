@@ -32,9 +32,9 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .ai_review_safety_service import completed_review_contract_is_valid
-from ..ai_orchestration.provider_adapters import AnthropicSDKTextAdapter
 from ..ai_orchestration.initial_prompts import initial_prompt_registry
 from ..ai_orchestration.provider_registry import default_registry
+from .systemic_langgraph_bridge import SystemicLangGraphBridge
 from .profile_intelligence_contract import (
     DATASET_VERSION,
     LABEL_VERSION,
@@ -1222,6 +1222,46 @@ async def run_ai_review_cycle(db: AsyncSession, tenant_id: UUID | None = None) -
                                  "context_payload_hash": context_payload_hash})
 
     # ── Key resolution ─────────────────────────────────────────────────────────
+    configured_model = os.environ.get("PI_AI_MODEL", "claude-haiku-4-5-20251001")
+    if tenant_id is not None:
+        graph_run = await SystemicLangGraphBridge.create_legacy_run_if_enabled(
+            db,
+            tenant_id=tenant_id,
+            user_id=tenant_id,
+            origin_module="shadow_portfolio",
+            origin_view="profile-intelligence-ai-critic",
+            entity_ids=(),
+            filters={
+                "review_id": str(review_id),
+                "window_start": window_start.isoformat(),
+                "window_end": window_end.isoformat(),
+            },
+            analysis_mode="ROOT_CAUSE_AUDIT",
+            question=(
+                "Execute a crítica sistêmica do desempenho Shadow congelado, identifique causa raiz "
+                "e mantenha toda recomendação sem autoridade live."
+            ),
+            authority="ANALYSIS_ONLY",
+            provider="anthropic",
+            model=configured_model,
+            correlation_identity=str(review_id),
+        )
+        if graph_run is not None:
+            await db.execute(text("""
+                UPDATE profile_ai_reviews
+                   SET findings = CAST(:findings AS jsonb)
+                 WHERE id = :review_id
+            """), {
+                "review_id": str(review_id),
+                "findings": json.dumps({"intelligence_run_id": str(graph_run.id)}),
+            })
+            await db.commit()
+            return {
+                "status": "BRIDGED_TO_INTELLIGENCE_RUN",
+                "review_id": str(review_id),
+                "graph_run_id": str(graph_run.id),
+            }
+
     ai_key = os.environ.get("ANTHROPIC_API_KEY", "") if tenant_id is None else ""
     key_source = "env" if ai_key else None
     if not ai_key:
@@ -1271,7 +1311,6 @@ async def run_ai_review_cycle(db: AsyncSession, tenant_id: UUID | None = None) -
                                 phase="ai", message="Consultando AI Critic...")
             await db.commit()
 
-            configured_model = os.environ.get("PI_AI_MODEL", "claude-haiku-4-5-20251001")
             model_resolution = default_registry().resolve(
                 requested_provider=None, requested_model=None,
                 configured_provider="anthropic", configured_model=configured_model,
@@ -1287,7 +1326,7 @@ async def run_ai_review_cycle(db: AsyncSession, tenant_id: UUID | None = None) -
                 "and risk flags. Format as JSON with keys: summary, findings, recommendations, "
                 "contradictions, risk_flags. Return ONLY the JSON, no markdown code blocks."
             )
-            response = await AnthropicSDKTextAdapter().execute(
+            response = await SystemicLangGraphBridge.execute_anthropic_text(
                 api_key=ai_key, model=model_used, prompt=prompt_text, max_tokens=1000,
             )
             raw = response.text

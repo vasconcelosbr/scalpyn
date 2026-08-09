@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { apiGet, ApiError } from "@/lib/api";
 import DetailedReportWorkspace from "@/components/shadow-portfolio/DetailedReportWorkspace";
+import { ModuleAIAnalysisAction } from "@/components/ai/ModuleAIAnalysisAction";
 
 // ── theme (alinhado com /dashboard/performance) ──────────────────────────────
 const C = {
@@ -2500,6 +2501,7 @@ export default function ShadowPortfolioPage() {
     >
       <div style={{ maxWidth: 1400, margin: "0 auto", display: "grid", gap: 16 }}>
         <div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
           <h1
             style={{
               fontSize: 20,
@@ -2510,6 +2512,14 @@ export default function ShadowPortfolioPage() {
           >
             Shadow Portfolio
           </h1>
+          <ModuleAIAnalysisAction
+            originModule="shadow_portfolio"
+            originView="shadow-portfolio"
+            entityIds={(list?.items ?? []).map((item) => item.id)}
+            supportsRegenerative
+            compact
+          />
+          </div>
           <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
             {(
               [

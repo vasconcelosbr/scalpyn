@@ -1,0 +1,42 @@
+{
+  "generated_at": "2026-08-09T01:08:49.549813+00:00",
+  "legacy": [
+    {
+      "entrypoint": "profile suggestion explanation",
+      "bridge": "SystemicLangGraphBridge",
+      "graph": "systemic-analysis-v2",
+      "proof": "static + focused tests"
+    },
+    {
+      "entrypoint": "shadow detailed analysis",
+      "bridge": "SystemicLangGraphBridge",
+      "graph": "root-cause-audit-v2/systemic-analysis-v2",
+      "proof": "static + focused tests"
+    },
+    {
+      "entrypoint": "AI Critic",
+      "bridge": "leased ai_orchestration task",
+      "graph": "root-cause-audit-v2",
+      "proof": "static + focused tests"
+    },
+    {
+      "entrypoint": "Co-Pilot",
+      "bridge": "SystemicLangGraphBridge",
+      "graph": "copilot-systemic-v2",
+      "proof": "static + focused tests"
+    }
+  ],
+  "module_ui": [
+    "strategy_profiles",
+    "ml_models",
+    "shadow_portfolio",
+    "score_engine",
+    "global_risk",
+    "strategies",
+    "social_score"
+  ],
+  "runtime_proven_origin_modules": [
+    "shadow_portfolio"
+  ],
+  "limitation": "all individual legacy and module entrypoints were not each invoked in staging"
+}

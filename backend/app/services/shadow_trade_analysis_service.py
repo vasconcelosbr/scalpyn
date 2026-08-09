@@ -6,7 +6,7 @@ import json
 import os
 from typing import Any
 
-from ..ai_orchestration.provider_adapters import HTTPProviderAdapter
+from .systemic_langgraph_bridge import SystemicLangGraphBridge
 
 
 SYSTEM_PROMPT = """Você é um auditor quantitativo de Shadow Trades do Scalpyn.
@@ -64,9 +64,10 @@ def _extract_json(text: str) -> dict[str, Any]:
 
 
 async def _call_provider(provider: str, api_key: str, model: str, prompt: str) -> tuple[str, dict[str, Any]]:
-    response = await HTTPProviderAdapter().execute(
+    response = await SystemicLangGraphBridge.execute_json_provider(
         provider=provider, model=model, system_prompt=SYSTEM_PROMPT, user_prompt=prompt,
-        tools=[], api_key=api_key, request_id="legacy-shadow-bridge",
+        api_key=api_key, request_id="legacy-shadow-bridge",
+        max_output_tokens=int(os.getenv("SHADOW_ANALYSIS_MAX_OUTPUT_TOKENS", "6000")),
     )
     usage = {"input_tokens": response.tokens_input, "output_tokens": response.tokens_output}
     return json.dumps(response.output, ensure_ascii=False), usage

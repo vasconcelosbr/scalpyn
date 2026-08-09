@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { apiGet } from "@/lib/api";
 import { buildModelDatasetAudit, type AuditWindow } from "@/lib/mlModelAudit";
 import { Brain, CheckCircle, Archive, ChevronDown, ChevronRight, ShieldCheck } from "lucide-react";
+import { ModuleAIAnalysisAction } from "@/components/ai/ModuleAIAnalysisAction";
 
 interface MetricsBlock {
   precision: number | null;
@@ -218,10 +219,18 @@ export default function MlModelsPage() {
 
   return (
     <div className="p-6 space-y-4 max-w-5xl">
-      <div className="flex items-center gap-3 mb-2">
+      <div className="flex flex-wrap items-center gap-3 mb-2">
         <Brain size={20} className="text-[#60A5FA]" />
         <h1 className="text-[17px] font-semibold text-[#E2E8F0] tracking-wide">ML Models</h1>
         <span className="text-[11px] text-[#4B5563] ml-1">{models.length} versão{models.length !== 1 ? "ões" : ""}</span>
+        <div className="ml-auto">
+          <ModuleAIAnalysisAction
+            originModule="ml_models"
+            originView="ml-models"
+            entityIds={expanded ? [expanded] : []}
+            compact
+          />
+        </div>
       </div>
 
       {models.length === 0 && (

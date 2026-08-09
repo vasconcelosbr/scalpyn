@@ -17,6 +17,7 @@ from ..models.shadow_trade_analysis import (
 from ..models.ai_provider_key import AIProviderKey
 from ..services.ai_keys_service import get_decrypted_api_key
 from ..services.shadow_trade_analysis_service import analyze_trade_documents
+from ..services.systemic_langgraph_bridge import SystemicLangGraphBridge
 
 
 async def _load_job_input(db, job_id: UUID):
@@ -83,6 +84,31 @@ async def _load_job_input(db, job_id: UUID):
             "filters": run.filters,
             "trade_ids_hash": run.trade_ids_hash,
         }
+    graph_run = await SystemicLangGraphBridge.create_legacy_run_if_enabled(
+        db,
+        tenant_id=job.user_id,
+        user_id=job.user_id,
+        origin_module="shadow_portfolio",
+        origin_view="shadow-detailed-analysis",
+        entity_ids=tuple(document["trade_id"] for document in documents),
+        filters={"legacy_job_id": str(job_id), "max_rows": len(documents)},
+        analysis_mode="ROOT_CAUSE_AUDIT",
+        question=(
+            "Analise a causa raiz do relatório Shadow congelado usando evidência multimódulo; "
+            "não crie alteração live."
+        ),
+        authority="ANALYSIS_ONLY",
+        provider=job.provider,
+        model=job.model,
+        correlation_identity=str(job_id),
+    )
+    if graph_run is not None:
+        return {
+            "user_id": job.user_id,
+            "graph_run_id": str(graph_run.id),
+            "selection": selection,
+        }
+
     api_key = await get_decrypted_api_key(db, job.user_id, job.provider)
     if not api_key:
         raise ValueError("Configured AI key could not be loaded")
@@ -191,6 +217,24 @@ def run(job_id: str) -> dict:
             payload = await run_db_task(lambda db: _load_job_input(db, UUID(job_id)), celery=True)
             if payload is None:
                 return {"status": "COMPLETED", "job_id": job_id}
+            if payload.get("graph_run_id"):
+                bridged_result = {
+                    "status": "BRIDGED_TO_INTELLIGENCE_RUN",
+                    "intelligence_run_id": payload["graph_run_id"],
+                    "selection": payload["selection"],
+                }
+                await run_db_task(
+                    lambda db: _store_success(
+                        db, UUID(job_id), bridged_result,
+                        str(bridged_result), {"provider_calls": []},
+                    ),
+                    celery=True,
+                )
+                return {
+                    "status": "BRIDGED_TO_INTELLIGENCE_RUN",
+                    "job_id": job_id,
+                    "graph_run_id": payload["graph_run_id"],
+                }
             result, raw, usage = await analyze_trade_documents(
                 provider=payload["provider"],
                 api_key=payload["api_key"],

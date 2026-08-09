@@ -160,6 +160,13 @@ def test_graph_resume_does_not_repeat_completed_side_effect(monkeypatch):
     assert handler.counts["detect_or_receive_degradation"] == 1
 
 
+def test_crash_resume_no_duplicate_side_effect(monkeypatch):
+    monkeypatch.setenv("LANGGRAPH_STRICT_MSGPACK", "true")
+    handler = CountingHandler()
+    _resume_once(handler)
+    assert handler.counts["detect_or_receive_degradation"] == 1
+
+
 def test_duplicate_resume_is_idempotent():
     service = source("backend/app/services/ai_graph_service.py")
     assert "interrupt_record.idempotency_key == idempotency_key" in service
@@ -214,9 +221,8 @@ def test_all_legacy_entrypoints_use_orchestration():
         "backend/app/services/profile_intelligence_live_service.py",
         "backend/app/copilot/agent.py",
     ]
-    contents = "\n".join(source(path) for path in paths)
-    assert "ai_orchestration.provider_adapters" in contents
-    assert "default_registry" in contents
+    for path in paths:
+        assert "SystemicLangGraphBridge" in source(path)
 
 
 def test_no_direct_provider_calls_outside_adapters():
@@ -314,7 +320,9 @@ def test_regenerative_graph_persists_decision_memory():
 def test_second_run_retrieves_prior_decision_memory():
     handler = source("backend/app/ai_orchestration/langgraph/handler.py")
     assert "retrieve_similar_decision_memory" in handler
-    assert "ORDER BY created_at DESC LIMIT 20" in handler
+    assert "context_fingerprint = :context_fingerprint" in handler
+    assert "mutation_fingerprint = CAST(:mutation_fingerprint AS text)" in handler
+    assert "ORDER BY created_at DESC LIMIT 20" not in handler
 
 
 def test_spot_invariant_blocks_mutation_authority():

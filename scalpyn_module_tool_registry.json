@@ -1,0 +1,7223 @@
+{
+  "generated_at": "2026-08-09T01:08:49.549813+00:00",
+  "source": "backend/app/ai_orchestration/domain_tools.py",
+  "authority_ceiling": [
+    "ANALYSIS_ONLY",
+    "PROPOSAL_ONLY",
+    "CANDIDATE_ONLY",
+    "SHADOW_ONLY"
+  ],
+  "live_write_tools": [],
+  "count": 81,
+  "items": [
+    {
+      "name": "audit_memory.find_similar_decisions",
+      "version": "1.0.0",
+      "domain": "audit_version_memory",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "audit_memory.find_similar_decisions"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": null,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "audit_memory.get_change_lineage",
+      "version": "1.0.0",
+      "domain": "audit_version_memory",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "audit_memory.get_change_lineage"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": null,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "audit_memory.get_experiment_history",
+      "version": "1.0.0",
+      "domain": "audit_version_memory",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "audit_memory.get_experiment_history"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": null,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "audit_memory.get_profile_changes",
+      "version": "1.0.0",
+      "domain": "audit_version_memory",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "audit_memory.get_profile_changes"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": null,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "audit_memory.get_rollbacks",
+      "version": "1.0.0",
+      "domain": "audit_version_memory",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "audit_memory.get_rollbacks"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": null,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "audit_memory.get_score_changes",
+      "version": "1.0.0",
+      "domain": "audit_version_memory",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "audit_memory.get_score_changes"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": null,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "audit_memory.persist_decision_memory",
+      "version": "1.0.0",
+      "domain": "audit_version_memory",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "audit_memory.persist_decision_memory"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "AUDIT_WRITE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": null,
+      "max_runtime_seconds": 30,
+      "max_rows": 1,
+      "requires_human_approval": false
+    },
+    {
+      "name": "audit_memory.persist_hypothesis",
+      "version": "1.0.0",
+      "domain": "audit_version_memory",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "audit_memory.persist_hypothesis"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "AUDIT_WRITE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": null,
+      "max_runtime_seconds": 30,
+      "max_rows": 1,
+      "requires_human_approval": false
+    },
+    {
+      "name": "global_risk.explain_conflicts",
+      "version": "1.0.0",
+      "domain": "global_risk",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "global_risk.explain_conflicts"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 60,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "global_risk.get_circuit_breaker_state",
+      "version": "1.0.0",
+      "domain": "global_risk",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "global_risk.get_circuit_breaker_state"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 60,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "global_risk.get_current_exposure",
+      "version": "1.0.0",
+      "domain": "global_risk",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "global_risk.get_current_exposure"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 60,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "global_risk.get_effective_policy",
+      "version": "1.0.0",
+      "domain": "global_risk",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "global_risk.get_effective_policy"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 60,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "global_risk.get_policy_version",
+      "version": "1.0.0",
+      "domain": "global_risk",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "global_risk.get_policy_version"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 60,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "global_risk.validate_recommendation",
+      "version": "1.0.0",
+      "domain": "global_risk",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "global_risk.validate_recommendation"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 60,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "intelligence_runs.get_interrupts",
+      "version": "1.0.0",
+      "domain": "intelligence_runs",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "intelligence_runs.get_interrupts"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 30,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "intelligence_runs.get_run",
+      "version": "1.0.0",
+      "domain": "intelligence_runs",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "intelligence_runs.get_run"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 30,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "intelligence_runs.get_timeline",
+      "version": "1.0.0",
+      "domain": "intelligence_runs",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "intelligence_runs.get_timeline"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 30,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "intelligence_runs.list_runs",
+      "version": "1.0.0",
+      "domain": "intelligence_runs",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "intelligence_runs.list_runs"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 30,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "market_regime.compare_windows",
+      "version": "1.0.0",
+      "domain": "market_regime",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "market_regime.compare_windows"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "market_regime.get_confidence",
+      "version": "1.0.0",
+      "domain": "market_regime",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "market_regime.get_confidence"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "market_regime.get_current",
+      "version": "1.0.0",
+      "domain": "market_regime",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "market_regime.get_current"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "market_regime.get_features",
+      "version": "1.0.0",
+      "domain": "market_regime",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "market_regime.get_features"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "market_regime.get_history",
+      "version": "1.0.0",
+      "domain": "market_regime",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "market_regime.get_history"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "ml_models.get_active_models",
+      "version": "1.0.0",
+      "domain": "ml_models",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "ml_models.get_active_models"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 900,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "ml_models.get_authority_status",
+      "version": "1.0.0",
+      "domain": "ml_models",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "ml_models.get_authority_status"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 900,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "ml_models.get_drift_status",
+      "version": "1.0.0",
+      "domain": "ml_models",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "ml_models.get_drift_status"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 900,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "ml_models.get_feature_contract",
+      "version": "1.0.0",
+      "domain": "ml_models",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "ml_models.get_feature_contract"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 900,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "ml_models.get_label_contract",
+      "version": "1.0.0",
+      "domain": "ml_models",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "ml_models.get_label_contract"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 900,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "ml_models.get_model_metrics",
+      "version": "1.0.0",
+      "domain": "ml_models",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "ml_models.get_model_metrics"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 900,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "ml_models.get_recent_experiments",
+      "version": "1.0.0",
+      "domain": "ml_models",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "ml_models.get_recent_experiments"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 900,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "ml_models.get_registry",
+      "version": "1.0.0",
+      "domain": "ml_models",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "ml_models.get_registry"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 900,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "ml_models.get_training_window",
+      "version": "1.0.0",
+      "domain": "ml_models",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "ml_models.get_training_window"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 900,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "score_engine.compare_versions",
+      "version": "1.0.0",
+      "domain": "score_engine",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "score_engine.compare_versions"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "score_engine.create_candidate_version",
+      "version": "1.0.0",
+      "domain": "score_engine",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "score_engine.create_candidate_version"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "CANDIDATE_WRITE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 1,
+      "requires_human_approval": true
+    },
+    {
+      "name": "score_engine.estimate_coverage_impact",
+      "version": "1.0.0",
+      "domain": "score_engine",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "score_engine.estimate_coverage_impact"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "score_engine.explain_score",
+      "version": "1.0.0",
+      "domain": "score_engine",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "score_engine.explain_score"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "score_engine.get_component_contributions",
+      "version": "1.0.0",
+      "domain": "score_engine",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "score_engine.get_component_contributions"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "score_engine.get_effective_configuration_at",
+      "version": "1.0.0",
+      "domain": "score_engine",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "score_engine.get_effective_configuration_at"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "score_engine.get_rule_impact",
+      "version": "1.0.0",
+      "domain": "score_engine",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "score_engine.get_rule_impact"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "score_engine.get_version_history",
+      "version": "1.0.0",
+      "domain": "score_engine",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "score_engine.get_version_history"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "score_engine.validate_change_set",
+      "version": "1.0.0",
+      "domain": "score_engine",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "score_engine.validate_change_set"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "shadow.compare_champion_candidate",
+      "version": "1.0.0",
+      "domain": "shadow_portfolio",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "shadow.compare_champion_candidate"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 120,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "shadow.create_experiment",
+      "version": "1.0.0",
+      "domain": "shadow_portfolio",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "shadow.create_experiment"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "SHADOW_WRITE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 120,
+      "max_runtime_seconds": 30,
+      "max_rows": 1,
+      "requires_human_approval": true
+    },
+    {
+      "name": "shadow.freeze_analysis_dataset",
+      "version": "1.0.0",
+      "domain": "shadow_portfolio",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "shadow.freeze_analysis_dataset"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 120,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "shadow.get_data_quality",
+      "version": "1.0.0",
+      "domain": "shadow_portfolio",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "shadow.get_data_quality"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 120,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "shadow.get_delayed_tp",
+      "version": "1.0.0",
+      "domain": "shadow_portfolio",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "shadow.get_delayed_tp"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 120,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "shadow.get_experiment_result",
+      "version": "1.0.0",
+      "domain": "shadow_portfolio",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "shadow.get_experiment_result"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 120,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "shadow.get_experiment_status",
+      "version": "1.0.0",
+      "domain": "shadow_portfolio",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "shadow.get_experiment_status"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 120,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "shadow.get_mae_mfe",
+      "version": "1.0.0",
+      "domain": "shadow_portfolio",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "shadow.get_mae_mfe"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 120,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "shadow.get_outcome_horizons",
+      "version": "1.0.0",
+      "domain": "shadow_portfolio",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "shadow.get_outcome_horizons"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 120,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "shadow.get_performance_summary",
+      "version": "1.0.0",
+      "domain": "shadow_portfolio",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "shadow.get_performance_summary"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 120,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "shadow.get_profile_performance",
+      "version": "1.0.0",
+      "domain": "shadow_portfolio",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "shadow.get_profile_performance"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 120,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "shadow.get_score_buckets",
+      "version": "1.0.0",
+      "domain": "shadow_portfolio",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "shadow.get_score_buckets"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 120,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "social_score.get_anomaly_flags",
+      "version": "1.0.0",
+      "domain": "social_score",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "social_score.get_anomaly_flags"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "social_score.get_coverage",
+      "version": "1.0.0",
+      "domain": "social_score",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "social_score.get_coverage"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "social_score.get_data_quality",
+      "version": "1.0.0",
+      "domain": "social_score",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "social_score.get_data_quality"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "social_score.get_freshness",
+      "version": "1.0.0",
+      "domain": "social_score",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "social_score.get_freshness"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "social_score.get_mentions",
+      "version": "1.0.0",
+      "domain": "social_score",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "social_score.get_mentions"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "social_score.get_sentiment",
+      "version": "1.0.0",
+      "domain": "social_score",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "social_score.get_sentiment"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "social_score.get_snapshot",
+      "version": "1.0.0",
+      "domain": "social_score",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "social_score.get_snapshot"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "social_score.get_source_breakdown",
+      "version": "1.0.0",
+      "domain": "social_score",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "social_score.get_source_breakdown"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "social_score.get_trend",
+      "version": "1.0.0",
+      "domain": "social_score",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "social_score.get_trend"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "strategies.explain_conflicts",
+      "version": "1.0.0",
+      "domain": "strategies",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "strategies.explain_conflicts"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "strategies.get_entry_execution_rules",
+      "version": "1.0.0",
+      "domain": "strategies",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "strategies.get_entry_execution_rules"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "strategies.get_execution_policy",
+      "version": "1.0.0",
+      "domain": "strategies",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "strategies.get_execution_policy"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "strategies.get_exit_policy",
+      "version": "1.0.0",
+      "domain": "strategies",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "strategies.get_exit_policy"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "strategies.get_futures_policy",
+      "version": "1.0.0",
+      "domain": "strategies",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "strategies.get_futures_policy"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "strategies.get_spot_policy",
+      "version": "1.0.0",
+      "domain": "strategies",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "strategies.get_spot_policy"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "strategies.get_timeout_policy",
+      "version": "1.0.0",
+      "domain": "strategies",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "strategies.get_timeout_policy"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "strategies.get_trailing_policy",
+      "version": "1.0.0",
+      "domain": "strategies",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "strategies.get_trailing_policy"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "strategies.validate_recommendation",
+      "version": "1.0.0",
+      "domain": "strategies",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "strategies.validate_recommendation"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "strategy_profiles.compare_versions",
+      "version": "1.0.0",
+      "domain": "strategy_profiles",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "strategy_profiles.compare_versions"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "strategy_profiles.create_candidate_version",
+      "version": "1.0.0",
+      "domain": "strategy_profiles",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "strategy_profiles.create_candidate_version"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "CANDIDATE_WRITE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 1,
+      "requires_human_approval": true
+    },
+    {
+      "name": "strategy_profiles.get_block_rules",
+      "version": "1.0.0",
+      "domain": "strategy_profiles",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "strategy_profiles.get_block_rules"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "strategy_profiles.get_effective_configuration_at",
+      "version": "1.0.0",
+      "domain": "strategy_profiles",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "strategy_profiles.get_effective_configuration_at"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "strategy_profiles.get_filters",
+      "version": "1.0.0",
+      "domain": "strategy_profiles",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "strategy_profiles.get_filters"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "strategy_profiles.get_profile",
+      "version": "1.0.0",
+      "domain": "strategy_profiles",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "strategy_profiles.get_profile"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "strategy_profiles.get_score_binding",
+      "version": "1.0.0",
+      "domain": "strategy_profiles",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "strategy_profiles.get_score_binding"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "strategy_profiles.get_signals",
+      "version": "1.0.0",
+      "domain": "strategy_profiles",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "strategy_profiles.get_signals"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "strategy_profiles.get_version_history",
+      "version": "1.0.0",
+      "domain": "strategy_profiles",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "strategy_profiles.get_version_history"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    },
+    {
+      "name": "strategy_profiles.validate_change_set",
+      "version": "1.0.0",
+      "domain": "strategy_profiles",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "filters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "const": "strategy_profiles.validate_change_set"
+          },
+          "contract_version": {
+            "type": "string"
+          },
+          "data": {
+            "type": [
+              "object",
+              "array",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "freshness": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": "string"
+          },
+          "missingness": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tool",
+          "contract_version",
+          "quality",
+          "missingness"
+        ],
+        "additionalProperties": false
+      },
+      "side_effect": "NONE",
+      "required_permissions": [
+        "ai:analyze"
+      ],
+      "tenant_scoped": true,
+      "freshness_sla_seconds": 300,
+      "max_runtime_seconds": 30,
+      "max_rows": 5000,
+      "requires_human_approval": false
+    }
+  ]
+}

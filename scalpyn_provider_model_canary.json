@@ -1,0 +1,16 @@
+{
+  "status": "REAL_PROVIDER_NOT_RUN_REQUIRES_COST_APPROVAL",
+  "fake_staging": {
+    "provider": "fake",
+    "configured_model": "fake-analysis-v1",
+    "effective_model": "fake-analysis-v1",
+    "cost_usd": "0",
+    "tokens_input": 0,
+    "tokens_output": 0,
+    "pricing_snapshot_version": "ZERO_COST_FAKE_STAGING"
+  },
+  "real_provider": {
+    "executed": false,
+    "reason": "explicit model and cost approval not supplied"
+  }
+}

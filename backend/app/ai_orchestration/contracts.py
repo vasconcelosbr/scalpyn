@@ -33,7 +33,11 @@ class ProviderModelRequest(BaseModel):
 
 class CanonicalDatasetRequest(BaseModel):
     model_config = ConfigDict(frozen=True)
-    domain: Literal["SHADOW_PORTFOLIO", "PROFILE_INTELLIGENCE", "CALIBRATION", "ML_BAYESIAN", "MARKET_REGIME"]
+    domain: Literal[
+        "SHADOW_PORTFOLIO", "PROFILE_INTELLIGENCE", "CALIBRATION", "ML_BAYESIAN",
+        "MARKET_REGIME", "STRATEGY_PROFILES", "SCORE_ENGINE", "GLOBAL_RISK",
+        "STRATEGIES", "SOCIAL_SCORE", "AUDIT_VERSION_MEMORY",
+    ]
     window_start: datetime
     window_end: datetime
     source_labels: tuple[str, ...]
@@ -101,6 +105,7 @@ class AIRequest(BaseModel):
     dataset_request: CanonicalDatasetRequest
     configuration_scope: ConfigurationScope
     question: str = Field(min_length=1, max_length=20_000)
+    frozen_context: dict[str, Any] = Field(default_factory=dict)
     tool_allowlist: tuple[str, ...] = ()
     correlation_id: str = Field(min_length=1, max_length=160)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { AlertCircle, FileJson, Save, RefreshCw, Plus, Trash2, Upload, X } from "lucide-react";
 import { useConfig } from "@/hooks/useConfig";
+import { ModuleAIAnalysisAction } from "@/components/ai/ModuleAIAnalysisAction";
 
 const INDICATORS = [
   "price", "market_cap", "change_24h", "volume_24h",
@@ -408,10 +409,13 @@ export default function ScoreEngineSettings() {
           <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">Score Engine Configuration</h1>
           <p className="text-[var(--text-secondary)] mt-1 text-[13px]">Configure Alpha Score weights, scoring rules, and classification thresholds.</p>
         </div>
+        <div className="flex items-center gap-2">
+        <ModuleAIAnalysisAction originModule="score_engine" originView="settings-score" supportsRegenerative compact />
         <button onClick={handleSave} disabled={saving} className="btn btn-primary">
           {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
           {saving ? "Saving..." : "Save"}
         </button>
+        </div>
       </div>
 
       {importNotice && (

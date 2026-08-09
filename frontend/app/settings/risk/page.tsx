@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { Save, RefreshCw } from "lucide-react";
 import { useConfig } from "@/hooks/useConfig";
+import { ModuleAIAnalysisAction } from "@/components/ai/ModuleAIAnalysisAction";
 
 export default function RiskSettingsPage() {
   const { config, updateConfig, isLoading } = useConfig("risk");
@@ -50,10 +51,13 @@ export default function RiskSettingsPage() {
           <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">Global Risk Configuration</h1>
           <p className="text-[var(--text-secondary)] mt-1 text-[13px]">ZERO HARDCODE: All parameters dynamically control the execution engine.</p>
         </div>
+        <div className="flex items-center gap-2">
+        <ModuleAIAnalysisAction originModule="global_risk" originView="settings-risk" compact />
         <button onClick={handleSave} disabled={saving} className="btn btn-primary">
           {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
           {saving ? "Saving..." : "Save Configuration"}
         </button>
+        </div>
       </div>
 
       <div className="card">

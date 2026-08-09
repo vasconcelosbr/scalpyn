@@ -35,6 +35,53 @@ class AIPromptVersion(Base):
     deprecated_at = Column(TIMESTAMP(timezone=True))
 
 
+class AIModuleCapabilityRecord(Base):
+    __tablename__ = "ai_module_capabilities"
+    __table_args__ = (
+        UniqueConstraint("module_key", "semantic_version", name="uq_ai_module_capability_key_version"),
+    )
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    module_key = Column(String(120), nullable=False)
+    semantic_version = Column(String(40), nullable=False)
+    entities = Column(JSONB, nullable=False, default=list)
+    read_tools = Column(JSONB, nullable=False, default=list)
+    write_tools = Column(JSONB, nullable=False, default=list)
+    dependencies = Column(JSONB, nullable=False, default=list)
+    freshness_sla_seconds = Column(Integer)
+    risk_class = Column(String(48), nullable=False)
+    tenant_scoped = Column(Boolean, nullable=False, default=True)
+    content_hash = Column(String(64), nullable=False, unique=True)
+    status = Column(String(24), nullable=False)
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, default=_now)
+    approved_at = Column(TIMESTAMP(timezone=True))
+    deprecated_at = Column(TIMESTAMP(timezone=True))
+
+
+class AIModelApprovalRecord(Base):
+    __tablename__ = "ai_model_approvals"
+    __table_args__ = (
+        Index("ix_ai_model_approval_tenant_model_time", "tenant_id", "provider", "model", "expires_at"),
+    )
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    provider = Column(String(40), nullable=False)
+    model = Column(String(200), nullable=False)
+    max_cost_usd = Column(Numeric(18, 8), nullable=False)
+    input_cost_per_million = Column(Numeric(18, 8), nullable=False)
+    output_cost_per_million = Column(Numeric(18, 8), nullable=False)
+    max_output_tokens = Column(Integer, nullable=False)
+    pricing_source_url = Column(Text, nullable=False)
+    pricing_observed_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    pricing_snapshot_hash = Column(String(64), nullable=False)
+    approval_phrase_hash = Column(String(64), nullable=False)
+    scope = Column(String(80), nullable=False)
+    status = Column(String(24), nullable=False, default="APPROVED")
+    approved_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    approved_at = Column(TIMESTAMP(timezone=True), nullable=False, default=_now)
+    expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    content_hash = Column(String(64), nullable=False, unique=True)
+
+
 class AIModelAlias(Base):
     __tablename__ = "ai_model_aliases"
     __table_args__ = (UniqueConstraint("provider", "alias", name="uq_ai_model_alias_provider"),)
@@ -90,6 +137,9 @@ class AIDatasetSnapshotRecord(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     contract_version = Column(String(80), nullable=False)
+    origin_module = Column(String(120))
+    module_context_refs = Column(JSONB)
+    context_manifest = Column(JSONB)
     source_tables = Column(JSONB, nullable=False)
     source_labels = Column(JSONB, nullable=False)
     event_identity_contract = Column(String(160), nullable=False)
@@ -218,4 +268,22 @@ class AIToolCallAudit(Base):
     input_hash = Column(String(64), nullable=False)
     output_hash = Column(String(64))
     denial_reason = Column(String(160))
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, default=_now)
+
+
+class AIToolEvidenceRecord(Base):
+    __tablename__ = "ai_tool_evidence"
+    __table_args__ = (
+        Index("ix_ai_tool_evidence_request_module", "tenant_id", "ai_request_id", "module_key", "created_at"),
+    )
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    ai_request_id = Column(UUID(as_uuid=True), ForeignKey("ai_requests.id", ondelete="CASCADE"), nullable=False)
+    tool_call_audit_id = Column(UUID(as_uuid=True), ForeignKey("ai_tool_call_audits.id", ondelete="CASCADE"), nullable=False, unique=True)
+    module_key = Column(String(120), nullable=False)
+    tool_name = Column(String(160), nullable=False)
+    output_json = Column(JSONB, nullable=False)
+    output_hash = Column(String(64), nullable=False)
+    freshness_json = Column(JSONB)
+    quality = Column(String(48), nullable=False)
     created_at = Column(TIMESTAMP(timezone=True), nullable=False, default=_now)

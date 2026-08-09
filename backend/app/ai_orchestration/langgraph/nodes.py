@@ -26,6 +26,7 @@ class NoopNodeHandler:
 INTERRUPT_NODES = {
     "interrupt_candidate_approval": "CANDIDATE_APPROVAL",
     "interrupt_wait_for_shadow_evidence": "SHADOW_EVIDENCE",
+    "interrupt_wait_evidence": "SHADOW_EVIDENCE",
     "interrupt_final_decision": "FINAL_DECISION",
 }
 

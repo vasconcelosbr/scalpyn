@@ -1,0 +1,55 @@
+{"message":"Starting Container","level":"info","timestamp":"2026-08-09T00:57:20.256930228Z"}
+{"level":"info","message":"[start.sh] CONTAINER ENTRY pid=1 k_service=local k_revision=local","timestamp":"2026-08-09T00:57:20.596452342Z"}
+{"message":"[start.sh] CONTAINER ENTRY pid=1 k_service=local k_revision=local","level":"error","timestamp":"2026-08-09T00:57:20.596463912Z"}
+{"timestamp":"2026-08-09T00:57:20.596469422Z","message":"==> [boot] Scalpyn backend starting (PORT=8080, WEB_CONCURRENCY=1)","level":"info"}
+{"message":" [boot] env DATABASE_URL: PRESENT","timestamp":"2026-08-09T00:57:20.596473392Z","level":"info"}
+{"level":"info","message":" [boot] env JWT_SECRET: PRESENT","timestamp":"2026-08-09T00:57:20.596478262Z"}
+{"message":" [boot] env ENCRYPTION_KEY: PRESENT","level":"info","timestamp":"2026-08-09T00:57:20.596483112Z"}
+{"timestamp":"2026-08-09T00:57:20.596487112Z","message":" [boot] env REDIS_URL: PRESENT","level":"info"}
+{"level":"info","timestamp":"2026-08-09T00:57:20.596491012Z","message":" [boot] env AI_KEYS_ENCRYPTION_KEY: PRESENT"}
+{"timestamp":"2026-08-09T00:57:20.596494682Z","message":"==> [migrations] SKIP_ALEMBIC=1 — skipping alembic upgrade (API service owns migrations)","level":"info"}
+{"message":"==> [schema] Validating critical schema...","level":"info","timestamp":"2026-08-09T00:57:20.596498592Z"}
+{"message":"OK: all 32 critical columns present.","level":"error","timestamp":"2026-08-09T00:57:20.596502022Z"}
+{"message":"==> [schema] Critical schema OK.","timestamp":"2026-08-09T00:57:20.596505802Z","level":"info"}
+{"message":"==> [redis] Verifying Redis connectivity...","timestamp":"2026-08-09T00:57:20.596509551Z","level":"info"}
+{"timestamp":"2026-08-09T00:57:20.596514151Z","message":"[redis] connected OK","level":"info"}
+{"level":"info","timestamp":"2026-08-09T00:57:20.596517511Z","message":"==> STARTING CELERY WORKER (queues=ai_orchestration concurrency=1 loglevel=info hostname=celery@celery-d7cb46d7)..."}
+{"timestamp":"2026-08-09T00:57:20.596521081Z","message":" Celery worker PID: 11","level":"info"}
+{"message":"==> SKIPPING CELERY BEAT (RUN_BEAT=0; this container only runs workers or API)","timestamp":"2026-08-09T00:57:20.596524481Z","level":"info"}
+{"message":"==> [celery-check] Waiting 5s for Celery processes to stabilize...","timestamp":"2026-08-09T00:57:20.596527961Z","level":"info"}
+{"timestamp":"2026-08-09T00:57:21.861832479Z","level":"info","message":" "}
+{"message":" -------------- celery@celery-d7cb46d7 v5.6.3 (recovery)","timestamp":"2026-08-09T00:57:21.861836979Z","level":"info"}
+{"timestamp":"2026-08-09T00:57:21.861842489Z","message":"--- ***** ----- ","level":"info"}
+{"message":"-- ******* ---- Linux-6.18.15+deb13-cloud-amd64-x86_64-with-glibc2.41 2026-08-09 00:57:21","timestamp":"2026-08-09T00:57:21.861846629Z","level":"info"}
+{"message":"- *** --- * --- ","level":"info","timestamp":"2026-08-09T00:57:21.861851798Z"}
+{"level":"info","timestamp":"2026-08-09T00:57:21.861856528Z","message":"- ** ---------- [config]"}
+{"timestamp":"2026-08-09T00:57:21.861861228Z","level":"info","message":"- ** ---------- .> app:         scalpyn_tasks:0x7f8ce5fed310"}
+{"message":"- ** ---------- .> transport:   redis://default:**@redis-jwrz.railway.internal:6379//","timestamp":"2026-08-09T00:57:21.861864938Z","level":"info"}
+{"message":"- ** ---------- .> results:     redis://default:**@redis-jwrz.railway.internal:6379/","timestamp":"2026-08-09T00:57:21.861868528Z","level":"info"}
+{"timestamp":"2026-08-09T00:57:21.861871918Z","level":"info","message":"- *** --- * --- .> concurrency: 1 (prefork)"}
+{"timestamp":"2026-08-09T00:57:21.861878538Z","level":"info","message":"-- ******* ---- .> task events: OFF (enable -E to monitor tasks in this worker)"}
+{"timestamp":"2026-08-09T00:57:21.861883178Z","message":"--- ***** ----- ","level":"info"}
+{"message":" -------------- [queues]","timestamp":"2026-08-09T00:57:21.861886708Z","level":"info"}
+{"message":"                .> ai_orchestration exchange=ai_orchestration(direct) key=ai_orchestration","level":"info","timestamp":"2026-08-09T00:57:21.861890098Z"}
+{"message":"                ","level":"info","timestamp":"2026-08-09T00:57:21.861893438Z"}
+{"level":"info","message":"","timestamp":"2026-08-09T00:57:21.861897418Z"}
+{"message":"[tasks]","timestamp":"2026-08-09T00:57:21.861900868Z","level":"info"}
+{"message":"  . app.tasks.ai_orchestration.cancel_graph_run","level":"info","timestamp":"2026-08-09T00:57:21.861903908Z"}
+{"message":"  . app.tasks.ai_orchestration.dispatch_queued_graph_runs","level":"info","timestamp":"2026-08-09T00:57:21.861907088Z"}
+{"timestamp":"2026-08-09T00:57:21.861911008Z","message":"  . app.tasks.ai_orchestration.dispatch_shadow_resume_events","level":"info"}
+{"timestamp":"2026-08-09T00:57:21.861914738Z","level":"info","message":"  . app.tasks.ai_orchestration.recover_stale_graph_runs"}
+{"message":"  . app.tasks.ai_orchestration.resume_graph_run","level":"info","timestamp":"2026-08-09T00:57:21.861918718Z"}
+{"message":"  . app.tasks.ai_orchestration.start_graph_run","timestamp":"2026-08-09T00:57:21.861922848Z","level":"info"}
+{"timestamp":"2026-08-09T00:57:21.861927938Z","message":"","level":"info"}
+{"message":"[2026-08-09 00:57:21,868: INFO/MainProcess] Connected to redis://default:**@redis-jwrz.railway.internal:6379//","timestamp":"2026-08-09T00:57:21.873754186Z","level":"error"}
+{"timestamp":"2026-08-09T00:57:21.873758446Z","level":"error","message":"[2026-08-09 00:57:21,871: INFO/MainProcess] mingle: searching for neighbors"}
+{"timestamp":"2026-08-09T00:57:22.898967494Z","message":"[2026-08-09 00:57:22,881: INFO/MainProcess] mingle: sync with 1 nodes","level":"error"}
+{"message":"[2026-08-09 00:57:22,881: INFO/MainProcess] mingle: sync complete","level":"error","timestamp":"2026-08-09T00:57:22.898970014Z"}
+{"message":"[2026-08-09 00:57:22,919: INFO/MainProcess] celery@celery-d7cb46d7 ready.","level":"error","timestamp":"2026-08-09T00:57:22.921477662Z"}
+{"message":"==> [celery-check] ps aux | grep -E 'celery|beat' (excluding grep):","timestamp":"2026-08-09T00:57:25.344891566Z","level":"info"}
+{"message":"appuser       11 30.6  0.0 146936 133784 ?       S    00:57   0:01 /usr/local/bin/python3.12 /usr/local/bin/celery -A app.tasks.celery_app worker --loglevel=info --concurrency=1 --queues=ai_orchestration --hostname=celery@celery-d7cb46d7","timestamp":"2026-08-09T00:57:25.344894426Z","level":"info"}
+{"timestamp":"2026-08-09T00:57:25.344896846Z","level":"info","message":"appuser       14  0.2  0.0 147240 117292 ?       S    00:57   0:00 /usr/local/bin/python3.12 /usr/local/bin/celery -A app.tasks.celery_app worker --loglevel=info --concurrency=1 --queues=ai_orchestration --hostname=celery@celery-d7cb46d7"}
+{"timestamp":"2026-08-09T00:57:25.344900206Z","level":"info","message":"==> [celery-check] Worker (PID 11) alive after 5s. ✓ (beat skipped)"}
+{"timestamp":"2026-08-09T00:57:25.344902896Z","level":"info","message":" [watchdog] Waiting 120s grace period before monitoring Celery..."}
+{"level":"info","message":"==> SERVICE_MODE=worker - waiting on isolated Celery worker","timestamp":"2026-08-09T00:57:25.344905306Z"}
+{"timestamp":"2026-08-09T00:59:26.571804658Z","level":"info","message":" [watchdog] Grace period over -- monitoring Celery processes."}

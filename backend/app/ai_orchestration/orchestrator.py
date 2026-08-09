@@ -89,7 +89,7 @@ class AIOrchestrationService:
         response = await adapter.execute(
             provider=resolution.effective_provider, model=resolution.effective_model,
             system_prompt=system_prompt, user_prompt=user_prompt, tools=[], api_key=api_key,
-            request_id=str(request.ai_request_id),
+            request_id=str(request.ai_request_id), max_output_tokens=estimated_output_tokens,
         )
         try:
             validate(response.output, prompt.output_schema_json)

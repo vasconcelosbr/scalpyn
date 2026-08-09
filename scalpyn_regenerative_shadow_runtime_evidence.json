@@ -1,0 +1,140 @@
+{
+  "status": "PROVEN_IN_STAGING",
+  "authority": "SHADOW_ONLY",
+  "runs": {
+    "run_a": {
+      "run_id": "8217485a-4e84-44b6-a485-8937eea50ce4",
+      "stages": [
+        {
+          "status": "INTERRUPTED",
+          "run_id": "8217485a-4e84-44b6-a485-8937eea50ce4"
+        },
+        {
+          "status": "INTERRUPTED",
+          "run_id": "8217485a-4e84-44b6-a485-8937eea50ce4"
+        },
+        {
+          "status": "INTERRUPTED",
+          "run_id": "8217485a-4e84-44b6-a485-8937eea50ce4"
+        },
+        {
+          "status": "COMPLETED",
+          "run_id": "8217485a-4e84-44b6-a485-8937eea50ce4"
+        }
+      ]
+    },
+    "run_b": {
+      "run_id": "3bc45977-44aa-45c5-89a6-27b138c67887",
+      "stages": [
+        {
+          "status": "INTERRUPTED",
+          "run_id": "3bc45977-44aa-45c5-89a6-27b138c67887"
+        },
+        {
+          "status": "INTERRUPTED",
+          "run_id": "3bc45977-44aa-45c5-89a6-27b138c67887"
+        },
+        {
+          "status": "INTERRUPTED",
+          "run_id": "3bc45977-44aa-45c5-89a6-27b138c67887"
+        },
+        {
+          "status": "COMPLETED",
+          "run_id": "3bc45977-44aa-45c5-89a6-27b138c67887"
+        }
+      ]
+    },
+    "run_c": {
+      "run_id": "cb5a7ee9-a946-4516-a135-a8f43fb33271",
+      "stages": [
+        {
+          "status": "INTERRUPTED",
+          "run_id": "cb5a7ee9-a946-4516-a135-a8f43fb33271"
+        },
+        {
+          "status": "INTERRUPTED",
+          "run_id": "cb5a7ee9-a946-4516-a135-a8f43fb33271"
+        },
+        {
+          "status": "INTERRUPTED",
+          "run_id": "cb5a7ee9-a946-4516-a135-a8f43fb33271"
+        },
+        {
+          "status": "COMPLETED",
+          "run_id": "cb5a7ee9-a946-4516-a135-a8f43fb33271"
+        }
+      ]
+    }
+  },
+  "events": {
+    "8217485a-4e84-44b6-a485-8937eea50ce4": {
+      "retrieve_contextual_memory": {
+        "memory_hit_count": 0,
+        "decision_memory_ids": [],
+        "state_schema_version": "scalpyn-graph-state-v2"
+      },
+      "create_profile_candidate_version": {
+        "state_schema_version": "scalpyn-graph-state-v2",
+        "candidate_version_ids": [
+          "523a7299-f31b-40e8-92c6-a046b6eb2b13"
+        ],
+        "candidate_version_count": 1
+      }
+    },
+    "3bc45977-44aa-45c5-89a6-27b138c67887": {
+      "retrieve_contextual_memory": {
+        "memory_hit_count": 1,
+        "decision_memory_ids": [
+          "6261b945-0920-49bc-a425-ea3a039b7c90"
+        ],
+        "state_schema_version": "scalpyn-graph-state-v2"
+      },
+      "create_profile_candidate_version": {
+        "state_schema_version": "scalpyn-graph-state-v2",
+        "candidate_version_ids": [
+          "eb682ed4-aaf2-40ac-8cb4-9124d2c1bff1"
+        ],
+        "candidate_version_count": 1
+      }
+    },
+    "cb5a7ee9-a946-4516-a135-a8f43fb33271": {
+      "retrieve_contextual_memory": {
+        "memory_hit_count": 0,
+        "decision_memory_ids": [],
+        "state_schema_version": "scalpyn-graph-state-v2"
+      },
+      "create_profile_candidate_version": {
+        "state_schema_version": "scalpyn-graph-state-v2",
+        "candidate_version_ids": [
+          "eea5bd49-da9e-450d-ad38-503d9a5c9e9f"
+        ],
+        "candidate_version_count": 1
+      }
+    }
+  },
+  "decision_memory": [
+    {
+      "id": "6261b945-0920-49bc-a425-ea3a039b7c90",
+      "ai_request_id": "0f26da98-a448-47c1-8689-a5469f557604",
+      "status": "COMPLETED",
+      "mutation_fingerprint": "e5928628d7d46e3eb1da8a8f4049935eabe257facf5dbca7d96dc3b2015beb13",
+      "context_fingerprint": "e96530e8dada73b9cba12b352c47c0f90ce4c7c1887419e2fafb2b9443feff87"
+    },
+    {
+      "id": "b151f6b6-09d8-47eb-9563-396c26d973d4",
+      "ai_request_id": "2efffb9a-dcb3-466e-afd6-4d5e91cd6d42",
+      "status": "COMPLETED",
+      "mutation_fingerprint": "e5928628d7d46e3eb1da8a8f4049935eabe257facf5dbca7d96dc3b2015beb13",
+      "context_fingerprint": "e96530e8dada73b9cba12b352c47c0f90ce4c7c1887419e2fafb2b9443feff87"
+    },
+    {
+      "id": "08d18e39-b28b-44bd-b2ed-c07f9942a119",
+      "ai_request_id": "5889af66-9af1-4fbf-82ae-96ca3fdba3a2",
+      "status": "COMPLETED",
+      "mutation_fingerprint": "e5928628d7d46e3eb1da8a8f4049935eabe257facf5dbca7d96dc3b2015beb13",
+      "context_fingerprint": "f1a44eb7b7065e54382de9fedff8328dc0f5086c5b8c5bef12f69a43de31c42d"
+    }
+  ],
+  "orders_created": 0,
+  "live_write": false
+}
