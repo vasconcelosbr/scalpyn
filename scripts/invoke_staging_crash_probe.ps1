@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('seed-start', 'snapshot', 'resume', 'origin-start', 'origin-snapshot')]
+    [ValidateSet('seed-start', 'snapshot', 'resume', 'origin-start', 'origin-snapshot', 'full-canary')]
     [string]$Action,
     [string]$RunId
 )
@@ -14,13 +14,17 @@ if (($Action -in @('snapshot', 'resume')) -and [string]::IsNullOrWhiteSpace($Run
     throw 'RUN_ID_REQUIRED'
 }
 
+$uri = 'https://scalpyn-langgraph-staging-api-systemic-ai-staging-20260807.up.railway.app/api/ai/graphs/staging-crash-resume'
 $body = @{ action = $Action }
-if ($RunId) {
+if ($Action -eq 'full-canary') {
+    $uri = 'https://scalpyn-langgraph-staging-api-systemic-ai-staging-20260807.up.railway.app/api/ai/graphs/staging-canary'
+    $body = @{}
+} elseif ($RunId) {
     $body.run_id = $RunId
 }
 $response = Invoke-RestMethod `
     -Method Post `
-    -Uri 'https://scalpyn-langgraph-staging-api-systemic-ai-staging-20260807.up.railway.app/api/ai/graphs/staging-crash-resume' `
+    -Uri $uri `
     -Headers @{ Authorization = "Bearer $token" } `
     -ContentType 'application/json' `
     -Body ($body | ConvertTo-Json -Compress) `
