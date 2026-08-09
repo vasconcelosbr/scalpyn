@@ -63,13 +63,13 @@
                   },
                   {
                       "path":  "audit_evidence/tests/direct-provider-classification.md",
-                      "sha256":  "ce7f709fb5a92af9c3b859a63d98820df782c1bc333059d765850cfd816e2488",
-                      "bytes":  535
+                      "sha256":  "e9d730a1d85c8e62872f7c6dec0b7a45ac512336675574b791e94dfc4f457017",
+                      "bytes":  485
                   },
                   {
                       "path":  "audit_evidence/tests/direct-provider-scan.txt",
-                      "sha256":  "a9eddc62eaee236d7e506bdb5af4c418f900d57449e811bf88bdcf314e002731",
-                      "bytes":  1695
+                      "sha256":  "16dae6e5fb3a79003c35912d200408c9fca0da169f2d1820bf05713315c4b50c",
+                      "bytes":  1527
                   },
                   {
                       "path":  "audit_evidence/tests/focused-backend.txt",

@@ -160,6 +160,22 @@ async def get_decrypted_api_key(db: AsyncSession, user_id: UUID, provider: str) 
         return None
 
 
+async def get_anthropic_api_key(db: AsyncSession, user_id: UUID) -> str:
+    """Resolve the tenant key with the existing system-key fallback."""
+    user_key = await get_decrypted_api_key(db, user_id, "anthropic")
+    if user_key:
+        return user_key
+
+    system_key = os.getenv("ANTHROPIC_API_KEY")
+    if system_key:
+        return system_key
+
+    raise ValueError(
+        f"No Anthropic key configured for user={user_id}. "
+        "Set up a key at /settings/general → AI Integrations."
+    )
+
+
 async def delete_ai_key(db: AsyncSession, user_id: UUID, provider: str) -> bool:
     r = await _get_record(db, user_id, provider)
     if not r:
@@ -179,18 +195,8 @@ async def get_anthropic_client(db: AsyncSession, user_id: UUID):
     except ImportError:
         raise ImportError("anthropic package not installed. Run: pip install anthropic")
 
-    user_key = await get_decrypted_api_key(db, user_id, "anthropic")
-    if user_key:
-        return anthropic.Anthropic(api_key=user_key)
-
-    system_key = os.getenv("ANTHROPIC_API_KEY")
-    if system_key:
-        return anthropic.Anthropic(api_key=system_key)
-
-    raise ValueError(
-        f"No Anthropic key configured for user={user_id}. "
-        "Set up a key at /settings/general → AI Integrations."
-    )
+    api_key = await get_anthropic_api_key(db, user_id)
+    return anthropic.Anthropic(api_key=api_key)
 
 
 async def _save_test_result(db: AsyncSession, r, success: bool, msg: str) -> None:

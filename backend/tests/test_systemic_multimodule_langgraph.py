@@ -346,6 +346,7 @@ def test_no_direct_provider_calls_outside_adapters():
         "HTTPProviderAdapter(",
         "AnthropicSDKTextAdapter(",
         "anthropic.Anthropic(",
+        ".messages.create(",
         "api.openai.com/v1/",
         "api.anthropic.com/v1/",
         "generativelanguage.googleapis.com/v1",
@@ -358,6 +359,50 @@ def test_no_direct_provider_calls_outside_adapters():
         if any(token in source for token in forbidden_tokens):
             offenders.append(str(path.relative_to(backend)))
     assert offenders == []
+
+
+@pytest.mark.asyncio
+async def test_anthropic_key_resolution_preserves_user_key_and_system_fallback(monkeypatch):
+    from app.services import ai_keys_service
+
+    async def user_key(*_args, **_kwargs):
+        return "tenant-key"
+
+    monkeypatch.setattr(ai_keys_service, "get_decrypted_api_key", user_key)
+    assert await ai_keys_service.get_anthropic_api_key(object(), uuid4()) == "tenant-key"
+
+    async def no_user_key(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(ai_keys_service, "get_decrypted_api_key", no_user_key)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "system-key")
+    assert await ai_keys_service.get_anthropic_api_key(object(), uuid4()) == "system-key"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_text_adapter_forwards_system_prompt(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from app.ai_orchestration.provider_adapters.anthropic_sdk import AnthropicSDKTextAdapter
+
+    create = AsyncMock(return_value=SimpleNamespace(
+        content=[SimpleNamespace(text="ok")],
+        usage=SimpleNamespace(input_tokens=2, output_tokens=3),
+    ))
+    client = SimpleNamespace(messages=SimpleNamespace(create=create))
+    monkeypatch.setitem(sys.modules, "anthropic", SimpleNamespace(AsyncAnthropic=lambda **_kwargs: client))
+
+    response = await AnthropicSDKTextAdapter().execute(
+        api_key="secret", model="model", prompt="user", max_tokens=100,
+        system_prompt="system",
+    )
+
+    assert response.text == "ok"
+    assert response.tokens_input == 2
+    assert response.tokens_output == 3
+    assert create.await_args.kwargs["system"] == "system"
 
 
 def test_migration_is_additive_immutable_and_seeds_v2_graphs():

@@ -287,6 +287,7 @@ write_json("scalpyn_gap_closure_after_multimodule.json", {
         "authenticated local-frontend/staging-backend control-plane proof",
         "dedicated AI worker isolation",
         "frontend lint high/critical dependency gates",
+        "legacy preset_ia provider calls routed through the systemic bridge",
     ],
     "open": [
         "full backend suite failures/errors",
@@ -294,7 +295,6 @@ write_json("scalpyn_gap_closure_after_multimodule.json", {
         "actual worker process crash/restart proof",
         "protected Vercel preview authenticated UI proof",
         "every entrypoint invoked individually in staging",
-        "legacy preset_ia_service direct Anthropic calls outside the central bridge",
         "full-history Alembic offline SQL rendering fails in immutable historical migration 148",
         "production checkpoint and rollout",
     ],
@@ -308,9 +308,8 @@ write_text("scalpyn_remaining_risks_after_multimodule.md", f"""
 4. UI: authenticated local frontend against staging is proven; Vercel preview proof is blocked by Vercel Authentication and was not bypassed.
 5. Frontend warnings: `435` warnings with `0` lint errors [query: `.codex-evidence/tests/frontend-lint.txt`]. They are classified legacy debt.
 6. Dependency residual: `1` low, `0` high and `0` critical advisories [query: `.codex-evidence/tests/npm-audit.json`].
-7. Provider boundary: legacy `preset_ia_service.py` still contains direct Anthropic calls [scan: `audit_evidence/tests/direct-provider-scan.txt`]. Adapters and key/catalog validation are allowed, but this domain service remains a blocker.
-8. Production: no migration, deployment, flag activation or canary was performed. Human checkpoint approval remains mandatory.
-9. Alembic offline rendering: full-history `upgrade head --sql` fails while rendering historical migration `148` JSONB literals [command evidence: `audit_evidence/db/alembic-upgrade-head.sql`]. Runtime upgrade/downgrade of the new migrations passed.
+7. Production: no migration, deployment, flag activation or canary was performed. Human checkpoint approval remains mandatory.
+8. Alembic offline rendering: full-history `upgrade head --sql` fails while rendering historical migration `148` JSONB literals [command evidence: `audit_evidence/db/alembic-upgrade-head.sql`]. Runtime upgrade/downgrade of the new migrations passed.
 """)
 
 for key in ("systemic-analysis-v2", "root-cause-audit-v2", "regenerative-shadow-v2", "copilot-systemic-v2"):
@@ -359,7 +358,7 @@ The clean worktree started at `fa586ff8cd006ac790e9ee431f6698fd838cc530`. Produc
 
 ## 3. Segurança
 
-Authority is capped at analysis/proposal/candidate/Shadow. There is no live tool. Tenant scope, typed schemas, row/time bounds, human approval gates, output hashes, fake/real-provider separation and Spot blocking are enforced. The staging canary credential was rotated after browser exposure and re-applied by a fresh successful canary. The legacy `preset_ia_service.py` direct Anthropic boundary remains open and blocks production readiness.
+Authority is capped at analysis/proposal/candidate/Shadow. There is no live tool. Tenant scope, typed schemas, row/time bounds, human approval gates, output hashes, fake/real-provider separation and Spot blocking are enforced. The staging canary credential was rotated after browser exposure and re-applied by a fresh successful canary. Legacy `preset_ia_service.py` provider calls now pass through `SystemicLangGraphBridge` and the central adapter boundary.
 
 ## 4. Arquitetura
 
@@ -491,7 +490,17 @@ for category in ("railway", "db", "logs", "api", "tests", "ui", "canary"):
 for category, paths in evidence_layout.items():
     for source in paths:
         if source.exists() and source.is_file():
-            shutil.copy2(source, ROOT / "audit_evidence" / category / source.name)
+            target = ROOT / "audit_evidence" / category / source.name
+            if source.suffix.lower() in {".md", ".txt", ".xml"}:
+                raw = source.read_bytes()
+                try:
+                    content = raw.decode("utf-8-sig")
+                except UnicodeDecodeError:
+                    content = raw.decode("utf-16")
+                normalized = "\n".join(line.rstrip() for line in content.splitlines()) + "\n"
+                target.write_text(normalized, encoding="utf-8")
+            else:
+                shutil.copy2(source, target)
 
 manifest = []
 for path in sorted((ROOT / "audit_evidence").rglob("*")):

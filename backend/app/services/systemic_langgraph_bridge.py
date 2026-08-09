@@ -112,9 +112,11 @@ class SystemicLangGraphBridge:
     @staticmethod
     async def execute_anthropic_text(
         *, api_key: str, model: str, prompt: str, max_tokens: int,
+        system_prompt: str | None = None,
     ):
         return await AnthropicSDKTextAdapter().execute(
             api_key=api_key, model=model, prompt=prompt, max_tokens=max_tokens,
+            system_prompt=system_prompt,
         )
 
     @staticmethod

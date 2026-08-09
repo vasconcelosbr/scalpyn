@@ -483,7 +483,8 @@ async def run_preset_ia(
             'executed_at':      str,
         }
     """
-    from .ai_keys_service import get_anthropic_client
+    from .ai_keys_service import get_anthropic_api_key
+    from .systemic_langgraph_bridge import SystemicLangGraphBridge
     from ..models.ai_skill import AiSkill
     from ..database import CeleryAsyncSessionLocal
     from sqlalchemy import select, and_
@@ -519,9 +520,10 @@ async def run_preset_ia(
         )
         logger.info(f'[PresetIA] Usando prompt padrão para role={profile_role}')
 
-    # Obter client Anthropic com sessão própria (evita conflito de DB)
+    # Resolver a chave com sessão própria (evita conflito de DB). O transporte
+    # permanece exclusivamente atrás da fronteira sistêmica auditada.
     async with CeleryAsyncSessionLocal() as own_db2:
-        client = await get_anthropic_client(db=own_db2, user_id=user_id)
+        api_key = await get_anthropic_api_key(db=own_db2, user_id=user_id)
 
     # Coletar mercado
     snapshot = await _get_market_snapshot()
@@ -536,15 +538,16 @@ async def run_preset_ia(
     # Chamar Claude
     logger.info(f'[PresetIA] Chamando Claude | profile={profile_id} role={profile_role}')
     try:
-        message = client.messages.create(
+        response = await SystemicLangGraphBridge.execute_anthropic_text(
+            api_key=api_key,
             model='claude-sonnet-4-5',
             max_tokens=4096,
-            system=system_prompt,
-            messages=[{'role': 'user', 'content': user_prompt}],
+            system_prompt=system_prompt,
+            prompt=user_prompt,
         )
-        raw = message.content[0].text.strip()
+        raw = response.text.strip()
         logger.info(
-            f'[PresetIA] Resposta recebida | tokens={message.usage.input_tokens + message.usage.output_tokens}'
+            f'[PresetIA] Resposta recebida | tokens={response.tokens_input + response.tokens_output}'
         )
     except Exception as e:
         logger.error(f'[PresetIA] Erro na chamada Claude: {e}')
@@ -641,10 +644,11 @@ async def run_preset_ia_for_pool(
             'executed_at':      str,
         }
     """
-    from .ai_keys_service import get_anthropic_client
+    from .ai_keys_service import get_anthropic_api_key
     from .market_data_service import market_data_service
+    from .systemic_langgraph_bridge import SystemicLangGraphBridge
 
-    client = await get_anthropic_client(db=db, user_id=user_id)
+    api_key = await get_anthropic_api_key(db=db, user_id=user_id)
 
     # Coletar dados de mercado para os ativos do pool
     try:
@@ -673,13 +677,14 @@ para melhorar a qualidade e performance do pool.
 
     logger.info(f'[PoolPresetIA] Chamando Claude | pool={pool_id} assets={len(symbols)}')
     try:
-        message = client.messages.create(
+        response = await SystemicLangGraphBridge.execute_anthropic_text(
+            api_key=api_key,
             model='claude-sonnet-4-5',
             max_tokens=2048,
-            system=system_prompt,
-            messages=[{'role': 'user', 'content': user_prompt}],
+            system_prompt=system_prompt,
+            prompt=user_prompt,
         )
-        raw = message.content[0].text.strip()
+        raw = response.text.strip()
     except Exception as e:
         logger.error(f'[PoolPresetIA] Erro na chamada Claude: {e}')
         raise

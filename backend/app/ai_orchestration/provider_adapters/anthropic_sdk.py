@@ -13,12 +13,20 @@ class AnthropicTextResponse:
 class AnthropicSDKTextAdapter:
     """Compatibility transport kept behind the central adapter boundary."""
 
-    async def execute(self, *, api_key: str, model: str, prompt: str, max_tokens: int) -> AnthropicTextResponse:
+    async def execute(
+        self, *, api_key: str, model: str, prompt: str, max_tokens: int,
+        system_prompt: str | None = None,
+    ) -> AnthropicTextResponse:
         import anthropic
 
-        response = await anthropic.AsyncAnthropic(api_key=api_key).messages.create(
-            model=model, max_tokens=max_tokens, messages=[{"role": "user", "content": prompt}],
-        )
+        request = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if system_prompt:
+            request["system"] = system_prompt
+        response = await anthropic.AsyncAnthropic(api_key=api_key).messages.create(**request)
         text = response.content[0].text if response.content else ""
         usage = response.usage
         return AnthropicTextResponse(

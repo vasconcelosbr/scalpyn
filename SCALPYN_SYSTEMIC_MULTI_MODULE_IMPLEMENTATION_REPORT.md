@@ -13,7 +13,7 @@ The clean worktree started at `fa586ff8cd006ac790e9ee431f6698fd838cc530`. Produc
 
 ## 3. Segurança
 
-Authority is capped at analysis/proposal/candidate/Shadow. There is no live tool. Tenant scope, typed schemas, row/time bounds, human approval gates, output hashes, fake/real-provider separation and Spot blocking are enforced. The staging canary credential was rotated after browser exposure and re-applied by a fresh successful canary. The legacy `preset_ia_service.py` direct Anthropic boundary remains open and blocks production readiness.
+Authority is capped at analysis/proposal/candidate/Shadow. There is no live tool. Tenant scope, typed schemas, row/time bounds, human approval gates, output hashes, fake/real-provider separation and Spot blocking are enforced. The staging canary credential was rotated after browser exposure and re-applied by a fresh successful canary. Legacy `preset_ia_service.py` provider calls now pass through `SystemicLangGraphBridge` and the central adapter boundary.
 
 ## 4. Arquitetura
 
