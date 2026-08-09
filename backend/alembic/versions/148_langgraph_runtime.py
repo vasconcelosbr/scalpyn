@@ -88,6 +88,48 @@ def _definition_rows() -> list[dict]:
     return rows
 
 
+def _sql_quote(value: str) -> str:
+    """Quote a trusted migration literal for deterministic offline SQL."""
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _graph_definition_insert_sql() -> str:
+    """Render the immutable seed rows without JSONB literal-bind failures.
+
+    Alembic's PostgreSQL offline compiler cannot render Python dict/list
+    values passed through ``bulk_insert`` as JSONB literals. These rows are
+    entirely migration-owned constants, so explicit SQL literals preserve the
+    online effect while making ``alembic upgrade head --sql`` deterministic.
+    """
+    values = []
+    for row in _definition_rows():
+        node_json = json.dumps(row["node_manifest"], separators=(",", ":"))
+        edge_json = json.dumps(row["edge_manifest"], separators=(",", ":"))
+        values.append(
+            "(" + ", ".join([
+                f"{_sql_quote(str(row['id']))}::uuid",
+                _sql_quote(row["graph_key"]),
+                _sql_quote(row["semantic_version"]),
+                _sql_quote(row["state_schema_version"]),
+                _sql_quote(row["status"]),
+                _sql_quote(row["content_hash"]),
+                _sql_quote(row["code_revision"]),
+                f"{_sql_quote(node_json)}::jsonb",
+                f"{_sql_quote(edge_json)}::jsonb",
+                _sql_quote(row["tool_policy_version"]),
+                f"{_sql_quote(row['created_at'].isoformat())}::timestamptz",
+                f"{_sql_quote(row['approved_at'].isoformat())}::timestamptz",
+            ]) + ")"
+        )
+    return """
+        INSERT INTO ai_graph_definitions (
+            id, graph_key, semantic_version, state_schema_version, status,
+            content_hash, code_revision, node_manifest, edge_manifest,
+            tool_policy_version, created_at, approved_at
+        ) VALUES
+    """ + ",\n".join(values)
+
+
 def upgrade() -> None:
     op.execute(sa.text("CREATE SCHEMA IF NOT EXISTS langgraph_runtime"))
 
@@ -109,7 +151,10 @@ def upgrade() -> None:
         sa.UniqueConstraint("graph_key", "semantic_version", name="uq_ai_graph_definition_key_version"),
         sa.CheckConstraint("status IN ('DRAFT','APPROVED','DEPRECATED','BLOCKED')", name="ck_ai_graph_definition_status"),
     )
-    op.bulk_insert(definitions, _definition_rows())
+    # Keep ``definitions`` as the authoritative table object while using an
+    # explicit renderer for JSONB-compatible online and offline execution.
+    del definitions
+    op.execute(sa.text(_graph_definition_insert_sql()))
     op.execute(sa.text("""
         CREATE OR REPLACE FUNCTION prevent_approved_ai_graph_mutation()
         RETURNS trigger LANGUAGE plpgsql AS $$

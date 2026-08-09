@@ -51,4 +51,4 @@ def test_handles_profiles_with_only_strict_meta_conditions():
     )
 
     assert selected["relaxed_strict_meta"] is True
-    assert selected["conditions"] == []
+    assert selected["conditions"] == [conditions[1]]

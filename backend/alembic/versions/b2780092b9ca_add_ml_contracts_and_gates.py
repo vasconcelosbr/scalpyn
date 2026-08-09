@@ -20,10 +20,23 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # Add contract columns to ml_models
-    op.add_column('ml_models', sa.Column('target_window_seconds', sa.Integer(), nullable=True))
-    op.add_column('ml_models', sa.Column('label_contract_id', postgresql.UUID(as_uuid=True), nullable=True))
-    op.add_column('ml_models', sa.Column('dataset_contract_id', postgresql.UUID(as_uuid=True), nullable=True))
-    op.add_column('ml_models', sa.Column('feature_contract_id', postgresql.UUID(as_uuid=True), nullable=True))
+    # The consolidated 000 baseline already contains this column. Keep this
+    # historical migration compatible with both pre-baseline databases (where
+    # it must add the column) and fresh baseline restores (where it is a no-op).
+    op.execute(sa.text(
+        "ALTER TABLE ml_models ADD COLUMN IF NOT EXISTS target_window_seconds INTEGER"
+    ))
+    # Contract IDs are deterministic hashes/semantic identifiers, not UUIDs.
+    # ``dataset_contract_id`` is also present in the consolidated baseline.
+    op.execute(sa.text(
+        "ALTER TABLE ml_models ADD COLUMN IF NOT EXISTS label_contract_id VARCHAR(32)"
+    ))
+    op.execute(sa.text(
+        "ALTER TABLE ml_models ADD COLUMN IF NOT EXISTS dataset_contract_id VARCHAR(100)"
+    ))
+    op.execute(sa.text(
+        "ALTER TABLE ml_models ADD COLUMN IF NOT EXISTS feature_contract_id VARCHAR(32)"
+    ))
     op.add_column('ml_models', sa.Column('tp_pct', sa.Numeric(), nullable=True))
     op.add_column('ml_models', sa.Column('sl_pct', sa.Numeric(), nullable=True))
     op.add_column('ml_models', sa.Column('fee_roundtrip_pct', sa.Numeric(), nullable=True))

@@ -179,6 +179,9 @@ class _FakeResult:
         class _M:
             def one(self):
                 return outer._one_mapping
+
+            def all(self):
+                return outer._rows
         return _M()
 
 
@@ -343,6 +346,9 @@ _ML_CONFIG_ROW = {
     "ml_active_barrier_contract_version": "shadow_atr_dynamic_v2",
     "shadow_barrier_min_pct": 0.5,
     "shadow_barrier_max_pct": 3.0,
+    "ml_l3_capture_min_directional_rate": 0.8,
+    "ml_l3_capture_window_hours": 24,
+    "ml_l3_capture_min_sample": 20,
 }
 
 _INVARIANT_NAMES = [
@@ -383,6 +389,7 @@ def _cert_session(failures=(), gate_blocked=0, atr_running=0, previous=None):
         _FakeResult(one_mapping=_cumulative_mapping()),
         _FakeResult(scalar=gate_blocked),
         _FakeResult(scalar=atr_running),
+        _FakeResult(rows=[]),
         _FakeResult(rows=[previous] if previous else []),
     ])
 
@@ -459,7 +466,8 @@ async def test_i12_coherence_params_are_config_driven():
         _FakeResult(rows=[(cfg2,)]),
         _FakeResult(rows=_invariant_rows()),
         _FakeResult(one_mapping=_cumulative_mapping()),
-        _FakeResult(scalar=0), _FakeResult(scalar=0), _FakeResult(rows=[]),
+        _FakeResult(scalar=0), _FakeResult(scalar=0),
+        _FakeResult(rows=[]), _FakeResult(rows=[]),
     ])
     await run_certification(db2, persist=False)
     p2 = _invariants_params(db2)
@@ -565,6 +573,7 @@ async def test_readiness_targets_come_from_config_not_hardcoded():
         _FakeResult(one_mapping=_cumulative_mapping()),
         _FakeResult(scalar=0),
         _FakeResult(scalar=0),
+        _FakeResult(rows=[]),
         _FakeResult(rows=[]),
     ])
     await run_certification(db2, persist=False)

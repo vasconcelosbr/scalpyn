@@ -243,8 +243,8 @@ def test_spread_pct_strict_meta():
     print("✓ PASS: spread_pct=None fails spread filter")
 
 
-def test_orderbook_depth_strict_meta():
-    """Test that orderbook_depth_usdt is treated as strict meta field."""
+def test_orderbook_depth_missing_is_unknown_not_strict_failure():
+    """Depth is fetched per symbol, so a missing value is UNKNOWN and skipped."""
     asset = {
         "symbol": "TEST_USDT",
         "market_cap": 10000000,
@@ -257,8 +257,8 @@ def test_orderbook_depth_strict_meta():
     ]
 
     result = _passes_profile_filters(asset, conditions, logic="AND")
-    assert result is False, "orderbook_depth_usdt=None should FAIL depth filter (strict meta)"
-    print("✓ PASS: orderbook_depth_usdt=None fails depth filter")
+    assert result is True, "orderbook_depth_usdt=None should remain UNKNOWN, not reject the asset"
+    print("✓ PASS: orderbook_depth_usdt=None is skipped as UNKNOWN")
 
 
 def test_between_operator_with_none():

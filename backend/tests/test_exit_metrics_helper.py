@@ -43,7 +43,7 @@ def test_flatten_entry_snapshot_handles_none_and_empty():
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 def test_build_exit_snapshot_drops_non_scalar(monkeypatch):

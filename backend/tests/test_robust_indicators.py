@@ -245,18 +245,15 @@ def test_score_uses_confidence_weighting():
     assert out_stale.score <= out_fresh.score
 
 
-def test_score_uses_direct_confidence_weighted_formula():
-    """Spec: score = Σ(points × confidence) / Σ(points) × 100.
-
-    With three matched rules totalling 80 points and a uniform
-    confidence (= base GATE_CANDLES = 0.85 for fresh values), the
-    expected score is exactly 0.85 × 100 = 85.
-    """
+def test_score_is_deterministic_and_confidence_is_separate():
+    """Task #211: points determine score; confidence is a separate gate."""
     envs = _full_envelope_set()
     out = calculate_score_with_confidence(envs, _SAMPLE_RULES)
     assert out.rejected is False
-    expected = CONFIDENCE_MAP[DataSource.GATE_CANDLES] * 100.0  # 85.0
-    assert out.score == pytest.approx(expected, rel=0.02)
+    assert out.score == pytest.approx(100.0)
+    assert out.score_confidence == pytest.approx(
+        CONFIDENCE_MAP[DataSource.GATE_CANDLES], rel=0.02
+    )
     # No category weights in direct mode — the result is identical
     # whether the caller passes weights or not.
     out_weighted = calculate_score_with_confidence(
@@ -275,7 +272,7 @@ def test_score_can_trade_threshold():
     )
     assert out.can_trade is True
     out2 = calculate_score_with_confidence(
-        envs, _SAMPLE_RULES, can_trade_threshold=99.0
+        envs, _SAMPLE_RULES, can_trade_threshold=101.0
     )
     assert out2.can_trade is False
 

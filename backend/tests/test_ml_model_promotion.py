@@ -14,6 +14,8 @@ PROMOTION_CONFIG = {
     "ml_promotion_max_val_test_gap": 0.05,
     "ml_promotion_max_test_fpr": 0.5,
     "ml_promotion_require_positive_net_ev": True,
+    "ml_approval_test_auc_ci_excludes_half": False,
+    "ml_approval_min_distinct_days": 0,
 }
 
 

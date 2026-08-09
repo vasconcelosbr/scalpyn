@@ -123,6 +123,7 @@ def test_migration_038_index_is_partial() -> None:
         Path(__file__).resolve().parent.parent
         / "alembic"
         / "versions"
+        / "legacy"
         / "038_trade_tracking.py"
     )
     src = migration_path.read_text(encoding="utf-8").lower()

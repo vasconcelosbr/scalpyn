@@ -142,6 +142,7 @@ def test_registry_migration_enforces_one_champion_per_scope():
         Path(__file__).resolve().parents[1]
         / "alembic"
         / "versions"
+        / "legacy"
         / "097_ml_champion_challenger_registry.py"
     ).read_text(encoding="utf-8")
     assert "uq_ml_registry_one_champion_scope" in migration

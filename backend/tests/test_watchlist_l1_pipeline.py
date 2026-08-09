@@ -9,7 +9,7 @@ import pytest
 import requests
 import os
 
-BASE_URL = "http://localhost:8001"
+BASE_URL = os.getenv("SCALPYN_E2E_BASE_URL", "http://localhost:8001").rstrip("/")
 
 # From context: existing pool/watchlist IDs
 POOL_ID = "d166102a-79e5-4824-9e02-13a2f046b819"
@@ -18,11 +18,18 @@ WATCHLIST_ID = "56987c59-3354-4191-987d-9896d85a09c4"
 
 @pytest.fixture(scope="module")
 def auth_token():
-    """Login and return JWT token."""
+    """Create the isolated E2E user when needed, then return its JWT."""
+    register = requests.post(f"{BASE_URL}/api/auth/register", json={
+        "email": "test@scalpyn.com",
+        "password": "TestPass123!",
+        "name": "Scalpyn E2E",
+    }, timeout=30)
+    if register.status_code == 200:
+        return register.json()["access_token"]
     resp = requests.post(f"{BASE_URL}/api/auth/login", json={
         "email": "test@scalpyn.com",
         "password": "TestPass123!"
-    })
+    }, timeout=30)
     assert resp.status_code == 200, f"Login failed: {resp.text}"
     return resp.json()["access_token"]
 
@@ -30,6 +37,56 @@ def auth_token():
 @pytest.fixture(scope="module")
 def headers(auth_token):
     return {"Authorization": f"Bearer {auth_token}", "Content-Type": "application/json"}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def isolated_pipeline_resources(headers):
+    """Provision the pool and pipeline chain instead of relying on stale IDs."""
+    global POOL_ID, WATCHLIST_ID
+
+    pool = requests.post(
+        f"{BASE_URL}/api/pools/",
+        json={"name": "L1 E2E Pool", "market_type": "spot", "mode": "paper"},
+        headers=headers,
+        timeout=30,
+    )
+    assert pool.status_code in (200, 201), pool.text
+    POOL_ID = pool.json()["id"]
+
+    coin = requests.post(
+        f"{BASE_URL}/api/pools/{POOL_ID}/coins",
+        json={"symbol": "BTC_USDT", "market_type": "spot"},
+        headers=headers,
+        timeout=30,
+    )
+    assert coin.status_code in (200, 201, 409), coin.text
+
+    pool_watchlist = requests.post(
+        f"{BASE_URL}/api/watchlists/",
+        json={
+            "name": "POOL E2E",
+            "level": "POOL",
+            "source_pool_id": POOL_ID,
+            "market_mode": "spot",
+        },
+        headers=headers,
+        timeout=30,
+    )
+    assert pool_watchlist.status_code in (200, 201), pool_watchlist.text
+
+    l1_watchlist = requests.post(
+        f"{BASE_URL}/api/watchlists/",
+        json={
+            "name": "L1 E2E",
+            "level": "L1",
+            "source_watchlist_id": pool_watchlist.json()["id"],
+            "market_mode": "spot",
+        },
+        headers=headers,
+        timeout=30,
+    )
+    assert l1_watchlist.status_code in (200, 201), l1_watchlist.text
+    WATCHLIST_ID = l1_watchlist.json()["id"]
 
 
 # ── Test 1: Symbol normalization BTCUSDT → BTC_USDT ──────────────────────────

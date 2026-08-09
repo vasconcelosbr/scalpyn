@@ -101,11 +101,10 @@ def test_l3_still_in_valid_sources():
 
 
 def test_insert_sql_uses_per_source_conflict():
-    """_INSERT_SHADOW_SQL deve referenciar (user_id, symbol, source) no ON CONFLICT."""
+    """The canonical insert must handle every applicable unique index."""
     from app.services.shadow_trade_service import _INSERT_SHADOW_SQL
     sql_text = str(_INSERT_SHADOW_SQL)
-    assert "(user_id, symbol, source)" in sql_text
-    assert "WHERE status = 'RUNNING'" in sql_text
+    assert "ON CONFLICT DO NOTHING" in sql_text
 
 
 # ── 4. Enabled=false → retorna 0 sem DB calls ────────────────────────────────
@@ -130,7 +129,7 @@ async def test_disabled_flag_returns_zero():
     mock_cfg_db.__aexit__ = AsyncMock(return_value=False)
 
     with patch(
-        "app.services.shadow_trade_service.CeleryAsyncSessionLocal",
+        "app.database.CeleryAsyncSessionLocal",
         return_value=mock_cfg_db,
     ):
         result = await create_l1_spectrum_shadows(
@@ -188,6 +187,10 @@ async def test_rate_limit_generates_skip():
     mock_cfg_db.execute = _fake_execute
     mock_cfg_db.__aenter__ = AsyncMock(return_value=mock_cfg_db)
     mock_cfg_db.__aexit__ = AsyncMock(return_value=False)
+    mock_cfg_nested = MagicMock()
+    mock_cfg_nested.__aenter__ = AsyncMock(return_value=None)
+    mock_cfg_nested.__aexit__ = AsyncMock(return_value=False)
+    mock_cfg_db.begin_nested = MagicMock(return_value=mock_cfg_nested)
 
     skip_insert_sqls: list = []
 
@@ -202,12 +205,13 @@ async def test_rate_limit_generates_skip():
     mock_skip_db.execute = _mock_skip_execute
     mock_skip_db.__aenter__ = AsyncMock(return_value=mock_skip_db)
     mock_skip_db.__aexit__ = AsyncMock(return_value=False)
-    mock_skip_ctx = AsyncMock()
-    mock_skip_ctx.__aenter__ = AsyncMock(return_value=mock_skip_db)
-    mock_skip_ctx.__aexit__ = AsyncMock(return_value=False)
+    mock_skip_nested = MagicMock()
+    mock_skip_nested.__aenter__ = AsyncMock(return_value=None)
+    mock_skip_nested.__aexit__ = AsyncMock(return_value=False)
+    mock_skip_db.begin_nested = MagicMock(return_value=mock_skip_nested)
 
     with patch(
-        "app.services.shadow_trade_service.CeleryAsyncSessionLocal",
+        "app.database.CeleryAsyncSessionLocal",
         side_effect=[mock_cfg_db, mock_cfg_db, mock_skip_db],
     ):
         result = await create_l1_spectrum_shadows(

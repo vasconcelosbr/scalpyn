@@ -65,20 +65,17 @@ def test_classify_ok_when_everything_is_healthy():
 
 def test_classify_not_approved_takes_priority_over_everything():
     rec = _classify_with_defaults(
-        pool={"is_approved": False, "is_active": True, "exists": True},
+        pool={"is_approved": False, "is_active": False, "exists": True},
     )
     assert rec.status == STATUS_NOT_APPROVED
 
 
-def test_classify_inactive_row_routes_to_ok():
-    """Inactive rows are operator-disabled, not a pool inconsistency,
-    and must not be flagged as NOT_APPROVED. Map them to STATUS_OK to
-    keep the public 5-status taxonomy intact.
-    """
+def test_classify_inactive_row_routes_to_not_approved():
+    """The ingestion gate is is_active; inactive rows require reactivation."""
     rec = _classify_with_defaults(
         pool={"is_approved": True, "is_active": False, "exists": True},
     )
-    assert rec.status == STATUS_OK
+    assert rec.status == STATUS_NOT_APPROVED
     assert rec.is_approved is False
 
 
@@ -733,6 +730,8 @@ def test_remediator_only_recomputes_for_post_refresh_confirmed(monkeypatch):
 
     import app.tasks.celery_app as celery_mod
     monkeypatch.setattr(celery_mod, "celery_app", _FakeCelery())
+    import app.tasks.task_dispatch as dispatch_mod
+    monkeypatch.setattr(dispatch_mod, "_redis_client", lambda: None)
 
     report = _build_report(
         ("BTC_USDT", STATUS_NOT_APPROVED),

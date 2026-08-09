@@ -197,9 +197,8 @@ def test_batch_errors_accumulate_correctly():
     assert "SOL" not in persisted_symbols
 
 
-def test_ohlcv_preflight_still_aborts_whole_batch():
-    """The OHLCV preflight check must still raise RuntimeError when candle
-    data is absent, aborting the whole batch before any decision is touched."""
+def test_ohlcv_preflight_skips_whole_batch_without_retry_storm():
+    """Missing OHLCV returns a structured skip before any decision is touched."""
 
     outer_session = AsyncMock()
 
@@ -218,17 +217,14 @@ def test_ohlcv_preflight_still_aborts_whole_batch():
     async def run():
         with patch.object(SimulationService, "simulate_decision", fake_simulate):
             svc = SimulationService(outer_session)
-            try:
-                await svc.run_simulation_batch(
-                    limit=10,
-                    skip_existing=False,
-                    exchange="gate",
-                    session_factory=_make_session_factory(),
-                )
-                return False
-            except RuntimeError:
-                return True
+            return await svc.run_simulation_batch(
+                limit=10,
+                skip_existing=False,
+                exchange="gate",
+                session_factory=_make_session_factory(),
+            )
 
-    raised = asyncio.run(run())
-    assert raised, "Expected RuntimeError from OHLCV preflight to propagate"
+    summary = asyncio.run(run())
+    assert summary["status"] == "skipped"
+    assert summary["reason"] == "no_recent_candles"
     assert not processed_decisions, "No decisions should be processed when OHLCV fails"

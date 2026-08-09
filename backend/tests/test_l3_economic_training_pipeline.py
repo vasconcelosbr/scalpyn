@@ -6,6 +6,7 @@ from backend.app.services.ml_challenger_service import (
     _stable_train_feature_indices,
     _validation_selection_score,
 )
+from backend.app.services.shadow_trade_service import BARRIER_CONTRACT_ATR_DYNAMIC_V2
 
 
 def test_positive_net_return_label_aligns_with_promotion_ev():
@@ -52,9 +53,13 @@ def test_stable_feature_filter_uses_train_coverage_and_exclusions():
 
 def test_l3_barrier_contract_rejects_mixed_payoff_policies():
     records = [
-        {"barrier_mode": "ATR_DYNAMIC", "tp_pct_applied": 1.5, "id": "keep"},
+        {"barrier_mode": "ATR_DYNAMIC", "tp_pct_applied": 1.5,
+         "barrier_contract_version": BARRIER_CONTRACT_ATR_DYNAMIC_V2, "id": "keep"},
         {"barrier_mode": "FIXED", "tp_pct_applied": 1.5, "id": "mode"},
-        {"barrier_mode": "ATR_DYNAMIC", "tp_pct_applied": 0.6, "id": "tp"},
+        {"barrier_mode": "ATR_DYNAMIC", "tp_pct_applied": 0.6,
+         "barrier_contract_version": BARRIER_CONTRACT_ATR_DYNAMIC_V2, "id": "dynamic_tp"},
+        {"barrier_mode": "ATR_DYNAMIC", "tp_pct_applied": 1.5,
+         "barrier_contract_version": "shadow_atr_dynamic_v1", "id": "legacy_atr"},
         {"barrier_mode": None, "tp_pct_applied": None, "id": "missing"},
     ]
 
@@ -64,10 +69,11 @@ def test_l3_barrier_contract_rejects_mixed_payoff_policies():
         expected_tp_pct=1.5,
     )
 
-    assert [row["id"] for row in kept] == ["keep"]
-    assert meta["barrier_contract_included"] == 1
+    assert [row["id"] for row in kept] == ["keep", "dynamic_tp"]
+    assert meta["barrier_contract_included"] == 2
     assert meta["barrier_contract_mode_mismatch"] == 1
-    assert meta["barrier_contract_tp_mismatch"] == 1
+    assert meta["barrier_contract_tp_mismatch"] == 0
+    assert meta["barrier_contract_atr_non_v2_excluded"] == 1
     assert meta["barrier_contract_missing"] == 1
 
 

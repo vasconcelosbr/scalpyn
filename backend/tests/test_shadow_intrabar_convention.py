@@ -262,15 +262,15 @@ def test_mae_mfe_none_when_no_min_max_price():
 # ── Label net-of-fees runtime (FIX-1c / B1) ─────────────────────────────────
 
 def test_label_net_of_fees_with_persisted_net_return():
-    """Quando net_return_pct persistido está disponível, usar ele vs MIN_WIN_PNL_PCT."""
+    """positive_net_return uses the persisted net return as its label."""
     import sys, os
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-    from app.ml.feature_extractor import build_training_dataframe, _MIN_WIN_PNL_PCT
+    from app.ml.feature_extractor import build_training_dataframe
 
     # Gross pnl sugere win, net pnl sugere lose → net deve prevalecer
     fee = 0.20
-    gross = _MIN_WIN_PNL_PCT + fee - 0.01  # just below win after fee
-    net = gross - fee  # = _MIN_WIN_PNL_PCT - 0.01 → LOSE
+    gross = 0.19
+    net = -0.01
 
     records = [{
         "pnl_pct": gross,
@@ -280,20 +280,23 @@ def test_label_net_of_fees_with_persisted_net_return():
         "outcome": "TP_HIT",
         "ttt_outcome": None,
     }]
-    df = build_training_dataframe(records, fee_roundtrip_pct=fee, label_net_of_fees=True)
+    df = build_training_dataframe(
+        records, fee_roundtrip_pct=fee, label_net_of_fees=True,
+        label_objective="positive_net_return",
+    )
 
     assert len(df) == 1
     assert df.iloc[0]["is_win_fast"] == 0, "net_return_pct just below MIN → LOSE"
 
 
 def test_label_net_of_fees_null_net_uses_runtime_fee():
-    """Quando net_return_pct é NULL, computar net = gross - fee em runtime."""
+    """When net return is absent, positive-net labeling falls back to gross PnL."""
     import sys, os
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-    from app.ml.feature_extractor import build_training_dataframe, _MIN_WIN_PNL_PCT
+    from app.ml.feature_extractor import build_training_dataframe
 
     fee = 0.20
-    gross = _MIN_WIN_PNL_PCT + fee + 0.05  # net = _MIN_WIN_PNL_PCT + 0.05 → WIN
+    gross = 0.25
 
     records = [{
         "pnl_pct": gross,
@@ -303,26 +306,28 @@ def test_label_net_of_fees_null_net_uses_runtime_fee():
         "outcome": "TP_HIT",
         "ttt_outcome": None,
     }]
-    df = build_training_dataframe(records, fee_roundtrip_pct=fee, label_net_of_fees=True)
+    df = build_training_dataframe(
+        records, fee_roundtrip_pct=fee, label_net_of_fees=True,
+        label_objective="positive_net_return",
+    )
 
     assert len(df) == 1
     assert df.iloc[0]["is_win_fast"] == 1, "runtime net above MIN → WIN"
 
 
 def test_label_legacy_path_when_not_net_of_fees():
-    """Sem label_net_of_fees, usar gross vs _WIN_THRESHOLD (caminho legado)."""
+    """Default fast_tp label uses simulator outcome plus configured holding ceiling."""
     import sys, os
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-    from app.ml.feature_extractor import build_training_dataframe, _WIN_THRESHOLD
-
-    gross_win = _WIN_THRESHOLD + 0.1
-    gross_lose = _WIN_THRESHOLD - 0.1
+    from app.ml.feature_extractor import build_training_dataframe
 
     records = [
-        {"pnl_pct": gross_win, "net_return_pct": None, "features_snapshot": {},
-         "created_at": "2026-06-10T00:00:00", "outcome": "TP_HIT", "ttt_outcome": None},
-        {"pnl_pct": gross_lose, "net_return_pct": None, "features_snapshot": {},
-         "created_at": "2026-06-10T00:00:00", "outcome": "SL_HIT", "ttt_outcome": None},
+        {"pnl_pct": 0.1, "net_return_pct": None, "features_snapshot": {},
+         "created_at": "2026-06-10T00:00:00", "outcome": "TP_HIT",
+         "holding_seconds": 100, "ttt_outcome": None},
+        {"pnl_pct": 2.0, "net_return_pct": None, "features_snapshot": {},
+         "created_at": "2026-06-10T00:00:00", "outcome": "TP_HIT",
+         "holding_seconds": 2000, "ttt_outcome": None},
     ]
     df = build_training_dataframe(records)  # label_net_of_fees=False (default)
 

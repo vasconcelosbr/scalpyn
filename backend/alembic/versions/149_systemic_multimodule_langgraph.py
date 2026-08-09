@@ -198,6 +198,73 @@ def _module_rows() -> list[dict]:
     return rows
 
 
+def _sql_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _jsonb_literal(value: object) -> str:
+    encoded = json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+    return f"{_sql_quote(encoded)}::jsonb"
+
+
+def _module_insert_sql() -> str:
+    values = []
+    for row in _module_rows():
+        freshness = (
+            "NULL" if row["freshness_sla_seconds"] is None
+            else str(int(row["freshness_sla_seconds"]))
+        )
+        values.append("(" + ", ".join([
+            f"{_sql_quote(str(row['id']))}::uuid",
+            _sql_quote(row["module_key"]),
+            _sql_quote(row["semantic_version"]),
+            _jsonb_literal(row["entities"]),
+            _jsonb_literal(row["read_tools"]),
+            _jsonb_literal(row["write_tools"]),
+            _jsonb_literal(row["dependencies"]),
+            freshness,
+            _sql_quote(row["risk_class"]),
+            "TRUE" if row["tenant_scoped"] else "FALSE",
+            _sql_quote(row["content_hash"]),
+            _sql_quote(row["status"]),
+            f"{_sql_quote(row['created_at'].isoformat())}::timestamptz",
+            f"{_sql_quote(row['approved_at'].isoformat())}::timestamptz",
+        ]) + ")")
+    return """
+        INSERT INTO ai_module_capabilities (
+            id, module_key, semantic_version, entities, read_tools,
+            write_tools, dependencies, freshness_sla_seconds, risk_class,
+            tenant_scoped, content_hash, status, created_at, approved_at
+        ) VALUES
+    """ + ",\n".join(values)
+
+
+def _graph_insert_sql() -> str:
+    values = []
+    for row in _graph_rows():
+        values.append("(" + ", ".join([
+            f"{_sql_quote(str(row['id']))}::uuid",
+            _sql_quote(row["graph_key"]),
+            _sql_quote(row["semantic_version"]),
+            _sql_quote(row["state_schema_version"]),
+            _sql_quote(row["status"]),
+            _sql_quote(row["content_hash"]),
+            _sql_quote(row["code_revision"]),
+            _jsonb_literal(row["node_manifest"]),
+            _jsonb_literal(row["edge_manifest"]),
+            _sql_quote(row["tool_policy_version"]),
+            f"{_sql_quote(row['created_at'].isoformat())}::timestamptz",
+            f"{_sql_quote(row['approved_at'].isoformat())}::timestamptz",
+        ]) + ")")
+    return """
+        INSERT INTO ai_graph_definitions (
+            id, graph_key, semantic_version, state_schema_version, status,
+            content_hash, code_revision, node_manifest, edge_manifest,
+            tool_policy_version, created_at, approved_at
+        ) VALUES
+    """ + ",\n".join(values)
+
+
 def upgrade() -> None:
     op.execute(sa.text("CREATE EXTENSION IF NOT EXISTS pgcrypto"))
 
@@ -253,7 +320,8 @@ def upgrade() -> None:
         sa.UniqueConstraint("module_key", "semantic_version", name="uq_ai_module_capability_key_version"),
         sa.CheckConstraint("status IN ('DRAFT','APPROVED','DEPRECATED','BLOCKED')", name="ck_ai_module_capability_status"),
     )
-    op.bulk_insert(modules, _module_rows())
+    del modules
+    op.execute(sa.text(_module_insert_sql()))
     op.execute(sa.text("""
         CREATE OR REPLACE FUNCTION prevent_approved_ai_module_capability_mutation()
         RETURNS trigger LANGUAGE plpgsql AS $$
@@ -324,7 +392,8 @@ def upgrade() -> None:
         sa.column("edge_manifest", JSONB), sa.column("tool_policy_version", sa.String),
         sa.column("created_at", sa.DateTime(timezone=True)), sa.column("approved_at", sa.DateTime(timezone=True)),
     )
-    op.bulk_insert(graph_table, _graph_rows())
+    del graph_table
+    op.execute(sa.text(_graph_insert_sql()))
 
 
 def downgrade() -> None:

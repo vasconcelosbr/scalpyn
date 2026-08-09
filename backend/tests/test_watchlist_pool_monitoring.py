@@ -84,7 +84,8 @@ def test_profile_indicator_columns_follow_filter_conditions_order():
     indicators = _extract_profile_indicator_fields(profile_config)
 
     assert indicators == [
-        {"key": "_meta:volume_24h", "label": "Volume 24h", "field": "volume_24h"},
+        {"key": "_meta:price", "label": "Price", "field": "price"},
+        {"key": "_meta:volume_24h", "label": "Vol 24h (Gate Spot)", "field": "volume_24h"},
         {"key": "_meta:market_cap", "label": "Market Cap", "field": "market_cap"},
         {"key": "spread_pct", "label": "Spread%", "field": "spread_pct"},
     ]

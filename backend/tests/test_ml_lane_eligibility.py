@@ -113,7 +113,7 @@ class TestPredictorModelLaneContract:
         import asyncio
 
         from backend.app.ml.prediction_service import WinFastPredictor
-        from app.ml.gcs_model_loader import NoEligibleModelError
+        from backend.app.ml.gcs_model_loader import NoEligibleModelError
 
         predictor = WinFastPredictor()
         with patch(

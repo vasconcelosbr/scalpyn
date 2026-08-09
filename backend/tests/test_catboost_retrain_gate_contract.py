@@ -172,7 +172,14 @@ def test_catboost_train_gate_uses_database_minimum_and_reports_deficit(monkeypat
         svc._load_ml_config = AsyncMock(return_value={
             "ml_dataset_valid_from": "2026-07-01T00:00:00+00:00",
             "ml_l3_dataset_valid_from": "2026-07-11T03:21:06+00:00",
+            "ml_win_fast_threshold_seconds": 14400,
             "ml_catboost_retrain_min_eligible_rows": 4,
+            "ml_catboost_train_size_ratio": 0.7,
+            "ml_catboost_validation_size_ratio": 0.15,
+            "ml_catboost_test_size_ratio": 0.15,
+            "ml_catboost_min_train_samples": 1,
+            "ml_catboost_min_validation_samples": 1,
+            "ml_catboost_min_test_samples": 1,
             "ml_promotion_min_test_samples": 3,
             "ml_maturity_embargo_margin_minutes": 60,
             "shadow_barrier_mode": "ATR_DYNAMIC",
@@ -286,9 +293,15 @@ def test_new_candidate_persists_contracts_and_fail_closed_governance():
         def scalar():
             return 80
 
+        @staticmethod
+        def first():
+            return (1,)
+
     async def _run():
         db = AsyncMock()
-        db.execute = AsyncMock(side_effect=[_ScalarResult(), None, None])
+        db.execute = AsyncMock(
+            side_effect=[_ScalarResult(), _ScalarResult(), None, None, None, None]
+        )
         svc = MLChallengerService()
         svc._load_ml_config = AsyncMock(return_value={
             "ml_label_version": "is_tp_4h_v2_sim_outcome",
@@ -297,6 +310,8 @@ def test_new_candidate_persists_contracts_and_fail_closed_governance():
             "ml_promotion_max_val_test_gap": 0.05,
             "ml_promotion_max_test_fpr": 0.5,
             "ml_promotion_require_positive_net_ev": True,
+            "ml_approval_test_auc_ci_excludes_half": False,
+            "ml_approval_min_distinct_days": 0,
         })
         await svc._save_to_db(
             db=db,
@@ -326,11 +341,17 @@ def test_new_candidate_persists_contracts_and_fail_closed_governance():
                 "net_ev": 0.1,
             },
             win_fast_threshold_s=14400,
+            dataset_stats={
+                "n_samples": 220,
+                "n_positive": 110,
+                "n_negative": 110,
+                "positive_rate": 0.5,
+            },
         )
         return db
 
     db = asyncio.run(_run())
-    insert_params = db.execute.await_args_list[1].args[1]
+    insert_params = db.execute.await_args_list[2].args[1]
     assert insert_params["dataset_contract_id"]
     assert insert_params["label_contract_id"]
     assert insert_params["feature_contract_id"]
@@ -347,6 +368,8 @@ def test_promotion_gate_requires_label_and_feature_contract_ids():
         "ml_promotion_max_val_test_gap": 0.05,
         "ml_promotion_max_test_fpr": 0.5,
         "ml_promotion_require_positive_net_ev": True,
+        "ml_approval_test_auc_ci_excludes_half": False,
+        "ml_approval_min_distinct_days": 0,
     }
     result = evaluate_promotion_gate({
         "metrics_json": {
@@ -383,9 +406,15 @@ def test_new_candidate_sanitizes_non_finite_metrics_before_jsonb():
         def scalar():
             return 81
 
+        @staticmethod
+        def first():
+            return (1,)
+
     async def _run():
         db = AsyncMock()
-        db.execute = AsyncMock(side_effect=[_ScalarResult(), None, None])
+        db.execute = AsyncMock(
+            side_effect=[_ScalarResult(), _ScalarResult(), None, None, None, None]
+        )
         svc = MLChallengerService()
         svc._load_ml_config = AsyncMock(return_value={
             "ml_label_version": "positive_net_return_v1",
@@ -394,6 +423,8 @@ def test_new_candidate_sanitizes_non_finite_metrics_before_jsonb():
             "ml_promotion_max_val_test_gap": 0.05,
             "ml_promotion_max_test_fpr": 0.5,
             "ml_promotion_require_positive_net_ev": True,
+            "ml_approval_test_auc_ci_excludes_half": False,
+            "ml_approval_min_distinct_days": 0,
         })
         await svc._save_to_db(
             db=db,
@@ -423,11 +454,17 @@ def test_new_candidate_sanitizes_non_finite_metrics_before_jsonb():
                 "net_ev": float("nan"),
             },
             win_fast_threshold_s=14400,
+            dataset_stats={
+                "n_samples": 215,
+                "n_positive": 100,
+                "n_negative": 115,
+                "positive_rate": 100 / 215,
+            },
         )
         return db
 
     db = asyncio.run(_run())
-    insert_params = db.execute.await_args_list[1].args[1]
+    insert_params = db.execute.await_args_list[2].args[1]
     assert insert_params["roc_auc"] is None
     assert "NaN" not in insert_params["hyperparams"]
     assert "NaN" not in insert_params["metrics_json"]

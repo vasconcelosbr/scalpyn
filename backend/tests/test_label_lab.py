@@ -159,7 +159,11 @@ class TestMigration107:
     def _migration_source(self) -> str:
         path = (
             Path(__file__).resolve().parents[2]
-            / "backend" / "alembic" / "versions" / "107_label_lab_runs.py"
+            / "backend"
+            / "alembic"
+            / "versions"
+            / "legacy"
+            / "107_label_lab_runs.py"
         )
         return path.read_text(encoding="utf-8")
 

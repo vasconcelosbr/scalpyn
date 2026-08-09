@@ -7,6 +7,7 @@ Revises: 149_multimodule_langgraph
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 
 from alembic import op
 import sqlalchemy as sa
@@ -66,6 +67,63 @@ def _prompt_table():
     )
 
 
+def _sql_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _jsonb_literal(value: object) -> str:
+    encoded = json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+    # ``sa.text`` treats ``:1``, ``:false`` and similar JSON fragments as bind
+    # parameters. Escaping colons preserves literal JSON online; SQLAlchemy
+    # removes the escape when compiling both online and offline SQL.
+    encoded = encoded.replace(":", r"\:")
+    return f"{_sql_quote(encoded)}::jsonb"
+
+
+def _prompt_seed_statements(values: dict) -> tuple[str, str]:
+    conflict = f"""
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1 FROM ai_prompt_versions
+             WHERE prompt_key = {_sql_quote(values['prompt_key'])}
+               AND semantic_version = {_sql_quote(values['semantic_version'])}
+               AND content_hash <> {_sql_quote(EXPECTED_PROMPT_HASH)}
+          ) THEN
+            RAISE EXCEPTION 'SYSTEMIC_MULTIMODULE_PROMPT_DATABASE_CONFLICT';
+          END IF;
+        END $$;
+    """
+    insert = f"""
+        INSERT INTO ai_prompt_versions (
+            id, prompt_key, semantic_version, status, system_template,
+            user_template, input_schema_json, output_schema_json,
+            tool_policy_json, provider_constraints_json, content_hash,
+            created_at, approved_at
+        )
+        SELECT
+            {_sql_quote(str(values['id']))}::uuid,
+            {_sql_quote(values['prompt_key'])},
+            {_sql_quote(values['semantic_version'])},
+            {_sql_quote(values['status'])},
+            {_sql_quote(values['system_template'])},
+            {_sql_quote(values['user_template'])},
+            {_jsonb_literal(values['input_schema_json'])},
+            {_jsonb_literal(values['output_schema_json'])},
+            {_jsonb_literal(values['tool_policy_json'])},
+            {_jsonb_literal(values['provider_constraints_json'])},
+            {_sql_quote(values['content_hash'])},
+            {_sql_quote(values['created_at'].isoformat())}::timestamptz,
+            {_sql_quote(values['approved_at'].isoformat())}::timestamptz
+        WHERE NOT EXISTS (
+            SELECT 1 FROM ai_prompt_versions
+             WHERE prompt_key = {_sql_quote(values['prompt_key'])}
+               AND semantic_version = {_sql_quote(values['semantic_version'])}
+        );
+    """
+    return conflict, insert
+
+
 def _harden_registry_trigger() -> None:
     op.execute(sa.text("""
         CREATE OR REPLACE FUNCTION prevent_approved_ai_module_capability_mutation()
@@ -93,28 +151,21 @@ def _harden_registry_trigger() -> None:
 
 
 def upgrade() -> None:
-    prompt = _prompt_table()
     values = _prompt_values()
-    bind = op.get_bind()
-    existing_hash = bind.execute(
-        sa.select(prompt.c.content_hash).where(
-            prompt.c.prompt_key == values["prompt_key"],
-            prompt.c.semantic_version == values["semantic_version"],
-        )
-    ).scalar_one_or_none()
-    if existing_hash is None:
-        bind.execute(prompt.insert().values(**values))
-    elif existing_hash != EXPECTED_PROMPT_HASH:
-        raise RuntimeError("SYSTEMIC_MULTIMODULE_PROMPT_DATABASE_CONFLICT")
+    conflict_sql, insert_sql = _prompt_seed_statements(values)
+    # asyncpg accepts a single SQL command per prepared statement. Keeping the
+    # conflict guard and idempotent insert separate also preserves offline SQL.
+    op.execute(sa.text(conflict_sql))
+    op.execute(sa.text(insert_sql))
     _harden_registry_trigger()
 
 
 def downgrade() -> None:
-    prompt = _prompt_table()
-    op.get_bind().execute(prompt.delete().where(
-        prompt.c.prompt_key == "systemic-multimodule",
-        prompt.c.semantic_version == "2.0.0",
-        prompt.c.content_hash == EXPECTED_PROMPT_HASH,
-    ))
+    op.execute(sa.text(f"""
+        DELETE FROM ai_prompt_versions
+         WHERE prompt_key = 'systemic-multimodule'
+           AND semantic_version = '2.0.0'
+           AND content_hash = '{EXPECTED_PROMPT_HASH}'
+    """))
     # Revision 149 contains the same hardened function definition, so no
     # trigger change is needed when returning to that source revision.

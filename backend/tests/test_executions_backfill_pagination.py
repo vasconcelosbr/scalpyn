@@ -53,7 +53,9 @@ class _StubAdapter:
 
     def __init__(self, spot_total: int, fut_total: int, page_size: int = 100):
         self.page_size = page_size
-        base = datetime(2026, 5, 1, tzinfo=timezone.utc)
+        # Keep fixture rows inside the paginator's rolling window. A fixed
+        # calendar date makes this test expire as wall-clock time advances.
+        base = datetime.now(timezone.utc) - timedelta(days=1)
         # Spot: store as descending by id (newest first) to match Gate.
         self._spot_all: List[Dict[str, Any]] = [
             _spot_row(i, base + timedelta(seconds=i)) for i in range(spot_total)

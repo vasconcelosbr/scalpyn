@@ -108,7 +108,7 @@ def test_symbol_audit_dry_run_returns_full_payload(client, monkeypatch):
     body = response.json()
     assert body["report"]["total"] == 2
     assert body["remediation"]["dry_run"] is True
-    assert body["remediation"]["counts_by_action"]["approve"] == 1
+    assert body["remediation"]["counts_by_action"]["activate"] == 1
     # In dry-run no action should be marked executed.
     assert all(a["executed"] is False for a in body["remediation"]["actions"])
 

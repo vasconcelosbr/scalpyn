@@ -86,13 +86,22 @@ def test_consumers_do_not_filter_by_lowercase_direction(path: Path):
     # Caça padrões: direction == 'up', direction = 'up', direction.in_(["up"]),
     # direction IN ('up'), d.direction = 'up', etc.
     forbidden_patterns = [
-        re.compile(rf"direction\s*[=!]=?\s*[\"']({v})[\"']", re.IGNORECASE)
+        re.compile(
+            rf"(?<![A-Za-z0-9_])direction\s*[=!]=?\s*[\"']({v})[\"']",
+            re.IGNORECASE,
+        )
         for v in FORBIDDEN_LOWERCASE_VALUES
     ] + [
-        re.compile(rf"direction\s+IN\s*\([^)]*[\"']({v})[\"']", re.IGNORECASE)
+        re.compile(
+            rf"(?<![A-Za-z0-9_])direction\s+IN\s*\([^)]*[\"']({v})[\"']",
+            re.IGNORECASE,
+        )
         for v in FORBIDDEN_LOWERCASE_VALUES
     ] + [
-        re.compile(rf"direction\.in_\(\s*\[[^]]*[\"']({v})[\"']", re.IGNORECASE)
+        re.compile(
+            rf"(?<![A-Za-z0-9_])direction\.in_\(\s*\[[^]]*[\"']({v})[\"']",
+            re.IGNORECASE,
+        )
         for v in FORBIDDEN_LOWERCASE_VALUES
     ]
     hits = []

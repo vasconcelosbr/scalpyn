@@ -172,7 +172,12 @@ class PositionLifecycleService:
             if qty <= 0:
                 continue
             price = _f(fill.price)
-            fee = _fee_in_quote(fill.fee, fill.fee_currency, symbol, price)
+            fee = _fee_in_quote(
+                fill.fee,
+                getattr(fill, "fee_currency", None),
+                symbol,
+                price,
+            )
             ts = fill.executed_at if isinstance(fill.executed_at, datetime) else None
             if ts is None:
                 continue

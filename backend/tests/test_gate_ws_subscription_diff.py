@@ -111,4 +111,4 @@ def test_apply_subscription_diff_uses_per_channel_payload_form():
     spot_by_channel = {m["channel"]: m["payload"] for m in spot_ws.sent if m["event"] == "subscribe"}
     assert spot_by_channel.get("spot.tickers") == ["DOGE_USDT"]
     assert spot_by_channel.get("spot.trades") == ["DOGE_USDT"]
-    assert spot_by_channel.get("spot.orders") == ["DOGE_USDT"]
+    assert "spot.orders" not in spot_by_channel
