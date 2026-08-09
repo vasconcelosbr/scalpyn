@@ -1,2 +1,6 @@
 .codex_tmp/
+.codex-evidence/
 .vercel-deploy-staging/
+graphify-out/
+frontend/.next/
+frontend/node_modules/
