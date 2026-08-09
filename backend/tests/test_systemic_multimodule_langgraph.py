@@ -48,11 +48,18 @@ def test_typed_tools_cover_every_registered_module():
 
     tools = default_tool_capabilities()
     modules = {tool.domain for tool in tools}
-    assert EXPECTED_MODULES - {"intelligence_runs"} <= modules
+    assert EXPECTED_MODULES <= modules
     assert all(tool.input_schema.get("type") == "object" for tool in tools)
     assert all(tool.output_schema.get("type") == "object" for tool in tools)
     assert all(tool.tenant_scoped for tool in tools)
     assert all(tool.freshness_sla_seconds is None or tool.freshness_sla_seconds > 0 for tool in tools)
+
+
+def test_module_analysis_domain_map_covers_registry_and_read_only_surfaces():
+    from app.services.module_ai_analysis_service import _DOMAIN, _READ_ONLY_MODULES
+
+    assert set(_DOMAIN) == EXPECTED_MODULES
+    assert {"intelligence_runs", "audit_version_memory"} <= _READ_ONLY_MODULES
 
 
 def test_strategy_profiles_tool_returns_version_and_hash():

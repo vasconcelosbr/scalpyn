@@ -31,7 +31,15 @@ from ..models.systemic_ai import AIModelApprovalRecord
 from .ai_graph_service import AIGraphRunService
 
 
-_READ_ONLY_MODULES = {"ml_models", "global_risk", "strategies", "social_score", "market_regime"}
+_READ_ONLY_MODULES = {
+    "ml_models",
+    "global_risk",
+    "strategies",
+    "intelligence_runs",
+    "social_score",
+    "market_regime",
+    "audit_version_memory",
+}
 _REGENERATIVE_MODULES = {"strategy_profiles", "score_engine", "shadow_portfolio"}
 _DOMAIN = {
     "strategy_profiles": "STRATEGY_PROFILES",
@@ -40,6 +48,7 @@ _DOMAIN = {
     "score_engine": "SCORE_ENGINE",
     "global_risk": "GLOBAL_RISK",
     "strategies": "STRATEGIES",
+    "intelligence_runs": "INTELLIGENCE_RUNS",
     "social_score": "SOCIAL_SCORE",
     "market_regime": "MARKET_REGIME",
     "audit_version_memory": "AUDIT_VERSION_MEMORY",
