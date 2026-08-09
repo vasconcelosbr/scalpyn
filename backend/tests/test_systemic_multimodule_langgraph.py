@@ -62,6 +62,17 @@ def test_module_analysis_domain_map_covers_registry_and_read_only_surfaces():
     assert {"intelligence_runs", "audit_version_memory"} <= _READ_ONLY_MODULES
 
 
+def test_provider_adapter_limits_are_environment_bounded(monkeypatch):
+    from app.ai_orchestration.provider_adapters import default_adapter_registry
+
+    monkeypatch.setenv("AI_PROVIDER_TIMEOUT_SECONDS", "90")
+    monkeypatch.setenv("AI_PROVIDER_MAX_ATTEMPTS", "1")
+    adapter = default_adapter_registry().get("anthropic")
+
+    assert adapter.timeout_seconds == 90
+    assert adapter.max_attempts == 1
+
+
 def test_strategy_profiles_tool_returns_version_and_hash():
     from app.ai_orchestration.domain_tools import default_tool_capabilities
     from app.ai_orchestration.module_tool_runtime import _bounded_frozen_reader
