@@ -1,0 +1,257 @@
+﻿{
+    "algorithm":  "SHA-256",
+    "evidence_file_count":  50,
+    "generated_at":  "2026-08-09T04:46:31.5611557Z",
+    "files":  [
+                  {
+                      "path":  "canary/final-staging-acceptance.json",
+                      "sha256":  "5992f20774518015d085e773dafaa4418ed2c3e85f160dec5fe4eb3699733918",
+                      "bytes":  773
+                  },
+                  {
+                      "path":  "canary/health-final.json",
+                      "sha256":  "0076e9197d5f78d04cea2268a83116016303c20a51f3ce4b25445a252eebc70f",
+                      "bytes":  53
+                  },
+                  {
+                      "path":  "canary/module-origin-e2e-matrix.json",
+                      "sha256":  "896b2a9ce2e3a9b98aa395e6c7aa728da528c664a7440f12059f64a0407e667a",
+                      "bytes":  1132
+                  },
+                  {
+                      "path":  "canary/railway-api-deployments.json",
+                      "sha256":  "74d56ed977f0bba1fd9575fe75cfea675aa3e4420a870837d28db3b41a0ec261",
+                      "bytes":  35927
+                  },
+                  {
+                      "path":  "canary/railway-status.json",
+                      "sha256":  "5df68a2e530b9421cb98729dd41f9ee7ebecb73b1f633c0d6a8e08878953eb2a",
+                      "bytes":  149234
+                  },
+                  {
+                      "path":  "canary/railway-worker-deployments.json",
+                      "sha256":  "79f233a36b02b4904ef5a52f6f1ea3373a82ab3ad54fbe95d14bf4921799c952",
+                      "bytes":  20045
+                  },
+                  {
+                      "path":  "canary/regenerative-abc-final-evidence.json",
+                      "sha256":  "d52dafedf64d5c7ec2249153f6bc79eae8cf2ad2174b0c25ecb316ca52ba1fcf",
+                      "bytes":  913
+                  },
+                  {
+                      "path":  "canary/staging-api-proof-final.json",
+                      "sha256":  "c8f8bdaef9e818fbe2f852102a03cf1bee30c146731a491164ff89e5143f608a",
+                      "bytes":  76895
+                  },
+                  {
+                      "path":  "canary/staging-canary-final.json",
+                      "sha256":  "de400b0e79ab4ec5dfec917ffa393e75b28c478ae1a9397690826bd4e17407fd",
+                      "bytes":  39298
+                  },
+                  {
+                      "path":  "db/alembic-heads.txt",
+                      "sha256":  "9102d1a1233b95afe55a4330e1fd9f4567d01153fe57e47aa5d42cfa93a212d9",
+                      "bytes":  34
+                  },
+                  {
+                      "path":  "db/alembic-offline-dr-resolution.md",
+                      "sha256":  "bc14d5aa3b5141a6c67fa58aea2c16b90bf20db07df2deebe753f1508167eb66",
+                      "bytes":  587
+                  },
+                  {
+                      "path":  "db/alembic-upgrade-head.sql",
+                      "sha256":  "5779c11f951dc567ba906b7b5161938dc9b841ddd6c9148a39fb003d04034306",
+                      "bytes":  304141
+                  },
+                  {
+                      "path":  "db/runtime-persistence-proof.json",
+                      "sha256":  "de400b0e79ab4ec5dfec917ffa393e75b28c478ae1a9397690826bd4e17407fd",
+                      "bytes":  39298
+                  },
+                  {
+                      "path":  "git/revision.json",
+                      "sha256":  "be1161ac3f223a562eb4d05b2814b52aa974b2458854fd413c69893b5aa53d93",
+                      "bytes":  352
+                  },
+                  {
+                      "path":  "provider/direct-provider-classification.md",
+                      "sha256":  "e58df37236602418c1046293343b8aec987b52a58694d844f2fcd5325b2ba39f",
+                      "bytes":  492
+                  },
+                  {
+                      "path":  "provider/direct-provider-scan.txt",
+                      "sha256":  "465dd3c278ecba377ab8b9e21b4d3911bf1884b96bca4eddcb117c4ae6c803dd",
+                      "bytes":  1528
+                  },
+                  {
+                      "path":  "provider/provider-boundary-closure.json",
+                      "sha256":  "1f279acbc650d19080e3a70b6ab70fb87ec80a1ca09e88007964f6fd1e3c7a99",
+                      "bytes":  857
+                  },
+                  {
+                      "path":  "provider/real-provider-staging-canary.json",
+                      "sha256":  "296305d9bca62be46c0b4deb11c0f8e5f83babcdd3926320103486579c0172c3",
+                      "bytes":  981
+                  },
+                  {
+                      "path":  "security/audit-evidence.json",
+                      "sha256":  "c1d78d484eb60bd7142091ae6fc631223dfb2aaa8b6585b0010fd91cb0c1c03b",
+                      "bytes":  1142
+                  },
+                  {
+                      "path":  "security/canary-credential-incident-closure.md",
+                      "sha256":  "c6c697475a84b875d6e8ae30dd93374087d637259e484f94569ad8dfd27bfed7",
+                      "bytes":  1792
+                  },
+                  {
+                      "path":  "security/codex-evidence.json",
+                      "sha256":  "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+                      "bytes":  3
+                  },
+                  {
+                      "path":  "security/deliverables-rescan.json",
+                      "sha256":  "3d414b8809b7c63231167cc54eda6ff96b601d2daa58049939902227a80ab680",
+                      "bytes":  1364
+                  },
+                  {
+                      "path":  "security/final-evidence.json",
+                      "sha256":  "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+                      "bytes":  3
+                  },
+                  {
+                      "path":  "security/final-evidence-rescan.json",
+                      "sha256":  "7eca80e5e619e7d0e2556410c01114499f6259480f6dffadfa287d36b4446340",
+                      "bytes":  1827
+                  },
+                  {
+                      "path":  "security/final-secret-scan-summary.json",
+                      "sha256":  "883da321d0f4490abe474afe63c7cff493057ac42ebfc685bd9ee84f23de1028",
+                      "bytes":  761
+                  },
+                  {
+                      "path":  "security/frontend-build.json",
+                      "sha256":  "e09a086c0ea51ebbf2887befd21b7e451e2367df1c45a73731e29a23315b690e",
+                      "bytes":  3340
+                  },
+                  {
+                      "path":  "security/frontend-build-clean.json",
+                      "sha256":  "d3bb54c90811cbb4ab178cc37bc2ca79ad9f6fa3ee7cd30e0a6eeeeff1959902",
+                      "bytes":  3340
+                  },
+                  {
+                      "path":  "security/git-history.json",
+                      "sha256":  "40da04bba5ee6f575120d176816a007b6bb062895810709df154e87447fed685",
+                      "bytes":  54689
+                  },
+                  {
+                      "path":  "security/git-history-relevant.json",
+                      "sha256":  "84f5bd0b7e13331f80104ed5ed7befe8165608ba800e2fd597c1d417fd4f9e2c",
+                      "bytes":  957
+                  },
+                  {
+                      "path":  "tests/backend-final-test-results.json",
+                      "sha256":  "034a4f8fdbad8800c1217b2686a1c433b8bbf1ca975b00259e84b44c746d46fd",
+                      "bytes":  797
+                  },
+                  {
+                      "path":  "tests/backend-full-after.txt",
+                      "sha256":  "f58d68430fb71771eab0782b2cd95d363658996bf119389b198b90633761c585",
+                      "bytes":  346
+                  },
+                  {
+                      "path":  "tests/backend-full-after.xml",
+                      "sha256":  "74e32079c48a06d46ffd8a96d32e5983c1494203cba7466a2e2cf6d47f839693",
+                      "bytes":  229562
+                  },
+                  {
+                      "path":  "tests/backend-full-before.xml",
+                      "sha256":  "98dc99d2947d216961b920daabbeb14bc00296ca657f9f18ff40829eed63b8e3",
+                      "bytes":  984221
+                  },
+                  {
+                      "path":  "tests/backend-full-final.xml",
+                      "sha256":  "74e32079c48a06d46ffd8a96d32e5983c1494203cba7466a2e2cf6d47f839693",
+                      "bytes":  229562
+                  },
+                  {
+                      "path":  "tests/eslint.json",
+                      "sha256":  "659b09a59c8a5a974d520d3981824d4b46b064ac2d371fcd19655e9064e19451",
+                      "bytes":  2026457
+                  },
+                  {
+                      "path":  "tests/failure-classification.json",
+                      "sha256":  "0ea573afde4ea836ebfe2d2639848490f7e089e7d8253d5ad84d930c86aaea3e",
+                      "bytes":  46600
+                  },
+                  {
+                      "path":  "tests/focused-backend.txt",
+                      "sha256":  "e083412afa5957bf68c1434511f08dfa3d06a884b484ced602379e7608f55ac0",
+                      "bytes":  751
+                  },
+                  {
+                      "path":  "tests/focused-backend.xml",
+                      "sha256":  "1612ff37cfbf87253f8db9cbb8e2ce5fcef681ce27f7e9752ab376df3b0086d3",
+                      "bytes":  10588
+                  },
+                  {
+                      "path":  "tests/frontend-build.txt",
+                      "sha256":  "185c367115bf0794e6c4c6f4af459027275a336591dd0bb9297b5b7008dee754",
+                      "bytes":  2539
+                  },
+                  {
+                      "path":  "tests/frontend-lint.txt",
+                      "sha256":  "39892f56958fe95fc076fb9ac428977092dc9f3985113d07e922e67ed9f7dceb",
+                      "bytes":  230018
+                  },
+                  {
+                      "path":  "tests/frontend-tests.txt",
+                      "sha256":  "38c0ced69e60af8f950e05e55bacc81617ecc6795e539e64050113bc1762f351",
+                      "bytes":  2329
+                  },
+                  {
+                      "path":  "tests/git-diff-check.txt",
+                      "sha256":  "497b713eeb516a91aaf7a6a584811b2667cb26378f9008310320943560fc574f",
+                      "bytes":  5566
+                  },
+                  {
+                      "path":  "tests/npm-audit.json",
+                      "sha256":  "bbd4ff8232361593ac11fc640817eaeb3d0e2b311bddf3888ca372f00661cf53",
+                      "bytes":  1226
+                  },
+                  {
+                      "path":  "tests/pip-check.txt",
+                      "sha256":  "672aec65a45bed50e70229c70934a7eebf0462595c459b83023027645d57cccf",
+                      "bytes":  31
+                  },
+                  {
+                      "path":  "ui/authenticated-ui-test-results.json",
+                      "sha256":  "e91951aa57f36dbb8cab453fd7f0501866f0dc05f9b3fb4af452d9071d2c440c",
+                      "bytes":  883
+                  },
+                  {
+                      "path":  "ui/authenticated-vercel-ui-evidence.md",
+                      "sha256":  "a32dad583750f28462bc8d15074f7d100989e824c1285d2b127181c301b9882a",
+                      "bytes":  2203
+                  },
+                  {
+                      "path":  "ui/intelligence-runs-authenticated-redacted.jpg",
+                      "sha256":  "e238af815d2dc79d80650520441edfcfec73ba38b446cd8b60f6df57e16a65d1",
+                      "bytes":  36584
+                  },
+                  {
+                      "path":  "worker/api-final.jsonl",
+                      "sha256":  "57a6638b09e0bd5afb955edf15b22d4a8d1b1b5309ebaa0f5fd58588eac59826",
+                      "bytes":  11577
+                  },
+                  {
+                      "path":  "worker/crash-resume-runtime-evidence.json",
+                      "sha256":  "e11293c51dbaec2f86d02f505048eda5630b9f82360e14cdf05f6a77cff69de9",
+                      "bytes":  1085
+                  },
+                  {
+                      "path":  "worker/worker-final.jsonl",
+                      "sha256":  "98ab3fdf860de75738d53287c206c85a6bd24e0fb308c765b17e15815b589d3c",
+                      "bytes":  7322
+                  }
+              ]
+}

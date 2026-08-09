@@ -1,0 +1,24 @@
+{
+  "verdict": "CODE_AND_TEST_PROVEN_REAL_PROVIDER_NOT_PROVEN",
+  "direct_provider_calls_outside_control_plane": 0,
+  "allowed_adapters": [
+    "backend/app/ai_orchestration/provider_adapters/anthropic_sdk.py",
+    "backend/app/ai_orchestration/provider_adapters/http_adapter.py",
+    "backend/app/copilot/transport.py"
+  ],
+  "preset_ia_service_boundary": "SystemicLangGraphBridge",
+  "catalog": [
+    {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
+    {"provider": "openai", "model": "gpt-4.1-mini"},
+    {"provider": "gemini", "model": "gemini-2.5-flash"}
+  ],
+  "staging_validated_provider_keys": 0,
+  "staging_active_model_approvals": 0,
+  "staging_budget_policies": 0,
+  "legacy_bridges": {
+    "static_adoption_proven": 4,
+    "runtime_e2e_proven": 0,
+    "required": 4,
+    "status": "NOT_PROVEN_REQUIRES_REAL_PROVIDER_GATE"
+  }
+}

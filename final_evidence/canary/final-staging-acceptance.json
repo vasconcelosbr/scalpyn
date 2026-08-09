@@ -1,0 +1,21 @@
+{
+  "verdict": "PARTIALLY_COMPLETE_PROVIDER_NOT_PROVEN",
+  "final_acceptance": false,
+  "gates": {
+    "backend_full": "PASS_1614_OF_1614",
+    "provider_boundary": "CODE_AND_TEST_PROVEN",
+    "real_provider": "NOT_PROVEN",
+    "worker_crash_restart_resume": "PROVEN",
+    "module_origins": "PROVEN_7_OF_7",
+    "legacy_bridges_runtime": "NOT_PROVEN_0_OF_4",
+    "authenticated_vercel_ui": "PROVEN",
+    "spot": "AI_SPOT_AUTHORITY_BLOCKED",
+    "alembic_offline_dr": "PROVEN",
+    "credential_incident": "MITIGATED_WITH_RESIDUAL_RISK",
+    "lint": "PASS_0_ERRORS_0_NEW_WARNINGS",
+    "regenerative_abc": "PROVEN",
+    "zero_orders_live_writes": "PROVEN_IN_STAGING"
+  },
+  "production_rollout_authorized_by_this_report": false,
+  "production_mutations_before_approval": 0
+}

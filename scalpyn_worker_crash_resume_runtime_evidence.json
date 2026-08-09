@@ -1,0 +1,37 @@
+{
+  "verdict": "CRASH_RESUME_RUNTIME_PROVEN",
+  "environment": "systemic-ai-staging-20260807",
+  "run_id": "7608396f-88a0-4367-a3e6-9970ba631a33",
+  "thread_id": "ee37ccbe-e1f4-435d-a1ae-446edddc8e65",
+  "authority": "SHADOW_ONLY",
+  "before_restart": {
+    "status": "INTERRUPTED",
+    "current_node": "interrupt_candidate_approval",
+    "checkpoint_count": 11,
+    "completed_nodes": 9,
+    "worker_hostname": "celery@celery-7275a56e",
+    "deployment_instance": "c1ce9665-527f-4351-8a7e-580f0775ebdf"
+  },
+  "restart": {
+    "method": "Railway worker restart",
+    "warm_shutdown_observed": true,
+    "new_worker_hostname": "celery@celery-e14fcbab"
+  },
+  "after_resume": {
+    "status": "COMPLETED",
+    "terminal_reason": "GRAPH_COMPLETED",
+    "checkpoint_count": 23,
+    "completed_nodes": 18,
+    "interrupts_resolved": 3,
+    "event_key_duplicate_count": 0,
+    "orders_created": 0,
+    "live_writes": 0
+  },
+  "side_effect_counts": {
+    "decision_hypotheses": 1,
+    "ai_change_sets": 2,
+    "experiment_links": 1,
+    "regeneration_runs": 1,
+    "decision_memory": 1
+  }
+}

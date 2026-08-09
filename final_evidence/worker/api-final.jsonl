@@ -1,0 +1,68 @@
+{"level":"info","message":"==> [migrations] alembic upgrade head","timestamp":"2026-08-09T00:55:00.637326650Z"}
+{"message":" [migrations] attempt 1/3 (timeout 90s) ...","timestamp":"2026-08-09T00:55:00.637335460Z","level":"info"}
+{"level":"info","message":"[start.sh] CONTAINER ENTRY pid=1 k_service=local k_revision=local","timestamp":"2026-08-09T00:55:00.637338900Z"}
+{"timestamp":"2026-08-09T00:55:00.637351040Z","message":"[start.sh] CONTAINER ENTRY pid=1 k_service=local k_revision=local","level":"error"}
+{"level":"info","message":"==> [boot] Scalpyn backend starting (PORT=8080, WEB_CONCURRENCY=1)","timestamp":"2026-08-09T00:55:00.637359120Z"}
+{"level":"info","message":" [boot] env REDIS_URL: PRESENT","timestamp":"2026-08-09T00:55:00.637364700Z"}
+{"level":"info","message":" [boot] env DATABASE_URL: PRESENT","timestamp":"2026-08-09T00:55:00.637366930Z"}
+{"timestamp":"2026-08-09T00:55:00.637380459Z","level":"info","message":" [boot] env AI_KEYS_ENCRYPTION_KEY: PRESENT"}
+{"message":" [boot] env JWT_SECRET: PRESENT","level":"info","timestamp":"2026-08-09T00:55:00.637391459Z"}
+{"timestamp":"2026-08-09T00:55:00.637405729Z","level":"info","message":" [boot] env ENCRYPTION_KEY: PRESENT"}
+{"timestamp":"2026-08-09T00:55:00.637717241Z","level":"info","message":"Starting Container"}
+{"timestamp":"2026-08-09T00:55:00.818146996Z","message":"INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.","level":"error"}
+{"level":"error","message":"INFO  [alembic.runtime.migration] Will assume transactional DDL.","timestamp":"2026-08-09T00:55:00.818151576Z"}
+{"message":"==> [migrations] alembic upgrade head OK","timestamp":"2026-08-09T00:55:01.083603888Z","level":"info"}
+{"timestamp":"2026-08-09T00:55:01.083610558Z","message":"==> [schema] Validating critical schema...","level":"info"}
+{"level":"error","timestamp":"2026-08-09T00:55:01.615793824Z","message":"OK: all 32 critical columns present."}
+{"message":"==> [schema] Critical schema OK.","timestamp":"2026-08-09T00:55:01.615797494Z","level":"info"}
+{"timestamp":"2026-08-09T00:55:01.615800914Z","level":"info","message":"==> [redis] Verifying Redis connectivity..."}
+{"timestamp":"2026-08-09T00:55:01.868730187Z","level":"info","message":"[redis] connected OK"}
+{"message":"==> [queue] WORKER_QUEUES=__none__ - API-only mode","timestamp":"2026-08-09T00:55:01.892079979Z","level":"info"}
+{"message":"==> SKIPPING CELERY WORKER (WORKER_QUEUES is empty; this container is API-only or beat-only)","timestamp":"2026-08-09T00:55:01.892085239Z","level":"info"}
+{"timestamp":"2026-08-09T00:55:01.892089169Z","message":"==> SKIPPING CELERY BEAT (RUN_BEAT=0; this container only runs workers or API)","level":"info"}
+{"message":"==> [celery-check] No Celery worker or beat started — API-only container.","level":"info","timestamp":"2026-08-09T00:55:01.892093069Z"}
+{"message":"==> Starting uvicorn...","timestamp":"2026-08-09T00:55:01.892096679Z","level":"info"}
+{"message":"/app/app/api/calibration_evolution.py:698: FastAPIDeprecationWarning: `regex` has been deprecated, please use `pattern` instead","level":"error","timestamp":"2026-08-09T00:55:04.274392391Z"}
+{"timestamp":"2026-08-09T00:55:04.274398451Z","level":"error","message":"  sort_by: str = Query(\"lift_vs_profile\", regex=\"^(lift_vs_profile|win_rate|avg_pnl_pct|ev_pct|sample_count)$\"),"}
+{"timestamp":"2026-08-09T00:55:04.274402911Z","level":"error","message":"/app/app/api/calibration_evolution.py:885: FastAPIDeprecationWarning: `regex` has been deprecated, please use `pattern` instead"}
+{"level":"error","timestamp":"2026-08-09T00:55:04.274407211Z","message":"  fmt: str = Query(\"csv\", regex=\"^(csv|json)$\"),"}
+{"timestamp":"2026-08-09T00:55:04.833817875Z","message":"INFO:     Started server process [1]","level":"error"}
+{"timestamp":"2026-08-09T00:55:04.833824395Z","level":"error","message":"INFO:     Waiting for application startup."}
+{"level":"error","message":"INFO:app.main:DB connection pool warmed up successfully.","timestamp":"2026-08-09T00:55:04.919657264Z"}
+{"level":"error","message":"INFO:app.database:Starting DB pool stats logger (every 60s)","timestamp":"2026-08-09T00:55:04.919662404Z"}
+{"message":"INFO:app.services.scheduler_service:[SCHED] combined scheduler inactive (ENABLE_COMBINED_SCHEDULER not set); structural + microstructure schedulers handle refresh","timestamp":"2026-08-09T00:55:04.919670524Z","level":"error"}
+{"message":"INFO:app.services.realtime_bridge:[RealtimeBridge] Decision event subscriber started.","timestamp":"2026-08-09T00:55:04.919674204Z","level":"error"}
+{"level":"error","message":"ERROR:app.services.gate_ws_leader:[gate-ws-leader] CRITICAL: ENABLE_GATE_WS is not set to '1' — WS ingestion is DISABLED; taker_ratio will be null until the flag is enabled","timestamp":"2026-08-09T00:55:04.919677534Z"}
+{"message":"WARNING:app.main:Gate WS leader election failed to start: Gate WS disabled — ENABLE_GATE_WS != '1'","timestamp":"2026-08-09T00:55:04.919680744Z","level":"error"}
+{"level":"error","timestamp":"2026-08-09T00:55:04.919683834Z","message":"INFO:app.services.persistence.queue:[persistence-queue] initialised maxsize=1000 compute_timeout=5.0s"}
+{"level":"error","message":"INFO:app.services.persistence.worker:[persistence-worker] started 4 workers","timestamp":"2026-08-09T00:55:04.919687084Z"}
+{"message":"INFO:app.services.operational_snapshot:[ops-snapshot] started 7 refreshers (intervals: ing=10s cel=15s redis=15s db=30s score=60s lat=60s, fail-tolerance=3)","level":"error","timestamp":"2026-08-09T00:55:04.919690704Z"}
+{"message":"INFO:app.main:[SCHED-STARTUP] active schedulers: [STRUCT-SCHED](900s,1h-OHLCV) | [MICRO-SCHED](300s,5m-OHLCV+live) | pipeline(600s)","timestamp":"2026-08-09T00:55:04.919695463Z","level":"error"}
+{"message":"INFO:app.services.structural_scheduler_service:[STRUCT-SCHED] scheduler starting (interval=900s, concurrency=3)","timestamp":"2026-08-09T00:55:04.919698693Z","level":"error"}
+{"level":"error","timestamp":"2026-08-09T00:55:04.919701833Z","message":"INFO:app.services.microstructure_scheduler_service:[MICRO-SCHED] scheduler starting (interval=300s, concurrency=3, of_window=300s)"}
+{"level":"error","message":"INFO:app.services.pipeline_scheduler_service:[PIPELINE-SCHED] pipeline scheduler starting (interval=600s, first_run_delay=60s)","timestamp":"2026-08-09T00:55:04.919705133Z"}
+{"message":"INFO:app.services.persistence.worker:[persistence-worker] persistence-worker-0 started","timestamp":"2026-08-09T00:55:04.920447283Z","level":"error"}
+{"timestamp":"2026-08-09T00:55:04.920450943Z","level":"error","message":"INFO:app.services.persistence.worker:[persistence-worker] persistence-worker-1 started"}
+{"message":"INFO:app.services.persistence.worker:[persistence-worker] persistence-worker-2 started","level":"error","timestamp":"2026-08-09T00:55:04.920454333Z"}
+{"level":"error","message":"INFO:app.services.persistence.worker:[persistence-worker] persistence-worker-3 started","timestamp":"2026-08-09T00:55:04.920466903Z"}
+{"message":"INFO:app.services.redis_client:[redis] async client initialised (url=redis://default:***@redis-jwrz.railway.internal:6379)","timestamp":"2026-08-09T00:55:04.920470163Z","level":"error"}
+{"timestamp":"2026-08-09T00:55:04.920473723Z","level":"error","message":"INFO:     Application startup complete."}
+{"message":"INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)","timestamp":"2026-08-09T00:55:04.942558183Z","level":"error"}
+{"level":"error","message":"INFO:app.services.realtime_bridge:[RealtimeBridge] Subscribed to channel: scalpyn:decisions:events","timestamp":"2026-08-09T00:55:04.942563223Z"}
+{"timestamp":"2026-08-09T00:55:24.948771609Z","message":"INFO:app.services.microstructure_scheduler_service:[MICRO-SCHED] no symbols to refresh — skipping cycle","level":"error"}
+{"message":"INFO:app.services.pipeline_scheduler_service:[PIPELINE-SCHED] microstructure scheduler signaled first cycle complete — now waiting for structural (lag < 30 min)...","level":"error","timestamp":"2026-08-09T00:55:24.948775259Z"}
+{"message":"INFO:app.services.structural_scheduler_service:[STRUCT-SCHED] no symbols to refresh — skipping cycle","timestamp":"2026-08-09T00:55:44.948602567Z","level":"error"}
+{"level":"error","message":"INFO:app.services.pipeline_scheduler_service:[PIPELINE-SCHED] structural scheduler signaled first cycle complete — both schedulers ready","timestamp":"2026-08-09T00:55:44.948606966Z"}
+{"message":"INFO:app.services.pipeline_scheduler_service:[PIPELINE-SCHED] starting pipeline scan cycle for 0 watchlists","level":"error","timestamp":"2026-08-09T00:55:44.948609946Z"}
+{"timestamp":"2026-08-09T00:55:44.948612946Z","level":"error","message":"INFO:app.services.pipeline_scheduler_service:[PIPELINE-SCHED] cycle finished in 0.1s — watchlists=0 new_signals=0 errors=0 execution_id=709c7969-5a9e-4877-8ba1-f2e3f75a3f2f"}
+{"message":"INFO:app.database:DB pool stats: size=5 checked_out=0 overflow=-1 checked_in=4 status='Pool size: 5  Connections in pool: 4 Current Overflow: -1 Current Checked out connections: 0'","timestamp":"2026-08-09T00:56:04.948156502Z","level":"error"}
+{"message":"INFO:     100.64.0.2:58636 - \"POST /api/ai/graphs/staging-canary HTTP/1.1\" 200 OK","timestamp":"2026-08-09T00:56:25.038038580Z","level":"info"}
+{"level":"error","message":"INFO:app.database:DB pool stats: size=5 checked_out=0 overflow=-1 checked_in=4 status='Pool size: 5  Connections in pool: 4 Current Overflow: -1 Current Checked out connections: 0'","timestamp":"2026-08-09T00:57:05.036287050Z"}
+{"message":"INFO:app.database:DB pool stats: size=5 checked_out=0 overflow=-1 checked_in=4 status='Pool size: 5  Connections in pool: 4 Current Overflow: -1 Current Checked out connections: 0'","level":"error","timestamp":"2026-08-09T00:58:05.664361555Z"}
+{"message":"INFO:app.database:DB pool stats: size=5 checked_out=0 overflow=-1 checked_in=4 status='Pool size: 5  Connections in pool: 4 Current Overflow: -1 Current Checked out connections: 0'","level":"error","timestamp":"2026-08-09T00:59:05.820699537Z"}
+{"level":"error","message":"INFO:app.database:DB pool stats: size=5 checked_out=0 overflow=-1 checked_in=4 status='Pool size: 5  Connections in pool: 4 Current Overflow: -1 Current Checked out connections: 0'","timestamp":"2026-08-09T01:00:06.318615132Z"}
+{"level":"error","message":"INFO:app.services.microstructure_scheduler_service:[MICRO-SCHED] no symbols to refresh — skipping cycle","timestamp":"2026-08-09T01:00:26.241724928Z"}
+{"timestamp":"2026-08-09T01:01:06.236073191Z","message":"INFO:app.database:DB pool stats: size=5 checked_out=0 overflow=-1 checked_in=4 status='Pool size: 5  Connections in pool: 4 Current Overflow: -1 Current Checked out connections: 0'","level":"error"}
+{"level":"error","timestamp":"2026-08-09T01:02:06.825743754Z","message":"INFO:app.database:DB pool stats: size=5 checked_out=0 overflow=-1 checked_in=4 status='Pool size: 5  Connections in pool: 4 Current Overflow: -1 Current Checked out connections: 0'"}
+{"level":"error","timestamp":"2026-08-09T01:03:06.789007804Z","message":"INFO:app.database:DB pool stats: size=5 checked_out=0 overflow=-1 checked_in=4 status='Pool size: 5  Connections in pool: 4 Current Overflow: -1 Current Checked out connections: 0'"}
+{"level":"error","timestamp":"2026-08-09T01:04:07.240030063Z","message":"INFO:app.database:DB pool stats: size=5 checked_out=0 overflow=-1 checked_in=4 status='Pool size: 5  Connections in pool: 4 Current Overflow: -1 Current Checked out connections: 0'"}

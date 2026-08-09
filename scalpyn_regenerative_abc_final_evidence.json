@@ -1,0 +1,16 @@
+{
+  "verdict": "REGENERATIVE_ABC_STAGING_PROVEN",
+  "analysis_run_id": "197a6033-fb25-4edb-adf3-f2656f70d555",
+  "run_a": {"run_id": "1d264c4d-bd91-4aa8-bd55-37b32b92a19d", "status": "COMPLETED", "checkpoint_count": 23, "memory_hits": 0},
+  "run_b": {"run_id": "2dede55a-7984-4310-9d84-131d6a4b0253", "status": "COMPLETED", "checkpoint_count": 23, "memory_hits": 1, "reused_memory_id": "3c3c1080-5f7e-4fd7-9324-1170ab108cfe"},
+  "run_c": {"run_id": "e5cbaac3-f25a-418b-b606-c3dc8e6019b7", "status": "COMPLETED", "checkpoint_count": 23, "memory_hits": 0, "different_context": true},
+  "interrupts_per_regenerative_run": 3,
+  "configured_provider": "fake",
+  "configured_model": "fake-analysis-v1",
+  "effective_provider": "fake",
+  "effective_model": "fake-analysis-v1",
+  "cost_usd": "0",
+  "orders_created": 0,
+  "live_write": false,
+  "real_provider_canary": "NOT_RUN_REQUIRES_COST_APPROVAL_AND_PROVIDER_KEY"
+}

@@ -1,0 +1,30 @@
+{
+  "verdict": "PASS",
+  "source": "final_evidence/tests/backend-full-final.xml",
+  "timestamp_utc": "2026-08-09T04:21:32.672595+00:00",
+  "platform": "linux-python-3.12",
+  "collected": 1614,
+  "passed": 1614,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "warnings": 5,
+  "duration_seconds": 64.942,
+  "focused_ai_langgraph": {
+    "passed": 105,
+    "status": "PASS"
+  },
+  "database_tests": {
+    "passed": 26,
+    "status": "PASS"
+  },
+  "external_watchlist_e2e": {
+    "passed": 13,
+    "status": "PASS"
+  },
+  "pip_check": "No broken requirements found.",
+  "notes": [
+    "The final global suite ran against an isolated PostgreSQL database and local API in Docker.",
+    "The five warnings are tracked dependency or test-infrastructure warnings; no test was skipped or relaxed."
+  ]
+}

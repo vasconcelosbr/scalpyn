@@ -1,0 +1,17 @@
+{
+  "verdict": "PASS_NO_NEW_WARNINGS",
+  "source": "final_evidence/tests/eslint.json",
+  "files_checked": 134,
+  "errors": 0,
+  "warnings": 435,
+  "legacy_baseline_warnings": 435,
+  "warning_delta": 0,
+  "npm_audit": {
+    "info": 0,
+    "low": 1,
+    "moderate": 0,
+    "high": 0,
+    "critical": 0,
+    "accepted_low_risk": "Indirect esbuild development-server issue on Windows; npm audit fix --dry-run proposed no package change."
+  }
+}

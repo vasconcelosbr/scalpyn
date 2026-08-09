@@ -1,0 +1,9 @@
+........................................................................ [ 94%]
+....                                                                     [100%]
+============================== warnings summary ===============================
+..\scalpyn-langgraph-runtime\backend\.venv-langgraph\Lib\site-packages\langchain_core\utils\pydantic.py:41
+  C:\Users\ricar\Documents\Codex\2026-08-08\scalpyn-langgraph-runtime\backend\.venv-langgraph\Lib\site-packages\langchain_core\utils\pydantic.py:41: UserWarning: Core Pydantic V1 functionality isn't compatible with Python 3.14 or greater.
+    from pydantic.v1 import BaseModel as BaseModelV1
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+76 passed, 1 warning in 4.80s

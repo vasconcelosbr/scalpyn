@@ -1,0 +1,21 @@
+{
+  "verdict": "MODULE_ORIGINS_E2E_PROVEN_7_OF_7",
+  "environment": "systemic-ai-staging-20260807",
+  "authority": "ANALYSIS_ONLY",
+  "origins": [
+    {"origin": "strategy_profiles", "run_id": "5a64681a-8bd5-4b5d-9cfe-bc27f2ab97ac", "status": "COMPLETED"},
+    {"origin": "ml_models", "run_id": "09df0872-7162-4cac-8ab1-601811db4615", "status": "COMPLETED"},
+    {"origin": "shadow_portfolio", "run_id": "caefb864-2a2a-4d41-9de6-ea7b74c0772d", "status": "COMPLETED"},
+    {"origin": "score_engine", "run_id": "defa1c0c-3a73-4c38-8c06-4f0e820b7a0e", "status": "COMPLETED"},
+    {"origin": "global_risk", "run_id": "001d3c71-e7a4-48a6-a335-fac1f26cf371", "status": "COMPLETED"},
+    {"origin": "strategies", "run_id": "04f8e2dc-2368-4e1c-87eb-4aac6b483416", "status": "COMPLETED"},
+    {"origin": "social_score", "run_id": "6d2e8755-8e74-4c98-91fd-bb9b30a067d4", "status": "COMPLETED"}
+  ],
+  "per_origin_event_count": 28,
+  "per_origin_usage_count": 1,
+  "per_origin_typed_tool_evidence_count": 10,
+  "event_key_duplicate_count": 0,
+  "orders_created": 0,
+  "missing_business_data_policy": "NO_DATA",
+  "fabricated_zero_values": 0
+}

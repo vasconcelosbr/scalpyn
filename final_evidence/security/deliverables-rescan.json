@@ -1,0 +1,42 @@
+[
+ {
+  "RuleID": "generic-api-key",
+  "Description": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
+  "StartLine": 30,
+  "EndLine": 30,
+  "StartColumn": 4,
+  "EndColumn": 57,
+  "Match": "API deployment: `REDACTED`",
+  "Secret": "REDACTED",
+  "File": "/repo/.codex-evidence/deliverable-scan-final/SCALPYN_FINALIZATION_IMPLEMENTATION_REPORT.md",
+  "SymlinkFile": "",
+  "Commit": "",
+  "Entropy": 3.5514622,
+  "Author": "",
+  "Email": "",
+  "Date": "",
+  "Message": "",
+  "Tags": [],
+  "Fingerprint": "/repo/.codex-evidence/deliverable-scan-final/SCALPYN_FINALIZATION_IMPLEMENTATION_REPORT.md:generic-api-key:30"
+ },
+ {
+  "RuleID": "generic-api-key",
+  "Description": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
+  "StartLine": 101,
+  "EndLine": 101,
+  "StartColumn": 4,
+  "EndColumn": 57,
+  "Match": "API service ID: `REDACTED`",
+  "Secret": "REDACTED",
+  "File": "/repo/.codex-evidence/deliverable-scan-final/SCALPYN_FINALIZATION_PREIMPLEMENTATION_REVALIDATION.md",
+  "SymlinkFile": "",
+  "Commit": "",
+  "Entropy": 3.7946534,
+  "Author": "",
+  "Email": "",
+  "Date": "",
+  "Message": "",
+  "Tags": [],
+  "Fingerprint": "/repo/.codex-evidence/deliverable-scan-final/SCALPYN_FINALIZATION_PREIMPLEMENTATION_REVALIDATION.md:generic-api-key:101"
+ }
+]

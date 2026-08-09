@@ -1,0 +1,23 @@
+{
+  "verdict": "NOT_RUN_REQUIRES_COST_APPROVAL_AND_PROVIDER_KEY",
+  "environment": "systemic-ai-staging-20260807",
+  "tenant": "synthetic staging canary tenant",
+  "authority": "ANALYSIS_ONLY",
+  "provider": "NÃO DISPONÍVEL",
+  "model": "NÃO DISPONÍVEL",
+  "input_token_estimate": "NÃO DISPONÍVEL",
+  "max_output_tokens": "NÃO DISPONÍVEL",
+  "worst_case_cost_usd": "NÃO DISPONÍVEL",
+  "reserved_budget_usd": "NÃO DISPONÍVEL",
+  "configured_model_equals_effective_model": "NOT_PROVEN",
+  "tokens_persisted": false,
+  "cost_persisted": false,
+  "provider_call_executed": false,
+  "blockers": [
+    "No validated provider key exists in the staging database or API/worker variables.",
+    "No active model approval exists for the synthetic tenant.",
+    "No budget policy exists for the synthetic tenant.",
+    "The operator has not approved a priced real-provider call for this remediation checkpoint."
+  ],
+  "fake_provider_is_not_counted_as_real_provider_proof": true
+}

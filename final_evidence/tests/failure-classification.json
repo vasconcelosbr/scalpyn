@@ -1,0 +1,693 @@
+﻿{
+    "schema_version":  "1.0",
+    "source_initial":  ".codex-evidence/final/backend-full-before.xml",
+    "source_final":  ".codex-evidence/final/backend-full-final.xml",
+    "initial":  {
+                    "collected":  1614,
+                    "failures":  71,
+                    "errors":  12,
+                    "skipped":  0,
+                    "nonpassing_cases":  83
+                },
+    "final":  {
+                  "collected":  1614,
+                  "passed":  1614,
+                  "failures":  0,
+                  "errors":  0,
+                  "skipped":  0,
+                  "warnings":  5
+              },
+    "classification_counts":  {
+                                  "database_environment_contract":  18,
+                                  "external_integration_environment":  13,
+                                  "product_regression":  5,
+                                  "test_fixture_or_contract_drift":  47
+                              },
+    "all_initial_cases_closed":  true,
+    "cases":  [
+                  {
+                      "classname":  "backend.tests.test_algorithm_governance",
+                      "test":  "test_registry_migration_enforces_one_champion_per_scope",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_catboost_retrain_gate_contract",
+                      "test":  "test_catboost_train_gate_uses_database_minimum_and_reports_deficit",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_catboost_retrain_gate_contract",
+                      "test":  "test_new_candidate_persists_contracts_and_fail_closed_governance",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_catboost_retrain_gate_contract",
+                      "test":  "test_promotion_gate_requires_label_and_feature_contract_ids",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_catboost_retrain_gate_contract",
+                      "test":  "test_new_candidate_sanitizes_non_finite_metrics_before_jsonb",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_db_safety_invariants",
+                      "test":  "test_run_db_task_rolls_back_on_fn_exception",
+                      "initial_outcome":  "failure",
+                      "category":  "database_environment_contract",
+                      "rationale":  "Windows host invocation could not sustain the Docker/PostgreSQL async connection contract.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_db_safety_invariants",
+                      "test":  "test_run_db_task_second_call_succeeds_after_first_raises",
+                      "initial_outcome":  "failure",
+                      "category":  "database_environment_contract",
+                      "rationale":  "Windows host invocation could not sustain the Docker/PostgreSQL async connection contract.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_db_safety_invariants",
+                      "test":  "test_get_db_rolls_back_and_fresh_session_works_after_http_exception",
+                      "initial_outcome":  "failure",
+                      "category":  "database_environment_contract",
+                      "rationale":  "Windows host invocation could not sustain the Docker/PostgreSQL async connection contract.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_db_safety_invariants",
+                      "test":  "test_get_db_rolls_back_and_fresh_session_works_after_sqlalchemy_error",
+                      "initial_outcome":  "failure",
+                      "category":  "database_environment_contract",
+                      "rationale":  "Windows host invocation could not sustain the Docker/PostgreSQL async connection contract.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_db_safety_invariants",
+                      "test":  "test_get_db_rolls_back_and_fresh_session_works_after_cancelled_error",
+                      "initial_outcome":  "failure",
+                      "category":  "database_environment_contract",
+                      "rationale":  "Windows host invocation could not sustain the Docker/PostgreSQL async connection contract.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_db_safety_invariants",
+                      "test":  "test_force_failure_once_fires_on_matching_statement",
+                      "initial_outcome":  "failure",
+                      "category":  "database_environment_contract",
+                      "rationale":  "Windows host invocation could not sustain the Docker/PostgreSQL async connection contract.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_db_safety_invariants",
+                      "test":  "test_force_failure_once_does_not_fire_on_non_matching_statement",
+                      "initial_outcome":  "failure",
+                      "category":  "database_environment_contract",
+                      "rationale":  "Windows host invocation could not sustain the Docker/PostgreSQL async connection contract.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_db_safety_invariants",
+                      "test":  "test_force_engine_failure_once_fires_on_matching_statement",
+                      "initial_outcome":  "failure",
+                      "category":  "database_environment_contract",
+                      "rationale":  "Windows host invocation could not sustain the Docker/PostgreSQL async connection contract.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_db_safety_invariants",
+                      "test":  "test_force_engine_failure_once_does_not_fire_on_non_matching_statement",
+                      "initial_outcome":  "failure",
+                      "category":  "database_environment_contract",
+                      "rationale":  "Windows host invocation could not sustain the Docker/PostgreSQL async connection contract.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_db_safety_invariants",
+                      "test":  "test_force_engine_failure_once_covers_run_db_task_internal_session",
+                      "initial_outcome":  "failure",
+                      "category":  "database_environment_contract",
+                      "rationale":  "Windows host invocation could not sustain the Docker/PostgreSQL async connection contract.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_db_safety_invariants",
+                      "test":  "test_force_failure_once_restores_execute_on_test_body_exception",
+                      "initial_outcome":  "failure",
+                      "category":  "database_environment_contract",
+                      "rationale":  "Windows host invocation could not sustain the Docker/PostgreSQL async connection contract.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_db_transaction_recovery",
+                      "test":  "test_safe_rollback_recovers_failed_transaction",
+                      "initial_outcome":  "failure",
+                      "category":  "database_environment_contract",
+                      "rationale":  "Windows host invocation could not sustain the Docker/PostgreSQL async connection contract.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_db_transaction_recovery",
+                      "test":  "test_process_batch_isolates_single_bad_item",
+                      "initial_outcome":  "failure",
+                      "category":  "database_environment_contract",
+                      "rationale":  "Windows host invocation could not sustain the Docker/PostgreSQL async connection contract.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_db_transaction_recovery",
+                      "test":  "test_process_batch_no_cascade_after_db_failure",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_db_transaction_recovery",
+                      "test":  "test_get_db_rolls_back_on_http_exception",
+                      "initial_outcome":  "failure",
+                      "category":  "database_environment_contract",
+                      "rationale":  "Windows host invocation could not sustain the Docker/PostgreSQL async connection contract.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_db_transaction_recovery",
+                      "test":  "test_get_db_rolls_back_on_generic_exception",
+                      "initial_outcome":  "failure",
+                      "category":  "database_environment_contract",
+                      "rationale":  "Windows host invocation could not sustain the Docker/PostgreSQL async connection contract.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_db_transaction_recovery",
+                      "test":  "test_update_last_scanned_recovers_session_on_failure",
+                      "initial_outcome":  "failure",
+                      "category":  "database_environment_contract",
+                      "rationale":  "Windows host invocation could not sustain the Docker/PostgreSQL async connection contract.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_direction_vocabulary_invariants",
+                      "test":  "test_consumers_do_not_filter_by_lowercase_direction[shadow_trade_service.py]",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_enricher_partial_index_invariant",
+                      "test":  "test_migration_038_index_is_partial",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_executions_backfill_pagination",
+                      "test":  "test_spot_pagination_walks_all_pages_no_gap",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_executions_backfill_pagination",
+                      "test":  "test_spot_pagination_hits_max_pages_cap",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_executions_backfill_pagination",
+                      "test":  "test_futures_pagination_uses_last_id_cursor",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_exit_metrics_helper",
+                      "test":  "test_build_exit_snapshot_drops_non_scalar",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_exit_metrics_helper",
+                      "test":  "test_build_exit_snapshot_never_raises",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_exit_metrics_helper",
+                      "test":  "test_build_exit_snapshot_empty_provider_returns_empty",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_fase1_integrity_certification",
+                      "test":  "test_certification_all_pass_is_green",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_fase1_integrity_certification",
+                      "test":  "test_certification_i12_l3_contract_covered_and_fails_closed",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_fase1_integrity_certification",
+                      "test":  "test_i12_coherence_params_are_config_driven",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_fase1_integrity_certification",
+                      "test":  "test_certification_i09_informative_in_historical_windows",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_fase1_integrity_certification",
+                      "test":  "test_readiness_targets_come_from_config_not_hardcoded",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_gate_ws_leader_lock",
+                      "test":  "test_renew_extends_ttl_only_for_owner",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_gate_ws_leader_lock",
+                      "test":  "test_release_only_evicts_when_caller_is_owner",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_gate_ws_leader_lock",
+                      "test":  "test_supervisor_takes_over_after_leader_lock_expires",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_gate_ws_subscription_diff",
+                      "test":  "test_apply_subscription_diff_uses_per_channel_payload_form",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_l1_features",
+                      "test":  "test_l1_shadow_full_coverage",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_l1_features",
+                      "test":  "test_l1_shadow_no_indicators",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_l1_features",
+                      "test":  "test_l1_shadow_provider_exception",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_l1_spectrum_capture",
+                      "test":  "test_insert_sql_uses_per_source_conflict",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_l1_spectrum_capture",
+                      "test":  "test_disabled_flag_returns_zero",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_l1_spectrum_capture",
+                      "test":  "test_rate_limit_generates_skip",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_l3_economic_training_pipeline",
+                      "test":  "test_l3_barrier_contract_rejects_mixed_payoff_policies",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_label_lab.TestMigration107",
+                      "test":  "test_revision_chain",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_market_cap_filter_fix",
+                      "test":  "test_orderbook_depth_strict_meta",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_ml_lane_eligibility.TestPredictorModelLaneContract",
+                      "test":  "test_no_eligible_model_returns_skipped_contract_not_random_score",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_ml_model_promotion",
+                      "test":  "test_promote_model_activates_approved_candidate_transactionally",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_p0_dataset_l3_split.TestTrainChallengersGate",
+                      "test":  "test_lightgbm_respects_configured_retrain_minimum",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_pipeline_profile_filter_coverage",
+                      "test":  "test_handles_profiles_with_only_strict_meta_conditions",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_pipeline_scan_tx_isolation",
+                      "test":  "test_savepoint_isolates_failed_best_effort_read",
+                      "initial_outcome":  "failure",
+                      "category":  "database_environment_contract",
+                      "rationale":  "Windows host invocation could not sustain the Docker/PostgreSQL async connection contract.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_pipeline_scan_tx_isolation",
+                      "test":  "test_validate_pipeline_integrity_handles_unknown_watchlists",
+                      "initial_outcome":  "failure",
+                      "category":  "database_environment_contract",
+                      "rationale":  "Windows host invocation could not sustain the Docker/PostgreSQL async connection contract.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_position_lifecycle_fifo",
+                      "test":  "test_spot_simple_round_trip_long",
+                      "initial_outcome":  "failure",
+                      "category":  "product_regression",
+                      "rationale":  "Position lifecycle assumed fee_currency on legacy/simple execution fixtures; compatibility fallback was required.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_position_lifecycle_fifo",
+                      "test":  "test_spot_orphan_sell_emits_drift",
+                      "initial_outcome":  "failure",
+                      "category":  "product_regression",
+                      "rationale":  "Position lifecycle assumed fee_currency on legacy/simple execution fixtures; compatibility fallback was required.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_position_lifecycle_fifo",
+                      "test":  "test_spot_sell_with_empty_queue_emits_drift_not_silent_skip",
+                      "initial_outcome":  "failure",
+                      "category":  "product_regression",
+                      "rationale":  "Position lifecycle assumed fee_currency on legacy/simple execution fixtures; compatibility fallback was required.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_position_lifecycle_fifo",
+                      "test":  "test_futures_position_flip_opens_reverse",
+                      "initial_outcome":  "failure",
+                      "category":  "product_regression",
+                      "rationale":  "Position lifecycle assumed fee_currency on legacy/simple execution fixtures; compatibility fallback was required.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_position_lifecycle_fifo",
+                      "test":  "test_futures_partial_close_keeps_remainder_open",
+                      "initial_outcome":  "failure",
+                      "category":  "product_regression",
+                      "rationale":  "Position lifecycle assumed fee_currency on legacy/simple execution fixtures; compatibility fallback was required.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_profile_rule_comparisons",
+                      "test":  "test_feature_engine_uses_base_volume_for_volume_indicators_and_quote_volume_for_24h_totals",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_robust_indicators",
+                      "test":  "test_score_uses_direct_confidence_weighted_formula",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_robust_indicators",
+                      "test":  "test_score_can_trade_threshold",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_shadow_intrabar_convention",
+                      "test":  "test_label_net_of_fees_with_persisted_net_return",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_shadow_intrabar_convention",
+                      "test":  "test_label_net_of_fees_null_net_uses_runtime_fee",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_shadow_intrabar_convention",
+                      "test":  "test_label_legacy_path_when_not_net_of_fees",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_simulation_batch_isolation",
+                      "test":  "test_ohlcv_preflight_still_aborts_whole_batch",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_symbol_audit_endpoint",
+                      "test":  "test_symbol_audit_dry_run_returns_full_payload",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_symbol_health_service",
+                      "test":  "test_classify_not_approved_takes_priority_over_everything",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_symbol_health_service",
+                      "test":  "test_classify_inactive_row_routes_to_ok",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_watchlist_l1_pipeline.TestSymbolNormalization",
+                      "test":  "test_add_coin_btcusdt_stored_as_btc_usdt",
+                      "initial_outcome":  "error",
+                      "category":  "external_integration_environment",
+                      "rationale":  "E2E API target localhost:8001 was not running in the initial host invocation.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_watchlist_l1_pipeline.TestSymbolNormalization",
+                      "test":  "test_add_coin_already_normalized_stays_unchanged",
+                      "initial_outcome":  "error",
+                      "category":  "external_integration_environment",
+                      "rationale":  "E2E API target localhost:8001 was not running in the initial host invocation.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_watchlist_l1_pipeline.TestSymbolNormalization",
+                      "test":  "test_pool_coins_all_normalized",
+                      "initial_outcome":  "error",
+                      "category":  "external_integration_environment",
+                      "rationale":  "E2E API target localhost:8001 was not running in the initial host invocation.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_watchlist_l1_pipeline.TestMarketSpotCurrencies",
+                      "test":  "test_spot_currencies_returns_underscore_format",
+                      "initial_outcome":  "failure",
+                      "category":  "external_integration_environment",
+                      "rationale":  "E2E API target localhost:8001 was not running in the initial host invocation.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_watchlist_l1_pipeline.TestDebugEndpoint",
+                      "test":  "test_debug_returns_expected_stages",
+                      "initial_outcome":  "error",
+                      "category":  "external_integration_environment",
+                      "rationale":  "E2E API target localhost:8001 was not running in the initial host invocation.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_watchlist_l1_pipeline.TestDebugEndpoint",
+                      "test":  "test_debug_no_error_field",
+                      "initial_outcome":  "error",
+                      "category":  "external_integration_environment",
+                      "rationale":  "E2E API target localhost:8001 was not running in the initial host invocation.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_watchlist_l1_pipeline.TestDebugEndpoint",
+                      "test":  "test_debug_has_summary",
+                      "initial_outcome":  "error",
+                      "category":  "external_integration_environment",
+                      "rationale":  "E2E API target localhost:8001 was not running in the initial host invocation.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_watchlist_l1_pipeline.TestL1WatchlistAssets",
+                      "test":  "test_watchlist_list_shows_l1",
+                      "initial_outcome":  "error",
+                      "category":  "external_integration_environment",
+                      "rationale":  "E2E API target localhost:8001 was not running in the initial host invocation.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_watchlist_l1_pipeline.TestL1WatchlistAssets",
+                      "test":  "test_l1_assets_returns_pool_coins_with_market_data",
+                      "initial_outcome":  "error",
+                      "category":  "external_integration_environment",
+                      "rationale":  "E2E API target localhost:8001 was not running in the initial host invocation.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_watchlist_l1_pipeline.TestL1WatchlistAssets",
+                      "test":  "test_l1_without_market_data_still_returns_assets",
+                      "initial_outcome":  "error",
+                      "category":  "external_integration_environment",
+                      "rationale":  "E2E API target localhost:8001 was not running in the initial host invocation.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_watchlist_l1_pipeline.TestL1WatchlistAssets",
+                      "test":  "test_l1_asset_count_in_list",
+                      "initial_outcome":  "error",
+                      "category":  "external_integration_environment",
+                      "rationale":  "E2E API target localhost:8001 was not running in the initial host invocation.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_watchlist_l1_pipeline.TestRefreshEndpoint",
+                      "test":  "test_refresh_returns_asset_count",
+                      "initial_outcome":  "error",
+                      "category":  "external_integration_environment",
+                      "rationale":  "E2E API target localhost:8001 was not running in the initial host invocation.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_watchlist_l1_pipeline.TestRefreshEndpoint",
+                      "test":  "test_refresh_then_assets_not_empty",
+                      "initial_outcome":  "error",
+                      "category":  "external_integration_environment",
+                      "rationale":  "E2E API target localhost:8001 was not running in the initial host invocation.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  },
+                  {
+                      "classname":  "backend.tests.test_watchlist_pool_monitoring",
+                      "test":  "test_profile_indicator_columns_follow_filter_conditions_order",
+                      "initial_outcome":  "failure",
+                      "category":  "test_fixture_or_contract_drift",
+                      "rationale":  "Assertion, fixture, path, or mock contract lagged the current fail-closed implementation and was reconciled without skips.",
+                      "closure":  "PASS_IN_BACKEND_FULL_FINAL"
+                  }
+              ]
+}

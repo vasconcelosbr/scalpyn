@@ -1,0 +1,3260 @@
+{
+  "buckets": {
+    "edges": []
+  },
+  "deletedAt": null,
+  "environments": {
+    "edges": [
+      {
+        "node": {
+          "canAccess": true,
+          "deletedAt": null,
+          "id": "2e7314b3-18a8-471a-ada5-418d65d92ffa",
+          "name": "pi-manual-staging-20260721",
+          "serviceInstances": {
+            "edges": [
+              {
+                "node": {
+                  "activeDeployments": [
+                    {
+                      "createdAt": "2026-07-31T14:39:35.761Z",
+                      "deploymentStopped": false,
+                      "id": "ecea44e0-0a6f-487c-9295-c49d7b3b8435",
+                      "instances": [
+                        {
+                          "id": "d44c4626-6dfe-4100-a7ed-be490ef07837",
+                          "status": "RUNNING"
+                        }
+                      ],
+                      "meta": {
+                        "buildOnly": false,
+                        "cliAgentSessionId": "railway-skill-20260731-bayesian-v2-staging",
+                        "cliCaller": "skill:use-railway@1.3.6",
+                        "cliMessage": "Bayesian analysis-only staging API bfe6b862",
+                        "fileServiceManifest": {},
+                        "imageDigest": "sha256:15eb969e764e427d3e55fd1bdb1b75f26c7f3341d9a97a9e64415e8c1e042f12",
+                        "logsV2": true,
+                        "nixpacksProviders": [],
+                        "propertyFileMapping": {},
+                        "reason": "deploy",
+                        "rootDirectory": null,
+                        "runtime": "V2",
+                        "serviceManifest": {
+                          "build": {
+                            "buildCommand": null,
+                            "buildEnvironment": "V3",
+                            "builder": "DOCKERFILE",
+                            "dockerfilePath": "/Dockerfile",
+                            "nixpacksConfigPath": null,
+                            "nixpacksPlan": null,
+                            "watchPatterns": []
+                          },
+                          "deploy": {
+                            "cronSchedule": null,
+                            "drainingSeconds": null,
+                            "healthcheckPath": null,
+                            "healthcheckTimeout": null,
+                            "ipv6EgressEnabled": false,
+                            "limitOverride": null,
+                            "multiRegionConfig": {
+                              "sfo": {
+                                "numReplicas": 1
+                              }
+                            },
+                            "numReplicas": 1,
+                            "overlapSeconds": null,
+                            "preDeployCommand": null,
+                            "region": null,
+                            "registryCredentials": null,
+                            "requiredMountPath": null,
+                            "restartPolicyMaxRetries": 10,
+                            "restartPolicyType": "ON_FAILURE",
+                            "runtime": "V2",
+                            "sleepApplication": false,
+                            "startCommand": null,
+                            "useLegacyStacker": false
+                          }
+                        },
+                        "volumeMounts": []
+                      },
+                      "status": "SUCCESS"
+                    }
+                  ],
+                  "cronSchedule": null,
+                  "domains": {
+                    "customDomains": [],
+                    "serviceDomains": [
+                      {
+                        "domain": "pi-manual-staging-api-pi-manual-staging-20260721.up.railway.app",
+                        "id": "a6b7735f-bb0a-4871-ba9b-bf1a98f4b564",
+                        "targetPort": 8080
+                      }
+                    ]
+                  },
+                  "environmentId": "2e7314b3-18a8-471a-ada5-418d65d92ffa",
+                  "id": "04cc66bd-bb40-46d1-ac81-3f0112ecfaec",
+                  "latestDeployment": {
+                    "canRedeploy": true,
+                    "createdAt": "2026-07-31T14:39:35.761Z",
+                    "deploymentStopped": false,
+                    "id": "ecea44e0-0a6f-487c-9295-c49d7b3b8435",
+                    "instances": [
+                      {
+                        "id": "d44c4626-6dfe-4100-a7ed-be490ef07837",
+                        "status": "RUNNING"
+                      }
+                    ],
+                    "meta": {
+                      "buildOnly": false,
+                      "cliAgentSessionId": "railway-skill-20260731-bayesian-v2-staging",
+                      "cliCaller": "skill:use-railway@1.3.6",
+                      "cliMessage": "Bayesian analysis-only staging API bfe6b862",
+                      "fileServiceManifest": {},
+                      "imageDigest": "sha256:15eb969e764e427d3e55fd1bdb1b75f26c7f3341d9a97a9e64415e8c1e042f12",
+                      "logsV2": true,
+                      "nixpacksProviders": [],
+                      "propertyFileMapping": {},
+                      "reason": "deploy",
+                      "rootDirectory": null,
+                      "runtime": "V2",
+                      "serviceManifest": {
+                        "build": {
+                          "buildCommand": null,
+                          "buildEnvironment": "V3",
+                          "builder": "DOCKERFILE",
+                          "dockerfilePath": "/Dockerfile",
+                          "nixpacksConfigPath": null,
+                          "nixpacksPlan": null,
+                          "watchPatterns": []
+                        },
+                        "deploy": {
+                          "cronSchedule": null,
+                          "drainingSeconds": null,
+                          "healthcheckPath": null,
+                          "healthcheckTimeout": null,
+                          "ipv6EgressEnabled": false,
+                          "limitOverride": null,
+                          "multiRegionConfig": {
+                            "sfo": {
+                              "numReplicas": 1
+                            }
+                          },
+                          "numReplicas": 1,
+                          "overlapSeconds": null,
+                          "preDeployCommand": null,
+                          "region": null,
+                          "registryCredentials": null,
+                          "requiredMountPath": null,
+                          "restartPolicyMaxRetries": 10,
+                          "restartPolicyType": "ON_FAILURE",
+                          "runtime": "V2",
+                          "sleepApplication": false,
+                          "startCommand": null,
+                          "useLegacyStacker": false
+                        }
+                      },
+                      "volumeMounts": []
+                    },
+                    "status": "SUCCESS"
+                  },
+                  "nextCronRunAt": null,
+                  "numReplicas": null,
+                  "serviceId": "a729e2d9-4d6e-464b-8fe2-4d00393be1e3",
+                  "serviceName": "pi-manual-staging-api",
+                  "source": {
+                    "image": null,
+                    "repo": null
+                  },
+                  "startCommand": null
+                }
+              },
+              {
+                "node": {
+                  "activeDeployments": [
+                    {
+                      "createdAt": "2026-07-21T23:04:04.239Z",
+                      "deploymentStopped": false,
+                      "id": "649445a9-f078-42f7-aedb-a6fa632757e4",
+                      "instances": [
+                        {
+                          "id": "0fb6c011-2923-4fe8-bcab-2b8055912c01",
+                          "status": "RUNNING"
+                        }
+                      ],
+                      "meta": {
+                        "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+                        "imageDigest": "sha256:21c501ce65f9b7de4bc9e4b545a095c00894a10bbf299f37a86e6004a6f7b066",
+                        "logsV2": true,
+                        "patchId": "77e219e3-ea36-435d-a240-af400407e767",
+                        "reason": "deploy",
+                        "runtime": "V2",
+                        "serviceManifest": {
+                          "build": {
+                            "buildCommand": null,
+                            "buildEnvironment": "V3",
+                            "builder": "RAILPACK",
+                            "dockerfilePath": null,
+                            "nixpacksConfigPath": null,
+                            "nixpacksPlan": null,
+                            "watchPatterns": []
+                          },
+                          "deploy": {
+                            "cronSchedule": null,
+                            "drainingSeconds": null,
+                            "healthcheckPath": null,
+                            "healthcheckTimeout": null,
+                            "ipv6EgressEnabled": false,
+                            "limitOverride": null,
+                            "multiRegionConfig": {
+                              "sfo": {
+                                "numReplicas": 1
+                              }
+                            },
+                            "numReplicas": 1,
+                            "overlapSeconds": null,
+                            "preDeployCommand": null,
+                            "region": null,
+                            "registryCredentials": null,
+                            "requiredMountPath": null,
+                            "restartPolicyMaxRetries": 10,
+                            "restartPolicyType": "ON_FAILURE",
+                            "runtime": "V2",
+                            "sleepApplication": false,
+                            "startCommand": null,
+                            "useLegacyStacker": false
+                          }
+                        },
+                        "volumeMounts": [
+                          "/var/lib/postgresql/data"
+                        ]
+                      },
+                      "status": "SUCCESS"
+                    }
+                  ],
+                  "cronSchedule": null,
+                  "domains": {
+                    "customDomains": [],
+                    "serviceDomains": []
+                  },
+                  "environmentId": "2e7314b3-18a8-471a-ada5-418d65d92ffa",
+                  "id": "0c75a1df-ce68-4e8b-bd68-f54dba116844",
+                  "latestDeployment": {
+                    "canRedeploy": true,
+                    "createdAt": "2026-07-21T23:04:04.239Z",
+                    "deploymentStopped": false,
+                    "id": "649445a9-f078-42f7-aedb-a6fa632757e4",
+                    "instances": [
+                      {
+                        "id": "0fb6c011-2923-4fe8-bcab-2b8055912c01",
+                        "status": "RUNNING"
+                      }
+                    ],
+                    "meta": {
+                      "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+                      "imageDigest": "sha256:21c501ce65f9b7de4bc9e4b545a095c00894a10bbf299f37a86e6004a6f7b066",
+                      "logsV2": true,
+                      "patchId": "77e219e3-ea36-435d-a240-af400407e767",
+                      "reason": "deploy",
+                      "runtime": "V2",
+                      "serviceManifest": {
+                        "build": {
+                          "buildCommand": null,
+                          "buildEnvironment": "V3",
+                          "builder": "RAILPACK",
+                          "dockerfilePath": null,
+                          "nixpacksConfigPath": null,
+                          "nixpacksPlan": null,
+                          "watchPatterns": []
+                        },
+                        "deploy": {
+                          "cronSchedule": null,
+                          "drainingSeconds": null,
+                          "healthcheckPath": null,
+                          "healthcheckTimeout": null,
+                          "ipv6EgressEnabled": false,
+                          "limitOverride": null,
+                          "multiRegionConfig": {
+                            "sfo": {
+                              "numReplicas": 1
+                            }
+                          },
+                          "numReplicas": 1,
+                          "overlapSeconds": null,
+                          "preDeployCommand": null,
+                          "region": null,
+                          "registryCredentials": null,
+                          "requiredMountPath": null,
+                          "restartPolicyMaxRetries": 10,
+                          "restartPolicyType": "ON_FAILURE",
+                          "runtime": "V2",
+                          "sleepApplication": false,
+                          "startCommand": null,
+                          "useLegacyStacker": false
+                        }
+                      },
+                      "volumeMounts": [
+                        "/var/lib/postgresql/data"
+                      ]
+                    },
+                    "status": "SUCCESS"
+                  },
+                  "nextCronRunAt": null,
+                  "numReplicas": 1,
+                  "serviceId": "2e2fd64c-725f-41b2-8094-995a0f6b091e",
+                  "serviceName": "Postgres-LC5q",
+                  "source": {
+                    "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+                    "repo": null
+                  },
+                  "startCommand": null
+                }
+              },
+              {
+                "node": {
+                  "activeDeployments": [
+                    {
+                      "createdAt": "2026-07-31T14:39:37.932Z",
+                      "deploymentStopped": false,
+                      "id": "933e867b-1f21-431f-ad3c-6c690eacccf0",
+                      "instances": [
+                        {
+                          "id": "164168c4-e9de-44b0-8786-c2d95fbb1455",
+                          "status": "RUNNING"
+                        }
+                      ],
+                      "meta": {
+                        "buildOnly": false,
+                        "cliAgentSessionId": "railway-skill-20260731-bayesian-v2-staging",
+                        "cliCaller": "skill:use-railway@1.3.6",
+                        "cliMessage": "Bayesian analysis-only isolated worker bfe6b862",
+                        "fileServiceManifest": {},
+                        "imageDigest": "sha256:6a6d2b0866d71efde14df8efb0ccd921db1c4433798ff29d930836252a59f7bb",
+                        "logsV2": true,
+                        "nixpacksProviders": [],
+                        "propertyFileMapping": {},
+                        "reason": "deploy",
+                        "rootDirectory": null,
+                        "runtime": "V2",
+                        "serviceManifest": {
+                          "build": {
+                            "buildCommand": null,
+                            "buildEnvironment": "V3",
+                            "builder": "DOCKERFILE",
+                            "dockerfilePath": "Dockerfile.profile-bayesian",
+                            "nixpacksConfigPath": null,
+                            "nixpacksPlan": null,
+                            "watchPatterns": []
+                          },
+                          "deploy": {
+                            "cronSchedule": null,
+                            "drainingSeconds": null,
+                            "healthcheckPath": null,
+                            "healthcheckTimeout": null,
+                            "ipv6EgressEnabled": false,
+                            "limitOverride": null,
+                            "multiRegionConfig": {
+                              "sfo": {
+                                "numReplicas": 1
+                              }
+                            },
+                            "numReplicas": 1,
+                            "overlapSeconds": null,
+                            "preDeployCommand": null,
+                            "region": null,
+                            "registryCredentials": null,
+                            "requiredMountPath": null,
+                            "restartPolicyMaxRetries": 3,
+                            "restartPolicyType": "ON_FAILURE",
+                            "runtime": "V2",
+                            "sleepApplication": false,
+                            "startCommand": "/app/start-profile-bayesian-worker.sh",
+                            "useLegacyStacker": false
+                          }
+                        },
+                        "volumeMounts": [
+                          "/data/profile-bayesian-v2"
+                        ]
+                      },
+                      "status": "SUCCESS"
+                    }
+                  ],
+                  "cronSchedule": null,
+                  "domains": {
+                    "customDomains": [],
+                    "serviceDomains": []
+                  },
+                  "environmentId": "2e7314b3-18a8-471a-ada5-418d65d92ffa",
+                  "id": "13153aaf-fb1a-471b-96bc-c3eac3dedfa1",
+                  "latestDeployment": {
+                    "canRedeploy": true,
+                    "createdAt": "2026-07-31T14:39:37.932Z",
+                    "deploymentStopped": false,
+                    "id": "933e867b-1f21-431f-ad3c-6c690eacccf0",
+                    "instances": [
+                      {
+                        "id": "164168c4-e9de-44b0-8786-c2d95fbb1455",
+                        "status": "RUNNING"
+                      }
+                    ],
+                    "meta": {
+                      "buildOnly": false,
+                      "cliAgentSessionId": "railway-skill-20260731-bayesian-v2-staging",
+                      "cliCaller": "skill:use-railway@1.3.6",
+                      "cliMessage": "Bayesian analysis-only isolated worker bfe6b862",
+                      "fileServiceManifest": {},
+                      "imageDigest": "sha256:6a6d2b0866d71efde14df8efb0ccd921db1c4433798ff29d930836252a59f7bb",
+                      "logsV2": true,
+                      "nixpacksProviders": [],
+                      "propertyFileMapping": {},
+                      "reason": "deploy",
+                      "rootDirectory": null,
+                      "runtime": "V2",
+                      "serviceManifest": {
+                        "build": {
+                          "buildCommand": null,
+                          "buildEnvironment": "V3",
+                          "builder": "DOCKERFILE",
+                          "dockerfilePath": "Dockerfile.profile-bayesian",
+                          "nixpacksConfigPath": null,
+                          "nixpacksPlan": null,
+                          "watchPatterns": []
+                        },
+                        "deploy": {
+                          "cronSchedule": null,
+                          "drainingSeconds": null,
+                          "healthcheckPath": null,
+                          "healthcheckTimeout": null,
+                          "ipv6EgressEnabled": false,
+                          "limitOverride": null,
+                          "multiRegionConfig": {
+                            "sfo": {
+                              "numReplicas": 1
+                            }
+                          },
+                          "numReplicas": 1,
+                          "overlapSeconds": null,
+                          "preDeployCommand": null,
+                          "region": null,
+                          "registryCredentials": null,
+                          "requiredMountPath": null,
+                          "restartPolicyMaxRetries": 3,
+                          "restartPolicyType": "ON_FAILURE",
+                          "runtime": "V2",
+                          "sleepApplication": false,
+                          "startCommand": "/app/start-profile-bayesian-worker.sh",
+                          "useLegacyStacker": false
+                        }
+                      },
+                      "volumeMounts": [
+                        "/data/profile-bayesian-v2"
+                      ]
+                    },
+                    "status": "SUCCESS"
+                  },
+                  "nextCronRunAt": null,
+                  "numReplicas": null,
+                  "serviceId": "7dbaca22-aaa1-43c3-be50-022990ccffbb",
+                  "serviceName": "pi-manual-staging-bayesian-v2",
+                  "source": null,
+                  "startCommand": "/app/start-profile-bayesian-worker.sh"
+                }
+              },
+              {
+                "node": {
+                  "activeDeployments": [
+                    {
+                      "createdAt": "2026-07-23T17:19:58.246Z",
+                      "deploymentStopped": false,
+                      "id": "1f272b58-a808-479f-9406-1f5559468759",
+                      "instances": [
+                        {
+                          "id": "29d583c3-4468-4fc7-86f0-446cb25f91b6",
+                          "status": "RUNNING"
+                        }
+                      ],
+                      "meta": {
+                        "buildOnly": false,
+                        "cliAgentSessionId": "railway-skill-pi-ai-selector-20260723",
+                        "cliCaller": "skill:use-railway@1.3.6",
+                        "cliMessage": "PI AI bounded context staging 8c34f3d",
+                        "fileServiceManifest": {},
+                        "imageDigest": "sha256:7fadea2c6a053739543f71dec0ec9466f236a00fc16383045848492eab99b3c6",
+                        "logsV2": true,
+                        "nixpacksProviders": [],
+                        "propertyFileMapping": {},
+                        "reason": "deploy",
+                        "rootDirectory": null,
+                        "runtime": "V2",
+                        "serviceManifest": {
+                          "build": {
+                            "buildCommand": null,
+                            "buildEnvironment": "V3",
+                            "builder": "DOCKERFILE",
+                            "dockerfilePath": "/Dockerfile",
+                            "nixpacksConfigPath": null,
+                            "nixpacksPlan": null,
+                            "watchPatterns": []
+                          },
+                          "deploy": {
+                            "cronSchedule": null,
+                            "drainingSeconds": null,
+                            "healthcheckPath": null,
+                            "healthcheckTimeout": null,
+                            "ipv6EgressEnabled": false,
+                            "limitOverride": null,
+                            "multiRegionConfig": {
+                              "sfo": {
+                                "numReplicas": 1
+                              }
+                            },
+                            "numReplicas": 1,
+                            "overlapSeconds": null,
+                            "preDeployCommand": null,
+                            "region": null,
+                            "registryCredentials": null,
+                            "requiredMountPath": null,
+                            "restartPolicyMaxRetries": 10,
+                            "restartPolicyType": "ON_FAILURE",
+                            "runtime": "V2",
+                            "sleepApplication": false,
+                            "startCommand": null,
+                            "useLegacyStacker": false
+                          }
+                        },
+                        "volumeMounts": []
+                      },
+                      "status": "SUCCESS"
+                    }
+                  ],
+                  "cronSchedule": null,
+                  "domains": {
+                    "customDomains": [],
+                    "serviceDomains": []
+                  },
+                  "environmentId": "2e7314b3-18a8-471a-ada5-418d65d92ffa",
+                  "id": "741df1eb-02d8-45dd-a68a-03dbdbf4c488",
+                  "latestDeployment": {
+                    "canRedeploy": true,
+                    "createdAt": "2026-07-23T17:19:58.246Z",
+                    "deploymentStopped": false,
+                    "id": "1f272b58-a808-479f-9406-1f5559468759",
+                    "instances": [
+                      {
+                        "id": "29d583c3-4468-4fc7-86f0-446cb25f91b6",
+                        "status": "RUNNING"
+                      }
+                    ],
+                    "meta": {
+                      "buildOnly": false,
+                      "cliAgentSessionId": "railway-skill-pi-ai-selector-20260723",
+                      "cliCaller": "skill:use-railway@1.3.6",
+                      "cliMessage": "PI AI bounded context staging 8c34f3d",
+                      "fileServiceManifest": {},
+                      "imageDigest": "sha256:7fadea2c6a053739543f71dec0ec9466f236a00fc16383045848492eab99b3c6",
+                      "logsV2": true,
+                      "nixpacksProviders": [],
+                      "propertyFileMapping": {},
+                      "reason": "deploy",
+                      "rootDirectory": null,
+                      "runtime": "V2",
+                      "serviceManifest": {
+                        "build": {
+                          "buildCommand": null,
+                          "buildEnvironment": "V3",
+                          "builder": "DOCKERFILE",
+                          "dockerfilePath": "/Dockerfile",
+                          "nixpacksConfigPath": null,
+                          "nixpacksPlan": null,
+                          "watchPatterns": []
+                        },
+                        "deploy": {
+                          "cronSchedule": null,
+                          "drainingSeconds": null,
+                          "healthcheckPath": null,
+                          "healthcheckTimeout": null,
+                          "ipv6EgressEnabled": false,
+                          "limitOverride": null,
+                          "multiRegionConfig": {
+                            "sfo": {
+                              "numReplicas": 1
+                            }
+                          },
+                          "numReplicas": 1,
+                          "overlapSeconds": null,
+                          "preDeployCommand": null,
+                          "region": null,
+                          "registryCredentials": null,
+                          "requiredMountPath": null,
+                          "restartPolicyMaxRetries": 10,
+                          "restartPolicyType": "ON_FAILURE",
+                          "runtime": "V2",
+                          "sleepApplication": false,
+                          "startCommand": null,
+                          "useLegacyStacker": false
+                        }
+                      },
+                      "volumeMounts": []
+                    },
+                    "status": "SUCCESS"
+                  },
+                  "nextCronRunAt": null,
+                  "numReplicas": null,
+                  "serviceId": "cdfe5e5a-7e88-4967-966a-c6acf58e2cf2",
+                  "serviceName": "pi-manual-staging-runtime",
+                  "source": {
+                    "image": null,
+                    "repo": null
+                  },
+                  "startCommand": null
+                }
+              },
+              {
+                "node": {
+                  "activeDeployments": [
+                    {
+                      "createdAt": "2026-07-21T23:04:07.132Z",
+                      "deploymentStopped": false,
+                      "id": "c4cd91c7-5da9-4943-a9c2-f772cc15e50a",
+                      "instances": [
+                        {
+                          "id": "f6901a52-0563-4827-a9fd-a4d8d87dc731",
+                          "status": "RUNNING"
+                        }
+                      ],
+                      "meta": {
+                        "image": "redis:8.2.1",
+                        "imageDigest": "sha256:5fa2edb1e408fa8235e6db8fab01d1afaaae96c9403ba67b70feceb8661e8621",
+                        "logsV2": true,
+                        "patchId": "6cfb1b71-5073-4fb1-8bb6-2d0ed644bc55",
+                        "reason": "deploy",
+                        "runtime": "V2",
+                        "serviceManifest": {
+                          "build": {
+                            "buildCommand": null,
+                            "buildEnvironment": "V3",
+                            "builder": "RAILPACK",
+                            "dockerfilePath": null,
+                            "nixpacksConfigPath": null,
+                            "nixpacksPlan": null,
+                            "watchPatterns": []
+                          },
+                          "deploy": {
+                            "cronSchedule": null,
+                            "drainingSeconds": null,
+                            "healthcheckPath": null,
+                            "healthcheckTimeout": null,
+                            "ipv6EgressEnabled": false,
+                            "limitOverride": null,
+                            "multiRegionConfig": {
+                              "sfo": {
+                                "numReplicas": 1
+                              }
+                            },
+                            "numReplicas": 1,
+                            "overlapSeconds": null,
+                            "preDeployCommand": null,
+                            "region": null,
+                            "registryCredentials": null,
+                            "requiredMountPath": null,
+                            "restartPolicyMaxRetries": 10,
+                            "restartPolicyType": "ON_FAILURE",
+                            "runtime": "V2",
+                            "sleepApplication": false,
+                            "startCommand": "/bin/sh -c \"rm -rf $RAILWAY_VOLUME_MOUNT_PATH/lost+found/ && exec docker-entrypoint.sh redis-server --requirepass $REDIS_PASSWORD --save 60 1 --dir $RAILWAY_VOLUME_MOUNT_PATH\"",
+                            "useLegacyStacker": false
+                          }
+                        },
+                        "volumeMounts": [
+                          "/data"
+                        ]
+                      },
+                      "status": "SUCCESS"
+                    }
+                  ],
+                  "cronSchedule": null,
+                  "domains": {
+                    "customDomains": [],
+                    "serviceDomains": []
+                  },
+                  "environmentId": "2e7314b3-18a8-471a-ada5-418d65d92ffa",
+                  "id": "ece0b689-cd6d-4f10-9d89-37d63d4409f9",
+                  "latestDeployment": {
+                    "canRedeploy": true,
+                    "createdAt": "2026-07-21T23:04:07.132Z",
+                    "deploymentStopped": false,
+                    "id": "c4cd91c7-5da9-4943-a9c2-f772cc15e50a",
+                    "instances": [
+                      {
+                        "id": "f6901a52-0563-4827-a9fd-a4d8d87dc731",
+                        "status": "RUNNING"
+                      }
+                    ],
+                    "meta": {
+                      "image": "redis:8.2.1",
+                      "imageDigest": "sha256:5fa2edb1e408fa8235e6db8fab01d1afaaae96c9403ba67b70feceb8661e8621",
+                      "logsV2": true,
+                      "patchId": "6cfb1b71-5073-4fb1-8bb6-2d0ed644bc55",
+                      "reason": "deploy",
+                      "runtime": "V2",
+                      "serviceManifest": {
+                        "build": {
+                          "buildCommand": null,
+                          "buildEnvironment": "V3",
+                          "builder": "RAILPACK",
+                          "dockerfilePath": null,
+                          "nixpacksConfigPath": null,
+                          "nixpacksPlan": null,
+                          "watchPatterns": []
+                        },
+                        "deploy": {
+                          "cronSchedule": null,
+                          "drainingSeconds": null,
+                          "healthcheckPath": null,
+                          "healthcheckTimeout": null,
+                          "ipv6EgressEnabled": false,
+                          "limitOverride": null,
+                          "multiRegionConfig": {
+                            "sfo": {
+                              "numReplicas": 1
+                            }
+                          },
+                          "numReplicas": 1,
+                          "overlapSeconds": null,
+                          "preDeployCommand": null,
+                          "region": null,
+                          "registryCredentials": null,
+                          "requiredMountPath": null,
+                          "restartPolicyMaxRetries": 10,
+                          "restartPolicyType": "ON_FAILURE",
+                          "runtime": "V2",
+                          "sleepApplication": false,
+                          "startCommand": "/bin/sh -c \"rm -rf $RAILWAY_VOLUME_MOUNT_PATH/lost+found/ && exec docker-entrypoint.sh redis-server --requirepass $REDIS_PASSWORD --save 60 1 --dir $RAILWAY_VOLUME_MOUNT_PATH\"",
+                          "useLegacyStacker": false
+                        }
+                      },
+                      "volumeMounts": [
+                        "/data"
+                      ]
+                    },
+                    "status": "SUCCESS"
+                  },
+                  "nextCronRunAt": null,
+                  "numReplicas": 1,
+                  "serviceId": "4026d936-6141-423a-b7d6-058e06e90976",
+                  "serviceName": "Redis-PkZC",
+                  "source": {
+                    "image": "redis:8.2.1",
+                    "repo": null
+                  },
+                  "startCommand": "/bin/sh -c \"rm -rf $RAILWAY_VOLUME_MOUNT_PATH/lost+found/ && exec docker-entrypoint.sh redis-server --requirepass $REDIS_PASSWORD --save 60 1 --dir $RAILWAY_VOLUME_MOUNT_PATH\""
+                }
+              }
+            ]
+          },
+          "unmergedChangesCount": null,
+          "volumeInstances": {
+            "edges": [
+              {
+                "node": {
+                  "currentSizeMB": 1266.180096,
+                  "deletedAt": null,
+                  "environmentId": "2e7314b3-18a8-471a-ada5-418d65d92ffa",
+                  "isPendingDeletion": false,
+                  "mountPath": "/data",
+                  "serviceId": "4026d936-6141-423a-b7d6-058e06e90976",
+                  "sizeMB": 50000,
+                  "state": "READY",
+                  "volume": {
+                    "id": "bff75ff2-8886-4a92-bbfa-97e1e7923f7a",
+                    "name": "redis-volume-eYVA"
+                  }
+                }
+              },
+              {
+                "node": {
+                  "currentSizeMB": 791.1505920000001,
+                  "deletedAt": null,
+                  "environmentId": "2e7314b3-18a8-471a-ada5-418d65d92ffa",
+                  "isPendingDeletion": false,
+                  "mountPath": "/data/profile-bayesian-v2",
+                  "serviceId": "7dbaca22-aaa1-43c3-be50-022990ccffbb",
+                  "sizeMB": 50000,
+                  "state": "READY",
+                  "volume": {
+                    "id": "84adf315-8a17-4fcf-af65-d6dd9e66490e",
+                    "name": "pi-manual-staging-bayesian-v2-volume"
+                  }
+                }
+              },
+              {
+                "node": {
+                  "currentSizeMB": 1170.743296,
+                  "deletedAt": null,
+                  "environmentId": "2e7314b3-18a8-471a-ada5-418d65d92ffa",
+                  "isPendingDeletion": false,
+                  "mountPath": "/var/lib/postgresql/data",
+                  "serviceId": "2e2fd64c-725f-41b2-8094-995a0f6b091e",
+                  "sizeMB": 50000,
+                  "state": "READY",
+                  "volume": {
+                    "id": "af8a5e90-be3f-4472-8fc3-fc4c7399fdda",
+                    "name": "postgres-volume-PFfK"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "node": {
+          "canAccess": true,
+          "deletedAt": null,
+          "id": "8e7bba37-1dc2-4f78-b549-248bbb3ec29d",
+          "name": "production",
+          "serviceInstances": {
+            "edges": [
+              {
+                "node": {
+                  "activeDeployments": [
+                    {
+                      "createdAt": "2026-08-04T13:55:37.999Z",
+                      "deploymentStopped": false,
+                      "id": "c7107f11-31a4-4a2d-a722-7cf769622aaa",
+                      "instances": [
+                        {
+                          "id": "9e572755-ee30-48ac-aac4-8dbcf15ab20a",
+                          "status": "RUNNING"
+                        }
+                      ],
+                      "meta": {
+                        "buildOnly": false,
+                        "cliAgentSessionId": "railway-skill-20260804-l3-historical",
+                        "cliCaller": "skill:use-railway@1.2.2",
+                        "cliMessage": "L3 historical causal lineage ddd2500",
+                        "fileServiceManifest": {},
+                        "imageDigest": "sha256:cb939e3abf1769f42b237d1cb2c4f8d5949a31418e8511bcea857fa80626fc96",
+                        "logsV2": true,
+                        "nixpacksProviders": [],
+                        "propertyFileMapping": {},
+                        "reason": "deploy",
+                        "rootDirectory": "backend",
+                        "runtime": "V2",
+                        "serviceManifest": {
+                          "build": {
+                            "buildCommand": null,
+                            "buildEnvironment": "V3",
+                            "builder": "DOCKERFILE",
+                            "dockerfilePath": "Dockerfile",
+                            "nixpacksConfigPath": null,
+                            "nixpacksPlan": null,
+                            "watchPatterns": []
+                          },
+                          "deploy": {
+                            "cronSchedule": null,
+                            "drainingSeconds": null,
+                            "healthcheckPath": null,
+                            "healthcheckTimeout": null,
+                            "ipv6EgressEnabled": false,
+                            "limitOverride": null,
+                            "multiRegionConfig": {
+                              "sfo": {
+                                "numReplicas": 1
+                              }
+                            },
+                            "numReplicas": 1,
+                            "overlapSeconds": null,
+                            "preDeployCommand": null,
+                            "region": null,
+                            "registryCredentials": null,
+                            "requiredMountPath": null,
+                            "restartPolicyMaxRetries": 10,
+                            "restartPolicyType": "ON_FAILURE",
+                            "runtime": "V2",
+                            "sleepApplication": false,
+                            "startCommand": null,
+                            "useLegacyStacker": false
+                          }
+                        },
+                        "volumeMounts": []
+                      },
+                      "status": "SUCCESS"
+                    }
+                  ],
+                  "cronSchedule": null,
+                  "domains": {
+                    "customDomains": [],
+                    "serviceDomains": []
+                  },
+                  "environmentId": "8e7bba37-1dc2-4f78-b549-248bbb3ec29d",
+                  "id": "0f183667-cbda-49a5-9970-0f1c60e81903",
+                  "latestDeployment": {
+                    "canRedeploy": true,
+                    "createdAt": "2026-08-04T13:55:37.999Z",
+                    "deploymentStopped": false,
+                    "id": "c7107f11-31a4-4a2d-a722-7cf769622aaa",
+                    "instances": [
+                      {
+                        "id": "9e572755-ee30-48ac-aac4-8dbcf15ab20a",
+                        "status": "RUNNING"
+                      }
+                    ],
+                    "meta": {
+                      "buildOnly": false,
+                      "cliAgentSessionId": "railway-skill-20260804-l3-historical",
+                      "cliCaller": "skill:use-railway@1.2.2",
+                      "cliMessage": "L3 historical causal lineage ddd2500",
+                      "fileServiceManifest": {},
+                      "imageDigest": "sha256:cb939e3abf1769f42b237d1cb2c4f8d5949a31418e8511bcea857fa80626fc96",
+                      "logsV2": true,
+                      "nixpacksProviders": [],
+                      "propertyFileMapping": {},
+                      "reason": "deploy",
+                      "rootDirectory": "backend",
+                      "runtime": "V2",
+                      "serviceManifest": {
+                        "build": {
+                          "buildCommand": null,
+                          "buildEnvironment": "V3",
+                          "builder": "DOCKERFILE",
+                          "dockerfilePath": "Dockerfile",
+                          "nixpacksConfigPath": null,
+                          "nixpacksPlan": null,
+                          "watchPatterns": []
+                        },
+                        "deploy": {
+                          "cronSchedule": null,
+                          "drainingSeconds": null,
+                          "healthcheckPath": null,
+                          "healthcheckTimeout": null,
+                          "ipv6EgressEnabled": false,
+                          "limitOverride": null,
+                          "multiRegionConfig": {
+                            "sfo": {
+                              "numReplicas": 1
+                            }
+                          },
+                          "numReplicas": 1,
+                          "overlapSeconds": null,
+                          "preDeployCommand": null,
+                          "region": null,
+                          "registryCredentials": null,
+                          "requiredMountPath": null,
+                          "restartPolicyMaxRetries": 10,
+                          "restartPolicyType": "ON_FAILURE",
+                          "runtime": "V2",
+                          "sleepApplication": false,
+                          "startCommand": null,
+                          "useLegacyStacker": false
+                        }
+                      },
+                      "volumeMounts": []
+                    },
+                    "status": "SUCCESS"
+                  },
+                  "nextCronRunAt": null,
+                  "numReplicas": null,
+                  "serviceId": "c6f22ae9-8b04-47e0-b17b-fc27dd9678c4",
+                  "serviceName": "scalpyn-worker-micro",
+                  "source": {
+                    "image": null,
+                    "repo": "vasconcelosbr/scalpyn"
+                  },
+                  "startCommand": null
+                }
+              },
+              {
+                "node": {
+                  "activeDeployments": [
+                    {
+                      "createdAt": "2026-08-04T13:55:37.653Z",
+                      "deploymentStopped": false,
+                      "id": "855f1826-6530-4caf-97fe-094683227f15",
+                      "instances": [
+                        {
+                          "id": "f60c1563-44fc-47b0-9d67-4266dde5563c",
+                          "status": "CREATED"
+                        }
+                      ],
+                      "meta": {
+                        "buildOnly": true,
+                        "cliAgentSessionId": "railway-skill-20260804-l3-historical",
+                        "cliCaller": "skill:use-railway@1.2.2",
+                        "cliMessage": "L3 historical causal lineage ddd2500",
+                        "fileServiceManifest": {},
+                        "imageDigest": "sha256:784204475039ce68010e25d7ebb93a91970d3190e51a0e0c089c7b05edb45219",
+                        "logsV2": true,
+                        "nixpacksProviders": [],
+                        "propertyFileMapping": {},
+                        "reason": "deploy",
+                        "rootDirectory": null,
+                        "runtime": "V2",
+                        "serviceManifest": {
+                          "build": {
+                            "buildCommand": null,
+                            "buildEnvironment": "V3",
+                            "builder": "DOCKERFILE",
+                            "dockerfilePath": "ml_trainer/Dockerfile",
+                            "nixpacksConfigPath": null,
+                            "nixpacksPlan": null,
+                            "watchPatterns": [
+                              "ml_trainer/**",
+                              "backend/app/ml/**"
+                            ]
+                          },
+                          "deploy": {
+                            "cronSchedule": "0 3 * * 0",
+                            "drainingSeconds": null,
+                            "healthcheckPath": null,
+                            "healthcheckTimeout": null,
+                            "ipv6EgressEnabled": false,
+                            "limitOverride": null,
+                            "multiRegionConfig": {
+                              "sfo": {
+                                "numReplicas": 1
+                              }
+                            },
+                            "numReplicas": 1,
+                            "overlapSeconds": null,
+                            "preDeployCommand": null,
+                            "region": null,
+                            "registryCredentials": null,
+                            "requiredMountPath": null,
+                            "restartPolicyMaxRetries": null,
+                            "restartPolicyType": "NEVER",
+                            "runtime": "V2",
+                            "sleepApplication": false,
+                            "startCommand": "python -m ml_trainer.job",
+                            "useLegacyStacker": false
+                          }
+                        },
+                        "volumeMounts": []
+                      },
+                      "status": "SUCCESS"
+                    }
+                  ],
+                  "cronSchedule": "0 3 * * 0",
+                  "domains": {
+                    "customDomains": [],
+                    "serviceDomains": []
+                  },
+                  "environmentId": "8e7bba37-1dc2-4f78-b549-248bbb3ec29d",
+                  "id": "1b1550eb-2370-4a96-8ed6-a91ebc82a763",
+                  "latestDeployment": {
+                    "canRedeploy": true,
+                    "createdAt": "2026-08-04T13:55:37.653Z",
+                    "deploymentStopped": false,
+                    "id": "855f1826-6530-4caf-97fe-094683227f15",
+                    "instances": [
+                      {
+                        "id": "f60c1563-44fc-47b0-9d67-4266dde5563c",
+                        "status": "CREATED"
+                      }
+                    ],
+                    "meta": {
+                      "buildOnly": true,
+                      "cliAgentSessionId": "railway-skill-20260804-l3-historical",
+                      "cliCaller": "skill:use-railway@1.2.2",
+                      "cliMessage": "L3 historical causal lineage ddd2500",
+                      "fileServiceManifest": {},
+                      "imageDigest": "sha256:784204475039ce68010e25d7ebb93a91970d3190e51a0e0c089c7b05edb45219",
+                      "logsV2": true,
+                      "nixpacksProviders": [],
+                      "propertyFileMapping": {},
+                      "reason": "deploy",
+                      "rootDirectory": null,
+                      "runtime": "V2",
+                      "serviceManifest": {
+                        "build": {
+                          "buildCommand": null,
+                          "buildEnvironment": "V3",
+                          "builder": "DOCKERFILE",
+                          "dockerfilePath": "ml_trainer/Dockerfile",
+                          "nixpacksConfigPath": null,
+                          "nixpacksPlan": null,
+                          "watchPatterns": [
+                            "ml_trainer/**",
+                            "backend/app/ml/**"
+                          ]
+                        },
+                        "deploy": {
+                          "cronSchedule": "0 3 * * 0",
+                          "drainingSeconds": null,
+                          "healthcheckPath": null,
+                          "healthcheckTimeout": null,
+                          "ipv6EgressEnabled": false,
+                          "limitOverride": null,
+                          "multiRegionConfig": {
+                            "sfo": {
+                              "numReplicas": 1
+                            }
+                          },
+                          "numReplicas": 1,
+                          "overlapSeconds": null,
+                          "preDeployCommand": null,
+                          "region": null,
+                          "registryCredentials": null,
+                          "requiredMountPath": null,
+                          "restartPolicyMaxRetries": null,
+                          "restartPolicyType": "NEVER",
+                          "runtime": "V2",
+                          "sleepApplication": false,
+                          "startCommand": "python -m ml_trainer.job",
+                          "useLegacyStacker": false
+                        }
+                      },
+                      "volumeMounts": []
+                    },
+                    "status": "SUCCESS"
+                  },
+                  "nextCronRunAt": "2026-08-09T03:00:00Z",
+                  "numReplicas": 1,
+                  "serviceId": "0c49adf1-7de7-4929-9c25-690815a6c1c0",
+                  "serviceName": "scalpyn-ml-trainer",
+                  "source": {
+                    "image": null,
+                    "repo": "vasconcelosbr/scalpyn"
+                  },
+                  "startCommand": "python -m ml_trainer.job"
+                }
+              },
+              {
+                "node": {
+                  "activeDeployments": [
+                    {
+                      "createdAt": "2026-08-08T00:28:48.653Z",
+                      "deploymentStopped": false,
+                      "id": "a8190d5a-cb5f-4468-9f7e-35ecb2da6ef5",
+                      "instances": [
+                        {
+                          "id": "e94bbec5-103e-4269-9a61-8f1665288eaa",
+                          "status": "RUNNING"
+                        }
+                      ],
+                      "meta": {
+                        "buildOnly": false,
+                        "cliAgentSessionId": "railway-skill-20260807-systemic-ai-prod-019fddc5",
+                        "cliCaller": "skill:use-railway@1.3.7",
+                        "cliMessage": "Systemic AI foundation 0d712e0",
+                        "fileServiceManifest": {},
+                        "imageDigest": "sha256:c1e5be0ad02c9c4e7108b795a57b0b4fe0c352334a795e7113eef4ff6b282d72",
+                        "logsV2": true,
+                        "nixpacksProviders": [],
+                        "propertyFileMapping": {},
+                        "reason": "deploy",
+                        "rootDirectory": "backend",
+                        "runtime": "V2",
+                        "serviceManifest": {
+                          "build": {
+                            "buildCommand": null,
+                            "buildEnvironment": "V3",
+                            "builder": "DOCKERFILE",
+                            "dockerfilePath": "Dockerfile",
+                            "nixpacksConfigPath": null,
+                            "nixpacksPlan": null,
+                            "watchPatterns": []
+                          },
+                          "deploy": {
+                            "cronSchedule": null,
+                            "drainingSeconds": null,
+                            "healthcheckPath": null,
+                            "healthcheckTimeout": null,
+                            "ipv6EgressEnabled": false,
+                            "limitOverride": null,
+                            "multiRegionConfig": {
+                              "sfo": {
+                                "numReplicas": 1
+                              }
+                            },
+                            "numReplicas": 1,
+                            "overlapSeconds": null,
+                            "preDeployCommand": null,
+                            "region": null,
+                            "registryCredentials": null,
+                            "requiredMountPath": null,
+                            "restartPolicyMaxRetries": 10,
+                            "restartPolicyType": "ON_FAILURE",
+                            "runtime": "V2",
+                            "sleepApplication": false,
+                            "startCommand": null,
+                            "useLegacyStacker": false
+                          }
+                        },
+                        "volumeMounts": []
+                      },
+                      "status": "SUCCESS"
+                    }
+                  ],
+                  "cronSchedule": null,
+                  "domains": {
+                    "customDomains": [],
+                    "serviceDomains": []
+                  },
+                  "environmentId": "8e7bba37-1dc2-4f78-b549-248bbb3ec29d",
+                  "id": "1c5655ec-187f-4976-99c6-885b5a771792",
+                  "latestDeployment": {
+                    "canRedeploy": true,
+                    "createdAt": "2026-08-08T00:28:48.653Z",
+                    "deploymentStopped": false,
+                    "id": "a8190d5a-cb5f-4468-9f7e-35ecb2da6ef5",
+                    "instances": [
+                      {
+                        "id": "e94bbec5-103e-4269-9a61-8f1665288eaa",
+                        "status": "RUNNING"
+                      }
+                    ],
+                    "meta": {
+                      "buildOnly": false,
+                      "cliAgentSessionId": "railway-skill-20260807-systemic-ai-prod-019fddc5",
+                      "cliCaller": "skill:use-railway@1.3.7",
+                      "cliMessage": "Systemic AI foundation 0d712e0",
+                      "fileServiceManifest": {},
+                      "imageDigest": "sha256:c1e5be0ad02c9c4e7108b795a57b0b4fe0c352334a795e7113eef4ff6b282d72",
+                      "logsV2": true,
+                      "nixpacksProviders": [],
+                      "propertyFileMapping": {},
+                      "reason": "deploy",
+                      "rootDirectory": "backend",
+                      "runtime": "V2",
+                      "serviceManifest": {
+                        "build": {
+                          "buildCommand": null,
+                          "buildEnvironment": "V3",
+                          "builder": "DOCKERFILE",
+                          "dockerfilePath": "Dockerfile",
+                          "nixpacksConfigPath": null,
+                          "nixpacksPlan": null,
+                          "watchPatterns": []
+                        },
+                        "deploy": {
+                          "cronSchedule": null,
+                          "drainingSeconds": null,
+                          "healthcheckPath": null,
+                          "healthcheckTimeout": null,
+                          "ipv6EgressEnabled": false,
+                          "limitOverride": null,
+                          "multiRegionConfig": {
+                            "sfo": {
+                              "numReplicas": 1
+                            }
+                          },
+                          "numReplicas": 1,
+                          "overlapSeconds": null,
+                          "preDeployCommand": null,
+                          "region": null,
+                          "registryCredentials": null,
+                          "requiredMountPath": null,
+                          "restartPolicyMaxRetries": 10,
+                          "restartPolicyType": "ON_FAILURE",
+                          "runtime": "V2",
+                          "sleepApplication": false,
+                          "startCommand": null,
+                          "useLegacyStacker": false
+                        }
+                      },
+                      "volumeMounts": []
+                    },
+                    "status": "SUCCESS"
+                  },
+                  "nextCronRunAt": null,
+                  "numReplicas": null,
+                  "serviceId": "91d4b8f1-8a68-46be-80b9-9aa63eadc971",
+                  "serviceName": "scalpyn-worker-execution",
+                  "source": {
+                    "image": null,
+                    "repo": "vasconcelosbr/scalpyn"
+                  },
+                  "startCommand": null
+                }
+              },
+              {
+                "node": {
+                  "activeDeployments": [
+                    {
+                      "createdAt": "2026-07-26T16:36:31.682Z",
+                      "deploymentStopped": false,
+                      "id": "2dcaab9c-2be3-48b3-89eb-c5121e88ba0e",
+                      "instances": [
+                        {
+                          "id": "3fb4f5b9-4a65-43ed-b33d-d4845c7f5a50",
+                          "status": "RUNNING"
+                        }
+                      ],
+                      "meta": {
+                        "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+                        "imageDigest": "sha256:21c501ce65f9b7de4bc9e4b545a095c00894a10bbf299f37a86e6004a6f7b066",
+                        "logsV2": true,
+                        "reason": "deploy",
+                        "runtime": "V2",
+                        "serviceManifest": {
+                          "build": {
+                            "buildCommand": null,
+                            "buildEnvironment": "V3",
+                            "builder": "RAILPACK",
+                            "dockerfilePath": null,
+                            "nixpacksConfigPath": null,
+                            "nixpacksPlan": null,
+                            "watchPatterns": []
+                          },
+                          "deploy": {
+                            "cronSchedule": null,
+                            "drainingSeconds": null,
+                            "healthcheckPath": null,
+                            "healthcheckTimeout": null,
+                            "ipv6EgressEnabled": false,
+                            "limitOverride": null,
+                            "multiRegionConfig": {
+                              "sfo": {
+                                "numReplicas": 1
+                              }
+                            },
+                            "numReplicas": 1,
+                            "overlapSeconds": null,
+                            "preDeployCommand": null,
+                            "region": null,
+                            "registryCredentials": null,
+                            "requiredMountPath": "/var/lib/postgresql/data",
+                            "restartPolicyMaxRetries": 10,
+                            "restartPolicyType": "ON_FAILURE",
+                            "runtime": "V2",
+                            "sleepApplication": false,
+                            "startCommand": null,
+                            "useLegacyStacker": false
+                          }
+                        },
+                        "volumeMounts": [
+                          "/var/lib/postgresql/data"
+                        ]
+                      },
+                      "status": "SUCCESS"
+                    }
+                  ],
+                  "cronSchedule": null,
+                  "domains": {
+                    "customDomains": [],
+                    "serviceDomains": []
+                  },
+                  "environmentId": "8e7bba37-1dc2-4f78-b549-248bbb3ec29d",
+                  "id": "2877e603-da09-46a3-8146-a9d0fb4d2bbb",
+                  "latestDeployment": {
+                    "canRedeploy": true,
+                    "createdAt": "2026-07-26T16:36:31.682Z",
+                    "deploymentStopped": false,
+                    "id": "2dcaab9c-2be3-48b3-89eb-c5121e88ba0e",
+                    "instances": [
+                      {
+                        "id": "3fb4f5b9-4a65-43ed-b33d-d4845c7f5a50",
+                        "status": "RUNNING"
+                      }
+                    ],
+                    "meta": {
+                      "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+                      "imageDigest": "sha256:21c501ce65f9b7de4bc9e4b545a095c00894a10bbf299f37a86e6004a6f7b066",
+                      "logsV2": true,
+                      "reason": "deploy",
+                      "runtime": "V2",
+                      "serviceManifest": {
+                        "build": {
+                          "buildCommand": null,
+                          "buildEnvironment": "V3",
+                          "builder": "RAILPACK",
+                          "dockerfilePath": null,
+                          "nixpacksConfigPath": null,
+                          "nixpacksPlan": null,
+                          "watchPatterns": []
+                        },
+                        "deploy": {
+                          "cronSchedule": null,
+                          "drainingSeconds": null,
+                          "healthcheckPath": null,
+                          "healthcheckTimeout": null,
+                          "ipv6EgressEnabled": false,
+                          "limitOverride": null,
+                          "multiRegionConfig": {
+                            "sfo": {
+                              "numReplicas": 1
+                            }
+                          },
+                          "numReplicas": 1,
+                          "overlapSeconds": null,
+                          "preDeployCommand": null,
+                          "region": null,
+                          "registryCredentials": null,
+                          "requiredMountPath": "/var/lib/postgresql/data",
+                          "restartPolicyMaxRetries": 10,
+                          "restartPolicyType": "ON_FAILURE",
+                          "runtime": "V2",
+                          "sleepApplication": false,
+                          "startCommand": null,
+                          "useLegacyStacker": false
+                        }
+                      },
+                      "volumeMounts": [
+                        "/var/lib/postgresql/data"
+                      ]
+                    },
+                    "status": "SUCCESS"
+                  },
+                  "nextCronRunAt": null,
+                  "numReplicas": null,
+                  "serviceId": "b5a65c6b-1c62-4446-b747-67c7320cfb26",
+                  "serviceName": "Postgres",
+                  "source": {
+                    "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+                    "repo": null
+                  },
+                  "startCommand": null
+                }
+              },
+              {
+                "node": {
+                  "activeDeployments": [
+                    {
+                      "createdAt": "2026-07-29T19:10:45.124Z",
+                      "deploymentStopped": false,
+                      "id": "5bcf17b1-f036-43cd-8b1f-dba6e0b37d9d",
+                      "instances": [
+                        {
+                          "id": "dd905ce4-91d0-4138-a4fe-de552e5d27d5",
+                          "status": "RUNNING"
+                        }
+                      ],
+                      "meta": {
+                        "buildOnly": false,
+                        "cliAgentSessionId": "railway-skill-20260729-bayesian-batch-1",
+                        "cliCaller": "skill:use-railway@1.3.6",
+                        "cliMessage": "Remove Bayesian 2-per-hour throttle while preserving serial concurrency",
+                        "fileServiceManifest": {},
+                        "imageDigest": "sha256:6ee732c15858c5b93404603e4dab454b41225ccf55c4c0141d7decbd3f1e1b47",
+                        "logsV2": true,
+                        "nixpacksProviders": [],
+                        "propertyFileMapping": {},
+                        "reason": "deploy",
+                        "rootDirectory": "backend",
+                        "runtime": "V2",
+                        "serviceManifest": {
+                          "build": {
+                            "buildCommand": null,
+                            "buildEnvironment": "V3",
+                            "builder": "DOCKERFILE",
+                            "dockerfilePath": "Dockerfile.profile-bayesian",
+                            "nixpacksConfigPath": null,
+                            "nixpacksPlan": null,
+                            "watchPatterns": []
+                          },
+                          "deploy": {
+                            "cronSchedule": null,
+                            "drainingSeconds": null,
+                            "healthcheckPath": null,
+                            "healthcheckTimeout": null,
+                            "ipv6EgressEnabled": false,
+                            "limitOverride": null,
+                            "multiRegionConfig": {
+                              "sfo": {
+                                "numReplicas": 1
+                              }
+                            },
+                            "numReplicas": 1,
+                            "overlapSeconds": null,
+                            "preDeployCommand": null,
+                            "region": null,
+                            "registryCredentials": null,
+                            "requiredMountPath": null,
+                            "restartPolicyMaxRetries": 10,
+                            "restartPolicyType": "ON_FAILURE",
+                            "runtime": "V2",
+                            "sleepApplication": false,
+                            "startCommand": null,
+                            "useLegacyStacker": false
+                          }
+                        },
+                        "volumeMounts": []
+                      },
+                      "status": "SUCCESS"
+                    }
+                  ],
+                  "cronSchedule": null,
+                  "domains": {
+                    "customDomains": [],
+                    "serviceDomains": []
+                  },
+                  "environmentId": "8e7bba37-1dc2-4f78-b549-248bbb3ec29d",
+                  "id": "2a0e3641-c99c-4099-ac87-76c18522f805",
+                  "latestDeployment": {
+                    "canRedeploy": true,
+                    "createdAt": "2026-07-29T19:10:45.124Z",
+                    "deploymentStopped": false,
+                    "id": "5bcf17b1-f036-43cd-8b1f-dba6e0b37d9d",
+                    "instances": [
+                      {
+                        "id": "dd905ce4-91d0-4138-a4fe-de552e5d27d5",
+                        "status": "RUNNING"
+                      }
+                    ],
+                    "meta": {
+                      "buildOnly": false,
+                      "cliAgentSessionId": "railway-skill-20260729-bayesian-batch-1",
+                      "cliCaller": "skill:use-railway@1.3.6",
+                      "cliMessage": "Remove Bayesian 2-per-hour throttle while preserving serial concurrency",
+                      "fileServiceManifest": {},
+                      "imageDigest": "sha256:6ee732c15858c5b93404603e4dab454b41225ccf55c4c0141d7decbd3f1e1b47",
+                      "logsV2": true,
+                      "nixpacksProviders": [],
+                      "propertyFileMapping": {},
+                      "reason": "deploy",
+                      "rootDirectory": "backend",
+                      "runtime": "V2",
+                      "serviceManifest": {
+                        "build": {
+                          "buildCommand": null,
+                          "buildEnvironment": "V3",
+                          "builder": "DOCKERFILE",
+                          "dockerfilePath": "Dockerfile.profile-bayesian",
+                          "nixpacksConfigPath": null,
+                          "nixpacksPlan": null,
+                          "watchPatterns": []
+                        },
+                        "deploy": {
+                          "cronSchedule": null,
+                          "drainingSeconds": null,
+                          "healthcheckPath": null,
+                          "healthcheckTimeout": null,
+                          "ipv6EgressEnabled": false,
+                          "limitOverride": null,
+                          "multiRegionConfig": {
+                            "sfo": {
+                              "numReplicas": 1
+                            }
+                          },
+                          "numReplicas": 1,
+                          "overlapSeconds": null,
+                          "preDeployCommand": null,
+                          "region": null,
+                          "registryCredentials": null,
+                          "requiredMountPath": null,
+                          "restartPolicyMaxRetries": 10,
+                          "restartPolicyType": "ON_FAILURE",
+                          "runtime": "V2",
+                          "sleepApplication": false,
+                          "startCommand": null,
+                          "useLegacyStacker": false
+                        }
+                      },
+                      "volumeMounts": []
+                    },
+                    "status": "SUCCESS"
+                  },
+                  "nextCronRunAt": null,
+                  "numReplicas": null,
+                  "serviceId": "8eaa42d8-c8a7-4cf8-ad65-5c110572ce77",
+                  "serviceName": "scalpyn-worker-profile-bayesian",
+                  "source": {
+                    "image": null,
+                    "repo": "vasconcelosbr/scalpyn"
+                  },
+                  "startCommand": null
+                }
+              },
+              {
+                "node": {
+                  "activeDeployments": [
+                    {
+                      "createdAt": "2026-06-02T17:31:05.362Z",
+                      "deploymentStopped": false,
+                      "id": "d43f8855-48ac-40ce-ac9e-6a790d8722e3",
+                      "instances": [
+                        {
+                          "id": "7322235d-fc0b-4a75-a872-bce057118f66",
+                          "status": "RUNNING"
+                        }
+                      ],
+                      "meta": {
+                        "image": "redis:8.2.1",
+                        "imageDigest": "sha256:5fa2edb1e408fa8235e6db8fab01d1afaaae96c9403ba67b70feceb8661e8621",
+                        "logsV2": true,
+                        "patchId": "dba78b3a-439e-40bb-a329-997596e3b315",
+                        "reason": "deploy",
+                        "runtime": "V2",
+                        "serviceManifest": {
+                          "build": {
+                            "buildCommand": null,
+                            "buildEnvironment": "V3",
+                            "builder": "RAILPACK",
+                            "dockerfilePath": null,
+                            "nixpacksConfigPath": null,
+                            "nixpacksPlan": null,
+                            "watchPatterns": []
+                          },
+                          "deploy": {
+                            "cronSchedule": null,
+                            "drainingSeconds": null,
+                            "healthcheckPath": null,
+                            "healthcheckTimeout": null,
+                            "ipv6EgressEnabled": false,
+                            "limitOverride": null,
+                            "multiRegionConfig": {
+                              "sfo": {
+                                "numReplicas": 1
+                              }
+                            },
+                            "numReplicas": 1,
+                            "overlapSeconds": null,
+                            "preDeployCommand": null,
+                            "region": null,
+                            "registryCredentials": null,
+                            "requiredMountPath": null,
+                            "restartPolicyMaxRetries": 10,
+                            "restartPolicyType": "ON_FAILURE",
+                            "runtime": "V2",
+                            "sleepApplication": false,
+                            "startCommand": "/bin/sh -c \"rm -rf $RAILWAY_VOLUME_MOUNT_PATH/lost+found/ && exec docker-entrypoint.sh redis-server --requirepass $REDIS_PASSWORD --save 60 1 --dir $RAILWAY_VOLUME_MOUNT_PATH\"",
+                            "useLegacyStacker": false
+                          }
+                        },
+                        "volumeMounts": [
+                          "/data"
+                        ]
+                      },
+                      "status": "SUCCESS"
+                    }
+                  ],
+                  "cronSchedule": null,
+                  "domains": {
+                    "customDomains": [],
+                    "serviceDomains": []
+                  },
+                  "environmentId": "8e7bba37-1dc2-4f78-b549-248bbb3ec29d",
+                  "id": "40fbcc32-00e7-4e2e-b591-ab12eb19ddc7",
+                  "latestDeployment": {
+                    "canRedeploy": true,
+                    "createdAt": "2026-06-02T17:31:05.362Z",
+                    "deploymentStopped": false,
+                    "id": "d43f8855-48ac-40ce-ac9e-6a790d8722e3",
+                    "instances": [
+                      {
+                        "id": "7322235d-fc0b-4a75-a872-bce057118f66",
+                        "status": "RUNNING"
+                      }
+                    ],
+                    "meta": {
+                      "image": "redis:8.2.1",
+                      "imageDigest": "sha256:5fa2edb1e408fa8235e6db8fab01d1afaaae96c9403ba67b70feceb8661e8621",
+                      "logsV2": true,
+                      "patchId": "dba78b3a-439e-40bb-a329-997596e3b315",
+                      "reason": "deploy",
+                      "runtime": "V2",
+                      "serviceManifest": {
+                        "build": {
+                          "buildCommand": null,
+                          "buildEnvironment": "V3",
+                          "builder": "RAILPACK",
+                          "dockerfilePath": null,
+                          "nixpacksConfigPath": null,
+                          "nixpacksPlan": null,
+                          "watchPatterns": []
+                        },
+                        "deploy": {
+                          "cronSchedule": null,
+                          "drainingSeconds": null,
+                          "healthcheckPath": null,
+                          "healthcheckTimeout": null,
+                          "ipv6EgressEnabled": false,
+                          "limitOverride": null,
+                          "multiRegionConfig": {
+                            "sfo": {
+                              "numReplicas": 1
+                            }
+                          },
+                          "numReplicas": 1,
+                          "overlapSeconds": null,
+                          "preDeployCommand": null,
+                          "region": null,
+                          "registryCredentials": null,
+                          "requiredMountPath": null,
+                          "restartPolicyMaxRetries": 10,
+                          "restartPolicyType": "ON_FAILURE",
+                          "runtime": "V2",
+                          "sleepApplication": false,
+                          "startCommand": "/bin/sh -c \"rm -rf $RAILWAY_VOLUME_MOUNT_PATH/lost+found/ && exec docker-entrypoint.sh redis-server --requirepass $REDIS_PASSWORD --save 60 1 --dir $RAILWAY_VOLUME_MOUNT_PATH\"",
+                          "useLegacyStacker": false
+                        }
+                      },
+                      "volumeMounts": [
+                        "/data"
+                      ]
+                    },
+                    "status": "SUCCESS"
+                  },
+                  "nextCronRunAt": null,
+                  "numReplicas": null,
+                  "serviceId": "cfaefa90-7a94-46f0-a890-5818eb9ac34c",
+                  "serviceName": "Redis",
+                  "source": {
+                    "image": "redis:8.2.1",
+                    "repo": null
+                  },
+                  "startCommand": "/bin/sh -c \"rm -rf $RAILWAY_VOLUME_MOUNT_PATH/lost+found/ && exec docker-entrypoint.sh redis-server --requirepass $REDIS_PASSWORD --save 60 1 --dir $RAILWAY_VOLUME_MOUNT_PATH\""
+                }
+              },
+              {
+                "node": {
+                  "activeDeployments": [
+                    {
+                      "createdAt": "2026-08-08T14:11:47.145Z",
+                      "deploymentStopped": false,
+                      "id": "b799b590-a114-4f31-8abe-41c846672fcd",
+                      "instances": [
+                        {
+                          "id": "f8b9161e-a3b6-4b20-a74a-981d14d98f04",
+                          "status": "RUNNING"
+                        }
+                      ],
+                      "meta": {
+                        "buildOnly": false,
+                        "cliAgentSessionId": "019fddc5-e294-7b90-af09-1d2c2243786b",
+                        "cliCaller": "skill:use-railway@1.3.7",
+                        "cliMessage": "prod dedicated ai_orchestration worker flags false 0e8e593",
+                        "fileServiceManifest": {},
+                        "imageDigest": "sha256:a4b362101e8656fe8e6ee27fdfcd11a884d0b6c0ed87a34ef6728fb6f99066d5",
+                        "logsV2": true,
+                        "nixpacksProviders": [],
+                        "propertyFileMapping": {},
+                        "reason": "deploy",
+                        "rootDirectory": null,
+                        "runtime": "V2",
+                        "serviceManifest": {
+                          "build": {
+                            "buildCommand": null,
+                            "buildEnvironment": "V3",
+                            "builder": "DOCKERFILE",
+                            "dockerfilePath": "/Dockerfile",
+                            "nixpacksConfigPath": null,
+                            "nixpacksPlan": null,
+                            "watchPatterns": []
+                          },
+                          "deploy": {
+                            "cronSchedule": null,
+                            "drainingSeconds": null,
+                            "healthcheckPath": null,
+                            "healthcheckTimeout": null,
+                            "ipv6EgressEnabled": false,
+                            "limitOverride": null,
+                            "multiRegionConfig": {
+                              "sfo": {
+                                "numReplicas": 1
+                              }
+                            },
+                            "numReplicas": 1,
+                            "overlapSeconds": null,
+                            "preDeployCommand": null,
+                            "region": null,
+                            "registryCredentials": null,
+                            "requiredMountPath": null,
+                            "restartPolicyMaxRetries": 10,
+                            "restartPolicyType": "ON_FAILURE",
+                            "runtime": "V2",
+                            "sleepApplication": false,
+                            "startCommand": null,
+                            "useLegacyStacker": false
+                          }
+                        },
+                        "volumeMounts": []
+                      },
+                      "status": "SUCCESS"
+                    }
+                  ],
+                  "cronSchedule": null,
+                  "domains": {
+                    "customDomains": [],
+                    "serviceDomains": []
+                  },
+                  "environmentId": "8e7bba37-1dc2-4f78-b549-248bbb3ec29d",
+                  "id": "4b9c37cc-6dd8-42f5-825e-d7daf9176ef2",
+                  "latestDeployment": {
+                    "canRedeploy": true,
+                    "createdAt": "2026-08-08T14:11:47.145Z",
+                    "deploymentStopped": false,
+                    "id": "b799b590-a114-4f31-8abe-41c846672fcd",
+                    "instances": [
+                      {
+                        "id": "f8b9161e-a3b6-4b20-a74a-981d14d98f04",
+                        "status": "RUNNING"
+                      }
+                    ],
+                    "meta": {
+                      "buildOnly": false,
+                      "cliAgentSessionId": "019fddc5-e294-7b90-af09-1d2c2243786b",
+                      "cliCaller": "skill:use-railway@1.3.7",
+                      "cliMessage": "prod dedicated ai_orchestration worker flags false 0e8e593",
+                      "fileServiceManifest": {},
+                      "imageDigest": "sha256:a4b362101e8656fe8e6ee27fdfcd11a884d0b6c0ed87a34ef6728fb6f99066d5",
+                      "logsV2": true,
+                      "nixpacksProviders": [],
+                      "propertyFileMapping": {},
+                      "reason": "deploy",
+                      "rootDirectory": null,
+                      "runtime": "V2",
+                      "serviceManifest": {
+                        "build": {
+                          "buildCommand": null,
+                          "buildEnvironment": "V3",
+                          "builder": "DOCKERFILE",
+                          "dockerfilePath": "/Dockerfile",
+                          "nixpacksConfigPath": null,
+                          "nixpacksPlan": null,
+                          "watchPatterns": []
+                        },
+                        "deploy": {
+                          "cronSchedule": null,
+                          "drainingSeconds": null,
+                          "healthcheckPath": null,
+                          "healthcheckTimeout": null,
+                          "ipv6EgressEnabled": false,
+                          "limitOverride": null,
+                          "multiRegionConfig": {
+                            "sfo": {
+                              "numReplicas": 1
+                            }
+                          },
+                          "numReplicas": 1,
+                          "overlapSeconds": null,
+                          "preDeployCommand": null,
+                          "region": null,
+                          "registryCredentials": null,
+                          "requiredMountPath": null,
+                          "restartPolicyMaxRetries": 10,
+                          "restartPolicyType": "ON_FAILURE",
+                          "runtime": "V2",
+                          "sleepApplication": false,
+                          "startCommand": null,
+                          "useLegacyStacker": false
+                        }
+                      },
+                      "volumeMounts": []
+                    },
+                    "status": "SUCCESS"
+                  },
+                  "nextCronRunAt": null,
+                  "numReplicas": null,
+                  "serviceId": "ee63635c-b20d-4425-aef8-c7cc8da78769",
+                  "serviceName": "scalpyn-langgraph-worker",
+                  "source": {
+                    "image": null,
+                    "repo": null
+                  },
+                  "startCommand": null
+                }
+              },
+              {
+                "node": {
+                  "activeDeployments": [
+                    {
+                      "createdAt": "2026-08-08T00:28:48.681Z",
+                      "deploymentStopped": false,
+                      "id": "0d5d8cd5-2212-499e-99fe-c37488b0baaa",
+                      "instances": [
+                        {
+                          "id": "4b08ad41-7e5e-42a1-a565-26f8de1aa078",
+                          "status": "RUNNING"
+                        }
+                      ],
+                      "meta": {
+                        "buildOnly": false,
+                        "cliAgentSessionId": "railway-skill-20260807-systemic-ai-prod-019fddc5",
+                        "cliCaller": "skill:use-railway@1.3.7",
+                        "cliMessage": "Systemic AI foundation 0d712e0",
+                        "fileServiceManifest": {},
+                        "imageDigest": "sha256:b5e4d8e5a5f3d8e8fae0577fb3f1d82e7dce05de166cb6745415339b6e983f9e",
+                        "logsV2": true,
+                        "nixpacksProviders": [],
+                        "propertyFileMapping": {},
+                        "reason": "deploy",
+                        "rootDirectory": "backend",
+                        "runtime": "V2",
+                        "serviceManifest": {
+                          "build": {
+                            "buildCommand": null,
+                            "buildEnvironment": "V3",
+                            "builder": "DOCKERFILE",
+                            "dockerfilePath": "Dockerfile",
+                            "nixpacksConfigPath": null,
+                            "nixpacksPlan": null,
+                            "watchPatterns": []
+                          },
+                          "deploy": {
+                            "cronSchedule": null,
+                            "drainingSeconds": null,
+                            "healthcheckPath": null,
+                            "healthcheckTimeout": null,
+                            "ipv6EgressEnabled": false,
+                            "limitOverride": null,
+                            "multiRegionConfig": {
+                              "sfo": {
+                                "numReplicas": 1
+                              }
+                            },
+                            "numReplicas": 1,
+                            "overlapSeconds": null,
+                            "preDeployCommand": null,
+                            "region": null,
+                            "registryCredentials": null,
+                            "requiredMountPath": null,
+                            "restartPolicyMaxRetries": 10,
+                            "restartPolicyType": "ON_FAILURE",
+                            "runtime": "V2",
+                            "sleepApplication": false,
+                            "startCommand": null,
+                            "useLegacyStacker": false
+                          }
+                        },
+                        "volumeMounts": []
+                      },
+                      "status": "SUCCESS"
+                    }
+                  ],
+                  "cronSchedule": null,
+                  "domains": {
+                    "customDomains": [],
+                    "serviceDomains": []
+                  },
+                  "environmentId": "8e7bba37-1dc2-4f78-b549-248bbb3ec29d",
+                  "id": "62d002ea-0bdc-4f4c-b383-7ea1d2b9bc7b",
+                  "latestDeployment": {
+                    "canRedeploy": true,
+                    "createdAt": "2026-08-08T00:28:48.681Z",
+                    "deploymentStopped": false,
+                    "id": "0d5d8cd5-2212-499e-99fe-c37488b0baaa",
+                    "instances": [
+                      {
+                        "id": "4b08ad41-7e5e-42a1-a565-26f8de1aa078",
+                        "status": "RUNNING"
+                      }
+                    ],
+                    "meta": {
+                      "buildOnly": false,
+                      "cliAgentSessionId": "railway-skill-20260807-systemic-ai-prod-019fddc5",
+                      "cliCaller": "skill:use-railway@1.3.7",
+                      "cliMessage": "Systemic AI foundation 0d712e0",
+                      "fileServiceManifest": {},
+                      "imageDigest": "sha256:b5e4d8e5a5f3d8e8fae0577fb3f1d82e7dce05de166cb6745415339b6e983f9e",
+                      "logsV2": true,
+                      "nixpacksProviders": [],
+                      "propertyFileMapping": {},
+                      "reason": "deploy",
+                      "rootDirectory": "backend",
+                      "runtime": "V2",
+                      "serviceManifest": {
+                        "build": {
+                          "buildCommand": null,
+                          "buildEnvironment": "V3",
+                          "builder": "DOCKERFILE",
+                          "dockerfilePath": "Dockerfile",
+                          "nixpacksConfigPath": null,
+                          "nixpacksPlan": null,
+                          "watchPatterns": []
+                        },
+                        "deploy": {
+                          "cronSchedule": null,
+                          "drainingSeconds": null,
+                          "healthcheckPath": null,
+                          "healthcheckTimeout": null,
+                          "ipv6EgressEnabled": false,
+                          "limitOverride": null,
+                          "multiRegionConfig": {
+                            "sfo": {
+                              "numReplicas": 1
+                            }
+                          },
+                          "numReplicas": 1,
+                          "overlapSeconds": null,
+                          "preDeployCommand": null,
+                          "region": null,
+                          "registryCredentials": null,
+                          "requiredMountPath": null,
+                          "restartPolicyMaxRetries": 10,
+                          "restartPolicyType": "ON_FAILURE",
+                          "runtime": "V2",
+                          "sleepApplication": false,
+                          "startCommand": null,
+                          "useLegacyStacker": false
+                        }
+                      },
+                      "volumeMounts": []
+                    },
+                    "status": "SUCCESS"
+                  },
+                  "nextCronRunAt": null,
+                  "numReplicas": null,
+                  "serviceId": "e2375cdd-f50b-4a74-947b-7f8448131648",
+                  "serviceName": "scalpyn-worker-compute",
+                  "source": {
+                    "image": null,
+                    "repo": "vasconcelosbr/scalpyn"
+                  },
+                  "startCommand": null
+                }
+              },
+              {
+                "node": {
+                  "activeDeployments": [
+                    {
+                      "createdAt": "2026-08-08T14:08:22.483Z",
+                      "deploymentStopped": false,
+                      "id": "92a4a71b-18d7-49c7-9fd9-eb91b976b7ab",
+                      "instances": [
+                        {
+                          "id": "0b8c32a2-e89c-412d-bdd6-bd482f8580e0",
+                          "status": "RUNNING"
+                        }
+                      ],
+                      "meta": {
+                        "buildOnly": false,
+                        "cliAgentSessionId": "019fddc5-e294-7b90-af09-1d2c2243786b",
+                        "cliCaller": "skill:use-railway@1.3.7",
+                        "cliMessage": "prod controlled LangGraph runtime repository root flags false 0e8e593",
+                        "fileServiceManifest": {},
+                        "imageDigest": "sha256:0bf2c32e93b8865d1754b8306b6869564d1a5c9dd9ad82d6c24c235c4cae4eca",
+                        "logsV2": true,
+                        "nixpacksProviders": [],
+                        "propertyFileMapping": {},
+                        "reason": "deploy",
+                        "rootDirectory": "backend",
+                        "runtime": "V2",
+                        "serviceManifest": {
+                          "build": {
+                            "buildCommand": null,
+                            "buildEnvironment": "V3",
+                            "builder": "DOCKERFILE",
+                            "dockerfilePath": "Dockerfile",
+                            "nixpacksConfigPath": null,
+                            "nixpacksPlan": null,
+                            "watchPatterns": []
+                          },
+                          "deploy": {
+                            "cronSchedule": null,
+                            "drainingSeconds": null,
+                            "healthcheckPath": null,
+                            "healthcheckTimeout": null,
+                            "ipv6EgressEnabled": false,
+                            "limitOverride": null,
+                            "multiRegionConfig": {
+                              "sfo": {
+                                "numReplicas": 1
+                              }
+                            },
+                            "numReplicas": 1,
+                            "overlapSeconds": null,
+                            "preDeployCommand": null,
+                            "region": null,
+                            "registryCredentials": null,
+                            "requiredMountPath": null,
+                            "restartPolicyMaxRetries": 10,
+                            "restartPolicyType": "ON_FAILURE",
+                            "runtime": "V2",
+                            "sleepApplication": false,
+                            "startCommand": "bash -c 'WORKER_QUEUES= exec /app/start.sh'",
+                            "useLegacyStacker": false
+                          }
+                        },
+                        "volumeMounts": []
+                      },
+                      "status": "SUCCESS"
+                    }
+                  ],
+                  "cronSchedule": null,
+                  "domains": {
+                    "customDomains": [],
+                    "serviceDomains": [
+                      {
+                        "domain": "scalpyn-production.up.railway.app",
+                        "id": "0f526d3f-c9c9-4111-983f-393a30be7b83",
+                        "targetPort": null
+                      }
+                    ]
+                  },
+                  "environmentId": "8e7bba37-1dc2-4f78-b549-248bbb3ec29d",
+                  "id": "63b4391a-2b98-4fe7-8392-62b63189bd6b",
+                  "latestDeployment": {
+                    "canRedeploy": true,
+                    "createdAt": "2026-08-08T14:08:22.483Z",
+                    "deploymentStopped": false,
+                    "id": "92a4a71b-18d7-49c7-9fd9-eb91b976b7ab",
+                    "instances": [
+                      {
+                        "id": "0b8c32a2-e89c-412d-bdd6-bd482f8580e0",
+                        "status": "RUNNING"
+                      }
+                    ],
+                    "meta": {
+                      "buildOnly": false,
+                      "cliAgentSessionId": "019fddc5-e294-7b90-af09-1d2c2243786b",
+                      "cliCaller": "skill:use-railway@1.3.7",
+                      "cliMessage": "prod controlled LangGraph runtime repository root flags false 0e8e593",
+                      "fileServiceManifest": {},
+                      "imageDigest": "sha256:0bf2c32e93b8865d1754b8306b6869564d1a5c9dd9ad82d6c24c235c4cae4eca",
+                      "logsV2": true,
+                      "nixpacksProviders": [],
+                      "propertyFileMapping": {},
+                      "reason": "deploy",
+                      "rootDirectory": "backend",
+                      "runtime": "V2",
+                      "serviceManifest": {
+                        "build": {
+                          "buildCommand": null,
+                          "buildEnvironment": "V3",
+                          "builder": "DOCKERFILE",
+                          "dockerfilePath": "Dockerfile",
+                          "nixpacksConfigPath": null,
+                          "nixpacksPlan": null,
+                          "watchPatterns": []
+                        },
+                        "deploy": {
+                          "cronSchedule": null,
+                          "drainingSeconds": null,
+                          "healthcheckPath": null,
+                          "healthcheckTimeout": null,
+                          "ipv6EgressEnabled": false,
+                          "limitOverride": null,
+                          "multiRegionConfig": {
+                            "sfo": {
+                              "numReplicas": 1
+                            }
+                          },
+                          "numReplicas": 1,
+                          "overlapSeconds": null,
+                          "preDeployCommand": null,
+                          "region": null,
+                          "registryCredentials": null,
+                          "requiredMountPath": null,
+                          "restartPolicyMaxRetries": 10,
+                          "restartPolicyType": "ON_FAILURE",
+                          "runtime": "V2",
+                          "sleepApplication": false,
+                          "startCommand": "bash -c 'WORKER_QUEUES= exec /app/start.sh'",
+                          "useLegacyStacker": false
+                        }
+                      },
+                      "volumeMounts": []
+                    },
+                    "status": "SUCCESS"
+                  },
+                  "nextCronRunAt": null,
+                  "numReplicas": null,
+                  "serviceId": "486ae90f-81b9-4593-aa31-6e24e67821b3",
+                  "serviceName": "scalpyn",
+                  "source": {
+                    "image": null,
+                    "repo": "vasconcelosbr/scalpyn"
+                  },
+                  "startCommand": "bash -c 'WORKER_QUEUES= exec /app/start.sh'"
+                }
+              },
+              {
+                "node": {
+                  "activeDeployments": [
+                    {
+                      "createdAt": "2026-08-08T00:28:48.847Z",
+                      "deploymentStopped": false,
+                      "id": "b0ee107f-d29b-46d0-a3f0-66ccf7016eb1",
+                      "instances": [
+                        {
+                          "id": "4a408e98-8860-4194-a535-e391662d05e8",
+                          "status": "RUNNING"
+                        }
+                      ],
+                      "meta": {
+                        "buildOnly": false,
+                        "cliAgentSessionId": "railway-skill-20260807-systemic-ai-prod-019fddc5",
+                        "cliCaller": "skill:use-railway@1.3.7",
+                        "cliMessage": "Systemic AI foundation 0d712e0",
+                        "fileServiceManifest": {},
+                        "imageDigest": "sha256:3a1b053bec0a67abb24a4dc81664ec53f1e6bed3d52abda26fc46fcce80d0e26",
+                        "logsV2": true,
+                        "nixpacksProviders": [],
+                        "propertyFileMapping": {},
+                        "reason": "deploy",
+                        "rootDirectory": "backend",
+                        "runtime": "V2",
+                        "serviceManifest": {
+                          "build": {
+                            "buildCommand": null,
+                            "buildEnvironment": "V3",
+                            "builder": "DOCKERFILE",
+                            "dockerfilePath": "Dockerfile",
+                            "nixpacksConfigPath": null,
+                            "nixpacksPlan": null,
+                            "watchPatterns": []
+                          },
+                          "deploy": {
+                            "cronSchedule": null,
+                            "drainingSeconds": null,
+                            "healthcheckPath": null,
+                            "healthcheckTimeout": null,
+                            "ipv6EgressEnabled": false,
+                            "limitOverride": null,
+                            "multiRegionConfig": {
+                              "sfo": {
+                                "numReplicas": 1
+                              }
+                            },
+                            "numReplicas": 1,
+                            "overlapSeconds": null,
+                            "preDeployCommand": null,
+                            "region": null,
+                            "registryCredentials": null,
+                            "requiredMountPath": null,
+                            "restartPolicyMaxRetries": 10,
+                            "restartPolicyType": "ON_FAILURE",
+                            "runtime": "V2",
+                            "sleepApplication": false,
+                            "startCommand": null,
+                            "useLegacyStacker": false
+                          }
+                        },
+                        "volumeMounts": []
+                      },
+                      "status": "SUCCESS"
+                    }
+                  ],
+                  "cronSchedule": null,
+                  "domains": {
+                    "customDomains": [],
+                    "serviceDomains": []
+                  },
+                  "environmentId": "8e7bba37-1dc2-4f78-b549-248bbb3ec29d",
+                  "id": "7c2c1f77-577a-45e0-a809-ac0b08f022fc",
+                  "latestDeployment": {
+                    "canRedeploy": true,
+                    "createdAt": "2026-08-08T00:28:48.847Z",
+                    "deploymentStopped": false,
+                    "id": "b0ee107f-d29b-46d0-a3f0-66ccf7016eb1",
+                    "instances": [
+                      {
+                        "id": "4a408e98-8860-4194-a535-e391662d05e8",
+                        "status": "RUNNING"
+                      }
+                    ],
+                    "meta": {
+                      "buildOnly": false,
+                      "cliAgentSessionId": "railway-skill-20260807-systemic-ai-prod-019fddc5",
+                      "cliCaller": "skill:use-railway@1.3.7",
+                      "cliMessage": "Systemic AI foundation 0d712e0",
+                      "fileServiceManifest": {},
+                      "imageDigest": "sha256:3a1b053bec0a67abb24a4dc81664ec53f1e6bed3d52abda26fc46fcce80d0e26",
+                      "logsV2": true,
+                      "nixpacksProviders": [],
+                      "propertyFileMapping": {},
+                      "reason": "deploy",
+                      "rootDirectory": "backend",
+                      "runtime": "V2",
+                      "serviceManifest": {
+                        "build": {
+                          "buildCommand": null,
+                          "buildEnvironment": "V3",
+                          "builder": "DOCKERFILE",
+                          "dockerfilePath": "Dockerfile",
+                          "nixpacksConfigPath": null,
+                          "nixpacksPlan": null,
+                          "watchPatterns": []
+                        },
+                        "deploy": {
+                          "cronSchedule": null,
+                          "drainingSeconds": null,
+                          "healthcheckPath": null,
+                          "healthcheckTimeout": null,
+                          "ipv6EgressEnabled": false,
+                          "limitOverride": null,
+                          "multiRegionConfig": {
+                            "sfo": {
+                              "numReplicas": 1
+                            }
+                          },
+                          "numReplicas": 1,
+                          "overlapSeconds": null,
+                          "preDeployCommand": null,
+                          "region": null,
+                          "registryCredentials": null,
+                          "requiredMountPath": null,
+                          "restartPolicyMaxRetries": 10,
+                          "restartPolicyType": "ON_FAILURE",
+                          "runtime": "V2",
+                          "sleepApplication": false,
+                          "startCommand": null,
+                          "useLegacyStacker": false
+                        }
+                      },
+                      "volumeMounts": []
+                    },
+                    "status": "SUCCESS"
+                  },
+                  "nextCronRunAt": null,
+                  "numReplicas": null,
+                  "serviceId": "b8f75a38-d687-44cf-a6be-f2f36ddf4a6a",
+                  "serviceName": "scalpyn-beat",
+                  "source": {
+                    "image": null,
+                    "repo": "vasconcelosbr/scalpyn"
+                  },
+                  "startCommand": null
+                }
+              },
+              {
+                "node": {
+                  "activeDeployments": [
+                    {
+                      "createdAt": "2026-08-08T00:28:48.492Z",
+                      "deploymentStopped": false,
+                      "id": "43752f3e-526f-4ddd-86b4-674f6a9a0a53",
+                      "instances": [
+                        {
+                          "id": "aae042c8-c35a-451d-8f99-5256ecc4d9cc",
+                          "status": "RUNNING"
+                        }
+                      ],
+                      "meta": {
+                        "buildOnly": false,
+                        "cliAgentSessionId": "railway-skill-20260807-systemic-ai-prod-019fddc5",
+                        "cliCaller": "skill:use-railway@1.3.7",
+                        "cliMessage": "Systemic AI foundation 0d712e0",
+                        "fileServiceManifest": {},
+                        "imageDigest": "sha256:b83fd4c928f6fe63fde3db987ad5e6a1e8cd7e018a7b547f9d4b0b05941234ad",
+                        "logsV2": true,
+                        "nixpacksProviders": [],
+                        "propertyFileMapping": {},
+                        "reason": "deploy",
+                        "rootDirectory": "backend",
+                        "runtime": "V2",
+                        "serviceManifest": {
+                          "build": {
+                            "buildCommand": null,
+                            "buildEnvironment": "V3",
+                            "builder": "DOCKERFILE",
+                            "dockerfilePath": "Dockerfile",
+                            "nixpacksConfigPath": null,
+                            "nixpacksPlan": null,
+                            "watchPatterns": []
+                          },
+                          "deploy": {
+                            "cronSchedule": null,
+                            "drainingSeconds": null,
+                            "healthcheckPath": null,
+                            "healthcheckTimeout": null,
+                            "ipv6EgressEnabled": false,
+                            "limitOverride": null,
+                            "multiRegionConfig": {
+                              "sfo": {
+                                "numReplicas": 1
+                              }
+                            },
+                            "numReplicas": 1,
+                            "overlapSeconds": null,
+                            "preDeployCommand": null,
+                            "region": null,
+                            "registryCredentials": null,
+                            "requiredMountPath": null,
+                            "restartPolicyMaxRetries": 10,
+                            "restartPolicyType": "ON_FAILURE",
+                            "runtime": "V2",
+                            "sleepApplication": false,
+                            "startCommand": null,
+                            "useLegacyStacker": false
+                          }
+                        },
+                        "volumeMounts": []
+                      },
+                      "status": "SUCCESS"
+                    }
+                  ],
+                  "cronSchedule": null,
+                  "domains": {
+                    "customDomains": [],
+                    "serviceDomains": []
+                  },
+                  "environmentId": "8e7bba37-1dc2-4f78-b549-248bbb3ec29d",
+                  "id": "f6eeaf77-8fc3-4990-b6a1-3ac2a0bb5a85",
+                  "latestDeployment": {
+                    "canRedeploy": true,
+                    "createdAt": "2026-08-08T00:28:48.492Z",
+                    "deploymentStopped": false,
+                    "id": "43752f3e-526f-4ddd-86b4-674f6a9a0a53",
+                    "instances": [
+                      {
+                        "id": "aae042c8-c35a-451d-8f99-5256ecc4d9cc",
+                        "status": "RUNNING"
+                      }
+                    ],
+                    "meta": {
+                      "buildOnly": false,
+                      "cliAgentSessionId": "railway-skill-20260807-systemic-ai-prod-019fddc5",
+                      "cliCaller": "skill:use-railway@1.3.7",
+                      "cliMessage": "Systemic AI foundation 0d712e0",
+                      "fileServiceManifest": {},
+                      "imageDigest": "sha256:b83fd4c928f6fe63fde3db987ad5e6a1e8cd7e018a7b547f9d4b0b05941234ad",
+                      "logsV2": true,
+                      "nixpacksProviders": [],
+                      "propertyFileMapping": {},
+                      "reason": "deploy",
+                      "rootDirectory": "backend",
+                      "runtime": "V2",
+                      "serviceManifest": {
+                        "build": {
+                          "buildCommand": null,
+                          "buildEnvironment": "V3",
+                          "builder": "DOCKERFILE",
+                          "dockerfilePath": "Dockerfile",
+                          "nixpacksConfigPath": null,
+                          "nixpacksPlan": null,
+                          "watchPatterns": []
+                        },
+                        "deploy": {
+                          "cronSchedule": null,
+                          "drainingSeconds": null,
+                          "healthcheckPath": null,
+                          "healthcheckTimeout": null,
+                          "ipv6EgressEnabled": false,
+                          "limitOverride": null,
+                          "multiRegionConfig": {
+                            "sfo": {
+                              "numReplicas": 1
+                            }
+                          },
+                          "numReplicas": 1,
+                          "overlapSeconds": null,
+                          "preDeployCommand": null,
+                          "region": null,
+                          "registryCredentials": null,
+                          "requiredMountPath": null,
+                          "restartPolicyMaxRetries": 10,
+                          "restartPolicyType": "ON_FAILURE",
+                          "runtime": "V2",
+                          "sleepApplication": false,
+                          "startCommand": null,
+                          "useLegacyStacker": false
+                        }
+                      },
+                      "volumeMounts": []
+                    },
+                    "status": "SUCCESS"
+                  },
+                  "nextCronRunAt": null,
+                  "numReplicas": null,
+                  "serviceId": "54dd84f6-4a21-46d2-a586-7c2f507b646c",
+                  "serviceName": "scalpyn-worker-structural",
+                  "source": {
+                    "image": null,
+                    "repo": "vasconcelosbr/scalpyn"
+                  },
+                  "startCommand": null
+                }
+              }
+            ]
+          },
+          "unmergedChangesCount": null,
+          "volumeInstances": {
+            "edges": [
+              {
+                "node": {
+                  "currentSizeMB": 15945.572352,
+                  "deletedAt": null,
+                  "environmentId": "8e7bba37-1dc2-4f78-b549-248bbb3ec29d",
+                  "isPendingDeletion": false,
+                  "mountPath": "/var/lib/postgresql/data",
+                  "serviceId": "b5a65c6b-1c62-4446-b747-67c7320cfb26",
+                  "sizeMB": 30000,
+                  "state": "READY",
+                  "volume": {
+                    "id": "39588042-8513-4cd8-a764-422fbc05353d",
+                    "name": "postgres-volume"
+                  }
+                }
+              },
+              {
+                "node": {
+                  "currentSizeMB": 50.126848,
+                  "deletedAt": null,
+                  "environmentId": "8e7bba37-1dc2-4f78-b549-248bbb3ec29d",
+                  "isPendingDeletion": false,
+                  "mountPath": "/data",
+                  "serviceId": "cfaefa90-7a94-46f0-a890-5818eb9ac34c",
+                  "sizeMB": 500,
+                  "state": "READY",
+                  "volume": {
+                    "id": "c2272f6f-1c7c-44b2-b122-60c778905413",
+                    "name": "redis-volume"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "node": {
+          "canAccess": true,
+          "deletedAt": null,
+          "id": "c74f5335-58e6-4d9c-8219-a7c8ebb42627",
+          "name": "systemic-ai-staging-20260807",
+          "serviceInstances": {
+            "edges": [
+              {
+                "node": {
+                  "activeDeployments": [
+                    {
+                      "createdAt": "2026-08-08T03:07:29.454Z",
+                      "deploymentStopped": false,
+                      "id": "8168dd84-73a4-4a32-9eaf-839562a83479",
+                      "instances": [
+                        {
+                          "id": "d579d191-fa09-4398-881d-18a6ca59f559",
+                          "status": "RUNNING"
+                        }
+                      ],
+                      "meta": {
+                        "image": "redis:8.2.1",
+                        "imageDigest": "sha256:5fa2edb1e408fa8235e6db8fab01d1afaaae96c9403ba67b70feceb8661e8621",
+                        "logsV2": true,
+                        "patchId": "26f8f31e-c818-4f9e-9af4-363c256ef49b",
+                        "reason": "deploy",
+                        "runtime": "V2",
+                        "serviceManifest": {
+                          "build": {
+                            "buildCommand": null,
+                            "buildEnvironment": "V3",
+                            "builder": "RAILPACK",
+                            "dockerfilePath": null,
+                            "nixpacksConfigPath": null,
+                            "nixpacksPlan": null,
+                            "watchPatterns": []
+                          },
+                          "deploy": {
+                            "cronSchedule": null,
+                            "drainingSeconds": null,
+                            "healthcheckPath": null,
+                            "healthcheckTimeout": null,
+                            "ipv6EgressEnabled": false,
+                            "limitOverride": null,
+                            "multiRegionConfig": {
+                              "sfo": {
+                                "numReplicas": 1
+                              }
+                            },
+                            "numReplicas": 1,
+                            "overlapSeconds": null,
+                            "preDeployCommand": null,
+                            "region": null,
+                            "registryCredentials": null,
+                            "requiredMountPath": null,
+                            "restartPolicyMaxRetries": 10,
+                            "restartPolicyType": "ON_FAILURE",
+                            "runtime": "V2",
+                            "sleepApplication": false,
+                            "startCommand": "/bin/sh -c \"rm -rf $RAILWAY_VOLUME_MOUNT_PATH/lost+found/ && exec docker-entrypoint.sh redis-server --requirepass $REDIS_PASSWORD --save 60 1 --dir $RAILWAY_VOLUME_MOUNT_PATH\"",
+                            "useLegacyStacker": false
+                          }
+                        },
+                        "volumeMounts": [
+                          "/data"
+                        ]
+                      },
+                      "status": "SUCCESS"
+                    }
+                  ],
+                  "cronSchedule": null,
+                  "domains": {
+                    "customDomains": [],
+                    "serviceDomains": []
+                  },
+                  "environmentId": "c74f5335-58e6-4d9c-8219-a7c8ebb42627",
+                  "id": "d2b9c90b-4294-457a-8242-da6d5c777f0b",
+                  "latestDeployment": {
+                    "canRedeploy": true,
+                    "createdAt": "2026-08-08T03:07:29.454Z",
+                    "deploymentStopped": false,
+                    "id": "8168dd84-73a4-4a32-9eaf-839562a83479",
+                    "instances": [
+                      {
+                        "id": "d579d191-fa09-4398-881d-18a6ca59f559",
+                        "status": "RUNNING"
+                      }
+                    ],
+                    "meta": {
+                      "image": "redis:8.2.1",
+                      "imageDigest": "sha256:5fa2edb1e408fa8235e6db8fab01d1afaaae96c9403ba67b70feceb8661e8621",
+                      "logsV2": true,
+                      "patchId": "26f8f31e-c818-4f9e-9af4-363c256ef49b",
+                      "reason": "deploy",
+                      "runtime": "V2",
+                      "serviceManifest": {
+                        "build": {
+                          "buildCommand": null,
+                          "buildEnvironment": "V3",
+                          "builder": "RAILPACK",
+                          "dockerfilePath": null,
+                          "nixpacksConfigPath": null,
+                          "nixpacksPlan": null,
+                          "watchPatterns": []
+                        },
+                        "deploy": {
+                          "cronSchedule": null,
+                          "drainingSeconds": null,
+                          "healthcheckPath": null,
+                          "healthcheckTimeout": null,
+                          "ipv6EgressEnabled": false,
+                          "limitOverride": null,
+                          "multiRegionConfig": {
+                            "sfo": {
+                              "numReplicas": 1
+                            }
+                          },
+                          "numReplicas": 1,
+                          "overlapSeconds": null,
+                          "preDeployCommand": null,
+                          "region": null,
+                          "registryCredentials": null,
+                          "requiredMountPath": null,
+                          "restartPolicyMaxRetries": 10,
+                          "restartPolicyType": "ON_FAILURE",
+                          "runtime": "V2",
+                          "sleepApplication": false,
+                          "startCommand": "/bin/sh -c \"rm -rf $RAILWAY_VOLUME_MOUNT_PATH/lost+found/ && exec docker-entrypoint.sh redis-server --requirepass $REDIS_PASSWORD --save 60 1 --dir $RAILWAY_VOLUME_MOUNT_PATH\"",
+                          "useLegacyStacker": false
+                        }
+                      },
+                      "volumeMounts": [
+                        "/data"
+                      ]
+                    },
+                    "status": "SUCCESS"
+                  },
+                  "nextCronRunAt": null,
+                  "numReplicas": 1,
+                  "serviceId": "e7657f1a-86b7-4a5b-9007-9a308e530f71",
+                  "serviceName": "Redis-JWRz",
+                  "source": {
+                    "image": "redis:8.2.1",
+                    "repo": null
+                  },
+                  "startCommand": "/bin/sh -c \"rm -rf $RAILWAY_VOLUME_MOUNT_PATH/lost+found/ && exec docker-entrypoint.sh redis-server --requirepass $REDIS_PASSWORD --save 60 1 --dir $RAILWAY_VOLUME_MOUNT_PATH\""
+                }
+              },
+              {
+                "node": {
+                  "activeDeployments": [
+                    {
+                      "createdAt": "2026-08-09T00:56:33.030Z",
+                      "deploymentStopped": false,
+                      "id": "b2f349ea-ae64-451c-89ea-9213613dd8f3",
+                      "instances": [
+                        {
+                          "id": "5a990a4c-7205-4578-9da3-5d653bf727ab",
+                          "status": "RUNNING"
+                        }
+                      ],
+                      "meta": {
+                        "buildOnly": false,
+                        "cliAgentSessionId": "scalpyn-mm-20260808-01",
+                        "cliCaller": "skill:use-railway@1.3.7",
+                        "cliMessage": "align dedicated AI worker with staging runtime",
+                        "fileServiceManifest": {},
+                        "imageDigest": "sha256:1a12318cc712a7554209dde34dd9fd33b7189b24abd9736e33a63d2a5b5d7088",
+                        "logsV2": true,
+                        "nixpacksProviders": [],
+                        "propertyFileMapping": {},
+                        "reason": "deploy",
+                        "rootDirectory": null,
+                        "runtime": "V2",
+                        "serviceManifest": {
+                          "build": {
+                            "buildCommand": null,
+                            "buildEnvironment": "V3",
+                            "builder": "DOCKERFILE",
+                            "dockerfilePath": "/Dockerfile",
+                            "nixpacksConfigPath": null,
+                            "nixpacksPlan": null,
+                            "watchPatterns": []
+                          },
+                          "deploy": {
+                            "cronSchedule": null,
+                            "drainingSeconds": null,
+                            "healthcheckPath": null,
+                            "healthcheckTimeout": null,
+                            "ipv6EgressEnabled": false,
+                            "limitOverride": null,
+                            "multiRegionConfig": {
+                              "sfo": {
+                                "numReplicas": 1
+                              }
+                            },
+                            "numReplicas": 1,
+                            "overlapSeconds": null,
+                            "preDeployCommand": null,
+                            "region": null,
+                            "registryCredentials": null,
+                            "requiredMountPath": null,
+                            "restartPolicyMaxRetries": 10,
+                            "restartPolicyType": "ON_FAILURE",
+                            "runtime": "V2",
+                            "sleepApplication": false,
+                            "startCommand": null,
+                            "useLegacyStacker": false
+                          }
+                        },
+                        "volumeMounts": []
+                      },
+                      "status": "SUCCESS"
+                    }
+                  ],
+                  "cronSchedule": null,
+                  "domains": {
+                    "customDomains": [],
+                    "serviceDomains": []
+                  },
+                  "environmentId": "c74f5335-58e6-4d9c-8219-a7c8ebb42627",
+                  "id": "dd90e594-7f91-4681-9922-f2a84711c661",
+                  "latestDeployment": {
+                    "canRedeploy": true,
+                    "createdAt": "2026-08-09T00:56:33.030Z",
+                    "deploymentStopped": false,
+                    "id": "b2f349ea-ae64-451c-89ea-9213613dd8f3",
+                    "instances": [
+                      {
+                        "id": "5a990a4c-7205-4578-9da3-5d653bf727ab",
+                        "status": "RUNNING"
+                      }
+                    ],
+                    "meta": {
+                      "buildOnly": false,
+                      "cliAgentSessionId": "scalpyn-mm-20260808-01",
+                      "cliCaller": "skill:use-railway@1.3.7",
+                      "cliMessage": "align dedicated AI worker with staging runtime",
+                      "fileServiceManifest": {},
+                      "imageDigest": "sha256:1a12318cc712a7554209dde34dd9fd33b7189b24abd9736e33a63d2a5b5d7088",
+                      "logsV2": true,
+                      "nixpacksProviders": [],
+                      "propertyFileMapping": {},
+                      "reason": "deploy",
+                      "rootDirectory": null,
+                      "runtime": "V2",
+                      "serviceManifest": {
+                        "build": {
+                          "buildCommand": null,
+                          "buildEnvironment": "V3",
+                          "builder": "DOCKERFILE",
+                          "dockerfilePath": "/Dockerfile",
+                          "nixpacksConfigPath": null,
+                          "nixpacksPlan": null,
+                          "watchPatterns": []
+                        },
+                        "deploy": {
+                          "cronSchedule": null,
+                          "drainingSeconds": null,
+                          "healthcheckPath": null,
+                          "healthcheckTimeout": null,
+                          "ipv6EgressEnabled": false,
+                          "limitOverride": null,
+                          "multiRegionConfig": {
+                            "sfo": {
+                              "numReplicas": 1
+                            }
+                          },
+                          "numReplicas": 1,
+                          "overlapSeconds": null,
+                          "preDeployCommand": null,
+                          "region": null,
+                          "registryCredentials": null,
+                          "requiredMountPath": null,
+                          "restartPolicyMaxRetries": 10,
+                          "restartPolicyType": "ON_FAILURE",
+                          "runtime": "V2",
+                          "sleepApplication": false,
+                          "startCommand": null,
+                          "useLegacyStacker": false
+                        }
+                      },
+                      "volumeMounts": []
+                    },
+                    "status": "SUCCESS"
+                  },
+                  "nextCronRunAt": null,
+                  "numReplicas": null,
+                  "serviceId": "10bd1a86-e559-4229-afc2-4a60624b7b5c",
+                  "serviceName": "scalpyn-langgraph-staging-worker",
+                  "source": {
+                    "image": null,
+                    "repo": null
+                  },
+                  "startCommand": null
+                }
+              },
+              {
+                "node": {
+                  "activeDeployments": [
+                    {
+                      "createdAt": "2026-08-09T00:54:29.598Z",
+                      "deploymentStopped": false,
+                      "id": "a1ac48ce-b971-4fec-9ec7-d53498474dc4",
+                      "instances": [
+                        {
+                          "id": "b0234535-4f15-422a-8b3b-9a153731c26d",
+                          "status": "RUNNING"
+                        }
+                      ],
+                      "meta": {
+                        "buildOnly": false,
+                        "cliAgentSessionId": "scalpyn-mm-20260808-01",
+                        "cliCaller": "skill:use-railway@1.3.7",
+                        "cliMessage": "tenant authorized checkpoint namespace inspection",
+                        "fileServiceManifest": {},
+                        "ignoreWatchPatterns": true,
+                        "imageDigest": "sha256:036961a52186e15e1e515d5fc5ed7112366dab0b35b59375177eee558672af7d",
+                        "logsV2": true,
+                        "nixpacksProviders": [],
+                        "propertyFileMapping": {},
+                        "reason": "redeploy",
+                        "rootDirectory": null,
+                        "runtime": "V2",
+                        "serviceManifest": {
+                          "build": {
+                            "buildCommand": null,
+                            "buildEnvironment": "V3",
+                            "builder": "DOCKERFILE",
+                            "dockerfilePath": "/Dockerfile",
+                            "nixpacksConfigPath": null,
+                            "nixpacksPlan": null,
+                            "watchPatterns": []
+                          },
+                          "deploy": {
+                            "cronSchedule": null,
+                            "drainingSeconds": null,
+                            "healthcheckPath": null,
+                            "healthcheckTimeout": null,
+                            "ipv6EgressEnabled": false,
+                            "limitOverride": null,
+                            "multiRegionConfig": {
+                              "sfo": {
+                                "numReplicas": 1
+                              }
+                            },
+                            "numReplicas": 1,
+                            "overlapSeconds": null,
+                            "preDeployCommand": null,
+                            "region": null,
+                            "registryCredentials": null,
+                            "requiredMountPath": null,
+                            "restartPolicyMaxRetries": 10,
+                            "restartPolicyType": "ON_FAILURE",
+                            "runtime": "V2",
+                            "sleepApplication": false,
+                            "startCommand": null,
+                            "useLegacyStacker": false
+                          }
+                        },
+                        "volumeMounts": []
+                      },
+                      "status": "SUCCESS"
+                    }
+                  ],
+                  "cronSchedule": null,
+                  "domains": {
+                    "customDomains": [],
+                    "serviceDomains": [
+                      {
+                        "domain": "scalpyn-langgraph-staging-api-systemic-ai-staging-20260807.up.railway.app",
+                        "id": "f532cad3-ba58-49ca-ad39-78f5e55189c8",
+                        "targetPort": 8080
+                      }
+                    ]
+                  },
+                  "environmentId": "c74f5335-58e6-4d9c-8219-a7c8ebb42627",
+                  "id": "e98f95b0-36b5-4d61-b6c1-bb0867c62ac4",
+                  "latestDeployment": {
+                    "canRedeploy": true,
+                    "createdAt": "2026-08-09T00:54:29.598Z",
+                    "deploymentStopped": false,
+                    "id": "a1ac48ce-b971-4fec-9ec7-d53498474dc4",
+                    "instances": [
+                      {
+                        "id": "b0234535-4f15-422a-8b3b-9a153731c26d",
+                        "status": "RUNNING"
+                      }
+                    ],
+                    "meta": {
+                      "buildOnly": false,
+                      "cliAgentSessionId": "scalpyn-mm-20260808-01",
+                      "cliCaller": "skill:use-railway@1.3.7",
+                      "cliMessage": "tenant authorized checkpoint namespace inspection",
+                      "fileServiceManifest": {},
+                      "ignoreWatchPatterns": true,
+                      "imageDigest": "sha256:036961a52186e15e1e515d5fc5ed7112366dab0b35b59375177eee558672af7d",
+                      "logsV2": true,
+                      "nixpacksProviders": [],
+                      "propertyFileMapping": {},
+                      "reason": "redeploy",
+                      "rootDirectory": null,
+                      "runtime": "V2",
+                      "serviceManifest": {
+                        "build": {
+                          "buildCommand": null,
+                          "buildEnvironment": "V3",
+                          "builder": "DOCKERFILE",
+                          "dockerfilePath": "/Dockerfile",
+                          "nixpacksConfigPath": null,
+                          "nixpacksPlan": null,
+                          "watchPatterns": []
+                        },
+                        "deploy": {
+                          "cronSchedule": null,
+                          "drainingSeconds": null,
+                          "healthcheckPath": null,
+                          "healthcheckTimeout": null,
+                          "ipv6EgressEnabled": false,
+                          "limitOverride": null,
+                          "multiRegionConfig": {
+                            "sfo": {
+                              "numReplicas": 1
+                            }
+                          },
+                          "numReplicas": 1,
+                          "overlapSeconds": null,
+                          "preDeployCommand": null,
+                          "region": null,
+                          "registryCredentials": null,
+                          "requiredMountPath": null,
+                          "restartPolicyMaxRetries": 10,
+                          "restartPolicyType": "ON_FAILURE",
+                          "runtime": "V2",
+                          "sleepApplication": false,
+                          "startCommand": null,
+                          "useLegacyStacker": false
+                        }
+                      },
+                      "volumeMounts": []
+                    },
+                    "status": "SUCCESS"
+                  },
+                  "nextCronRunAt": null,
+                  "numReplicas": null,
+                  "serviceId": "e366856b-677a-4bc9-b4b0-93ed03dfc7af",
+                  "serviceName": "scalpyn-langgraph-staging-api",
+                  "source": {
+                    "image": null,
+                    "repo": null
+                  },
+                  "startCommand": null
+                }
+              },
+              {
+                "node": {
+                  "activeDeployments": [
+                    {
+                      "createdAt": "2026-08-07T21:24:48.744Z",
+                      "deploymentStopped": false,
+                      "id": "1ffcde2b-7c1c-47bb-8fdf-09bd29b6037f",
+                      "instances": [
+                        {
+                          "id": "14e8a2e4-4e97-4257-9a2f-5a2a96a84f63",
+                          "status": "RUNNING"
+                        }
+                      ],
+                      "meta": {
+                        "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+                        "imageDigest": "sha256:268850e5d26bf0dab62a8d2cdb16453f0a2d0c532a6a4ea8f4976c16844f80f2",
+                        "logsV2": true,
+                        "patchId": "9b8946f7-6d3d-407d-b094-86d8a5713ad3",
+                        "reason": "deploy",
+                        "runtime": "V2",
+                        "serviceManifest": {
+                          "build": {
+                            "buildCommand": null,
+                            "buildEnvironment": "V3",
+                            "builder": "RAILPACK",
+                            "dockerfilePath": null,
+                            "nixpacksConfigPath": null,
+                            "nixpacksPlan": null,
+                            "watchPatterns": []
+                          },
+                          "deploy": {
+                            "cronSchedule": null,
+                            "drainingSeconds": null,
+                            "healthcheckPath": null,
+                            "healthcheckTimeout": null,
+                            "ipv6EgressEnabled": false,
+                            "limitOverride": null,
+                            "multiRegionConfig": {
+                              "sfo": {
+                                "numReplicas": 1
+                              }
+                            },
+                            "numReplicas": 1,
+                            "overlapSeconds": null,
+                            "preDeployCommand": null,
+                            "region": null,
+                            "registryCredentials": null,
+                            "requiredMountPath": null,
+                            "restartPolicyMaxRetries": 10,
+                            "restartPolicyType": "ON_FAILURE",
+                            "runtime": "V2",
+                            "sleepApplication": false,
+                            "startCommand": null,
+                            "useLegacyStacker": false
+                          }
+                        },
+                        "volumeMounts": [
+                          "/var/lib/postgresql/data"
+                        ]
+                      },
+                      "status": "SUCCESS"
+                    }
+                  ],
+                  "cronSchedule": null,
+                  "domains": {
+                    "customDomains": [],
+                    "serviceDomains": []
+                  },
+                  "environmentId": "c74f5335-58e6-4d9c-8219-a7c8ebb42627",
+                  "id": "ed924bcc-2352-4ba1-b8ad-8e793b608c3d",
+                  "latestDeployment": {
+                    "canRedeploy": true,
+                    "createdAt": "2026-08-07T21:24:48.744Z",
+                    "deploymentStopped": false,
+                    "id": "1ffcde2b-7c1c-47bb-8fdf-09bd29b6037f",
+                    "instances": [
+                      {
+                        "id": "14e8a2e4-4e97-4257-9a2f-5a2a96a84f63",
+                        "status": "RUNNING"
+                      }
+                    ],
+                    "meta": {
+                      "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+                      "imageDigest": "sha256:268850e5d26bf0dab62a8d2cdb16453f0a2d0c532a6a4ea8f4976c16844f80f2",
+                      "logsV2": true,
+                      "patchId": "9b8946f7-6d3d-407d-b094-86d8a5713ad3",
+                      "reason": "deploy",
+                      "runtime": "V2",
+                      "serviceManifest": {
+                        "build": {
+                          "buildCommand": null,
+                          "buildEnvironment": "V3",
+                          "builder": "RAILPACK",
+                          "dockerfilePath": null,
+                          "nixpacksConfigPath": null,
+                          "nixpacksPlan": null,
+                          "watchPatterns": []
+                        },
+                        "deploy": {
+                          "cronSchedule": null,
+                          "drainingSeconds": null,
+                          "healthcheckPath": null,
+                          "healthcheckTimeout": null,
+                          "ipv6EgressEnabled": false,
+                          "limitOverride": null,
+                          "multiRegionConfig": {
+                            "sfo": {
+                              "numReplicas": 1
+                            }
+                          },
+                          "numReplicas": 1,
+                          "overlapSeconds": null,
+                          "preDeployCommand": null,
+                          "region": null,
+                          "registryCredentials": null,
+                          "requiredMountPath": null,
+                          "restartPolicyMaxRetries": 10,
+                          "restartPolicyType": "ON_FAILURE",
+                          "runtime": "V2",
+                          "sleepApplication": false,
+                          "startCommand": null,
+                          "useLegacyStacker": false
+                        }
+                      },
+                      "volumeMounts": [
+                        "/var/lib/postgresql/data"
+                      ]
+                    },
+                    "status": "SUCCESS"
+                  },
+                  "nextCronRunAt": null,
+                  "numReplicas": 1,
+                  "serviceId": "c77013b1-5eef-4d98-8d44-3775e63c2d40",
+                  "serviceName": "Postgres-OarF",
+                  "source": {
+                    "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+                    "repo": null
+                  },
+                  "startCommand": null
+                }
+              }
+            ]
+          },
+          "unmergedChangesCount": null,
+          "volumeInstances": {
+            "edges": [
+              {
+                "node": {
+                  "currentSizeMB": 859.267072,
+                  "deletedAt": null,
+                  "environmentId": "c74f5335-58e6-4d9c-8219-a7c8ebb42627",
+                  "isPendingDeletion": false,
+                  "mountPath": "/data",
+                  "serviceId": "e7657f1a-86b7-4a5b-9007-9a308e530f71",
+                  "sizeMB": 50000,
+                  "state": "READY",
+                  "volume": {
+                    "id": "d545dccd-a14b-49fd-9fa0-7ad58675aeca",
+                    "name": "redis-volume-lt-s"
+                  }
+                }
+              },
+              {
+                "node": {
+                  "currentSizeMB": 890.3802880000001,
+                  "deletedAt": null,
+                  "environmentId": "c74f5335-58e6-4d9c-8219-a7c8ebb42627",
+                  "isPendingDeletion": false,
+                  "mountPath": "/var/lib/postgresql/data",
+                  "serviceId": "c77013b1-5eef-4d98-8d44-3775e63c2d40",
+                  "sizeMB": 50000,
+                  "state": "READY",
+                  "volume": {
+                    "id": "bb156d7a-37fe-47d7-93c3-63fc413488a2",
+                    "name": "postgres-volume-uFw-"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "id": "a3af94be-bbb5-413b-a1bd-c1f0a5db0ee5",
+  "name": "Scalpyn",
+  "services": {
+    "edges": [
+      {
+        "node": {
+          "id": "0c49adf1-7de7-4929-9c25-690815a6c1c0",
+          "name": "scalpyn-ml-trainer"
+        }
+      },
+      {
+        "node": {
+          "id": "10bd1a86-e559-4229-afc2-4a60624b7b5c",
+          "name": "scalpyn-langgraph-staging-worker"
+        }
+      },
+      {
+        "node": {
+          "id": "2e2fd64c-725f-41b2-8094-995a0f6b091e",
+          "name": "Postgres-LC5q"
+        }
+      },
+      {
+        "node": {
+          "id": "4026d936-6141-423a-b7d6-058e06e90976",
+          "name": "Redis-PkZC"
+        }
+      },
+      {
+        "node": {
+          "id": "486ae90f-81b9-4593-aa31-6e24e67821b3",
+          "name": "scalpyn"
+        }
+      },
+      {
+        "node": {
+          "id": "54dd84f6-4a21-46d2-a586-7c2f507b646c",
+          "name": "scalpyn-worker-structural"
+        }
+      },
+      {
+        "node": {
+          "id": "7dbaca22-aaa1-43c3-be50-022990ccffbb",
+          "name": "pi-manual-staging-bayesian-v2"
+        }
+      },
+      {
+        "node": {
+          "id": "8eaa42d8-c8a7-4cf8-ad65-5c110572ce77",
+          "name": "scalpyn-worker-profile-bayesian"
+        }
+      },
+      {
+        "node": {
+          "id": "91d4b8f1-8a68-46be-80b9-9aa63eadc971",
+          "name": "scalpyn-worker-execution"
+        }
+      },
+      {
+        "node": {
+          "id": "a729e2d9-4d6e-464b-8fe2-4d00393be1e3",
+          "name": "pi-manual-staging-api"
+        }
+      },
+      {
+        "node": {
+          "id": "b5a65c6b-1c62-4446-b747-67c7320cfb26",
+          "name": "Postgres"
+        }
+      },
+      {
+        "node": {
+          "id": "b8f75a38-d687-44cf-a6be-f2f36ddf4a6a",
+          "name": "scalpyn-beat"
+        }
+      },
+      {
+        "node": {
+          "id": "c6f22ae9-8b04-47e0-b17b-fc27dd9678c4",
+          "name": "scalpyn-worker-micro"
+        }
+      },
+      {
+        "node": {
+          "id": "c77013b1-5eef-4d98-8d44-3775e63c2d40",
+          "name": "Postgres-OarF"
+        }
+      },
+      {
+        "node": {
+          "id": "cdfe5e5a-7e88-4967-966a-c6acf58e2cf2",
+          "name": "pi-manual-staging-runtime"
+        }
+      },
+      {
+        "node": {
+          "id": "cfaefa90-7a94-46f0-a890-5818eb9ac34c",
+          "name": "Redis"
+        }
+      },
+      {
+        "node": {
+          "id": "e2375cdd-f50b-4a74-947b-7f8448131648",
+          "name": "scalpyn-worker-compute"
+        }
+      },
+      {
+        "node": {
+          "id": "e366856b-677a-4bc9-b4b0-93ed03dfc7af",
+          "name": "scalpyn-langgraph-staging-api"
+        }
+      },
+      {
+        "node": {
+          "id": "e7657f1a-86b7-4a5b-9007-9a308e530f71",
+          "name": "Redis-JWRz"
+        }
+      },
+      {
+        "node": {
+          "id": "ee63635c-b20d-4425-aef8-c7cc8da78769",
+          "name": "scalpyn-langgraph-worker"
+        }
+      }
+    ]
+  },
+  "workspace": {
+    "name": "CX Hub"
+  },
+  "workspaceId": "890f8fdb-b540-4769-a5dc-551b5985dea9"
+}

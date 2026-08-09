@@ -1,0 +1,42 @@
+[
+ {
+  "RuleID": "generic-api-key",
+  "Description": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
+  "StartLine": 546,
+  "EndLine": 546,
+  "StartColumn": 48,
+  "EndColumn": 84,
+  "Match": "graph_key\":  \"REDACTED\"",
+  "Secret": "REDACTED",
+  "File": "/scan/api/staging-api-proof-final.json",
+  "SymlinkFile": "",
+  "Commit": "",
+  "Entropy": 3.732159,
+  "Author": "",
+  "Email": "",
+  "Date": "",
+  "Message": "",
+  "Tags": [],
+  "Fingerprint": "/scan/api/staging-api-proof-final.json:generic-api-key:546"
+ },
+ {
+  "RuleID": "generic-api-key",
+  "Description": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
+  "StartLine": 634,
+  "EndLine": 634,
+  "StartColumn": 71,
+  "EndColumn": 107,
+  "Match": "graph_key\":  \"REDACTED\"",
+  "Secret": "REDACTED",
+  "File": "/scan/api/staging-api-proof-final.json",
+  "SymlinkFile": "",
+  "Commit": "",
+  "Entropy": 3.732159,
+  "Author": "",
+  "Email": "",
+  "Date": "",
+  "Message": "",
+  "Tags": [],
+  "Fingerprint": "/scan/api/staging-api-proof-final.json:generic-api-key:634"
+ }
+]

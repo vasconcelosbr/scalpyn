@@ -1,0 +1,22 @@
+{
+  "closed": [
+    "global backend regression gate",
+    "provider boundary static and test closure",
+    "Alembic online/offline chain",
+    "real worker restart and durable resume",
+    "seven module origin E2E runs",
+    "authenticated protected Vercel preview UI",
+    "double-submit blocking",
+    "cross-tenant denial",
+    "Spot authority fail-closed disposition",
+    "regenerative A/B/C contextual memory",
+    "zero staging orders and live writes"
+  ],
+  "open": [
+    "one priced real-provider analysis-only canary",
+    "runtime E2E proof for four legacy bridges",
+    "formal revocation proof for legacy secrets retained in Git history",
+    "explicit human production rollout approval"
+  ],
+  "production_mutations": 0
+}

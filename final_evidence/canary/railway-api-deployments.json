@@ -1,0 +1,1127 @@
+[
+  {
+    "id": "a1ac48ce-b971-4fec-9ec7-d53498474dc4",
+    "status": "SUCCESS",
+    "createdAt": "2026-08-09T00:54:29.598Z",
+    "meta": {
+      "buildOnly": false,
+      "cliAgentSessionId": "scalpyn-mm-20260808-01",
+      "cliCaller": "skill:use-railway@1.3.7",
+      "cliMessage": "tenant authorized checkpoint namespace inspection",
+      "fileServiceManifest": {},
+      "ignoreWatchPatterns": true,
+      "imageDigest": "sha256:036961a52186e15e1e515d5fc5ed7112366dab0b35b59375177eee558672af7d",
+      "logsV2": true,
+      "nixpacksProviders": [],
+      "propertyFileMapping": {},
+      "reason": "redeploy",
+      "rootDirectory": null,
+      "runtime": "V2",
+      "serviceManifest": {
+        "build": {
+          "buildCommand": null,
+          "buildEnvironment": "V3",
+          "builder": "DOCKERFILE",
+          "dockerfilePath": "/Dockerfile",
+          "nixpacksConfigPath": null,
+          "nixpacksPlan": null,
+          "watchPatterns": []
+        },
+        "deploy": {
+          "cronSchedule": null,
+          "drainingSeconds": null,
+          "healthcheckPath": null,
+          "healthcheckTimeout": null,
+          "ipv6EgressEnabled": false,
+          "limitOverride": null,
+          "multiRegionConfig": {
+            "sfo": {
+              "numReplicas": 1
+            }
+          },
+          "numReplicas": 1,
+          "overlapSeconds": null,
+          "preDeployCommand": null,
+          "region": null,
+          "registryCredentials": null,
+          "requiredMountPath": null,
+          "restartPolicyMaxRetries": 10,
+          "restartPolicyType": "ON_FAILURE",
+          "runtime": "V2",
+          "sleepApplication": false,
+          "startCommand": null,
+          "useLegacyStacker": false
+        }
+      },
+      "volumeMounts": []
+    }
+  },
+  {
+    "id": "4ed44558-df28-4563-9913-5abed26a550a",
+    "status": "REMOVED",
+    "createdAt": "2026-08-09T00:50:51.043Z",
+    "meta": {
+      "buildOnly": false,
+      "cliAgentSessionId": "scalpyn-mm-20260808-01",
+      "cliCaller": "skill:use-railway@1.3.7",
+      "cliMessage": "tenant authorized checkpoint namespace inspection",
+      "fileServiceManifest": {},
+      "imageDigest": "sha256:c3cb00d1e91d5b7753d4e2b20b127574201c73939de3ab3ade2c701e830fb145",
+      "logsV2": true,
+      "nixpacksProviders": [],
+      "propertyFileMapping": {},
+      "reason": "deploy",
+      "rootDirectory": null,
+      "runtime": "V2",
+      "serviceManifest": {
+        "build": {
+          "buildCommand": null,
+          "buildEnvironment": "V3",
+          "builder": "DOCKERFILE",
+          "dockerfilePath": "/Dockerfile",
+          "nixpacksConfigPath": null,
+          "nixpacksPlan": null,
+          "watchPatterns": []
+        },
+        "deploy": {
+          "cronSchedule": null,
+          "drainingSeconds": null,
+          "healthcheckPath": null,
+          "healthcheckTimeout": null,
+          "ipv6EgressEnabled": false,
+          "limitOverride": null,
+          "multiRegionConfig": {
+            "sfo": {
+              "numReplicas": 1
+            }
+          },
+          "numReplicas": 1,
+          "overlapSeconds": null,
+          "preDeployCommand": null,
+          "region": null,
+          "registryCredentials": null,
+          "requiredMountPath": null,
+          "restartPolicyMaxRetries": 10,
+          "restartPolicyType": "ON_FAILURE",
+          "runtime": "V2",
+          "sleepApplication": false,
+          "startCommand": null,
+          "useLegacyStacker": false
+        }
+      },
+      "volumeMounts": []
+    }
+  },
+  {
+    "id": "715d545b-b6c9-44c5-81bb-3fd1db3d8174",
+    "status": "REMOVED",
+    "createdAt": "2026-08-09T00:48:13.295Z",
+    "meta": {
+      "buildOnly": false,
+      "cliAgentSessionId": "scalpyn-mm-20260808-01",
+      "cliCaller": "skill:use-railway@1.3.7",
+      "cliMessage": "repeatable contextual memory canary",
+      "fileServiceManifest": {},
+      "imageDigest": "sha256:415ace165094990a6591b6c065cd67490803800dc4f1d2141a823acc1c1647cc",
+      "logsV2": true,
+      "nixpacksProviders": [],
+      "propertyFileMapping": {},
+      "reason": "deploy",
+      "rootDirectory": null,
+      "runtime": "V2",
+      "serviceManifest": {
+        "build": {
+          "buildCommand": null,
+          "buildEnvironment": "V3",
+          "builder": "DOCKERFILE",
+          "dockerfilePath": "/Dockerfile",
+          "nixpacksConfigPath": null,
+          "nixpacksPlan": null,
+          "watchPatterns": []
+        },
+        "deploy": {
+          "cronSchedule": null,
+          "drainingSeconds": null,
+          "healthcheckPath": null,
+          "healthcheckTimeout": null,
+          "ipv6EgressEnabled": false,
+          "limitOverride": null,
+          "multiRegionConfig": {
+            "sfo": {
+              "numReplicas": 1
+            }
+          },
+          "numReplicas": 1,
+          "overlapSeconds": null,
+          "preDeployCommand": null,
+          "region": null,
+          "registryCredentials": null,
+          "requiredMountPath": null,
+          "restartPolicyMaxRetries": 10,
+          "restartPolicyType": "ON_FAILURE",
+          "runtime": "V2",
+          "sleepApplication": false,
+          "startCommand": null,
+          "useLegacyStacker": false
+        }
+      },
+      "volumeMounts": []
+    }
+  },
+  {
+    "id": "4da4480a-9810-41a1-9c80-9ee921e9779d",
+    "status": "REMOVED",
+    "createdAt": "2026-08-09T00:46:54.072Z",
+    "meta": {
+      "buildOnly": false,
+      "cliAgentSessionId": "scalpyn-mm-20260808-01",
+      "cliCaller": "skill:use-railway@1.3.7",
+      "cliMessage": "staging canary condition diagnostics",
+      "fileServiceManifest": {},
+      "imageDigest": "sha256:4e6331288f0d217ab797537900a1bd7f38ff83f3e50e4b37ff479eddec41e113",
+      "logsV2": true,
+      "nixpacksProviders": [],
+      "propertyFileMapping": {},
+      "reason": "deploy",
+      "rootDirectory": null,
+      "runtime": "V2",
+      "serviceManifest": {
+        "build": {
+          "buildCommand": null,
+          "buildEnvironment": "V3",
+          "builder": "DOCKERFILE",
+          "dockerfilePath": "/Dockerfile",
+          "nixpacksConfigPath": null,
+          "nixpacksPlan": null,
+          "watchPatterns": []
+        },
+        "deploy": {
+          "cronSchedule": null,
+          "drainingSeconds": null,
+          "healthcheckPath": null,
+          "healthcheckTimeout": null,
+          "ipv6EgressEnabled": false,
+          "limitOverride": null,
+          "multiRegionConfig": {
+            "sfo": {
+              "numReplicas": 1
+            }
+          },
+          "numReplicas": 1,
+          "overlapSeconds": null,
+          "preDeployCommand": null,
+          "region": null,
+          "registryCredentials": null,
+          "requiredMountPath": null,
+          "restartPolicyMaxRetries": 10,
+          "restartPolicyType": "ON_FAILURE",
+          "runtime": "V2",
+          "sleepApplication": false,
+          "startCommand": null,
+          "useLegacyStacker": false
+        }
+      },
+      "volumeMounts": []
+    }
+  },
+  {
+    "id": "96ad7995-1c1e-4e24-938b-75cc4781d8a5",
+    "status": "REMOVED",
+    "createdAt": "2026-08-09T00:44:42.946Z",
+    "meta": {
+      "buildOnly": false,
+      "cliAgentSessionId": "scalpyn-mm-20260808-01",
+      "cliCaller": "skill:use-railway@1.3.7",
+      "cliMessage": "contextual memory abc and checkpoint proof",
+      "fileServiceManifest": {},
+      "imageDigest": "sha256:98031c72291d1ed9a68303e9e2edbb88a6d5b8ffbaa273adb38367e91c1ca9f1",
+      "logsV2": true,
+      "nixpacksProviders": [],
+      "propertyFileMapping": {},
+      "reason": "deploy",
+      "rootDirectory": null,
+      "runtime": "V2",
+      "serviceManifest": {
+        "build": {
+          "buildCommand": null,
+          "buildEnvironment": "V3",
+          "builder": "DOCKERFILE",
+          "dockerfilePath": "/Dockerfile",
+          "nixpacksConfigPath": null,
+          "nixpacksPlan": null,
+          "watchPatterns": []
+        },
+        "deploy": {
+          "cronSchedule": null,
+          "drainingSeconds": null,
+          "healthcheckPath": null,
+          "healthcheckTimeout": null,
+          "ipv6EgressEnabled": false,
+          "limitOverride": null,
+          "multiRegionConfig": {
+            "sfo": {
+              "numReplicas": 1
+            }
+          },
+          "numReplicas": 1,
+          "overlapSeconds": null,
+          "preDeployCommand": null,
+          "region": null,
+          "registryCredentials": null,
+          "requiredMountPath": null,
+          "restartPolicyMaxRetries": 10,
+          "restartPolicyType": "ON_FAILURE",
+          "runtime": "V2",
+          "sleepApplication": false,
+          "startCommand": null,
+          "useLegacyStacker": false
+        }
+      },
+      "volumeMounts": []
+    }
+  },
+  {
+    "id": "76488ad2-ca82-4c26-a8d5-adcf0049df18",
+    "status": "REMOVED",
+    "createdAt": "2026-08-09T00:40:09.342Z",
+    "meta": {
+      "buildOnly": false,
+      "cliAgentSessionId": "scalpyn-mm-20260808-01",
+      "cliCaller": "skill:use-railway@1.3.7",
+      "cliMessage": "zero cost fake usage lineage",
+      "fileServiceManifest": {},
+      "imageDigest": "sha256:bb1d54e296a131896d2645f4c6d68c99ead3ee56608c1e30896942c1e0ad7aab",
+      "logsV2": true,
+      "nixpacksProviders": [],
+      "propertyFileMapping": {},
+      "reason": "deploy",
+      "rootDirectory": null,
+      "runtime": "V2",
+      "serviceManifest": {
+        "build": {
+          "buildCommand": null,
+          "buildEnvironment": "V3",
+          "builder": "DOCKERFILE",
+          "dockerfilePath": "/Dockerfile",
+          "nixpacksConfigPath": null,
+          "nixpacksPlan": null,
+          "watchPatterns": []
+        },
+        "deploy": {
+          "cronSchedule": null,
+          "drainingSeconds": null,
+          "healthcheckPath": null,
+          "healthcheckTimeout": null,
+          "ipv6EgressEnabled": false,
+          "limitOverride": null,
+          "multiRegionConfig": {
+            "sfo": {
+              "numReplicas": 1
+            }
+          },
+          "numReplicas": 1,
+          "overlapSeconds": null,
+          "preDeployCommand": null,
+          "region": null,
+          "registryCredentials": null,
+          "requiredMountPath": null,
+          "restartPolicyMaxRetries": 10,
+          "restartPolicyType": "ON_FAILURE",
+          "runtime": "V2",
+          "sleepApplication": false,
+          "startCommand": null,
+          "useLegacyStacker": false
+        }
+      },
+      "volumeMounts": []
+    }
+  },
+  {
+    "id": "775f161c-f7df-4699-bb70-3e961abe7584",
+    "status": "REMOVED",
+    "createdAt": "2026-08-09T00:37:54.385Z",
+    "meta": {
+      "buildOnly": false,
+      "cliAgentSessionId": "scalpyn-mm-20260808-01",
+      "cliCaller": "skill:use-railway@1.3.7",
+      "cliMessage": "tenant scoped tool evidence context",
+      "fileServiceManifest": {},
+      "imageDigest": "sha256:8c443e1f35e9966c83df7b5c784874de52858e96a803ff22b15d69ad4d362291",
+      "logsV2": true,
+      "nixpacksProviders": [],
+      "propertyFileMapping": {},
+      "reason": "deploy",
+      "rootDirectory": null,
+      "runtime": "V2",
+      "serviceManifest": {
+        "build": {
+          "buildCommand": null,
+          "buildEnvironment": "V3",
+          "builder": "DOCKERFILE",
+          "dockerfilePath": "/Dockerfile",
+          "nixpacksConfigPath": null,
+          "nixpacksPlan": null,
+          "watchPatterns": []
+        },
+        "deploy": {
+          "cronSchedule": null,
+          "drainingSeconds": null,
+          "healthcheckPath": null,
+          "healthcheckTimeout": null,
+          "ipv6EgressEnabled": false,
+          "limitOverride": null,
+          "multiRegionConfig": {
+            "sfo": {
+              "numReplicas": 1
+            }
+          },
+          "numReplicas": 1,
+          "overlapSeconds": null,
+          "preDeployCommand": null,
+          "region": null,
+          "registryCredentials": null,
+          "requiredMountPath": null,
+          "restartPolicyMaxRetries": 10,
+          "restartPolicyType": "ON_FAILURE",
+          "runtime": "V2",
+          "sleepApplication": false,
+          "startCommand": null,
+          "useLegacyStacker": false
+        }
+      },
+      "volumeMounts": []
+    }
+  },
+  {
+    "id": "257660e4-a3e1-4aa5-98a4-303291829856",
+    "status": "REMOVED",
+    "createdAt": "2026-08-09T00:34:38.269Z",
+    "meta": {
+      "buildOnly": false,
+      "cliAgentSessionId": "scalpyn-mm-20260808-01",
+      "cliCaller": "skill:use-railway@1.3.7",
+      "cliMessage": "typed memory fingerprint staging fix",
+      "fileServiceManifest": {},
+      "imageDigest": "sha256:c313a94ab215c6487c82b06e0c5968c07a6b679d425ef4671522d900a2370d76",
+      "logsV2": true,
+      "nixpacksProviders": [],
+      "propertyFileMapping": {},
+      "reason": "deploy",
+      "rootDirectory": null,
+      "runtime": "V2",
+      "serviceManifest": {
+        "build": {
+          "buildCommand": null,
+          "buildEnvironment": "V3",
+          "builder": "DOCKERFILE",
+          "dockerfilePath": "/Dockerfile",
+          "nixpacksConfigPath": null,
+          "nixpacksPlan": null,
+          "watchPatterns": []
+        },
+        "deploy": {
+          "cronSchedule": null,
+          "drainingSeconds": null,
+          "healthcheckPath": null,
+          "healthcheckTimeout": null,
+          "ipv6EgressEnabled": false,
+          "limitOverride": null,
+          "multiRegionConfig": {
+            "sfo": {
+              "numReplicas": 1
+            }
+          },
+          "numReplicas": 1,
+          "overlapSeconds": null,
+          "preDeployCommand": null,
+          "region": null,
+          "registryCredentials": null,
+          "requiredMountPath": null,
+          "restartPolicyMaxRetries": 10,
+          "restartPolicyType": "ON_FAILURE",
+          "runtime": "V2",
+          "sleepApplication": false,
+          "startCommand": null,
+          "useLegacyStacker": false
+        }
+      },
+      "volumeMounts": []
+    }
+  },
+  {
+    "id": "e22f0b8a-3894-4885-be59-4a6389135cec",
+    "status": "REMOVED",
+    "createdAt": "2026-08-09T00:32:09.576Z",
+    "meta": {
+      "buildOnly": false,
+      "cliAgentSessionId": "scalpyn-mm-20260808-01",
+      "cliCaller": "skill:use-railway@1.3.7",
+      "cliMessage": "typed multimodule staging canary",
+      "fileServiceManifest": {},
+      "imageDigest": "sha256:10f31c6d946f38da90abefc547ddff2d30451b576ab70ccdfe27ddeee43573f7",
+      "logsV2": true,
+      "nixpacksProviders": [],
+      "propertyFileMapping": {},
+      "reason": "deploy",
+      "rootDirectory": null,
+      "runtime": "V2",
+      "serviceManifest": {
+        "build": {
+          "buildCommand": null,
+          "buildEnvironment": "V3",
+          "builder": "DOCKERFILE",
+          "dockerfilePath": "/Dockerfile",
+          "nixpacksConfigPath": null,
+          "nixpacksPlan": null,
+          "watchPatterns": []
+        },
+        "deploy": {
+          "cronSchedule": null,
+          "drainingSeconds": null,
+          "healthcheckPath": null,
+          "healthcheckTimeout": null,
+          "ipv6EgressEnabled": false,
+          "limitOverride": null,
+          "multiRegionConfig": {
+            "sfo": {
+              "numReplicas": 1
+            }
+          },
+          "numReplicas": 1,
+          "overlapSeconds": null,
+          "preDeployCommand": null,
+          "region": null,
+          "registryCredentials": null,
+          "requiredMountPath": null,
+          "restartPolicyMaxRetries": 10,
+          "restartPolicyType": "ON_FAILURE",
+          "runtime": "V2",
+          "sleepApplication": false,
+          "startCommand": null,
+          "useLegacyStacker": false
+        }
+      },
+      "volumeMounts": []
+    }
+  },
+  {
+    "id": "dde45911-ea77-4bb1-94fd-744030cbd098",
+    "status": "FAILED",
+    "createdAt": "2026-08-09T00:31:21.917Z",
+    "meta": {
+      "buildOnly": false,
+      "cliAgentSessionId": "scalpyn-mm-20260808-01",
+      "cliCaller": "skill:use-railway@1.3.7",
+      "cliMessage": "typed multimodule staging canary",
+      "fileServiceManifest": {},
+      "logsV2": true,
+      "nixpacksProviders": [],
+      "propertyFileMapping": {},
+      "reason": "deploy",
+      "rootDirectory": null,
+      "runtime": "V2",
+      "serviceManifest": {
+        "build": {
+          "buildCommand": null,
+          "buildEnvironment": "V3",
+          "builder": "RAILPACK",
+          "dockerfilePath": null,
+          "nixpacksConfigPath": null,
+          "nixpacksPlan": null,
+          "watchPatterns": []
+        },
+        "deploy": {
+          "cronSchedule": null,
+          "drainingSeconds": null,
+          "healthcheckPath": null,
+          "healthcheckTimeout": null,
+          "ipv6EgressEnabled": false,
+          "limitOverride": null,
+          "multiRegionConfig": {
+            "sfo": {
+              "numReplicas": 1
+            }
+          },
+          "numReplicas": 1,
+          "overlapSeconds": null,
+          "preDeployCommand": null,
+          "region": null,
+          "registryCredentials": null,
+          "requiredMountPath": null,
+          "restartPolicyMaxRetries": 10,
+          "restartPolicyType": "ON_FAILURE",
+          "runtime": "V2",
+          "sleepApplication": false,
+          "startCommand": null,
+          "useLegacyStacker": false
+        }
+      },
+      "volumeMounts": []
+    }
+  },
+  {
+    "id": "b50ba40c-0d69-4af7-8b15-b1576608faa8",
+    "status": "FAILED",
+    "createdAt": "2026-08-09T00:30:23.458Z",
+    "meta": {
+      "buildOnly": false,
+      "cliAgentSessionId": "scalpyn-mm-20260808-01",
+      "cliCaller": "skill:use-railway@1.3.7",
+      "fileServiceManifest": {},
+      "logsV2": true,
+      "nixpacksProviders": [],
+      "propertyFileMapping": {},
+      "reason": "deploy",
+      "rootDirectory": null,
+      "runtime": "V2",
+      "serviceManifest": {
+        "build": {
+          "buildCommand": null,
+          "buildEnvironment": "V3",
+          "builder": "RAILPACK",
+          "dockerfilePath": null,
+          "nixpacksConfigPath": null,
+          "nixpacksPlan": null,
+          "watchPatterns": []
+        },
+        "deploy": {
+          "cronSchedule": null,
+          "drainingSeconds": null,
+          "healthcheckPath": null,
+          "healthcheckTimeout": null,
+          "ipv6EgressEnabled": false,
+          "limitOverride": null,
+          "multiRegionConfig": {
+            "sfo": {
+              "numReplicas": 1
+            }
+          },
+          "numReplicas": 1,
+          "overlapSeconds": null,
+          "preDeployCommand": null,
+          "region": null,
+          "registryCredentials": null,
+          "requiredMountPath": null,
+          "restartPolicyMaxRetries": 10,
+          "restartPolicyType": "ON_FAILURE",
+          "runtime": "V2",
+          "sleepApplication": false,
+          "startCommand": null,
+          "useLegacyStacker": false
+        }
+      },
+      "volumeMounts": []
+    }
+  },
+  {
+    "id": "ecb24e5a-4bfd-4d78-8fc5-13a8a6288d46",
+    "status": "REMOVED",
+    "createdAt": "2026-08-09T00:24:42.149Z",
+    "meta": {
+      "buildOnly": false,
+      "cliAgentSessionId": "scalpyn-mm-20260808-01",
+      "cliCaller": "skill:use-railway@1.3.7",
+      "cliMessage": "migration 150 systemic prompt and registry hardening",
+      "fileServiceManifest": {},
+      "imageDigest": "sha256:9de9d76af4fd9dce7d1dad96ebfe1dcdcf63536f6053bfe803856b365726c4fd",
+      "logsV2": true,
+      "nixpacksProviders": [],
+      "propertyFileMapping": {},
+      "reason": "deploy",
+      "rootDirectory": null,
+      "runtime": "V2",
+      "serviceManifest": {
+        "build": {
+          "buildCommand": null,
+          "buildEnvironment": "V3",
+          "builder": "DOCKERFILE",
+          "dockerfilePath": "/Dockerfile",
+          "nixpacksConfigPath": null,
+          "nixpacksPlan": null,
+          "watchPatterns": []
+        },
+        "deploy": {
+          "cronSchedule": null,
+          "drainingSeconds": null,
+          "healthcheckPath": null,
+          "healthcheckTimeout": null,
+          "ipv6EgressEnabled": false,
+          "limitOverride": null,
+          "multiRegionConfig": {
+            "sfo": {
+              "numReplicas": 1
+            }
+          },
+          "numReplicas": 1,
+          "overlapSeconds": null,
+          "preDeployCommand": null,
+          "region": null,
+          "registryCredentials": null,
+          "requiredMountPath": null,
+          "restartPolicyMaxRetries": 10,
+          "restartPolicyType": "ON_FAILURE",
+          "runtime": "V2",
+          "sleepApplication": false,
+          "startCommand": null,
+          "useLegacyStacker": false
+        }
+      },
+      "volumeMounts": []
+    }
+  },
+  {
+    "id": "ec90662e-e725-4e3a-8e5e-d8d83560b19e",
+    "status": "REMOVED",
+    "createdAt": "2026-08-09T00:20:26.921Z",
+    "meta": {
+      "buildOnly": false,
+      "cliAgentSessionId": "scalpyn-mm-20260808-01",
+      "cliCaller": "skill:use-railway@1.3.7",
+      "cliMessage": "diagnostics-gated systemic v2 staging canary",
+      "fileServiceManifest": {},
+      "ignoreWatchPatterns": true,
+      "imageDigest": "sha256:4e67f543b914f72c2e0365cf29a55afe1a9429e5ab0a7d066ed2041ce3df73b3",
+      "logsV2": true,
+      "nixpacksProviders": [],
+      "propertyFileMapping": {},
+      "reason": "redeploy",
+      "rootDirectory": null,
+      "runtime": "V2",
+      "serviceManifest": {
+        "build": {
+          "buildCommand": null,
+          "buildEnvironment": "V3",
+          "builder": "DOCKERFILE",
+          "dockerfilePath": "/Dockerfile",
+          "nixpacksConfigPath": null,
+          "nixpacksPlan": null,
+          "watchPatterns": []
+        },
+        "deploy": {
+          "cronSchedule": null,
+          "drainingSeconds": null,
+          "healthcheckPath": null,
+          "healthcheckTimeout": null,
+          "ipv6EgressEnabled": false,
+          "limitOverride": null,
+          "multiRegionConfig": {
+            "sfo": {
+              "numReplicas": 1
+            }
+          },
+          "numReplicas": 1,
+          "overlapSeconds": null,
+          "preDeployCommand": null,
+          "region": null,
+          "registryCredentials": null,
+          "requiredMountPath": null,
+          "restartPolicyMaxRetries": 10,
+          "restartPolicyType": "ON_FAILURE",
+          "runtime": "V2",
+          "sleepApplication": false,
+          "startCommand": null,
+          "useLegacyStacker": false
+        }
+      },
+      "skipBuildCache": true,
+      "volumeMounts": []
+    }
+  },
+  {
+    "id": "573d0268-a092-4e17-96f4-433239823df5",
+    "status": "REMOVED",
+    "createdAt": "2026-08-09T00:20:03.681Z",
+    "meta": {
+      "buildOnly": false,
+      "cliAgentSessionId": "scalpyn-mm-20260808-01",
+      "cliCaller": "skill:use-railway@1.3.7",
+      "cliMessage": "diagnostics-gated systemic v2 staging canary",
+      "fileServiceManifest": {},
+      "ignoreWatchPatterns": true,
+      "imageDigest": "sha256:4e67f543b914f72c2e0365cf29a55afe1a9429e5ab0a7d066ed2041ce3df73b3",
+      "logsV2": true,
+      "nixpacksProviders": [],
+      "propertyFileMapping": {},
+      "reason": "redeploy",
+      "rootDirectory": null,
+      "runtime": "V2",
+      "serviceManifest": {
+        "build": {
+          "buildCommand": null,
+          "buildEnvironment": "V3",
+          "builder": "DOCKERFILE",
+          "dockerfilePath": "/Dockerfile",
+          "nixpacksConfigPath": null,
+          "nixpacksPlan": null,
+          "watchPatterns": []
+        },
+        "deploy": {
+          "cronSchedule": null,
+          "drainingSeconds": null,
+          "healthcheckPath": null,
+          "healthcheckTimeout": null,
+          "ipv6EgressEnabled": false,
+          "limitOverride": null,
+          "multiRegionConfig": {
+            "sfo": {
+              "numReplicas": 1
+            }
+          },
+          "numReplicas": 1,
+          "overlapSeconds": null,
+          "preDeployCommand": null,
+          "region": null,
+          "registryCredentials": null,
+          "requiredMountPath": null,
+          "restartPolicyMaxRetries": 10,
+          "restartPolicyType": "ON_FAILURE",
+          "runtime": "V2",
+          "sleepApplication": false,
+          "startCommand": null,
+          "useLegacyStacker": false
+        }
+      },
+      "skipBuildCache": true,
+      "volumeMounts": []
+    }
+  },
+  {
+    "id": "ce4125fb-3b84-42ce-8746-9a099aaa6bfc",
+    "status": "REMOVED",
+    "createdAt": "2026-08-09T00:18:25.735Z",
+    "meta": {
+      "buildOnly": false,
+      "cliAgentSessionId": "scalpyn-mm-20260808-01",
+      "cliCaller": "skill:use-railway@1.3.7",
+      "cliMessage": "diagnostics-gated systemic v2 staging canary",
+      "fileServiceManifest": {},
+      "imageDigest": "sha256:4e67f543b914f72c2e0365cf29a55afe1a9429e5ab0a7d066ed2041ce3df73b3",
+      "logsV2": true,
+      "nixpacksProviders": [],
+      "propertyFileMapping": {},
+      "reason": "deploy",
+      "rootDirectory": null,
+      "runtime": "V2",
+      "serviceManifest": {
+        "build": {
+          "buildCommand": null,
+          "buildEnvironment": "V3",
+          "builder": "DOCKERFILE",
+          "dockerfilePath": "/Dockerfile",
+          "nixpacksConfigPath": null,
+          "nixpacksPlan": null,
+          "watchPatterns": []
+        },
+        "deploy": {
+          "cronSchedule": null,
+          "drainingSeconds": null,
+          "healthcheckPath": null,
+          "healthcheckTimeout": null,
+          "ipv6EgressEnabled": false,
+          "limitOverride": null,
+          "multiRegionConfig": {
+            "sfo": {
+              "numReplicas": 1
+            }
+          },
+          "numReplicas": 1,
+          "overlapSeconds": null,
+          "preDeployCommand": null,
+          "region": null,
+          "registryCredentials": null,
+          "requiredMountPath": null,
+          "restartPolicyMaxRetries": 10,
+          "restartPolicyType": "ON_FAILURE",
+          "runtime": "V2",
+          "sleepApplication": false,
+          "startCommand": null,
+          "useLegacyStacker": false
+        }
+      },
+      "volumeMounts": []
+    }
+  },
+  {
+    "id": "70126b4e-b5ae-4d40-ae64-c56dc47ebd3b",
+    "status": "REMOVED",
+    "createdAt": "2026-08-09T00:13:35.511Z",
+    "meta": {
+      "buildOnly": false,
+      "cliAgentSessionId": "scalpyn-mm-20260808-01",
+      "cliCaller": "skill:use-railway@1.3.7",
+      "cliMessage": "systemic v2 fake canary staging API",
+      "fileServiceManifest": {},
+      "ignoreWatchPatterns": true,
+      "imageDigest": "sha256:bd43282a7fee6f0ff980871c98cee0761528491407ba04bcc46ae5d61acaae01",
+      "logsV2": true,
+      "nixpacksProviders": [],
+      "propertyFileMapping": {},
+      "reason": "redeploy",
+      "rootDirectory": null,
+      "runtime": "V2",
+      "serviceManifest": {
+        "build": {
+          "buildCommand": null,
+          "buildEnvironment": "V3",
+          "builder": "DOCKERFILE",
+          "dockerfilePath": "/Dockerfile",
+          "nixpacksConfigPath": null,
+          "nixpacksPlan": null,
+          "watchPatterns": []
+        },
+        "deploy": {
+          "cronSchedule": null,
+          "drainingSeconds": null,
+          "healthcheckPath": null,
+          "healthcheckTimeout": null,
+          "ipv6EgressEnabled": false,
+          "limitOverride": null,
+          "multiRegionConfig": {
+            "sfo": {
+              "numReplicas": 1
+            }
+          },
+          "numReplicas": 1,
+          "overlapSeconds": null,
+          "preDeployCommand": null,
+          "region": null,
+          "registryCredentials": null,
+          "requiredMountPath": null,
+          "restartPolicyMaxRetries": 10,
+          "restartPolicyType": "ON_FAILURE",
+          "runtime": "V2",
+          "sleepApplication": false,
+          "startCommand": null,
+          "useLegacyStacker": false
+        }
+      },
+      "skipBuildCache": true,
+      "volumeMounts": []
+    }
+  },
+  {
+    "id": "610b2c43-8f7b-4a4a-87b1-653219babf21",
+    "status": "REMOVED",
+    "createdAt": "2026-08-09T00:12:18.779Z",
+    "meta": {
+      "buildOnly": false,
+      "cliAgentSessionId": "scalpyn-mm-20260808-01",
+      "cliCaller": "skill:use-railway@1.3.7",
+      "cliMessage": "systemic v2 fake canary staging API",
+      "duration": 68,
+      "fileServiceManifest": {},
+      "imageDigest": "sha256:bd43282a7fee6f0ff980871c98cee0761528491407ba04bcc46ae5d61acaae01",
+      "logsV2": true,
+      "nixpacksProviders": [],
+      "propertyFileMapping": {},
+      "reason": "deploy",
+      "rootDirectory": null,
+      "runtime": "V2",
+      "serviceManifest": {
+        "build": {
+          "buildCommand": null,
+          "buildEnvironment": "V3",
+          "builder": "DOCKERFILE",
+          "dockerfilePath": "/Dockerfile",
+          "nixpacksConfigPath": null,
+          "nixpacksPlan": null,
+          "watchPatterns": []
+        },
+        "deploy": {
+          "cronSchedule": null,
+          "drainingSeconds": null,
+          "healthcheckPath": null,
+          "healthcheckTimeout": null,
+          "ipv6EgressEnabled": false,
+          "limitOverride": null,
+          "multiRegionConfig": {
+            "sfo": {
+              "numReplicas": 1
+            }
+          },
+          "numReplicas": 1,
+          "overlapSeconds": null,
+          "preDeployCommand": null,
+          "region": null,
+          "registryCredentials": null,
+          "requiredMountPath": null,
+          "restartPolicyMaxRetries": 10,
+          "restartPolicyType": "ON_FAILURE",
+          "runtime": "V2",
+          "sleepApplication": false,
+          "startCommand": null,
+          "useLegacyStacker": false
+        }
+      },
+      "volumeMounts": []
+    }
+  },
+  {
+    "id": "0dd38ca4-ffe6-4fd7-b120-6593dd4b37f0",
+    "status": "REMOVED",
+    "createdAt": "2026-08-08T23:54:02.935Z",
+    "meta": {
+      "buildOnly": false,
+      "cliAgentSessionId": "scalpyn-mm-20260808-01",
+      "cliCaller": "skill:use-railway@1.3.7",
+      "cliMessage": "systemic multi-module LangGraph staging API",
+      "fileServiceManifest": {},
+      "imageDigest": "sha256:d9b8fc189b50cb7a2b3ba3d0781d71be2917ef2f4d2313f56b1e402f82764d52",
+      "logsV2": true,
+      "nixpacksProviders": [],
+      "propertyFileMapping": {},
+      "reason": "deploy",
+      "rootDirectory": null,
+      "runtime": "V2",
+      "serviceManifest": {
+        "build": {
+          "buildCommand": null,
+          "buildEnvironment": "V3",
+          "builder": "DOCKERFILE",
+          "dockerfilePath": "/Dockerfile",
+          "nixpacksConfigPath": null,
+          "nixpacksPlan": null,
+          "watchPatterns": []
+        },
+        "deploy": {
+          "cronSchedule": null,
+          "drainingSeconds": null,
+          "healthcheckPath": null,
+          "healthcheckTimeout": null,
+          "ipv6EgressEnabled": false,
+          "limitOverride": null,
+          "multiRegionConfig": {
+            "sfo": {
+              "numReplicas": 1
+            }
+          },
+          "numReplicas": 1,
+          "overlapSeconds": null,
+          "preDeployCommand": null,
+          "region": null,
+          "registryCredentials": null,
+          "requiredMountPath": null,
+          "restartPolicyMaxRetries": 10,
+          "restartPolicyType": "ON_FAILURE",
+          "runtime": "V2",
+          "sleepApplication": false,
+          "startCommand": null,
+          "useLegacyStacker": false
+        }
+      },
+      "volumeMounts": []
+    }
+  },
+  {
+    "id": "34489a41-da33-46a6-9e8e-ca036e6d877c",
+    "status": "REMOVED",
+    "createdAt": "2026-08-08T13:02:47.369Z",
+    "meta": {
+      "buildOnly": false,
+      "cliAgentSessionId": "019fddc5-e294-7b90-af09-1d2c2243786b",
+      "cliCaller": "skill:use-railway@1.3.7",
+      "cliMessage": "staging checkpoint-postgres 3.1.2 security patch",
+      "fileServiceManifest": {},
+      "imageDigest": "sha256:bab7372e035bbdfbf53abea24b23d425d461779380c795f2d4b1c3dfab6b12c5",
+      "logsV2": true,
+      "nixpacksProviders": [],
+      "propertyFileMapping": {},
+      "reason": "deploy",
+      "rootDirectory": null,
+      "runtime": "V2",
+      "serviceManifest": {
+        "build": {
+          "buildCommand": null,
+          "buildEnvironment": "V3",
+          "builder": "DOCKERFILE",
+          "dockerfilePath": "/Dockerfile",
+          "nixpacksConfigPath": null,
+          "nixpacksPlan": null,
+          "watchPatterns": []
+        },
+        "deploy": {
+          "cronSchedule": null,
+          "drainingSeconds": null,
+          "healthcheckPath": null,
+          "healthcheckTimeout": null,
+          "ipv6EgressEnabled": false,
+          "limitOverride": null,
+          "multiRegionConfig": {
+            "sfo": {
+              "numReplicas": 1
+            }
+          },
+          "numReplicas": 1,
+          "overlapSeconds": null,
+          "preDeployCommand": null,
+          "region": null,
+          "registryCredentials": null,
+          "requiredMountPath": null,
+          "restartPolicyMaxRetries": 10,
+          "restartPolicyType": "ON_FAILURE",
+          "runtime": "V2",
+          "sleepApplication": false,
+          "startCommand": null,
+          "useLegacyStacker": false
+        }
+      },
+      "volumeMounts": []
+    }
+  },
+  {
+    "id": "f0bf2b43-29a9-4340-bb2d-f1bf1156dc26",
+    "status": "REMOVED",
+    "createdAt": "2026-08-08T12:43:10.275Z",
+    "meta": {
+      "buildOnly": false,
+      "cliAgentSessionId": "019fddc5-e294-7b90-af09-1d2c2243786b",
+      "cliCaller": "skill:use-railway@1.3.7",
+      "cliMessage": "LangGraph staging API Celery 5.6 route fix da95c6f",
+      "fileServiceManifest": {},
+      "imageDigest": "sha256:34adbb79e27e8f711a6395d1b4e761ca917f84d40f6d60df7da29147b517c718",
+      "logsV2": true,
+      "nixpacksProviders": [],
+      "propertyFileMapping": {},
+      "reason": "deploy",
+      "rootDirectory": null,
+      "runtime": "V2",
+      "serviceManifest": {
+        "build": {
+          "buildCommand": null,
+          "buildEnvironment": "V3",
+          "builder": "DOCKERFILE",
+          "dockerfilePath": "/Dockerfile",
+          "nixpacksConfigPath": null,
+          "nixpacksPlan": null,
+          "watchPatterns": []
+        },
+        "deploy": {
+          "cronSchedule": null,
+          "drainingSeconds": null,
+          "healthcheckPath": null,
+          "healthcheckTimeout": null,
+          "ipv6EgressEnabled": false,
+          "limitOverride": null,
+          "multiRegionConfig": {
+            "sfo": {
+              "numReplicas": 1
+            }
+          },
+          "numReplicas": 1,
+          "overlapSeconds": null,
+          "preDeployCommand": null,
+          "region": null,
+          "registryCredentials": null,
+          "requiredMountPath": null,
+          "restartPolicyMaxRetries": 10,
+          "restartPolicyType": "ON_FAILURE",
+          "runtime": "V2",
+          "sleepApplication": false,
+          "startCommand": null,
+          "useLegacyStacker": false
+        }
+      },
+      "volumeMounts": []
+    }
+  }
+]

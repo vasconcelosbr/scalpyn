@@ -1,0 +1,47 @@
+
+> frontend@0.1.0 test
+> node --import tsx --test lib/**/*.test.ts
+
+▶ engineStatus normalisation (Task #127)
+  ✔ handles every documented payload shape without errors (2.7147ms)
+✔ engineStatus normalisation (Task #127) (4.4936ms)
+▶ scoreBand thresholds (Task #187)
+  ✔ returns BLOCKED with red color when blocked, regardless of score (1.2399ms)
+  ✔ returns AVOID (red) for score < 40 (0.3414ms)
+  ✔ returns MIXED (yellow) for 40 <= score < 65 (0.2471ms)
+  ✔ returns GOOD (green) for 65 <= score < 80 (0.2854ms)
+  ✔ returns STRONG for score >= 80 (0.2652ms)
+  ✔ handles null/NaN as unknown (gray) (0.2333ms)
+  ✔ label and color are always derived from the same threshold set (0.2826ms)
+✔ scoreBand thresholds (Task #187) (4.6604ms)
+▶ scorePct clamping (Task #187)
+  ✔ clamps to [0, 100] and treats null/NaN as 0 (0.4327ms)
+  ✔ renders the canonical 9.6/40-of-120 fixture as ~10% red bar with AVOID label (0.3693ms)
+✔ scorePct clamping (Task #187) (1.1903ms)
+▶ summarizeScoreRules — deterministic scoring (Task #211)
+  ✔ awarded_points equals full configured points (no confidence weighting) (1.6583ms)
+  ✔ falls back to nominal when no rule has awarded_points (legacy snapshot) (0.3068ms)
+  ✔ penalty rules contribute to totalPenalties, not totalPossible (0.2309ms)
+  ✔ handles empty rule lists without dividing by zero (0.1976ms)
+  ✔ treats partial enrichment as enriched (sums what is available) (0.1821ms)
+✔ summarizeScoreRules — deterministic scoring (Task #211) (4.471ms)
+▶ fmtConfidence
+  ✔ formats 0–1 floats to two decimals (0.2902ms)
+  ✔ returns em dash for null/NaN/undefined (0.2509ms)
+✔ fmtConfidence (0.8625ms)
+▶ watchlist performance dashboard helpers
+  ✔ summarizes trusted, low-N and positive rows (2.8044ms)
+  ✔ returns every priority bucket in operational order (0.5943ms)
+✔ watchlist performance dashboard helpers (5.3934ms)
+✔ approval requires an explicit canonical phrase (1.6838ms)
+✔ evidence cells preserve structured values (0.3878ms)
+✔ reconciles legacy L3 split without inventing a dataset window (1.7736ms)
+✔ uses exact persisted windows for new models (0.3067ms)
+ℹ tests 23
+ℹ suites 6
+ℹ pass 23
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1138.6097

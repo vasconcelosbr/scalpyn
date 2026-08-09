@@ -1,0 +1,23 @@
+[
+ {
+  "RuleID": "generic-api-key",
+  "Description": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
+  "StartLine": 101,
+  "EndLine": 101,
+  "StartColumn": 4,
+  "EndColumn": 57,
+  "Match": "API service ID: `REDACTED`",
+  "Secret": "REDACTED",
+  "File": "SCALPYN_FINALIZATION_PREIMPLEMENTATION_REVALIDATION.md",
+  "SymlinkFile": "",
+  "Commit": "cc9fd46288b4883db9ad5d70e8c0274485304ff7",
+  "Link": "https://github.com/vasconcelosbr/scalpyn/blob/cc9fd46288b4883db9ad5d70e8c0274485304ff7/SCALPYN_FINALIZATION_PREIMPLEMENTATION_REVALIDATION.md?plain=1#L101",
+  "Entropy": 3.7946534,
+  "Author": "vasconcelosbr",
+  "Email": "ricardo.vasconcelos@live.com",
+  "Date": "2026-08-09T03:24:01Z",
+  "Message": "fix: close final LangGraph validation gates",
+  "Tags": [],
+  "Fingerprint": "cc9fd46288b4883db9ad5d70e8c0274485304ff7:SCALPYN_FINALIZATION_PREIMPLEMENTATION_REVALIDATION.md:generic-api-key:101"
+ }
+]

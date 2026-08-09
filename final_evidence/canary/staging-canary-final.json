@@ -1,0 +1,439 @@
+{
+    "status":  "COMPLETED",
+    "environment":  "systemic-ai-staging-20260807",
+    "analysis":  {
+                     "status":  "COMPLETED",
+                     "run_id":  "24222ef7-6455-4bbd-a2b1-7bca6ed9e8d3"
+                 },
+    "regenerative_stages":  [
+                                {
+                                    "status":  "INTERRUPTED",
+                                    "run_id":  "8217485a-4e84-44b6-a485-8937eea50ce4"
+                                },
+                                {
+                                    "status":  "INTERRUPTED",
+                                    "run_id":  "8217485a-4e84-44b6-a485-8937eea50ce4"
+                                },
+                                {
+                                    "status":  "INTERRUPTED",
+                                    "run_id":  "8217485a-4e84-44b6-a485-8937eea50ce4"
+                                },
+                                {
+                                    "status":  "COMPLETED",
+                                    "run_id":  "8217485a-4e84-44b6-a485-8937eea50ce4"
+                                }
+                            ],
+    "regenerative_runs":  {
+                              "run_a":  {
+                                            "run_id":  "8217485a-4e84-44b6-a485-8937eea50ce4",
+                                            "stages":  [
+                                                           {
+                                                               "status":  "INTERRUPTED",
+                                                               "run_id":  "8217485a-4e84-44b6-a485-8937eea50ce4"
+                                                           },
+                                                           {
+                                                               "status":  "INTERRUPTED",
+                                                               "run_id":  "8217485a-4e84-44b6-a485-8937eea50ce4"
+                                                           },
+                                                           {
+                                                               "status":  "INTERRUPTED",
+                                                               "run_id":  "8217485a-4e84-44b6-a485-8937eea50ce4"
+                                                           },
+                                                           {
+                                                               "status":  "COMPLETED",
+                                                               "run_id":  "8217485a-4e84-44b6-a485-8937eea50ce4"
+                                                           }
+                                                       ]
+                                        },
+                              "run_b":  {
+                                            "run_id":  "3bc45977-44aa-45c5-89a6-27b138c67887",
+                                            "stages":  [
+                                                           {
+                                                               "status":  "INTERRUPTED",
+                                                               "run_id":  "3bc45977-44aa-45c5-89a6-27b138c67887"
+                                                           },
+                                                           {
+                                                               "status":  "INTERRUPTED",
+                                                               "run_id":  "3bc45977-44aa-45c5-89a6-27b138c67887"
+                                                           },
+                                                           {
+                                                               "status":  "INTERRUPTED",
+                                                               "run_id":  "3bc45977-44aa-45c5-89a6-27b138c67887"
+                                                           },
+                                                           {
+                                                               "status":  "COMPLETED",
+                                                               "run_id":  "3bc45977-44aa-45c5-89a6-27b138c67887"
+                                                           }
+                                                       ]
+                                        },
+                              "run_c":  {
+                                            "run_id":  "cb5a7ee9-a946-4516-a135-a8f43fb33271",
+                                            "stages":  [
+                                                           {
+                                                               "status":  "INTERRUPTED",
+                                                               "run_id":  "cb5a7ee9-a946-4516-a135-a8f43fb33271"
+                                                           },
+                                                           {
+                                                               "status":  "INTERRUPTED",
+                                                               "run_id":  "cb5a7ee9-a946-4516-a135-a8f43fb33271"
+                                                           },
+                                                           {
+                                                               "status":  "INTERRUPTED",
+                                                               "run_id":  "cb5a7ee9-a946-4516-a135-a8f43fb33271"
+                                                           },
+                                                           {
+                                                               "status":  "COMPLETED",
+                                                               "run_id":  "cb5a7ee9-a946-4516-a135-a8f43fb33271"
+                                                           }
+                                                       ]
+                                        }
+                          },
+    "runtime_proof":  {
+                          "tool_evidence_count":  10,
+                          "tool_evidence":  [
+                                                {
+                                                    "id":  "5cf90f37-9bc7-4b12-a22d-71c66ce086b4",
+                                                    "module":  "strategy_profiles",
+                                                    "tool":  "strategy_profiles.get_profile",
+                                                    "output_hash":  "1420011e8c9c8f7b0cfc465be0f3a7be11cffe4cf01176d271f322efc8e3357c",
+                                                    "quality":  "PASS_WITH_MISSINGNESS"
+                                                },
+                                                {
+                                                    "id":  "d75fa582-75ca-4960-a86e-57129a9508cb",
+                                                    "module":  "ml_models",
+                                                    "tool":  "ml_models.get_authority_status",
+                                                    "output_hash":  "97932df32c1a427de026140042eeff55f1f539c5d9bd19031d7e77a1342b5043",
+                                                    "quality":  "NO_DATA"
+                                                },
+                                                {
+                                                    "id":  "7fd47525-c64b-4d04-acfa-a594b4c20a40",
+                                                    "module":  "shadow_portfolio",
+                                                    "tool":  "shadow.get_performance_summary",
+                                                    "output_hash":  "26eace669520aaedf6a4ea3ee4ce81443116dcb71d258f052eb14e3937cc209c",
+                                                    "quality":  "NO_DATA"
+                                                },
+                                                {
+                                                    "id":  "2b8990cf-4169-482c-a7ed-842ae229a1d7",
+                                                    "module":  "score_engine",
+                                                    "tool":  "score_engine.get_effective_configuration_at",
+                                                    "output_hash":  "59793e2c89882c8812beab8ba30dafccdb66d68e4b9eedb0f6ba293569974177",
+                                                    "quality":  "NO_DATA"
+                                                },
+                                                {
+                                                    "id":  "578613c9-d8df-4a4b-bbb7-cb853f43b693",
+                                                    "module":  "global_risk",
+                                                    "tool":  "global_risk.validate_recommendation",
+                                                    "output_hash":  "87e00034811aa5dcecb59e6f1cb111c411892141a8d404071d4f209a831cee9f",
+                                                    "quality":  "NO_DATA"
+                                                },
+                                                {
+                                                    "id":  "777d9816-1b49-4bd6-b6ea-1b2133825c43",
+                                                    "module":  "strategies",
+                                                    "tool":  "strategies.validate_recommendation",
+                                                    "output_hash":  "9d13e5b2d448c101c48e534cbea3fca84a7ec25acd675ae0232e9cea255c56e0",
+                                                    "quality":  "NO_DATA"
+                                                },
+                                                {
+                                                    "id":  "0edd4c90-b4c5-40dc-bb77-7d8130083a29",
+                                                    "module":  "intelligence_runs",
+                                                    "tool":  "intelligence_runs.list_runs",
+                                                    "output_hash":  "94256f444e7073322eff5cec8826b7dd073077ad7010b6bcedc834f9fd53fd87",
+                                                    "quality":  "PASS_WITH_MISSINGNESS"
+                                                },
+                                                {
+                                                    "id":  "fa5a7665-322f-456d-90f4-cc849393974e",
+                                                    "module":  "social_score",
+                                                    "tool":  "social_score.get_snapshot",
+                                                    "output_hash":  "6faf6e701a5103d0eaaadd7c27e734649036e7a77b6fc9aefeb36c113b967bfe",
+                                                    "quality":  "NO_DATA"
+                                                },
+                                                {
+                                                    "id":  "1b4e7c2a-378c-4ffb-bf2e-db4204554049",
+                                                    "module":  "market_regime",
+                                                    "tool":  "market_regime.get_current",
+                                                    "output_hash":  "49f63bdb317e7ed00a77d215aa5ab317400e38a56b02b2d0051f983cfa924d03",
+                                                    "quality":  "NO_DATA"
+                                                },
+                                                {
+                                                    "id":  "76b7c935-3240-46aa-b28c-4ce03492a0db",
+                                                    "module":  "audit_version_memory",
+                                                    "tool":  "audit_memory.find_similar_decisions",
+                                                    "output_hash":  "09c8dee4c787cf2e2e6a64401496721e53eac017839a4644cba5a8894643feff",
+                                                    "quality":  "PASS_WITH_MISSINGNESS"
+                                                }
+                                            ],
+                          "regenerative_events":  {
+                                                      "8217485a-4e84-44b6-a485-8937eea50ce4":  {
+                                                                                                   "retrieve_contextual_memory":  {
+                                                                                                                                      "memory_hit_count":  0,
+                                                                                                                                      "decision_memory_ids":  [
+
+                                                                                                                                                              ],
+                                                                                                                                      "state_schema_version":  "scalpyn-graph-state-v2"
+                                                                                                                                  },
+                                                                                                   "create_profile_candidate_version":  {
+                                                                                                                                            "state_schema_version":  "scalpyn-graph-state-v2",
+                                                                                                                                            "candidate_version_ids":  [
+                                                                                                                                                                          "523a7299-f31b-40e8-92c6-a046b6eb2b13"
+                                                                                                                                                                      ],
+                                                                                                                                            "candidate_version_count":  1
+                                                                                                                                        }
+                                                                                               },
+                                                      "3bc45977-44aa-45c5-89a6-27b138c67887":  {
+                                                                                                   "retrieve_contextual_memory":  {
+                                                                                                                                      "memory_hit_count":  1,
+                                                                                                                                      "decision_memory_ids":  [
+                                                                                                                                                                  "6261b945-0920-49bc-a425-ea3a039b7c90"
+                                                                                                                                                              ],
+                                                                                                                                      "state_schema_version":  "scalpyn-graph-state-v2"
+                                                                                                                                  },
+                                                                                                   "create_profile_candidate_version":  {
+                                                                                                                                            "state_schema_version":  "scalpyn-graph-state-v2",
+                                                                                                                                            "candidate_version_ids":  [
+                                                                                                                                                                          "eb682ed4-aaf2-40ac-8cb4-9124d2c1bff1"
+                                                                                                                                                                      ],
+                                                                                                                                            "candidate_version_count":  1
+                                                                                                                                        }
+                                                                                               },
+                                                      "cb5a7ee9-a946-4516-a135-a8f43fb33271":  {
+                                                                                                   "retrieve_contextual_memory":  {
+                                                                                                                                      "memory_hit_count":  0,
+                                                                                                                                      "decision_memory_ids":  [
+
+                                                                                                                                                              ],
+                                                                                                                                      "state_schema_version":  "scalpyn-graph-state-v2"
+                                                                                                                                  },
+                                                                                                   "create_profile_candidate_version":  {
+                                                                                                                                            "state_schema_version":  "scalpyn-graph-state-v2",
+                                                                                                                                            "candidate_version_ids":  [
+                                                                                                                                                                          "eea5bd49-da9e-450d-ad38-503d9a5c9e9f"
+                                                                                                                                                                      ],
+                                                                                                                                            "candidate_version_count":  1
+                                                                                                                                        }
+                                                                                               }
+                                                  },
+                          "decision_memory":  [
+                                                  {
+                                                      "id":  "6261b945-0920-49bc-a425-ea3a039b7c90",
+                                                      "ai_request_id":  "0f26da98-a448-47c1-8689-a5469f557604",
+                                                      "status":  "COMPLETED",
+                                                      "mutation_fingerprint":  "e5928628d7d46e3eb1da8a8f4049935eabe257facf5dbca7d96dc3b2015beb13",
+                                                      "context_fingerprint":  "e96530e8dada73b9cba12b352c47c0f90ce4c7c1887419e2fafb2b9443feff87"
+                                                  },
+                                                  {
+                                                      "id":  "b151f6b6-09d8-47eb-9563-396c26d973d4",
+                                                      "ai_request_id":  "2efffb9a-dcb3-466e-afd6-4d5e91cd6d42",
+                                                      "status":  "COMPLETED",
+                                                      "mutation_fingerprint":  "e5928628d7d46e3eb1da8a8f4049935eabe257facf5dbca7d96dc3b2015beb13",
+                                                      "context_fingerprint":  "e96530e8dada73b9cba12b352c47c0f90ce4c7c1887419e2fafb2b9443feff87"
+                                                  },
+                                                  {
+                                                      "id":  "08d18e39-b28b-44bd-b2ed-c07f9942a119",
+                                                      "ai_request_id":  "5889af66-9af1-4fbf-82ae-96ca3fdba3a2",
+                                                      "status":  "COMPLETED",
+                                                      "mutation_fingerprint":  "e5928628d7d46e3eb1da8a8f4049935eabe257facf5dbca7d96dc3b2015beb13",
+                                                      "context_fingerprint":  "f1a44eb7b7065e54382de9fedff8328dc0f5086c5b8c5bef12f69a43de31c42d"
+                                                  }
+                                              ],
+                          "run_b_reused_run_a":  true,
+                          "run_b_memory_hit_ids":  [
+                                                       "6261b945-0920-49bc-a425-ea3a039b7c90"
+                                                   ],
+                          "run_c_different_context_memory_hit_ids":  [
+
+                                                                     ],
+                          "run_c_avoided_global_block":  true,
+                          "orders_created_during_canary":  0
+                      },
+    "checkpoint_proof":  {
+                             "analysis":  {
+                                              "graph_run_id":  "24222ef7-6455-4bbd-a2b1-7bca6ed9e8d3",
+                                              "thread_id":  "ae112afc-a8d9-4cfa-96dc-f16a9edc4cb2",
+                                              "tenant_id":  "338ca0bb-2a18-4f3c-8ec4-5e296d3154ab",
+                                              "status":  "COMPLETED",
+                                              "current_node":  "complete",
+                                              "created_at":  "2026-08-09T00:56:18.446600+00:00",
+                                              "updated_at":  "2026-08-09T00:56:19.979768+00:00",
+                                              "checkpoint_count":  28,
+                                              "checkpoint_ids":  [
+                                                                     "1f1938d2-23e4-6618-801a-45e9d0499ba3",
+                                                                     "1f1938d2-2382-61b4-8019-1ca7d7081788",
+                                                                     "1f1938d2-2311-600c-8018-5919fdc51596",
+                                                                     "1f1938d2-22b2-6187-8017-ed9e7cab60d3",
+                                                                     "1f1938d2-2232-6628-8016-b38408343a58",
+                                                                     "1f1938d2-21e6-6550-8015-2277f681b646",
+                                                                     "1f1938d2-20a5-6074-8014-6d4637853ecf",
+                                                                     "1f1938d2-2055-693f-8013-c48da7f2b697",
+                                                                     "1f1938d2-1ff8-67da-8012-7df6454d02d3",
+                                                                     "1f1938d2-1f9d-663e-8011-2d9eabde69b8",
+                                                                     "1f1938d2-1f50-6cd5-8010-2fa09daffbf0",
+                                                                     "1f1938d2-1f04-6b8c-800f-dcfbf822582f",
+                                                                     "1f1938d2-1eb5-6310-800e-d35bdf65326f",
+                                                                     "1f1938d2-1e5c-6950-800d-ccb61e37acc0",
+                                                                     "1f1938d2-1e07-6c40-800c-2013c5523223",
+                                                                     "1f1938d2-1db1-6cd6-800b-459fe6c4574a",
+                                                                     "1f1938d2-1d47-62d0-800a-6abd4104359d",
+                                                                     "1f1938d2-1cf3-6e5e-8009-2e5ae19d89fb",
+                                                                     "1f1938d2-1c92-68ff-8008-228e40760ab3",
+                                                                     "1f1938d2-1c3a-6f9e-8007-3781a4291798",
+                                                                     "1f1938d2-1bdd-6568-8006-c8e9420bbc9c",
+                                                                     "1f1938d2-1b85-6858-8005-fef5d6d280fd",
+                                                                     "1f1938d2-1b23-6b1a-8004-4034fe0910a1",
+                                                                     "1f1938d2-1abd-6258-8003-2f0d127894ed",
+                                                                     "1f1938d2-1a6c-64f9-8002-f9277ef6d6c3",
+                                                                     "1f1938d2-1a11-6126-8001-fd2fcaca4cb3",
+                                                                     "1f1938d2-19ba-6f5a-8000-9e1caeae77f8",
+                                                                     "1f1938d2-19b7-656e-bfff-d1807b3d12cd"
+                                                                 ],
+                                              "checkpoint_namespaces":  [
+                                                                            ""
+                                                                        ]
+                                          },
+                             "run_a":  {
+                                           "graph_run_id":  "8217485a-4e84-44b6-a485-8937eea50ce4",
+                                           "thread_id":  "d7dbd05c-bd2a-49c8-afb5-6880cef81a80",
+                                           "tenant_id":  "338ca0bb-2a18-4f3c-8ec4-5e296d3154ab",
+                                           "status":  "COMPLETED",
+                                           "current_node":  "complete",
+                                           "created_at":  "2026-08-09T00:56:18.452024+00:00",
+                                           "updated_at":  "2026-08-09T00:56:21.396345+00:00",
+                                           "checkpoint_count":  23,
+                                           "checkpoint_ids":  [
+                                                                  "1f1938d2-317b-674a-8015-bd18f22053c8",
+                                                                  "1f1938d2-311f-6c30-8014-f6cdea7b32d9",
+                                                                  "1f1938d2-308a-6e8e-8013-4cb9cd1d9601",
+                                                                  "1f1938d2-3013-63c6-8012-92f08b9df3c1",
+                                                                  "1f1938d2-2eeb-6157-8011-b0a264036a01",
+                                                                  "1f1938d2-2d8d-69ce-8010-8050cc3fd404",
+                                                                  "1f1938d2-2d34-68aa-800f-8cb45c2a7019",
+                                                                  "1f1938d2-2ce0-675b-800e-6e0e871e58b1",
+                                                                  "1f1938d2-2b61-6c14-800d-dd56a95db238",
+                                                                  "1f1938d2-2b02-6ec9-800c-b7a52871d53d",
+                                                                  "1f1938d2-2aab-62c9-800b-6e1a1e4c89fb",
+                                                                  "1f1938d2-2a2e-6d5c-800a-0ea45092fc12",
+                                                                  "1f1938d2-2896-69fb-8009-79d82451b8e3",
+                                                                  "1f1938d2-2844-6e80-8008-f79062c233a8",
+                                                                  "1f1938d2-27e6-6134-8007-e5f777544260",
+                                                                  "1f1938d2-278f-6c8b-8006-51aea34b2fcd",
+                                                                  "1f1938d2-273a-6332-8005-23311548604a",
+                                                                  "1f1938d2-26bb-67c5-8004-6182d7c67735",
+                                                                  "1f1938d2-265f-69b7-8003-f367abe219cb",
+                                                                  "1f1938d2-25f9-6ea3-8002-26451e87eb2c",
+                                                                  "1f1938d2-259f-6f63-8001-faee6450b485",
+                                                                  "1f1938d2-2548-6ad5-8000-ef05166d8885",
+                                                                  "1f1938d2-2546-621f-bfff-656217238b25"
+                                                              ],
+                                           "checkpoint_namespaces":  [
+                                                                         ""
+                                                                     ]
+                                       },
+                             "run_b":  {
+                                           "graph_run_id":  "3bc45977-44aa-45c5-89a6-27b138c67887",
+                                           "thread_id":  "9521064f-a600-4901-b54f-8e492d9549fa",
+                                           "tenant_id":  "338ca0bb-2a18-4f3c-8ec4-5e296d3154ab",
+                                           "status":  "COMPLETED",
+                                           "current_node":  "complete",
+                                           "created_at":  "2026-08-09T00:56:18.455556+00:00",
+                                           "updated_at":  "2026-08-09T00:56:22.780917+00:00",
+                                           "checkpoint_count":  23,
+                                           "checkpoint_ids":  [
+                                                                  "1f1938d2-3ea2-6b6e-8015-8d53836bbf48",
+                                                                  "1f1938d2-3e4b-64e6-8014-97dfcf52b60e",
+                                                                  "1f1938d2-3de9-699e-8013-313b4a407ecc",
+                                                                  "1f1938d2-3d91-61fa-8012-8ef95c45020d",
+                                                                  "1f1938d2-3ceb-680f-8011-cafdb69bf430",
+                                                                  "1f1938d2-3b53-6f77-8010-af33ea88be5d",
+                                                                  "1f1938d2-3ae7-6083-800f-515c9164d67d",
+                                                                  "1f1938d2-3a81-6270-800e-d4e4f741c5b6",
+                                                                  "1f1938d2-3912-6e68-800d-c49496733eba",
+                                                                  "1f1938d2-38ab-6391-800c-e72e273aa833",
+                                                                  "1f1938d2-384d-6254-800b-b1a0d59df4f9",
+                                                                  "1f1938d2-37d3-6fbd-800a-2cc6ef800d1e",
+                                                                  "1f1938d2-365e-6f92-8009-c28a6597f8df",
+                                                                  "1f1938d2-35e7-6060-8008-102e8768fc49",
+                                                                  "1f1938d2-356b-6743-8007-a11676905d42",
+                                                                  "1f1938d2-350f-661c-8006-c9d6c25ddabb",
+                                                                  "1f1938d2-3498-6183-8005-3af99d617e16",
+                                                                  "1f1938d2-3430-6a95-8004-dc152c1f3ad7",
+                                                                  "1f1938d2-33dd-6ca9-8003-8154fccf6a6e",
+                                                                  "1f1938d2-337d-69ca-8002-62fd8aed8c56",
+                                                                  "1f1938d2-332d-615c-8001-352ac94e88c3",
+                                                                  "1f1938d2-32cf-6b0b-8000-c952f67c6ab4",
+                                                                  "1f1938d2-32cc-6e1a-bfff-2164d855fe85"
+                                                              ],
+                                           "checkpoint_namespaces":  [
+                                                                         ""
+                                                                     ]
+                                       },
+                             "run_c":  {
+                                           "graph_run_id":  "cb5a7ee9-a946-4516-a135-a8f43fb33271",
+                                           "thread_id":  "5461ddfb-c520-438f-b7b2-356ffb049488",
+                                           "tenant_id":  "338ca0bb-2a18-4f3c-8ec4-5e296d3154ab",
+                                           "status":  "COMPLETED",
+                                           "current_node":  "complete",
+                                           "created_at":  "2026-08-09T00:56:18.459123+00:00",
+                                           "updated_at":  "2026-08-09T00:56:24.113741+00:00",
+                                           "checkpoint_count":  23,
+                                           "checkpoint_ids":  [
+                                                                  "1f1938d2-4b6e-6afd-8015-5acff7ccbcaa",
+                                                                  "1f1938d2-4b04-6bed-8014-1b7b4c2dbfb2",
+                                                                  "1f1938d2-4aa1-6052-8013-9eafb2671b7e",
+                                                                  "1f1938d2-4a39-651d-8012-4d52c509bb78",
+                                                                  "1f1938d2-49ce-663d-8011-3b087194e603",
+                                                                  "1f1938d2-4879-6520-8010-face117d97a2",
+                                                                  "1f1938d2-4818-6608-800f-06a6a125215c",
+                                                                  "1f1938d2-47c0-6b38-800e-ff1ee9bb6972",
+                                                                  "1f1938d2-4688-6bbd-800d-1bc1f5d8dd5f",
+                                                                  "1f1938d2-460e-6833-800c-affae4112f3e",
+                                                                  "1f1938d2-45b6-6dc1-800b-72b1f5080d08",
+                                                                  "1f1938d2-454c-6317-800a-d52161d95c38",
+                                                                  "1f1938d2-43f1-6b42-8009-c3d2e3ab6724",
+                                                                  "1f1938d2-439e-6fcf-8008-dccc5932dd25",
+                                                                  "1f1938d2-4342-6ee7-8007-f96092da858e",
+                                                                  "1f1938d2-42f3-6ece-8006-299390efb8ab",
+                                                                  "1f1938d2-429e-6ec1-8005-4aa634a15b99",
+                                                                  "1f1938d2-424b-64f4-8004-aa463f4cb230",
+                                                                  "1f1938d2-41f9-6c28-8003-3a5a52e1c6b4",
+                                                                  "1f1938d2-41a5-67c0-8002-8374fc6bca52",
+                                                                  "1f1938d2-4139-685e-8001-fcf5b9e9160a",
+                                                                  "1f1938d2-40e4-649e-8000-9277142eac58",
+                                                                  "1f1938d2-40e2-6655-bfff-555689c29baa"
+                                                              ],
+                                           "checkpoint_namespaces":  [
+                                                                         ""
+                                                                     ]
+                                       }
+                         },
+    "tenant_id":  "338ca0bb-2a18-4f3c-8ec4-5e296d3154ab",
+    "analysis_run_id":  "24222ef7-6455-4bbd-a2b1-7bca6ed9e8d3",
+    "analysis_thread_id":  "ae112afc-a8d9-4cfa-96dc-f16a9edc4cb2",
+    "analysis_request_id":  "26a94a60-1a1f-4310-8522-97189a46dcef",
+    "regenerative_run_id":  "8217485a-4e84-44b6-a485-8937eea50ce4",
+    "regenerative_run_a_id":  "8217485a-4e84-44b6-a485-8937eea50ce4",
+    "regenerative_run_b_id":  "3bc45977-44aa-45c5-89a6-27b138c67887",
+    "regenerative_run_c_id":  "cb5a7ee9-a946-4516-a135-a8f43fb33271",
+    "regenerative_thread_a_id":  "d7dbd05c-bd2a-49c8-afb5-6880cef81a80",
+    "regenerative_thread_b_id":  "9521064f-a600-4901-b54f-8e492d9549fa",
+    "regenerative_thread_c_id":  "5461ddfb-c520-438f-b7b2-356ffb049488",
+    "regenerative_request_a_id":  "0f26da98-a448-47c1-8689-a5469f557604",
+    "regenerative_request_b_id":  "2efffb9a-dcb3-466e-afd6-4d5e91cd6d42",
+    "regenerative_request_c_id":  "5889af66-9af1-4fbf-82ae-96ca3fdba3a2",
+    "context_fingerprint_ab":  "e96530e8dada73b9cba12b352c47c0f90ce4c7c1887419e2fafb2b9443feff87",
+    "context_fingerprint_c":  "f1a44eb7b7065e54382de9fedff8328dc0f5086c5b8c5bef12f69a43de31c42d",
+    "mutation_fingerprint":  "e5928628d7d46e3eb1da8a8f4049935eabe257facf5dbca7d96dc3b2015beb13",
+    "dataset_id":  "e95e774e-ad5b-43fb-89e6-aa5d989c8946",
+    "bundle_id":  "9b5c6dc3-b52a-4646-8c0e-18b5e0b76f09",
+    "prompt_id":  "bc8f1b37-1fbc-5d64-ac43-0ebd9b633981",
+    "model_resolution_id":  "41ad571a-f241-47cd-bf38-f4f79472ba96",
+    "profile_id":  "d09f0242-cee3-42b6-a417-53b5bb5ab7f9",
+    "provider":  "fake",
+    "configured_model":  "fake-analysis-v1",
+    "effective_model":  "fake-analysis-v1",
+    "cost_usd":  "0",
+    "authority":  [
+                      "ANALYSIS_ONLY",
+                      "SHADOW_ONLY"
+                  ],
+    "live_write":  false,
+    "real_provider_canary":  "NOT_RUN_REQUIRES_COST_APPROVAL"
+}

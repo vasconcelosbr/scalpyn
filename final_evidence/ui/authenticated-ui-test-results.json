@@ -1,0 +1,28 @@
+{
+  "classification": "AUTHENTICATED_UI_PROVEN",
+  "vercel_project": "scalpyn",
+  "deployment_id": "dpl_GpGdtjf1TpmxcPMAtpbKCENCdGLN",
+  "target": "preview",
+  "deployment_status": "Ready",
+  "protected_route_http_status": 200,
+  "authenticated_run_id": "e5cbaac3-f25a-418b-b606-c3dc8e6019b7",
+  "human_gate_run_id": "24146319-eab7-4fb4-9829-0bbc44f0dc58",
+  "double_submit_blocked": true,
+  "cross_tenant_foreign_run_id": "9bfc6fa0-4ef4-410b-8b3f-1db18a07d4e7",
+  "cross_tenant_endpoint_statuses": {
+    "context": 404,
+    "interrupts": 404,
+    "timeline": 404
+  },
+  "foreign_run_rendered": false,
+  "live_write_badge": "DENIED",
+  "orders_created": 0,
+  "temporary_cross_tenant_records_remaining": {
+    "tenant": 0,
+    "request": 0,
+    "run": 0
+  },
+  "logged_out": true,
+  "browser_sessions_finalized": true,
+  "screenshot": "intelligence-runs-authenticated-redacted.jpg"
+}

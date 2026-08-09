@@ -1,0 +1,9 @@
+Final global backend suite
+
+Command contract: pytest backend/tests --junitxml=.codex-evidence/final/backend-full-final.xml -ra
+Environment: isolated Linux Docker test runtime
+Result: 1614 passed, 0 failed, 0 errors, 0 skipped
+Warnings: 5
+Duration reported by pytest: 64.98s
+Exit code: 0
+JUnit source: .codex-evidence/final/backend-full-final.xml

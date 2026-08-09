@@ -1,0 +1,80 @@
+git : warning: in the working copy of 'backend/app/ai_orchestration/contracts.py', LF will be replaced by CRLF the
+next time Git touches it
+No linha:2 caractere:757
++ ... Output 'ROTATED_SECRET_NOT_IN_SOURCE'}; git diff --check 2>&1 | Tee-O ...
++                                             ~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (warning: in the... Git touches it:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+
+warning: in the working copy of 'backend/app/ai_orchestration/dataset_service.py', LF will be replaced by CRLF the
+next time Git touches it
+warning: in the working copy of 'backend/app/ai_orchestration/domain_tools.py', LF will be replaced by CRLF the next
+time Git touches it
+warning: in the working copy of 'backend/app/ai_orchestration/initial_prompts.py', LF will be replaced by CRLF the
+next time Git touches it
+warning: in the working copy of 'backend/app/ai_orchestration/langgraph/checkpoint_admin.py', LF will be replaced by
+CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/ai_orchestration/langgraph/config.py', LF will be replaced by CRLF the
+next time Git touches it
+warning: in the working copy of 'backend/app/ai_orchestration/langgraph/handler.py', LF will be replaced by CRLF the
+next time Git touches it
+warning: in the working copy of 'backend/app/ai_orchestration/langgraph/nodes.py', LF will be replaced by CRLF the
+next time Git touches it
+warning: in the working copy of 'backend/app/ai_orchestration/langgraph/registry.py', LF will be replaced by CRLF the
+next time Git touches it
+warning: in the working copy of 'backend/app/ai_orchestration/langgraph/staging_canary.py', LF will be replaced by
+CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/ai_orchestration/orchestrator.py', LF will be replaced by CRLF the next
+time Git touches it
+warning: in the working copy of 'backend/app/ai_orchestration/persistence.py', LF will be replaced by CRLF the next
+time Git touches it
+warning: in the working copy of 'backend/app/ai_orchestration/provider_adapters/__init__.py', LF will be replaced by
+CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/ai_orchestration/provider_adapters/http_adapter.py', LF will be replaced
+by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/ai_orchestration/provider_registry.py', LF will be replaced by CRLF the
+next time Git touches it
+warning: in the working copy of 'backend/app/ai_orchestration/runtime.py', LF will be replaced by CRLF the next time
+Git touches it
+warning: in the working copy of 'backend/app/ai_orchestration/tool_registry.py', LF will be replaced by CRLF the next
+time Git touches it
+warning: in the working copy of 'backend/app/api/ai_graphs.py', LF will be replaced by CRLF the next time Git touches
+it
+warning: in the working copy of 'backend/app/copilot/agent.py', LF will be replaced by CRLF the next time Git touches
+it
+warning: in the working copy of 'backend/app/main.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/models/__init__.py', LF will be replaced by CRLF the next time Git
+touches it
+warning: in the working copy of 'backend/app/models/systemic_ai.py', LF will be replaced by CRLF the next time Git
+touches it
+warning: in the working copy of 'backend/app/services/profile_ai_explanation_service.py', LF will be replaced by CRLF
+the next time Git touches it
+warning: in the working copy of 'backend/app/services/profile_intelligence_live_service.py', LF will be replaced by
+CRLF the next time Git touches it
+warning: in the working copy of 'backend/app/services/shadow_trade_analysis_service.py', LF will be replaced by CRLF
+the next time Git touches it
+warning: in the working copy of 'backend/app/tasks/ai_orchestration.py', LF will be replaced by CRLF the next time Git
+touches it
+warning: in the working copy of 'backend/app/tasks/celery_app.py', LF will be replaced by CRLF the next time Git
+touches it
+warning: in the working copy of 'backend/app/tasks/shadow_trade_analysis.py', LF will be replaced by CRLF the next
+time Git touches it
+warning: in the working copy of 'backend/tests/test_langgraph_systemic_runtime.py', LF will be replaced by CRLF the
+next time Git touches it
+warning: in the working copy of 'frontend/app/dashboard/shadow-portfolio/page.tsx', LF will be replaced by CRLF the
+next time Git touches it
+warning: in the working copy of 'frontend/app/intelligence-runs/page.tsx', LF will be replaced by CRLF the next time
+Git touches it
+warning: in the working copy of 'frontend/app/ml-models/page.tsx', LF will be replaced by CRLF the next time Git
+touches it
+warning: in the working copy of 'frontend/app/profiles/page.tsx', LF will be replaced by CRLF the next time Git
+touches it
+warning: in the working copy of 'frontend/app/settings/risk/page.tsx', LF will be replaced by CRLF the next time Git
+touches it
+warning: in the working copy of 'frontend/app/settings/score/page.tsx', LF will be replaced by CRLF the next time Git
+touches it
+warning: in the working copy of 'frontend/app/settings/social-score/page.tsx', LF will be replaced by CRLF the next
+time Git touches it
+warning: in the working copy of 'frontend/app/settings/strategies/page.tsx', LF will be replaced by CRLF the next time
+Git touches it
+warning: in the working copy of 'frontend/eslint.config.mjs', LF will be replaced by CRLF the next time Git touches it
