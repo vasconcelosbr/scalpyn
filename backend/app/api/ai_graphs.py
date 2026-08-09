@@ -44,6 +44,11 @@ class ResumeGraphRunRequest(BaseModel):
     edits: dict[str, Any] = Field(default_factory=dict)
 
 
+class StagingCrashResumeRequest(BaseModel):
+    action: Literal["seed-start", "snapshot", "resume"]
+    run_id: UUID | None = None
+
+
 def _run_payload(run, request=None, definition=None) -> dict[str, Any]:
     return {
         "id": str(run.id),
@@ -347,5 +352,40 @@ async def run_staging_canary(
 
     try:
         return await run_canaries()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail={"code": str(exc)}) from exc
+
+
+@router.post("/staging-crash-resume")
+async def run_staging_crash_resume(
+    payload: StagingCrashResumeRequest,
+    authorization: str | None = Header(default=None),
+):
+    """Drive a fake-provider crash/resume proof through the dedicated worker."""
+    expected = os.getenv("DIAGNOSTICS_BEARER_TOKEN", "").strip()
+    prefix = "Bearer "
+    supplied = authorization[len(prefix):] if authorization and authorization.startswith(prefix) else ""
+    if not expected or not supplied or not secrets.compare_digest(supplied, expected):
+        raise HTTPException(
+            status_code=401 if expected else 404,
+            detail="Unauthorized" if expected else "Not Found",
+            headers={"WWW-Authenticate": "Bearer"} if expected else None,
+        )
+    from ..ai_orchestration.langgraph.staging_canary import _assert_staging
+    from scripts.final_langgraph_runtime_driver import (
+        _resume_pending,
+        _seed_start,
+        _snapshot,
+    )
+
+    try:
+        _assert_staging()
+        if payload.action == "seed-start":
+            return await _seed_start()
+        if payload.run_id is None:
+            raise RuntimeError("GRAPH_RUN_ID_REQUIRED")
+        if payload.action == "snapshot":
+            return await _snapshot(payload.run_id)
+        return await _resume_pending(payload.run_id)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail={"code": str(exc)}) from exc
