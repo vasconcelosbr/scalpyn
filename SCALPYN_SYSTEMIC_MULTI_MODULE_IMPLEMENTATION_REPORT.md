@@ -1,132 +1,68 @@
-
 # Scalpyn — Systemic Multi-Module Intelligence Implementation Report
 
 ## 1. Veredito
 
-`PARTIALLY_IMPLEMENTED_TEST_GATE_FAILED`.
+`PRODUCTION_ANALYSIS_ONLY_DEPLOYED_WITH_RESIDUAL_GATES`.
 
-The staging systemic and regenerative Shadow runtime is proven, but acceptance is blocked by the non-green full backend suite, absent real-provider cost approval, absent real process crash/restart proof, and incomplete protected-preview UI proof. Production was not changed.
+The systemic multi-module runtime is deployed in production with analysis-only authority. The production API, dedicated LangGraph worker, database migrations and Vercel frontend are healthy [deployment: final production verification]. Completion remains gated by the non-green full backend suite, the absence of an approved real-provider canary, missing process-kill crash/resume proof, recurring execution-worker heartbeat misses and source-control reconciliation.
 
-## 2. Baseline revalidado
+## 2. Baseline e código implantado
 
-The clean worktree started at `fa586ff8cd006ac790e9ee431f6698fd838cc530`. Production read-only probes showed migration `148_langgraph_runtime`, empty systemic runtime tables, no live/Auto-Pilot profiles and no AI-created orders at the frozen probe time [query: production read-only probe].
+The implementation originated from clean baseline `fa586ff8cd006ac790e9ee431f6698fd838cc530` [git]. The deployed worktree includes implementation commit `c86faffd4b9ad35601d384b4c0d8093b5b4a29f2`, provider-boundary fix `09b8cb47722a79237db803210c863dee65a32696` and Vercel packaging fix `5aea8d2ba6694aab92a6ed2f0ecedb7d696ef8c3` [git].
 
-## 3. Segurança
+## 3. Segurança e autoridade
 
-Authority is capped at analysis/proposal/candidate/Shadow. There is no live tool. Tenant scope, typed schemas, row/time bounds, human approval gates, output hashes, fake/real-provider separation and Spot blocking are enforced. The staging canary credential was rotated after browser exposure and re-applied by a fresh successful canary. Legacy `preset_ia_service.py` provider calls now pass through `SystemicLangGraphBridge` and the central adapter boundary.
+Authority remains capped at analysis/proposal/candidate/Shadow. There is no live AI tool. Tenant scope, typed schemas, row/time bounds, human approval gates, output hashes, fake/real-provider separation and Spot blocking are enforced. Legacy `preset_ia_service.py` provider calls now pass through `SystemicLangGraphBridge` and the central adapter boundary [code + focused tests].
+
+Production flags explicitly keep regenerative Shadow and both provider canaries disabled [config: Railway production]. No provider call, model approval, graph run, AI tool evidence or AI order was created during the rollout [query: production post-deploy probe].
 
 ## 4. Arquitetura
 
 Module entrypoint → Intelligence Runs API → orchestration service → LangGraph → typed tools/policies/contextual memory → canonical PostgreSQL records.
 
-## 5. Module Capability Registry
+## 5. Capability registry
 
-`10` approved immutable tenant-scoped modules [code: module registry].
+The registry contains `10` approved immutable tenant-scoped modules [code: module registry].
 
-## 6. Strategy Profiles
+## 6. Module contracts
 
-Read tools plus human-approved candidate version creation; no live pointer switch.
+- Strategy Profiles: read tools plus human-approved candidate version creation; no live pointer switch.
+- ML Models: read-only metrics/contracts/drift/authority; no training or promotion authority.
+- Shadow Portfolio: frozen datasets, deterministic comparison and human-gated experiments.
+- Score Engine: read/explain/validate plus candidate versions only.
+- Global Risk and Strategies: read-only hard vetoes; no policy mutation.
+- Social Score and Market Regime: read-only contextual evidence with provenance and missingness preserved.
+- Audit/Version/Experiment Memory: durable contextual memory for completed Shadow decisions.
+- Intelligence Runs: authenticated control plane for lineage, evidence, authority, prompts, datasets and bundles.
 
-## 7. ML Models
+## 7. Graphs e entrypoints
 
-Read-only metrics/contracts/drift/authority. No training or promotion authority.
+Four approved v2 graphs are versioned and exported as Mermaid [code: graph registry]. Four legacy bridges and seven module UI actions are implemented and statically tested [code + focused tests]. Only `shadow_portfolio` has end-to-end staging runtime proof; individual execution of every entrypoint remains open.
 
-## 8. Shadow Portfolio
+## 8. Staging proof
 
-Frozen datasets, deterministic comparison and human-gated Shadow experiments.
+The staging canary proved frozen datasets, complete configuration lineage, fake-provider resolution, durable interrupts, contextual Decision Memory, candidate version-on-change and zero orders [query: staging canary]. A real worker process kill/restart remains `NÃO VERIFICADO`.
 
-## 9. Score Engine
+## 9. Test gates
 
-Read/explain/validate plus new candidate versions only.
+Focused backend verification passed with `78` tests and `0` failures [query: focused pytest]. The historical full backend collection remains red with `68` failures and `12` errors in `1606` collected tests [query: `.codex-evidence/full-backend.xml`]. The full-history Alembic offline renderer still fails on immutable historical migration `148`; actual runtime upgrades through the new migrations passed [command evidence].
 
-## 10. Global Risk
+## 10. Produção
 
-Read-only hard veto; no candidate or policy mutation.
+- Database migration: `150_multimodule_hardening (head)` [query: production Alembic].
+- Railway API deployment: `4ff3c107-2431-4427-84b1-5ee91f00fdeb`, status `SUCCESS` [deployment: Railway].
+- Railway LangGraph worker deployment: `7e307ac1-9f68-49d0-a1a6-85e001f2d7f1`, status `SUCCESS` [deployment: Railway].
+- Vercel deployment: `dpl_8GTy7i92msxdsG1irBkEspnfg44d`, status `READY`, alias `https://scalpyn.vercel.app` [deployment: Vercel].
+- Direct and Vercel-proxied `/api/health` and `/api/health/schema`: HTTP `200` [probe: production routes].
+- Protected graph definitions/capabilities without authentication: HTTP `401`, expected [probe: production authorization].
+- Production runtime state after rollout: `10` module rows in `APPROVED`; `0` model approvals; `0` AI tool evidence; `0` graph runs; `0` orders [query: production post-deploy probe].
 
-## 11. Strategies
+The first API rebuild triggered by the feature-flag update used stale source-linked `origin/main` and returned HTTP `502` because it could not locate migration `150_multimodule_hardening` [logs: Railway deployment `4613bf70-1e3f-47d7-a92c-1ae1685df335`]. The current source was re-uploaded immediately, restoring the healthy final deployment above [deployment + route probes].
 
-Read-only hard veto; Spot invariant remains blocked.
+## 11. Riscos residuais
 
-## 12. Social Score
+See `scalpyn_remaining_risks_after_multimodule.md`. The two most urgent operational items are controlled reconciliation of the deployed commits into the source-linked main branch, and investigation of recurring missed heartbeat messages for the existing execution worker without disrupting real-trading services.
 
-Read-only, provenance/freshness/missingness preserving, sanitized and not injected into ML.
+## 12. Evidência de implantação
 
-## 13. Market Regime
-
-Read-only context used in root-cause and memory fingerprints.
-
-## 14. Audit/Version/Experiment Memory
-
-Final Shadow decisions persist completed contextual memory with mutation/context fingerprints.
-
-## 15. Intelligence Runs
-
-Authenticated local frontend against staging displayed list, timeline, lineage, authority, model, prompt, dataset, bundle, tool count and cost. Vercel preview remained protected.
-
-## 16. Graphs
-
-Four approved v2 graphs are versioned and exported as Mermaid [code: graph registry].
-
-## 17. Entrypoint adoption
-
-Four legacy bridges and seven module UI actions are implemented and statically tested [code + focused tests]. Only `shadow_portfolio` received end-to-end staging runtime proof.
-
-## 18. Canonical datasets
-
-Final dataset `e95e774e-ad5b-43fb-89e6-aa5d989c8946` passed quality and remained immutable [query: staging canary].
-
-## 19. Configuration bundles
-
-Final bundle `9b5c6dc3-b52a-4646-8c0e-18b5e0b76f09` carried complete lineage [query: staging canary].
-
-## 20. Provider/model
-
-Fake staging provider only: configured/effective `fake-analysis-v1`, cost `0` USD [query: ai_usage]. Real provider is not proven and was intentionally not called without cost approval.
-
-## 21. Data quality
-
-Missing module rows remain `NO_DATA`; they are not coerced to zero. Candidate-capable dataset quality passed.
-
-## 22. Versioning/rollback
-
-Each A/B/C run created one candidate version [query: graph event]. Rollback remains version-on-change; no in-place live rollback occurred.
-
-## 23. Regenerative cycle
-
-Runs A/B/C completed after three durable interrupts each [query: staging canary]. B reused A; C used a different context and did not inherit the block [query: staging canary].
-
-## 24. Decision Memory
-
-Contextual reuse and isolation are proven by persisted memory IDs and event payloads.
-
-## 25. Crash/resume
-
-Checkpoints and interrupt/resume are proven. A real worker process kill/restart is `NÃO VERIFICADO`.
-
-## 26. Frontend
-
-Tests, typecheck and production build passed. Lint has zero errors and classified warnings.
-
-## 27. Tests/security
-
-Focused tests passed. The full collection remains red and blocks completion. npm audit has no high/critical findings. The provider-boundary scan still finds direct calls in the legacy Preset IA domain service. The full-history Alembic offline renderer fails on immutable historical migration `148`; the actual new-migration cycle and staging upgrade passed.
-
-## 28. Staging
-
-Railway API and dedicated `ai_orchestration` worker are healthy. The worker imports only orchestration tasks [logs: dedicated worker]. Final canary created zero orders [query: staging orders] and no live writes.
-
-## 29. Production
-
-Not deployed. Mandatory checkpoint pending.
-
-## 30. Gap closure
-
-See `scalpyn_gap_closure_after_multimodule.json`.
-
-## 31. Remaining risks
-
-See `scalpyn_remaining_risks_after_multimodule.md`.
-
-## 32. Evidence ledger
-
-See `SCALPYN_SYSTEMIC_MULTI_MODULE_EVIDENCE_LEDGER.md`.
+See `SCALPYN_SYSTEMIC_MULTIMODULE_PRODUCTION_DEPLOYMENT_REPORT.md` and `SCALPYN_SYSTEMIC_MULTI_MODULE_EVIDENCE_LEDGER.md`.
