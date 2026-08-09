@@ -1,5 +1,6 @@
 from .http_adapter import HTTPProviderAdapter
 from .anthropic_sdk import AnthropicSDKTextAdapter
+from .catalog import AnthropicCatalogAdapter, ProviderCatalogError
 from .copilot_transport import CopilotProviderTransport
 from ..runtime import ProviderAdapterRegistry
 
@@ -12,6 +13,7 @@ def default_adapter_registry() -> ProviderAdapterRegistry:
     return registry
 
 __all__ = [
-    "AnthropicSDKTextAdapter", "CopilotProviderTransport", "HTTPProviderAdapter",
+    "AnthropicCatalogAdapter", "AnthropicSDKTextAdapter", "CopilotProviderTransport",
+    "HTTPProviderAdapter", "ProviderCatalogError",
     "default_adapter_registry",
 ]

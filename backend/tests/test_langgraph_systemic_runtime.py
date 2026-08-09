@@ -228,7 +228,7 @@ def test_all_legacy_entrypoints_use_orchestration():
 def test_no_direct_provider_calls_outside_adapters():
     # Provider adapters own transport; ai_keys.py is the explicit key-validation
     # endpoint exception required by the deployment contract.
-    allowed = {"http_adapter.py", "anthropic_sdk.py", "copilot_transport.py", "ai_keys.py"}
+    allowed = {"catalog.py", "http_adapter.py", "anthropic_sdk.py", "copilot_transport.py", "ai_keys.py"}
     offenders = []
     for path in (BACKEND / "app").rglob("*.py"):
         text_value = path.read_text(encoding="utf-8")

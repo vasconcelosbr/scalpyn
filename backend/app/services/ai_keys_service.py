@@ -8,7 +8,6 @@ The key is NEVER returned in plain text by the API — only key_hint.
 
 import os
 import logging
-import traceback
 from datetime import datetime, timezone
 from typing import Optional, Tuple
 from uuid import UUID
@@ -213,13 +212,6 @@ async def test_anthropic_key(db: AsyncSession, user_id: UUID, provider: str = "a
         return False, "Nenhuma chave configurada para este provider."
 
     try:
-        import anthropic
-    except ImportError:
-        msg = "Pacote 'anthropic' não instalado. Execute: pip install anthropic"
-        logger.error(f"[AIKeys] {msg}")
-        return False, msg
-
-    try:
         api_key = decrypt_value(r.api_key_encrypted)
     except ValueError as e:
         msg = str(e)
@@ -227,45 +219,33 @@ async def test_anthropic_key(db: AsyncSession, user_id: UUID, provider: str = "a
         await _save_test_result(db, r, False, msg)
         return False, msg
 
+    # Key validation must not consume generation tokens. The authenticated
+    # catalog proves that the provider accepts the credential and supplies the
+    # exact model IDs used by the separately approved canary.
+    from ..ai_orchestration.provider_adapters import AnthropicCatalogAdapter, ProviderCatalogError
+
     msg = ""
     try:
-        client = anthropic.Anthropic(api_key=api_key)
-        client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=10,
-            messages=[{"role": "user", "content": "Hi"}],
-        )
+        await AnthropicCatalogAdapter().list_model_ids(api_key=api_key)
         await _save_test_result(db, r, True, "")
-        logger.info(f"[AIKeys] Anthropic test OK user={user_id}")
-        return True, "Conexão com a API Anthropic estabelecida com sucesso."
-
-    except anthropic.AuthenticationError as e:
-        msg = f"Chave inválida. Verifique se copiou a API key corretamente. (AuthenticationError: {e.message})"
-        logger.error(f"[AIKeys] AuthenticationError user={user_id}: {e.message}")
-
-    except anthropic.PermissionDeniedError as e:
-        msg = f"Permissão negada. Verifique os escopos da chave. (PermissionDeniedError: {e.message})"
-        logger.error(f"[AIKeys] PermissionDeniedError user={user_id}: {e.message}")
-
-    except anthropic.RateLimitError as e:
-        msg = f"Rate limit atingido. Aguarde alguns instantes e tente novamente. (RateLimitError: {e.message})"
-        logger.warning(f"[AIKeys] RateLimitError user={user_id}: {e.message}")
-
-    except anthropic.APIConnectionError as e:
-        msg = f"Erro de conexão com a API Anthropic. Verifique sua rede. (APIConnectionError: {e})"
-        logger.error(f"[AIKeys] APIConnectionError user={user_id}: {e}")
-
-    except anthropic.APIStatusError as e:
-        msg = f"Erro da API Anthropic (HTTP {e.status_code}): {e.message}"
-        logger.error(f"[AIKeys] APIStatusError {e.status_code} user={user_id}: {e.message}")
-
-    except Exception as e:
-        tb = traceback.format_exc()
-        msg = f"{type(e).__name__}: {str(e) or 'sem mensagem'}"
-        logger.error(f"[AIKeys] Erro inesperado user={user_id}:\n{tb}")
+        logger.info("[AIKeys] Anthropic catalog validation OK user=%s", user_id)
+        return True, "Conexão autenticada e catálogo consultado sem geração."
+    except ProviderCatalogError as exc:
+        if exc.status_code == 401:
+            msg = "Chave inválida ou expirada."
+        elif exc.status_code == 403:
+            msg = "Permissão negada. Verifique os escopos da chave."
+        elif exc.code == "PROVIDER_CATALOG_TIMEOUT":
+            msg = "Timeout ao consultar o catálogo do provider."
+        elif exc.code == "PROVIDER_CATALOG_CONNECTION_ERROR":
+            msg = "Erro de conexão ao consultar o catálogo do provider."
+        elif exc.code in {"PROVIDER_CATALOG_RESPONSE_INVALID", "PROVIDER_CATALOG_EMPTY"}:
+            msg = "Resposta inválida do catálogo do provider."
+        else:
+            msg = f"Erro HTTP {exc.status_code} ao consultar o catálogo do provider."
 
     if not msg:
-        msg = "Erro desconhecido. Verifique os logs do Cloud Run."
+        msg = "Erro desconhecido. Verifique os logs do servidor."
 
     await _save_test_result(db, r, False, msg)
     return False, msg

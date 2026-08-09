@@ -6,7 +6,8 @@ from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import AnyHttpUrl, BaseModel, Field, field_validator
+from pydantic import AnyHttpUrl, BaseModel, Field, field_validator, model_validator
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..ai_orchestration.contracts import AnalysisMode, Authority
@@ -14,7 +15,7 @@ from ..ai_orchestration.hashing import canonical_hash
 from ..ai_orchestration.langgraph.config import get_langgraph_settings
 from ..ai_orchestration.provider_registry import default_registry
 from ..database import get_db
-from ..models.systemic_ai import AIModelApprovalRecord
+from ..models.systemic_ai import AIBudgetPolicyRecord, AIModelApprovalRecord
 from ..services.module_ai_analysis_service import ModuleAIAnalysisService
 from .config import get_current_user_id
 
@@ -34,6 +35,15 @@ class CreateModelApprovalRequest(BaseModel):
     pricing_observed_at: datetime
     approval_phrase: str
     scope: Literal["SYSTEMIC_MODULE_ANALYSIS"] = "SYSTEMIC_MODULE_ANALYSIS"
+    module: Literal[
+        "strategy_profiles", "ml_models", "shadow_portfolio", "score_engine",
+        "global_risk", "strategies", "social_score",
+    ]
+    max_input_tokens: int = Field(gt=0)
+    max_output_tokens: int = Field(gt=0)
+    request_token_limit: int = Field(gt=0)
+    daily_token_limit: int = Field(gt=0)
+    monthly_token_limit: int = Field(gt=0)
 
     @field_validator("pricing_observed_at")
     @classmethod
@@ -41,6 +51,17 @@ class CreateModelApprovalRequest(BaseModel):
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("pricing_observed_at must include a timezone")
         return value
+
+    @model_validator(mode="after")
+    def budget_is_bounded(self):
+        reservation = self.max_input_tokens + self.max_output_tokens
+        if self.request_token_limit < reservation:
+            raise ValueError("request_token_limit must cover max_input_tokens + max_output_tokens")
+        if self.daily_token_limit < self.request_token_limit:
+            raise ValueError("daily_token_limit must be at least request_token_limit")
+        if self.monthly_token_limit < self.daily_token_limit:
+            raise ValueError("monthly_token_limit must be at least daily_token_limit")
+        return self
 
 
 @router.post("/model-approvals", status_code=201)
@@ -54,13 +75,25 @@ async def create_model_approval(
     now = datetime.now(timezone.utc)
     catalog = default_registry()
     catalog_entry = catalog.get_entry(payload.provider, payload.model)
+    if payload.max_input_tokens > catalog_entry.max_input:
+        raise HTTPException(status_code=422, detail={"code": "MODEL_INPUT_CAP_EXCEEDED"})
+    if payload.max_output_tokens > catalog_entry.max_output:
+        raise HTTPException(status_code=422, detail={"code": "MODEL_OUTPUT_CAP_EXCEEDED"})
+    million = Decimal("1000000")
+    worst_case_cost = (
+        Decimal(payload.max_input_tokens) * payload.input_cost_per_million
+        + Decimal(payload.max_output_tokens) * payload.output_cost_per_million
+    ) / million
+    if payload.max_cost_usd < worst_case_cost:
+        raise HTTPException(status_code=422, detail={"code": "MODEL_COST_CAP_BELOW_WORST_CASE"})
     pricing_payload = {
         "provider": payload.provider, "model": payload.model,
         "input_cost_per_million": str(payload.input_cost_per_million),
         "output_cost_per_million": str(payload.output_cost_per_million),
         "pricing_source_url": str(payload.pricing_source_url),
         "pricing_observed_at": payload.pricing_observed_at.isoformat(),
-        "max_output_tokens": catalog_entry.max_output,
+        "max_input_tokens": payload.max_input_tokens,
+        "max_output_tokens": payload.max_output_tokens,
         "catalog_snapshot_hash": catalog.catalog_snapshot_hash,
     }
     pricing_snapshot_hash = canonical_hash(pricing_payload)
@@ -70,13 +103,17 @@ async def create_model_approval(
         "model": payload.model, "max_cost_usd": str(payload.max_cost_usd),
         "scope": payload.scope, "approved_by": str(user_id), "approved_at": now.isoformat(),
         "pricing_snapshot_hash": pricing_snapshot_hash,
+        "module": payload.module,
+        "request_token_limit": payload.request_token_limit,
+        "daily_token_limit": payload.daily_token_limit,
+        "monthly_token_limit": payload.monthly_token_limit,
     }
     record = AIModelApprovalRecord(
         id=record_id, tenant_id=user_id, provider=payload.provider, model=payload.model,
         max_cost_usd=payload.max_cost_usd,
         input_cost_per_million=payload.input_cost_per_million,
         output_cost_per_million=payload.output_cost_per_million,
-        max_output_tokens=catalog_entry.max_output,
+        max_output_tokens=payload.max_output_tokens,
         pricing_source_url=str(payload.pricing_source_url),
         pricing_observed_at=payload.pricing_observed_at,
         pricing_snapshot_hash=pricing_snapshot_hash,
@@ -86,6 +123,25 @@ async def create_model_approval(
         expires_at=now + timedelta(seconds=get_langgraph_settings().model_approval_ttl_seconds),
         content_hash=canonical_hash(approval_payload),
     )
+    budget = (await db.execute(select(AIBudgetPolicyRecord).where(
+        AIBudgetPolicyRecord.tenant_id == user_id,
+        AIBudgetPolicyRecord.provider == payload.provider,
+        AIBudgetPolicyRecord.model == payload.model,
+        AIBudgetPolicyRecord.module == payload.module,
+    ))).scalar_one_or_none()
+    if budget is None:
+        budget = AIBudgetPolicyRecord(
+            tenant_id=user_id,
+            provider=payload.provider,
+            model=payload.model,
+            module=payload.module,
+        )
+        db.add(budget)
+    budget.request_token_limit = payload.request_token_limit
+    budget.daily_token_limit = payload.daily_token_limit
+    budget.monthly_token_limit = payload.monthly_token_limit
+    budget.null_limit_policy = "DENY"
+    budget.is_active = True
     db.add(record)
     await db.commit()
     return {
@@ -93,6 +149,18 @@ async def create_model_approval(
         "max_cost_usd": str(record.max_cost_usd), "scope": record.scope,
         "pricing_snapshot_hash": record.pricing_snapshot_hash,
         "expires_at": record.expires_at.isoformat(), "content_hash": record.content_hash,
+        "max_input_tokens": payload.max_input_tokens,
+        "max_output_tokens": record.max_output_tokens,
+        "worst_case_cost_usd": str(worst_case_cost),
+        "budget": {
+            "module": budget.module,
+            "request_token_limit": budget.request_token_limit,
+            "daily_token_limit": budget.daily_token_limit,
+            "monthly_token_limit": budget.monthly_token_limit,
+            "null_limit_policy": budget.null_limit_policy,
+            "is_active": budget.is_active,
+            "expires_at": record.expires_at.isoformat(),
+        },
     }
 
 

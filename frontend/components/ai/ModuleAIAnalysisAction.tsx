@@ -74,6 +74,11 @@ export function ModuleAIAnalysisAction({
   const [maxCostUsd, setMaxCostUsd] = useState("");
   const [inputCostPerMillion, setInputCostPerMillion] = useState("");
   const [outputCostPerMillion, setOutputCostPerMillion] = useState("");
+  const [maxInputTokens, setMaxInputTokens] = useState("");
+  const [maxOutputTokens, setMaxOutputTokens] = useState("");
+  const [requestTokenLimit, setRequestTokenLimit] = useState("");
+  const [dailyTokenLimit, setDailyTokenLimit] = useState("");
+  const [monthlyTokenLimit, setMonthlyTokenLimit] = useState("");
   const [pricingSourceUrl, setPricingSourceUrl] = useState("");
   const [approvalPhrase, setApprovalPhrase] = useState("");
   const [busy, setBusy] = useState(false);
@@ -101,6 +106,11 @@ export function ModuleAIAnalysisAction({
     const approvedCost = Number(maxCostUsd);
     const inputRate = Number(inputCostPerMillion);
     const outputRate = Number(outputCostPerMillion);
+    const maxInput = Number(maxInputTokens);
+    const maxOutput = Number(maxOutputTokens);
+    const requestLimit = Number(requestTokenLimit);
+    const dailyLimit = Number(dailyTokenLimit);
+    const monthlyLimit = Number(monthlyTokenLimit);
     if (
       approvalPhrase.trim() !== "APROVO MODELO E CUSTO"
       || !question.trim()
@@ -111,6 +121,16 @@ export function ModuleAIAnalysisAction({
       || inputRate < 0
       || !Number.isFinite(outputRate)
       || outputRate < 0
+      || !Number.isInteger(maxInput)
+      || maxInput <= 0
+      || !Number.isInteger(maxOutput)
+      || maxOutput <= 0
+      || !Number.isInteger(requestLimit)
+      || requestLimit < maxInput + maxOutput
+      || !Number.isInteger(dailyLimit)
+      || dailyLimit < requestLimit
+      || !Number.isInteger(monthlyLimit)
+      || monthlyLimit < dailyLimit
       || !pricingSourceUrl.startsWith("https://")
     ) return;
     setBusy(true);
@@ -126,6 +146,12 @@ export function ModuleAIAnalysisAction({
         pricing_observed_at: new Date().toISOString(),
         approval_phrase: approvalPhrase.trim(),
         scope: "SYSTEMIC_MODULE_ANALYSIS",
+        module: originModule,
+        max_input_tokens: maxInput,
+        max_output_tokens: maxOutput,
+        request_token_limit: requestLimit,
+        daily_token_limit: dailyLimit,
+        monthly_token_limit: monthlyLimit,
       });
       const created = await apiPost<RunResponse>("/ai/modules/analysis-runs", {
         origin_module: originModule,
@@ -218,6 +244,21 @@ export function ModuleAIAnalysisAction({
                     <label className="text-xs leading-5 text-amber-100/80">USD / milhão de tokens de saída
                       <input inputMode="decimal" value={outputCostPerMillion} onChange={(event) => { setOutputCostPerMillion(event.target.value); setApprovalPhrase(""); }} className="mt-1.5 w-full rounded-lg border border-amber-300/20 bg-black/20 px-3 py-2 text-sm text-amber-50" />
                     </label>
+                    <label className="text-xs leading-5 text-amber-100/80">Máximo de tokens de entrada
+                      <input inputMode="numeric" value={maxInputTokens} onChange={(event) => { setMaxInputTokens(event.target.value); setApprovalPhrase(""); }} className="mt-1.5 w-full rounded-lg border border-amber-300/20 bg-black/20 px-3 py-2 text-sm text-amber-50" />
+                    </label>
+                    <label className="text-xs leading-5 text-amber-100/80">Máximo de tokens de saída
+                      <input inputMode="numeric" value={maxOutputTokens} onChange={(event) => { setMaxOutputTokens(event.target.value); setApprovalPhrase(""); }} className="mt-1.5 w-full rounded-lg border border-amber-300/20 bg-black/20 px-3 py-2 text-sm text-amber-50" />
+                    </label>
+                    <label className="text-xs leading-5 text-amber-100/80">Limite desta solicitação
+                      <input inputMode="numeric" value={requestTokenLimit} onChange={(event) => { setRequestTokenLimit(event.target.value); setApprovalPhrase(""); }} className="mt-1.5 w-full rounded-lg border border-amber-300/20 bg-black/20 px-3 py-2 text-sm text-amber-50" />
+                    </label>
+                    <label className="text-xs leading-5 text-amber-100/80">Limite diário de tokens
+                      <input inputMode="numeric" value={dailyTokenLimit} onChange={(event) => { setDailyTokenLimit(event.target.value); setApprovalPhrase(""); }} className="mt-1.5 w-full rounded-lg border border-amber-300/20 bg-black/20 px-3 py-2 text-sm text-amber-50" />
+                    </label>
+                    <label className="text-xs leading-5 text-amber-100/80">Limite mensal de tokens
+                      <input inputMode="numeric" value={monthlyTokenLimit} onChange={(event) => { setMonthlyTokenLimit(event.target.value); setApprovalPhrase(""); }} className="mt-1.5 w-full rounded-lg border border-amber-300/20 bg-black/20 px-3 py-2 text-sm text-amber-50" />
+                    </label>
                     <label className="text-xs leading-5 text-amber-100/80">Fonte oficial do preço
                       <input type="url" value={pricingSourceUrl} onChange={(event) => { setPricingSourceUrl(event.target.value); setApprovalPhrase(""); }} placeholder="https://..." className="mt-1.5 w-full rounded-lg border border-amber-300/20 bg-black/20 px-3 py-2 text-sm text-amber-50" />
                     </label>
@@ -234,7 +275,7 @@ export function ModuleAIAnalysisAction({
             {!run && (
               <div className="flex items-center justify-end gap-2 border-t border-white/10 px-5 py-4">
                 <button type="button" onClick={() => setOpen(false)} className="rounded-lg px-3 py-2 text-sm text-slate-400 hover:text-slate-100">Cancelar</button>
-                <button type="button" onClick={() => void submit()} disabled={busy || approvalPhrase.trim() !== "APROVO MODELO E CUSTO" || !maxCostUsd || !inputCostPerMillion || !outputCostPerMillion || !pricingSourceUrl || !question.trim() || !model.trim()} className="inline-flex items-center gap-2 rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-cyan-950 disabled:cursor-not-allowed disabled:opacity-40">
+                <button type="button" onClick={() => void submit()} disabled={busy || approvalPhrase.trim() !== "APROVO MODELO E CUSTO" || !maxCostUsd || !inputCostPerMillion || !outputCostPerMillion || !maxInputTokens || !maxOutputTokens || !requestTokenLimit || !dailyTokenLimit || !monthlyTokenLimit || !pricingSourceUrl || !question.trim() || !model.trim()} className="inline-flex items-center gap-2 rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-cyan-950 disabled:cursor-not-allowed disabled:opacity-40">
                   {busy && <Loader2 size={15} className="animate-spin" />} Criar Intelligence Run
                 </button>
               </div>

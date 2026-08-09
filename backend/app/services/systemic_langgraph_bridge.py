@@ -10,7 +10,7 @@ from typing import Any, Awaitable, Callable
 from uuid import UUID
 
 from jsonschema import validate
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..ai_orchestration.provider_adapters import (
@@ -20,7 +20,7 @@ from ..ai_orchestration.runtime import ProviderResponse
 from ..ai_orchestration.sanitizer import TrustLabel, structured_block
 from ..models.ai_provider_key import AIProviderKey
 from ..models.systemic_ai import (
-    AIConfigurationBundleRecord, AIDatasetSnapshotRecord, AIModelResolutionRecord,
+    AIBudgetPolicyRecord, AIConfigurationBundleRecord, AIDatasetSnapshotRecord, AIModelResolutionRecord,
     AIModelApprovalRecord, AIPromptVersion, AIRequestRecord, AIResultRecord, AIUsageRecord,
     AIToolEvidenceRecord,
 )
@@ -250,6 +250,41 @@ class SystemicLangGraphBridge:
             or approval.expires_at <= datetime.now(timezone.utc)
         ):
             raise RuntimeError("MODEL_COST_APPROVAL_INVALID")
+        budget = (await db.execute(select(AIBudgetPolicyRecord).where(
+            AIBudgetPolicyRecord.tenant_id == request.tenant_id,
+            AIBudgetPolicyRecord.provider == resolution.effective_provider,
+            AIBudgetPolicyRecord.model == resolution.effective_model,
+            AIBudgetPolicyRecord.module == request.origin_module,
+            AIBudgetPolicyRecord.is_active.is_(True),
+        ))).scalar_one_or_none()
+        if (
+            budget is None
+            or budget.null_limit_policy != "DENY"
+            or budget.daily_token_limit is None
+            or budget.monthly_token_limit is None
+        ):
+            raise RuntimeError("BOUNDED_AI_BUDGET_POLICY_REQUIRED")
+        now = datetime.now(timezone.utc)
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        month_start = day_start.replace(day=1)
+        used_today = int((await db.scalar(select(func.coalesce(
+            func.sum(AIUsageRecord.tokens_input + AIUsageRecord.tokens_output), 0,
+        )).where(
+            AIUsageRecord.tenant_id == request.tenant_id,
+            AIUsageRecord.provider == resolution.effective_provider,
+            AIUsageRecord.model == resolution.effective_model,
+            AIUsageRecord.module == request.origin_module,
+            AIUsageRecord.created_at >= day_start,
+        ))) or 0)
+        used_month = int((await db.scalar(select(func.coalesce(
+            func.sum(AIUsageRecord.tokens_input + AIUsageRecord.tokens_output), 0,
+        )).where(
+            AIUsageRecord.tenant_id == request.tenant_id,
+            AIUsageRecord.provider == resolution.effective_provider,
+            AIUsageRecord.model == resolution.effective_model,
+            AIUsageRecord.module == request.origin_module,
+            AIUsageRecord.created_at >= month_start,
+        ))) or 0)
         question = structured_block(TrustLabel.USER_INPUT, str(request_json.get("question") or ""))
         tool_evidence_rows = list((await db.execute(select(AIToolEvidenceRecord).where(
             AIToolEvidenceRecord.tenant_id == request.tenant_id,
@@ -286,6 +321,16 @@ class SystemicLangGraphBridge:
         # UTF-8 byte length is a deliberately conservative reservation bound;
         # it avoids under-reserving for non-ASCII prompt content.
         estimated_input_tokens = max(1, len((system_prompt + user_prompt).encode("utf-8")))
+        max_input_tokens = int(budget.request_token_limit) - int(approval.max_output_tokens)
+        if max_input_tokens <= 0 or estimated_input_tokens > max_input_tokens:
+            raise RuntimeError("AI_INPUT_RESERVATION_EXCEEDED")
+        reserved_tokens = estimated_input_tokens + int(approval.max_output_tokens)
+        if reserved_tokens > int(budget.request_token_limit):
+            raise RuntimeError("AI_REQUEST_TOKEN_BUDGET_EXCEEDED")
+        if used_today + reserved_tokens > int(budget.daily_token_limit):
+            raise RuntimeError("AI_DAILY_TOKEN_BUDGET_EXCEEDED")
+        if used_month + reserved_tokens > int(budget.monthly_token_limit):
+            raise RuntimeError("AI_MONTHLY_TOKEN_BUDGET_EXCEEDED")
         million = Decimal("1000000")
         input_rate = Decimal(approval.input_cost_per_million)
         output_rate = Decimal(approval.output_cost_per_million)
@@ -307,6 +352,12 @@ class SystemicLangGraphBridge:
         )
         validate(response.output, prompt.output_schema_json)
         token_total = int(response.tokens_input) + int(response.tokens_output)
+        if token_total > int(budget.request_token_limit):
+            raise RuntimeError("AI_REQUEST_TOKEN_RECONCILIATION_EXCEEDED")
+        if used_today + token_total > int(budget.daily_token_limit):
+            raise RuntimeError("AI_DAILY_TOKEN_RECONCILIATION_EXCEEDED")
+        if used_month + token_total > int(budget.monthly_token_limit):
+            raise RuntimeError("AI_MONTHLY_TOKEN_RECONCILIATION_EXCEEDED")
         if int(key.tokens_used_month or 0) + token_total > int(key.monthly_token_limit):
             raise RuntimeError("MONTHLY_AI_BUDGET_RECONCILIATION_EXCEEDED")
         key.tokens_used_month = int(key.tokens_used_month or 0) + token_total
@@ -353,6 +404,13 @@ class SystemicLangGraphBridge:
                 "output_cost_per_million": str(output_rate),
                 "pricing_source_url": approval.pricing_source_url,
                 "cost_formula": "(tokens_input*input_rate + tokens_output*output_rate)/1000000",
+                "reserved_tokens": reserved_tokens,
+                "request_token_limit": int(budget.request_token_limit),
+                "daily_token_limit": int(budget.daily_token_limit),
+                "monthly_token_limit": int(budget.monthly_token_limit),
+                "used_today_before": used_today,
+                "used_month_before": used_month,
+                "reservation_reconciled": token_total <= reserved_tokens,
             },
         }
         db.add(AIResultRecord(
