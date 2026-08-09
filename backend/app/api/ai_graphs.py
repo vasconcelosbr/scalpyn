@@ -45,7 +45,9 @@ class ResumeGraphRunRequest(BaseModel):
 
 
 class StagingCrashResumeRequest(BaseModel):
-    action: Literal["seed-start", "snapshot", "resume"]
+    action: Literal[
+        "seed-start", "snapshot", "resume", "origin-start", "origin-snapshot",
+    ]
     run_id: UUID | None = None
 
 
@@ -373,6 +375,8 @@ async def run_staging_crash_resume(
         )
     from ..ai_orchestration.langgraph.staging_canary import _assert_staging
     from scripts.final_langgraph_runtime_driver import (
+        _origin_snapshot,
+        _origin_start,
         _resume_pending,
         _seed_start,
         _snapshot,
@@ -382,6 +386,10 @@ async def run_staging_crash_resume(
         _assert_staging()
         if payload.action == "seed-start":
             return await _seed_start()
+        if payload.action == "origin-start":
+            return await _origin_start()
+        if payload.action == "origin-snapshot":
+            return await _origin_snapshot()
         if payload.run_id is None:
             raise RuntimeError("GRAPH_RUN_ID_REQUIRED")
         if payload.action == "snapshot":
