@@ -36,7 +36,7 @@ class CanonicalDatasetRequest(BaseModel):
     domain: Literal[
         "SHADOW_PORTFOLIO", "PROFILE_INTELLIGENCE", "CALIBRATION", "ML_BAYESIAN",
         "MARKET_REGIME", "STRATEGY_PROFILES", "SCORE_ENGINE", "GLOBAL_RISK",
-        "STRATEGIES", "SOCIAL_SCORE", "AUDIT_VERSION_MEMORY",
+        "STRATEGIES", "SOCIAL_SCORE", "INTELLIGENCE_RUNS", "AUDIT_VERSION_MEMORY",
     ]
     window_start: datetime
     window_end: datetime

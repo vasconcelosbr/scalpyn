@@ -56,6 +56,7 @@ def test_typed_tools_cover_every_registered_module():
 
 
 def test_module_analysis_domain_map_covers_registry_and_read_only_surfaces():
+    from app.ai_orchestration.contracts import CanonicalDatasetRequest
     from app.ai_orchestration.dataset_service import CanonicalDatasetService
     from app.services.module_ai_analysis_service import _DOMAIN, _READ_ONLY_MODULES
 
@@ -64,6 +65,18 @@ def test_module_analysis_domain_map_covers_registry_and_read_only_surfaces():
     assert CanonicalDatasetService.DOMAIN_TABLES["INTELLIGENCE_RUNS"] == (
         "ai_graph_runs", "ai_graph_events", "ai_graph_interrupts",
     )
+    now = datetime.now(timezone.utc)
+    for module, domain in _DOMAIN.items():
+        request = CanonicalDatasetRequest(
+            domain=domain,
+            source_labels=(module,),
+            event_identity_contract="systemic-event-identity-v1",
+            outcome_contract="systemic-module-observation-v1",
+            time_anchor="module_observed_at",
+            window_start=now - timedelta(seconds=1),
+            window_end=now,
+        )
+        assert request.domain == domain
 
 
 def test_module_api_contract_exposes_read_only_intelligence_surfaces():
