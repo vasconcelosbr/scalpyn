@@ -39,7 +39,14 @@ class HTTPProviderAdapter:
                     request_id, max_output_tokens,
                 )
                 if response.is_success:
-                    return self._decode(provider, response.json())
+                    return self._decode(
+                        provider,
+                        response.json(),
+                        raw_response_ref=(
+                            response.headers.get("request-id")
+                            or response.headers.get("x-request-id")
+                        ),
+                    )
                 retry_after = int(response.headers.get("retry-after", "0") or 0) or None
                 policy = classify_provider_status(response.status_code, retry_after_seconds=retry_after)
                 delays = retry_delays(policy, max_attempts=self.max_attempts)
@@ -79,14 +86,42 @@ class HTTPProviderAdapter:
         ))
 
     @staticmethod
-    def _decode(provider: str, payload: dict) -> ProviderResponse:
+    def _decode(
+        provider: str,
+        payload: dict,
+        *,
+        raw_response_ref: str | None = None,
+    ) -> ProviderResponse:
         if provider == "openai":
             text = payload["choices"][0]["message"]["content"]; usage = payload.get("usage") or {}
             tokens_in = usage.get("prompt_tokens", 0); tokens_out = usage.get("completion_tokens", 0)
+            stop_reason = payload["choices"][0].get("finish_reason")
         elif provider == "anthropic":
             text = "\n".join(block.get("text", "") for block in payload.get("content", []) if block.get("type") == "text")
             usage = payload.get("usage") or {}; tokens_in = usage.get("input_tokens", 0); tokens_out = usage.get("output_tokens", 0)
+            stop_reason = payload.get("stop_reason")
         else:
             text = payload["candidates"][0]["content"]["parts"][0]["text"]; usage = payload.get("usageMetadata") or {}
             tokens_in = usage.get("promptTokenCount", 0); tokens_out = usage.get("candidatesTokenCount", 0)
-        return ProviderResponse(output=_json_object(text), tokens_input=int(tokens_in or 0), tokens_output=int(tokens_out or 0))
+            stop_reason = payload["candidates"][0].get("finishReason")
+
+        terminal_error_code = None
+        try:
+            output = _json_object(text)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            # The provider call has already happened and must remain auditable.
+            # Return usage metadata without retaining or logging the raw output.
+            output = {}
+            terminal_error_code = "PROVIDER_OUTPUT_JSON_INVALID"
+
+        if stop_reason in {"max_tokens", "length", "MAX_TOKENS"}:
+            terminal_error_code = "PROVIDER_OUTPUT_TRUNCATED"
+
+        return ProviderResponse(
+            output=output,
+            tokens_input=int(tokens_in or 0),
+            tokens_output=int(tokens_out or 0),
+            raw_response_ref=raw_response_ref,
+            stop_reason=stop_reason,
+            terminal_error_code=terminal_error_code,
+        )

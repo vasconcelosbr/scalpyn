@@ -66,6 +66,57 @@ _SYSTEMIC_OUTPUT = {
 }
 
 
+_COMPACT_SYSTEMIC_OUTPUT = json.loads(json.dumps(_SYSTEMIC_OUTPUT))
+_COMPACT_SYSTEMIC_OUTPUT["properties"]["diagnosis"]["maxLength"] = 240
+_COMPACT_SYSTEMIC_OUTPUT["properties"]["root_cause_classification"]["maxLength"] = 96
+_COMPACT_SYSTEMIC_OUTPUT["properties"]["affected_modules"].update({
+    "maxItems": 6,
+    "items": {"type": "string", "maxLength": 64},
+})
+_COMPACT_SYSTEMIC_OUTPUT["properties"]["evidence"].update({
+    "maxItems": 7,
+    "items": {
+        "type": "object",
+        "required": ["evidence_id", "tool", "finding"],
+        "properties": {
+            "evidence_id": {"type": "string", "maxLength": 64},
+            "tool": {"type": "string", "maxLength": 96},
+            "finding": {"type": "string", "maxLength": 160},
+        },
+        "additionalProperties": False,
+    },
+})
+for field in ("discarded_hypotheses", "memory_hits"):
+    _COMPACT_SYSTEMIC_OUTPUT["properties"][field].update({
+        "maxItems": 2,
+        "items": {"type": "object", "maxProperties": 3},
+    })
+for field in ("data_quality", "market_regime"):
+    _COMPACT_SYSTEMIC_OUTPUT["properties"][field]["maxProperties"] = 4
+recommendation_schema = _COMPACT_SYSTEMIC_OUTPUT["properties"]["recommendations"]
+recommendation_schema["maxItems"] = 1
+recommendation_properties = recommendation_schema["items"]["properties"]
+for field, maximum in (
+    ("target_module", 64),
+    ("target_entity_id", 96),
+    ("target_path", 128),
+    ("operation", 64),
+):
+    recommendation_properties[field]["maxLength"] = maximum
+for field in ("risk_conflicts", "strategy_conflicts"):
+    recommendation_properties[field].update({
+        "maxItems": 2,
+        "items": {"type": "object", "maxProperties": 3},
+    })
+for field in ("expected_impact", "validation_plan", "rollback_plan"):
+    recommendation_properties[field]["maxProperties"] = 3
+for field in ("warnings", "limitations"):
+    _COMPACT_SYSTEMIC_OUTPUT["properties"][field].update({
+        "maxItems": 2,
+        "items": {"type": "string", "maxLength": 160},
+    })
+
+
 def _schema_template(schema: dict) -> str:
     """Serialize a schema for ``str.format_map`` without treating JSON as fields."""
     return json.dumps(schema, ensure_ascii=False, separators=(",", ":")).replace("{", "{{").replace("}", "}}")
@@ -162,6 +213,29 @@ INITIAL_PROMPTS = (
             "No other fields are allowed."
         ),
         output_schema=_SYSTEMIC_OUTPUT,
+    ),
+    _prompt(
+        "systemic-multimodule", "2.0.3",
+        (
+            "You are Scalpyn systemic analysis. Use only canonical typed-tool evidence. "
+            "Never invent metrics, causal claims, authority, or missing values. "
+            "Global Risk and Strategies are hard vetoes; ML, Social Score, and Market Regime are read-only. "
+            "Return every required contract field in one compact JSON object."
+        ),
+        (
+            "Question: {question}\nCanonical typed-tool evidence: {dataset}\n"
+            "Configuration bundle: {configuration}\n"
+            "Return minified JSON without markdown or repeated context. diagnosis is at most 240 characters; "
+            "root_cause_classification at most 96; affected_modules has at most 6 items. Return exactly one "
+            "evidence object per supplied typed tool using only evidence_id, tool, and a finding of at most 160 "
+            "characters. data_quality and market_regime are compact objects. memory_hits and "
+            "discarded_hypotheses have at most 2 compact objects. recommendations has at most 1 item and may be "
+            "empty when no safe action is supported. Every recommendation requires target_module, target_path, "
+            "operation, side_effect_class, confidence, risk_conflicts, strategy_conflicts, validation_plan, and "
+            "rollback_plan; LIVE_WRITE is forbidden. warnings and limitations have at most 2 strings each. "
+            "Use scalar values and no more than 3 keys in nested plan, conflict, impact, or memory objects."
+        ),
+        output_schema=_COMPACT_SYSTEMIC_OUTPUT,
     ),
 )
 

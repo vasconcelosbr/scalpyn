@@ -101,6 +101,27 @@ def test_provider_adapter_limits_are_environment_bounded(monkeypatch):
     assert adapter.max_attempts == 1
 
 
+def test_anthropic_truncation_preserves_usage_without_raw_output():
+    from app.ai_orchestration.provider_adapters.http_adapter import HTTPProviderAdapter
+
+    response = HTTPProviderAdapter._decode(
+        "anthropic",
+        {
+            "content": [{"type": "text", "text": '{"diagnosis":"cut",'}],
+            "usage": {"input_tokens": 4117, "output_tokens": 1975},
+            "stop_reason": "max_tokens",
+        },
+        raw_response_ref="req_staging_literal",
+    )
+
+    assert response.output == {}
+    assert response.tokens_input == 4117
+    assert response.tokens_output == 1975
+    assert response.stop_reason == "max_tokens"
+    assert response.terminal_error_code == "PROVIDER_OUTPUT_TRUNCATED"
+    assert response.raw_response_ref == "req_staging_literal"
+
+
 def test_strategy_profiles_tool_returns_version_and_hash():
     from app.ai_orchestration.domain_tools import default_tool_capabilities
     from app.ai_orchestration.module_tool_runtime import _bounded_frozen_reader
@@ -395,6 +416,26 @@ def test_systemic_prompt_v2_0_2_keeps_required_contract_concise():
     assert len(rendered.encode("utf-8")) < 2_000
 
 
+def test_systemic_prompt_v2_0_3_bounds_provider_output():
+    from app.ai_orchestration.initial_prompts import initial_prompt_registry
+
+    prompt = initial_prompt_registry().resolve("systemic-multimodule", "2.0.3")
+    schema = prompt.output_schema_json
+    properties = schema["properties"]
+
+    assert properties["diagnosis"]["maxLength"] == 240
+    assert properties["evidence"]["maxItems"] == 7
+    assert properties["recommendations"]["maxItems"] == 1
+    assert properties["warnings"]["maxItems"] == 2
+    assert properties["limitations"]["maxItems"] == 2
+    assert properties["recommendations"]["items"]["required"] == (
+        initial_prompt_registry()
+        .resolve("systemic-multimodule", "2.0.2")
+        .output_schema_json["properties"]["recommendations"]["items"]["required"]
+    )
+    assert len(prompt.user_template.encode("utf-8")) < 1_200
+
+
 def test_provider_usage_is_reconciled_before_output_validation_and_blocks_retry():
     backend = Path(__file__).resolve().parents[1]
     provider = (backend / "app/services/systemic_langgraph_bridge.py").read_text(encoding="utf-8")
@@ -444,6 +485,23 @@ def test_migration_152_seeds_concise_prompt_without_bind_drift():
 
     assert module.revision == "152_concise_systemic_prompt"
     assert module.down_revision == "151_systemic_prompt_schema"
+    prompt_literal = module._quote(module._prompt_values()["user_template"])
+    assert sa.text(f"SELECT {prompt_literal}").compile().params == {}
+
+
+def test_migration_153_seeds_bounded_prompt_without_bind_drift():
+    import importlib.util
+    import sqlalchemy as sa
+
+    backend = Path(__file__).resolve().parents[1]
+    migration = backend / "alembic/versions/153_bounded_systemic_prompt_contract.py"
+    spec = importlib.util.spec_from_file_location("migration_153_test", migration)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    assert module.revision == "153_bounded_systemic_prompt"
+    assert module.down_revision == "152_concise_systemic_prompt"
     prompt_literal = module._quote(module._prompt_values()["user_template"])
     assert sa.text(f"SELECT {prompt_literal}").compile().params == {}
 

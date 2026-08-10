@@ -389,6 +389,17 @@ class SystemicLangGraphBridge:
             pricing_snapshot_version=approval.pricing_snapshot_hash,
         ))
 
+        if response.terminal_error_code is not None:
+            return {
+                "ai_request_id": str(request.id),
+                "status": "FAILED",
+                "terminal_reason": response.terminal_error_code,
+                "error_code": response.terminal_error_code,
+                "provider_output_schema_valid": False,
+                "provider_stop_reason": response.stop_reason,
+                "provider_response_ref": response.raw_response_ref,
+            }
+
         try:
             validate(response.output, prompt.output_schema_json)
         except ValidationError:

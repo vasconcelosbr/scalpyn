@@ -91,14 +91,21 @@ class AIOrchestrationService:
             system_prompt=system_prompt, user_prompt=user_prompt, tools=[], api_key=api_key,
             request_id=str(request.ai_request_id), max_output_tokens=estimated_output_tokens,
         )
-        try:
-            validate(response.output, prompt.output_schema_json)
-        except ValidationError as exc:
-            raise fail(AIErrorCode.OUTPUT_SCHEMA_INVALID, "Provider output did not match the approved schema") from exc
         usage_data = self.budget.reconcile(
             reservation, actual_input=response.tokens_input, actual_output=response.tokens_output,
             actual_cost=Decimal("0"),
         )
+        if self.persist:
+            await self.persist("usage", usage_data)
+        if response.terminal_error_code is not None:
+            raise fail(
+                AIErrorCode.OUTPUT_SCHEMA_INVALID,
+                f"Provider response terminated with {response.terminal_error_code}",
+            )
+        try:
+            validate(response.output, prompt.output_schema_json)
+        except ValidationError as exc:
+            raise fail(AIErrorCode.OUTPUT_SCHEMA_INVALID, "Provider output did not match the approved schema") from exc
         usage = AIUsage(
             tokens_input=response.tokens_input, tokens_output=response.tokens_output,
             pricing_snapshot_version="UNPRICED_STAGING_V1", reservation=Decimal(reservation.estimated_tokens),
@@ -118,7 +125,6 @@ class AIOrchestrationService:
             usage=usage, completed_at=completed,
         )
         if self.persist:
-            await self.persist("usage", usage_data)
             await self.persist("result", result)
             await self.persist("job", job.terminalize(status=AIJobState.COMPLETED, now=completed))
         return result

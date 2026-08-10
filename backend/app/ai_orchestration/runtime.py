@@ -10,6 +10,8 @@ class ProviderResponse:
     tokens_input: int
     tokens_output: int
     raw_response_ref: str | None = None
+    stop_reason: str | None = None
+    terminal_error_code: str | None = None
 
 
 class ProviderAdapter(Protocol):
