@@ -405,6 +405,19 @@ def test_migration_151_seeds_new_immutable_prompt_version():
     assert "536a9715671a5817ebb733de8553165ac2e98be72bc0ac9feb73deb7068bab42" in source
 
 
+def test_staging_usage_reconciliation_is_idempotent_and_never_calls_provider():
+    backend = Path(__file__).resolve().parents[1]
+    script = (backend / "scripts/reconcile_staging_provider_usage.py").read_text(encoding="utf-8")
+
+    assert '"staging" not in environment.lower()' in script
+    assert "AIUsageRecord(" in script
+    assert "PROVIDER_USAGE_RECONCILED" in script
+    assert "on_conflict_do_nothing" in script
+    assert '"provider_retried": False' in script
+    assert "execute_json_provider" not in script
+    assert "execute_graph_run" not in script
+
+
 def test_unresolved_event_conflict_blocks_change_set():
     from app.ai_orchestration.langgraph.registry import graph_registry
 
