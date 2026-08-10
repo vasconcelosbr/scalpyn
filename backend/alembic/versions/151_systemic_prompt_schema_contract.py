@@ -46,11 +46,14 @@ def _prompt_values() -> dict:
 
 
 def _quote(value: str) -> str:
-    return "'" + value.replace("'", "''") + "'"
+    # ``sa.text`` recognizes ``:name`` even inside SQL string literals. Escape
+    # every colon in template/JSON/timestamp values so no content is mistaken
+    # for an unbound SQLAlchemy parameter; the compiler removes the escape.
+    return "'" + value.replace("'", "''").replace(":", r"\:") + "'"
 
 
 def _jsonb(value: object) -> str:
-    encoded = json.dumps(value, separators=(",", ":"), ensure_ascii=False).replace(":", r"\:")
+    encoded = json.dumps(value, separators=(",", ":"), ensure_ascii=False)
     return f"{_quote(encoded)}::jsonb"
 
 

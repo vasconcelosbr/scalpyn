@@ -395,6 +395,9 @@ def test_provider_usage_is_reconciled_before_output_validation_and_blocks_retry(
 
 
 def test_migration_151_seeds_new_immutable_prompt_version():
+    import importlib.util
+    import sqlalchemy as sa
+
     backend = Path(__file__).resolve().parents[1]
     migration = backend / "alembic/versions/151_systemic_prompt_schema_contract.py"
     source = migration.read_text(encoding="utf-8")
@@ -403,6 +406,12 @@ def test_migration_151_seeds_new_immutable_prompt_version():
     assert 'down_revision = "150_multimodule_hardening"' in source
     assert 'semantic_version = \'2.0.1\'' in source
     assert "536a9715671a5817ebb733de8553165ac2e98be72bc0ac9feb73deb7068bab42" in source
+    spec = importlib.util.spec_from_file_location("migration_151_test", migration)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    prompt_literal = module._quote(module._prompt_values()["user_template"])
+    assert sa.text(f"SELECT {prompt_literal}").compile().params == {}
 
 
 def test_staging_usage_reconciliation_is_idempotent_and_never_calls_provider():
