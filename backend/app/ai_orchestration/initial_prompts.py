@@ -117,6 +117,28 @@ for field in ("warnings", "limitations"):
     })
 
 
+_ADVISORY_SCHEMA_CONSTRAINTS = {
+    "maximum", "maxItems", "maxLength", "maxProperties",
+    "minimum", "minLength",
+}
+
+
+def _structural_schema(value):
+    """Retain only constraints enforced by the provider structured-output API."""
+    if isinstance(value, dict):
+        return {
+            key: _structural_schema(item)
+            for key, item in value.items()
+            if key not in _ADVISORY_SCHEMA_CONSTRAINTS
+        }
+    if isinstance(value, list):
+        return [_structural_schema(item) for item in value]
+    return value
+
+
+_STRUCTURAL_SYSTEMIC_OUTPUT = _structural_schema(_COMPACT_SYSTEMIC_OUTPUT)
+
+
 def _schema_template(schema: dict) -> str:
     """Serialize a schema for ``str.format_map`` without treating JSON as fields."""
     return json.dumps(schema, ensure_ascii=False, separators=(",", ":")).replace("{", "{{").replace("}", "}}")
@@ -236,6 +258,30 @@ INITIAL_PROMPTS = (
             "Use scalar values and no more than 3 keys in nested plan, conflict, impact, or memory objects."
         ),
         output_schema=_COMPACT_SYSTEMIC_OUTPUT,
+    ),
+    _prompt(
+        "systemic-multimodule", "2.0.4",
+        (
+            "You are Scalpyn systemic analysis. Use only canonical typed-tool evidence. "
+            "Never invent metrics, causal claims, authority, or missing values. "
+            "Global Risk and Strategies are hard vetoes; ML, Social Score, and Market Regime are read-only. "
+            "Return every required contract field in one compact JSON object."
+        ),
+        (
+            "Question: {question}\nCanonical typed-tool evidence: {dataset}\n"
+            "Configuration bundle: {configuration}\n"
+            "Return minified JSON without markdown or repeated context. diagnosis must be non-empty and at "
+            "most 240 characters; root_cause_classification must be non-empty and at most 96; "
+            "affected_modules has at most 6 items. Return exactly one evidence object per supplied typed tool "
+            "using only evidence_id, tool, and a finding of at most 160 characters. data_quality and "
+            "market_regime are compact objects with at most 4 keys. memory_hits and discarded_hypotheses have "
+            "at most 2 objects and 3 keys per object. recommendations has at most 1 item and may be empty when "
+            "no safe action is supported. Every recommendation requires target_module, target_path, operation, "
+            "side_effect_class, confidence from 0 to 1, risk_conflicts, strategy_conflicts, validation_plan, and "
+            "rollback_plan; LIVE_WRITE is forbidden. warnings and limitations have at most 2 strings of at most "
+            "160 characters each. Use no more than 3 keys in nested plan, conflict, impact, or memory objects."
+        ),
+        output_schema=_STRUCTURAL_SYSTEMIC_OUTPUT,
     ),
 )
 

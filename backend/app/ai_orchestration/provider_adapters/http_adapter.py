@@ -17,6 +17,17 @@ _ANTHROPIC_UNSUPPORTED_SCHEMA_CONSTRAINTS = {
 }
 
 
+def _constraint_description(schema: dict[str, Any]) -> str | None:
+    constraints = [
+        f"{key}={schema[key]}"
+        for key in sorted(_ANTHROPIC_UNSUPPORTED_SCHEMA_CONSTRAINTS)
+        if key in schema
+    ]
+    if not constraints:
+        return None
+    return "Advisory constraints: " + "; ".join(constraints) + "."
+
+
 def _enum_type(values: list[Any]) -> str:
     sample = values[0]
     if isinstance(sample, bool):
@@ -66,6 +77,11 @@ def prepare_anthropic_output_schema(
             normalized["anyOf"] = [{"type": item} for item in value]
             continue
         normalized[key] = value
+
+    advisory = _constraint_description(schema)
+    if advisory:
+        existing = str(normalized.get("description") or "").strip()
+        normalized["description"] = f"{existing} {advisory}".strip()
 
     if not any(key in normalized for key in ("type", "anyOf", "oneOf", "allOf")):
         enum = normalized.get("enum")

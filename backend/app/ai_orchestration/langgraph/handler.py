@@ -92,6 +92,20 @@ class CanonicalGraphNodeHandler:
                     "tool_call_ids": tool_call_ids,
                     "tool_call_count": len(tool_call_ids),
                 })
+            if node_name == "invoke_provider":
+                result_json = updates.get("result_json") or {}
+                for key in (
+                    "error_code", "terminal_reason", "provider_output_schema_valid",
+                    "provider_stop_reason", "provider_response_ref", "schema_validator",
+                ):
+                    value = result_json.get(key)
+                    if value is not None:
+                        event_payload[key] = value[:160] if isinstance(value, str) else value
+                schema_error_path = result_json.get("schema_error_path")
+                if isinstance(schema_error_path, list):
+                    event_payload["schema_error_path"] = [
+                        str(item)[:96] for item in schema_error_path[:8]
+                    ]
             if node_name in {
                 "create_immutable_candidate_versions", "create_profile_candidate_version",
                 "create_score_candidate_version",

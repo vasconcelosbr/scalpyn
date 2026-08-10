@@ -135,12 +135,16 @@ def test_anthropic_structured_output_uses_strict_supported_schema():
     recommendation = schema["properties"]["recommendations"]["items"]
 
     assert schema["additionalProperties"] is False
-    assert schema["properties"]["diagnosis"] == {"type": "string"}
+    assert schema["properties"]["diagnosis"] == {
+        "type": "string",
+        "description": "Advisory constraints: maxLength=240; minLength=1.",
+    }
     assert recommendation["additionalProperties"] is False
     assert "current_value" not in recommendation["properties"]
     assert "proposed_value" not in recommendation["properties"]
     assert recommendation["properties"]["target_entity_id"] == {
         "anyOf": [{"type": "string"}, {"type": "null"}],
+        "description": "Advisory constraints: maxLength=96.",
     }
     assert recommendation["properties"]["side_effect_class"]["type"] == "string"
 
@@ -488,6 +492,40 @@ def test_systemic_prompt_v2_0_3_bounds_provider_output():
     assert len(prompt.user_template.encode("utf-8")) < 1_200
 
 
+def test_systemic_prompt_v2_0_4_uses_provider_enforced_structural_contract():
+    from app.ai_orchestration.initial_prompts import initial_prompt_registry
+
+    prompt = initial_prompt_registry().resolve("systemic-multimodule", "2.0.4")
+    schema = prompt.output_schema_json
+    serialized = json.dumps(schema, sort_keys=True)
+
+    for unsupported in (
+        '"maximum"', '"minimum"', '"maxLength"', '"minLength"',
+        '"maxItems"', '"maxProperties"',
+    ):
+        assert unsupported not in serialized
+    assert schema["properties"]["evidence"]["minItems"] == 1
+    assert schema["required"] == (
+        initial_prompt_registry()
+        .resolve("systemic-multimodule", "2.0.3")
+        .output_schema_json["required"]
+    )
+    assert "at most 240 characters" in prompt.user_template
+    assert len(prompt.user_template.encode("utf-8")) < 1_200
+
+
+def test_invoke_provider_event_persists_safe_failure_diagnostics_only():
+    backend = Path(__file__).resolve().parents[1]
+    handler = (backend / "app/ai_orchestration/langgraph/handler.py").read_text(encoding="utf-8")
+
+    for field in (
+        "provider_output_schema_valid", "provider_stop_reason",
+        "provider_response_ref", "schema_error_path", "schema_validator",
+    ):
+        assert field in handler
+    assert "raw_provider_output" not in handler
+
+
 def test_provider_usage_is_reconciled_before_output_validation_and_blocks_retry():
     backend = Path(__file__).resolve().parents[1]
     provider = (backend / "app/services/systemic_langgraph_bridge.py").read_text(encoding="utf-8")
@@ -554,6 +592,23 @@ def test_migration_153_seeds_bounded_prompt_without_bind_drift():
 
     assert module.revision == "153_bounded_systemic_prompt"
     assert module.down_revision == "152_concise_systemic_prompt"
+    prompt_literal = module._quote(module._prompt_values()["user_template"])
+    assert sa.text(f"SELECT {prompt_literal}").compile().params == {}
+
+
+def test_migration_154_seeds_structural_prompt_without_bind_drift():
+    import importlib.util
+    import sqlalchemy as sa
+
+    backend = Path(__file__).resolve().parents[1]
+    migration = backend / "alembic/versions/154_structural_systemic_prompt_contract.py"
+    spec = importlib.util.spec_from_file_location("migration_154_test", migration)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    assert module.revision == "154_structural_systemic_prompt"
+    assert module.down_revision == "153_bounded_systemic_prompt"
     prompt_literal = module._quote(module._prompt_values()["user_template"])
     assert sa.text(f"SELECT {prompt_literal}").compile().params == {}
 
