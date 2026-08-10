@@ -6,6 +6,10 @@ import { useState } from "react";
 import useSWR from "swr";
 
 import { apiGet, apiPost } from "@/lib/api";
+import {
+  getModuleAnalysisFormIssues,
+  MODEL_COST_APPROVAL_PHRASE,
+} from "@/lib/moduleAIAnalysisForm";
 
 type ModuleKey =
   | "strategy_profiles"
@@ -95,6 +99,21 @@ export function ModuleAIAnalysisAction({
     && capabilities.entrypoints_enabled
     && capabilities.module_flags?.[originModule]
   );
+  const formIssues = getModuleAnalysisFormIssues({
+    question,
+    model,
+    maxCostUsd,
+    inputCostPerMillion,
+    outputCostPerMillion,
+    maxInputTokens,
+    maxOutputTokens,
+    requestTokenLimit,
+    dailyTokenLimit,
+    monthlyTokenLimit,
+    pricingSourceUrl,
+    approvalPhrase,
+  });
+  const formReady = formIssues.length === 0;
 
   function selectProvider(value: string) {
     setProvider(value);
@@ -103,36 +122,12 @@ export function ModuleAIAnalysisAction({
   }
 
   async function submit() {
-    const approvedCost = Number(maxCostUsd);
-    const inputRate = Number(inputCostPerMillion);
-    const outputRate = Number(outputCostPerMillion);
     const maxInput = Number(maxInputTokens);
     const maxOutput = Number(maxOutputTokens);
     const requestLimit = Number(requestTokenLimit);
     const dailyLimit = Number(dailyTokenLimit);
     const monthlyLimit = Number(monthlyTokenLimit);
-    if (
-      approvalPhrase.trim() !== "APROVO MODELO E CUSTO"
-      || !question.trim()
-      || !model.trim()
-      || !Number.isFinite(approvedCost)
-      || approvedCost <= 0
-      || !Number.isFinite(inputRate)
-      || inputRate < 0
-      || !Number.isFinite(outputRate)
-      || outputRate < 0
-      || !Number.isInteger(maxInput)
-      || maxInput <= 0
-      || !Number.isInteger(maxOutput)
-      || maxOutput <= 0
-      || !Number.isInteger(requestLimit)
-      || requestLimit < maxInput + maxOutput
-      || !Number.isInteger(dailyLimit)
-      || dailyLimit < requestLimit
-      || !Number.isInteger(monthlyLimit)
-      || monthlyLimit < dailyLimit
-      || !pricingSourceUrl.startsWith("https://")
-    ) return;
+    if (!formReady) return;
     setBusy(true);
     setError(null);
     try {
@@ -188,7 +183,7 @@ export function ModuleAIAnalysisAction({
 
       {open && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="Criar análise por IA">
-          <div className="w-full max-w-xl overflow-hidden rounded-2xl border border-cyan-400/20 bg-[#0A0E16] shadow-2xl shadow-cyan-950/40">
+          <div className="flex max-h-[calc(100vh-2rem)] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-cyan-400/20 bg-[#0A0E16] shadow-2xl shadow-cyan-950/40">
             <div className="flex items-start justify-between border-b border-white/10 px-5 py-4">
               <div>
                 <div className="flex items-center gap-2 text-cyan-300"><BrainCircuit size={17} /><span className="text-sm font-semibold">Análise sistêmica</span></div>
@@ -197,7 +192,7 @@ export function ModuleAIAnalysisAction({
               <button type="button" onClick={() => setOpen(false)} className="rounded-lg p-1.5 text-slate-500 hover:bg-white/5 hover:text-slate-200" aria-label="Fechar"><X size={17} /></button>
             </div>
 
-            <div className="space-y-4 p-5">
+            <div className="space-y-4 overflow-y-auto p-5">
               {run ? (
                 <div className="rounded-xl border border-emerald-400/25 bg-emerald-400/10 p-4">
                   <div className="flex items-center gap-2 text-sm font-medium text-emerald-200"><ShieldCheck size={16} /> Intelligence Run criada</div>
@@ -263,10 +258,19 @@ export function ModuleAIAnalysisAction({
                       <input type="url" value={pricingSourceUrl} onChange={(event) => { setPricingSourceUrl(event.target.value); setApprovalPhrase(""); }} placeholder="https://..." className="mt-1.5 w-full rounded-lg border border-amber-300/20 bg-black/20 px-3 py-2 text-sm text-amber-50" />
                     </label>
                     <label className="text-xs leading-5 text-amber-100/80">Confirmação humana
-                      <input value={approvalPhrase} onChange={(event) => setApprovalPhrase(event.target.value)} placeholder="APROVO MODELO E CUSTO" className="mt-1.5 w-full rounded-lg border border-amber-300/20 bg-black/20 px-3 py-2 text-sm text-amber-50" />
+                      <input value={approvalPhrase} onChange={(event) => setApprovalPhrase(event.target.value)} placeholder={MODEL_COST_APPROVAL_PHRASE} className="mt-1.5 w-full rounded-lg border border-amber-300/20 bg-black/20 px-3 py-2 text-sm text-amber-50" />
                     </label>
                     <p className="text-[11px] leading-4 text-amber-100/60 sm:col-span-2">A aprovação é persistida, expira e vale somente para esta análise. A autoridade permanece analysis-only ou shadow-only.</p>
                   </div>
+                  {!formReady && (
+                    <div id="module-analysis-form-status" className="rounded-xl border border-amber-400/20 bg-amber-400/5 px-4 py-3 text-xs text-amber-100/80" role="status">
+                      <p className="font-semibold text-amber-100">Para habilitar a execução segura:</p>
+                      <ul className="mt-2 list-disc space-y-1 pl-4">
+                        {formIssues.map((issue) => <li key={issue}>{issue}</li>)}
+                      </ul>
+                      <p className="mt-2 text-[11px] text-amber-100/60">Textos de exemplo dentro dos campos não contam como valores preenchidos.</p>
+                    </div>
+                  )}
                   {error && <p className="rounded-lg border border-rose-400/20 bg-rose-400/10 px-3 py-2 text-xs text-rose-200">{error}</p>}
                 </>
               )}
@@ -275,7 +279,7 @@ export function ModuleAIAnalysisAction({
             {!run && (
               <div className="flex items-center justify-end gap-2 border-t border-white/10 px-5 py-4">
                 <button type="button" onClick={() => setOpen(false)} className="rounded-lg px-3 py-2 text-sm text-slate-400 hover:text-slate-100">Cancelar</button>
-                <button type="button" onClick={() => void submit()} disabled={busy || approvalPhrase.trim() !== "APROVO MODELO E CUSTO" || !maxCostUsd || !inputCostPerMillion || !outputCostPerMillion || !maxInputTokens || !maxOutputTokens || !requestTokenLimit || !dailyTokenLimit || !monthlyTokenLimit || !pricingSourceUrl || !question.trim() || !model.trim()} className="inline-flex items-center gap-2 rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-cyan-950 disabled:cursor-not-allowed disabled:opacity-40">
+                <button type="button" onClick={() => void submit()} disabled={busy || !formReady} aria-describedby={!formReady ? "module-analysis-form-status" : undefined} className="inline-flex items-center gap-2 rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-cyan-950 disabled:cursor-not-allowed disabled:opacity-40">
                   {busy && <Loader2 size={15} className="animate-spin" />} Criar Intelligence Run
                 </button>
               </div>
