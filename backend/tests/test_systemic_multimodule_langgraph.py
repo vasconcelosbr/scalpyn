@@ -378,6 +378,23 @@ def test_systemic_prompt_v2_0_1_embeds_exact_required_schema():
     assert rendered_schema == prompt.output_schema_json
 
 
+def test_systemic_prompt_v2_0_2_keeps_required_contract_concise():
+    from app.ai_orchestration.initial_prompts import initial_prompt_registry
+
+    prompt = initial_prompt_registry().resolve("systemic-multimodule", "2.0.2")
+    rendered = prompt.user_template.format_map({
+        "question": "read-only diagnosis",
+        "dataset": "{}",
+        "configuration": "{}",
+    })
+
+    for field in prompt.output_schema_json["required"]:
+        assert field in rendered
+    for field in prompt.output_schema_json["properties"]["recommendations"]["items"]["required"]:
+        assert field in rendered
+    assert len(rendered.encode("utf-8")) < 2_000
+
+
 def test_provider_usage_is_reconciled_before_output_validation_and_blocks_retry():
     backend = Path(__file__).resolve().parents[1]
     provider = (backend / "app/services/systemic_langgraph_bridge.py").read_text(encoding="utf-8")
@@ -410,6 +427,23 @@ def test_migration_151_seeds_new_immutable_prompt_version():
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(module)
+    prompt_literal = module._quote(module._prompt_values()["user_template"])
+    assert sa.text(f"SELECT {prompt_literal}").compile().params == {}
+
+
+def test_migration_152_seeds_concise_prompt_without_bind_drift():
+    import importlib.util
+    import sqlalchemy as sa
+
+    backend = Path(__file__).resolve().parents[1]
+    migration = backend / "alembic/versions/152_concise_systemic_prompt_contract.py"
+    spec = importlib.util.spec_from_file_location("migration_152_test", migration)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    assert module.revision == "152_concise_systemic_prompt"
+    assert module.down_revision == "151_systemic_prompt_schema"
     prompt_literal = module._quote(module._prompt_values()["user_template"])
     assert sa.text(f"SELECT {prompt_literal}").compile().params == {}
 

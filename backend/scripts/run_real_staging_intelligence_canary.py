@@ -23,9 +23,11 @@ TENANT_ID = UUID("b02e84ad-a0eb-4fca-8cf6-bef1ccaafc40")
 PROVIDER = "anthropic"
 MODEL = "claude-haiku-4-5-20251001"
 MODULE = "intelligence_runs"
-MAX_INPUT_TOKENS = 10_000
-MAX_OUTPUT_TOKENS = 2_000
-REQUEST_TOKEN_LIMIT = 12_000
+MAX_INPUT_TOKENS = 10_125
+MAX_OUTPUT_TOKENS = 1_975
+REQUEST_TOKEN_LIMIT = 12_100
+DAILY_TOKEN_LIMIT = 24_000
+MONTHLY_TOKEN_LIMIT = 24_000
 APPROVAL_TEXT = "APROVO O CANÁRIO REAL EM STAGING COM CUSTO MÁXIMO DE US$ 0,02."
 PRICING_URL = "https://www.anthropic.com/claude/haiku"
 QUESTION = (
@@ -113,9 +115,9 @@ async def main() -> None:
             ).with_for_update())).scalar_one_or_none()
             if key is None:
                 raise RuntimeError("VALIDATED_STAGING_PROVIDER_KEY_REQUIRED")
-            if int(key.tokens_used_month or 0) != 0:
-                raise RuntimeError("STAGING_PROVIDER_KEY_USAGE_MUST_START_AT_ZERO")
-            key.monthly_token_limit = REQUEST_TOKEN_LIMIT
+            if int(key.tokens_used_month or 0) + REQUEST_TOKEN_LIMIT > MONTHLY_TOKEN_LIMIT:
+                raise RuntimeError("STAGING_PROVIDER_KEY_BUDGET_INSUFFICIENT")
+            key.monthly_token_limit = MONTHLY_TOKEN_LIMIT
 
             existing_request = (await session.execute(select(AIRequestRecord).where(
                 AIRequestRecord.tenant_id == TENANT_ID,
@@ -179,8 +181,8 @@ async def main() -> None:
                 "pricing_snapshot_hash": pricing_snapshot_hash,
                 "module": MODULE,
                 "request_token_limit": REQUEST_TOKEN_LIMIT,
-                "daily_token_limit": REQUEST_TOKEN_LIMIT,
-                "monthly_token_limit": REQUEST_TOKEN_LIMIT,
+                "daily_token_limit": DAILY_TOKEN_LIMIT,
+                "monthly_token_limit": MONTHLY_TOKEN_LIMIT,
             }
             approval = AIModelApprovalRecord(
                 id=approval_id,
@@ -219,8 +221,8 @@ async def main() -> None:
                 )
                 session.add(budget)
             budget.request_token_limit = REQUEST_TOKEN_LIMIT
-            budget.daily_token_limit = REQUEST_TOKEN_LIMIT
-            budget.monthly_token_limit = REQUEST_TOKEN_LIMIT
+            budget.daily_token_limit = DAILY_TOKEN_LIMIT
+            budget.monthly_token_limit = MONTHLY_TOKEN_LIMIT
             budget.null_limit_policy = "DENY"
             budget.is_active = True
             await session.flush()
@@ -242,7 +244,7 @@ async def main() -> None:
                 provider=PROVIDER,
                 model=MODEL,
                 model_approval_id=approval_id,
-                idempotency_key="real-provider-intelligence-canary-20260810-v1",
+                idempotency_key="real-provider-intelligence-canary-20260810-v2",
             )
             run_id = run.id
             await session.commit()

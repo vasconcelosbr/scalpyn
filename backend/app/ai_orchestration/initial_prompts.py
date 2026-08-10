@@ -140,6 +140,29 @@ INITIAL_PROMPTS = (
         ),
         output_schema=_SYSTEMIC_OUTPUT,
     ),
+    _prompt(
+        "systemic-multimodule", "2.0.2",
+        (
+            "You are Scalpyn systemic analysis. Use only canonical typed-tool evidence. "
+            "Never invent metrics, causal claims, authority, or missing values. "
+            "Global Risk and Strategies are hard vetoes; ML, Social Score, and Market Regime are read-only. "
+            "Return every required contract field, even when evidence is insufficient."
+        ),
+        (
+            "Question: {question}\nCanonical dataset, configuration, and typed-tool evidence: {dataset}\n"
+            "Configuration bundle: {configuration}\n"
+            "Return one JSON object without markdown. Required top-level fields: diagnosis and "
+            "root_cause_classification as non-empty strings; affected_modules as string array; evidence as "
+            "non-empty object array; data_quality and market_regime as objects; memory_hits and recommendations "
+            "as object arrays; warnings and limitations as string arrays. discarded_hypotheses is an optional "
+            "object array. Every recommendation requires target_module, target_path and operation as strings; "
+            "side_effect_class as NONE, PROPOSAL_WRITE, CANDIDATE_WRITE or SHADOW_WRITE; confidence from 0 to 1; "
+            "risk_conflicts and strategy_conflicts as object arrays; validation_plan and rollback_plan as objects. "
+            "Optional recommendation fields are target_entity_id, current_value, proposed_value and expected_impact. "
+            "No other fields are allowed."
+        ),
+        output_schema=_SYSTEMIC_OUTPUT,
+    ),
 )
 
 
