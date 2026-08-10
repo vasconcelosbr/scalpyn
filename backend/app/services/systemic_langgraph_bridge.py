@@ -9,7 +9,7 @@ import os
 from typing import Any, Awaitable, Callable
 from uuid import UUID
 
-from jsonschema import validate
+from jsonschema import ValidationError, validate
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -203,14 +203,26 @@ class SystemicLangGraphBridge:
                 ))
             await db.flush()
             return result_json
-        if not settings.real_provider_canary_enabled:
-            raise RuntimeError("LANGGRAPH_REAL_PROVIDER_CANARY_DISABLED")
         existing = (await db.execute(select(AIResultRecord).where(
             AIResultRecord.tenant_id == request.tenant_id,
             AIResultRecord.ai_request_id == request.id,
         ))).scalar_one_or_none()
         if existing is not None:
             return dict(existing.result_json)
+        existing_usage = (await db.execute(select(AIUsageRecord).where(
+            AIUsageRecord.tenant_id == request.tenant_id,
+            AIUsageRecord.ai_request_id == request.id,
+        ).order_by(AIUsageRecord.created_at.desc()).limit(1))).scalar_one_or_none()
+        if existing_usage is not None:
+            return {
+                "ai_request_id": str(request.id),
+                "status": "FAILED",
+                "terminal_reason": "PROVIDER_CALL_ALREADY_RECONCILED",
+                "error_code": "PROVIDER_CALL_ALREADY_RECONCILED_NO_RETRY",
+                "provider_output_schema_valid": False,
+            }
+        if not settings.real_provider_canary_enabled:
+            raise RuntimeError("LANGGRAPH_REAL_PROVIDER_CANARY_DISABLED")
 
         resolution = await db.get(AIModelResolutionRecord, request.model_resolution_id)
         prompt = await db.get(AIPromptVersion, request.prompt_version_id)
@@ -350,23 +362,51 @@ class SystemicLangGraphBridge:
             request_id=str(request.id),
             max_output_tokens=int(approval.max_output_tokens),
         )
-        validate(response.output, prompt.output_schema_json)
         token_total = int(response.tokens_input) + int(response.tokens_output)
-        if token_total > int(budget.request_token_limit):
-            raise RuntimeError("AI_REQUEST_TOKEN_RECONCILIATION_EXCEEDED")
-        if used_today + token_total > int(budget.daily_token_limit):
-            raise RuntimeError("AI_DAILY_TOKEN_RECONCILIATION_EXCEEDED")
-        if used_month + token_total > int(budget.monthly_token_limit):
-            raise RuntimeError("AI_MONTHLY_TOKEN_RECONCILIATION_EXCEEDED")
-        if int(key.tokens_used_month or 0) + token_total > int(key.monthly_token_limit):
-            raise RuntimeError("MONTHLY_AI_BUDGET_RECONCILIATION_EXCEEDED")
-        key.tokens_used_month = int(key.tokens_used_month or 0) + token_total
         actual_cost = (
             Decimal(response.tokens_input) * input_rate
             + Decimal(response.tokens_output) * output_rate
         ) / million
-        if actual_cost > Decimal(approval.max_cost_usd):
-            raise RuntimeError("MODEL_COST_APPROVAL_RECONCILIATION_EXCEEDED")
+        reconciliation_error = next((code for exceeded, code in (
+            (token_total > int(budget.request_token_limit), "AI_REQUEST_TOKEN_RECONCILIATION_EXCEEDED"),
+            (used_today + token_total > int(budget.daily_token_limit), "AI_DAILY_TOKEN_RECONCILIATION_EXCEEDED"),
+            (used_month + token_total > int(budget.monthly_token_limit), "AI_MONTHLY_TOKEN_RECONCILIATION_EXCEEDED"),
+            (int(key.tokens_used_month or 0) + token_total > int(key.monthly_token_limit), "MONTHLY_AI_BUDGET_RECONCILIATION_EXCEEDED"),
+            (actual_cost > Decimal(approval.max_cost_usd), "MODEL_COST_APPROVAL_RECONCILIATION_EXCEEDED"),
+        ) if exceeded), None)
+
+        # A provider call is an external side effect. Persist its usage before
+        # validating content so a rejected response remains fully auditable and
+        # the graph can never repeat the paid request on resume/retry.
+        key.tokens_used_month = int(key.tokens_used_month or 0) + token_total
+        key.last_used_at = datetime.now(timezone.utc)
+        db.add(AIUsageRecord(
+            tenant_id=request.tenant_id, ai_request_id=request.id,
+            provider=resolution.effective_provider, model=resolution.effective_model,
+            module=request.origin_module, tokens_input=int(response.tokens_input),
+            tokens_output=int(response.tokens_output), estimated_cost=reserved_cost,
+            actual_cost=actual_cost, currency="USD",
+            pricing_snapshot_version=approval.pricing_snapshot_hash,
+        ))
+
+        try:
+            validate(response.output, prompt.output_schema_json)
+        except ValidationError:
+            return {
+                "ai_request_id": str(request.id),
+                "status": "FAILED",
+                "terminal_reason": "OUTPUT_SCHEMA_INVALID",
+                "error_code": "OUTPUT_SCHEMA_INVALID",
+                "provider_output_schema_valid": False,
+            }
+        if reconciliation_error is not None:
+            return {
+                "ai_request_id": str(request.id),
+                "status": "FAILED",
+                "terminal_reason": "PROVIDER_USAGE_RECONCILIATION_DENIED",
+                "error_code": reconciliation_error,
+                "provider_output_schema_valid": True,
+            }
 
         result_json = {
             "ai_request_id": str(request.id),
@@ -416,14 +456,6 @@ class SystemicLangGraphBridge:
         db.add(AIResultRecord(
             tenant_id=request.tenant_id, ai_request_id=request.id, status="COMPLETED",
             result_json=result_json, terminal_reason="ANALYSIS_ONLY_COMPLETED",
-        ))
-        db.add(AIUsageRecord(
-            tenant_id=request.tenant_id, ai_request_id=request.id,
-            provider=resolution.effective_provider, model=resolution.effective_model,
-            module=request.origin_module, tokens_input=int(response.tokens_input),
-            tokens_output=int(response.tokens_output), estimated_cost=reserved_cost,
-            actual_cost=actual_cost, currency="USD",
-            pricing_snapshot_version=approval.pricing_snapshot_hash,
         ))
         await db.flush()
         return result_json

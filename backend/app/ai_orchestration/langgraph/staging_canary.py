@@ -109,7 +109,7 @@ async def _seed(db, password: str) -> dict:
     prompt = (await db.execute(select(AIPromptVersion).where(
         AIPromptVersion.prompt_key == "systemic-multimodule",
         AIPromptVersion.status == "APPROVED",
-    ))).scalar_one()
+    ).order_by(AIPromptVersion.semantic_version.desc()).limit(1))).scalar_one()
     bundle_payload = {"profile_id": str(profile.id), "config": candidate_config, "live_write": False}
     bundle = AIConfigurationBundleRecord(
         tenant_id=user.id, profile_id=profile.id, lineage_refs={"source": "staging_canary"},

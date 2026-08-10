@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from uuid import NAMESPACE_URL, uuid5
 
 from .prompt_registry import PromptRegistry, PromptVersion
@@ -65,6 +66,11 @@ _SYSTEMIC_OUTPUT = {
 }
 
 
+def _schema_template(schema: dict) -> str:
+    """Serialize a schema for ``str.format_map`` without treating JSON as fields."""
+    return json.dumps(schema, ensure_ascii=False, separators=(",", ":")).replace("{", "{{").replace("}", "}}")
+
+
 def _prompt(
     key: str, version: str, system: str, user: str, *,
     tools: tuple[str, ...] = (), output_schema: dict | None = None,
@@ -116,6 +122,21 @@ INITIAL_PROMPTS = (
         (
             "Question: {question}\nCanonical dataset, configuration, and typed-tool evidence: {dataset}\n"
             "Configuration bundle: {configuration}\nReturn only JSON matching the approved systemic schema."
+        ),
+        output_schema=_SYSTEMIC_OUTPUT,
+    ),
+    _prompt(
+        "systemic-multimodule", "2.0.1",
+        (
+            "You are Scalpyn systemic analysis. Use only canonical typed-tool evidence. "
+            "Never invent metrics, causal claims, authority, or missing values. "
+            "Global Risk and Strategies are hard vetoes; ML, Social Score, and Market Regime are read-only. "
+            "Return every required field from the supplied JSON Schema, even when evidence is insufficient."
+        ),
+        (
+            "Question: {question}\nCanonical dataset, configuration, and typed-tool evidence: {dataset}\n"
+            "Configuration bundle: {configuration}\nReturn only one JSON object, without markdown, matching this exact schema:\n"
+            + _schema_template(_SYSTEMIC_OUTPUT)
         ),
         output_schema=_SYSTEMIC_OUTPUT,
     ),

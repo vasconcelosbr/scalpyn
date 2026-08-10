@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 from types import MappingProxyType
 from uuid import uuid4
@@ -358,6 +359,50 @@ def test_each_run_persists_dataset_bundle_result_usage():
     assert "AIRequestRecord(" in persistence
     assert "AIResultRecord(" in provider
     assert "AIUsageRecord(" in provider
+
+
+def test_systemic_prompt_v2_0_1_embeds_exact_required_schema():
+    from app.ai_orchestration.initial_prompts import initial_prompt_registry
+
+    prompt = initial_prompt_registry().resolve("systemic-multimodule", "2.0.1")
+    rendered = prompt.user_template.format_map({
+        "question": "read-only diagnosis",
+        "dataset": "{}",
+        "configuration": "{}",
+    })
+
+    assert '"diagnosis"' in rendered
+    assert '"root_cause_classification"' in rendered
+    assert '"rollback_plan"' in rendered
+    rendered_schema = json.loads(rendered.rsplit("matching this exact schema:\n", 1)[1])
+    assert rendered_schema == prompt.output_schema_json
+
+
+def test_provider_usage_is_reconciled_before_output_validation_and_blocks_retry():
+    backend = Path(__file__).resolve().parents[1]
+    provider = (backend / "app/services/systemic_langgraph_bridge.py").read_text(encoding="utf-8")
+    post_call = provider[provider.index(
+        "response = await SystemicLangGraphBridge.execute_json_provider"
+    ):]
+    usage_write = post_call.index("db.add(AIUsageRecord(")
+    output_validation = post_call.index("validate(response.output, prompt.output_schema_json)")
+
+    assert usage_write < output_validation
+    assert "PROVIDER_CALL_ALREADY_RECONCILED_NO_RETRY" in provider
+    assert '"error_code": "OUTPUT_SCHEMA_INVALID"' in provider
+    handler = (backend / "app/ai_orchestration/langgraph/handler.py").read_text(encoding="utf-8")
+    assert 'state["result_json"].get("status") != "COMPLETED"' in handler
+
+
+def test_migration_151_seeds_new_immutable_prompt_version():
+    backend = Path(__file__).resolve().parents[1]
+    migration = backend / "alembic/versions/151_systemic_prompt_schema_contract.py"
+    source = migration.read_text(encoding="utf-8")
+
+    assert 'revision = "151_systemic_prompt_schema"' in source
+    assert 'down_revision = "150_multimodule_hardening"' in source
+    assert 'semantic_version = \'2.0.1\'' in source
+    assert "536a9715671a5817ebb733de8553165ac2e98be72bc0ac9feb73deb7068bab42" in source
 
 
 def test_unresolved_event_conflict_blocks_change_set():

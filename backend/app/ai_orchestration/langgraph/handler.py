@@ -449,6 +449,10 @@ class CanonicalGraphNodeHandler:
         if node_name in {"validate_structured_output", "validate_output"}:
             if not isinstance(state.get("result_json"), dict):
                 raise RuntimeError("GRAPH_RESULT_SCHEMA_INVALID")
+            if state["result_json"].get("status") != "COMPLETED":
+                raise RuntimeError(
+                    str(state["result_json"].get("error_code") or "GRAPH_PROVIDER_RESULT_INVALID")
+                )
             recommendations = state["result_json"].get("recommendations") or []
             for recommendation in recommendations:
                 side_effect = str(recommendation.get("side_effect_class") or "NONE")
