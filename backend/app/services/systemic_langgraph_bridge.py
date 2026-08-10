@@ -14,7 +14,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..ai_orchestration.provider_adapters import (
-    AnthropicSDKTextAdapter, CopilotProviderTransport, default_adapter_registry,
+    AnthropicSDKTextAdapter, CopilotProviderTransport, anthropic_output_config,
+    default_adapter_registry,
 )
 from ..ai_orchestration.runtime import ProviderResponse
 from ..ai_orchestration.sanitizer import TrustLabel, structured_block
@@ -101,12 +102,13 @@ class SystemicLangGraphBridge:
     async def execute_json_provider(
         *, provider: str, model: str, system_prompt: str, user_prompt: str,
         api_key: str, request_id: str, max_output_tokens: int,
+        output_schema: dict[str, Any] | None = None,
     ) -> ProviderResponse:
         adapter = default_adapter_registry().get(provider)
         return await adapter.execute(
             provider=provider, model=model, system_prompt=system_prompt,
             user_prompt=user_prompt, tools=[], api_key=api_key, request_id=request_id,
-            max_output_tokens=max_output_tokens,
+            max_output_tokens=max_output_tokens, output_schema=output_schema,
         )
 
     @staticmethod
@@ -332,7 +334,21 @@ class SystemicLangGraphBridge:
 
         # UTF-8 byte length is a deliberately conservative reservation bound;
         # it avoids under-reserving for non-ASCII prompt content.
-        estimated_input_tokens = max(1, len((system_prompt + user_prompt).encode("utf-8")))
+        structured_output_reservation = 0
+        if resolution.effective_provider == "anthropic":
+            output_config = anthropic_output_config(prompt.output_schema_json)
+            # Reserve the complete transport contract plus bounded room for the
+            # provider-injected structured-output instruction.
+            structured_output_reservation = len(json.dumps(
+                {"output_config": output_config},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")) + 512
+        estimated_input_tokens = max(
+            1,
+            len((system_prompt + user_prompt).encode("utf-8"))
+            + structured_output_reservation,
+        )
         max_input_tokens = int(budget.request_token_limit) - int(approval.max_output_tokens)
         if max_input_tokens <= 0 or estimated_input_tokens > max_input_tokens:
             raise RuntimeError("AI_INPUT_RESERVATION_EXCEEDED")
@@ -361,6 +377,7 @@ class SystemicLangGraphBridge:
             api_key=decrypt_value(bytes(key.api_key_encrypted)),
             request_id=str(request.id),
             max_output_tokens=int(approval.max_output_tokens),
+            output_schema=prompt.output_schema_json,
         )
         token_total = int(response.tokens_input) + int(response.tokens_output)
         actual_cost = (
@@ -402,13 +419,17 @@ class SystemicLangGraphBridge:
 
         try:
             validate(response.output, prompt.output_schema_json)
-        except ValidationError:
+        except ValidationError as exc:
             return {
                 "ai_request_id": str(request.id),
                 "status": "FAILED",
                 "terminal_reason": "OUTPUT_SCHEMA_INVALID",
                 "error_code": "OUTPUT_SCHEMA_INVALID",
                 "provider_output_schema_valid": False,
+                "provider_stop_reason": response.stop_reason,
+                "provider_response_ref": response.raw_response_ref,
+                "schema_error_path": [str(item) for item in exc.absolute_path][:8],
+                "schema_validator": str(exc.validator),
             }
         if reconciliation_error is not None:
             return {

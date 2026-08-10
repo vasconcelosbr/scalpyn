@@ -17,7 +17,8 @@ class ProviderResponse:
 class ProviderAdapter(Protocol):
     async def execute(self, *, provider: str, model: str, system_prompt: str, user_prompt: str,
                       tools: list[dict], api_key: str, request_id: str,
-                      max_output_tokens: int) -> ProviderResponse: ...
+                      max_output_tokens: int,
+                      output_schema: dict[str, Any] | None = None) -> ProviderResponse: ...
 
 
 class ProviderAdapterRegistry:

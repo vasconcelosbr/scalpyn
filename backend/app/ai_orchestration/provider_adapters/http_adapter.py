@@ -11,6 +11,79 @@ from ..reliability import classify_provider_status, retry_delays
 from ..runtime import ProviderResponse
 
 
+_ANTHROPIC_UNSUPPORTED_SCHEMA_CONSTRAINTS = {
+    "maximum", "maxItems", "maxLength", "maxProperties",
+    "minimum", "minLength",
+}
+
+
+def _enum_type(values: list[Any]) -> str:
+    sample = values[0]
+    if isinstance(sample, bool):
+        return "boolean"
+    if isinstance(sample, str):
+        return "string"
+    if isinstance(sample, int):
+        return "integer"
+    if isinstance(sample, float):
+        return "number"
+    if sample is None:
+        return "null"
+    raise ValueError("unsupported enum type for Anthropic structured output")
+
+
+def prepare_anthropic_output_schema(
+    schema: dict[str, Any],
+    *,
+    required: bool = True,
+) -> dict[str, Any] | None:
+    """Build the strict subset accepted by Anthropic structured outputs."""
+    if not schema:
+        if required:
+            raise ValueError("required output field cannot use an unconstrained schema")
+        return None
+
+    normalized: dict[str, Any] = {}
+    required_properties = set(schema.get("required") or ())
+    for key, value in schema.items():
+        if key in _ANTHROPIC_UNSUPPORTED_SCHEMA_CONSTRAINTS or key == "additionalProperties":
+            continue
+        if key == "properties":
+            properties: dict[str, Any] = {}
+            for name, property_schema in value.items():
+                prepared = prepare_anthropic_output_schema(
+                    property_schema,
+                    required=name in required_properties,
+                )
+                if prepared is not None:
+                    properties[name] = prepared
+            normalized[key] = properties
+            continue
+        if key == "items":
+            normalized[key] = prepare_anthropic_output_schema(value, required=True)
+            continue
+        if key == "type" and isinstance(value, list):
+            normalized["anyOf"] = [{"type": item} for item in value]
+            continue
+        normalized[key] = value
+
+    if not any(key in normalized for key in ("type", "anyOf", "oneOf", "allOf")):
+        enum = normalized.get("enum")
+        if not isinstance(enum, list) or not enum:
+            raise ValueError("structured output schema requires a concrete type")
+        normalized["type"] = _enum_type(enum)
+    if normalized.get("type") == "object":
+        normalized["additionalProperties"] = False
+    return normalized
+
+
+def anthropic_output_config(schema: dict[str, Any]) -> dict[str, Any]:
+    prepared = prepare_anthropic_output_schema(schema)
+    if prepared is None:
+        raise ValueError("Anthropic structured output schema is empty")
+    return {"format": {"type": "json_schema", "schema": prepared}}
+
+
 def _json_object(text: str) -> dict[str, Any]:
     cleaned = text.strip()
     if cleaned.startswith("```"):
@@ -31,12 +104,13 @@ class HTTPProviderAdapter:
 
     async def execute(self, *, provider: str, model: str, system_prompt: str, user_prompt: str,
                       tools: list[dict], api_key: str, request_id: str,
-                      max_output_tokens: int) -> ProviderResponse:
+                      max_output_tokens: int,
+                      output_schema: dict[str, Any] | None = None) -> ProviderResponse:
         async with httpx.AsyncClient(timeout=httpx.Timeout(self.timeout_seconds, connect=20.0)) as client:
             for attempt in range(1, self.max_attempts + 1):
                 response = await self._post(
                     client, provider, model, system_prompt, user_prompt, api_key,
-                    request_id, max_output_tokens,
+                    request_id, max_output_tokens, output_schema,
                 )
                 if response.is_success:
                     return self._decode(
@@ -60,7 +134,10 @@ class HTTPProviderAdapter:
                 await asyncio.sleep(delays[attempt - 1])
         raise AssertionError("unreachable")
 
-    async def _post(self, client, provider, model, system, user, api_key, request_id, max_output_tokens):
+    async def _post(
+        self, client, provider, model, system, user, api_key, request_id,
+        max_output_tokens, output_schema=None,
+    ):
         headers = {"x-scalpyn-ai-request-id": request_id}
         if provider == "openai":
             return await client.post("https://api.openai.com/v1/chat/completions",
@@ -69,10 +146,15 @@ class HTTPProviderAdapter:
                       "response_format": {"type": "json_object"},
                       "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]})
         if provider == "anthropic":
+            payload = {
+                "model": model, "max_tokens": max_output_tokens, "temperature": 0,
+                "system": system, "messages": [{"role": "user", "content": user}],
+            }
+            if output_schema is not None:
+                payload["output_config"] = anthropic_output_config(output_schema)
             return await client.post("https://api.anthropic.com/v1/messages",
                 headers={**headers, "x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-                json={"model": model, "max_tokens": max_output_tokens, "temperature": 0, "system": system,
-                      "messages": [{"role": "user", "content": user}]})
+                json=payload)
         if provider == "gemini":
             return await client.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
                 params={"key": api_key}, headers=headers,

@@ -1,6 +1,6 @@
 import os
 
-from .http_adapter import HTTPProviderAdapter
+from .http_adapter import HTTPProviderAdapter, anthropic_output_config
 from .anthropic_sdk import AnthropicSDKTextAdapter
 from .catalog import AnthropicCatalogAdapter, ProviderCatalogError
 from .copilot_transport import CopilotProviderTransport
@@ -19,6 +19,6 @@ def default_adapter_registry() -> ProviderAdapterRegistry:
 
 __all__ = [
     "AnthropicCatalogAdapter", "AnthropicSDKTextAdapter", "CopilotProviderTransport",
-    "HTTPProviderAdapter", "ProviderCatalogError",
+    "HTTPProviderAdapter", "ProviderCatalogError", "anthropic_output_config",
     "default_adapter_registry",
 ]

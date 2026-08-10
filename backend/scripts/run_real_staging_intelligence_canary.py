@@ -23,11 +23,11 @@ TENANT_ID = UUID("b02e84ad-a0eb-4fca-8cf6-bef1ccaafc40")
 PROVIDER = "anthropic"
 MODEL = "claude-haiku-4-5-20251001"
 MODULE = "intelligence_runs"
-MAX_INPUT_TOKENS = 10_127
-MAX_OUTPUT_TOKENS = 1_974
-REQUEST_TOKEN_LIMIT = 12_101
-DAILY_TOKEN_LIMIT = 24_000
-MONTHLY_TOKEN_LIMIT = 24_000
+MAX_INPUT_TOKENS = 12_663
+MAX_OUTPUT_TOKENS = 1_450
+REQUEST_TOKEN_LIMIT = 14_113
+DAILY_TOKEN_LIMIT = 32_000
+MONTHLY_TOKEN_LIMIT = 32_000
 APPROVAL_TEXT = "APROVO O CANÁRIO REAL EM STAGING COM CUSTO MÁXIMO DE US$ 0,02."
 PRICING_URL = "https://www.anthropic.com/claude/haiku"
 QUESTION = (
@@ -244,7 +244,7 @@ async def main() -> None:
                 provider=PROVIDER,
                 model=MODEL,
                 model_approval_id=approval_id,
-                idempotency_key="real-provider-intelligence-canary-20260810-v3",
+                idempotency_key="real-provider-intelligence-canary-20260810-v4",
             )
             run_id = run.id
             await session.commit()

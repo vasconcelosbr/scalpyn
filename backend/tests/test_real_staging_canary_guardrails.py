@@ -12,7 +12,7 @@ from scripts.run_real_staging_intelligence_canary import (
 def test_real_canary_reservation_stays_within_approved_cost():
     assert MAX_INPUT_TOKENS + MAX_OUTPUT_TOKENS == REQUEST_TOKEN_LIMIT
     worst_cost_microusd = MAX_INPUT_TOKENS + (MAX_OUTPUT_TOKENS * 5)
-    assert worst_cost_microusd == 19_997
+    assert worst_cost_microusd == 19_913
 
 
 def test_expire_model_approval_preserves_immutable_status_and_clamps_expiry():

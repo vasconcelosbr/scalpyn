@@ -122,6 +122,58 @@ def test_anthropic_truncation_preserves_usage_without_raw_output():
     assert response.raw_response_ref == "req_staging_literal"
 
 
+def test_anthropic_structured_output_uses_strict_supported_schema():
+    from app.ai_orchestration.initial_prompts import initial_prompt_registry
+    from app.ai_orchestration.provider_adapters.http_adapter import (
+        anthropic_output_config,
+    )
+
+    original = initial_prompt_registry().resolve(
+        "systemic-multimodule", "2.0.3",
+    ).output_schema_json
+    schema = anthropic_output_config(original)["format"]["schema"]
+    recommendation = schema["properties"]["recommendations"]["items"]
+
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["diagnosis"] == {"type": "string"}
+    assert recommendation["additionalProperties"] is False
+    assert "current_value" not in recommendation["properties"]
+    assert "proposed_value" not in recommendation["properties"]
+    assert recommendation["properties"]["target_entity_id"] == {
+        "anyOf": [{"type": "string"}, {"type": "null"}],
+    }
+    assert recommendation["properties"]["side_effect_class"]["type"] == "string"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_http_request_sends_output_config():
+    from app.ai_orchestration.provider_adapters.http_adapter import HTTPProviderAdapter
+
+    class Client:
+        payload = None
+
+        async def post(self, *_args, **kwargs):
+            self.payload = kwargs["json"]
+            return object()
+
+    client = Client()
+    await HTTPProviderAdapter()._post(
+        client, "anthropic", "model", "system", "user", "key", "request",
+        100, {"type": "object", "properties": {}, "additionalProperties": False},
+    )
+
+    assert client.payload["output_config"] == {
+        "format": {
+            "type": "json_schema",
+            "schema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
 def test_strategy_profiles_tool_returns_version_and_hash():
     from app.ai_orchestration.domain_tools import default_tool_capabilities
     from app.ai_orchestration.module_tool_runtime import _bounded_frozen_reader
