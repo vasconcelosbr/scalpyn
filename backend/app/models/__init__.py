@@ -26,6 +26,7 @@ from .crypto_ev import CryptoEVL3ReplayFlag, CryptoEVSnapshot
 from .opportunity_snapshot import OpportunitySnapshot
 from .social_intelligence import SocialAssetObservation, SocialIntelligenceRun
 from .systemic_ai import (
+    AIAnalysisProfileRecord,
     AIModuleCapabilityRecord,
     AIModelApprovalRecord,
     AIBudgetPolicyRecord,
@@ -110,6 +111,7 @@ __all__ = [
     "SocialAssetObservation",
     "SocialIntelligenceRun",
     "AIBudgetPolicyRecord",
+    "AIAnalysisProfileRecord",
     "AIModuleCapabilityRecord",
     "AIModelApprovalRecord",
     "AIConfigurationBundleRecord",

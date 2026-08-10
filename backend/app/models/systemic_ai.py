@@ -57,6 +57,40 @@ class AIModuleCapabilityRecord(Base):
     deprecated_at = Column(TIMESTAMP(timezone=True))
 
 
+class AIAnalysisProfileRecord(Base):
+    __tablename__ = "ai_analysis_profiles"
+    __table_args__ = (
+        UniqueConstraint("slug", name="uq_ai_analysis_profile_slug"),
+        Index("ix_ai_analysis_profile_active_order", "is_active", "display_order"),
+    )
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    slug = Column(String(80), nullable=False)
+    name = Column(String(120), nullable=False)
+    description = Column(Text, nullable=False)
+    provider = Column(String(40), nullable=False)
+    model = Column(String(200), nullable=False)
+    analysis_mode = Column(String(40), nullable=False)
+    authority = Column(String(40), nullable=False, default="ANALYSIS_ONLY")
+    question_template = Column(Text, nullable=False)
+    max_cost_usd = Column(Numeric(18, 8), nullable=False)
+    input_cost_per_million = Column(Numeric(18, 8), nullable=False)
+    output_cost_per_million = Column(Numeric(18, 8), nullable=False)
+    max_input_tokens = Column(Integer, nullable=False)
+    max_output_tokens = Column(Integer, nullable=False)
+    request_token_limit = Column(Integer, nullable=False)
+    daily_token_limit = Column(Integer, nullable=False)
+    monthly_token_limit = Column(Integer, nullable=False)
+    pricing_source_url = Column(Text, nullable=False)
+    pricing_observed_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    pricing_valid_until = Column(TIMESTAMP(timezone=True), nullable=False)
+    profile_version = Column(Integer, nullable=False, default=1)
+    profile_hash = Column(String(64), nullable=False, unique=True)
+    display_order = Column(Integer, nullable=False, default=0)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, default=_now)
+    updated_at = Column(TIMESTAMP(timezone=True), nullable=False, default=_now)
+
+
 class AIModelApprovalRecord(Base):
     __tablename__ = "ai_model_approvals"
     __table_args__ = (
@@ -74,6 +108,11 @@ class AIModelApprovalRecord(Base):
     pricing_observed_at = Column(TIMESTAMP(timezone=True), nullable=False)
     pricing_snapshot_hash = Column(String(64), nullable=False)
     approval_phrase_hash = Column(String(64), nullable=False)
+    approval_method = Column(String(40), nullable=False, default="HUMAN_PHRASE")
+    analysis_profile_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("ai_analysis_profiles.id", ondelete="RESTRICT"),
+    )
     scope = Column(String(80), nullable=False)
     status = Column(String(24), nullable=False, default="APPROVED")
     approved_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
