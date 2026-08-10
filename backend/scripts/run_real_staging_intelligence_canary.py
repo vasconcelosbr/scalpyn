@@ -2,7 +2,8 @@
 
 The provider key is loaded only from the encrypted tenant record. The real
 provider flag is enabled only in this process, while the persistent Railway
-flag remains false. Approval and budget records are disabled in ``finally``.
+flag remains false. The immutable approval is expired and the budget record is
+disabled in ``finally``.
 """
 
 from __future__ import annotations
@@ -56,6 +57,11 @@ def _assert_staging(args: argparse.Namespace) -> str:
 
 async def _scalar(session, statement) -> int:
     return int((await session.scalar(statement)) or 0)
+
+
+def _expire_model_approval(approval, now: datetime) -> None:
+    """Invalidate an immutable approval without changing its status field."""
+    approval.expires_at = min(approval.expires_at, now)
 
 
 async def main() -> None:
@@ -248,8 +254,7 @@ async def main() -> None:
         async with AsyncSessionLocal() as session:
             approval = await session.get(AIModelApprovalRecord, approval_id)
             if approval is not None:
-                approval.status = "CONSUMED" if execution_error is None else "REVOKED"
-                approval.expires_at = min(approval.expires_at, datetime.now(timezone.utc))
+                _expire_model_approval(approval, datetime.now(timezone.utc))
             if budget_id is not None:
                 budget = await session.get(AIBudgetPolicyRecord, budget_id)
                 if budget is not None:
@@ -323,6 +328,9 @@ async def main() -> None:
             "live_profiles": live_profiles,
             "provider_key_tokens_used_month": int(key.tokens_used_month or 0) if key else None,
             "approval_status": approval.status if approval else None,
+            "approval_expired": (
+                approval.expires_at <= datetime.now(timezone.utc) if approval else None
+            ),
             "budget_active": bool(budget.is_active) if budget else None,
             "persistent_real_provider_flag": os.getenv("RAILWAY_ENVIRONMENT_NAME") and False,
             "provider_key_material_printed": False,
@@ -348,8 +356,12 @@ async def main() -> None:
             failures.append("forbidden_side_effect_detected")
         if budget is None or budget.is_active:
             failures.append("budget_not_disabled")
-        if approval is None or approval.status != "CONSUMED":
-            failures.append("approval_not_consumed")
+        if (
+            approval is None
+            or approval.status != "APPROVED"
+            or approval.expires_at > datetime.now(timezone.utc)
+        ):
+            failures.append("approval_not_expired")
         if failures:
             raise SystemExit("CANARY_RECONCILIATION_FAILED:" + ",".join(failures))
 
