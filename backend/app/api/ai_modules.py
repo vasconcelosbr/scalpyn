@@ -37,7 +37,8 @@ class CreateModelApprovalRequest(BaseModel):
     scope: Literal["SYSTEMIC_MODULE_ANALYSIS"] = "SYSTEMIC_MODULE_ANALYSIS"
     module: Literal[
         "strategy_profiles", "ml_models", "shadow_portfolio", "score_engine",
-        "global_risk", "strategies", "social_score",
+        "global_risk", "strategies", "intelligence_runs", "social_score",
+        "market_regime", "audit_version_memory",
     ]
     max_input_tokens: int = Field(gt=0)
     max_output_tokens: int = Field(gt=0)
@@ -167,7 +168,8 @@ async def create_model_approval(
 class CreateModuleAnalysisRequest(BaseModel):
     origin_module: Literal[
         "strategy_profiles", "ml_models", "shadow_portfolio", "score_engine",
-        "global_risk", "strategies", "social_score",
+        "global_risk", "strategies", "intelligence_runs", "social_score",
+        "market_regime", "audit_version_memory",
     ]
     origin_view: str = Field(min_length=1, max_length=200)
     entity_ids: tuple[str, ...] = ()

@@ -56,10 +56,24 @@ def test_typed_tools_cover_every_registered_module():
 
 
 def test_module_analysis_domain_map_covers_registry_and_read_only_surfaces():
+    from app.ai_orchestration.dataset_service import CanonicalDatasetService
     from app.services.module_ai_analysis_service import _DOMAIN, _READ_ONLY_MODULES
 
     assert set(_DOMAIN) == EXPECTED_MODULES
     assert {"intelligence_runs", "audit_version_memory"} <= _READ_ONLY_MODULES
+    assert CanonicalDatasetService.DOMAIN_TABLES["INTELLIGENCE_RUNS"] == (
+        "ai_graph_runs", "ai_graph_events", "ai_graph_interrupts",
+    )
+
+
+def test_module_api_contract_exposes_read_only_intelligence_surfaces():
+    from app.api.ai_modules import CreateModelApprovalRequest, CreateModuleAnalysisRequest
+
+    approval_modules = CreateModelApprovalRequest.model_fields["module"].annotation.__args__
+    analysis_modules = CreateModuleAnalysisRequest.model_fields["origin_module"].annotation.__args__
+
+    assert {"intelligence_runs", "market_regime", "audit_version_memory"} <= set(approval_modules)
+    assert {"intelligence_runs", "market_regime", "audit_version_memory"} <= set(analysis_modules)
 
 
 def test_provider_adapter_limits_are_environment_bounded(monkeypatch):

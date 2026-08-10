@@ -61,6 +61,7 @@ class CanonicalDatasetService:
         "SCORE_ENGINE": ("config_profiles", "score_engine_versions", "rule_contribution"),
         "GLOBAL_RISK": ("config_profiles", "positions", "trades"),
         "STRATEGIES": ("config_profiles", "trades", "positions"),
+        "INTELLIGENCE_RUNS": ("ai_graph_runs", "ai_graph_events", "ai_graph_interrupts"),
         "SOCIAL_SCORE": ("social_intelligence_runs", "social_asset_observations"),
         "AUDIT_VERSION_MEMORY": ("decision_memory", "decision_hypotheses", "ai_change_sets"),
     }
