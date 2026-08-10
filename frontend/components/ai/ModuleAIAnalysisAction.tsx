@@ -76,6 +76,7 @@ export function ModuleAIAnalysisAction({
 }) {
   const [open, setOpen] = useState(false);
   const [selectedProfileId, setSelectedProfileId] = useState("");
+  const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [run, setRun] = useState<RunResponse | null>(null);
@@ -101,9 +102,10 @@ export function ModuleAIAnalysisAction({
   );
   const profiles = profileData?.profiles ?? [];
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId) ?? profiles[0] ?? null;
+  const promptReady = prompt.trim().length > 0;
 
   async function submit() {
-    if (!selectedProfile) return;
+    if (!selectedProfile || !promptReady) return;
     setBusy(true);
     setError(null);
     try {
@@ -113,6 +115,7 @@ export function ModuleAIAnalysisAction({
         entity_ids: entityIds,
         filters: {},
         analysis_profile_id: selectedProfile.id,
+        user_prompt: prompt.trim(),
         idempotency_key: `module-analysis-profile-${crypto.randomUUID()}`,
       });
       setRun(created);
@@ -159,7 +162,7 @@ export function ModuleAIAnalysisAction({
                 <>
                   <div>
                     <p className="text-sm font-medium text-slate-100">Escolha o perfil da análise</p>
-                    <p className="mt-1 text-xs text-slate-400">O objetivo, o modelo, os limites e a aprovação de custo já estão definidos no perfil.</p>
+                    <p className="mt-1 text-xs text-slate-400">O modelo, os limites e a aprovação de custo já estão definidos no perfil.</p>
                   </div>
 
                   {profilesLoading && (
@@ -206,6 +209,18 @@ export function ModuleAIAnalysisAction({
                     <p className="rounded-xl border border-amber-400/20 bg-amber-400/5 px-4 py-3 text-xs text-amber-100/80">Nenhum perfil de análise válido está disponível.</p>
                   )}
                   {profileError && <p className="rounded-lg border border-rose-400/20 bg-rose-400/10 px-3 py-2 text-xs text-rose-200">Não foi possível carregar os perfis governados.</p>}
+                  <label className="block text-xs font-medium text-slate-200">
+                    Prompt da análise
+                    <textarea
+                      value={prompt}
+                      onChange={(event) => setPrompt(event.target.value)}
+                      rows={4}
+                      required
+                      placeholder="Digite o que você deseja que a IA analise, compare ou explique."
+                      className="mt-2 w-full resize-y rounded-xl border border-white/10 bg-black/20 px-3 py-2.5 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-400/50"
+                    />
+                    <span className="mt-1.5 block text-[11px] font-normal text-slate-500">O perfil define o método; este prompt define a sua pergunta.</span>
+                  </label>
                   {selectedProfile && (
                     <p className="rounded-lg border border-emerald-400/15 bg-emerald-400/5 px-3 py-2 text-[11px] leading-4 text-emerald-100/70">
                       Ao clicar em criar, você seleciona este perfil e aprova até {formatUsd(selectedProfile.max_cost_usd)} para esta execução. Nenhuma autoridade de escrita live é concedida.
@@ -219,7 +234,7 @@ export function ModuleAIAnalysisAction({
             {!run && (
               <div className="flex items-center justify-end gap-2 border-t border-white/10 px-5 py-4">
                 <button type="button" onClick={() => setOpen(false)} className="rounded-lg px-3 py-2 text-sm text-slate-400 hover:text-slate-100">Cancelar</button>
-                <button type="button" onClick={() => void submit()} disabled={busy || !selectedProfile} className="inline-flex items-center gap-2 rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-cyan-950 disabled:cursor-not-allowed disabled:opacity-40">
+                <button type="button" onClick={() => void submit()} disabled={busy || !selectedProfile || !promptReady} className="inline-flex items-center gap-2 rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-cyan-950 disabled:cursor-not-allowed disabled:opacity-40">
                   {busy && <Loader2 size={15} className="animate-spin" />} Criar Intelligence Run
                 </button>
               </div>

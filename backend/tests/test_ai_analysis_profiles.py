@@ -9,7 +9,11 @@ import pytest
 from fastapi import HTTPException
 
 from app.ai_orchestration.hashing import canonical_hash
-from app.api.ai_modules import analysis_profile_snapshot, _validate_profile
+from app.api.ai_modules import (
+    CreateProfileAnalysisRequest,
+    _validate_profile,
+    analysis_profile_snapshot,
+)
 
 
 BACKEND = Path(__file__).resolve().parents[1]
@@ -57,6 +61,9 @@ def test_frontend_uses_profile_selection_without_technical_cost_form():
     assert "/ai/modules/analysis-profiles" in source
     assert "/ai/modules/analysis-runs/from-profile" in source
     assert "Escolha o perfil da análise" in source
+    assert "Prompt da análise" in source
+    assert "user_prompt: prompt.trim()" in source
+    assert "!selectedProfile || !promptReady" in source
     for removed_label in (
         "Máximo de tokens de entrada",
         "Limite diário de tokens",
@@ -64,6 +71,34 @@ def test_frontend_uses_profile_selection_without_technical_cost_form():
         "Confirmação humana",
     ):
         assert removed_label not in source
+
+
+def test_profile_run_normalizes_user_prompt_and_preserves_legacy_client():
+    payload = CreateProfileAnalysisRequest(
+        origin_module="strategy_profiles",
+        origin_view="profiles",
+        analysis_profile_id="44dd0065-7de7-5b1d-bfe1-c7a5f008c9a1",
+        user_prompt="  Compare os perfis ativos.  ",
+        idempotency_key="module-analysis-profile-1234567890",
+    )
+    assert payload.user_prompt == "Compare os perfis ativos."
+
+    legacy_payload = CreateProfileAnalysisRequest(
+        origin_module="strategy_profiles",
+        origin_view="profiles",
+        analysis_profile_id="44dd0065-7de7-5b1d-bfe1-c7a5f008c9a1",
+        idempotency_key="module-analysis-profile-1234567890",
+    )
+    assert legacy_payload.user_prompt is None
+
+    with pytest.raises(ValueError):
+        CreateProfileAnalysisRequest(
+            origin_module="strategy_profiles",
+            origin_view="profiles",
+            analysis_profile_id="44dd0065-7de7-5b1d-bfe1-c7a5f008c9a1",
+            user_prompt="   ",
+            idempotency_key="module-analysis-profile-1234567890",
+        )
 
 
 def test_profile_selection_is_persisted_as_approval_provenance():

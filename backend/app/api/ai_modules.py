@@ -247,7 +247,18 @@ class CreateProfileAnalysisRequest(BaseModel):
     entity_ids: tuple[str, ...] = ()
     filters: dict[str, Any] = Field(default_factory=dict)
     analysis_profile_id: UUID
+    user_prompt: str | None = Field(default=None, min_length=1, max_length=20_000)
     idempotency_key: str = Field(min_length=16, max_length=160)
+
+    @field_validator("user_prompt")
+    @classmethod
+    def user_prompt_must_contain_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("user_prompt must contain text")
+        return normalized
 
 
 def _profile_response(profile: AIAnalysisProfileRecord) -> dict[str, Any]:
@@ -345,7 +356,12 @@ async def create_module_analysis_run_from_profile(
             entity_ids=payload.entity_ids,
             filters={**payload.filters, "analysis_profile_id": str(profile.id)},
             analysis_mode=AnalysisMode(profile.analysis_mode),
-            question=profile.question_template,
+            question=(
+                f"{profile.question_template.rstrip()}\n\n"
+                f"Pergunta específica do usuário:\n{payload.user_prompt}"
+                if payload.user_prompt
+                else profile.question_template
+            ),
             authority=Authority.ANALYSIS_ONLY,
             provider=profile.provider,
             model=profile.model,
