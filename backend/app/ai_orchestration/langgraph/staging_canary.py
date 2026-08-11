@@ -18,7 +18,7 @@ from ...models.ai_graph import AIGraphEvent, AIGraphInterrupt
 from ...models.profile import Profile
 from ...models.systemic_ai import (
     AIConfigurationBundleRecord, AIDatasetSnapshotRecord, AIModelResolutionRecord,
-    AIPromptVersion, AIRequestRecord, AIResultRecord, AIToolEvidenceRecord,
+    AIPromptVersion, AIRequestRecord, AIToolEvidenceRecord,
 )
 from ...models.user import User
 from ...services.ai_graph_service import AIGraphRunService
@@ -154,6 +154,7 @@ async def _seed(db, password: str) -> dict:
             "target": "profile.candidate.shadow_only",
         }
         payload = {
+            "request_intent": "FAKE_PROVIDER_CANARY",
             "staging_canary": True, "fake_provider": True,
             "candidate_config": candidate_config, "score_config": score_config,
             "mutation_reason": "staging_canary_shadow_only",
@@ -211,10 +212,10 @@ async def _seed(db, password: str) -> dict:
         "warnings": [], "limitations": ["isolated fake adapter; no provider claim"],
         "terminal_reason": "STAGING_CANARY", "completed_at": now.isoformat(),
     }
-    db.add(AIResultRecord(
-        tenant_id=user.id, ai_request_id=analysis_request.id, status="COMPLETED",
-        result_json=result_payload, terminal_reason="STAGING_CANARY", completed_at=now,
-    ))
+    analysis_request.request_json = {
+        **dict(analysis_request.request_json or {}),
+        "fake_provider_result": result_payload,
+    }
     regenerative_request_a = await make_request("REGENERATIVE", "SHADOW_ONLY", "regenerative-a")
     regenerative_request_b = await make_request("REGENERATIVE", "SHADOW_ONLY", "regenerative-b")
     regenerative_request_c = await make_request(

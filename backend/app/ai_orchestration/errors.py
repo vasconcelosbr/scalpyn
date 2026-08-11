@@ -9,6 +9,7 @@ class AIErrorCode(StrEnum):
     CONFIG_NOT_FOUND = "CONFIG_NOT_FOUND"
     TENANT_SCOPE_MISSING = "TENANT_SCOPE_MISSING"
     PROVIDER_NOT_CONFIGURED = "PROVIDER_NOT_CONFIGURED"
+    PROVIDER_BLOCKED = "PROVIDER_BLOCKED"
     PROVIDER_KEY_INVALID = "PROVIDER_KEY_INVALID"
     MODEL_UNKNOWN = "MODEL_UNKNOWN"
     MODEL_NOT_ALLOWED = "MODEL_NOT_ALLOWED"
@@ -53,6 +54,39 @@ class AIOrchestrationError(RuntimeError):
     def __init__(self, detail: AIError):
         self.detail = detail
         super().__init__(detail.safe_message)
+
+
+class ProviderBlockedError(RuntimeError):
+    """Fail-closed provider gate with safe, machine-readable diagnostics."""
+
+    error_kind = AIErrorCode.PROVIDER_BLOCKED.value
+    provider_transport_attempted = False
+
+    def __init__(self, reason_code: str, safe_message: str):
+        self.reason_code = reason_code
+        self.safe_message = safe_message
+        super().__init__(reason_code)
+
+
+class GraphNodeExecutionError(RuntimeError):
+    """Carries the failing node across the node transaction rollback."""
+
+    def __init__(self, node_name: str, cause: Exception):
+        self.node_name = node_name
+        self.cause = cause
+        super().__init__(str(cause))
+
+
+class ProviderTransportError(RuntimeError):
+    """Redacted transport failure after an external call was attempted."""
+
+    error_kind = "PROVIDER_TRANSPORT_FAILED"
+    provider_transport_attempted = True
+
+    def __init__(self, reason_code: str = "PROVIDER_TRANSPORT_FAILED"):
+        self.reason_code = reason_code
+        self.safe_message = "Provider transport failed after the request was attempted"
+        super().__init__(reason_code)
 
 
 def fail(code: AIErrorCode, message: str, *, retryable: bool = False, http_status: int = 422,

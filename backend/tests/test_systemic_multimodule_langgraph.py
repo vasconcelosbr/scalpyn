@@ -784,7 +784,10 @@ def test_staging_canary_targets_v2_graphs_and_fake_provider_only():
     assert 'graph_key="systemic-analysis-v2"' in canary
     assert 'graph_key="regenerative-shadow-v2"' in canary
     assert '"real_provider_canary": "NOT_RUN_REQUIRES_COST_APPROVAL"' in canary
-    assert "LANGGRAPH_STAGING_FAKE_PROVIDER_INVALID" in bridge
+    assert "FAKE_PROVIDER_CANARY_INVALID" in bridge
+    assert "AIResult.model_validate(fake_result)" in bridge
+    fake_branch = bridge.index("if request_intent is AIRequestIntent.FAKE_PROVIDER_CANARY")
+    assert bridge.index("return result_json", fake_branch) < bridge.index("select(AIProviderKey)")
     assert 'resolution.effective_provider != "fake"' in bridge
     assert 'pricing_snapshot_version="ZERO_COST_FAKE_STAGING"' in bridge
     assert 'result_json["tool_calls"]' in bridge

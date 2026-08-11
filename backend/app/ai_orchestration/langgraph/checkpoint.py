@@ -18,6 +18,11 @@ def checkpoint_connection_string(raw_url: str | None = None) -> str:
     if parts.scheme not in {"postgres", "postgresql"}:
         raise RuntimeError("LangGraph checkpointer requires PostgreSQL")
     query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    # SQLAlchemy/asyncpg uses ``ssl`` while psycopg conninfo uses ``sslmode``.
+    # Normalize the public staging URI without weakening TLS requirements.
+    if "ssl" in query:
+        ssl_value = query.pop("ssl")
+        query.setdefault("sslmode", ssl_value)
     required_options = f"-csearch_path={settings.checkpoint_schema},public"
     current_options = query.get("options", "")
     if current_options and required_options not in current_options:

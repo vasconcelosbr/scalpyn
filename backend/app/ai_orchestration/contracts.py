@@ -23,6 +23,14 @@ class AnalysisMode(StrEnum):
     ROOT_CAUSE_AUDIT = "ROOT_CAUSE_AUDIT"
 
 
+class AIRequestIntent(StrEnum):
+    """Server-validated provider execution intent persisted with every request."""
+
+    NORMAL_ANALYSIS = "NORMAL_ANALYSIS"
+    FAKE_PROVIDER_CANARY = "FAKE_PROVIDER_CANARY"
+    REAL_PROVIDER_CANARY = "REAL_PROVIDER_CANARY"
+
+
 class ProviderModelRequest(BaseModel):
     model_config = ConfigDict(frozen=True)
     provider: str | None = None
@@ -99,6 +107,7 @@ class AIRequest(BaseModel):
     origin_view: str | None = Field(default=None, max_length=200)
     analysis_mode: AnalysisMode
     authority: Authority
+    request_intent: AIRequestIntent = AIRequestIntent.NORMAL_ANALYSIS
     provider_request: ProviderModelRequest
     prompt_key: str = Field(min_length=1, max_length=160)
     prompt_version: str | None = Field(default=None, max_length=40)

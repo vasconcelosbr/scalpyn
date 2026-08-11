@@ -11,7 +11,7 @@ from ..ai_orchestration.configuration_bundle_service import ConfigurationBundleS
 from ..ai_orchestration.context_memory import ContextFingerprint, mutation_fingerprint
 from ..ai_orchestration.hashing import canonical_hash
 from ..ai_orchestration.contracts import (
-    AIRequest, AnalysisMode, Authority, CanonicalDatasetRequest,
+    AIRequest, AIRequestIntent, AnalysisMode, Authority, CanonicalDatasetRequest,
     ConfigurationScope, ProviderModelRequest,
 )
 from ..ai_orchestration.dataset_service import CanonicalDatasetService
@@ -450,6 +450,7 @@ class ModuleAIAnalysisService:
             tenant_id=tenant_id, requested_by_user_id=user_id,
             origin_module=origin_module, origin_view=origin_view,
             analysis_mode=analysis_mode, authority=authority,
+            request_intent=AIRequestIntent.NORMAL_ANALYSIS,
             provider_request=ProviderModelRequest(provider=provider, model=model),
             prompt_key=prompt.prompt_key, prompt_version=prompt.semantic_version,
             dataset_request=dataset_request, configuration_scope=ConfigurationScope(),

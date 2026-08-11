@@ -11,10 +11,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..ai_orchestration.langgraph.config import get_langgraph_settings
+from ..ai_orchestration.errors import ProviderBlockedError
+from ..ai_orchestration.request_intent import resolve_request_intent
 from ..database import get_db
 from ..models.ai_graph import AIGraphDefinition, AIGraphRun
+from ..models.config_profile import ConfigProfile
 from ..models.systemic_ai import (
-    AIConfigurationBundleRecord, AIDatasetSnapshotRecord, AIModelResolutionRecord,
+    AIBudgetReservationRecord, AIConfigurationBundleRecord, AIDatasetSnapshotRecord, AIModelResolutionRecord,
     AIPromptVersion, AIRequestRecord, AIResultRecord, AIToolEvidenceRecord,
     AIUsageRecord,
 )
@@ -52,12 +55,20 @@ class StagingCrashResumeRequest(BaseModel):
 
 
 def _run_payload(run, request=None, definition=None) -> dict[str, Any]:
+    request_intent = None
+    if request is not None:
+        try:
+            request_intent = resolve_request_intent(dict(request.request_json or {})).value
+        except ProviderBlockedError:
+            request_intent = "INVALID_OR_AMBIGUOUS"
     return {
         "id": str(run.id),
         "ai_request_id": str(run.ai_request_id),
         "graph_definition_id": str(run.graph_definition_id),
         "status": run.status,
         "current_node": run.current_node,
+        "last_completed_node": run.last_completed_node,
+        "failed_node": run.failed_node,
         "authority": run.authority,
         "state_schema_version": run.state_schema_version,
         "started_at": run.started_at,
@@ -65,10 +76,14 @@ def _run_payload(run, request=None, definition=None) -> dict[str, Any]:
         "terminal_reason": run.terminal_reason,
         "last_error_code": run.last_error_code,
         "last_error_safe_message": run.last_error_safe_message,
+        "error_kind": run.error_kind,
+        "provider_transport_attempted": run.provider_transport_attempted,
         "created_at": run.created_at,
         "updated_at": run.updated_at,
         "origin_module": request.origin_module if request else None,
         "origin_view": request.origin_view if request else None,
+        "request_intent": request_intent,
+        "correlation_id": request.correlation_id if request else None,
         "graph_key": definition.graph_key if definition else None,
         "graph_version": definition.semantic_version if definition else None,
     }
@@ -166,6 +181,10 @@ async def get_graph_context(
     usage = (await db.execute(select(AIUsageRecord).where(
         AIUsageRecord.tenant_id == user_id, AIUsageRecord.ai_request_id == request.id,
     ).order_by(AIUsageRecord.created_at.desc()))).scalars().first()
+    reservation = (await db.execute(select(AIBudgetReservationRecord).where(
+        AIBudgetReservationRecord.tenant_id == user_id,
+        AIBudgetReservationRecord.ai_request_id == request.id,
+    ))).scalar_one_or_none()
     tool_evidence = list((await db.execute(select(AIToolEvidenceRecord).where(
         AIToolEvidenceRecord.tenant_id == user_id,
         AIToolEvidenceRecord.ai_request_id == request.id,
@@ -211,6 +230,24 @@ async def get_graph_context(
             "actual_cost": str(usage.actual_cost) if usage else None,
             "currency": usage.currency if usage else None,
             "pricing_snapshot_version": usage.pricing_snapshot_version if usage else None,
+        },
+        "budget_reservation": {
+            "id": str(reservation.id) if reservation else None,
+            "status": reservation.status if reservation else None,
+            "provider": reservation.provider if reservation else None,
+            "model": reservation.model if reservation else None,
+            "reserved_tokens": reservation.reserved_tokens if reservation else None,
+            "actual_tokens": reservation.actual_tokens if reservation else None,
+            "released_tokens": reservation.released_tokens if reservation else None,
+            "reserved_cost_usd": str(reservation.reserved_cost_usd) if reservation else None,
+            "actual_cost_usd": (
+                str(reservation.actual_cost_usd)
+                if reservation and reservation.actual_cost_usd is not None else None
+            ),
+            "provider_transport_attempted": (
+                reservation.provider_transport_attempted if reservation else None
+            ),
+            "terminal_reason": reservation.terminal_reason if reservation else None,
         },
         "tool_evidence": [{
             "id": str(item.id),
@@ -319,14 +356,27 @@ async def list_graph_definitions(
 
 
 @router.get("/capabilities")
-async def graph_capabilities(_user_id: UUID = Depends(get_current_user_id)):
+async def graph_capabilities(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
     settings = get_langgraph_settings()
+    runtime_config = (await db.execute(select(ConfigProfile).where(
+        ConfigProfile.user_id == user_id,
+        ConfigProfile.pool_id.is_(None),
+        ConfigProfile.config_type == "ai_provider_runtime",
+        ConfigProfile.is_active.is_(True),
+    ).order_by(ConfigProfile.updated_at.desc()).limit(1))).scalar_one_or_none()
     return {
         "runtime": settings.runtime,
         "runtime_enabled": settings.runtime_enabled,
         "entrypoints_enabled": settings.entrypoints_enabled,
         "regenerative_shadow_enabled": settings.regenerative_shadow_enabled,
         "real_provider_canary_enabled": settings.real_provider_canary_enabled,
+        "normal_analysis_provider_enabled": bool(
+            runtime_config
+            and (runtime_config.config_json or {}).get("normal_analysis_provider_enabled") is True
+        ),
         "strict_msgpack": settings.strict_msgpack,
         "authorities": ["ANALYSIS_ONLY", "PROPOSAL_ONLY", "CANDIDATE_ONLY", "SHADOW_ONLY"],
         "live_write": False,

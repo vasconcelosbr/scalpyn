@@ -294,6 +294,44 @@ class AIBudgetPolicyRecord(Base):
     created_at = Column(TIMESTAMP(timezone=True), nullable=False, default=_now)
 
 
+class AIBudgetReservationRecord(Base):
+    __tablename__ = "ai_budget_reservations"
+    __table_args__ = (
+        UniqueConstraint("ai_request_id", name="uq_ai_budget_reservation_request"),
+        Index("ix_ai_budget_reservation_tenant_created", "tenant_id", "created_at"),
+        Index("ix_ai_budget_reservation_status_updated", "status", "updated_at"),
+    )
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    ai_request_id = Column(UUID(as_uuid=True), ForeignKey("ai_requests.id", ondelete="CASCADE"), nullable=False)
+    budget_policy_id = Column(UUID(as_uuid=True), ForeignKey("ai_budget_policies.id", ondelete="SET NULL"))
+    model_approval_id = Column(UUID(as_uuid=True), ForeignKey("ai_model_approvals.id", ondelete="SET NULL"))
+    request_intent = Column(String(40), nullable=False)
+    provider = Column(String(40), nullable=False)
+    model = Column(String(200), nullable=False)
+    module = Column(String(120), nullable=False)
+    status = Column(String(32), nullable=False)
+    estimated_input_tokens = Column(Integer, nullable=False)
+    max_output_tokens = Column(Integer, nullable=False)
+    request_token_limit = Column(Integer, nullable=False)
+    daily_token_limit = Column(Integer, nullable=False)
+    monthly_token_limit = Column(Integer, nullable=False)
+    reserved_tokens = Column(Integer, nullable=False)
+    reserved_cost_usd = Column(Numeric(18, 8), nullable=False, default=0)
+    actual_tokens = Column(Integer)
+    actual_cost_usd = Column(Numeric(18, 8))
+    released_tokens = Column(Integer, nullable=False, default=0)
+    overage_tokens = Column(Integer, nullable=False, default=0)
+    currency = Column(String(8), nullable=False, default="USD")
+    provider_transport_attempted = Column(Boolean, nullable=False, default=False)
+    terminal_reason = Column(String(160))
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, default=_now)
+    updated_at = Column(TIMESTAMP(timezone=True), nullable=False, default=_now, onupdate=_now)
+    transport_started_at = Column(TIMESTAMP(timezone=True))
+    reconciled_at = Column(TIMESTAMP(timezone=True))
+    released_at = Column(TIMESTAMP(timezone=True))
+
+
 class AIToolCallAudit(Base):
     __tablename__ = "ai_tool_call_audits"
     __table_args__ = (Index("ix_ai_tool_audit_tenant_created", "tenant_id", "created_at"),)

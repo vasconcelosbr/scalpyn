@@ -212,6 +212,7 @@ async def _seed_origins_rows(db, password: str) -> dict:
             dataset_snapshot_id=dataset.id,
             configuration_bundle_id=context["bundle_id"],
             request_json={
+                "request_intent": "FAKE_PROVIDER_CANARY",
                 "staging_canary": True,
                 "fake_provider": True,
                 "origin_module": origin_module,

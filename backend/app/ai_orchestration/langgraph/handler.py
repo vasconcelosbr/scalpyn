@@ -27,6 +27,7 @@ from ...models.systemic_ai import (
     AIResultRecord,
 )
 from ..hashing import canonical_hash
+from ..errors import GraphNodeExecutionError
 from ..module_registry import module_capability_registry
 from .config import get_langgraph_settings
 from .metrics import checkpoint_writes, decision_memory_hits, node_duration, node_retries
@@ -73,6 +74,7 @@ class CanonicalGraphNodeHandler:
             run.lease_expires_at = now + timedelta(seconds=settings.lease_seconds)
             run.updated_at = now
             updates = await self._node_updates(db, run, request, node_name, state)
+            run.last_completed_node = node_name
 
             event_payload: dict[str, Any] = {
                 "state_schema_version": run.state_schema_version,
@@ -131,7 +133,12 @@ class CanonicalGraphNodeHandler:
             return updates
 
         with node_duration.labels(node_name=node_name).time():
-            updates = await self._transaction(_handle)
+            try:
+                updates = await self._transaction(_handle)
+            except GraphNodeExecutionError:
+                raise
+            except Exception as exc:
+                raise GraphNodeExecutionError(node_name, exc) from exc
         checkpoint_writes.inc()
         if node_name in (state.get("completed_nodes") or []):
             node_retries.labels(node_name=node_name).inc()

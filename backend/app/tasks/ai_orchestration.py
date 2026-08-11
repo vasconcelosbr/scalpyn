@@ -13,6 +13,7 @@ from sqlalchemy.dialects.postgresql import insert
 
 from .celery_app import celery_app
 from .task_dispatch import enqueue
+from ..ai_orchestration.errors import GraphNodeExecutionError, ProviderBlockedError
 from ..ai_orchestration.langgraph.checkpoint import postgres_checkpointer
 from ..ai_orchestration.langgraph.config import get_langgraph_settings
 from ..ai_orchestration.langgraph.graphs import build_graph
@@ -60,6 +61,9 @@ async def _acquire_run(db, run_id: UUID):
     run.lease_expires_at = now + timedelta(seconds=settings.lease_seconds)
     run.last_error_code = None
     run.last_error_safe_message = None
+    run.failed_node = None
+    run.error_kind = None
+    run.provider_transport_attempted = None
     run.updated_at = now
     if run.ai_job_id:
         job = await db.get(AIJobRecord, run.ai_job_id)
@@ -95,6 +99,10 @@ async def _mark_terminal(db, run_id: UUID, final_state: dict):
     now = _now()
     run.status = "COMPLETED"
     run.current_node = final_state.get("current_node")
+    run.last_completed_node = final_state.get("current_node") or run.last_completed_node
+    run.failed_node = None
+    run.error_kind = None
+    run.provider_transport_attempted = None
     run.terminal_reason = final_state.get("terminal_reason") or "GRAPH_COMPLETED"
     run.completed_at = now
     run.heartbeat_at = now
@@ -108,6 +116,7 @@ async def _mark_terminal(db, run_id: UUID, final_state: dict):
         job.status = "COMPLETED"
         job.completed_at = now
         job.terminal_reason = run.terminal_reason
+        job.lease_owner = None
         job.lease_expires_at = None
     await db.execute(insert(AIGraphEvent).values(
         tenant_id=run.tenant_id, graph_run_id=run.id,
@@ -159,7 +168,38 @@ async def _mark_interrupted(db, run_id: UUID, interrupt_value):
     ).on_conflict_do_nothing(index_elements=[AIGraphEvent.graph_run_id, AIGraphEvent.event_key]))
 
 
-async def _mark_failed(db, run_id: UUID, error_code: str):
+def _failure_details(exc: Exception) -> dict:
+    failed_node = exc.node_name if isinstance(exc, GraphNodeExecutionError) else None
+    cause = exc.cause if isinstance(exc, GraphNodeExecutionError) else exc
+    reason_code = str(getattr(cause, "reason_code", "") or str(cause).split(":", 1)[0])
+    reason_code = reason_code.strip().upper().replace(" ", "_")
+    if not reason_code or len(reason_code) > 80:
+        reason_code = type(cause).__name__.upper()[:80]
+    if isinstance(cause, ProviderBlockedError):
+        error_kind = "PROVIDER_BLOCKED"
+        terminal_reason = "PROVIDER_BLOCKED"
+    else:
+        error_kind = str(getattr(cause, "error_kind", "GRAPH_EXECUTION_FAILED"))[:80]
+        terminal_reason = "FAIL_CLOSED"
+    return {
+        "failed_node": failed_node,
+        "error_kind": error_kind,
+        "reason_code": reason_code,
+        "safe_message": str(
+            getattr(cause, "safe_message", "The systemic AI graph could not complete")
+        )[:500],
+        "provider_transport_attempted": bool(
+            getattr(cause, "provider_transport_attempted", False)
+        ),
+        "terminal_reason": terminal_reason,
+    }
+
+
+async def _mark_failed(
+    db, run_id: UUID, *, failed_node: str | None, error_kind: str,
+    reason_code: str, safe_message: str, provider_transport_attempted: bool,
+    terminal_reason: str,
+):
     run = (
         await db.execute(select(AIGraphRun).where(AIGraphRun.id == run_id).with_for_update())
     ).scalar_one_or_none()
@@ -167,9 +207,12 @@ async def _mark_failed(db, run_id: UUID, error_code: str):
         return
     now = _now()
     run.status = "FAILED"
-    run.last_error_code = error_code[:80]
-    run.last_error_safe_message = "The systemic AI graph could not complete"
-    run.terminal_reason = "FAIL_CLOSED"
+    run.failed_node = failed_node
+    run.error_kind = error_kind[:80]
+    run.last_error_code = reason_code[:80]
+    run.last_error_safe_message = safe_message[:500]
+    run.provider_transport_attempted = provider_transport_attempted
+    run.terminal_reason = terminal_reason[:160]
     run.completed_at = now
     run.lease_owner = None
     run.lease_expires_at = None
@@ -182,11 +225,22 @@ async def _mark_failed(db, run_id: UUID, error_code: str):
             job.last_error_safe_message = run.last_error_safe_message
             job.terminal_reason = run.terminal_reason
             job.completed_at = now
+            job.lease_owner = None
             job.lease_expires_at = None
+    request = await db.get(AIRequestRecord, run.ai_request_id)
+    correlation_id = request.correlation_id if request and request.tenant_id == run.tenant_id else None
     await db.execute(insert(AIGraphEvent).values(
         tenant_id=run.tenant_id, graph_run_id=run.id,
-        event_key=f"{run.id}:failed", event_type="FAILED", status="FAILED",
-        payload={"error_code": run.last_error_code, "terminal_reason": "FAIL_CLOSED"},
+        event_key=f"{run.id}:failed", event_type="FAILED",
+        node_name=failed_node, status="FAILED",
+        payload={
+            "error_kind": run.error_kind,
+            "reason_code": run.last_error_code,
+            "safe_message": run.last_error_safe_message,
+            "terminal_reason": run.terminal_reason,
+            "provider_transport_attempted": provider_transport_attempted,
+            "correlation_id": correlation_id,
+        },
     ).on_conflict_do_nothing(index_elements=[AIGraphEvent.graph_run_id, AIGraphEvent.event_key]))
 
 
@@ -235,11 +289,9 @@ async def execute_graph_run(run_id: UUID, *, resume_payload: dict | None = None)
         graph_runs_total.labels(graph_key=context["graph_key"], status="COMPLETED").inc()
         return {"status": "COMPLETED", "run_id": str(run_id)}
     except Exception as exc:
-        safe_code = str(exc).split(":", 1)[0].strip().upper().replace(" ", "_")
-        if not safe_code or len(safe_code) > 80:
-            safe_code = type(exc).__name__.upper()
-        await run_db_task(lambda db: _mark_failed(db, run_id, safe_code), celery=True)
-        graph_runs_failed.labels(error_code=safe_code).inc()
+        failure = _failure_details(exc)
+        await run_db_task(lambda db: _mark_failed(db, run_id, **failure), celery=True)
+        graph_runs_failed.labels(error_code=failure["reason_code"]).inc()
         graph_runs_total.labels(graph_key=context["graph_key"], status="FAILED").inc()
         raise
     finally:

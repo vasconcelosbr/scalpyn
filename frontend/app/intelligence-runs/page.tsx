@@ -1,12 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity, AlertTriangle, Check, ChevronRight, CircleDot, Clock3,
   GitBranch, Pause, RefreshCw, ShieldCheck, Square, X,
 } from "lucide-react";
 
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet, apiPost, apiPut } from "@/lib/api";
 
 type GraphRun = {
   id: string;
@@ -14,6 +14,8 @@ type GraphRun = {
   graph_definition_id: string;
   status: string;
   current_node: string | null;
+  last_completed_node: string | null;
+  failed_node: string | null;
   authority: string;
   state_schema_version: string;
   started_at: string | null;
@@ -21,10 +23,14 @@ type GraphRun = {
   terminal_reason: string | null;
   last_error_code: string | null;
   last_error_safe_message: string | null;
+  error_kind: string | null;
+  provider_transport_attempted: boolean | null;
   created_at: string;
   updated_at: string;
   origin_module: string | null;
   origin_view: string | null;
+  request_intent: string | null;
+  correlation_id: string | null;
   graph_key: string | null;
   graph_version: string | null;
 };
@@ -55,6 +61,7 @@ type Capabilities = {
   entrypoints_enabled: boolean;
   regenerative_shadow_enabled: boolean;
   real_provider_canary_enabled: boolean;
+  normal_analysis_provider_enabled: boolean;
   strict_msgpack: boolean;
   live_write: boolean;
   module_flags: Record<string, boolean>;
@@ -67,6 +74,7 @@ type RunContext = {
   bundle: { id: string | null; hash: string | null; lineage_status: string | null; lineage_refs: Record<string, unknown> | null };
   result: { status: string | null; warnings: string[]; limitations: string[]; memory_hits: Array<Record<string, unknown>> };
   usage: { tokens_input: number | null; tokens_output: number | null; actual_cost: string | null; currency: string | null; pricing_snapshot_version: string | null };
+  budget_reservation: { id: string | null; status: string | null; provider: string | null; model: string | null; reserved_tokens: number | null; actual_tokens: number | null; released_tokens: number | null; reserved_cost_usd: string | null; actual_cost_usd: string | null; provider_transport_attempted: boolean | null; terminal_reason: string | null };
 };
 
 const TERMINAL = new Set(["COMPLETED", "FAILED", "CANCELLED"]);
@@ -89,6 +97,15 @@ function statusTone(status: string) {
   return "border-cyan-400/30 bg-cyan-400/10 text-cyan-300";
 }
 
+function runStatusLabel(run: GraphRun) {
+  return run.error_kind === "PROVIDER_BLOCKED" ? "Provider bloqueado" : run.status;
+}
+
+function runTitle(run: GraphRun) {
+  if (run.error_kind === "PROVIDER_BLOCKED") return "Provider bloqueado";
+  return run.failed_node ?? run.current_node ?? "queued";
+}
+
 export default function IntelligenceRunsPage() {
   const [runs, setRuns] = useState<GraphRun[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -98,8 +115,10 @@ export default function IntelligenceRunsPage() {
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionBusy, setActionBusy] = useState(false);
+  const [gateBusy, setGateBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [candidateIds, setCandidateIds] = useState("");
+  const detailRequestSequence = useRef(0);
 
   const selected = useMemo(
     () => runs.find((run) => run.id === selectedId) ?? null,
@@ -125,16 +144,19 @@ export default function IntelligenceRunsPage() {
   }, []);
 
   const refreshDetail = useCallback(async (runId: string) => {
+    const requestSequence = ++detailRequestSequence.current;
     try {
       const [timeline, interruptResponse, contextResponse] = await Promise.all([
         apiGet<{ items: GraphEvent[] }>(`/ai/graphs/runs/${runId}/timeline?limit=200`),
         apiGet<{ items: GraphInterrupt[] }>(`/ai/graphs/runs/${runId}/interrupts`),
         apiGet<RunContext>(`/ai/graphs/runs/${runId}/context`),
       ]);
+      if (requestSequence !== detailRequestSequence.current) return;
       setEvents(timeline.items);
       setInterrupts(interruptResponse.items);
       setRunContext(contextResponse);
     } catch (caught) {
+      if (requestSequence !== detailRequestSequence.current) return;
       setError(caught instanceof Error ? caught.message : "Falha ao carregar a trilha");
     }
   }, []);
@@ -142,7 +164,12 @@ export default function IntelligenceRunsPage() {
   useEffect(() => { void refresh(); }, [refresh]);
   useEffect(() => {
     if (selectedId) void refreshDetail(selectedId);
-    else { setEvents([]); setInterrupts([]); setRunContext(null); }
+    else {
+      detailRequestSequence.current += 1;
+      setEvents([]);
+      setInterrupts([]);
+      setRunContext(null);
+    }
   }, [selectedId, refreshDetail]);
 
   useEffect(() => {
@@ -193,6 +220,26 @@ export default function IntelligenceRunsPage() {
     }
   }
 
+  async function toggleNormalProviderGate() {
+    if (!capabilities) return;
+    const nextValue = !capabilities.normal_analysis_provider_enabled;
+    const action = nextValue ? "habilitar" : "desabilitar";
+    if (!window.confirm(`Confirmar ${action} o provider apenas para analises normais deste tenant?`)) return;
+    setGateBusy(true);
+    setError(null);
+    try {
+      await apiPut(
+        `/config/ai_provider_runtime?change_description=${encodeURIComponent(`Intelligence Runs: ${action} gate normal`)}`,
+        { normal_analysis_provider_enabled: nextValue },
+      );
+      await refresh(selectedId);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Gate normal nao foi alterado");
+    } finally {
+      setGateBusy(false);
+    }
+  }
+
   const pendingInterrupt = interrupts.find((item) => item.status === "PENDING") ?? null;
 
   return (
@@ -240,10 +287,10 @@ export default function IntelligenceRunsPage() {
               {runs.map((run) => (
                 <button key={run.id} onClick={() => setSelectedId(run.id)} className={`mb-1 w-full rounded-xl border p-3 text-left transition ${selectedId === run.id ? "border-cyan-400/35 bg-cyan-400/8" : "border-transparent hover:border-[var(--border-subtle)] hover:bg-white/[.02]"}`}>
                   <div className="mb-2 flex items-center justify-between gap-2">
-                    <span className={`rounded-full border px-2 py-0.5 font-mono text-[9px] ${statusTone(run.status)}`}>{run.status}</span>
+                    <span className={`rounded-full border px-2 py-0.5 font-mono text-[9px] ${statusTone(run.error_kind === "PROVIDER_BLOCKED" ? "INTERRUPTED" : run.status)}`}>{runStatusLabel(run)}</span>
                     <span className="font-mono text-[10px] text-[var(--text-muted)]">{shortId(run.id)}</span>
                   </div>
-                  <p className="truncate text-sm font-medium">{run.current_node ?? "queued"}</p>
+                  <p className="truncate text-sm font-medium">{runTitle(run)}</p>
                   <p className="mt-1 truncate font-mono text-[10px] text-cyan-300/70">{run.origin_module ?? run.graph_key ?? "canonical"}</p>
                   <div className="mt-2 flex items-center justify-between text-[10px] text-[var(--text-muted)]">
                     <span>{run.authority}</span><span>{when(run.updated_at)}</span>
@@ -291,8 +338,13 @@ export default function IntelligenceRunsPage() {
                 <div className="flex justify-between gap-3"><dt className="text-[var(--text-muted)]">Authority</dt><dd className="font-mono text-cyan-300">{selected?.authority ?? "—"}</dd></div>
                 <div className="flex justify-between gap-3"><dt className="text-[var(--text-muted)]">Runtime</dt><dd className="font-mono">{capabilities?.runtime ?? "—"}</dd></div>
                 <div className="flex justify-between gap-3"><dt className="text-[var(--text-muted)]">Entrypoints</dt><dd>{capabilities?.entrypoints_enabled ? "enabled" : "disabled"}</dd></div>
-                <div className="flex justify-between gap-3"><dt className="text-[var(--text-muted)]">Provider canary</dt><dd>{capabilities?.real_provider_canary_enabled ? "enabled" : "disabled"}</dd></div>
+                <div className="flex justify-between gap-3"><dt className="text-[var(--text-muted)]">Canario real</dt><dd>{capabilities?.real_provider_canary_enabled ? "enabled" : "disabled"}</dd></div>
+                <div className="flex justify-between gap-3"><dt className="text-[var(--text-muted)]">Provider normal</dt><dd>{capabilities?.normal_analysis_provider_enabled ? "enabled" : "disabled"}</dd></div>
               </dl>
+              <button disabled={gateBusy || !capabilities} onClick={() => void toggleNormalProviderGate()} className="mt-4 w-full rounded-lg border border-[var(--border-subtle)] py-2 text-xs text-[var(--text-muted)] hover:border-cyan-400/40 hover:text-cyan-300 disabled:opacity-40">
+                {capabilities?.normal_analysis_provider_enabled ? "Desabilitar provider normal" : "Habilitar provider normal"}
+              </button>
+              <p className="mt-2 text-[10px] leading-4 text-[var(--text-muted)]">Este gate e separado dos canarios e nao concede escrita live.</p>
             </section>
 
             {selected && runContext && (
@@ -307,6 +359,7 @@ export default function IntelligenceRunsPage() {
                   <div><dt className="text-[10px] uppercase tracking-wider">Modules consulted</dt><dd className="mt-0.5 leading-5 text-[var(--text-primary)]">{runContext.dataset.context_manifest?.modules_consulted?.join(" · ") || "—"}</dd></div>
                   <div><dt className="text-[10px] uppercase tracking-wider">Tool calls / memory</dt><dd className="mt-0.5 font-mono text-[var(--text-primary)]">{runContext.dataset.context_manifest?.tools_called?.length ?? 0} / {runContext.result.memory_hits.length}</dd></div>
                   <div><dt className="text-[10px] uppercase tracking-wider">Usage / cost</dt><dd className="mt-0.5 font-mono text-[var(--text-primary)]">{runContext.usage.tokens_input ?? "—"} in · {runContext.usage.tokens_output ?? "—"} out · {runContext.usage.actual_cost ?? "—"} {runContext.usage.currency ?? ""}</dd></div>
+                  <div><dt className="text-[10px] uppercase tracking-wider">Budget reservation</dt><dd className="mt-0.5 font-mono text-[var(--text-primary)]">{runContext.budget_reservation.status ?? "—"} · reserved {runContext.budget_reservation.reserved_tokens ?? "—"} · actual {runContext.budget_reservation.actual_tokens ?? "—"} · released {runContext.budget_reservation.released_tokens ?? "—"}</dd></div>
                 </dl>
               </section>
             )}
@@ -338,8 +391,14 @@ export default function IntelligenceRunsPage() {
                 <div className="mb-3 flex items-center gap-2 font-medium"><Activity size={15} className="text-cyan-300" /> Run facts</div>
                 <div className="space-y-2 text-[var(--text-muted)]">
                   <p className="flex items-center gap-2"><Clock3 size={12} /> created {when(selected.created_at)}</p>
-                  <p className="flex items-center gap-2"><ChevronRight size={12} /> {selected.terminal_reason ?? selected.current_node ?? "queued"}</p>
+                  <p className="flex items-center gap-2"><ChevronRight size={12} /> Intent: {selected.request_intent ?? "—"}</p>
+                  <p className="flex items-center gap-2"><ChevronRight size={12} /> Ultimo no concluido: {selected.last_completed_node ?? "—"}</p>
+                  <p className="flex items-center gap-2"><AlertTriangle size={12} /> No que falhou: {selected.failed_node ?? "—"}</p>
+                  {selected.error_kind === "PROVIDER_BLOCKED" && <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 p-3 text-amber-200"><p className="font-medium">Provider bloqueado</p><p className="mt-1 leading-5">O transporte nao foi iniciado. Verifique o intent e o gate operacional correspondente; o canario real nao corrige uma analise normal.</p></div>}
                   {selected.last_error_code && <p className="font-mono text-rose-300">{selected.last_error_code}</p>}
+                  {selected.last_error_safe_message && <p className="leading-5">{selected.last_error_safe_message}</p>}
+                  <p className="font-mono text-[10px]">transport attempted: {selected.provider_transport_attempted === null ? "—" : String(selected.provider_transport_attempted)}</p>
+                  <p className="truncate font-mono text-[10px]">correlation: {selected.correlation_id ?? "—"}</p>
                 </div>
               </section>
             )}

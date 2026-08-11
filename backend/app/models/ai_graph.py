@@ -7,7 +7,7 @@ models are the application authorization and audit boundary.
 from datetime import datetime, timezone
 import uuid
 
-from sqlalchemy import Column, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.types import BigInteger, TIMESTAMP
 
@@ -57,6 +57,8 @@ class AIGraphRun(Base):
     idempotency_key = Column(String(160), nullable=False)
     status = Column(String(40), nullable=False, default="QUEUED")
     current_node = Column(String(160))
+    last_completed_node = Column(String(160))
+    failed_node = Column(String(160))
     state_schema_version = Column(String(80), nullable=False)
     authority = Column(String(40), nullable=False)
     lease_owner = Column(String(160))
@@ -68,6 +70,8 @@ class AIGraphRun(Base):
     terminal_reason = Column(String(160))
     last_error_code = Column(String(80))
     last_error_safe_message = Column(Text)
+    error_kind = Column(String(80))
+    provider_transport_attempted = Column(Boolean)
     created_at = Column(TIMESTAMP(timezone=True), nullable=False, default=_now)
     updated_at = Column(TIMESTAMP(timezone=True), nullable=False, default=_now, onupdate=_now)
 

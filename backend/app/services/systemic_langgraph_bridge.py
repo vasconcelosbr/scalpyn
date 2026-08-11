@@ -13,13 +13,19 @@ from jsonschema import ValidationError, validate
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..ai_orchestration.budget_reservation_audit import BudgetReservationAudit
+from ..ai_orchestration.contracts import AIRequestIntent, AIResult
+from ..ai_orchestration.errors import ProviderBlockedError, ProviderTransportError
 from ..ai_orchestration.provider_adapters import (
     AnthropicSDKTextAdapter, CopilotProviderTransport, anthropic_output_config,
     default_adapter_registry,
 )
 from ..ai_orchestration.runtime import ProviderResponse
+from ..ai_orchestration.request_intent import resolve_request_intent, validate_provider_intent_gate
 from ..ai_orchestration.sanitizer import TrustLabel, structured_block
+from ..database import run_db_task
 from ..models.ai_provider_key import AIProviderKey
+from ..models.config_profile import ConfigProfile
 from ..models.systemic_ai import (
     AIBudgetPolicyRecord, AIConfigurationBundleRecord, AIDatasetSnapshotRecord, AIModelResolutionRecord,
     AIModelApprovalRecord, AIPromptVersion, AIRequestRecord, AIResultRecord, AIUsageRecord,
@@ -144,38 +150,67 @@ class SystemicLangGraphBridge:
         from ..ai_orchestration.langgraph.config import get_langgraph_settings
 
         settings = get_langgraph_settings()
-        settings.require_runtime()
         request_json = dict(request.request_json or {})
-        is_staging_fake = bool(
-            request_json.get("staging_canary") and request_json.get("fake_provider")
-        )
-        if is_staging_fake:
-            environment = os.getenv("RAILWAY_ENVIRONMENT_NAME", "").lower()
-            fake_enabled = os.getenv(
-                "LANGGRAPH_FAKE_PROVIDER_CANARY_ENABLED", "false",
-            ).lower() == "true"
+        request_intent = resolve_request_intent(request_json)
+        settings.require_runtime()
+        environment = os.getenv("RAILWAY_ENVIRONMENT_NAME", "").lower()
+        fake_enabled = os.getenv(
+            "LANGGRAPH_FAKE_PROVIDER_CANARY_ENABLED", "false",
+        ).lower() == "true"
+        if request_intent is AIRequestIntent.FAKE_PROVIDER_CANARY:
+            validate_provider_intent_gate(
+                request_intent,
+                environment_name=environment,
+                fake_provider_canary_enabled=fake_enabled,
+                real_provider_canary_enabled=settings.real_provider_canary_enabled,
+                normal_analysis_provider_enabled=False,
+            )
             resolution = await db.get(AIModelResolutionRecord, request.model_resolution_id)
             existing = (await db.execute(select(AIResultRecord).where(
                 AIResultRecord.tenant_id == request.tenant_id,
                 AIResultRecord.ai_request_id == request.id,
             ))).scalar_one_or_none()
+            if existing is not None:
+                return dict(existing.result_json)
+            fake_result = request_json.get("fake_provider_result")
             if (
-                "staging" not in environment
-                or not fake_enabled
-                or settings.real_provider_canary_enabled
-                or resolution is None
+                resolution is None
                 or resolution.effective_provider != "fake"
                 or resolution.effective_model != "fake-analysis-v1"
-                or existing is None
+                or not isinstance(fake_result, dict)
             ):
-                raise RuntimeError("LANGGRAPH_STAGING_FAKE_PROVIDER_INVALID")
+                raise ProviderBlockedError(
+                    "FAKE_PROVIDER_CANARY_INVALID",
+                    "Fake provider canary fixture or model resolution is invalid",
+                )
+            try:
+                validated_fake_result = AIResult.model_validate(fake_result)
+            except Exception as exc:
+                raise ProviderBlockedError(
+                    "FAKE_PROVIDER_CANARY_RESULT_INVALID",
+                    "Fake provider canary result failed typed validation",
+                ) from exc
             tool_evidence_rows = list((await db.execute(select(AIToolEvidenceRecord).where(
                 AIToolEvidenceRecord.tenant_id == request.tenant_id,
                 AIToolEvidenceRecord.ai_request_id == request.id,
             ).order_by(AIToolEvidenceRecord.created_at, AIToolEvidenceRecord.id))).scalars().all())
             if not tool_evidence_rows:
                 raise RuntimeError("GRAPH_TYPED_TOOL_EVIDENCE_REQUIRED")
-            result_json = dict(existing.result_json)
+            await run_db_task(
+                lambda reservation_db: BudgetReservationAudit.record_zero_cost_fake(
+                    reservation_db,
+                    tenant_id=request.tenant_id,
+                    ai_request_id=request.id,
+                    budget_policy_id=None,
+                    model_approval_id=None,
+                    request_intent=request_intent.value,
+                    provider="fake",
+                    model="fake-analysis-v1",
+                    module=request.origin_module,
+                ),
+                celery=True,
+            )
+            result_json = validated_fake_result.model_dump(mode="json")
             result_json["tool_calls"] = [{
                 "tool_call_audit_id": str(row.tool_call_audit_id),
                 "evidence_id": str(row.id),
@@ -184,7 +219,14 @@ class SystemicLangGraphBridge:
                 "output_hash": row.output_hash,
                 "quality": row.quality,
             } for row in tool_evidence_rows]
-            existing.result_json = result_json
+            db.add(AIResultRecord(
+                tenant_id=request.tenant_id,
+                ai_request_id=request.id,
+                status="COMPLETED",
+                result_json=result_json,
+                terminal_reason="STAGING_CANARY",
+                completed_at=datetime.now(timezone.utc),
+            ))
             usage = (await db.execute(select(AIUsageRecord).where(
                 AIUsageRecord.tenant_id == request.tenant_id,
                 AIUsageRecord.ai_request_id == request.id,
@@ -223,9 +265,6 @@ class SystemicLangGraphBridge:
                 "error_code": "PROVIDER_CALL_ALREADY_RECONCILED_NO_RETRY",
                 "provider_output_schema_valid": False,
             }
-        if not settings.real_provider_canary_enabled:
-            raise RuntimeError("LANGGRAPH_REAL_PROVIDER_CANARY_DISABLED")
-
         resolution = await db.get(AIModelResolutionRecord, request.model_resolution_id)
         prompt = await db.get(AIPromptVersion, request.prompt_version_id)
         dataset = await db.get(AIDatasetSnapshotRecord, request.dataset_snapshot_id)
@@ -236,6 +275,33 @@ class SystemicLangGraphBridge:
             raise RuntimeError("GRAPH_CANONICAL_TENANT_MISMATCH")
         if resolution.configured_model != resolution.effective_model:
             raise RuntimeError("CONFIGURED_EFFECTIVE_MODEL_MISMATCH")
+
+        tool_evidence_rows = list((await db.execute(select(AIToolEvidenceRecord).where(
+            AIToolEvidenceRecord.tenant_id == request.tenant_id,
+            AIToolEvidenceRecord.ai_request_id == request.id,
+        ).order_by(AIToolEvidenceRecord.created_at, AIToolEvidenceRecord.id))).scalars().all())
+        if not tool_evidence_rows:
+            raise RuntimeError("GRAPH_TYPED_TOOL_EVIDENCE_REQUIRED")
+
+        normal_provider_enabled = False
+        if request_intent is AIRequestIntent.NORMAL_ANALYSIS:
+            runtime_config = (await db.execute(select(ConfigProfile).where(
+                ConfigProfile.user_id == request.tenant_id,
+                ConfigProfile.pool_id.is_(None),
+                ConfigProfile.config_type == "ai_provider_runtime",
+                ConfigProfile.is_active.is_(True),
+            ).order_by(ConfigProfile.updated_at.desc()).limit(1))).scalar_one_or_none()
+            normal_provider_enabled = bool(
+                runtime_config
+                and (runtime_config.config_json or {}).get("normal_analysis_provider_enabled") is True
+            )
+        validate_provider_intent_gate(
+            request_intent,
+            environment_name=environment,
+            fake_provider_canary_enabled=fake_enabled,
+            real_provider_canary_enabled=settings.real_provider_canary_enabled,
+            normal_analysis_provider_enabled=normal_provider_enabled,
+        )
 
         key = (await db.execute(select(AIProviderKey).where(
             AIProviderKey.user_id == request.tenant_id,
@@ -300,12 +366,6 @@ class SystemicLangGraphBridge:
             AIUsageRecord.created_at >= month_start,
         ))) or 0)
         question = structured_block(TrustLabel.USER_INPUT, str(request_json.get("question") or ""))
-        tool_evidence_rows = list((await db.execute(select(AIToolEvidenceRecord).where(
-            AIToolEvidenceRecord.tenant_id == request.tenant_id,
-            AIToolEvidenceRecord.ai_request_id == request.id,
-        ).order_by(AIToolEvidenceRecord.created_at, AIToolEvidenceRecord.id))).scalars().all())
-        if not tool_evidence_rows:
-            raise RuntimeError("GRAPH_TYPED_TOOL_EVIDENCE_REQUIRED")
         tool_evidence = [{
             "evidence_id": str(row.id),
             "module": row.module_key,
@@ -369,16 +429,75 @@ class SystemicLangGraphBridge:
         if reserved_cost > Decimal(approval.max_cost_usd):
             raise RuntimeError("MODEL_COST_APPROVAL_LIMIT_EXCEEDED_BEFORE_CALL")
 
-        response = await SystemicLangGraphBridge.execute_json_provider(
-            provider=resolution.effective_provider,
-            model=resolution.effective_model,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            api_key=decrypt_value(bytes(key.api_key_encrypted)),
-            request_id=str(request.id),
-            max_output_tokens=int(approval.max_output_tokens),
-            output_schema=prompt.output_schema_json,
+        api_key = decrypt_value(bytes(key.api_key_encrypted))
+        reservation = await run_db_task(
+            lambda reservation_db: BudgetReservationAudit.reserve(
+                reservation_db,
+                tenant_id=request.tenant_id,
+                ai_request_id=request.id,
+                budget_policy_id=budget.id,
+                model_approval_id=approval.id,
+                request_intent=request_intent.value,
+                provider=resolution.effective_provider,
+                model=resolution.effective_model,
+                module=request.origin_module,
+                estimated_input_tokens=estimated_input_tokens,
+                max_output_tokens=int(approval.max_output_tokens),
+                request_token_limit=int(budget.request_token_limit),
+                daily_token_limit=int(budget.daily_token_limit),
+                monthly_token_limit=int(budget.monthly_token_limit),
+                reserved_tokens=reserved_tokens,
+                reserved_cost_usd=reserved_cost,
+            ),
+            celery=True,
         )
+        if not reservation["created"]:
+            raise ProviderBlockedError(
+                "BUDGET_RESERVATION_ALREADY_EXISTS_NO_RETRY",
+                "A budget reservation already exists; provider transport was not retried",
+            )
+        try:
+            await run_db_task(
+                lambda reservation_db: BudgetReservationAudit.mark_transport_started(
+                    reservation_db,
+                    tenant_id=request.tenant_id,
+                    ai_request_id=request.id,
+                ),
+                celery=True,
+            )
+        except Exception:
+            await run_db_task(
+                lambda reservation_db: BudgetReservationAudit.release_before_transport(
+                    reservation_db,
+                    tenant_id=request.tenant_id,
+                    ai_request_id=request.id,
+                    reason_code="TRANSPORT_START_AUDIT_FAILED",
+                ),
+                celery=True,
+            )
+            raise
+        try:
+            response = await SystemicLangGraphBridge.execute_json_provider(
+                provider=resolution.effective_provider,
+                model=resolution.effective_model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                api_key=api_key,
+                request_id=str(request.id),
+                max_output_tokens=int(approval.max_output_tokens),
+                output_schema=prompt.output_schema_json,
+            )
+        except Exception as exc:
+            await run_db_task(
+                lambda reservation_db: BudgetReservationAudit.mark_transport_error(
+                    reservation_db,
+                    tenant_id=request.tenant_id,
+                    ai_request_id=request.id,
+                    reason_code="PROVIDER_TRANSPORT_FAILED",
+                ),
+                celery=True,
+            )
+            raise ProviderTransportError() from exc
         token_total = int(response.tokens_input) + int(response.tokens_output)
         actual_cost = (
             Decimal(response.tokens_input) * input_rate
@@ -391,6 +510,18 @@ class SystemicLangGraphBridge:
             (int(key.tokens_used_month or 0) + token_total > int(key.monthly_token_limit), "MONTHLY_AI_BUDGET_RECONCILIATION_EXCEEDED"),
             (actual_cost > Decimal(approval.max_cost_usd), "MODEL_COST_APPROVAL_RECONCILIATION_EXCEEDED"),
         ) if exceeded), None)
+        reservation_reconciliation = await run_db_task(
+            lambda reservation_db: BudgetReservationAudit.reconcile(
+                reservation_db,
+                tenant_id=request.tenant_id,
+                ai_request_id=request.id,
+                reserved_tokens=reserved_tokens,
+                actual_tokens=token_total,
+                actual_cost_usd=actual_cost,
+                terminal_reason=str(response.terminal_error_code or "PROVIDER_RESPONSE_RECEIVED"),
+            ),
+            celery=True,
+        )
 
         # A provider call is an external side effect. Persist its usage before
         # validating content so a rejected response remains fully auditable and
@@ -483,6 +614,9 @@ class SystemicLangGraphBridge:
                 "used_today_before": used_today,
                 "used_month_before": used_month,
                 "reservation_reconciled": token_total <= reserved_tokens,
+                "budget_reservation_id": str(reservation["id"]),
+                "released_tokens": reservation_reconciliation["released_tokens"],
+                "overage_tokens": reservation_reconciliation["overage_tokens"],
             },
         }
         db.add(AIResultRecord(
