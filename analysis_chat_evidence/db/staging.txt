@@ -1,0 +1,9 @@
+alembic_head=157_analysis_chat
+parent_run_status=COMPLETED
+orders_created=0
+trades_entered=0
+position_lifecycle_created=0
+trade_decisions_created=0
+profile_candidates_created=0
+profiles_updated=0
+ml_promotions=0

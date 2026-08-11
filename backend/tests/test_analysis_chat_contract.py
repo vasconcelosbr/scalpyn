@@ -1,0 +1,239 @@
+from __future__ import annotations
+
+import inspect
+import uuid
+
+import pytest
+
+from app.ai_orchestration.contracts import AIRequestIntent
+from app.ai_orchestration.langgraph.graphs import build_graph
+from app.ai_orchestration.langgraph.registry import resolve_graph
+from app.ai_orchestration.langgraph.state import assert_checkpoint_safe
+from app.schemas.analysis_chat import (
+    AnalysisChatDataMode,
+    AnalysisChatOutput,
+    AnalysisChatRequestKind,
+    AnalysisChatRuntimeConfig,
+)
+from app.services.analysis_chat_service import AnalysisChatError, AnalysisChatService
+
+
+def test_chat_does_not_create_new_provider_intent():
+    assert {item.value for item in AIRequestIntent} == {
+        "NORMAL_ANALYSIS", "FAKE_PROVIDER_CANARY", "REAL_PROVIDER_CANARY",
+    }
+    assert "FOLLOW_UP_CHAT" in {item.value for item in AnalysisChatRequestKind}
+
+
+def test_analysis_chat_flags_fail_closed():
+    config = AnalysisChatRuntimeConfig()
+    assert config.enabled is False
+    assert config.readonly_refresh_enabled is False
+    assert config.child_analysis_enabled is False
+    assert config.proposals_enabled is False
+    assert config.streaming_enabled is False
+
+
+@pytest.mark.parametrize("mode", list(AnalysisChatDataMode))
+def test_disabled_chat_rejects_every_mode(mode):
+    with pytest.raises(AnalysisChatError, match="ANALYSIS_CHAT_DISABLED"):
+        AnalysisChatService._require_mode(AnalysisChatRuntimeConfig(), mode)
+
+
+def test_frozen_mode_is_the_only_default_enabled_mode():
+    config = AnalysisChatRuntimeConfig(enabled=True)
+    AnalysisChatService._require_mode(config, AnalysisChatDataMode.FROZEN_ANALYSIS_ONLY)
+    for mode in (
+        AnalysisChatDataMode.ALLOW_READONLY_REFRESH,
+        AnalysisChatDataMode.CREATE_CHILD_ANALYSIS,
+        AnalysisChatDataMode.DRAFT_PROPOSAL,
+    ):
+        with pytest.raises(AnalysisChatError, match="MODE_DISABLED"):
+            AnalysisChatService._require_mode(config, mode)
+
+
+def test_request_kind_is_separate_from_data_mode():
+    assert AnalysisChatService._request_kind(
+        AnalysisChatDataMode.FROZEN_ANALYSIS_ONLY
+    ) is AnalysisChatRequestKind.FOLLOW_UP_CHAT
+    assert AnalysisChatService._request_kind(
+        AnalysisChatDataMode.CREATE_CHILD_ANALYSIS
+    ) is AnalysisChatRequestKind.CHILD_ANALYSIS
+    assert AnalysisChatService._request_kind(
+        AnalysisChatDataMode.DRAFT_PROPOSAL
+    ) is AnalysisChatRequestKind.PROPOSAL_DRAFT
+
+
+def test_staging_fake_intent_is_environment_and_flag_bounded(monkeypatch):
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "systemic-ai-staging-20260807")
+    monkeypatch.setenv("LANGGRAPH_FAKE_PROVIDER_CANARY_ENABLED", "true")
+    assert AnalysisChatService._intent() == "FAKE_PROVIDER_CANARY"
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+    assert AnalysisChatService._intent() == "NORMAL_ANALYSIS"
+
+
+def test_analysis_chat_graph_is_immutable_and_separate():
+    graph = resolve_graph("analysis-chat-v1")
+    assert graph.semantic_version == "1.0.0"
+    assert graph.state_schema_version == "analysis-chat-state-v1"
+    assert graph.tool_policy_version == "analysis-chat-tool-policy-v1"
+    assert graph.content_hash == "c1753398733152b7ce78556bd02f09e6ccbc03d67247c6fda992e689d82961c2"
+
+
+def test_analysis_chat_graph_compiles_all_human_gates():
+    graph = build_graph("analysis-chat-v1")
+    rendered = graph.get_graph().draw_mermaid()
+    assert "interrupt_child_analysis_confirmation" in rendered
+    assert "interrupt_proposal_confirmation" in rendered
+    assert "interrupt_proposal_approval" in rendered
+
+
+def test_chat_thread_mapping_cannot_reuse_parent_thread():
+    conversation_id = uuid.uuid4()
+    thread_label = f"analysis-chat:{conversation_id}"
+    checkpoint_thread = uuid.uuid5(uuid.NAMESPACE_URL, thread_label)
+    parent_thread = uuid.uuid4()
+    assert thread_label.startswith("analysis-chat:")
+    assert checkpoint_thread != parent_thread
+
+
+def test_checkpoint_contract_rejects_secrets_and_accepts_chat_ids():
+    assert_checkpoint_safe({
+        "conversation_id": str(uuid.uuid4()),
+        "message_id": str(uuid.uuid4()),
+        "selected_evidence_refs": [{"evidence_id": str(uuid.uuid4())}],
+    })
+    with pytest.raises(ValueError, match="forbidden key"):
+        assert_checkpoint_safe({"conversation_id": "x", "provider_key": "secret"})
+
+
+def test_chat_output_requires_parent_and_evidence_contract():
+    parent_id = uuid.uuid4()
+    output = AnalysisChatOutput(
+        answer="Resposta limitada ao snapshot.",
+        answer_type="EXPLANATION",
+        based_on="FROZEN_ANALYSIS",
+        parent_analysis_run_id=parent_id,
+        evidence_refs=[{"evidence_id": str(uuid.uuid4()), "module": "score_engine"}],
+    )
+    assert output.parent_analysis_run_id == parent_id
+    assert output.new_data_queried is False
+
+
+def test_frozen_mode_executes_no_new_tools():
+    source = inspect.getsource(AnalysisChatService.send_message)
+    assert '["market_regime.get_current"]' in source
+    assert "if data_mode is AnalysisChatDataMode.DRAFT_PROPOSAL else []" in source
+
+
+def test_readonly_refresh_has_a_single_none_side_effect_tool_path():
+    from app.ai_orchestration.langgraph.analysis_chat_handler import AnalysisChatGraphNodeHandler
+
+    source = inspect.getsource(AnalysisChatGraphNodeHandler._node_updates)
+    assert 'allowlist != ["market_regime.get_current"]' in source
+    assert "ModuleToolRuntime" in source
+    assert "LIVE_WRITE" not in source
+    assert "READONLY_REFRESH_CURRENT_SNAPSHOT_ONLY" in source
+    assert '"effective_coverage": "CURRENT_SNAPSHOT_ONLY"' in source
+    assert "message.tool_call_ids_json" in source
+
+
+def test_child_analysis_requires_interrupt_and_does_not_reuse_parent_snapshot():
+    graph = resolve_graph("analysis-chat-v1")
+    assert "interrupt_child_analysis_confirmation" in graph.node_manifest
+    from app.ai_orchestration.langgraph.analysis_chat_handler import AnalysisChatGraphNodeHandler
+    source = inspect.getsource(AnalysisChatGraphNodeHandler._node_updates)
+    assert "CHILD_ANALYSIS_REQUIRES_FRESH_DATASET_AND_BUNDLE" in source
+    assert "Nenhuma análise filha foi criada" in source
+
+
+def test_proposal_is_draft_only_and_human_gated_twice():
+    graph = resolve_graph("analysis-chat-v1")
+    assert "interrupt_proposal_confirmation" in graph.node_manifest
+    assert "interrupt_proposal_approval" in graph.node_manifest
+    from app.ai_orchestration.langgraph.analysis_chat_handler import AnalysisChatGraphNodeHandler
+    source = inspect.getsource(AnalysisChatGraphNodeHandler._node_updates)
+    assert '"status": "DRAFT"' in source
+    assert '"live_write": False' in source
+    assert '"candidate_created": False' in source
+    assert '"shadow_started": False' in source
+
+
+def test_each_successful_turn_reconciles_a_budget_reservation():
+    from app.ai_orchestration.langgraph.analysis_chat_handler import AnalysisChatGraphNodeHandler
+    source = inspect.getsource(AnalysisChatGraphNodeHandler._persist_answer)
+    assert "await self._ensure_reservation" in source
+    assert 'reservation.status = "RECONCILED"' in source
+    assert "provider_transport_attempted = False" in source
+
+
+def test_every_accepted_turn_reserves_budget_before_human_interrupts():
+    source = inspect.getsource(AnalysisChatService.send_message)
+    assert "AIBudgetReservationRecord(" in source
+    assert 'status="RESERVED"' in source
+    assert "provider_transport_attempted=False" in source
+
+
+def test_cancel_terminalizes_job_and_releases_reserved_budget():
+    source = inspect.getsource(AnalysisChatService.cancel)
+    assert 'reservation.status = "RELEASED"' in source
+    assert 'job.status = "CANCELLED"' in source
+    assert '"CANCELLED_BY_AUTHORIZED_ACTOR"' in source
+
+
+def test_provider_blocked_is_typed_and_releases_before_transport():
+    from app.ai_orchestration.langgraph.analysis_chat_handler import AnalysisChatGraphNodeHandler
+    source = inspect.getsource(AnalysisChatGraphNodeHandler._node_updates)
+    assert "ProviderBlockedError" in source
+    assert "NORMAL_ANALYSIS_PROVIDER_DISABLED" in source
+    assert "ANALYSIS_CHAT_REAL_PROVIDER_CHECKPOINT_REQUIRED" in source
+
+
+def test_running_summary_is_versioned_hashed_and_does_not_replace_evidence():
+    from app.ai_orchestration.langgraph.analysis_chat_handler import AnalysisChatGraphNodeHandler
+    source = inspect.getsource(AnalysisChatGraphNodeHandler._node_updates)
+    assert 'conversation.summary_version = "analysis-chat-summary@1.0.0"' in source
+    assert "conversation.summary_hash = _sha(summary)" in source
+    assert "selected_evidence_refs" in source
+
+
+def test_message_idempotency_and_sequence_are_transactional():
+    source = inspect.getsource(AnalysisChatService.send_message)
+    assert "lock=True" in source
+    assert "idempotency_key == idempotency_key" in source
+    assert "conversation.message_count" in source
+
+
+def test_prompt_injection_cannot_expand_tools_or_authority():
+    source = inspect.getsource(AnalysisChatService.send_message)
+    assert 'authority="ANALYSIS_ONLY"' in source
+    assert "data_mode=data_mode.value" in source
+    assert "tool_allowlist" in source
+    assert "normalized" not in source.split('"tool_allowlist":', 1)[1].split("},", 1)[0]
+
+
+def test_no_order_ml_promotion_or_spot_mutation_path_exists():
+    from app.ai_orchestration.langgraph.analysis_chat_handler import AnalysisChatGraphNodeHandler
+    source = inspect.getsource(AnalysisChatGraphNodeHandler)
+    forbidden = ("Order(", "create_order", "promote_model", "spot_engine", "LIVE_WRITE")
+    assert not any(value in source for value in forbidden)
+
+
+def test_run_acquisition_does_not_read_terminal_state_before_execution():
+    from app.tasks.ai_orchestration import _acquire_run
+
+    source = inspect.getsource(_acquire_run)
+    assert "final_state" not in source
+    assert "provider_transport_attempted = None" in source
+
+
+def test_terminal_message_cannot_regress_to_streaming_in_tail_nodes():
+    from app.ai_orchestration.langgraph.analysis_chat_handler import AnalysisChatGraphNodeHandler
+
+    source = inspect.getsource(AnalysisChatGraphNodeHandler.handle)
+    assert 'message.status not in {"COMPLETED", "BLOCKED", "FAILED", "CANCELLED"}' in source
+
+
+def test_each_turn_has_a_unique_checkpoint_thread_under_the_conversation():
+    source = inspect.getsource(AnalysisChatService.send_message)
+    assert 'f"{conversation.thread_id}:message:{user_message.id}"' in source

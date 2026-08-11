@@ -1,0 +1,8 @@
+{
+  "prompts": [
+    {"key": "analysis-chat-followup-router", "version": "1.0.0", "hash": "2dc42aacf78cec140f20786ad92b61ac86c10b38a3f9297d094a56c89e4d35ec", "status": "APPROVED"},
+    {"key": "analysis-chat-proposal", "version": "1.0.0", "hash": "5d5c6d9c7abf0cc860fe171e4ed3b08aca390d4c1782ffa1c9ace47ac35dc9a9", "status": "APPROVED"},
+    {"key": "analysis-chat-summary", "version": "1.0.0", "hash": "f92599310a145e486643230f013ae6e700f1d5e952cfd495e5f1e8b32a9f60bc", "status": "APPROVED"},
+    {"key": "analysis-chat-system", "version": "1.0.0", "hash": "6a83dcb9de1474d3a2e2151bbf2abe2d44a7688c30adad138ac22c204a8f8e2c", "status": "APPROVED"}
+  ]
+}

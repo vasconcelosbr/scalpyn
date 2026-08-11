@@ -1,0 +1,8 @@
+{
+  "backend": {"scope": "focused systemic AI and analysis chat", "passed": 155, "failed": 0, "warning": "Python 3.14 / Pydantic v1 compatibility warning in dependency"},
+  "frontend": {"passed": 28, "failed": 0},
+  "typecheck": {"status": "PASS"},
+  "focused_eslint": {"status": "PASS", "errors": 0, "warnings": 0},
+  "production_build": {"status": "PASS", "nextjs": "16.3.0", "route": "/intelligence-runs"},
+  "diff_check": {"status": "PASS"}
+}

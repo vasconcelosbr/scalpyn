@@ -28,6 +28,9 @@ INTERRUPT_NODES = {
     "interrupt_wait_for_shadow_evidence": "SHADOW_EVIDENCE",
     "interrupt_wait_evidence": "SHADOW_EVIDENCE",
     "interrupt_final_decision": "FINAL_DECISION",
+    "interrupt_child_analysis_confirmation": "CHILD_ANALYSIS_CONFIRMATION",
+    "interrupt_proposal_confirmation": "PROPOSAL_CONFIRMATION",
+    "interrupt_proposal_approval": "PROPOSAL_APPROVAL",
 }
 
 

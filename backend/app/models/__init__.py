@@ -50,6 +50,7 @@ from .ai_graph import (
     AIGraphRun,
     AIGraphRuntimeMetadata,
 )
+from .analysis_chat import AIAnalysisConversation, AIAnalysisMessage, AIAnalysisMessageEvidence
 from .profile_metrics import ProfileMetrics
 from .rule_contribution import RuleContribution
 from .profile_audit_log import ProfileAuditLog
@@ -128,6 +129,9 @@ __all__ = [
     "AIToolEvidenceRecord",
     "AIUsageRecord",
     "AIGraphDefinition",
+    "AIAnalysisConversation",
+    "AIAnalysisMessage",
+    "AIAnalysisMessageEvidence",
     "AIGraphEvent",
     "AIGraphInterrupt",
     "AIGraphRun",

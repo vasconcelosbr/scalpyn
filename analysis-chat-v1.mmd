@@ -1,0 +1,21 @@
+flowchart TD
+  A["Load conversation"] --> B["Authorize tenant"]
+  B --> C["Load immutable parent analysis"]
+  C --> D["Load bounded conversation memory"]
+  D --> E{"Effective data mode"}
+  E -->|Frozen| F["Retrieve parent evidence"]
+  E -->|Read-only| G["Execute NONE allowlist"]
+  E -->|Child| H["Human confirmation"]
+  E -->|Proposal| I["Human confirmation"]
+  G --> F
+  F --> J["Reserve budget"]
+  J --> K["Invoke governed provider"]
+  K --> L["Validate and persist result/usage"]
+  H --> M["Fresh child contracts required"]
+  M --> L
+  I --> N["Draft only"]
+  N --> O["Risk and Strategies read-only validation"]
+  O --> P["Human proposal approval"]
+  P --> L
+  L --> Q["Versioned running summary"]
+  Q --> R["Complete message"]

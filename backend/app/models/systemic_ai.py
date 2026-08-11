@@ -218,6 +218,10 @@ class AIRequestRecord(Base):
     dataset_snapshot_id = Column(UUID(as_uuid=True), ForeignKey("ai_dataset_snapshots.id", ondelete="RESTRICT"), nullable=False)
     configuration_bundle_id = Column(UUID(as_uuid=True), ForeignKey("ai_configuration_bundles.id", ondelete="RESTRICT"), nullable=False)
     request_json = Column(JSONB, nullable=False)
+    request_kind = Column(String(40))
+    conversation_id = Column(UUID(as_uuid=True), ForeignKey("ai_analysis_conversations.id", ondelete="RESTRICT"))
+    message_id = Column(UUID(as_uuid=True), ForeignKey("ai_analysis_messages.id", ondelete="RESTRICT"))
+    parent_analysis_run_id = Column(UUID(as_uuid=True), ForeignKey("ai_graph_runs.id", ondelete="RESTRICT"))
     created_at = Column(TIMESTAMP(timezone=True), nullable=False, default=_now)
 
 

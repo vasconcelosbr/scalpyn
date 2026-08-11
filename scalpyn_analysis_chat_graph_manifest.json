@@ -1,0 +1,9 @@
+{
+  "graph_key": "analysis-chat-v1",
+  "semantic_version": "1.0.0",
+  "content_hash": "c1753398733152b7ce78556bd02f09e6ccbc03d67247c6fda992e689d82961c2",
+  "state_schema_version": "analysis-chat-state-v1",
+  "authority": "ANALYSIS_ONLY",
+  "human_interrupts": ["CHILD_ANALYSIS_CONFIRMATION", "PROPOSAL_CONFIRMATION", "PROPOSAL_APPROVAL"],
+  "provider_intents": ["NORMAL_ANALYSIS", "FAKE_PROVIDER_CANARY", "REAL_PROVIDER_CANARY"]
+}

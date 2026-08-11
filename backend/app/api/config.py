@@ -15,6 +15,7 @@ from ..services.config_service import config_service
 from ..services.crypto_ev_config import default_crypto_ev_config
 from ..schemas.social_intelligence import SocialScoreConfig
 from ..schemas.ai_provider_runtime_config import AIProviderRuntimeConfig
+from ..schemas.analysis_chat import AnalysisChatRuntimeConfig
 
 security = HTTPBearer()
 
@@ -127,6 +128,8 @@ async def update_config(
         payload = validated.model_dump()
     elif config_type == "ai_provider_runtime":
         payload = AIProviderRuntimeConfig.model_validate(payload).model_dump()
+    elif config_type == "ai_analysis_chat_runtime":
+        payload = AnalysisChatRuntimeConfig.model_validate(payload).model_dump()
     updated = await config_service.update_config(
         db=db,
         config_type=config_type,

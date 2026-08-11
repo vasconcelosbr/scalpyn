@@ -1,0 +1,8 @@
+orders=0
+trades=0
+positions=0
+trade_decisions=0
+profile_candidates=0
+profiles_updated=0
+ml_promotions=0
+cross_tenant_denials=2

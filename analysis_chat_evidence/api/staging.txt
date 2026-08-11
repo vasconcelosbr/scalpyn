@@ -1,0 +1,5 @@
+frozen_status=COMPLETED
+readonly_status=COMPLETED
+provider_blocked_status=BLOCKED
+cross_tenant_conversation=404
+cross_tenant_parent=404

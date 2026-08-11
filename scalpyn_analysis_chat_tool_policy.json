@@ -1,0 +1,7 @@
+{
+  "authority": "ANALYSIS_ONLY",
+  "frozen": {"allowlist": []},
+  "readonly_initial_rollout": {"allowlist": ["market_regime.get_current"], "side_effect": "NONE"},
+  "proposal_validation": {"allowlist": ["global_risk.validate_recommendation", "strategies.validate_recommendation"], "side_effect": "NONE"},
+  "denied": ["LIVE_WRITE", "orders", "profile_mutation", "score_mutation", "spot_mutation", "ml_training", "ml_promotion"]
+}

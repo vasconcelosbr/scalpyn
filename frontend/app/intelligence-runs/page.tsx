@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 
 import { apiGet, apiPost, apiPut } from "@/lib/api";
+import { AnalysisChatPanel } from "@/components/ai/AnalysisChatPanel";
 
 type GraphRun = {
   id: string;
@@ -419,6 +420,14 @@ export default function IntelligenceRunsPage() {
         )}
 
         {selected && runContext && <AnalysisResultPanel context={runContext} />}
+        {selected?.status === "COMPLETED" && runContext?.result.status === "COMPLETED" && (
+          <AnalysisChatPanel
+            runId={selected.id}
+            graphLabel={`${selected.graph_key ?? "analysis"}@${selected.graph_version ?? "—"}`}
+            snapshotLabel={`${runContext.dataset.contract_version ?? "snapshot"} · ${runContext.dataset.row_count ?? "—"} registros`}
+            modelLabel={`${runContext.model.effective_provider ?? "—"}/${runContext.model.effective_model ?? "—"}`}
+          />
+        )}
 
         <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)_360px]">
           <section className="overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/90 backdrop-blur">

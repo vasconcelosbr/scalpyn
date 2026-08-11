@@ -27,6 +27,9 @@ def build_graph(
             node_callable(node_name, node_handler, timeout_seconds=timeout),
         )
     builder.add_edge(START, definition.node_manifest[0])
+    if graph_key == "analysis-chat-v1":
+        _wire_analysis_chat(builder)
+        return builder.compile(checkpointer=checkpointer, name=definition.graph_key)
     for source, target in definition.edge_manifest:
         if source in INTERRUPT_NODES:
             def route_after_human_decision(state, *, _target=target):
@@ -38,3 +41,56 @@ def build_graph(
             builder.add_edge(source, target)
     builder.add_edge(definition.node_manifest[-1], END)
     return builder.compile(checkpointer=checkpointer, name=definition.graph_key)
+
+
+def _wire_analysis_chat(builder: StateGraph) -> None:
+    common = (
+        ("load_conversation", "authorize_tenant"),
+        ("authorize_tenant", "load_parent_analysis"),
+        ("load_parent_analysis", "validate_parent_contracts"),
+        ("validate_parent_contracts", "load_conversation_memory"),
+        ("load_conversation_memory", "classify_followup"),
+        ("classify_followup", "select_data_mode"),
+    )
+    for source, target in common:
+        builder.add_edge(source, target)
+
+    def route_mode(state):
+        return {
+            "FROZEN_ANALYSIS_ONLY": "retrieve_relevant_evidence",
+            "ALLOW_READONLY_REFRESH": "plan_readonly_tools",
+            "CREATE_CHILD_ANALYSIS": "interrupt_child_analysis_confirmation",
+            "DRAFT_PROPOSAL": "interrupt_proposal_confirmation",
+        }.get(state.get("data_mode"), "retrieve_relevant_evidence")
+
+    builder.add_conditional_edges("select_data_mode", route_mode)
+    builder.add_edge("plan_readonly_tools", "execute_readonly_tools")
+    builder.add_edge("execute_readonly_tools", "retrieve_relevant_evidence")
+    builder.add_edge("retrieve_relevant_evidence", "decide_if_new_data_required")
+    builder.add_edge("decide_if_new_data_required", "assemble_chat_context")
+    builder.add_edge("assemble_chat_context", "reserve_budget")
+    builder.add_edge("reserve_budget", "invoke_provider")
+    builder.add_edge("invoke_provider", "validate_chat_output")
+    builder.add_edge("validate_chat_output", "persist_message_result_usage")
+    builder.add_edge("persist_message_result_usage", "update_conversation_summary_if_needed")
+    builder.add_edge("update_conversation_summary_if_needed", "complete_message")
+
+    def route_after_confirmation(state, target):
+        return END if (state.get("interrupt_decision") or {}).get("decision") == "reject" else target
+
+    builder.add_conditional_edges(
+        "interrupt_child_analysis_confirmation",
+        lambda state: route_after_confirmation(state, "create_child_analysis_if_confirmed"),
+    )
+    builder.add_edge("create_child_analysis_if_confirmed", "persist_message_result_usage")
+    builder.add_conditional_edges(
+        "interrupt_proposal_confirmation",
+        lambda state: route_after_confirmation(state, "draft_proposal_if_confirmed"),
+    )
+    builder.add_edge("draft_proposal_if_confirmed", "validate_risk_and_strategy")
+    builder.add_edge("validate_risk_and_strategy", "interrupt_proposal_approval")
+    builder.add_conditional_edges(
+        "interrupt_proposal_approval",
+        lambda state: route_after_confirmation(state, "persist_message_result_usage"),
+    )
+    builder.add_edge("complete_message", END)

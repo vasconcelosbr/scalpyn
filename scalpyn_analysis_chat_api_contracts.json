@@ -1,0 +1,16 @@
+{
+  "version": "1.0.0",
+  "tenant_source": "authenticated_access_token",
+  "routes": [
+    {"method": "POST", "path": "/api/intelligence-runs/{run_id}/conversations", "success": 201},
+    {"method": "GET", "path": "/api/intelligence-runs/{run_id}/conversations", "success": 200},
+    {"method": "GET", "path": "/api/intelligence-conversations/{conversation_id}", "success": 200},
+    {"method": "GET", "path": "/api/intelligence-conversations/{conversation_id}/messages", "success": 200},
+    {"method": "POST", "path": "/api/intelligence-conversations/{conversation_id}/messages", "success": 202, "idempotency_required": true},
+    {"method": "POST", "path": "/api/intelligence-conversations/{conversation_id}/messages/{message_id}/decision", "success": 202},
+    {"method": "POST", "path": "/api/intelligence-conversations/{conversation_id}/cancel", "success": 200},
+    {"method": "GET", "path": "/api/intelligence-conversations/{conversation_id}/stream", "success": 200, "media_type": "text/event-stream", "last_event_id": true}
+  ],
+  "cross_tenant_policy": 404,
+  "raw_checkpoints_exposed": false
+}

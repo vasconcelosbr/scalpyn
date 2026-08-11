@@ -1,0 +1,13 @@
+{
+  "verdict": "PARTIALLY_IMPLEMENTED_CHAT_RUNTIME_NOT_PROVEN",
+  "frozen": {"status": "COMPLETED", "provider": "fake", "model": "fake-analysis-v1", "evidence_refs": 10, "tool_calls": 0, "cost_usd": "0E-8", "transport_attempted": false},
+  "readonly": {"status": "COMPLETED", "tool": "market_regime.get_current", "tool_calls": 1, "new_data": true, "coverage": "CURRENT_SNAPSHOT_ONLY", "seven_day_materialized": false},
+  "child": {"confirmed": true, "created": false, "reason": "CHILD_ANALYSIS_REQUIRES_FRESH_DATASET_AND_BUNDLE"},
+  "proposal": {"confirmation_interrupt": true, "risk_validator": "VETO_NO_DATA", "strategy_validator": "VETO_NO_DATA", "approval_interrupt_pending": true, "candidate_created": false, "shadow_started": false},
+  "summary": {"version": "analysis-chat-summary@1.0.0", "hash": "8cb3a089940d74773272235dbd53164f593b39592fac4a50a2fcffd337e8c197", "summarized_through_sequence": 4},
+  "stream": {"events": 41, "token_events": 2, "completed_events": 2, "reconnect": true, "replayed_ids": 0},
+  "cross_tenant": {"conversation_status": 404, "parent_status": 404},
+  "provider_blocked": {"status": "BLOCKED", "error_kind": "PROVIDER_BLOCKED", "reason": "NORMAL_ANALYSIS_PROVIDER_DISABLED", "transport_attempted": false, "reservation": "RELEASED"},
+  "real_provider": "NOT_RUN",
+  "production_deploy": "NOT_RUN"
+}

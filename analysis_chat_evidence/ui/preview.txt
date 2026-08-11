@@ -1,0 +1,5 @@
+vercel_deployment=dpl_2VjExXcK42NjSedTyb9YX1rs8oWZ
+target=preview
+status=Ready
+route_status=200
+authenticated_interactive_ui=NOT_PROVEN

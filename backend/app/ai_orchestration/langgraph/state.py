@@ -55,6 +55,26 @@ class ScalpynGraphState(TypedDict, total=False):
     result_json: dict[str, Any] | None
     terminal_reason: str | None
 
+    conversation_id: str | None
+    message_id: str | None
+    parent_analysis_run_id: str | None
+    parent_result_id: str | None
+    parent_result_summary: str | None
+    request_intent: str | None
+    request_kind: str | None
+    data_mode: str | None
+    question: str | None
+    conversation_summary: str | None
+    recent_messages: list[dict[str, Any]]
+    selected_evidence_refs: Annotated[list[dict[str, Any]], append_unique]
+    readonly_tool_call_ids: Annotated[list[str], append_unique]
+    new_data_snapshot_refs: Annotated[list[dict[str, Any]], append_unique]
+    new_data_queried: bool
+    child_analysis_run_id: str | None
+    proposal_id: str | None
+    answer: dict[str, Any] | None
+    reason_code: str | None
+
 
 SECRET_KEY_FRAGMENTS = (
     "api_key", "apikey", "authorization", "cookie", "database_url", "dsn",

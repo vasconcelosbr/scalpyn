@@ -1,0 +1,4 @@
+branch=codex/analysis-chat-staging
+base_head=d317e9ed4dac38b7e3c7a75a44d474ab8173377b
+production_deploy=NOT_RUN
+real_provider=NOT_RUN

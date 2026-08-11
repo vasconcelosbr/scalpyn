@@ -1,0 +1,4 @@
+fake_provider=PROVEN
+normal_provider_blocked=PROVEN
+real_provider=NOT_RUN
+provider_transport_attempted=false

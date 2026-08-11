@@ -1,0 +1,9 @@
+frozen=COMPLETED
+readonly=COMPLETED
+child=LIMITATION_NO_RUN
+proposal=SECOND_INTERRUPT_PENDING
+stream_reconnect=PASS
+summary=PASS
+budget=PASS
+cancel_reconciliation=PASS
+zero_mutation=PASS

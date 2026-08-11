@@ -1,0 +1,8 @@
+{
+  "policy": "reserve_at_turn_acceptance",
+  "staging_fake": {"reserved_tokens": 0, "actual_tokens": 0, "reserved_cost_usd": "0E-8", "actual_cost_usd": "0E-8", "provider_transport_attempted": false},
+  "aggregate": {"reconciled": 5, "released": 2, "reserved": 0},
+  "provider_blocked": {"status": "RELEASED", "terminal_reason": "NORMAL_ANALYSIS_PROVIDER_DISABLED", "provider_transport_attempted": false},
+  "cancel_reconciliation": {"job": "CANCELLED", "graph": "CANCELLED", "reservation": "RELEASED", "terminal_reason": "CANCELLED_BY_AUTHORIZED_ACTOR"},
+  "real_provider_budget": "NOT_CREATED_OR_USED"
+}

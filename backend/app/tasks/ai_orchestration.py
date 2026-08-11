@@ -18,6 +18,7 @@ from ..ai_orchestration.langgraph.checkpoint import postgres_checkpointer
 from ..ai_orchestration.langgraph.config import get_langgraph_settings
 from ..ai_orchestration.langgraph.graphs import build_graph
 from ..ai_orchestration.langgraph.handler import CanonicalGraphNodeHandler
+from ..ai_orchestration.langgraph.analysis_chat_handler import AnalysisChatGraphNodeHandler
 from ..ai_orchestration.langgraph.metrics import (
     graph_runs_failed, graph_runs_interrupted, graph_runs_resumed,
     graph_runs_running, graph_runs_total, stale_graph_leases,
@@ -28,6 +29,8 @@ from ..models.ai_graph import (
     AIGraphDefinition, AIGraphEvent, AIGraphInterrupt, AIGraphRun,
 )
 from ..models.systemic_ai import AIJobRecord, AIRequestRecord
+from ..models.systemic_ai import AIBudgetReservationRecord
+from ..models.analysis_chat import AIAnalysisMessage
 
 
 def _now() -> datetime:
@@ -63,6 +66,8 @@ async def _acquire_run(db, run_id: UUID):
     run.last_error_safe_message = None
     run.failed_node = None
     run.error_kind = None
+    # A fresh lease has not attempted provider transport yet.  The terminal
+    # handlers replace this value with the audited outcome from the run.
     run.provider_transport_attempted = None
     run.updated_at = now
     if run.ai_job_id:
@@ -118,6 +123,21 @@ async def _mark_terminal(db, run_id: UUID, final_state: dict):
         job.terminal_reason = run.terminal_reason
         job.lease_owner = None
         job.lease_expires_at = None
+    request = await db.get(AIRequestRecord, run.ai_request_id)
+    if request is not None and request.request_kind in {
+        "FOLLOW_UP_CHAT", "CHILD_ANALYSIS", "PROPOSAL_DRAFT", "CONVERSATION_SUMMARY",
+    }:
+        message = (await db.execute(select(AIAnalysisMessage).where(
+            AIAnalysisMessage.tenant_id == run.tenant_id,
+            AIAnalysisMessage.ai_request_id == request.id,
+            AIAnalysisMessage.role == "ASSISTANT",
+        ).with_for_update())).scalar_one_or_none()
+        if message is not None and message.status == "INTERRUPTED":
+            message.status = "CANCELLED"
+            message.content = "A ação human-gated foi rejeitada. Nenhuma mudança foi aplicada."
+            message.content_hash = __import__("hashlib").sha256(message.content.encode("utf-8")).hexdigest()
+            message.provider_transport_attempted = False
+            message.cancelled_at = now
     await db.execute(insert(AIGraphEvent).values(
         tenant_id=run.tenant_id, graph_run_id=run.id,
         event_key=f"{run.id}:completed", event_type="COMPLETED",
@@ -136,6 +156,9 @@ async def _mark_interrupted(db, run_id: UUID, interrupt_value):
         "CANDIDATE_APPROVAL": ["candidate_version_ids", "hypothesis_notes"],
         "SHADOW_EVIDENCE": [],
         "FINAL_DECISION": ["decision_notes", "rollback_reason"],
+        "CHILD_ANALYSIS_CONFIRMATION": [],
+        "PROPOSAL_CONFIRMATION": [],
+        "PROPOSAL_APPROVAL": ["proposal_notes"],
     }.get(interrupt_type, [])
     interrupt_key = f"{interrupt_type}:{interrupt_value.id}"
     await db.execute(insert(AIGraphInterrupt).values(
@@ -154,12 +177,27 @@ async def _mark_interrupted(db, run_id: UUID, interrupt_value):
         "CANDIDATE_APPROVAL": "interrupt_candidate_approval",
         "SHADOW_EVIDENCE": "interrupt_wait_for_shadow_evidence",
         "FINAL_DECISION": "interrupt_final_decision",
+        "CHILD_ANALYSIS_CONFIRMATION": "interrupt_child_analysis_confirmation",
+        "PROPOSAL_CONFIRMATION": "interrupt_proposal_confirmation",
+        "PROPOSAL_APPROVAL": "interrupt_proposal_approval",
     }.get(interrupt_type)
     if interrupt_type == "SHADOW_EVIDENCE" and run.current_node is None:
         run.current_node = "interrupt_wait_evidence"
     run.lease_owner = None
     run.lease_expires_at = None
     run.updated_at = _now()
+    request = await db.get(AIRequestRecord, run.ai_request_id)
+    if request is not None and request.request_kind in {
+        "FOLLOW_UP_CHAT", "CHILD_ANALYSIS", "PROPOSAL_DRAFT", "CONVERSATION_SUMMARY",
+    }:
+        message = (await db.execute(select(AIAnalysisMessage).where(
+            AIAnalysisMessage.tenant_id == run.tenant_id,
+            AIAnalysisMessage.ai_request_id == request.id,
+            AIAnalysisMessage.role == "ASSISTANT",
+        ).with_for_update())).scalar_one_or_none()
+        if message is not None:
+            message.status = "INTERRUPTED"
+            message.lock_version = int(message.lock_version or 0) + 1
     await db.execute(insert(AIGraphEvent).values(
         tenant_id=run.tenant_id, graph_run_id=run.id,
         event_key=f"{run.id}:interrupt:{interrupt_key}", event_type="INTERRUPTED",
@@ -229,6 +267,32 @@ async def _mark_failed(
             job.lease_expires_at = None
     request = await db.get(AIRequestRecord, run.ai_request_id)
     correlation_id = request.correlation_id if request and request.tenant_id == run.tenant_id else None
+    if request is not None and request.request_kind in {
+        "FOLLOW_UP_CHAT", "CHILD_ANALYSIS", "PROPOSAL_DRAFT", "CONVERSATION_SUMMARY",
+    }:
+        message = (await db.execute(select(AIAnalysisMessage).where(
+            AIAnalysisMessage.tenant_id == run.tenant_id,
+            AIAnalysisMessage.ai_request_id == request.id,
+            AIAnalysisMessage.role == "ASSISTANT",
+        ).with_for_update())).scalar_one_or_none()
+        if message is not None:
+            message.status = "BLOCKED" if error_kind == "PROVIDER_BLOCKED" else "FAILED"
+            message.message_type = "ERROR_NOTICE"
+            message.content = safe_message[:500]
+            message.content_hash = __import__("hashlib").sha256(message.content.encode("utf-8")).hexdigest()
+            message.provider_transport_attempted = provider_transport_attempted
+            message.completed_at = now
+            message.lock_version = int(message.lock_version or 0) + 1
+        reservation = (await db.execute(select(AIBudgetReservationRecord).where(
+            AIBudgetReservationRecord.ai_request_id == request.id
+        ).with_for_update())).scalar_one_or_none()
+        if reservation is not None and reservation.status in {"RESERVED", "TRANSPORT_STARTED"}:
+            reservation.status = "RELEASED"
+            reservation.released_tokens = int(reservation.reserved_tokens or 0)
+            reservation.provider_transport_attempted = provider_transport_attempted
+            reservation.terminal_reason = reason_code[:160]
+            reservation.released_at = now
+            reservation.updated_at = now
     await db.execute(insert(AIGraphEvent).values(
         tenant_id=run.tenant_id, graph_run_id=run.id,
         event_key=f"{run.id}:failed", event_type="FAILED",
@@ -251,7 +315,11 @@ async def execute_graph_run(run_id: UUID, *, resume_payload: dict | None = None)
     graph = None
     graph_runs_running.inc()
     try:
-        handler = CanonicalGraphNodeHandler(run_id, celery=True)
+        handler = (
+            AnalysisChatGraphNodeHandler(run_id, celery=True)
+            if context["graph_key"] == "analysis-chat-v1"
+            else CanonicalGraphNodeHandler(run_id, celery=True)
+        )
         async with postgres_checkpointer() as saver:
             graph = build_graph(context["graph_key"], handler=handler, checkpointer=saver)
             config = {"configurable": {
