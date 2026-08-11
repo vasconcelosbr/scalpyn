@@ -97,6 +97,42 @@ def _error(exc: GraphAccessError) -> HTTPException:
     return HTTPException(status_code=status, detail={"code": code})
 
 
+def _result_payload(result: AIResultRecord | None) -> dict[str, Any]:
+    """Return the user-facing, persisted analysis without internal lineage fields."""
+    if result is None:
+        return {
+            "status": None,
+            "analysis": None,
+            "recommendations": [],
+            "warnings": [],
+            "limitations": [],
+            "memory_hits": [],
+        }
+
+    document = result.result_json if isinstance(result.result_json, dict) else {}
+    analysis = document.get("analysis")
+    safe_analysis = analysis if isinstance(analysis, dict) else None
+
+    def _list(key: str) -> list[Any]:
+        value = document.get(key)
+        return value if isinstance(value, list) else []
+
+    memory_hits = _list("memory_hits")
+    if not memory_hits and safe_analysis is not None:
+        nested_memory_hits = safe_analysis.get("memory_hits")
+        if isinstance(nested_memory_hits, list):
+            memory_hits = nested_memory_hits
+
+    return {
+        "status": result.status,
+        "analysis": safe_analysis,
+        "recommendations": _list("recommendations"),
+        "warnings": _list("warnings"),
+        "limitations": _list("limitations"),
+        "memory_hits": memory_hits,
+    }
+
+
 @router.post("/runs", status_code=202)
 async def create_graph_run(
     payload: CreateGraphRunRequest,
@@ -218,12 +254,7 @@ async def get_graph_context(
             "lineage_status": bundle.lineage_status if bundle else None,
             "lineage_refs": bundle.lineage_refs if bundle else None,
         },
-        "result": {
-            "status": result.status if result else None,
-            "warnings": (result.result_json or {}).get("warnings", []) if result else [],
-            "limitations": (result.result_json or {}).get("limitations", []) if result else [],
-            "memory_hits": (result.result_json or {}).get("memory_hits", []) if result else [],
-        },
+        "result": _result_payload(result),
         "usage": {
             "tokens_input": usage.tokens_input if usage else None,
             "tokens_output": usage.tokens_output if usage else None,

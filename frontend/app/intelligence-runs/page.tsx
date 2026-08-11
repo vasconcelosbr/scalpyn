@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity, AlertTriangle, Check, ChevronRight, CircleDot, Clock3,
-  GitBranch, Pause, RefreshCw, ShieldCheck, Square, X,
+  Activity, AlertTriangle, Boxes, Check, ChevronRight, CircleDot, Clock3,
+  FileSearch, GitBranch, Lightbulb, Pause, RefreshCw, ShieldCheck, Square, X,
 } from "lucide-react";
 
 import { apiGet, apiPost, apiPut } from "@/lib/api";
@@ -67,12 +67,48 @@ type Capabilities = {
   module_flags: Record<string, boolean>;
 };
 
+type AnalysisEvidence = {
+  tool?: string;
+  finding?: string;
+  evidence_id?: string;
+  [key: string]: unknown;
+};
+
+type RunAnalysis = {
+  diagnosis?: string;
+  root_cause_classification?: string;
+  affected_modules?: string[];
+  evidence?: AnalysisEvidence[];
+  discarded_hypotheses?: Array<Record<string, unknown>>;
+  data_quality?: Record<string, unknown>;
+  market_regime?: Record<string, unknown>;
+  memory_hits?: Array<Record<string, unknown>>;
+  [key: string]: unknown;
+};
+
+type AnalysisRecommendation = {
+  target_module?: string;
+  target_path?: string;
+  operation?: string;
+  current_value?: unknown;
+  proposed_value?: unknown;
+  confidence?: number;
+  [key: string]: unknown;
+};
+
 type RunContext = {
   model: { configured_provider: string | null; configured_model: string | null; effective_provider: string | null; effective_model: string | null; resolution_reason: string | null };
   prompt: { key: string | null; version: string | null; hash: string | null };
   dataset: { id: string | null; hash: string | null; contract_version: string | null; quality_status: string | null; row_count: number | null; module_context_refs: Record<string, unknown> | null; context_manifest: { modules_consulted?: string[]; tools_called?: string[]; evidence_ids?: string[] } | null };
   bundle: { id: string | null; hash: string | null; lineage_status: string | null; lineage_refs: Record<string, unknown> | null };
-  result: { status: string | null; warnings: string[]; limitations: string[]; memory_hits: Array<Record<string, unknown>> };
+  result: {
+    status: string | null;
+    analysis: RunAnalysis | null;
+    recommendations: AnalysisRecommendation[];
+    warnings: string[];
+    limitations: string[];
+    memory_hits: Array<Record<string, unknown>>;
+  };
   usage: { tokens_input: number | null; tokens_output: number | null; actual_cost: string | null; currency: string | null; pricing_snapshot_version: string | null };
   budget_reservation: { id: string | null; status: string | null; provider: string | null; model: string | null; reserved_tokens: number | null; actual_tokens: number | null; released_tokens: number | null; reserved_cost_usd: string | null; actual_cost_usd: string | null; provider_transport_attempted: boolean | null; terminal_reason: string | null };
 };
@@ -104,6 +140,113 @@ function runStatusLabel(run: GraphRun) {
 function runTitle(run: GraphRun) {
   if (run.error_kind === "PROVIDER_BLOCKED") return "Provider bloqueado";
   return run.failed_node ?? run.current_node ?? "queued";
+}
+
+function displayValue(value: unknown) {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  return JSON.stringify(value);
+}
+
+function AnalysisResultPanel({ context }: { context: RunContext }) {
+  const { result } = context;
+  const analysis = result.analysis;
+  const evidence = Array.isArray(analysis?.evidence) ? analysis.evidence : [];
+  const affectedModules = Array.isArray(analysis?.affected_modules) ? analysis.affected_modules : [];
+
+  return (
+    <section className="mb-4 overflow-hidden rounded-2xl border border-cyan-400/20 bg-[linear-gradient(135deg,rgba(8,145,178,.09),rgba(15,23,42,.15)_45%,rgba(16,185,129,.05))] shadow-[0_24px_80px_rgba(2,8,23,.22)] backdrop-blur">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-cyan-400/10 px-5 py-4 md:px-6">
+        <div>
+          <div className="mb-1 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.2em] text-cyan-300">
+            <FileSearch size={14} /> resultado persistido
+          </div>
+          <h2 className="text-lg font-semibold tracking-tight">Resultado da análise</h2>
+        </div>
+        <span className={`rounded-full border px-3 py-1 font-mono text-[10px] uppercase ${statusTone(result.status ?? "UNKNOWN")}`}>
+          {result.status ?? "indisponível"}
+        </span>
+      </div>
+
+      {!analysis ? (
+        <div className="px-6 py-8 text-sm text-[var(--text-muted)]">
+          Esta execução não possui um resultado de análise estruturado disponível.
+        </div>
+      ) : (
+        <div className="space-y-6 px-5 py-5 md:px-6">
+          <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_auto]">
+            <div>
+              <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--text-muted)]">Diagnóstico</p>
+              <p className="max-w-5xl text-sm leading-7 text-[var(--text-primary)] md:text-[15px]">
+                {analysis.diagnosis || "Diagnóstico textual não informado."}
+              </p>
+            </div>
+            {analysis.root_cause_classification && (
+              <div className="min-w-60 rounded-xl border border-amber-400/20 bg-amber-400/[.06] px-4 py-3">
+                <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-amber-300/70">Causa raiz</p>
+                <p className="mt-1 font-mono text-xs font-semibold text-amber-200">{analysis.root_cause_classification}</p>
+              </div>
+            )}
+          </div>
+
+          {affectedModules.length > 0 && (
+            <div>
+              <div className="mb-2 flex items-center gap-2 text-[10px] uppercase tracking-[0.16em] text-[var(--text-muted)]"><Boxes size={13} /> Módulos afetados</div>
+              <div className="flex flex-wrap gap-2">
+                {affectedModules.map((module) => <span key={module} className="rounded-lg border border-cyan-400/15 bg-cyan-400/[.05] px-2.5 py-1 font-mono text-[10px] text-cyan-200">{module}</span>)}
+              </div>
+            </div>
+          )}
+
+          <div>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.16em] text-[var(--text-muted)]"><FileSearch size={13} /> Evidências usadas</div>
+              <span className="font-mono text-[10px] text-cyan-300/70">{evidence.length} itens</span>
+            </div>
+            {evidence.length > 0 ? (
+              <ol className="grid gap-3 md:grid-cols-2">
+                {evidence.map((item, index) => (
+                  <li key={`${item.evidence_id ?? item.tool ?? "evidence"}-${index}`} className="rounded-xl border border-[var(--border-subtle)] bg-black/10 p-4">
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <span className="font-mono text-[10px] text-cyan-300">{item.tool || `evidência ${index + 1}`}</span>
+                      {item.evidence_id && <span className="max-w-40 truncate font-mono text-[9px] text-[var(--text-muted)]" title={item.evidence_id}>{item.evidence_id}</span>}
+                    </div>
+                    <p className="text-xs leading-5 text-[var(--text-primary)]">{item.finding || displayValue(item)}</p>
+                  </li>
+                ))}
+              </ol>
+            ) : <p className="rounded-xl border border-[var(--border-subtle)] bg-black/10 px-4 py-3 text-xs text-[var(--text-muted)]">Nenhuma evidência textual foi retornada.</p>}
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-3">
+            <div className="rounded-xl border border-emerald-400/15 bg-emerald-400/[.04] p-4 lg:col-span-1">
+              <div className="mb-3 flex items-center gap-2 text-xs font-medium text-emerald-200"><Lightbulb size={14} /> Recomendações</div>
+              {result.recommendations.length === 0 ? (
+                <p className="text-xs leading-5 text-[var(--text-muted)]">Nenhum ajuste aplicável foi proposto nesta análise.</p>
+              ) : (
+                <ul className="space-y-3">
+                  {result.recommendations.map((recommendation, index) => (
+                    <li key={`${recommendation.target_path ?? "recommendation"}-${index}`} className="border-l border-emerald-400/30 pl-3 text-xs leading-5">
+                      <p className="font-mono text-[10px] text-emerald-300">{recommendation.target_module ?? "ajuste"} · {recommendation.target_path ?? recommendation.operation ?? index + 1}</p>
+                      {(recommendation.current_value !== undefined || recommendation.proposed_value !== undefined) && <p className="mt-1 text-[var(--text-muted)]">{displayValue(recommendation.current_value)} → <span className="text-[var(--text-primary)]">{displayValue(recommendation.proposed_value)}</span></p>}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="rounded-xl border border-amber-400/15 bg-amber-400/[.04] p-4">
+              <div className="mb-3 flex items-center gap-2 text-xs font-medium text-amber-200"><AlertTriangle size={14} /> Avisos</div>
+              {result.warnings.length > 0 ? <ul className="space-y-2 text-xs leading-5 text-[var(--text-muted)]">{result.warnings.map((warning, index) => <li key={index}>• {warning}</li>)}</ul> : <p className="text-xs text-[var(--text-muted)]">Nenhum aviso registrado.</p>}
+            </div>
+            <div className="rounded-xl border border-slate-400/15 bg-slate-400/[.03] p-4">
+              <div className="mb-3 flex items-center gap-2 text-xs font-medium text-slate-200"><CircleDot size={14} /> Limitações</div>
+              {result.limitations.length > 0 ? <ul className="space-y-2 text-xs leading-5 text-[var(--text-muted)]">{result.limitations.map((limitation, index) => <li key={index}>• {limitation}</li>)}</ul> : <p className="text-xs text-[var(--text-muted)]">Nenhuma limitação registrada.</p>}
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
+  );
 }
 
 export default function IntelligenceRunsPage() {
@@ -274,6 +417,8 @@ export default function IntelligenceRunsPage() {
             <AlertTriangle size={16} /> {error}
           </div>
         )}
+
+        {selected && runContext && <AnalysisResultPanel context={runContext} />}
 
         <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)_360px]">
           <section className="overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/90 backdrop-blur">
