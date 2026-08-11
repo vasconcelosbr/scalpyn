@@ -4,7 +4,16 @@
 
 `PARTIALLY_IMPLEMENTED_CHAT_RUNTIME_NOT_PROVEN`
 
-The frozen chat, read-only refresh, provider-blocked path, SSE/reconnect, summary, proposal gates, tenant isolation and zero-mutation controls were proven in staging. The complete runtime seal is withheld because confirmed child analysis currently fails safe with `CHILD_ANALYSIS_REQUIRES_FRESH_DATASET_AND_BUNDLE` instead of creating a new run. Authenticated browser interaction was not proven; the protected preview route itself returned HTTP 200 through the Vercel CLI.
+The frozen chat, read-only refresh, provider-blocked path, SSE/reconnect, summary, proposal gates, tenant isolation and zero-mutation controls were proven in staging. The code, additive schema and UI are now deployed dormant in production. The complete runtime seal is withheld because confirmed child analysis currently fails safe with `CHILD_ANALYSIS_REQUIRES_FRESH_DATASET_AND_BUNDLE` instead of creating a new run. Authenticated browser interaction was not proven; the production route itself returned HTTP 200.
+
+## Production deployment — approved 2026-08-11
+
+- Railway API deployment `d3d27b24-b37a-4bae-9100-7d23e3e0c5f2`: `SUCCESS`.
+- Railway worker deployment `4207770e-cc5d-41a0-845b-a56eec485276`: `SUCCESS`; queue `ai_orchestration` ready.
+- Vercel deployment `dpl_DytQCMEQudmtyDMfu6ZJJjMajS3g`: `READY`, target `production`, aliased to `https://scalpyn.vercel.app`.
+- Production Alembic head: `157_analysis_chat`; all three chat tables exist.
+- Runtime remains dormant: zero active `ai_analysis_chat_runtime` rows; fake and real provider flags are both `false` on API and worker.
+- No production provider call or chat request was made. Production remained at zero conversations, messages, evidence links and `ANALYSIS_CHAT%` AI requests after deployment.
 
 ## Implemented
 
@@ -29,6 +38,6 @@ The frozen chat, read-only refresh, provider-blocked path, SSE/reconnect, summar
 ## Deliberate stops
 
 - Real provider: not called.
-- Production: not deployed and no flags enabled.
+- Production activation: code/schema/UI deployed, but no runtime or provider flag enabled.
 - Child run: not fabricated from the parent snapshot; remains a typed limitation.
 - Candidate/Shadow/live proposal application: not performed.
