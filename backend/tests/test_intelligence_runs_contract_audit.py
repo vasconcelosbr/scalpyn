@@ -31,6 +31,8 @@ def _source(relative: str) -> str:
 
 
 def _evidence(evidence_id: str) -> dict:
+    if not EVIDENCE.exists():
+        pytest.skip("requires the separately retained production audit evidence bundle")
     for line in EVIDENCE.read_text(encoding="utf-8").splitlines():
         record = json.loads(line)
         if record["evidence_id"] == evidence_id:
