@@ -89,6 +89,18 @@ class ProviderTransportError(RuntimeError):
         super().__init__(reason_code)
 
 
+class ProviderOutputError(RuntimeError):
+    """Typed failure for an incomplete or invalid response after transport."""
+
+    error_kind = "PROVIDER_OUTPUT_FAILED"
+    provider_transport_attempted = True
+
+    def __init__(self, reason_code: str):
+        self.reason_code = reason_code
+        self.safe_message = "Provider returned an incomplete or invalid structured response"
+        super().__init__(reason_code)
+
+
 def fail(code: AIErrorCode, message: str, *, retryable: bool = False, http_status: int = 422,
          operator_action: str = "Review the request and audit trail", attempt: int = 1) -> AIOrchestrationError:
     return AIOrchestrationError(AIError(

@@ -29,6 +29,15 @@ def _migration_module():
     return module
 
 
+def _output_budget_migration_module():
+    migration_path = BACKEND / "alembic/versions/160_systemic_output_budget.py"
+    spec = importlib.util.spec_from_file_location("migration_160_systemic_output_budget", migration_path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_seeded_profiles_are_hash_exact_and_analysis_only():
     migration = _migration_module()
     assert len(migration.PROFILES) == 3
@@ -42,6 +51,36 @@ def test_seeded_profiles_are_hash_exact_and_analysis_only():
             + seeded["max_output_tokens"] * seeded["output_cost_per_million"]
         ) / 1_000_000
         assert worst_case <= seeded["max_cost_usd"]
+
+
+def test_output_budget_migration_promotes_the_complete_governed_budget():
+    migration = _output_budget_migration_module()
+    seeded = dict(_migration_module().PROFILES[0])
+    snapshot = migration._profile_snapshot(
+        seeded,
+        max_output_tokens=2300,
+        profile_version=2,
+        enforce_governed_budget=True,
+    )
+    assert snapshot["max_cost_usd"] == "0.45000000"
+    assert snapshot["max_input_tokens"] == 200000
+    assert snapshot["max_output_tokens"] == 2300
+    assert snapshot["request_token_limit"] == 444600
+    worst_case = (
+        snapshot["max_input_tokens"] * float(snapshot["input_cost_per_million"])
+        + snapshot["max_output_tokens"] * float(snapshot["output_cost_per_million"])
+    ) / 1_000_000
+    assert worst_case <= float(snapshot["max_cost_usd"])
+
+
+def test_output_budget_repair_revision_fits_live_alembic_version_column():
+    migration_path = BACKEND / "alembic/versions/161_output_budget_repair.py"
+    spec = importlib.util.spec_from_file_location("migration_161_output_budget_repair", migration_path)
+    assert spec and spec.loader
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    assert len(migration.revision) <= 32
+    assert migration.down_revision == "160_systemic_output_budget"
 
 
 def test_profile_validation_fails_closed_on_expired_pricing():

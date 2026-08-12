@@ -149,6 +149,37 @@ def test_anthropic_structured_output_uses_strict_supported_schema():
     assert recommendation["properties"]["side_effect_class"]["type"] == "string"
 
 
+def test_systemic_prompt_205_bounds_decision_evidence_for_finite_output():
+    from app.ai_orchestration.initial_prompts import initial_prompt_registry
+
+    prompt = initial_prompt_registry().resolve("systemic-multimodule", "2.0.5")
+    assert "at most 7 decision-relevant evidence objects" in prompt.user_template
+    assert prompt.output_schema_json["properties"]["evidence"]["maxItems"] == 7
+
+
+def test_systemic_prompt_205_matches_the_migration_contract():
+    import importlib.util
+    from pathlib import Path
+
+    from app.ai_orchestration.initial_prompts import initial_prompt_registry
+
+    migration_path = (
+        Path(__file__).resolve().parents[1]
+        / "alembic/versions/160_systemic_output_budget.py"
+    )
+    spec = importlib.util.spec_from_file_location("migration_160_systemic_output_budget", migration_path)
+    assert spec and spec.loader
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    registry = initial_prompt_registry()
+    previous = registry.resolve("systemic-multimodule", "2.0.4")
+    current = registry.resolve("systemic-multimodule", "2.0.5")
+    assert migration.SYSTEM_TEMPLATE == current.system_template
+    assert migration.USER_TEMPLATE == current.user_template
+    assert migration._bounded_output_schema(previous.output_schema_json) == current.output_schema_json
+
+
 @pytest.mark.asyncio
 async def test_anthropic_http_request_sends_output_config():
     from app.ai_orchestration.provider_adapters.http_adapter import HTTPProviderAdapter

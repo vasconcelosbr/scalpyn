@@ -420,6 +420,12 @@ export default function IntelligenceRunsPage() {
         )}
 
         {selected && runContext && <AnalysisResultPanel context={runContext} />}
+        {selected?.status === "FAILED" && runContext?.result.status !== "COMPLETED" && (
+          <div className="mb-4 rounded-xl border border-amber-400/30 bg-amber-400/[.06] px-4 py-3 text-sm text-amber-100">
+            <p className="font-medium">Chat indisponível para esta execução</p>
+            <p className="mt-1 text-xs leading-5 text-amber-100/70">O chat é vinculado a uma análise concluída. Execute uma nova análise após a correção ou selecione uma execução concluída para conversar sobre o resultado.</p>
+          </div>
+        )}
         {selected?.status === "COMPLETED" && runContext?.result.status === "COMPLETED" && (
           <AnalysisChatPanel
             runId={selected.id}
@@ -549,6 +555,7 @@ export default function IntelligenceRunsPage() {
                   <p className="flex items-center gap-2"><ChevronRight size={12} /> Ultimo no concluido: {selected.last_completed_node ?? "—"}</p>
                   <p className="flex items-center gap-2"><AlertTriangle size={12} /> No que falhou: {selected.failed_node ?? "—"}</p>
                   {selected.error_kind === "PROVIDER_BLOCKED" && <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 p-3 text-amber-200"><p className="font-medium">Provider bloqueado</p><p className="mt-1 leading-5">O transporte nao foi iniciado. Verifique o intent e o gate operacional correspondente; o canario real nao corrige uma analise normal.</p></div>}
+                  {selected.error_kind === "PROVIDER_OUTPUT_FAILED" && <div className="rounded-lg border border-rose-400/30 bg-rose-400/10 p-3 text-rose-200"><p className="font-medium">Resposta do provider incompleta</p><p className="mt-1 leading-5">O transporte ocorreu, mas a resposta estruturada não pôde ser concluída ou validada. O grafo permaneceu fail-closed.</p></div>}
                   {selected.last_error_code && <p className="font-mono text-rose-300">{selected.last_error_code}</p>}
                   {selected.last_error_safe_message && <p className="leading-5">{selected.last_error_safe_message}</p>}
                   <p className="font-mono text-[10px]">transport attempted: {selected.provider_transport_attempted === null ? "—" : String(selected.provider_transport_attempted)}</p>

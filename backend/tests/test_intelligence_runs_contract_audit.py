@@ -12,7 +12,11 @@ from pathlib import Path
 import pytest
 
 from app.ai_orchestration.contracts import AIRequestIntent
-from app.ai_orchestration.errors import GraphNodeExecutionError, ProviderBlockedError
+from app.ai_orchestration.errors import (
+    GraphNodeExecutionError,
+    ProviderBlockedError,
+    ProviderOutputError,
+)
 from app.ai_orchestration.request_intent import validate_provider_intent_gate
 from app.tasks.ai_orchestration import _failure_details
 
@@ -75,6 +79,27 @@ def test_provider_disabled_returns_typed_blocked_status():
         "provider_transport_attempted": False,
         "terminal_reason": "PROVIDER_BLOCKED",
     }
+
+
+def test_provider_output_failure_preserves_attempted_transport():
+    failure = _failure_details(GraphNodeExecutionError(
+        "validate_output",
+        ProviderOutputError("PROVIDER_OUTPUT_TRUNCATED"),
+    ))
+    assert failure == {
+        "failed_node": "validate_output",
+        "error_kind": "PROVIDER_OUTPUT_FAILED",
+        "reason_code": "PROVIDER_OUTPUT_TRUNCATED",
+        "safe_message": "Provider returned an incomplete or invalid structured response",
+        "provider_transport_attempted": True,
+        "terminal_reason": "FAIL_CLOSED",
+    }
+
+
+def test_bridge_marks_post_transport_output_failures_as_attempted():
+    bridge = _source("backend/app/services/systemic_langgraph_bridge.py")
+    terminal_branch = bridge.split("if response.terminal_error_code is not None:", 1)[1]
+    assert '"provider_transport_attempted": True' in terminal_branch.split("try:", 1)[0]
 
 
 def test_assemble_evidence_persists_manifest_before_provider_gate():

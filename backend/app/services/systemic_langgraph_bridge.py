@@ -572,6 +572,7 @@ class SystemicLangGraphBridge:
             return {
                 "ai_request_id": str(request.id),
                 "status": "FAILED",
+                "provider_transport_attempted": True,
                 "terminal_reason": response.terminal_error_code,
                 "error_code": response.terminal_error_code,
                 "provider_output_schema_valid": False,
@@ -585,6 +586,7 @@ class SystemicLangGraphBridge:
             return {
                 "ai_request_id": str(request.id),
                 "status": "FAILED",
+                "provider_transport_attempted": True,
                 "terminal_reason": "OUTPUT_SCHEMA_INVALID",
                 "error_code": "OUTPUT_SCHEMA_INVALID",
                 "provider_output_schema_valid": False,

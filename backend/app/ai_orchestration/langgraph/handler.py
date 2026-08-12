@@ -99,6 +99,7 @@ class CanonicalGraphNodeHandler:
                 for key in (
                     "error_code", "terminal_reason", "provider_output_schema_valid",
                     "provider_stop_reason", "provider_response_ref", "schema_validator",
+                    "provider_transport_attempted",
                 ):
                     value = result_json.get(key)
                     if value is not None:
@@ -471,9 +472,13 @@ class CanonicalGraphNodeHandler:
             if not isinstance(state.get("result_json"), dict):
                 raise RuntimeError("GRAPH_RESULT_SCHEMA_INVALID")
             if state["result_json"].get("status") != "COMPLETED":
-                raise RuntimeError(
-                    str(state["result_json"].get("error_code") or "GRAPH_PROVIDER_RESULT_INVALID")
+                reason_code = str(
+                    state["result_json"].get("error_code") or "GRAPH_PROVIDER_RESULT_INVALID"
                 )
+                if state["result_json"].get("provider_transport_attempted") is True:
+                    from ..errors import ProviderOutputError
+                    raise ProviderOutputError(reason_code)
+                raise RuntimeError(reason_code)
             recommendations = state["result_json"].get("recommendations") or []
             for recommendation in recommendations:
                 side_effect = str(recommendation.get("side_effect_class") or "NONE")
