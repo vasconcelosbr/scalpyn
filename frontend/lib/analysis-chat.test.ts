@@ -39,6 +39,10 @@ test("chat exposes audit-only budget mode without presenting a cost ceiling", ()
   assert.match(panel, /orçamento somente auditável/);
 });
 
+test("chat labels the default composer as automatic governed routing", () => {
+  assert.match(panel, /Automático: análise ou ação governada/);
+});
+
 test("the first message can create its conversation without a separate click", () => {
   assert.match(panel, /let activeConversationId = conversationId/);
   assert.match(panel, /if \(!activeConversationId\)/);

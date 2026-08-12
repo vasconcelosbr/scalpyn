@@ -463,7 +463,7 @@ export function AnalysisChatPanel({ runId, graphLabel, snapshotLabel, modelLabel
             <div className="border-t border-cyan-300/10 p-4">
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                 <select value={mode} onChange={(event) => setMode(event.target.value as DataMode)} className="rounded-lg border border-[var(--border-subtle)] bg-black/20 px-2 py-1.5 text-[10px] text-[var(--text-primary)] outline-none">
-                  <option value="FROZEN_ANALYSIS_ONLY">Snapshot original</option>
+                  <option value="FROZEN_ANALYSIS_ONLY">Automático: análise ou ação governada</option>
                   <option value="ALLOW_READONLY_REFRESH" disabled={!flags.readonly_refresh_enabled}>Atualização read-only</option>
                   <option value="CREATE_CHILD_ANALYSIS" disabled={!flags.child_analysis_enabled}>Análise filha</option>
                   <option value="DRAFT_PROPOSAL" disabled={!flags.proposals_enabled || !flags.governed_actions_enabled}>Executar alteração</option>

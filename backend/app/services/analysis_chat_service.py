@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import hashlib
 import os
+import re
 import uuid
 from uuid import UUID
 
@@ -51,6 +52,21 @@ class AnalysisChatError(RuntimeError):
 
 
 class AnalysisChatService:
+    _GOVERNED_ACTION_PREFIX = re.compile(
+        r"^(?:por favor,?\s+)?"
+        r"(?:(?:preciso|quero)\s+que\s+(?:voc[eê]\s+)?|pode\s+(?:voc[eê]\s+)?)?"
+        r"(?:realiz(?:ar|e)|fa[cç]a|aplic(?:ar|e)|execut(?:ar|e)|alter(?:ar|e)|"
+        r"ajust(?:ar|e)|modific(?:ar|e)|atualiz(?:ar|e)|corr(?:igir|ija)|"
+        r"exclu(?:ir|a)|delet(?:ar|e)|remov(?:er|a)|desativ(?:ar|e)|"
+        r"ativ(?:ar|e)|cri(?:ar|e)|implement(?:ar|e))\b",
+        re.IGNORECASE,
+    )
+    _GOVERNED_ACTION_TARGETS = (
+        "perfi", "configura", "score", "estrat", "regra", "threshold",
+        "limite", "peso", "parâmetro", "parametro", "filtro", "sinal",
+        "risco", "risk",
+    )
+
     @staticmethod
     async def runtime_config(db: AsyncSession, tenant_id: UUID) -> AnalysisChatRuntimeConfig:
         record = (
@@ -177,6 +193,28 @@ class AnalysisChatService:
         return AnalysisChatRequestKind.FOLLOW_UP_CHAT
 
     @staticmethod
+    def _resolve_data_mode(
+        config: AnalysisChatRuntimeConfig,
+        requested_mode: AnalysisChatDataMode,
+        message: str,
+    ) -> AnalysisChatDataMode:
+        if requested_mode is not AnalysisChatDataMode.FROZEN_ANALYSIS_ONLY:
+            return requested_mode
+        governed_enabled = (
+            config.proposals_enabled
+            and config.governed_actions_enabled
+            and config.live_config_write_enabled
+        )
+        lowered = message.casefold()
+        if (
+            governed_enabled
+            and AnalysisChatService._GOVERNED_ACTION_PREFIX.search(message)
+            and any(target in lowered for target in AnalysisChatService._GOVERNED_ACTION_TARGETS)
+        ):
+            return AnalysisChatDataMode.DRAFT_PROPOSAL
+        return requested_mode
+
+    @staticmethod
     async def send_message(
         db: AsyncSession,
         *,
@@ -189,6 +227,12 @@ class AnalysisChatService:
         response_language: str,
     ) -> tuple[AIAnalysisMessage, AIAnalysisMessage, AIGraphRun, bool]:
         config = await AnalysisChatService.runtime_config(db, tenant_id)
+        normalized = message.strip()
+        if not normalized:
+            raise AnalysisChatError("ANALYSIS_CHAT_MESSAGE_EMPTY", status_code=422)
+        data_mode = AnalysisChatService._resolve_data_mode(
+            config, data_mode, normalized
+        )
         AnalysisChatService._require_mode(config, data_mode)
         intent = AnalysisChatService._intent()
         provider_required = data_mode in {
@@ -208,9 +252,6 @@ class AnalysisChatService:
             )
         ):
             raise AnalysisChatError("ANALYSIS_CHAT_PROVIDER_BUDGET_NOT_CONFIGURED")
-        normalized = message.strip()
-        if not normalized:
-            raise AnalysisChatError("ANALYSIS_CHAT_MESSAGE_EMPTY", status_code=422)
         if len(normalized) > config.max_message_characters:
             raise AnalysisChatError("ANALYSIS_CHAT_MESSAGE_TOO_LARGE", status_code=422)
 

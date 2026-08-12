@@ -96,6 +96,48 @@ def test_request_kind_is_separate_from_data_mode():
     ) is AnalysisChatRequestKind.PROPOSAL_DRAFT
 
 
+def test_explicit_profile_change_is_routed_to_governed_proposal():
+    config = AnalysisChatRuntimeConfig(
+        enabled=True,
+        proposals_enabled=True,
+        governed_actions_enabled=True,
+        live_config_write_enabled=True,
+    )
+    assert AnalysisChatService._resolve_data_mode(
+        config,
+        AnalysisChatDataMode.FROZEN_ANALYSIS_ONLY,
+        "realizar os ajustes em todos os perfis analisados.",
+    ) is AnalysisChatDataMode.DRAFT_PROPOSAL
+
+
+def test_analytical_deletion_question_stays_frozen_readonly():
+    config = AnalysisChatRuntimeConfig(
+        enabled=True,
+        proposals_enabled=True,
+        governed_actions_enabled=True,
+        live_config_write_enabled=True,
+    )
+    assert AnalysisChatService._resolve_data_mode(
+        config,
+        AnalysisChatDataMode.FROZEN_ANALYSIS_ONLY,
+        "quais seriam os perfis elegíveis para deletar?",
+    ) is AnalysisChatDataMode.FROZEN_ANALYSIS_ONLY
+
+
+def test_explicit_change_never_auto_routes_when_governed_writes_are_disabled():
+    config = AnalysisChatRuntimeConfig(
+        enabled=True,
+        proposals_enabled=True,
+        governed_actions_enabled=True,
+        live_config_write_enabled=False,
+    )
+    assert AnalysisChatService._resolve_data_mode(
+        config,
+        AnalysisChatDataMode.FROZEN_ANALYSIS_ONLY,
+        "aplique os ajustes nos perfis",
+    ) is AnalysisChatDataMode.FROZEN_ANALYSIS_ONLY
+
+
 def test_staging_fake_intent_is_environment_and_flag_bounded(monkeypatch):
     monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "systemic-ai-staging-20260807")
     monkeypatch.setenv("LANGGRAPH_FAKE_PROVIDER_CANARY_ENABLED", "true")
