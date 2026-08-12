@@ -33,3 +33,9 @@ test("authority-expanding modes require confirmation and can be cancelled", () =
   assert.match(panel, /DRAFT_PROPOSAL/);
   assert.match(panel, /\/cancel/);
 });
+
+test("the first message can create its conversation without a separate click", () => {
+  assert.match(panel, /let activeConversationId = conversationId/);
+  assert.match(panel, /if \(!activeConversationId\)/);
+  assert.doesNotMatch(panel, /disabled=\{busy \|\| !conversationId \|\| !draft\.trim\(\)\}/);
+});

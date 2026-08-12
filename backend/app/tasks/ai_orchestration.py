@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 import os
 from uuid import UUID
 
@@ -28,9 +29,9 @@ from ..database import run_db_task
 from ..models.ai_graph import (
     AIGraphDefinition, AIGraphEvent, AIGraphInterrupt, AIGraphRun,
 )
-from ..models.systemic_ai import AIJobRecord, AIRequestRecord
+from ..models.systemic_ai import AIJobRecord, AIRequestRecord, AIUsageRecord
 from ..models.systemic_ai import AIBudgetReservationRecord
-from ..models.analysis_chat import AIAnalysisMessage
+from ..models.analysis_chat import AIAnalysisConversation, AIAnalysisMessage
 
 
 def _now() -> datetime:
@@ -276,6 +277,39 @@ async def _mark_failed(
             AIAnalysisMessage.role == "ASSISTANT",
         ).with_for_update())).scalar_one_or_none()
         if message is not None:
+            usage = (await db.execute(select(AIUsageRecord).where(
+                AIUsageRecord.tenant_id == run.tenant_id,
+                AIUsageRecord.ai_request_id == request.id,
+            ))).scalar_one_or_none()
+            if usage is not None:
+                first_usage_attribution = (
+                    message.tokens_input is None
+                    and message.tokens_output is None
+                    and message.cost_usd is None
+                )
+                message.tokens_input = int(usage.tokens_input)
+                message.tokens_output = int(usage.tokens_output)
+                message.cost_usd = Decimal(usage.actual_cost)
+                if first_usage_attribution:
+                    conversation = await db.get(
+                        AIAnalysisConversation,
+                        message.conversation_id,
+                    )
+                    if conversation is not None:
+                        conversation.total_tokens_input = (
+                            int(conversation.total_tokens_input or 0)
+                            + int(usage.tokens_input)
+                        )
+                        conversation.total_tokens_output = (
+                            int(conversation.total_tokens_output or 0)
+                            + int(usage.tokens_output)
+                        )
+                        conversation.total_cost_usd = (
+                            Decimal(str(conversation.total_cost_usd or 0))
+                            + Decimal(usage.actual_cost)
+                        )
+                        conversation.updated_at = now
+                        conversation.lock_version = int(conversation.lock_version or 0) + 1
             message.status = "BLOCKED" if error_kind == "PROVIDER_BLOCKED" else "FAILED"
             message.message_type = "ERROR_NOTICE"
             message.content = safe_message[:500]

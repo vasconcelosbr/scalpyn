@@ -41,7 +41,12 @@ from ...models.systemic_ai import (
 from ...schemas.analysis_chat import AnalysisChatOutput, AnalysisChatRuntimeConfig
 from ...services.ai_keys_service import decrypt_value
 from ...services.systemic_langgraph_bridge import SystemicLangGraphBridge
-from ..errors import GraphNodeExecutionError, ProviderBlockedError, ProviderTransportError
+from ..errors import (
+    GraphNodeExecutionError,
+    ProviderBlockedError,
+    ProviderOutputError,
+    ProviderTransportError,
+)
 from .state import ScalpynGraphState
 
 
@@ -51,6 +56,21 @@ def _now() -> datetime:
 
 def _sha(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _normalize_provider_parent(
+    provider_answer: AnalysisChatOutput,
+    canonical_parent_id: UUID,
+) -> AnalysisChatOutput:
+    if provider_answer.parent_analysis_run_id == canonical_parent_id:
+        return provider_answer
+    return provider_answer.model_copy(update={
+        "parent_analysis_run_id": canonical_parent_id,
+        "warnings": [
+            *provider_answer.warnings,
+            "PROVIDER_PARENT_ANALYSIS_RUN_ID_NORMALIZED",
+        ],
+    })
 
 
 class AnalysisChatGraphNodeHandler:
@@ -807,15 +827,17 @@ class AnalysisChatGraphNodeHandler:
             (actual_cost > Decimal(approval.max_cost_usd), "ANALYSIS_CHAT_COST_RECONCILIATION_EXCEEDED"),
         ) if exceeded), None)
         if response.terminal_error_code is not None:
-            raise ProviderTransportError(str(response.terminal_error_code))
+            raise ProviderOutputError(str(response.terminal_error_code))
         if reconciliation_error is not None:
             raise ProviderTransportError(reconciliation_error)
         try:
             provider_answer = AnalysisChatOutput.model_validate(response.output)
         except Exception as exc:
-            raise ProviderTransportError("ANALYSIS_CHAT_OUTPUT_SCHEMA_INVALID") from exc
-        if provider_answer.parent_analysis_run_id != conversation.parent_analysis_run_id:
-            raise ProviderTransportError("ANALYSIS_CHAT_PARENT_ID_OUTPUT_MISMATCH")
+            raise ProviderOutputError("ANALYSIS_CHAT_OUTPUT_SCHEMA_INVALID") from exc
+        provider_answer = _normalize_provider_parent(
+            provider_answer,
+            conversation.parent_analysis_run_id,
+        )
 
         refs = list(state.get("selected_evidence_refs") or [])
         modules = list(dict.fromkeys(

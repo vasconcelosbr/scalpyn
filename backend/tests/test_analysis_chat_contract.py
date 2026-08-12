@@ -124,6 +124,37 @@ def test_chat_output_requires_parent_and_evidence_contract():
     assert output.new_data_queried is False
 
 
+def test_provider_parent_id_is_normalized_to_the_canonical_conversation_run():
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        _normalize_provider_parent,
+    )
+
+    canonical_parent = uuid.uuid4()
+    provider_output = AnalysisChatOutput(
+        answer="Resposta limitada ao snapshot.",
+        answer_type="EXPLANATION",
+        based_on="FROZEN_ANALYSIS",
+        parent_analysis_run_id=uuid.uuid4(),
+        evidence_refs=[],
+    )
+
+    normalized = _normalize_provider_parent(provider_output, canonical_parent)
+
+    assert normalized.parent_analysis_run_id == canonical_parent
+    assert "PROVIDER_PARENT_ANALYSIS_RUN_ID_NORMALIZED" in normalized.warnings
+
+
+def test_failed_chat_turn_persists_audited_provider_usage():
+    from app.tasks.ai_orchestration import _mark_failed
+
+    source = inspect.getsource(_mark_failed)
+    assert "AIUsageRecord" in source
+    assert "message.tokens_input" in source
+    assert "message.tokens_output" in source
+    assert "message.cost_usd" in source
+    assert "conversation.total_cost_usd" in source
+
+
 def test_frozen_mode_executes_no_new_tools():
     source = inspect.getsource(AnalysisChatService.send_message)
     assert '["market_regime.get_current"]' in source

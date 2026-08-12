@@ -166,17 +166,22 @@ export function AnalysisChatPanel({ runId, graphLabel, snapshotLabel, modelLabel
     });
   }, [conversationId, loadMessages, open]);
 
+  async function createConversationRecord() {
+    const created = await apiPost<Conversation>(`/intelligence-runs/${runId}/conversations`, {
+      title: "Chat da Análise",
+    });
+    await loadConversations();
+    setConversationId(created.conversation_id);
+    setMessages([]);
+    setOpen(true);
+    return created.conversation_id;
+  }
+
   async function createConversation() {
     setBusy(true);
     setError(null);
     try {
-      const created = await apiPost<Conversation>(`/intelligence-runs/${runId}/conversations`, {
-        title: "Chat da Análise",
-      });
-      await loadConversations();
-      setConversationId(created.conversation_id);
-      setMessages([]);
-      setOpen(true);
+      await createConversationRecord();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Não foi possível criar a conversa");
     } finally {
@@ -227,7 +232,7 @@ export function AnalysisChatPanel({ runId, graphLabel, snapshotLabel, modelLabel
   }
 
   async function sendMessage() {
-    if (!conversationId || !draft.trim()) return;
+    if (!draft.trim()) return;
     const modeNotice = {
       FROZEN_ANALYSIS_ONLY: "A resposta usará o snapshot original.",
       ALLOW_READONLY_REFRESH: "A pergunta fará somente consultas read-only.",
@@ -239,19 +244,23 @@ export function AnalysisChatPanel({ runId, graphLabel, snapshotLabel, modelLabel
     setError(null);
     setStreamText("");
     try {
-      await apiPost(`/intelligence-conversations/${conversationId}/messages`, {
+      let activeConversationId = conversationId;
+      if (!activeConversationId) {
+        activeConversationId = await createConversationRecord();
+      }
+      await apiPost(`/intelligence-conversations/${activeConversationId}/messages`, {
         message: draft.trim(),
         data_mode: mode,
         idempotency_key: crypto.randomUUID(),
         response_language: "pt-BR",
       });
       setDraft("");
-      await loadMessages(conversationId);
-      if (flags?.streaming_enabled) await consumeStream(conversationId);
+      await loadMessages(activeConversationId);
+      if (flags?.streaming_enabled) await consumeStream(activeConversationId);
       else {
         for (let attempt = 0; attempt < 20; attempt += 1) {
           await new Promise((resolve) => window.setTimeout(resolve, 1000));
-          const rows = await loadMessages(conversationId);
+          const rows = await loadMessages(activeConversationId);
           const latest = [...rows].reverse().find((item) => item.role === "ASSISTANT");
           if (latest && TERMINAL_MESSAGE.has(latest.status)) break;
         }
@@ -391,7 +400,7 @@ export function AnalysisChatPanel({ runId, graphLabel, snapshotLabel, modelLabel
               <div className="flex gap-2">
                 <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} rows={2} placeholder="Pergunte sobre o diagnóstico, evidências ou limitações…" className="min-h-14 flex-1 resize-none rounded-xl border border-[var(--border-subtle)] bg-black/20 px-3 py-2 text-sm outline-none placeholder:text-[var(--text-muted)] focus:border-cyan-300/30" />
                 <div className="flex flex-col gap-2">
-                  <button disabled={busy || !conversationId || !draft.trim()} onClick={() => void sendMessage()} className="grid flex-1 place-items-center rounded-xl bg-cyan-300 px-4 text-slate-950 disabled:opacity-40" aria-label="Enviar"><Send size={16} /></button>
+                  <button disabled={busy || !draft.trim()} onClick={() => void sendMessage()} className="grid flex-1 place-items-center rounded-xl bg-cyan-300 px-4 text-slate-950 disabled:opacity-40" aria-label="Enviar"><Send size={16} /></button>
                   <button disabled={!busy} onClick={() => void cancel()} className="grid flex-1 place-items-center rounded-xl border border-rose-300/20 px-4 text-rose-200 disabled:opacity-30" aria-label="Cancelar"><CircleStop size={15} /></button>
                 </div>
               </div>
