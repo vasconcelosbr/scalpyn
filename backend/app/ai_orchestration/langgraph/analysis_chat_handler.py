@@ -950,15 +950,27 @@ class AnalysisChatGraphNodeHandler:
             str(item.get("module")) for item in refs if item.get("module")
         ))
         refreshed = state.get("data_mode") == "ALLOW_READONLY_REFRESH"
+        is_proposal = state.get("data_mode") == "DRAFT_PROPOSAL"
+        if is_proposal and not isinstance(provider_answer.proposal, dict):
+            raise ProviderOutputError("ANALYSIS_CHAT_PROPOSAL_OUTPUT_MISSING")
         answer = AnalysisChatOutput(
             answer=provider_answer.answer,
-            answer_type="READONLY_REFRESH" if refreshed else "EXPLANATION",
-            based_on="REFRESHED_READONLY_DATA" if refreshed else "FROZEN_ANALYSIS",
+            answer_type=(
+                "PROPOSAL"
+                if is_proposal
+                else "READONLY_REFRESH" if refreshed else "EXPLANATION"
+            ),
+            based_on=(
+                "PROPOSAL_DRAFT"
+                if is_proposal
+                else "REFRESHED_READONLY_DATA" if refreshed else "FROZEN_ANALYSIS"
+            ),
             parent_analysis_run_id=conversation.parent_analysis_run_id,
             modules_consulted=modules,
             evidence_refs=refs,
             new_data_queried=refreshed,
             new_data_window=provider_answer.new_data_window,
+            proposal=provider_answer.proposal if is_proposal else None,
             warnings=provider_answer.warnings,
             limitations=provider_answer.limitations,
             suggested_questions=provider_answer.suggested_questions,

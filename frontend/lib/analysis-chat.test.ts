@@ -54,6 +54,15 @@ test("human decisions are submitted once while the graph resumes", () => {
   assert.match(panel, /GRAPH_INTERRUPT_ALREADY_RESOLVED/);
 });
 
+test("streaming stops and clears its transient card on terminal events", () => {
+  assert.match(panel, /setStreamText\(""\);\s*await reader\.cancel\(\);\s*return;/);
+});
+
+test("a terminal governed turn without a proposal is shown as not generated", () => {
+  assert.match(panel, /Prévia executável não gerada/);
+  assert.match(panel, /Nenhum perfil foi alterado/);
+});
+
 test("bulk profile proposals show their profile count", () => {
   assert.match(panel, /target\.profile_ids\?\.length/);
   assert.match(panel, /perfis/);

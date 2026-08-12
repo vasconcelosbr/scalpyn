@@ -313,6 +313,15 @@ def test_proposal_is_typed_and_human_gated_twice_before_execution():
     )
 
 
+def test_provider_normalization_preserves_typed_proposal_for_materialization():
+    from app.ai_orchestration.langgraph.analysis_chat_handler import AnalysisChatGraphNodeHandler
+
+    source = inspect.getsource(AnalysisChatGraphNodeHandler._invoke_normal_provider)
+    assert 'is_proposal = state.get("data_mode") == "DRAFT_PROPOSAL"' in source
+    assert 'ProviderOutputError("ANALYSIS_CHAT_PROPOSAL_OUTPUT_MISSING")' in source
+    assert "proposal=provider_answer.proposal if is_proposal else None" in source
+
+
 def test_each_successful_turn_reconciles_a_budget_reservation():
     from app.ai_orchestration.langgraph.analysis_chat_handler import AnalysisChatGraphNodeHandler
     source = inspect.getsource(AnalysisChatGraphNodeHandler._persist_answer)

@@ -244,6 +244,9 @@ export function AnalysisChatPanel({ runId, graphLabel, snapshotLabel, modelLabel
         }
         if (event === "completed" || event === "blocked" || event === "error") {
           await loadMessages(id);
+          setStreamText("");
+          await reader.cancel();
+          return;
         }
       }
     }
@@ -410,6 +413,18 @@ export function AnalysisChatPanel({ runId, graphLabel, snapshotLabel, modelLabel
                     </div>
                   )}
                   {message.new_data_queried && <p className="mt-3 flex items-center gap-1.5 text-[10px] text-cyan-200"><Database size={11} /> Dados read-only atualizados, separados do snapshot original.</p>}
+                  {message.role === "ASSISTANT"
+                    && message.data_mode === "DRAFT_PROPOSAL"
+                    && TERMINAL_MESSAGE.has(message.status)
+                    && !message.proposal
+                    && !message.pending_interrupt && (
+                    <div className="mt-3 rounded-xl border border-amber-300/20 bg-amber-300/[.06] p-3">
+                      <p className="text-xs font-semibold text-amber-100">Prévia executável não gerada</p>
+                      <p className="mt-1 text-[10px] leading-5 text-[var(--text-muted)]">
+                        A resposta terminou sem um diff aplicável. Nenhum perfil foi alterado. Reenvie a solicitação para gerar uma nova prévia auditável.
+                      </p>
+                    </div>
+                  )}
                   {message.proposal && (
                     <div className="mt-3 rounded-xl border border-cyan-300/20 bg-cyan-300/[.05] p-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
