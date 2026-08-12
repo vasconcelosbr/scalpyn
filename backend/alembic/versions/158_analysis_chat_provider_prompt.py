@@ -98,14 +98,14 @@ def upgrade() -> None:
                 input_schema_json,output_schema_json,tool_policy_json,
                 provider_constraints_json,status,content_hash,created_at,approved_at
             ) VALUES (
-                :id,:prompt_key,:semantic_version,:system_template,:user_template,
+                CAST(:id AS uuid),:prompt_key,:semantic_version,:system_template,:user_template,
                 CAST(:input_schema_json AS jsonb),CAST(:output_schema_json AS jsonb),
                 CAST(:tool_policy_json AS jsonb),CAST(:provider_constraints_json AS jsonb),
                 'APPROVED',:content_hash,:created_at,:approved_at
             ) ON CONFLICT (prompt_key,semantic_version) DO NOTHING
             """
         ).bindparams(
-            id=str(uuid.uuid5(PROMPT_NAMESPACE, "analysis-chat-system@1.1.0")),
+            id=uuid.uuid5(PROMPT_NAMESPACE, "analysis-chat-system@1.1.0"),
             prompt_key=content["prompt_key"],
             semantic_version=content["semantic_version"],
             system_template=content["system_template"],
