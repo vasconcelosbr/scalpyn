@@ -30,6 +30,8 @@ class AnalysisChatRuntimeConfig(BaseModel):
     readonly_refresh_enabled: bool = False
     child_analysis_enabled: bool = False
     proposals_enabled: bool = False
+    governed_actions_enabled: bool = False
+    live_config_write_enabled: bool = False
     streaming_enabled: bool = False
     summary_enabled: bool = False
     summary_message_threshold: int = Field(default=10, ge=4, le=100)

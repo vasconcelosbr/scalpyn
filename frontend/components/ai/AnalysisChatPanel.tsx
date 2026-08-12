@@ -19,6 +19,8 @@ type ChatFlags = {
   readonly_refresh_enabled: boolean;
   child_analysis_enabled: boolean;
   proposals_enabled: boolean;
+  governed_actions_enabled: boolean;
+  live_config_write_enabled: boolean;
   streaming_enabled: boolean;
   summary_enabled: boolean;
   provider_max_cost_usd: string;
@@ -79,6 +81,19 @@ type ChatMessage = {
     terminal_reason: string | null;
   } | null;
   pending_interrupt: PendingInterrupt | null;
+  proposal: {
+    proposal_id: string;
+    operation_type: string;
+    target_type: string;
+    target_id: string;
+    target: { profile_id?: string; profile_name?: string; config_type?: string; pool_id?: string | null };
+    objective: string;
+    risk: string | null;
+    changes: Array<{ op: string; path: string; old_value: unknown; value: unknown; reason: string }>;
+    status: string;
+    rollback_available: boolean;
+    execution_result: Record<string, unknown> | null;
+  } | null;
 };
 
 type Props = {
@@ -99,7 +114,7 @@ function modeLabel(mode: DataMode) {
     FROZEN_ANALYSIS_ONLY: "Snapshot original",
     ALLOW_READONLY_REFRESH: "Atualizar read-only",
     CREATE_CHILD_ANALYSIS: "Análise filha",
-    DRAFT_PROPOSAL: "Draft de proposta",
+    DRAFT_PROPOSAL: "Executar alteração",
   }[mode];
 }
 
@@ -122,6 +137,7 @@ export function AnalysisChatPanel({ runId, graphLabel, snapshotLabel, modelLabel
   const [busy, setBusy] = useState(false);
   const [streamText, setStreamText] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [rollbackArmed, setRollbackArmed] = useState<string | null>(null);
   const streamAbort = useRef<AbortController | null>(null);
   const streamCursor = useRef(0);
 
@@ -297,6 +313,28 @@ export function AnalysisChatPanel({ runId, graphLabel, snapshotLabel, modelLabel
     await loadMessages(conversationId);
   }
 
+  async function rollbackProposal(message: ChatMessage) {
+    if (!conversationId || !message.proposal) return;
+    if (rollbackArmed !== message.proposal.proposal_id) {
+      setRollbackArmed(message.proposal.proposal_id);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await apiPost(
+        `/intelligence-conversations/${conversationId}/proposals/${message.proposal.proposal_id}/rollback`,
+        { confirmation_text: "CONFIRMO ROLLBACK" },
+      );
+      setRollbackArmed(null);
+      await loadMessages(conversationId);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "O rollback não foi processado");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!flags?.enabled) return null;
 
   return (
@@ -307,7 +345,7 @@ export function AnalysisChatPanel({ runId, graphLabel, snapshotLabel, modelLabel
             <Sparkles size={13} /> Chat da Análise
           </div>
           <p className="mt-1 text-xs text-[var(--text-muted)]">
-            Base: {graphLabel} · Snapshot: {snapshotLabel} · Modelo: {modelLabel} · Authority: ANALYSIS_ONLY
+            Base: {graphLabel} · Snapshot: {snapshotLabel} · Modelo: {modelLabel} · Authority: {flags.governed_actions_enabled ? "ANÁLISE + ALTERAÇÃO CONFIRMADA" : "ANALYSIS_ONLY"}
           </p>
         </div>
         <div className="flex gap-2">
@@ -354,12 +392,53 @@ export function AnalysisChatPanel({ runId, graphLabel, snapshotLabel, modelLabel
                     </div>
                   )}
                   {message.new_data_queried && <p className="mt-3 flex items-center gap-1.5 text-[10px] text-cyan-200"><Database size={11} /> Dados read-only atualizados, separados do snapshot original.</p>}
+                  {message.proposal && (
+                    <div className="mt-3 rounded-xl border border-cyan-300/20 bg-cyan-300/[.05] p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-xs font-semibold text-cyan-100">Prévia da alteração</p>
+                        <span className="rounded-full border border-cyan-300/20 px-2 py-0.5 font-mono text-[8px] text-cyan-200">{message.proposal.status}</span>
+                      </div>
+                      <p className="mt-2 text-xs text-[var(--text-primary)]">{message.proposal.objective}</p>
+                      <p className="mt-1 font-mono text-[9px] text-[var(--text-muted)]">
+                        {message.proposal.target.profile_name || message.proposal.target.config_type || message.proposal.target_id}
+                      </p>
+                      <div className="mt-3 space-y-2">
+                        {message.proposal.changes.map((change, index) => (
+                          <div key={`${change.path}-${index}`} className="rounded-lg border border-white/[.06] bg-black/20 p-2">
+                            <div className="flex items-center gap-2 font-mono text-[9px] text-cyan-200">
+                              <span>{change.op.toUpperCase()}</span><span>{change.path}</span>
+                            </div>
+                            <div className="mt-1 grid gap-1 text-[10px] text-[var(--text-muted)] md:grid-cols-2">
+                              <span>Antes: {JSON.stringify(change.old_value)}</span>
+                              <span>Depois: {JSON.stringify(change.value)}</span>
+                            </div>
+                            <p className="mt-1 text-[10px] text-[var(--text-muted)]">{change.reason}</p>
+                          </div>
+                        ))}
+                      </div>
+                      {message.proposal.risk && <p className="mt-2 text-[10px] text-amber-200">Risco: {message.proposal.risk}</p>}
+                      {message.proposal.rollback_available && (
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                          <button disabled={busy} onClick={() => void rollbackProposal(message)} className="rounded-lg border border-rose-300/25 px-3 py-1.5 text-xs text-rose-200">
+                            {rollbackArmed === message.proposal.proposal_id ? "Confirmar rollback" : "Desfazer alteração"}
+                          </button>
+                          {rollbackArmed === message.proposal.proposal_id && (
+                            <button onClick={() => setRollbackArmed(null)} className="px-2 py-1 text-[10px] text-[var(--text-muted)]">Cancelar</button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   {message.warnings.map((warning) => <p key={warning} className="mt-2 text-[10px] text-amber-200">⚠ {warning}</p>)}
                   {message.limitations.map((limitation) => <p key={limitation} className="mt-1 text-[10px] text-[var(--text-muted)]">Limitação: {limitation}</p>)}
                   {message.pending_interrupt && (
                     <div className="mt-3 rounded-xl border border-amber-300/20 bg-amber-300/[.06] p-3">
                       <p className="text-xs text-amber-100">Confirmação: {message.pending_interrupt.interrupt_type}</p>
-                      <p className="mt-1 text-[10px] text-[var(--text-muted)]">Nenhuma mudança live será aplicada.</p>
+                      <p className="mt-1 text-[10px] text-[var(--text-muted)]">
+                        {message.pending_interrupt.interrupt_type === "PROPOSAL_APPROVAL"
+                          ? "A confirmação aplicará exatamente o diff exibido acima e criará um rollback auditável."
+                          : "Esta confirmação autoriza apenas gerar e validar a prévia; ainda não altera o sistema."}
+                      </p>
                       <div className="mt-3 flex gap-2">
                         <button disabled={busy} onClick={() => void decide(message, "reject")} className="inline-flex items-center gap-1 rounded-lg border border-rose-300/25 px-3 py-1.5 text-xs text-rose-200"><X size={12} /> Rejeitar</button>
                         <button disabled={busy} onClick={() => void decide(message, "approve")} className="inline-flex items-center gap-1 rounded-lg bg-amber-200 px-3 py-1.5 text-xs font-medium text-amber-950"><Check size={12} /> Confirmar</button>
@@ -386,12 +465,12 @@ export function AnalysisChatPanel({ runId, graphLabel, snapshotLabel, modelLabel
                   <option value="FROZEN_ANALYSIS_ONLY">Snapshot original</option>
                   <option value="ALLOW_READONLY_REFRESH" disabled={!flags.readonly_refresh_enabled}>Atualização read-only</option>
                   <option value="CREATE_CHILD_ANALYSIS" disabled={!flags.child_analysis_enabled}>Análise filha</option>
-                  <option value="DRAFT_PROPOSAL" disabled={!flags.proposals_enabled}>Draft de proposta</option>
+                  <option value="DRAFT_PROPOSAL" disabled={!flags.proposals_enabled || !flags.governed_actions_enabled}>Executar alteração</option>
                 </select>
-                <span className="flex items-center gap-1 font-mono text-[9px] text-emerald-200"><ShieldCheck size={11} /> live write denied · teto US$ {flags.provider_max_cost_usd}</span>
+                <span className="flex items-center gap-1 font-mono text-[9px] text-emerald-200"><ShieldCheck size={11} /> {flags.live_config_write_enabled ? "alteração mediante confirmação" : "alteração desativada"} · teto US$ {flags.provider_max_cost_usd}</span>
               </div>
               <div className="flex gap-2">
-                <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} rows={2} placeholder="Pergunte sobre o diagnóstico, evidências ou limitações…" className="min-h-14 flex-1 resize-none rounded-xl border border-[var(--border-subtle)] bg-black/20 px-3 py-2 text-sm outline-none placeholder:text-[var(--text-muted)] focus:border-cyan-300/30" />
+                <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} rows={2} placeholder={mode === "DRAFT_PROPOSAL" ? "Descreva a alteração desejada, o perfil ou configuração e o valor…" : "Pergunte sobre o diagnóstico, evidências ou limitações…"} className="min-h-14 flex-1 resize-none rounded-xl border border-[var(--border-subtle)] bg-black/20 px-3 py-2 text-sm outline-none placeholder:text-[var(--text-muted)] focus:border-cyan-300/30" />
                 <div className="flex flex-col gap-2">
                   <button disabled={busy || !draft.trim()} onClick={() => void sendMessage()} className="grid flex-1 place-items-center rounded-xl bg-cyan-300 px-4 text-slate-950 disabled:opacity-40" aria-label="Enviar"><Send size={16} /></button>
                   <button disabled={!busy} onClick={() => void cancel()} className="grid flex-1 place-items-center rounded-xl border border-rose-300/20 px-4 text-rose-200 disabled:opacity-30" aria-label="Cancelar"><CircleStop size={15} /></button>

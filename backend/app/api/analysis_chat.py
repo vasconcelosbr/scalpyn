@@ -15,10 +15,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db, run_db_task
 from ..models.ai_graph import AIGraphEvent, AIGraphInterrupt, AIGraphRun
 from ..models.analysis_chat import AIAnalysisConversation, AIAnalysisMessage
+from ..models.copilot import CopilotActionPlan
 from ..models.systemic_ai import AIBudgetReservationRecord, AIRequestRecord
 from ..schemas.analysis_chat import AnalysisChatDataMode
 from ..services.ai_graph_service import AIGraphRunService, GraphAccessError
 from ..services.analysis_chat_service import AnalysisChatError, AnalysisChatService
+from ..services.governed_change_service import (
+    get_plan as get_governed_change_plan,
+    plan_to_dict as governed_plan_to_dict,
+    rollback as rollback_governed_change,
+)
 from .config import get_current_user_id
 
 
@@ -42,6 +48,10 @@ class DecideMessageRequest(BaseModel):
     decision_id: UUID
     idempotency_key: str = Field(min_length=16, max_length=160)
     edits: dict[str, Any] = Field(default_factory=dict)
+
+
+class RollbackProposalRequest(BaseModel):
+    confirmation_text: str = Field(min_length=1, max_length=80)
 
 
 def _error(exc: AnalysisChatError) -> HTTPException:
@@ -70,7 +80,12 @@ def _conversation_payload(row: AIAnalysisConversation) -> dict[str, Any]:
     }
 
 
-def _message_payload(row: AIAnalysisMessage, reservation=None, interrupt=None) -> dict[str, Any]:
+def _message_payload(
+    row: AIAnalysisMessage,
+    reservation=None,
+    interrupt=None,
+    proposal: CopilotActionPlan | None = None,
+) -> dict[str, Any]:
     return {
         "id": str(row.id),
         "conversation_id": str(row.conversation_id),
@@ -88,6 +103,7 @@ def _message_payload(row: AIAnalysisMessage, reservation=None, interrupt=None) -
         "graph_run_id": str(row.graph_run_id) if row.graph_run_id else None,
         "child_analysis_run_id": str(row.child_analysis_run_id) if row.child_analysis_run_id else None,
         "proposal_id": str(row.proposal_id) if row.proposal_id else None,
+        "proposal": governed_plan_to_dict(proposal) if proposal else None,
         "configured_provider": row.configured_provider,
         "configured_model": row.configured_model,
         "effective_provider": row.effective_provider,
@@ -144,7 +160,15 @@ async def _message_rows(db: AsyncSession, tenant_id: UUID, conversation_id: UUID
                 AIGraphInterrupt.graph_run_id == row.graph_run_id,
                 AIGraphInterrupt.status == "PENDING",
             ).order_by(AIGraphInterrupt.created_at.desc()).limit(1))).scalar_one_or_none()
-        payloads.append(_message_payload(row, reservation, interrupt))
+        proposal = None
+        if row.proposal_id:
+            proposal = (
+                await db.execute(select(CopilotActionPlan).where(
+                    CopilotActionPlan.id == row.proposal_id,
+                    CopilotActionPlan.user_id == tenant_id,
+                ))
+            ).scalar_one_or_none()
+        payloads.append(_message_payload(row, reservation, interrupt, proposal))
     return payloads
 
 
@@ -281,6 +305,38 @@ async def decide_message(
         await db.rollback()
         raise _error(exc) from exc
     except GraphAccessError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail={"code": str(exc)}) from exc
+
+
+@router.post(
+    "/api/intelligence-conversations/{conversation_id}/proposals/{proposal_id}/rollback"
+)
+async def rollback_proposal(
+    conversation_id: UUID,
+    proposal_id: UUID,
+    payload: RollbackProposalRequest,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    try:
+        await AnalysisChatService.get_conversation(
+            db, tenant_id=user_id, conversation_id=conversation_id
+        )
+        proposal = await get_governed_change_plan(db, user_id, proposal_id)
+        if str((proposal.evidence or {}).get("conversation_id")) != str(conversation_id):
+            raise LookupError("Governed change proposal not found in this conversation")
+        plan = await rollback_governed_change(
+            db,
+            user_id,
+            proposal_id,
+            confirmation_text=payload.confirmation_text,
+        )
+        return {"status": "ROLLED_BACK", "proposal": plan}
+    except LookupError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=404, detail={"code": str(exc)}) from exc
+    except ValueError as exc:
         await db.rollback()
         raise HTTPException(status_code=409, detail={"code": str(exc)}) from exc
 

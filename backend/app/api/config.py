@@ -127,9 +127,12 @@ async def update_config(
                 )
         payload = validated.model_dump()
     elif config_type == "ai_provider_runtime":
-        payload = AIProviderRuntimeConfig.model_validate(payload).model_dump()
+        payload = AIProviderRuntimeConfig.model_validate(payload).model_dump(mode="json")
     elif config_type == "ai_analysis_chat_runtime":
-        payload = AnalysisChatRuntimeConfig.model_validate(payload).model_dump()
+        # JSONB cannot serialize Decimal directly.  Pydantic's JSON mode keeps
+        # the persisted config canonical and makes runtime flag updates
+        # reversible through this endpoint.
+        payload = AnalysisChatRuntimeConfig.model_validate(payload).model_dump(mode="json")
     updated = await config_service.update_config(
         db=db,
         config_type=config_type,

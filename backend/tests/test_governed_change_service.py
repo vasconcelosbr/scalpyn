@@ -1,0 +1,163 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from types import SimpleNamespace
+import uuid
+
+import pytest
+
+from app.models.profile_audit_log import ProfileAuditLog
+from app.services import governed_change_service as service
+from app.services.governed_change_service import (
+    ALLOWED_CONFIG_TYPES,
+    PROFILE_ROOTS,
+    apply_typed_patch,
+)
+
+
+class _ScalarResult:
+    def __init__(self, value):
+        self.value = value
+
+    def scalar_one_or_none(self):
+        return self.value
+
+
+class _FakeDB:
+    def __init__(self, result):
+        self.result = result
+        self.added = []
+        self.commits = 0
+
+    async def execute(self, _query):
+        return _ScalarResult(self.result)
+
+    def add(self, value):
+        self.added.append(value)
+
+    async def commit(self):
+        self.commits += 1
+
+    async def refresh(self, _value):
+        return None
+
+
+def test_profile_patch_returns_an_auditable_before_after_diff():
+    source = {
+        "default_timeframe": "5m",
+        "filters": {"logic": "AND", "conditions": []},
+        "scoring": {"enabled": True, "selected_rule_ids": ["r1"]},
+        "signals": {"logic": "AND", "conditions": []},
+        "block_rules": {"blocks": []},
+        "entry_triggers": {"logic": "AND", "conditions": []},
+    }
+    candidate, diff = apply_typed_patch(source, [{
+        "op": "replace",
+        "path": "/default_timeframe",
+        "value": "15m",
+        "reason": "Use the evidenced decision horizon",
+        "evidence_refs": ["evidence-1"],
+    }], allowed_roots=PROFILE_ROOTS)
+
+    assert source["default_timeframe"] == "5m"
+    assert candidate["default_timeframe"] == "15m"
+    assert diff == [{
+        "op": "replace",
+        "path": "/default_timeframe",
+        "old_value": "5m",
+        "value": "15m",
+        "reason": "Use the evidenced decision horizon",
+        "evidence_refs": ["evidence-1"],
+    }]
+
+
+def test_patch_rejects_sensitive_or_unknown_configuration_paths():
+    with pytest.raises(ValueError, match="Sensitive field"):
+        apply_typed_patch(
+            {"provider": {}},
+            [{"op": "add", "path": "/provider/api_key", "value": "x"}],
+        )
+    with pytest.raises(ValueError, match="Unknown configuration root"):
+        apply_typed_patch(
+            {"thresholds": {}},
+            [{"op": "add", "path": "/new_runtime_gate", "value": True}],
+        )
+
+
+def test_chat_config_authority_excludes_self_modifying_and_secret_families():
+    assert {"score", "risk", "strategy", "spot_engine", "futures_engine"}.issubset(
+        ALLOWED_CONFIG_TYPES
+    )
+    assert "ai_analysis_chat_runtime" not in ALLOWED_CONFIG_TYPES
+    assert "ai_provider_runtime" not in ALLOWED_CONFIG_TYPES
+    assert "ml" not in ALLOWED_CONFIG_TYPES
+
+
+@pytest.mark.asyncio
+async def test_human_confirmed_profile_change_updates_live_config_and_audit(monkeypatch):
+    user_id = uuid.uuid4()
+    profile_id = uuid.uuid4()
+    now = datetime(2026, 8, 12, tzinfo=timezone.utc)
+    profile = SimpleNamespace(
+        id=profile_id,
+        user_id=user_id,
+        name="Profile A",
+        config={"default_timeframe": "5m"},
+        profile_version=now,
+        updated_at=now,
+    )
+    state_hash = service.document_hash({
+        "config": profile.config,
+        "profile_version": profile.profile_version,
+        "updated_at": profile.updated_at,
+    })
+    plan = SimpleNamespace(
+        id=uuid.uuid4(),
+        user_id=user_id,
+        action_type=service.ACTION_TYPE,
+        target_type="PROFILE",
+        target_id=str(profile_id),
+        objective="Use 15m",
+        evidence={"evidence_ids": [str(uuid.uuid4())]},
+        proposed_diff=[{
+            "op": "replace", "path": "/default_timeframe",
+            "old_value": "5m", "value": "15m", "reason": "evidence",
+        }],
+        execution_payload={
+            "operation_type": "UPDATE_PROFILE_CONFIG",
+            "profile_id": str(profile_id),
+            "profile_name": "Profile A",
+            "source_document": {"default_timeframe": "5m"},
+            "candidate_document": {"default_timeframe": "15m"},
+        },
+        risk_assessment="Operational change",
+        rollback_plan={"source_document": {"default_timeframe": "5m"}},
+        target_state_hash=state_hash,
+        status="DRY_RUN",
+        approved_at=None,
+        approved_by=None,
+        approval_text=None,
+        executed_at=None,
+        execution_result=None,
+    )
+    db = _FakeDB(profile)
+
+    async def _allowed(_db, _user_id):
+        return True
+
+    async def _plan(_db, _user_id, _plan_id, *, lock=False):
+        assert lock is True
+        return plan
+
+    monkeypatch.setattr(service, "_runtime_allows_write", _allowed)
+    monkeypatch.setattr(service, "get_plan", _plan)
+
+    result = await service.approve_and_execute(
+        db, user_id, plan.id, decision_id=str(uuid.uuid4())
+    )
+
+    assert profile.config["default_timeframe"] == "15m"
+    assert plan.status == "EXECUTED"
+    assert result["execution_result"]["live_config_changed"] is True
+    assert db.commits == 1
+    assert any(isinstance(item, ProfileAuditLog) for item in db.added)

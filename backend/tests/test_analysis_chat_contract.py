@@ -33,9 +33,20 @@ def test_analysis_chat_flags_fail_closed():
     assert config.readonly_refresh_enabled is False
     assert config.child_analysis_enabled is False
     assert config.proposals_enabled is False
+    assert config.governed_actions_enabled is False
+    assert config.live_config_write_enabled is False
     assert config.streaming_enabled is False
     assert config.provider_max_cost_usd == 0
     assert config.request_token_limit == 0
+
+
+def test_analysis_chat_runtime_config_is_jsonb_serializable():
+    payload = AnalysisChatRuntimeConfig(
+        enabled=True,
+        provider_max_cost_usd="0.45",
+    ).model_dump(mode="json")
+    json.dumps(payload)
+    assert payload["provider_max_cost_usd"] == "0.45"
 
 
 @pytest.mark.parametrize("mode", list(AnalysisChatDataMode))
@@ -78,10 +89,10 @@ def test_staging_fake_intent_is_environment_and_flag_bounded(monkeypatch):
 
 def test_analysis_chat_graph_is_immutable_and_separate():
     graph = resolve_graph("analysis-chat-v1")
-    assert graph.semantic_version == "1.0.0"
-    assert graph.state_schema_version == "analysis-chat-state-v1"
-    assert graph.tool_policy_version == "analysis-chat-tool-policy-v1"
-    assert graph.content_hash == "c1753398733152b7ce78556bd02f09e6ccbc03d67247c6fda992e689d82961c2"
+    assert graph.semantic_version == "1.1.0"
+    assert graph.state_schema_version == "analysis-chat-state-v1.1"
+    assert graph.tool_policy_version == "analysis-chat-governed-write-policy-v1"
+    assert graph.content_hash == "5eac25a787affe754fa0893a3a92a8eae247754449fb6e29b879ec055692009e"
 
 
 def test_analysis_chat_graph_compiles_all_human_gates():
@@ -182,16 +193,24 @@ def test_child_analysis_requires_interrupt_and_does_not_reuse_parent_snapshot():
     assert "Nenhuma análise filha foi criada" in source
 
 
-def test_proposal_is_draft_only_and_human_gated_twice():
+def test_proposal_is_typed_and_human_gated_twice_before_execution():
     graph = resolve_graph("analysis-chat-v1")
     assert "interrupt_proposal_confirmation" in graph.node_manifest
     assert "interrupt_proposal_approval" in graph.node_manifest
     from app.ai_orchestration.langgraph.analysis_chat_handler import AnalysisChatGraphNodeHandler
     source = inspect.getsource(AnalysisChatGraphNodeHandler._node_updates)
-    assert '"status": "DRAFT"' in source
-    assert '"live_write": False' in source
-    assert '"candidate_created": False' in source
-    assert '"shadow_started": False' in source
+    assert "create_governed_change_dry_run" in source
+    assert "execute_governed_proposal_if_confirmed" in source
+    assert "approve_and_execute_governed_change" in source
+    assert "ANALYSIS_CHAT_GOVERNED_CHANGE_ACTOR_MISMATCH" in source
+    assert 'decision.get("decision") != "approve"' in source
+    assert "if not actor_user_id or str(actor_user_id) != str(request.requested_by_user_id)" in source
+    assert 'not in {"approve", "edit"}' not in source
+    assert graph.edge_manifest.index(
+        ("interrupt_proposal_approval", "execute_governed_proposal_if_confirmed")
+    ) > graph.edge_manifest.index(
+        ("draft_proposal_if_confirmed", "validate_risk_and_strategy")
+    )
 
 
 def test_each_successful_turn_reconciles_a_budget_reservation():
@@ -278,7 +297,9 @@ def test_message_idempotency_and_sequence_are_transactional():
 
 def test_prompt_injection_cannot_expand_tools_or_authority():
     source = inspect.getsource(AnalysisChatService.send_message)
-    assert 'authority="ANALYSIS_ONLY"' in source
+    assert '"PROPOSAL_ONLY"' in source
+    assert 'else "ANALYSIS_ONLY"' in source
+    assert "if data_mode is AnalysisChatDataMode.DRAFT_PROPOSAL" in source
     assert "data_mode=data_mode.value" in source
     assert "tool_allowlist" in source
     assert "normalized" not in source.split('"tool_allowlist":', 1)[1].split("},", 1)[0]

@@ -89,7 +89,8 @@ ANALYSIS_CHAT_NODES = (
     "plan_readonly_tools", "execute_readonly_tools", "interrupt_child_analysis_confirmation",
     "create_child_analysis_if_confirmed", "interrupt_proposal_confirmation",
     "draft_proposal_if_confirmed", "validate_risk_and_strategy",
-    "interrupt_proposal_approval", "assemble_chat_context", "reserve_budget",
+    "interrupt_proposal_approval", "execute_governed_proposal_if_confirmed",
+    "assemble_chat_context", "reserve_budget",
     "invoke_provider", "validate_chat_output", "persist_message_result_usage",
     "update_conversation_summary_if_needed", "complete_message",
 )
@@ -106,10 +107,12 @@ ANALYSIS_CHAT_EDGES = (
     ("execute_readonly_tools", "retrieve_relevant_evidence"),
     ("interrupt_child_analysis_confirmation", "create_child_analysis_if_confirmed"),
     ("create_child_analysis_if_confirmed", "persist_message_result_usage"),
-    ("interrupt_proposal_confirmation", "draft_proposal_if_confirmed"),
+    ("interrupt_proposal_confirmation", "retrieve_relevant_evidence"),
+    ("validate_chat_output", "draft_proposal_if_confirmed"),
     ("draft_proposal_if_confirmed", "validate_risk_and_strategy"),
     ("validate_risk_and_strategy", "interrupt_proposal_approval"),
-    ("interrupt_proposal_approval", "persist_message_result_usage"),
+    ("interrupt_proposal_approval", "execute_governed_proposal_if_confirmed"),
+    ("execute_governed_proposal_if_confirmed", "persist_message_result_usage"),
     ("assemble_chat_context", "reserve_budget"),
     ("reserve_budget", "invoke_provider"),
     ("invoke_provider", "validate_chat_output"),
@@ -178,15 +181,15 @@ def _definition(graph_key: str, nodes: tuple[str, ...]) -> GraphDefinition:
 def _analysis_chat_definition() -> GraphDefinition:
     payload = {
         "graph_key": "analysis-chat-v1",
-        "semantic_version": "1.0.0",
-        "state_schema_version": "analysis-chat-state-v1",
+        "semantic_version": "1.1.0",
+        "state_schema_version": "analysis-chat-state-v1.1",
         "node_manifest": list(ANALYSIS_CHAT_NODES),
         "edge_manifest": [list(edge) for edge in ANALYSIS_CHAT_EDGES],
-        "tool_policy_version": "analysis-chat-tool-policy-v1",
+        "tool_policy_version": "analysis-chat-governed-write-policy-v1",
     }
     approved_at = datetime(2026, 8, 11, tzinfo=timezone.utc)
     return GraphDefinition(
-        id=uuid.uuid5(GRAPH_NAMESPACE, "analysis-chat-v1@1.0.0"),
+        id=uuid.uuid5(GRAPH_NAMESPACE, "analysis-chat-v1@1.1.0"),
         graph_key=payload["graph_key"],
         semantic_version=payload["semantic_version"],
         state_schema_version=payload["state_schema_version"],
@@ -194,7 +197,7 @@ def _analysis_chat_definition() -> GraphDefinition:
         content_hash=hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest(),
-        code_revision="157_analysis_chat",
+        code_revision="163_chat_governed_actions",
         node_manifest=ANALYSIS_CHAT_NODES,
         edge_manifest=ANALYSIS_CHAT_EDGES,
         tool_policy_version=payload["tool_policy_version"],

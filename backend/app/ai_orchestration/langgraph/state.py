@@ -72,6 +72,7 @@ class ScalpynGraphState(TypedDict, total=False):
     new_data_queried: bool
     child_analysis_run_id: str | None
     proposal_id: str | None
+    proposal_execution_result: dict[str, Any] | None
     answer: dict[str, Any] | None
     reason_code: str | None
 

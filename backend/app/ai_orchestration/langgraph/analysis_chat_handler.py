@@ -40,6 +40,10 @@ from ...models.systemic_ai import (
 )
 from ...schemas.analysis_chat import AnalysisChatOutput, AnalysisChatRuntimeConfig
 from ...services.ai_keys_service import decrypt_value
+from ...services.governed_change_service import (
+    approve_and_execute as approve_and_execute_governed_change,
+    create_dry_run as create_governed_change_dry_run,
+)
 from ...services.systemic_langgraph_bridge import SystemicLangGraphBridge
 from ..errors import (
     GraphNodeExecutionError,
@@ -165,11 +169,16 @@ class AnalysisChatGraphNodeHandler:
                 "question": str(request_json.get("question") or ""),
             }
         if node_name == "authorize_tenant":
-            if request.authority != "ANALYSIS_ONLY" or run.authority != "ANALYSIS_ONLY":
+            expected_authority = (
+                "PROPOSAL_ONLY"
+                if request_json.get("data_mode") == "DRAFT_PROPOSAL"
+                else "ANALYSIS_ONLY"
+            )
+            if request.authority != expected_authority or run.authority != expected_authority:
                 raise RuntimeError("ANALYSIS_CHAT_AUTHORITY_DENIED")
             if request.parent_analysis_run_id != conversation.parent_analysis_run_id:
                 raise RuntimeError("ANALYSIS_CHAT_PARENT_LINK_MISMATCH")
-            return {"authority": "ANALYSIS_ONLY"}
+            return {"authority": expected_authority}
         if node_name == "load_parent_analysis":
             parent_run = await db.get(AIGraphRun, conversation.parent_analysis_run_id)
             result = await db.get(AIResultRecord, conversation.parent_result_id)
@@ -308,23 +317,61 @@ class AnalysisChatGraphNodeHandler:
             ).model_dump(mode="json")
             return {"answer": answer, "limitations": answer["limitations"]}
         if node_name == "draft_proposal_if_confirmed":
-            proposal_id = uuid.uuid4()
-            answer = AnalysisChatOutput(
-                answer="Foi criado somente um draft governado. Nenhuma configuração live foi alterada.",
-                answer_type="PROPOSAL",
-                based_on="PROPOSAL_DRAFT",
-                parent_analysis_run_id=conversation.parent_analysis_run_id,
-                proposal={
-                    "proposal_id": str(proposal_id),
-                    "requested_change": str(request_json.get("question") or "")[:1000],
-                    "status": "DRAFT",
-                    "authority": "CANDIDATE_ONLY",
-                    "live_write": False,
-                },
-                warnings=["GLOBAL_RISK_AND_STRATEGIES_VALIDATION_REQUIRED"],
-                limitations=["DRAFT_NOT_APPLIED"],
-            ).model_dump(mode="json")
+            answer = dict(state.get("answer") or {})
+            raw_proposal = answer.get("proposal")
+            if not isinstance(raw_proposal, dict):
+                answer["answer_type"] = "LIMITATION"
+                answer["limitations"] = [
+                    *(answer.get("limitations") or []),
+                    "GOVERNED_CHANGE_REQUIRES_AN_UNAMBIGUOUS_TYPED_TARGET",
+                ]
+                return {"answer": answer, "proposal_id": None}
+            changes: list[dict[str, Any]] = []
+            for raw_change in raw_proposal.get("changes") or []:
+                change = dict(raw_change)
+                if change.get("op") != "remove":
+                    try:
+                        change["value"] = json.loads(str(change.pop("value_json")))
+                    except (KeyError, TypeError, ValueError) as exc:
+                        raise ValueError(
+                            f"Invalid value_json for governed change path {change.get('path')}"
+                        ) from exc
+                else:
+                    change.pop("value_json", None)
+                changes.append(change)
+            typed_proposal = {
+                "operation_type": raw_proposal.get("operation_type"),
+                "target": raw_proposal.get("target") or {},
+                "objective": raw_proposal.get("objective"),
+                "risk": raw_proposal.get("risk"),
+                "changes": changes,
+            }
+            evidence_ids = {
+                str(ref.get("evidence_id"))
+                for ref in state.get("selected_evidence_refs") or []
+                if ref.get("evidence_id")
+            }
+            plan = await create_governed_change_dry_run(
+                db,
+                run.tenant_id,
+                proposal=typed_proposal,
+                conversation_id=conversation.id,
+                message_id=message.id,
+                evidence_ids=evidence_ids,
+            )
+            proposal_id = UUID(plan["proposal_id"])
             message.proposal_id = proposal_id
+            answer["answer"] = (
+                "A prévia foi validada. Revise o diff abaixo; a configuração só será "
+                "alterada depois da confirmação final."
+            )
+            answer["answer_type"] = "PROPOSAL"
+            answer["based_on"] = "PROPOSAL_DRAFT"
+            answer["proposal"] = plan
+            answer["warnings"] = [
+                *(answer.get("warnings") or []),
+                "GLOBAL_RISK_AND_STRATEGIES_VALIDATION_PENDING",
+            ]
             return {"proposal_id": str(proposal_id), "answer": answer}
         if node_name == "validate_risk_and_strategy":
             from ..module_tool_runtime import ModuleToolRuntime
@@ -391,6 +438,32 @@ class AnalysisChatGraphNodeHandler:
                 "tool_call_ids": tool_call_ids,
                 "readonly_tool_call_ids": tool_call_ids,
             }
+        if node_name == "execute_governed_proposal_if_confirmed":
+            proposal_id = state.get("proposal_id")
+            decision = dict(state.get("interrupt_decision") or {})
+            # Editing never implies approval. A changed request must produce a
+            # fresh preview before the user can approve its exact diff.
+            if not proposal_id or decision.get("decision") != "approve":
+                raise RuntimeError("ANALYSIS_CHAT_GOVERNED_CHANGE_APPROVAL_MISSING")
+            actor_user_id = decision.get("actor_user_id")
+            if not actor_user_id or str(actor_user_id) != str(request.requested_by_user_id):
+                raise RuntimeError("ANALYSIS_CHAT_GOVERNED_CHANGE_ACTOR_MISMATCH")
+            executed = await approve_and_execute_governed_change(
+                db,
+                run.tenant_id,
+                UUID(str(proposal_id)),
+                decision_id=decision.get("decision_id"),
+            )
+            answer = dict(state.get("answer") or {})
+            answer["answer"] = (
+                "Alteração confirmada e aplicada com registro de auditoria e rollback disponível."
+            )
+            answer["proposal"] = executed
+            answer["limitations"] = [
+                item for item in answer.get("limitations") or []
+                if item != "DRAFT_NOT_APPLIED"
+            ]
+            return {"answer": answer, "proposal_execution_result": executed}
         if node_name == "assemble_chat_context":
             return {
                 "limitations": list(state.get("limitations") or []),
@@ -417,6 +490,7 @@ class AnalysisChatGraphNodeHandler:
                     else "FROZEN_ANALYSIS"
                 )
                 answer_type = "READONLY_REFRESH" if based_on == "REFRESHED_READONLY_DATA" else "EXPLANATION"
+                is_proposal = state.get("data_mode") == "DRAFT_PROPOSAL"
                 summary = str(state.get("parent_result_summary") or "A análise original foi concluída.")
                 if based_on == "REFRESHED_READONLY_DATA":
                     answer_text = (
@@ -432,8 +506,8 @@ class AnalysisChatGraphNodeHandler:
                     )
                 answer = AnalysisChatOutput(
                     answer=answer_text[:5000],
-                    answer_type=answer_type,
-                    based_on=based_on,
+                    answer_type="LIMITATION" if is_proposal else answer_type,
+                    based_on="PROPOSAL_DRAFT" if is_proposal else based_on,
                     parent_analysis_run_id=conversation.parent_analysis_run_id,
                     modules_consulted=modules,
                     evidence_refs=refs,
@@ -448,6 +522,7 @@ class AnalysisChatGraphNodeHandler:
                     ),
                     limitations=[
                         "STAGING_FAKE_PROVIDER_RESPONSE",
+                        *(["FAKE_PROVIDER_DOES_NOT_CREATE_EXECUTABLE_CHANGES"] if is_proposal else []),
                         *(["READONLY_REFRESH_CURRENT_SNAPSHOT_ONLY"]
                           if based_on == "REFRESHED_READONLY_DATA" else []),
                     ],
@@ -986,7 +1061,7 @@ class AnalysisChatGraphNodeHandler:
             ))
         ).scalar_one_or_none()
         is_fake = request.request_json.get("request_intent") == "FAKE_PROVIDER_CANARY"
-        no_provider_required = request.request_kind in {"CHILD_ANALYSIS", "PROPOSAL_DRAFT"}
+        no_provider_required = request.request_kind == "CHILD_ANALYSIS"
         zero_cost_turn = is_fake or no_provider_required
         if usage is None and zero_cost_turn:
             usage = AIUsageRecord(

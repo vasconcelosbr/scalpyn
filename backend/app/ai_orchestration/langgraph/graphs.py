@@ -71,7 +71,15 @@ def _wire_analysis_chat(builder: StateGraph) -> None:
     builder.add_edge("assemble_chat_context", "reserve_budget")
     builder.add_edge("reserve_budget", "invoke_provider")
     builder.add_edge("invoke_provider", "validate_chat_output")
-    builder.add_edge("validate_chat_output", "persist_message_result_usage")
+
+    def route_validated_output(state):
+        return (
+            "draft_proposal_if_confirmed"
+            if state.get("data_mode") == "DRAFT_PROPOSAL"
+            else "persist_message_result_usage"
+        )
+
+    builder.add_conditional_edges("validate_chat_output", route_validated_output)
     builder.add_edge("persist_message_result_usage", "update_conversation_summary_if_needed")
     builder.add_edge("update_conversation_summary_if_needed", "complete_message")
 
@@ -85,12 +93,29 @@ def _wire_analysis_chat(builder: StateGraph) -> None:
     builder.add_edge("create_child_analysis_if_confirmed", "persist_message_result_usage")
     builder.add_conditional_edges(
         "interrupt_proposal_confirmation",
-        lambda state: route_after_confirmation(state, "draft_proposal_if_confirmed"),
+        lambda state: route_after_confirmation(state, "retrieve_relevant_evidence"),
     )
-    builder.add_edge("draft_proposal_if_confirmed", "validate_risk_and_strategy")
+
+    def route_materialized_proposal(state):
+        return (
+            "validate_risk_and_strategy"
+            if state.get("proposal_id")
+            else "persist_message_result_usage"
+        )
+
+    builder.add_conditional_edges("draft_proposal_if_confirmed", route_materialized_proposal)
     builder.add_edge("validate_risk_and_strategy", "interrupt_proposal_approval")
+
+    def route_after_explicit_approval(state):
+        return (
+            "execute_governed_proposal_if_confirmed"
+            if (state.get("interrupt_decision") or {}).get("decision") == "approve"
+            else END
+        )
+
     builder.add_conditional_edges(
         "interrupt_proposal_approval",
-        lambda state: route_after_confirmation(state, "persist_message_result_usage"),
+        route_after_explicit_approval,
     )
+    builder.add_edge("execute_governed_proposal_if_confirmed", "persist_message_result_usage")
     builder.add_edge("complete_message", END)

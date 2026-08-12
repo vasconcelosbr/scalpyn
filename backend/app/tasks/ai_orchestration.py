@@ -432,7 +432,12 @@ def resume_graph_run(run_id: str, interrupt_id: str) -> dict:
         record = await db.get(AIGraphInterrupt, UUID(interrupt_id))
         if record is None or record.graph_run_id != UUID(run_id) or record.status not in {"RESOLVED", "REJECTED"}:
             raise RuntimeError("GRAPH_INTERRUPT_NOT_RESOLVED")
-        return {"decision": record.decision, **(record.decision_payload or {})}
+        return {
+            "decision": record.decision,
+            "decision_id": str(record.decision_id) if record.decision_id else None,
+            "actor_user_id": str(record.actor_user_id) if record.actor_user_id else None,
+            **(record.decision_payload or {}),
+        }
     payload = asyncio.run(run_db_task(_load, celery=True))
     graph_runs_resumed.labels(decision=payload.get("decision") or "unknown").inc()
     return asyncio.run(execute_graph_run(UUID(run_id), resume_payload=payload))

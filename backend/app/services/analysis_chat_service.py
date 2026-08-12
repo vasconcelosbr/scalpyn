@@ -76,7 +76,9 @@ class AnalysisChatService:
             AnalysisChatDataMode.FROZEN_ANALYSIS_ONLY: True,
             AnalysisChatDataMode.ALLOW_READONLY_REFRESH: config.readonly_refresh_enabled,
             AnalysisChatDataMode.CREATE_CHILD_ANALYSIS: config.child_analysis_enabled,
-            AnalysisChatDataMode.DRAFT_PROPOSAL: config.proposals_enabled,
+            AnalysisChatDataMode.DRAFT_PROPOSAL: (
+                config.proposals_enabled and config.governed_actions_enabled
+            ),
         }[mode]
         if not allowed:
             raise AnalysisChatError(f"ANALYSIS_CHAT_MODE_DISABLED:{mode.value}", status_code=403)
@@ -192,6 +194,7 @@ class AnalysisChatService:
         provider_required = data_mode in {
             AnalysisChatDataMode.FROZEN_ANALYSIS_ONLY,
             AnalysisChatDataMode.ALLOW_READONLY_REFRESH,
+            AnalysisChatDataMode.DRAFT_PROPOSAL,
         }
         if intent == "NORMAL_ANALYSIS" and provider_required and (
             config.provider_max_cost_usd <= 0
@@ -275,9 +278,14 @@ class AnalysisChatService:
         db.add(user_message)
         await db.flush()
 
+        prompt_key = (
+            "analysis-chat-governed-change"
+            if data_mode is AnalysisChatDataMode.DRAFT_PROPOSAL
+            else "analysis-chat-system"
+        )
         prompt = (
             await db.execute(select(AIPromptVersion).where(
-                AIPromptVersion.prompt_key == "analysis-chat-system",
+                AIPromptVersion.prompt_key == prompt_key,
                 AIPromptVersion.status == "APPROVED",
             ).order_by(AIPromptVersion.approved_at.desc(), AIPromptVersion.semantic_version.desc()).limit(1))
         ).scalar_one_or_none()
@@ -400,7 +408,11 @@ class AnalysisChatService:
             origin_module="intelligence_runs",
             origin_view=f"analysis-chat:{conversation.id}",
             analysis_mode="FOLLOW_UP_CHAT",
-            authority="ANALYSIS_ONLY",
+            authority=(
+                "PROPOSAL_ONLY"
+                if data_mode is AnalysisChatDataMode.DRAFT_PROPOSAL
+                else "ANALYSIS_ONLY"
+            ),
             question_hash=_sha(normalized),
             correlation_id=correlation,
             model_resolution_id=resolution.id,
