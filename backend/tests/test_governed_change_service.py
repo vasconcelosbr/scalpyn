@@ -93,6 +93,24 @@ def test_chat_config_authority_excludes_self_modifying_and_secret_families():
     assert "ml" not in ALLOWED_CONFIG_TYPES
 
 
+def test_bulk_profile_patch_keeps_each_profile_diff_separate():
+    first = {"scoring": {"weights": {"rsi": 4}}}
+    second = {"scoring": {"weights": {"rsi": 3}}}
+    first_candidate, first_diff = apply_typed_patch(first, [{
+        "op": "replace", "path": "/scoring/weights/rsi", "value": 2,
+        "reason": "evidence", "evidence_refs": ["e1"],
+    }], allowed_roots=PROFILE_ROOTS)
+    second_candidate, second_diff = apply_typed_patch(second, [{
+        "op": "replace", "path": "/scoring/weights/rsi", "value": 2,
+        "reason": "evidence", "evidence_refs": ["e2"],
+    }], allowed_roots=PROFILE_ROOTS)
+
+    assert first_candidate["scoring"]["weights"]["rsi"] == 2
+    assert second_candidate["scoring"]["weights"]["rsi"] == 2
+    assert first_diff[0]["old_value"] == 4
+    assert second_diff[0]["old_value"] == 3
+
+
 @pytest.mark.asyncio
 async def test_human_confirmed_profile_change_updates_live_config_and_audit(monkeypatch):
     user_id = uuid.uuid4()

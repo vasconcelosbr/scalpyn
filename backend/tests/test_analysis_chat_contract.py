@@ -93,6 +93,17 @@ def test_governed_actions_support_bulk_profile_activation_without_deletion():
     assert 'payload.get("operation_type") == "SET_PROFILE_ACTIVE_STATUS"' in source
 
 
+def test_governed_actions_support_atomic_bulk_profile_configuration_and_rollback():
+    from app.services import governed_change_service
+
+    source = inspect.getsource(governed_change_service)
+    assert 'operation == "UPDATE_PROFILE_CONFIG_SET"' in source
+    assert 'payload.get("operation_type") == "UPDATE_PROFILE_CONFIG_SET"' in source
+    assert 'change_source="analysis_chat_human_confirmed_bulk"' in source
+    assert 'change_source="analysis_chat_human_confirmed_bulk_rollback"' in source
+    assert '"profiles_deleted": False' in source
+
+
 @pytest.mark.parametrize("mode", list(AnalysisChatDataMode))
 def test_disabled_chat_rejects_every_mode(mode):
     with pytest.raises(AnalysisChatError, match="ANALYSIS_CHAT_DISABLED"):

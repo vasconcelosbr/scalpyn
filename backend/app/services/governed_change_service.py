@@ -325,6 +325,100 @@ async def create_dry_run(
             "source_document": before,
             "candidate_document": candidate,
         }
+    elif operation == "UPDATE_PROFILE_CONFIG_SET":
+        raw_target_ids = list(target.get("profile_ids") or [])
+        if not raw_target_ids:
+            raise ValueError("UPDATE_PROFILE_CONFIG_SET requires profile_ids")
+        try:
+            target_ids = [UUID(str(item)) for item in raw_target_ids]
+        except (TypeError, ValueError) as exc:
+            raise ValueError("UPDATE_PROFILE_CONFIG_SET requires valid profile_ids") from exc
+        if len(target_ids) != len(set(target_ids)):
+            raise ValueError("UPDATE_PROFILE_CONFIG_SET profile_ids must be unique")
+        if len(target_ids) > 32:
+            raise ValueError("A governed profile configuration set is limited to 32 profiles")
+        resources = list((await db.execute(select(Profile).where(
+            Profile.user_id == user_id,
+            Profile.id.in_(target_ids),
+        ))).scalars().all())
+        by_id = {resource.id: resource for resource in resources}
+        if set(by_id) != set(target_ids):
+            raise LookupError("One or more profiles were not found")
+
+        grouped: dict[UUID, list[dict[str, Any]]] = {item: [] for item in target_ids}
+        for change in changes:
+            try:
+                profile_id = UUID(str(change.get("profile_id")))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Every profile configuration change requires profile_id") from exc
+            if profile_id not in by_id:
+                raise ValueError("Profile configuration change targets an unowned profile")
+            expected_name = str(change.get("profile_name") or "").strip()
+            if expected_name and expected_name != by_id[profile_id].name:
+                raise ValueError("Target profile_name does not match the owned profile")
+            grouped[profile_id].append(change)
+        if any(not grouped[item] for item in target_ids):
+            raise ValueError("Every target profile requires at least one configuration change")
+
+        score = (
+            await db.execute(select(ConfigProfile).where(
+                ConfigProfile.user_id == user_id,
+                ConfigProfile.pool_id.is_(None),
+                ConfigProfile.config_type == "score",
+                ConfigProfile.is_active.is_(True),
+            ).limit(1))
+        ).scalar_one_or_none()
+        ordered = [by_id[item] for item in sorted(target_ids, key=str)]
+        before_rows: list[dict[str, Any]] = []
+        candidate_rows: list[dict[str, Any]] = []
+        diff = []
+        for resource in ordered:
+            source_config = deepcopy(resource.config or {})
+            candidate_config, profile_diff = apply_typed_patch(
+                source_config,
+                grouped[resource.id],
+                allowed_roots=PROFILE_ROOTS,
+            )
+            candidate_config = _validate_profile_config(candidate_config)
+            if score is not None and (score.config_json or {}).get("scoring_rules") is not None:
+                validate_score_links(candidate_config, score.config_json or {})
+            before_rows.append({
+                "profile_id": str(resource.id),
+                "profile_name": resource.name,
+                "config": source_config,
+            })
+            candidate_rows.append({
+                "profile_id": str(resource.id),
+                "profile_name": resource.name,
+                "config": candidate_config,
+            })
+            diff.extend({
+                **item,
+                "path": f"/profiles/{resource.id}{item['path']}",
+                "profile_id": str(resource.id),
+                "profile_name": resource.name,
+            } for item in profile_diff)
+        before = {"profiles": before_rows}
+        candidate = {"profiles": candidate_rows}
+        state_hash = document_hash({
+            "profiles": [
+                {
+                    **item,
+                    "profile_version": by_id[UUID(item["profile_id"])].profile_version,
+                    "updated_at": by_id[UUID(item["profile_id"])].updated_at,
+                }
+                for item in before_rows
+            ]
+        })
+        target_type = "PROFILE_SET"
+        target_id = f"bulk-config:{document_hash([str(item) for item in target_ids])[:86]}"
+        target_label = f"{len(ordered)} profiles"
+        payload = {
+            "operation_type": operation,
+            "profile_ids": [str(resource.id) for resource in ordered],
+            "source_document": before,
+            "candidate_document": candidate,
+        }
     elif operation == "UPDATE_PROFILE_CONFIG":
         try:
             profile_id = UUID(str(target.get("profile_id")))
@@ -577,6 +671,75 @@ async def approve_and_execute(
             "profiles_deleted": False,
         }
         cache_type = None
+    elif operation == "UPDATE_PROFILE_CONFIG_SET":
+        profile_ids = [UUID(str(item)) for item in payload.get("profile_ids") or []]
+        resources = list((await db.execute(select(Profile).where(
+            Profile.user_id == user_id,
+            Profile.id.in_(profile_ids),
+        ).order_by(Profile.id).with_for_update())).scalars().all())
+        if {resource.id for resource in resources} != set(profile_ids):
+            raise LookupError("One or more profiles were not found")
+        current_snapshot = {
+            "profiles": [
+                {
+                    "profile_id": str(resource.id),
+                    "profile_name": resource.name,
+                    "config": deepcopy(resource.config or {}),
+                    "profile_version": resource.profile_version,
+                    "updated_at": resource.updated_at,
+                }
+                for resource in resources
+            ]
+        }
+        if document_hash(current_snapshot) != plan.target_state_hash:
+            plan.status = "STALE"
+            await db.commit()
+            raise ValueError("A profile changed after preview; create a new proposal")
+        candidate_rows = {
+            UUID(str(item["profile_id"])): item
+            for item in candidate.get("profiles") or []
+        }
+        score = (
+            await db.execute(select(ConfigProfile).where(
+                ConfigProfile.user_id == user_id,
+                ConfigProfile.pool_id.is_(None),
+                ConfigProfile.config_type == "score",
+                ConfigProfile.is_active.is_(True),
+            ).limit(1))
+        ).scalar_one_or_none()
+        for resource in resources:
+            row = candidate_rows.get(resource.id)
+            if row is None or not isinstance(row.get("config"), dict):
+                raise ValueError("Bulk profile configuration candidate is incomplete")
+            new_config = _validate_profile_config(deepcopy(row["config"]))
+            if score is not None and (score.config_json or {}).get("scoring_rules") is not None:
+                validate_score_links(new_config, score.config_json or {})
+            old_config = deepcopy(resource.config or {})
+            old_version = resource.profile_version
+            resource.config = new_config
+            resource.profile_version = now
+            resource.updated_at = now
+            db.add(ProfileAuditLog(
+                user_id=user_id,
+                profile_id=resource.id,
+                changed_by=user_id,
+                change_source="analysis_chat_human_confirmed_bulk",
+                change_description=f"Governed Analysis Chat proposal {plan.id}: {plan.objective}",
+                previous_config=old_config,
+                new_config=new_config,
+                previous_profile_version=old_version,
+                new_profile_version=now,
+            ))
+        result = {
+            "status": "EXECUTED",
+            "resource_type": "PROFILE_SET",
+            "resource_ids": [str(resource.id) for resource in resources],
+            "profile_count": len(resources),
+            "new_document_hash": document_hash(candidate),
+            "live_config_changed": True,
+            "profiles_deleted": False,
+        }
+        cache_type = None
     elif operation == "UPDATE_PROFILE_CONFIG":
         resource = (
             await db.execute(select(Profile).where(
@@ -728,6 +891,51 @@ async def rollback(
             resource.is_active = row["is_active"]
             resource.profile_version = now
             resource.updated_at = now
+    elif payload.get("operation_type") == "UPDATE_PROFILE_CONFIG_SET":
+        profile_ids = [UUID(str(item)) for item in payload.get("profile_ids") or []]
+        resources = list((await db.execute(select(Profile).where(
+            Profile.user_id == user_id,
+            Profile.id.in_(profile_ids),
+        ).order_by(Profile.id).with_for_update())).scalars().all())
+        if {resource.id for resource in resources} != set(profile_ids):
+            raise LookupError("One or more profiles were not found")
+        current = {
+            "profiles": [
+                {
+                    "profile_id": str(resource.id),
+                    "profile_name": resource.name,
+                    "config": deepcopy(resource.config or {}),
+                }
+                for resource in resources
+            ]
+        }
+        if document_hash(current) != candidate_hash:
+            raise ValueError("A profile changed after execution; rollback would overwrite newer work")
+        source_rows = {
+            UUID(str(item["profile_id"])): item
+            for item in source.get("profiles") or []
+        }
+        for resource in resources:
+            row = source_rows.get(resource.id)
+            if row is None or not isinstance(row.get("config"), dict):
+                raise ValueError("Bulk profile configuration rollback snapshot is incomplete")
+            restored = _validate_profile_config(deepcopy(row["config"]))
+            previous = deepcopy(resource.config or {})
+            previous_version = resource.profile_version
+            resource.config = restored
+            resource.profile_version = now
+            resource.updated_at = now
+            db.add(ProfileAuditLog(
+                user_id=user_id,
+                profile_id=resource.id,
+                changed_by=user_id,
+                change_source="analysis_chat_human_confirmed_bulk_rollback",
+                change_description=f"Rollback governed Analysis Chat proposal {plan.id}",
+                previous_config=previous,
+                new_config=restored,
+                previous_profile_version=previous_version,
+                new_profile_version=now,
+            ))
     elif payload.get("operation_type") == "UPDATE_PROFILE_CONFIG":
         resource = (
             await db.execute(select(Profile).where(
