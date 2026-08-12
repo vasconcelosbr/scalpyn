@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import inspect
+import json
+from types import SimpleNamespace
 import uuid
 
 import pytest
@@ -32,6 +34,8 @@ def test_analysis_chat_flags_fail_closed():
     assert config.child_analysis_enabled is False
     assert config.proposals_enabled is False
     assert config.streaming_enabled is False
+    assert config.provider_max_cost_usd == 0
+    assert config.request_token_limit == 0
 
 
 @pytest.mark.parametrize("mode", list(AnalysisChatDataMode))
@@ -186,7 +190,44 @@ def test_provider_blocked_is_typed_and_releases_before_transport():
     source = inspect.getsource(AnalysisChatGraphNodeHandler._node_updates)
     assert "ProviderBlockedError" in source
     assert "NORMAL_ANALYSIS_PROVIDER_DISABLED" in source
-    assert "ANALYSIS_CHAT_REAL_PROVIDER_CHECKPOINT_REQUIRED" in source
+    assert "_invoke_normal_provider" in source
+
+
+def test_chat_real_provider_is_per_turn_approved_and_budget_audited():
+    from app.ai_orchestration.budget_reservation_audit import BudgetReservationAudit
+    from app.ai_orchestration.langgraph.analysis_chat_handler import AnalysisChatGraphNodeHandler
+
+    send_source = inspect.getsource(AnalysisChatService.send_message)
+    invoke_source = inspect.getsource(AnalysisChatGraphNodeHandler._invoke_normal_provider)
+    assert 'scope="ANALYSIS_CHAT_TURN"' in send_source
+    assert 'approval_method="ANALYSIS_CHAT_SEND_ACTION"' in send_source
+    assert "activate_placeholder" in invoke_source
+    assert "mark_transport_started" in invoke_source
+    assert "reconcile" in invoke_source
+    assert hasattr(BudgetReservationAudit, "activate_placeholder")
+
+
+def test_provider_decision_context_keeps_rows_and_outputs_without_ledger_duplication():
+    from app.services.systemic_langgraph_bridge import _provider_decision_context
+
+    rows = [{"id": "row-1", "score": 42}]
+    output = {"quality": "PASS", "freshness": {"age": 1}, "data": rows}
+    evidence = SimpleNamespace(
+        id=uuid.uuid4(), module_key="shadow_portfolio", tool_name="shadow.test",
+        output_json=output, output_hash="hash", quality="PASS",
+        freshness_json={"age": 1},
+    )
+    payload = json.loads(_provider_decision_context({
+        "rows": rows,
+        "context": {"timeframe": "1h"},
+        "context_manifest": {"ledger_only": True},
+        "model_approval_id": str(uuid.uuid4()),
+    }, [evidence]))
+    assert payload["frozen_context"] == {
+        "rows": rows, "context": {"timeframe": "1h"},
+    }
+    assert payload["typed_tool_evidence"][0]["output"] == output
+    assert "output_hash" not in payload["typed_tool_evidence"][0]
 
 
 def test_running_summary_is_versioned_hashed_and_does_not_replace_evidence():

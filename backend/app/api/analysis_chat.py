@@ -179,7 +179,7 @@ async def list_conversations(
         )
         return {
             "items": [_conversation_payload(row) for row in rows],
-            "feature_flags": config.model_dump(),
+            "feature_flags": config.model_dump(mode="json"),
         }
     except AnalysisChatError as exc:
         raise _error(exc) from exc

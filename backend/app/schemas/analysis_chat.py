@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -34,6 +35,10 @@ class AnalysisChatRuntimeConfig(BaseModel):
     summary_message_threshold: int = Field(default=10, ge=4, le=100)
     recent_message_limit: int = Field(default=10, ge=4, le=20)
     max_message_characters: int = Field(default=4000, ge=256, le=12000)
+    provider_max_cost_usd: Decimal = Field(default=Decimal("0"), ge=0, le=10)
+    request_token_limit: int = Field(default=0, ge=0)
+    daily_token_limit: int = Field(default=0, ge=0)
+    monthly_token_limit: int = Field(default=0, ge=0)
 
 
 class AnalysisChatOutput(BaseModel):

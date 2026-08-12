@@ -31,6 +31,23 @@ async def _existing(db: AsyncSession, *, tenant_id: UUID, ai_request_id: UUID) -
 
 class BudgetReservationAudit:
     @staticmethod
+    async def activate_placeholder(db: AsyncSession, **values: Any) -> dict[str, Any]:
+        """Hydrate an accepted chat turn before any provider transport starts."""
+
+        tenant_id = values.pop("tenant_id")
+        ai_request_id = values.pop("ai_request_id")
+        now = _now()
+        result = await db.execute(update(AIBudgetReservationRecord).where(
+            AIBudgetReservationRecord.tenant_id == tenant_id,
+            AIBudgetReservationRecord.ai_request_id == ai_request_id,
+            AIBudgetReservationRecord.status == "RESERVED",
+            AIBudgetReservationRecord.provider_transport_attempted.is_(False),
+            AIBudgetReservationRecord.reserved_tokens == 0,
+        ).values(updated_at=now, **values))
+        row = await _existing(db, tenant_id=tenant_id, ai_request_id=ai_request_id)
+        return {"id": row.id, "status": row.status, "activated": result.rowcount == 1}
+
+    @staticmethod
     async def reserve(db: AsyncSession, **values: Any) -> dict[str, Any]:
         reservation_id = uuid4()
         now = _now()

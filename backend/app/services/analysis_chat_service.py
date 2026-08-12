@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import hashlib
 import os
@@ -12,13 +12,16 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..ai_orchestration.hashing import canonical_hash
 from ..ai_orchestration.langgraph.config import get_langgraph_settings
 from ..models.ai_graph import AIGraphRun
 from ..models.analysis_chat import AIAnalysisConversation, AIAnalysisMessage
 from ..models.config_profile import ConfigProfile
 from ..models.systemic_ai import (
+    AIBudgetPolicyRecord,
     AIBudgetReservationRecord,
     AIJobRecord,
+    AIModelApprovalRecord,
     AIModelResolutionRecord,
     AIPromptVersion,
     AIRequestRecord,
@@ -185,6 +188,18 @@ class AnalysisChatService:
     ) -> tuple[AIAnalysisMessage, AIAnalysisMessage, AIGraphRun, bool]:
         config = await AnalysisChatService.runtime_config(db, tenant_id)
         AnalysisChatService._require_mode(config, data_mode)
+        intent = AnalysisChatService._intent()
+        provider_required = data_mode in {
+            AnalysisChatDataMode.FROZEN_ANALYSIS_ONLY,
+            AnalysisChatDataMode.ALLOW_READONLY_REFRESH,
+        }
+        if intent == "NORMAL_ANALYSIS" and provider_required and (
+            config.provider_max_cost_usd <= 0
+            or config.request_token_limit <= 0
+            or config.daily_token_limit < config.request_token_limit
+            or config.monthly_token_limit < config.daily_token_limit
+        ):
+            raise AnalysisChatError("ANALYSIS_CHAT_PROVIDER_BUDGET_NOT_CONFIGURED")
         normalized = message.strip()
         if not normalized:
             raise AnalysisChatError("ANALYSIS_CHAT_MESSAGE_EMPTY", status_code=422)
@@ -263,14 +278,12 @@ class AnalysisChatService:
         prompt = (
             await db.execute(select(AIPromptVersion).where(
                 AIPromptVersion.prompt_key == "analysis-chat-system",
-                AIPromptVersion.semantic_version == "1.0.0",
                 AIPromptVersion.status == "APPROVED",
-            ))
+            ).order_by(AIPromptVersion.approved_at.desc(), AIPromptVersion.semantic_version.desc()).limit(1))
         ).scalar_one_or_none()
         if prompt is None:
             raise AnalysisChatError("ANALYSIS_CHAT_PROMPT_NOT_DEPLOYED")
 
-        intent = AnalysisChatService._intent()
         if intent == "FAKE_PROVIDER_CANARY":
             configured_provider = effective_provider = "fake"
             configured_model = effective_model = "fake-analysis-v1"
@@ -299,6 +312,87 @@ class AnalysisChatService:
         db.add(resolution)
         await db.flush()
 
+        approval = None
+        budget = None
+        if intent == "NORMAL_ANALYSIS" and provider_required:
+            parent_frozen = dict(parent_request.request_json or {}).get("frozen_context") or {}
+            try:
+                parent_approval_id = UUID(str(parent_frozen["model_approval_id"]))
+            except (KeyError, ValueError) as exc:
+                raise AnalysisChatError("ANALYSIS_CHAT_PARENT_APPROVAL_MISSING") from exc
+            parent_approval = await db.get(AIModelApprovalRecord, parent_approval_id)
+            if (
+                parent_approval is None
+                or parent_approval.tenant_id != tenant_id
+                or parent_approval.provider != effective_provider
+                or parent_approval.model != effective_model
+                or parent_approval.status != "APPROVED"
+            ):
+                raise AnalysisChatError("ANALYSIS_CHAT_PARENT_APPROVAL_INVALID")
+            now = _now()
+            approval_id = uuid.uuid4()
+            approval_payload = {
+                "id": str(approval_id),
+                "tenant_id": str(tenant_id),
+                "provider": effective_provider,
+                "model": effective_model,
+                "max_cost_usd": str(config.provider_max_cost_usd),
+                "scope": "ANALYSIS_CHAT_TURN",
+                "approved_by": str(user_id),
+                "approved_at": now.isoformat(),
+                "parent_analysis_run_id": str(parent_run.id),
+                "user_message_id": str(user_message.id),
+            }
+            approval = AIModelApprovalRecord(
+                id=approval_id,
+                tenant_id=tenant_id,
+                provider=effective_provider,
+                model=effective_model,
+                max_cost_usd=config.provider_max_cost_usd,
+                input_cost_per_million=parent_approval.input_cost_per_million,
+                output_cost_per_million=parent_approval.output_cost_per_million,
+                max_output_tokens=parent_approval.max_output_tokens,
+                pricing_source_url=parent_approval.pricing_source_url,
+                pricing_observed_at=parent_approval.pricing_observed_at,
+                pricing_snapshot_hash=parent_approval.pricing_snapshot_hash,
+                approval_phrase_hash=canonical_hash({
+                    "action": "AUTHENTICATED_ANALYSIS_CHAT_SEND",
+                    "user_message_id": str(user_message.id),
+                    "max_cost_usd": str(config.provider_max_cost_usd),
+                }),
+                approval_method="ANALYSIS_CHAT_SEND_ACTION",
+                analysis_profile_id=parent_approval.analysis_profile_id,
+                scope="ANALYSIS_CHAT_TURN",
+                status="APPROVED",
+                approved_by=user_id,
+                approved_at=now,
+                expires_at=now + timedelta(seconds=get_langgraph_settings().model_approval_ttl_seconds),
+                content_hash=canonical_hash(approval_payload),
+            )
+            db.add(approval)
+            budget = (
+                await db.execute(select(AIBudgetPolicyRecord).where(
+                    AIBudgetPolicyRecord.tenant_id == tenant_id,
+                    AIBudgetPolicyRecord.provider == effective_provider,
+                    AIBudgetPolicyRecord.model == effective_model,
+                    AIBudgetPolicyRecord.module == "analysis_chat",
+                ).with_for_update())
+            ).scalar_one_or_none()
+            if budget is None:
+                budget = AIBudgetPolicyRecord(
+                    tenant_id=tenant_id,
+                    provider=effective_provider,
+                    model=effective_model,
+                    module="analysis_chat",
+                )
+                db.add(budget)
+            budget.request_token_limit = config.request_token_limit
+            budget.daily_token_limit = config.daily_token_limit
+            budget.monthly_token_limit = config.monthly_token_limit
+            budget.null_limit_policy = "DENY"
+            budget.is_active = True
+            await db.flush()
+
         correlation = f"analysis-chat:{conversation.id}:{idempotency_key}"[:160]
         request = AIRequestRecord(
             tenant_id=tenant_id,
@@ -319,6 +413,8 @@ class AnalysisChatService:
                 "data_mode": data_mode.value,
                 "question": normalized,
                 "response_language": response_language[:16],
+                "model_approval_id": str(approval.id) if approval else None,
+                "provider_max_cost_usd": str(config.provider_max_cost_usd),
                 "trust_labels": {
                     "question": "USER_INPUT",
                     "parent_result": "TRUSTED_CALCULATED",
@@ -345,16 +441,18 @@ class AnalysisChatService:
         db.add(AIBudgetReservationRecord(
             tenant_id=tenant_id,
             ai_request_id=request.id,
+            budget_policy_id=budget.id if budget else None,
+            model_approval_id=approval.id if approval else None,
             request_intent=intent,
             provider=effective_provider,
             model=effective_model,
             module="analysis_chat",
             status="RESERVED",
             estimated_input_tokens=0,
-            max_output_tokens=0,
-            request_token_limit=0,
-            daily_token_limit=0,
-            monthly_token_limit=0,
+            max_output_tokens=int(approval.max_output_tokens) if approval else 0,
+            request_token_limit=config.request_token_limit if approval else 0,
+            daily_token_limit=config.daily_token_limit if approval else 0,
+            monthly_token_limit=config.monthly_token_limit if approval else 0,
             reserved_tokens=0,
             reserved_cost_usd=Decimal("0"),
             provider_transport_attempted=False,

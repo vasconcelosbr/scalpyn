@@ -5,15 +5,19 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal
 import hashlib
+import json
 import os
 from typing import Any
 import uuid
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 
 from ...database import run_db_task
+from ...ai_orchestration.budget_reservation_audit import BudgetReservationAudit
+from ...ai_orchestration.provider_adapters import anthropic_output_config
+from ...ai_orchestration.sanitizer import TrustLabel, structured_block
 from ...models.ai_graph import AIGraphEvent, AIGraphRun
 from ...models.analysis_chat import (
     AIAnalysisConversation,
@@ -21,16 +25,23 @@ from ...models.analysis_chat import (
     AIAnalysisMessageEvidence,
 )
 from ...models.config_profile import ConfigProfile
+from ...models.ai_provider_key import AIProviderKey
 from ...models.systemic_ai import (
+    AIBudgetPolicyRecord,
     AIBudgetReservationRecord,
     AIDatasetSnapshotRecord,
+    AIModelApprovalRecord,
+    AIModelResolutionRecord,
+    AIPromptVersion,
     AIRequestRecord,
     AIResultRecord,
     AIToolEvidenceRecord,
     AIUsageRecord,
 )
 from ...schemas.analysis_chat import AnalysisChatOutput, AnalysisChatRuntimeConfig
-from ..errors import GraphNodeExecutionError, ProviderBlockedError
+from ...services.ai_keys_service import decrypt_value
+from ...services.systemic_langgraph_bridge import SystemicLangGraphBridge
+from ..errors import GraphNodeExecutionError, ProviderBlockedError, ProviderTransportError
 from .state import ScalpynGraphState
 
 
@@ -445,10 +456,13 @@ class AnalysisChatGraphNodeHandler:
                     "NORMAL_ANALYSIS_PROVIDER_DISABLED",
                     "The tenant-governed normal analysis provider gate is disabled",
                 )
-            raise ProviderBlockedError(
-                "ANALYSIS_CHAT_REAL_PROVIDER_CHECKPOINT_REQUIRED",
-                "A separate provider, cost and one-turn staging checkpoint is required",
+            answer = await self._invoke_normal_provider(
+                db, run, request, message, conversation, state
             )
+            return {
+                "answer": answer.model_dump(mode="json"),
+                "provider_transport_attempted": True,
+            }
         if node_name == "validate_chat_output":
             AnalysisChatOutput.model_validate(state.get("answer"))
             return {}
@@ -480,6 +494,406 @@ class AnalysisChatGraphNodeHandler:
         if node_name == "complete_message":
             return {"status": "COMPLETED", "terminal_reason": "ANALYSIS_CHAT_MESSAGE_COMPLETED"}
         return {}
+
+    async def _invoke_normal_provider(
+        self,
+        db,
+        run: AIGraphRun,
+        request: AIRequestRecord,
+        message: AIAnalysisMessage,
+        conversation: AIAnalysisConversation,
+        state: ScalpynGraphState,
+    ) -> AnalysisChatOutput:
+        request_json = dict(request.request_json or {})
+        resolution = await db.get(AIModelResolutionRecord, request.model_resolution_id)
+        prompt = await db.get(AIPromptVersion, request.prompt_version_id)
+        parent_run = await db.get(AIGraphRun, conversation.parent_analysis_run_id)
+        parent_result = await db.get(AIResultRecord, conversation.parent_result_id)
+        if not all((resolution, prompt, parent_run, parent_result)):
+            raise ProviderBlockedError(
+                "ANALYSIS_CHAT_CANONICAL_LINEAGE_INVALID",
+                "The chat provider was blocked because canonical lineage is incomplete",
+            )
+        if (
+            resolution.tenant_id != run.tenant_id
+            or parent_run.tenant_id != run.tenant_id
+            or parent_result.tenant_id != run.tenant_id
+        ):
+            raise ProviderBlockedError(
+                "ANALYSIS_CHAT_TENANT_SCOPE_INVALID",
+                "The chat provider was blocked by tenant scope validation",
+            )
+
+        try:
+            approval_id = UUID(str(request_json["model_approval_id"]))
+        except (KeyError, ValueError) as exc:
+            raise ProviderBlockedError(
+                "ANALYSIS_CHAT_MODEL_APPROVAL_REQUIRED",
+                "The chat provider requires an auditable per-turn approval",
+            ) from exc
+        approval = await db.get(AIModelApprovalRecord, approval_id)
+        if (
+            approval is None
+            or approval.tenant_id != run.tenant_id
+            or approval.provider != resolution.effective_provider
+            or approval.model != resolution.effective_model
+            or approval.scope != "ANALYSIS_CHAT_TURN"
+            or approval.status != "APPROVED"
+            or approval.expires_at <= _now()
+        ):
+            raise ProviderBlockedError(
+                "ANALYSIS_CHAT_MODEL_APPROVAL_INVALID",
+                "The chat provider was blocked because the per-turn approval is invalid or expired",
+            )
+        budget = (
+            await db.execute(select(AIBudgetPolicyRecord).where(
+                AIBudgetPolicyRecord.tenant_id == run.tenant_id,
+                AIBudgetPolicyRecord.provider == resolution.effective_provider,
+                AIBudgetPolicyRecord.model == resolution.effective_model,
+                AIBudgetPolicyRecord.module == "analysis_chat",
+                AIBudgetPolicyRecord.is_active.is_(True),
+            ))
+        ).scalar_one_or_none()
+        if (
+            budget is None
+            or budget.null_limit_policy != "DENY"
+            or budget.daily_token_limit is None
+            or budget.monthly_token_limit is None
+        ):
+            raise ProviderBlockedError(
+                "ANALYSIS_CHAT_BOUNDED_BUDGET_REQUIRED",
+                "The chat provider requires a bounded request, daily and monthly budget",
+            )
+        key = (
+            await db.execute(select(AIProviderKey).where(
+                AIProviderKey.user_id == run.tenant_id,
+                AIProviderKey.provider == resolution.effective_provider,
+                AIProviderKey.is_active.is_(True),
+                AIProviderKey.is_validated.is_(True),
+            ))
+        ).scalar_one_or_none()
+        if key is None or key.monthly_token_limit is None:
+            raise ProviderBlockedError(
+                "ANALYSIS_CHAT_VALIDATED_PROVIDER_KEY_REQUIRED",
+                "The chat provider requires an active validated key with a monthly limit",
+            )
+
+        evidence_ids: list[UUID] = []
+        for ref in state.get("selected_evidence_refs") or []:
+            try:
+                evidence_ids.append(UUID(str(ref.get("evidence_id"))))
+            except (TypeError, ValueError):
+                continue
+        evidence_rows = list((await db.execute(select(AIToolEvidenceRecord).where(
+            AIToolEvidenceRecord.tenant_id == run.tenant_id,
+            AIToolEvidenceRecord.id.in_(evidence_ids),
+        ))).scalars().all()) if evidence_ids else []
+        by_id = {row.id: row for row in evidence_rows}
+        ordered_evidence = [by_id[item] for item in evidence_ids if item in by_id]
+        if not ordered_evidence:
+            raise ProviderBlockedError(
+                "ANALYSIS_CHAT_TYPED_EVIDENCE_REQUIRED",
+                "The chat provider requires tenant-scoped typed evidence",
+            )
+        evidence_payload = [{
+            "evidence_id": str(row.id),
+            "module": row.module_key,
+            "tool": row.tool_name,
+            "output": row.output_json,
+        } for row in ordered_evidence]
+        values = {
+            "parent_analysis": json.dumps(
+                parent_result.result_json,
+                ensure_ascii=False,
+                default=str,
+                separators=(",", ":"),
+            ),
+            "evidence": json.dumps(
+                evidence_payload,
+                ensure_ascii=False,
+                default=str,
+                separators=(",", ":"),
+            ),
+            "conversation": json.dumps({
+                "summary": state.get("conversation_summary"),
+                "recent_messages": state.get("recent_messages") or [],
+            }, ensure_ascii=False, default=str, separators=(",", ":")),
+            "question": structured_block(
+                TrustLabel.USER_INPUT, str(request_json.get("question") or "")
+            ),
+        }
+        try:
+            system_prompt = prompt.system_template.format_map(values)
+            user_prompt = prompt.user_template.format_map(values)
+        except KeyError as exc:
+            raise ProviderBlockedError(
+                f"ANALYSIS_CHAT_PROMPT_INPUT_MISSING_{exc.args[0]}",
+                "The chat provider prompt contract is incomplete",
+            ) from exc
+        structured_output_reservation = 0
+        if resolution.effective_provider == "anthropic":
+            structured_output_reservation = len(json.dumps(
+                {"output_config": anthropic_output_config(prompt.output_schema_json)},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")) + 512
+        estimated_input_tokens = max(
+            1,
+            len((system_prompt + user_prompt).encode("utf-8"))
+            + structured_output_reservation,
+        )
+        max_output_tokens = int(approval.max_output_tokens)
+        max_input_tokens = int(budget.request_token_limit) - max_output_tokens
+        if max_input_tokens <= 0 or estimated_input_tokens > max_input_tokens:
+            raise ProviderBlockedError(
+                "ANALYSIS_CHAT_INPUT_RESERVATION_EXCEEDED",
+                "The chat provider was blocked because the input reservation exceeds the request budget",
+            )
+        reserved_tokens = estimated_input_tokens + max_output_tokens
+        now = _now()
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        month_start = day_start.replace(day=1)
+        used_today = int((await db.scalar(select(func.coalesce(
+            func.sum(AIUsageRecord.tokens_input + AIUsageRecord.tokens_output), 0,
+        )).where(
+            AIUsageRecord.tenant_id == run.tenant_id,
+            AIUsageRecord.provider == resolution.effective_provider,
+            AIUsageRecord.model == resolution.effective_model,
+            AIUsageRecord.module == "analysis_chat",
+            AIUsageRecord.created_at >= day_start,
+        ))) or 0)
+        used_month = int((await db.scalar(select(func.coalesce(
+            func.sum(AIUsageRecord.tokens_input + AIUsageRecord.tokens_output), 0,
+        )).where(
+            AIUsageRecord.tenant_id == run.tenant_id,
+            AIUsageRecord.provider == resolution.effective_provider,
+            AIUsageRecord.model == resolution.effective_model,
+            AIUsageRecord.module == "analysis_chat",
+            AIUsageRecord.created_at >= month_start,
+        ))) or 0)
+        if used_today + reserved_tokens > int(budget.daily_token_limit):
+            raise ProviderBlockedError(
+                "ANALYSIS_CHAT_DAILY_TOKEN_BUDGET_EXCEEDED",
+                "The chat provider was blocked by the daily token budget",
+            )
+        if used_month + reserved_tokens > int(budget.monthly_token_limit):
+            raise ProviderBlockedError(
+                "ANALYSIS_CHAT_MONTHLY_TOKEN_BUDGET_EXCEEDED",
+                "The chat provider was blocked by the monthly token budget",
+            )
+        if int(key.tokens_used_month or 0) + reserved_tokens > int(key.monthly_token_limit):
+            raise ProviderBlockedError(
+                "ANALYSIS_CHAT_PROVIDER_KEY_BUDGET_EXCEEDED",
+                "The chat provider was blocked by the provider-key monthly budget",
+            )
+        million = Decimal("1000000")
+        input_rate = Decimal(approval.input_cost_per_million)
+        output_rate = Decimal(approval.output_cost_per_million)
+        reserved_cost = (
+            Decimal(estimated_input_tokens) * input_rate
+            + Decimal(max_output_tokens) * output_rate
+        ) / million
+        if reserved_cost > Decimal(approval.max_cost_usd):
+            raise ProviderBlockedError(
+                "ANALYSIS_CHAT_COST_APPROVAL_EXCEEDED",
+                "The chat provider was blocked by the per-turn cost ceiling",
+            )
+
+        activated = await run_db_task(
+            lambda reservation_db: BudgetReservationAudit.activate_placeholder(
+                reservation_db,
+                tenant_id=run.tenant_id,
+                ai_request_id=request.id,
+                budget_policy_id=budget.id,
+                model_approval_id=approval.id,
+                provider=resolution.effective_provider,
+                model=resolution.effective_model,
+                module="analysis_chat",
+                estimated_input_tokens=estimated_input_tokens,
+                max_output_tokens=max_output_tokens,
+                request_token_limit=int(budget.request_token_limit),
+                daily_token_limit=int(budget.daily_token_limit),
+                monthly_token_limit=int(budget.monthly_token_limit),
+                reserved_tokens=reserved_tokens,
+                reserved_cost_usd=reserved_cost,
+            ),
+            celery=True,
+        )
+        if not activated["activated"]:
+            raise ProviderBlockedError(
+                "ANALYSIS_CHAT_BUDGET_RESERVATION_ALREADY_ACTIVATED_NO_RETRY",
+                "The chat provider was not retried because this turn already has an activated reservation",
+            )
+        try:
+            await run_db_task(
+                lambda reservation_db: BudgetReservationAudit.mark_transport_started(
+                    reservation_db,
+                    tenant_id=run.tenant_id,
+                    ai_request_id=request.id,
+                ),
+                celery=True,
+            )
+        except Exception:
+            await run_db_task(
+                lambda reservation_db: BudgetReservationAudit.release_before_transport(
+                    reservation_db,
+                    tenant_id=run.tenant_id,
+                    ai_request_id=request.id,
+                    reason_code="ANALYSIS_CHAT_TRANSPORT_START_AUDIT_FAILED",
+                ),
+                celery=True,
+            )
+            raise
+        try:
+            response = await SystemicLangGraphBridge.execute_json_provider(
+                provider=resolution.effective_provider,
+                model=resolution.effective_model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                api_key=decrypt_value(bytes(key.api_key_encrypted)),
+                request_id=str(request.id),
+                max_output_tokens=max_output_tokens,
+                output_schema=prompt.output_schema_json,
+            )
+        except Exception as exc:
+            await run_db_task(
+                lambda reservation_db: BudgetReservationAudit.mark_transport_error(
+                    reservation_db,
+                    tenant_id=run.tenant_id,
+                    ai_request_id=request.id,
+                    reason_code="ANALYSIS_CHAT_PROVIDER_TRANSPORT_FAILED",
+                ),
+                celery=True,
+            )
+            raise ProviderTransportError("ANALYSIS_CHAT_PROVIDER_TRANSPORT_FAILED") from exc
+
+        actual_tokens = int(response.tokens_input) + int(response.tokens_output)
+        actual_cost = (
+            Decimal(response.tokens_input) * input_rate
+            + Decimal(response.tokens_output) * output_rate
+        ) / million
+        await run_db_task(
+            lambda reservation_db: BudgetReservationAudit.reconcile(
+                reservation_db,
+                tenant_id=run.tenant_id,
+                ai_request_id=request.id,
+                reserved_tokens=reserved_tokens,
+                actual_tokens=actual_tokens,
+                actual_cost_usd=actual_cost,
+                terminal_reason=str(response.terminal_error_code or "PROVIDER_RESPONSE_RECEIVED"),
+            ),
+            celery=True,
+        )
+        usage_audit = await run_db_task(
+            lambda usage_db: self._record_provider_usage(
+                usage_db,
+                tenant_id=run.tenant_id,
+                ai_request_id=request.id,
+                provider=resolution.effective_provider,
+                model=resolution.effective_model,
+                tokens_input=int(response.tokens_input),
+                tokens_output=int(response.tokens_output),
+                estimated_cost=reserved_cost,
+                actual_cost=actual_cost,
+                pricing_snapshot_version=approval.pricing_snapshot_hash,
+            ),
+            celery=True,
+        )
+        reconciliation_error = next((code for exceeded, code in (
+            (actual_tokens > int(budget.request_token_limit), "ANALYSIS_CHAT_REQUEST_RECONCILIATION_EXCEEDED"),
+            (used_today + actual_tokens > int(budget.daily_token_limit), "ANALYSIS_CHAT_DAILY_RECONCILIATION_EXCEEDED"),
+            (used_month + actual_tokens > int(budget.monthly_token_limit), "ANALYSIS_CHAT_MONTHLY_RECONCILIATION_EXCEEDED"),
+            (int(usage_audit["provider_tokens_used_month"]) > int(key.monthly_token_limit), "ANALYSIS_CHAT_PROVIDER_KEY_RECONCILIATION_EXCEEDED"),
+            (actual_cost > Decimal(approval.max_cost_usd), "ANALYSIS_CHAT_COST_RECONCILIATION_EXCEEDED"),
+        ) if exceeded), None)
+        if response.terminal_error_code is not None:
+            raise ProviderTransportError(str(response.terminal_error_code))
+        if reconciliation_error is not None:
+            raise ProviderTransportError(reconciliation_error)
+        try:
+            provider_answer = AnalysisChatOutput.model_validate(response.output)
+        except Exception as exc:
+            raise ProviderTransportError("ANALYSIS_CHAT_OUTPUT_SCHEMA_INVALID") from exc
+        if provider_answer.parent_analysis_run_id != conversation.parent_analysis_run_id:
+            raise ProviderTransportError("ANALYSIS_CHAT_PARENT_ID_OUTPUT_MISMATCH")
+
+        refs = list(state.get("selected_evidence_refs") or [])
+        modules = list(dict.fromkeys(
+            str(item.get("module")) for item in refs if item.get("module")
+        ))
+        refreshed = state.get("data_mode") == "ALLOW_READONLY_REFRESH"
+        answer = AnalysisChatOutput(
+            answer=provider_answer.answer,
+            answer_type="READONLY_REFRESH" if refreshed else "EXPLANATION",
+            based_on="REFRESHED_READONLY_DATA" if refreshed else "FROZEN_ANALYSIS",
+            parent_analysis_run_id=conversation.parent_analysis_run_id,
+            modules_consulted=modules,
+            evidence_refs=refs,
+            new_data_queried=refreshed,
+            new_data_window=provider_answer.new_data_window,
+            warnings=provider_answer.warnings,
+            limitations=provider_answer.limitations,
+            suggested_questions=provider_answer.suggested_questions,
+        )
+        await self._emit_tokens(db, run, request, message, answer.answer)
+        return answer
+
+    async def _record_provider_usage(
+        self,
+        db,
+        *,
+        tenant_id: UUID,
+        ai_request_id: UUID,
+        provider: str,
+        model: str,
+        tokens_input: int,
+        tokens_output: int,
+        estimated_cost: Decimal,
+        actual_cost: Decimal,
+        pricing_snapshot_version: str,
+    ) -> dict[str, int]:
+        existing = (
+            await db.execute(select(AIUsageRecord).where(
+                AIUsageRecord.tenant_id == tenant_id,
+                AIUsageRecord.ai_request_id == ai_request_id,
+            ).with_for_update())
+        ).scalar_one_or_none()
+        key = (
+            await db.execute(select(AIProviderKey).where(
+                AIProviderKey.user_id == tenant_id,
+                AIProviderKey.provider == provider,
+                AIProviderKey.is_active.is_(True),
+                AIProviderKey.is_validated.is_(True),
+            ).with_for_update())
+        ).scalar_one_or_none()
+        if key is None:
+            raise RuntimeError("ANALYSIS_CHAT_PROVIDER_KEY_DISAPPEARED_AFTER_TRANSPORT")
+        if existing is None:
+            db.add(AIUsageRecord(
+                tenant_id=tenant_id,
+                ai_request_id=ai_request_id,
+                provider=provider,
+                model=model,
+                module="analysis_chat",
+                tokens_input=tokens_input,
+                tokens_output=tokens_output,
+                estimated_cost=estimated_cost,
+                actual_cost=actual_cost,
+                currency="USD",
+                pricing_snapshot_version=pricing_snapshot_version,
+            ))
+            key.tokens_used_month = (
+                int(key.tokens_used_month or 0) + tokens_input + tokens_output
+            )
+            key.last_used_at = _now()
+        elif (
+            int(existing.tokens_input) != tokens_input
+            or int(existing.tokens_output) != tokens_output
+            or Decimal(existing.actual_cost) != actual_cost
+        ):
+            raise RuntimeError("ANALYSIS_CHAT_PROVIDER_USAGE_CONFLICT")
+        await db.flush()
+        return {"provider_tokens_used_month": int(key.tokens_used_month or 0)}
 
     async def _runtime_config(self, db, tenant_id: UUID) -> AnalysisChatRuntimeConfig:
         record = (
@@ -549,7 +963,10 @@ class AnalysisChatGraphNodeHandler:
                 AIUsageRecord.ai_request_id == request.id,
             ))
         ).scalar_one_or_none()
-        if usage is None:
+        is_fake = request.request_json.get("request_intent") == "FAKE_PROVIDER_CANARY"
+        no_provider_required = request.request_kind in {"CHILD_ANALYSIS", "PROPOSAL_DRAFT"}
+        zero_cost_turn = is_fake or no_provider_required
+        if usage is None and zero_cost_turn:
             usage = AIUsageRecord(
                 tenant_id=run.tenant_id,
                 ai_request_id=request.id,
@@ -561,19 +978,29 @@ class AnalysisChatGraphNodeHandler:
                 estimated_cost=Decimal("0"),
                 actual_cost=Decimal("0"),
                 currency="USD",
-                pricing_snapshot_version="ZERO_COST_FAKE_STAGING",
+                pricing_snapshot_version=(
+                    "ZERO_COST_FAKE_STAGING" if is_fake else "NO_PROVIDER_REQUIRED"
+                ),
             )
             db.add(usage)
+        elif usage is None:
+            raise RuntimeError("ANALYSIS_CHAT_PROVIDER_USAGE_MISSING")
         reservation = await self._ensure_reservation(db, run, request)
-        reservation.status = "RECONCILED"
-        reservation.actual_tokens = 0
-        reservation.actual_cost_usd = Decimal("0")
-        reservation.released_tokens = 0
-        reservation.provider_transport_attempted = False
-        reservation.terminal_reason = "ZERO_COST_FAKE_RECONCILED"
-        reservation.reconciled_at = _now()
+        if zero_cost_turn:
+            reservation.status = "RECONCILED"
+            reservation.actual_tokens = 0
+            reservation.actual_cost_usd = Decimal("0")
+            reservation.released_tokens = 0
+            reservation.provider_transport_attempted = False
+            reservation.terminal_reason = (
+                "ZERO_COST_FAKE_RECONCILED" if is_fake else "NO_PROVIDER_REQUIRED_RECONCILED"
+            )
+            reservation.reconciled_at = _now()
+        elif reservation.status != "RECONCILED" or not reservation.provider_transport_attempted:
+            raise RuntimeError("ANALYSIS_CHAT_BUDGET_RECONCILIATION_MISSING")
 
         document = answer.model_dump(mode="json")
+        first_completion = message.ai_result_id is None
         message.status = "COMPLETED"
         message.content = answer.answer
         message.content_hash = _sha(answer.answer)
@@ -585,10 +1012,10 @@ class AnalysisChatGraphNodeHandler:
         message.limitations_json = document["limitations"]
         message.suggested_questions_json = document["suggested_questions"]
         message.new_data_queried = answer.new_data_queried
-        message.provider_transport_attempted = False
-        message.tokens_input = 0
-        message.tokens_output = 0
-        message.cost_usd = Decimal("0")
+        message.provider_transport_attempted = not zero_cost_turn
+        message.tokens_input = int(usage.tokens_input)
+        message.tokens_output = int(usage.tokens_output)
+        message.cost_usd = Decimal(usage.actual_cost)
         message.completed_at = _now()
         message.lock_version = int(message.lock_version or 0) + 1
         for ref in answer.evidence_refs:
@@ -617,9 +1044,17 @@ class AnalysisChatGraphNodeHandler:
                     AIAnalysisMessageEvidence.relation_type,
                 ]
             ))
-        conversation.total_tokens_input = int(conversation.total_tokens_input or 0)
-        conversation.total_tokens_output = int(conversation.total_tokens_output or 0)
-        conversation.total_cost_usd = Decimal(str(conversation.total_cost_usd or 0))
+        if first_completion:
+            conversation.total_tokens_input = (
+                int(conversation.total_tokens_input or 0) + int(usage.tokens_input)
+            )
+            conversation.total_tokens_output = (
+                int(conversation.total_tokens_output or 0) + int(usage.tokens_output)
+            )
+            conversation.total_cost_usd = (
+                Decimal(str(conversation.total_cost_usd or 0))
+                + Decimal(usage.actual_cost)
+            )
         conversation.updated_at = _now()
         conversation.lock_version = int(conversation.lock_version or 0) + 1
 
@@ -642,3 +1077,4 @@ class AnalysisChatGraphNodeHandler:
             ).on_conflict_do_nothing(
                 index_elements=[AIGraphEvent.graph_run_id, AIGraphEvent.event_key]
             ))
+from ...models.ai_provider_key import AIProviderKey

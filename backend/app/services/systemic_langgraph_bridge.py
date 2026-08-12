@@ -34,6 +34,44 @@ from ..models.systemic_ai import (
 from .ai_keys_service import decrypt_value
 
 
+def _provider_decision_context(
+    frozen_context: dict[str, Any],
+    tool_evidence_rows: list[AIToolEvidenceRecord],
+) -> str:
+    """Serialize every decision datum without resending ledger-only metadata."""
+
+    decision_frozen = {
+        key: frozen_context[key]
+        for key in ("rows", "context")
+        if key in frozen_context
+    }
+    typed_tool_evidence: list[dict[str, Any]] = []
+    for row in tool_evidence_rows:
+        output = row.output_json
+        evidence = {
+            "evidence_id": str(row.id),
+            "module": row.module_key,
+            "tool": row.tool_name,
+            "output": output,
+        }
+        # Canonical tools already place these decision fields inside output.
+        # Retain a fallback for older evidence contracts without duplicating it.
+        if not isinstance(output, dict) or "quality" not in output:
+            evidence["quality"] = row.quality
+        if not isinstance(output, dict) or "freshness" not in output:
+            evidence["freshness"] = row.freshness_json
+        typed_tool_evidence.append(evidence)
+    return json.dumps(
+        {
+            "frozen_context": decision_frozen,
+            "typed_tool_evidence": typed_tool_evidence,
+        },
+        ensure_ascii=False,
+        default=str,
+        separators=(",", ":"),
+    )
+
+
 class SystemicLangGraphBridge:
     """The only domain-facing transport bridge; graph nodes own provider execution."""
 
@@ -366,24 +404,17 @@ class SystemicLangGraphBridge:
             AIUsageRecord.created_at >= month_start,
         ))) or 0)
         question = structured_block(TrustLabel.USER_INPUT, str(request_json.get("question") or ""))
-        tool_evidence = [{
-            "evidence_id": str(row.id),
-            "module": row.module_key,
-            "tool": row.tool_name,
-            "output_hash": row.output_hash,
-            "quality": row.quality,
-            "freshness": row.freshness_json,
-            "output": row.output_json,
-        } for row in tool_evidence_rows]
-        context_json = json.dumps({
-            "frozen_context": frozen_context,
-            "typed_tool_evidence": tool_evidence,
-        }, ensure_ascii=False, default=str)
+        context_json = _provider_decision_context(frozen_context, tool_evidence_rows)
         values = {
             "question": question,
             "evidence": context_json,
             "dataset": context_json,
-            "configuration": json.dumps(bundle.bundle_json, ensure_ascii=False, default=str),
+            "configuration": json.dumps(
+                bundle.bundle_json,
+                ensure_ascii=False,
+                default=str,
+                separators=(",", ":"),
+            ),
             "context": context_json,
         }
         try:

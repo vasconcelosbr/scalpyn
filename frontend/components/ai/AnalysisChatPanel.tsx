@@ -21,6 +21,10 @@ type ChatFlags = {
   proposals_enabled: boolean;
   streaming_enabled: boolean;
   summary_enabled: boolean;
+  provider_max_cost_usd: string;
+  request_token_limit: number;
+  daily_token_limit: number;
+  monthly_token_limit: number;
 };
 
 type Conversation = {
@@ -224,14 +228,13 @@ export function AnalysisChatPanel({ runId, graphLabel, snapshotLabel, modelLabel
 
   async function sendMessage() {
     if (!conversationId || !draft.trim()) return;
-    if (mode !== "FROZEN_ANALYSIS_ONLY") {
-      const confirmation = {
-        ALLOW_READONLY_REFRESH: "Esta pergunta fará somente consultas read-only. Continuar?",
-        CREATE_CHILD_ANALYSIS: "Esta ação pedirá confirmação para uma nova análise filha. Continuar?",
-        DRAFT_PROPOSAL: "Esta ação criará somente um draft, sem aplicar mudanças. Continuar?",
-      }[mode];
-      if (!window.confirm(confirmation)) return;
-    }
+    const modeNotice = {
+      FROZEN_ANALYSIS_ONLY: "A resposta usará o snapshot original.",
+      ALLOW_READONLY_REFRESH: "A pergunta fará somente consultas read-only.",
+      CREATE_CHILD_ANALYSIS: "A ação pedirá confirmação para uma nova análise filha.",
+      DRAFT_PROPOSAL: "A ação criará somente um draft, sem aplicar mudanças.",
+    }[mode];
+    if (!window.confirm(`${modeNotice} Este envio autoriza até US$ ${flags?.provider_max_cost_usd ?? "0"} para o turno. Continuar?`)) return;
     setBusy(true);
     setError(null);
     setStreamText("");
@@ -383,7 +386,7 @@ export function AnalysisChatPanel({ runId, graphLabel, snapshotLabel, modelLabel
                   <option value="CREATE_CHILD_ANALYSIS" disabled={!flags.child_analysis_enabled}>Análise filha</option>
                   <option value="DRAFT_PROPOSAL" disabled={!flags.proposals_enabled}>Draft de proposta</option>
                 </select>
-                <span className="flex items-center gap-1 font-mono text-[9px] text-emerald-200"><ShieldCheck size={11} /> live write denied</span>
+                <span className="flex items-center gap-1 font-mono text-[9px] text-emerald-200"><ShieldCheck size={11} /> live write denied · teto US$ {flags.provider_max_cost_usd}</span>
               </div>
               <div className="flex gap-2">
                 <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} rows={2} placeholder="Pergunte sobre o diagnóstico, evidências ou limitações…" className="min-h-14 flex-1 resize-none rounded-xl border border-[var(--border-subtle)] bg-black/20 px-3 py-2 text-sm outline-none placeholder:text-[var(--text-muted)] focus:border-cyan-300/30" />
