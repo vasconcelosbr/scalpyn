@@ -171,6 +171,20 @@ def test_chat_thread_mapping_cannot_reuse_parent_thread():
     assert checkpoint_thread != parent_thread
 
 
+def test_chat_on_chat_selection_resolves_to_canonical_analysis_parent():
+    source = inspect.getsource(AnalysisChatService._canonical_parent)
+    send_source = inspect.getsource(AnalysisChatService.send_message)
+    create_source = inspect.getsource(AnalysisChatService.create_conversation)
+    list_source = inspect.getsource(AnalysisChatService.list_conversations)
+    assert 'definition.graph_key != "analysis-chat-v1"' in source
+    assert "request.parent_analysis_run_id" in source
+    assert "ANALYSIS_CHAT_PARENT_NESTING_LIMIT_EXCEEDED" in source
+    assert "canonical_run.id != parent_run.id" in send_source
+    assert "ANALYSIS_CHAT_NESTED_CONVERSATION_NOT_EMPTY" in send_source
+    assert "_canonical_parent" in create_source
+    assert "_canonical_parent" in list_source
+
+
 def test_checkpoint_contract_rejects_secrets_and_accepts_chat_ids():
     assert_checkpoint_safe({
         "conversation_id": str(uuid.uuid4()),

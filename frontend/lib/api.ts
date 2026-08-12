@@ -89,6 +89,8 @@ export async function apiFetch<T = any>(
         const parsed = JSON.parse(rawBody);
         if (typeof parsed?.detail === 'string') {
           detail = parsed.detail;
+        } else if (typeof parsed?.detail?.code === 'string') {
+          detail = parsed.detail.code;
         } else if (typeof parsed?.message === 'string') {
           detail = parsed.message;
         }

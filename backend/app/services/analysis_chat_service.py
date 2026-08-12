@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..ai_orchestration.hashing import canonical_hash
 from ..ai_orchestration.langgraph.config import get_langgraph_settings
-from ..models.ai_graph import AIGraphRun
+from ..models.ai_graph import AIGraphDefinition, AIGraphRun
 from ..models.analysis_chat import AIAnalysisConversation, AIAnalysisMessage
 from ..models.config_profile import ConfigProfile
 from ..models.systemic_ai import (
@@ -85,6 +85,42 @@ class AnalysisChatService:
             raise AnalysisChatError("ANALYSIS_CHAT_RUNTIME_CONFIG_INVALID") from exc
 
     @staticmethod
+    async def _canonical_parent(
+        db: AsyncSession,
+        *,
+        tenant_id: UUID,
+        run: AIGraphRun,
+        result: AIResultRecord,
+    ) -> tuple[AIGraphRun, AIResultRecord]:
+        """Resolve chat-on-chat selections back to the original analysis run."""
+        for _ in range(8):
+            definition = await db.get(AIGraphDefinition, run.graph_definition_id)
+            if definition is None:
+                raise AnalysisChatError("ANALYSIS_CHAT_GRAPH_DEFINITION_MISSING")
+            if definition.graph_key != "analysis-chat-v1":
+                return run, result
+            request = await db.get(AIRequestRecord, run.ai_request_id)
+            if (
+                request is None
+                or request.tenant_id != tenant_id
+                or request.parent_analysis_run_id is None
+            ):
+                raise AnalysisChatError("ANALYSIS_CHAT_CANONICAL_PARENT_MISSING")
+            parent_run = await db.get(AIGraphRun, request.parent_analysis_run_id)
+            if parent_run is None or parent_run.tenant_id != tenant_id:
+                raise AnalysisChatError("ANALYSIS_CHAT_CANONICAL_PARENT_INVALID")
+            parent_result = (
+                await db.execute(select(AIResultRecord).where(
+                    AIResultRecord.tenant_id == tenant_id,
+                    AIResultRecord.ai_request_id == parent_run.ai_request_id,
+                ))
+            ).scalar_one_or_none()
+            if parent_result is None:
+                raise AnalysisChatError("ANALYSIS_CHAT_CANONICAL_RESULT_MISSING")
+            run, result = parent_run, parent_result
+        raise AnalysisChatError("ANALYSIS_CHAT_PARENT_NESTING_LIMIT_EXCEEDED")
+
+    @staticmethod
     def _require_mode(config: AnalysisChatRuntimeConfig, mode: AnalysisChatDataMode) -> None:
         if not config.enabled:
             raise AnalysisChatError("ANALYSIS_CHAT_DISABLED", status_code=403)
@@ -116,6 +152,9 @@ class AnalysisChatService:
         if row is None:
             raise AnalysisChatError("ANALYSIS_CHAT_PARENT_RUN_NOT_FOUND", status_code=404)
         run, result = row
+        run, result = await AnalysisChatService._canonical_parent(
+            db, tenant_id=tenant_id, run=run, result=result
+        )
         if run.status != "COMPLETED" or result.status != "COMPLETED":
             raise AnalysisChatError("ANALYSIS_CHAT_PARENT_RUN_NOT_ELIGIBLE")
         conversation_id = uuid.uuid4()
@@ -156,10 +195,21 @@ class AnalysisChatService:
         parent = await db.get(AIGraphRun, run_id)
         if parent is None or parent.tenant_id != tenant_id:
             raise AnalysisChatError("ANALYSIS_CHAT_PARENT_RUN_NOT_FOUND", status_code=404)
+        parent_result = (
+            await db.execute(select(AIResultRecord).where(
+                AIResultRecord.tenant_id == tenant_id,
+                AIResultRecord.ai_request_id == parent.ai_request_id,
+            ))
+        ).scalar_one_or_none()
+        if parent_result is None:
+            raise AnalysisChatError("ANALYSIS_CHAT_PARENT_CONTRACT_INVALID")
+        parent, _ = await AnalysisChatService._canonical_parent(
+            db, tenant_id=tenant_id, run=parent, result=parent_result
+        )
         rows = list((await db.execute(
             select(AIAnalysisConversation).where(
                 AIAnalysisConversation.tenant_id == tenant_id,
-                AIAnalysisConversation.parent_analysis_run_id == run_id,
+                AIAnalysisConversation.parent_analysis_run_id == parent.id,
             ).order_by(AIAnalysisConversation.updated_at.desc())
         )).scalars().all())
         return config, rows
@@ -260,6 +310,22 @@ class AnalysisChatService:
         )
         if conversation.status != "ACTIVE":
             raise AnalysisChatError("ANALYSIS_CHAT_CONVERSATION_NOT_ACTIVE")
+        parent_run = await db.get(AIGraphRun, conversation.parent_analysis_run_id)
+        parent_result = await db.get(AIResultRecord, conversation.parent_result_id)
+        if (
+            parent_run is None or parent_result is None
+            or parent_run.tenant_id != tenant_id or parent_result.tenant_id != tenant_id
+        ):
+            raise AnalysisChatError("ANALYSIS_CHAT_PARENT_CONTRACT_INVALID")
+        canonical_run, canonical_result = await AnalysisChatService._canonical_parent(
+            db, tenant_id=tenant_id, run=parent_run, result=parent_result
+        )
+        if canonical_run.id != parent_run.id:
+            if int(conversation.message_count or 0) != 0:
+                raise AnalysisChatError("ANALYSIS_CHAT_NESTED_CONVERSATION_NOT_EMPTY")
+            conversation.parent_analysis_run_id = canonical_run.id
+            conversation.parent_result_id = canonical_result.id
+            parent_run, parent_result = canonical_run, canonical_result
         existing = (
             await db.execute(select(AIAnalysisMessage).where(
                 AIAnalysisMessage.tenant_id == tenant_id,
@@ -291,8 +357,6 @@ class AnalysisChatService:
         if active is not None:
             raise AnalysisChatError("ANALYSIS_CHAT_MESSAGE_ALREADY_ACTIVE", status_code=429)
 
-        parent_run = await db.get(AIGraphRun, conversation.parent_analysis_run_id)
-        parent_result = await db.get(AIResultRecord, conversation.parent_result_id)
         if (
             parent_run is None or parent_result is None
             or parent_run.tenant_id != tenant_id or parent_result.tenant_id != tenant_id

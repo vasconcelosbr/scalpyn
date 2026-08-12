@@ -4,6 +4,7 @@ import test from "node:test";
 
 const panel = readFileSync(new URL("../components/ai/AnalysisChatPanel.tsx", import.meta.url), "utf8");
 const page = readFileSync(new URL("../app/intelligence-runs/page.tsx", import.meta.url), "utf8");
+const api = readFileSync(new URL("api.ts", import.meta.url), "utf8");
 
 test("chat button is gated by completed run and persisted result", () => {
   assert.match(page, /selected\?\.status === "COMPLETED"/);
@@ -41,6 +42,10 @@ test("chat exposes audit-only budget mode without presenting a cost ceiling", ()
 
 test("chat labels the default composer as automatic governed routing", () => {
   assert.match(panel, /Automático: análise ou ação governada/);
+});
+
+test("nested API detail codes are shown instead of a generic 409 error", () => {
+  assert.match(api, /parsed\?\.detail\?\.code/);
 });
 
 test("the first message can create its conversation without a separate click", () => {
