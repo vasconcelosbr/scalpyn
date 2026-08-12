@@ -25,10 +25,10 @@ test("chat uses authenticated SSE with reconnect and safe plain-text rendering",
   assert.doesNotMatch(panel, /dangerouslySetInnerHTML/);
 });
 
-test("authority-expanding modes require confirmation and can be cancelled", () => {
-  assert.match(panel, /window\.confirm/);
+test("chat sends without browser alerts and keeps inline authority gates", () => {
+  assert.doesNotMatch(panel, /window\.confirm/);
   assert.match(panel, /provider_max_cost_usd/);
-  assert.match(panel, /autoriza até US\$/);
+  assert.match(panel, /pending_interrupt/);
   assert.match(panel, /CREATE_CHILD_ANALYSIS/);
   assert.match(panel, /DRAFT_PROPOSAL/);
   assert.match(panel, /\/cancel/);

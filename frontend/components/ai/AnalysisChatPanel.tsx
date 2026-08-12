@@ -233,13 +233,6 @@ export function AnalysisChatPanel({ runId, graphLabel, snapshotLabel, modelLabel
 
   async function sendMessage() {
     if (!draft.trim()) return;
-    const modeNotice = {
-      FROZEN_ANALYSIS_ONLY: "A resposta usará o snapshot original.",
-      ALLOW_READONLY_REFRESH: "A pergunta fará somente consultas read-only.",
-      CREATE_CHILD_ANALYSIS: "A ação pedirá confirmação para uma nova análise filha.",
-      DRAFT_PROPOSAL: "A ação criará somente um draft, sem aplicar mudanças.",
-    }[mode];
-    if (!window.confirm(`${modeNotice} Este envio autoriza até US$ ${flags?.provider_max_cost_usd ?? "0"} para o turno. Continuar?`)) return;
     setBusy(true);
     setError(null);
     setStreamText("");
