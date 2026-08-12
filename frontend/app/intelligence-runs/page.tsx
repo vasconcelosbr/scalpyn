@@ -268,6 +268,10 @@ export default function IntelligenceRunsPage() {
     () => runs.find((run) => run.id === selectedId) ?? null,
     [runs, selectedId],
   );
+  const latestCompletedRun = useMemo(
+    () => runs.find((run) => run.status === "COMPLETED") ?? null,
+    [runs],
+  );
 
   const refresh = useCallback(async (preferredId?: string | null) => {
     setError(null);
@@ -279,7 +283,8 @@ export default function IntelligenceRunsPage() {
       setRuns(runResponse.items);
       setCapabilities(capabilityResponse);
       const linkedRun = typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("run");
-      setSelectedId((current) => preferredId ?? current ?? linkedRun ?? runResponse.items[0]?.id ?? null);
+      const latestCompleted = runResponse.items.find((run) => run.status === "COMPLETED");
+      setSelectedId((current) => preferredId ?? current ?? linkedRun ?? latestCompleted?.id ?? runResponse.items[0]?.id ?? null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Falha ao carregar execuções");
     } finally {
@@ -421,9 +426,16 @@ export default function IntelligenceRunsPage() {
 
         {selected && runContext && <AnalysisResultPanel context={runContext} />}
         {selected?.status === "FAILED" && runContext?.result.status !== "COMPLETED" && (
-          <div className="mb-4 rounded-xl border border-amber-400/30 bg-amber-400/[.06] px-4 py-3 text-sm text-amber-100">
-            <p className="font-medium">Chat indisponível para esta execução</p>
-            <p className="mt-1 text-xs leading-5 text-amber-100/70">O chat é vinculado a uma análise concluída. Execute uma nova análise após a correção ou selecione uma execução concluída para conversar sobre o resultado.</p>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-400/30 bg-amber-400/[.06] px-4 py-3 text-sm text-amber-100">
+            <div>
+              <p className="font-medium">Chat indisponível para esta execução</p>
+              <p className="mt-1 text-xs leading-5 text-amber-100/70">O chat é vinculado a uma análise concluída. Execute uma nova análise após a correção ou abra a última execução concluída para conversar sobre o resultado.</p>
+            </div>
+            {latestCompletedRun && (
+              <button onClick={() => setSelectedId(latestCompletedRun.id)} className="rounded-lg border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-xs font-medium text-amber-100 transition hover:border-amber-200/50 hover:bg-amber-300/15">
+                Abrir chat da última concluída
+              </button>
+            )}
           </div>
         )}
         {selected?.status === "COMPLETED" && runContext?.result.status === "COMPLETED" && (
