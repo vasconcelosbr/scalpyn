@@ -226,7 +226,106 @@ async def create_dry_run(
     if not referenced or not referenced.issubset(evidence_ids):
         raise ValueError("Every proposed change requires evidence from the parent analysis")
 
-    if operation == "UPDATE_PROFILE_CONFIG":
+    if operation == "SET_PROFILE_ACTIVE_STATUS":
+        raw_target_ids = list(target.get("profile_ids") or [])
+        if not raw_target_ids:
+            raise ValueError("SET_PROFILE_ACTIVE_STATUS requires profile_ids")
+        try:
+            target_ids = [UUID(str(item)) for item in raw_target_ids]
+        except (TypeError, ValueError) as exc:
+            raise ValueError("SET_PROFILE_ACTIVE_STATUS requires valid profile_ids") from exc
+        if len(target_ids) != len(set(target_ids)):
+            raise ValueError("SET_PROFILE_ACTIVE_STATUS profile_ids must be unique")
+        if len(target_ids) > 100:
+            raise ValueError("A governed change is limited to 100 profiles")
+        resources = list((await db.execute(select(Profile).where(
+            Profile.user_id == user_id,
+            Profile.id.in_(target_ids),
+        ))).scalars().all())
+        by_id = {resource.id: resource for resource in resources}
+        if set(by_id) != set(target_ids):
+            raise LookupError("One or more profiles were not found")
+
+        requested: dict[UUID, dict[str, Any]] = {}
+        for change in changes:
+            try:
+                profile_id = UUID(str(change.get("profile_id")))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Every profile status change requires profile_id") from exc
+            if profile_id not in by_id or profile_id in requested:
+                raise ValueError("Profile status changes must target each owned profile once")
+            if change.get("op") != "replace" or change.get("path") != "/is_active":
+                raise ValueError("Profile status changes may only replace /is_active")
+            value = change.get("value")
+            if not isinstance(value, bool):
+                raise ValueError("Profile is_active must be a boolean")
+            expected_name = str(change.get("profile_name") or "").strip()
+            if expected_name and expected_name != by_id[profile_id].name:
+                raise ValueError("Target profile_name does not match the owned profile")
+            requested[profile_id] = change
+        if set(requested) != set(target_ids):
+            raise ValueError("profile_ids must match the proposed status changes")
+
+        ordered = [by_id[item] for item in sorted(target_ids, key=str)]
+        before = {
+            "profiles": [
+                {
+                    "profile_id": str(resource.id),
+                    "profile_name": resource.name,
+                    "is_active": bool(resource.is_active),
+                }
+                for resource in ordered
+            ]
+        }
+        state_snapshot = {
+            "profiles": [
+                {
+                    **item,
+                    "updated_at": by_id[UUID(item["profile_id"])].updated_at,
+                }
+                for item in before["profiles"]
+            ]
+        }
+        candidate = {
+            "profiles": [
+                {
+                    "profile_id": str(resource.id),
+                    "profile_name": resource.name,
+                    "is_active": requested[resource.id]["value"],
+                }
+                for resource in ordered
+            ]
+        }
+        diff = [
+            {
+                "op": "replace",
+                "path": f"/profiles/{resource.id}/is_active",
+                "old_value": bool(resource.is_active),
+                "value": requested[resource.id]["value"],
+                "reason": str(
+                    requested[resource.id].get("reason")
+                    or "Requested in Analysis Chat"
+                )[:2000],
+                "evidence_refs": [
+                    str(item)
+                    for item in requested[resource.id].get("evidence_refs") or []
+                ],
+                "profile_id": str(resource.id),
+                "profile_name": resource.name,
+            }
+            for resource in ordered
+        ]
+        target_type = "PROFILE_SET"
+        target_id = f"bulk:{document_hash([str(item) for item in target_ids])[:93]}"
+        target_label = f"{len(ordered)} profiles"
+        state_hash = document_hash(state_snapshot)
+        payload = {
+            "operation_type": operation,
+            "profile_ids": [str(resource.id) for resource in ordered],
+            "source_document": before,
+            "candidate_document": candidate,
+        }
+    elif operation == "UPDATE_PROFILE_CONFIG":
         try:
             profile_id = UUID(str(target.get("profile_id")))
         except (TypeError, ValueError) as exc:
@@ -364,7 +463,9 @@ def plan_to_dict(plan: CopilotActionPlan) -> dict[str, Any]:
         "target_id": plan.target_id,
         "target": {
             key: value for key, value in (plan.execution_payload or {}).items()
-            if key in {"profile_id", "profile_name", "config_type", "pool_id"}
+            if key in {
+                "profile_id", "profile_ids", "profile_name", "config_type", "pool_id"
+            }
         },
         "objective": plan.objective,
         "risk": plan.risk_assessment,
@@ -432,7 +533,51 @@ async def approve_and_execute(
     payload = dict(plan.execution_payload or {})
     operation = payload.get("operation_type")
     candidate = deepcopy(payload.get("candidate_document") or {})
-    if operation == "UPDATE_PROFILE_CONFIG":
+    if operation == "SET_PROFILE_ACTIVE_STATUS":
+        profile_ids = [UUID(str(item)) for item in payload.get("profile_ids") or []]
+        resources = list((await db.execute(select(Profile).where(
+            Profile.user_id == user_id,
+            Profile.id.in_(profile_ids),
+        ).order_by(Profile.id).with_for_update())).scalars().all())
+        if {resource.id for resource in resources} != set(profile_ids):
+            raise LookupError("One or more profiles were not found")
+        current_snapshot = {
+            "profiles": [
+                {
+                    "profile_id": str(resource.id),
+                    "profile_name": resource.name,
+                    "is_active": bool(resource.is_active),
+                    "updated_at": resource.updated_at,
+                }
+                for resource in resources
+            ]
+        }
+        if document_hash(current_snapshot) != plan.target_state_hash:
+            plan.status = "STALE"
+            await db.commit()
+            raise ValueError("A profile changed after preview; create a new proposal")
+        candidate_rows = {
+            UUID(str(item["profile_id"])): item
+            for item in candidate.get("profiles") or []
+        }
+        for resource in resources:
+            row = candidate_rows.get(resource.id)
+            if row is None or not isinstance(row.get("is_active"), bool):
+                raise ValueError("Bulk profile candidate is incomplete")
+            resource.is_active = row["is_active"]
+            resource.profile_version = now
+            resource.updated_at = now
+        result = {
+            "status": "EXECUTED",
+            "resource_type": "PROFILE_SET",
+            "resource_ids": [str(resource.id) for resource in resources],
+            "profile_count": len(resources),
+            "new_document_hash": document_hash(candidate),
+            "live_config_changed": True,
+            "profiles_deleted": False,
+        }
+        cache_type = None
+    elif operation == "UPDATE_PROFILE_CONFIG":
         resource = (
             await db.execute(select(Profile).where(
                 Profile.id == UUID(payload["profile_id"]),
@@ -552,7 +697,38 @@ async def rollback(
     candidate_hash = str(result.get("new_document_hash") or "")
     now = _now()
     cache_type: str | None = None
-    if payload.get("operation_type") == "UPDATE_PROFILE_CONFIG":
+    if payload.get("operation_type") == "SET_PROFILE_ACTIVE_STATUS":
+        profile_ids = [UUID(str(item)) for item in payload.get("profile_ids") or []]
+        resources = list((await db.execute(select(Profile).where(
+            Profile.user_id == user_id,
+            Profile.id.in_(profile_ids),
+        ).order_by(Profile.id).with_for_update())).scalars().all())
+        if {resource.id for resource in resources} != set(profile_ids):
+            raise LookupError("One or more profiles were not found")
+        current = {
+            "profiles": [
+                {
+                    "profile_id": str(resource.id),
+                    "profile_name": resource.name,
+                    "is_active": bool(resource.is_active),
+                }
+                for resource in resources
+            ]
+        }
+        if document_hash(current) != candidate_hash:
+            raise ValueError("A profile changed after execution; rollback would overwrite newer work")
+        source_rows = {
+            UUID(str(item["profile_id"])): item
+            for item in source.get("profiles") or []
+        }
+        for resource in resources:
+            row = source_rows.get(resource.id)
+            if row is None or not isinstance(row.get("is_active"), bool):
+                raise ValueError("Bulk profile rollback snapshot is incomplete")
+            resource.is_active = row["is_active"]
+            resource.profile_version = now
+            resource.updated_at = now
+    elif payload.get("operation_type") == "UPDATE_PROFILE_CONFIG":
         resource = (
             await db.execute(select(Profile).where(
                 Profile.id == UUID(payload["profile_id"]),

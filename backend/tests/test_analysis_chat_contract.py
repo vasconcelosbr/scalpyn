@@ -66,6 +66,33 @@ def test_chat_budget_audit_only_mode_disables_every_financial_blocker():
     assert "BudgetReservationAudit.reconcile" in invoke_source
 
 
+def test_governed_proposal_has_configured_output_allowance_and_refreshes_legacy_turns():
+    config = AnalysisChatRuntimeConfig(
+        enabled=True,
+        proposal_max_output_tokens=8192,
+    )
+    assert config.proposal_max_output_tokens == 8192
+    send_source = inspect.getsource(AnalysisChatService.send_message)
+    refresh_source = inspect.getsource(
+        AnalysisChatService.refresh_proposal_confirmation_contract
+    )
+    assert "config.proposal_max_output_tokens" in send_source
+    assert 'interrupt.interrupt_type != "PROPOSAL_CONFIRMATION"' in refresh_source
+    assert 'request_json.get("request_intent") != "NORMAL_ANALYSIS"' in refresh_source
+    assert "ANALYSIS_CHAT_PROPOSAL_CONFIRMATION" in refresh_source
+    assert "PROPOSAL_CONTRACT_REFRESHED" in refresh_source
+
+
+def test_governed_actions_support_bulk_profile_activation_without_deletion():
+    from app.services import governed_change_service
+
+    source = inspect.getsource(governed_change_service)
+    assert 'operation == "SET_PROFILE_ACTIVE_STATUS"' in source
+    assert 'change.get("path") != "/is_active"' in source
+    assert '"profiles_deleted": False' in source
+    assert 'payload.get("operation_type") == "SET_PROFILE_ACTIVE_STATUS"' in source
+
+
 @pytest.mark.parametrize("mode", list(AnalysisChatDataMode))
 def test_disabled_chat_rejects_every_mode(mode):
     with pytest.raises(AnalysisChatError, match="ANALYSIS_CHAT_DISABLED"):

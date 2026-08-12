@@ -25,6 +25,7 @@ type ChatFlags = {
   summary_enabled: boolean;
   budget_enforcement_enabled: boolean;
   provider_max_cost_usd: string;
+  proposal_max_output_tokens: number;
   request_token_limit: number;
   daily_token_limit: number;
   monthly_token_limit: number;
@@ -87,7 +88,7 @@ type ChatMessage = {
     operation_type: string;
     target_type: string;
     target_id: string;
-    target: { profile_id?: string; profile_name?: string; config_type?: string; pool_id?: string | null };
+    target: { profile_id?: string; profile_ids?: string[]; profile_name?: string; config_type?: string; pool_id?: string | null };
     objective: string;
     risk: string | null;
     changes: Array<{ op: string; path: string; old_value: unknown; value: unknown; reason: string }>;
@@ -139,6 +140,7 @@ export function AnalysisChatPanel({ runId, graphLabel, snapshotLabel, modelLabel
   const [streamText, setStreamText] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [rollbackArmed, setRollbackArmed] = useState<string | null>(null);
+  const [submittedInterrupts, setSubmittedInterrupts] = useState<Set<string>>(() => new Set());
   const streamAbort = useRef<AbortController | null>(null);
   const streamCursor = useRef(0);
 
@@ -287,21 +289,36 @@ export function AnalysisChatPanel({ runId, graphLabel, snapshotLabel, modelLabel
 
   async function decide(message: ChatMessage, decision: "approve" | "reject") {
     if (!conversationId || !message.pending_interrupt) return;
+    const interruptId = message.pending_interrupt.id;
+    if (submittedInterrupts.has(interruptId)) return;
+    setSubmittedInterrupts((current) => new Set(current).add(interruptId));
     setBusy(true);
+    setError(null);
     try {
       await apiPost(
         `/intelligence-conversations/${conversationId}/messages/${message.id}/decision`,
         {
-          interrupt_id: message.pending_interrupt.id,
+          interrupt_id: interruptId,
           decision,
           decision_id: crypto.randomUUID(),
           idempotency_key: `chat-decision-${crypto.randomUUID()}`,
           edits: {},
         },
       );
+      await loadMessages(conversationId);
       await consumeStream(conversationId);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "A decisão não foi processada");
+      const detail = caught instanceof Error ? caught.message : "A decisão não foi processada";
+      if (detail.includes("GRAPH_INTERRUPT_ALREADY_RESOLVED")) {
+        await loadMessages(conversationId);
+      } else {
+        setSubmittedInterrupts((current) => {
+          const next = new Set(current);
+          next.delete(interruptId);
+          return next;
+        });
+        setError(detail);
+      }
     } finally {
       setBusy(false);
     }
@@ -401,7 +418,11 @@ export function AnalysisChatPanel({ runId, graphLabel, snapshotLabel, modelLabel
                       </div>
                       <p className="mt-2 text-xs text-[var(--text-primary)]">{message.proposal.objective}</p>
                       <p className="mt-1 font-mono text-[9px] text-[var(--text-muted)]">
-                        {message.proposal.target.profile_name || message.proposal.target.config_type || message.proposal.target_id}
+                        {message.proposal.target.profile_name
+                          || message.proposal.target.config_type
+                          || (message.proposal.target.profile_ids?.length
+                            ? `${message.proposal.target.profile_ids.length} perfis`
+                            : message.proposal.target_id)}
                       </p>
                       <div className="mt-3 space-y-2">
                         {message.proposal.changes.map((change, index) => (
@@ -432,7 +453,7 @@ export function AnalysisChatPanel({ runId, graphLabel, snapshotLabel, modelLabel
                   )}
                   {message.warnings.map((warning) => <p key={warning} className="mt-2 text-[10px] text-amber-200">⚠ {warning}</p>)}
                   {message.limitations.map((limitation) => <p key={limitation} className="mt-1 text-[10px] text-[var(--text-muted)]">Limitação: {limitation}</p>)}
-                  {message.pending_interrupt && (
+                  {message.pending_interrupt && !submittedInterrupts.has(message.pending_interrupt.id) && (
                     <div className="mt-3 rounded-xl border border-amber-300/20 bg-amber-300/[.06] p-3">
                       <p className="text-xs text-amber-100">Confirmação: {message.pending_interrupt.interrupt_type}</p>
                       <p className="mt-1 text-[10px] text-[var(--text-muted)]">

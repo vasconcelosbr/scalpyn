@@ -15,7 +15,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..ai_orchestration.hashing import canonical_hash
 from ..ai_orchestration.langgraph.config import get_langgraph_settings
-from ..models.ai_graph import AIGraphDefinition, AIGraphRun
+from ..models.ai_graph import (
+    AIGraphDefinition,
+    AIGraphEvent,
+    AIGraphInterrupt,
+    AIGraphRun,
+)
 from ..models.analysis_chat import AIAnalysisConversation, AIAnalysisMessage
 from ..models.config_profile import ConfigProfile
 from ..models.systemic_ai import (
@@ -119,6 +124,151 @@ class AnalysisChatService:
                 raise AnalysisChatError("ANALYSIS_CHAT_CANONICAL_RESULT_MISSING")
             run, result = parent_run, parent_result
         raise AnalysisChatError("ANALYSIS_CHAT_PARENT_NESTING_LIMIT_EXCEEDED")
+
+    @staticmethod
+    async def refresh_proposal_confirmation_contract(
+        db: AsyncSession,
+        *,
+        tenant_id: UUID,
+        user_id: UUID,
+        message: AIAnalysisMessage,
+        interrupt_id: UUID,
+        decision: str,
+    ) -> None:
+        """Refresh a still-untransported proposal turn at its first human gate.
+
+        Older turns inherited the parent analysis output allowance, which is
+        too small for a typed multi-profile proposal.  Reissuing the per-turn
+        approval here keeps the larger allowance bound to the explicit human
+        confirmation and leaves an immutable graph event for audit.
+        """
+        if decision != "approve" or message.data_mode != AnalysisChatDataMode.DRAFT_PROPOSAL.value:
+            return
+        if message.graph_run_id is None or message.ai_request_id is None:
+            raise AnalysisChatError("ANALYSIS_CHAT_PROPOSAL_CONTRACT_INVALID")
+        interrupt = await db.get(AIGraphInterrupt, interrupt_id)
+        if (
+            interrupt is None
+            or interrupt.tenant_id != tenant_id
+            or interrupt.graph_run_id != message.graph_run_id
+            or interrupt.interrupt_type != "PROPOSAL_CONFIRMATION"
+            or interrupt.status != "PENDING"
+        ):
+            return
+        request = await db.get(AIRequestRecord, message.ai_request_id)
+        reservation = (
+            await db.execute(select(AIBudgetReservationRecord).where(
+                AIBudgetReservationRecord.tenant_id == tenant_id,
+                AIBudgetReservationRecord.ai_request_id == message.ai_request_id,
+            ).with_for_update())
+        ).scalar_one_or_none()
+        if request is None or request.tenant_id != tenant_id or reservation is None:
+            raise AnalysisChatError("ANALYSIS_CHAT_PROPOSAL_CONTRACT_INVALID")
+        if reservation.status != "RESERVED" or reservation.provider_transport_attempted:
+            raise AnalysisChatError("ANALYSIS_CHAT_PROPOSAL_CONTRACT_ALREADY_USED")
+
+        config = await AnalysisChatService.runtime_config(db, tenant_id)
+        latest_prompt = (
+            await db.execute(select(AIPromptVersion).where(
+                AIPromptVersion.prompt_key == "analysis-chat-governed-change",
+                AIPromptVersion.status == "APPROVED",
+            ).order_by(
+                AIPromptVersion.approved_at.desc(),
+                AIPromptVersion.semantic_version.desc(),
+            ).limit(1))
+        ).scalar_one_or_none()
+        request_json = dict(request.request_json or {})
+        # Fake-provider canaries intentionally have no real-provider approval.
+        # Their proposal path must remain usable for transport-free staging
+        # verification and must never mint a production provider allowance.
+        if request_json.get("request_intent") != "NORMAL_ANALYSIS":
+            return
+        try:
+            current_approval_id = UUID(str(request_json["model_approval_id"]))
+        except (KeyError, ValueError) as exc:
+            raise AnalysisChatError("ANALYSIS_CHAT_MODEL_APPROVAL_REQUIRED") from exc
+        current_approval = await db.get(AIModelApprovalRecord, current_approval_id)
+        if (
+            current_approval is None
+            or current_approval.tenant_id != tenant_id
+            or current_approval.scope != "ANALYSIS_CHAT_TURN"
+        ):
+            raise AnalysisChatError("ANALYSIS_CHAT_MODEL_APPROVAL_INVALID")
+        if latest_prompt is None:
+            raise AnalysisChatError("ANALYSIS_CHAT_PROMPT_NOT_DEPLOYED")
+
+        old_prompt_id = request.prompt_version_id
+        request.prompt_version_id = latest_prompt.id
+        message.prompt_version_id = latest_prompt.id
+        desired_output_tokens = int(config.proposal_max_output_tokens)
+        replacement_approval_id = current_approval.id
+        if int(current_approval.max_output_tokens) < desired_output_tokens:
+            now = _now()
+            replacement_approval_id = uuid.uuid4()
+            approval_payload = {
+                "id": str(replacement_approval_id),
+                "tenant_id": str(tenant_id),
+                "provider": current_approval.provider,
+                "model": current_approval.model,
+                "max_cost_usd": str(config.provider_max_cost_usd),
+                "max_output_tokens": desired_output_tokens,
+                "scope": "ANALYSIS_CHAT_TURN",
+                "approved_by": str(user_id),
+                "approved_at": now.isoformat(),
+                "replaces_approval_id": str(current_approval.id),
+                "human_gate": "PROPOSAL_CONFIRMATION",
+            }
+            replacement = AIModelApprovalRecord(
+                id=replacement_approval_id,
+                tenant_id=tenant_id,
+                provider=current_approval.provider,
+                model=current_approval.model,
+                max_cost_usd=config.provider_max_cost_usd,
+                input_cost_per_million=current_approval.input_cost_per_million,
+                output_cost_per_million=current_approval.output_cost_per_million,
+                max_output_tokens=desired_output_tokens,
+                pricing_source_url=current_approval.pricing_source_url,
+                pricing_observed_at=current_approval.pricing_observed_at,
+                pricing_snapshot_hash=current_approval.pricing_snapshot_hash,
+                approval_phrase_hash=canonical_hash({
+                    "action": "CONFIRM_GOVERNED_PROPOSAL_GENERATION",
+                    "message_id": str(message.id),
+                    "interrupt_id": str(interrupt_id),
+                    "max_output_tokens": desired_output_tokens,
+                }),
+                approval_method="ANALYSIS_CHAT_PROPOSAL_CONFIRMATION",
+                analysis_profile_id=current_approval.analysis_profile_id,
+                scope="ANALYSIS_CHAT_TURN",
+                status="APPROVED",
+                approved_by=user_id,
+                approved_at=now,
+                expires_at=now + timedelta(
+                    seconds=get_langgraph_settings().model_approval_ttl_seconds
+                ),
+                content_hash=canonical_hash(approval_payload),
+            )
+            db.add(replacement)
+            request_json["model_approval_id"] = str(replacement_approval_id)
+            request.request_json = request_json
+            reservation.model_approval_id = replacement_approval_id
+            reservation.max_output_tokens = desired_output_tokens
+
+        db.add(AIGraphEvent(
+            tenant_id=tenant_id,
+            graph_run_id=message.graph_run_id,
+            event_key=f"{message.graph_run_id}:proposal-contract:{interrupt_id}",
+            event_type="PROPOSAL_CONTRACT_REFRESHED",
+            status="APPROVED",
+            payload={
+                "interrupt_id": str(interrupt_id),
+                "old_prompt_version_id": str(old_prompt_id),
+                "prompt_version_id": str(latest_prompt.id),
+                "old_model_approval_id": str(current_approval.id),
+                "model_approval_id": str(replacement_approval_id),
+                "max_output_tokens": desired_output_tokens,
+            },
+        ))
+        await db.flush()
 
     @staticmethod
     def _require_mode(config: AnalysisChatRuntimeConfig, mode: AnalysisChatDataMode) -> None:
@@ -449,12 +599,18 @@ class AnalysisChatService:
                 raise AnalysisChatError("ANALYSIS_CHAT_PARENT_APPROVAL_INVALID")
             now = _now()
             approval_id = uuid.uuid4()
+            turn_max_output_tokens = (
+                config.proposal_max_output_tokens
+                if data_mode is AnalysisChatDataMode.DRAFT_PROPOSAL
+                else parent_approval.max_output_tokens
+            )
             approval_payload = {
                 "id": str(approval_id),
                 "tenant_id": str(tenant_id),
                 "provider": effective_provider,
                 "model": effective_model,
                 "max_cost_usd": str(config.provider_max_cost_usd),
+                "max_output_tokens": int(turn_max_output_tokens),
                 "budget_enforcement_enabled": config.budget_enforcement_enabled,
                 "scope": "ANALYSIS_CHAT_TURN",
                 "approved_by": str(user_id),
@@ -470,7 +626,7 @@ class AnalysisChatService:
                 max_cost_usd=config.provider_max_cost_usd,
                 input_cost_per_million=parent_approval.input_cost_per_million,
                 output_cost_per_million=parent_approval.output_cost_per_million,
-                max_output_tokens=parent_approval.max_output_tokens,
+                max_output_tokens=turn_max_output_tokens,
                 pricing_source_url=parent_approval.pricing_source_url,
                 pricing_observed_at=parent_approval.pricing_observed_at,
                 pricing_snapshot_hash=parent_approval.pricing_snapshot_hash,
@@ -478,6 +634,7 @@ class AnalysisChatService:
                     "action": "AUTHENTICATED_ANALYSIS_CHAT_SEND",
                     "user_message_id": str(user_message.id),
                     "max_cost_usd": str(config.provider_max_cost_usd),
+                    "max_output_tokens": int(turn_max_output_tokens),
                     "budget_enforcement_enabled": config.budget_enforcement_enabled,
                 }),
                 approval_method="ANALYSIS_CHAT_SEND_ACTION",

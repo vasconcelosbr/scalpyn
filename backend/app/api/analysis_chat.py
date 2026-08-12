@@ -284,6 +284,14 @@ async def decide_message(
         message = await db.get(AIAnalysisMessage, message_id)
         if message is None or message.tenant_id != user_id or message.conversation_id != conversation.id or not message.graph_run_id:
             raise AnalysisChatError("ANALYSIS_CHAT_MESSAGE_NOT_FOUND", status_code=404)
+        await AnalysisChatService.refresh_proposal_confirmation_contract(
+            db,
+            tenant_id=user_id,
+            user_id=user_id,
+            message=message,
+            interrupt_id=payload.interrupt_id,
+            decision=payload.decision,
+        )
         run = await AIGraphRunService.resume(
             db,
             tenant_id=user_id,

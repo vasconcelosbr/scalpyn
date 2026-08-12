@@ -48,6 +48,17 @@ test("nested API detail codes are shown instead of a generic 409 error", () => {
   assert.match(api, /parsed\?\.detail\?\.code/);
 });
 
+test("human decisions are submitted once while the graph resumes", () => {
+  assert.match(panel, /submittedInterrupts\.has\(interruptId\)/);
+  assert.match(panel, /new Set\(current\)\.add\(interruptId\)/);
+  assert.match(panel, /GRAPH_INTERRUPT_ALREADY_RESOLVED/);
+});
+
+test("bulk profile proposals show their profile count", () => {
+  assert.match(panel, /target\.profile_ids\?\.length/);
+  assert.match(panel, /perfis/);
+});
+
 test("the first message can create its conversation without a separate click", () => {
   assert.match(panel, /let activeConversationId = conversationId/);
   assert.match(panel, /if \(!activeConversationId\)/);
