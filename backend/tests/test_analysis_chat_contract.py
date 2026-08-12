@@ -36,6 +36,7 @@ def test_analysis_chat_flags_fail_closed():
     assert config.governed_actions_enabled is False
     assert config.live_config_write_enabled is False
     assert config.streaming_enabled is False
+    assert config.budget_enforcement_enabled is True
     assert config.provider_max_cost_usd == 0
     assert config.request_token_limit == 0
 
@@ -43,10 +44,26 @@ def test_analysis_chat_flags_fail_closed():
 def test_analysis_chat_runtime_config_is_jsonb_serializable():
     payload = AnalysisChatRuntimeConfig(
         enabled=True,
+        budget_enforcement_enabled=False,
         provider_max_cost_usd="0.45",
     ).model_dump(mode="json")
     json.dumps(payload)
     assert payload["provider_max_cost_usd"] == "0.45"
+    assert payload["budget_enforcement_enabled"] is False
+
+
+def test_chat_budget_audit_only_mode_disables_every_financial_blocker():
+    from app.ai_orchestration.langgraph.analysis_chat_handler import AnalysisChatGraphNodeHandler
+
+    send_source = inspect.getsource(AnalysisChatService.send_message)
+    invoke_source = inspect.getsource(AnalysisChatGraphNodeHandler._invoke_normal_provider)
+    assert "config.budget_enforcement_enabled" in send_source
+    assert '"AUDIT_ONLY"' in send_source
+    assert 'request_json.get("budget_enforcement_enabled") is not False' in invoke_source
+    assert invoke_source.count("if budget_enforcement_enabled") >= 3
+    assert "AUDIT_ONLY_PROVIDER_RESPONSE_RECEIVED" in invoke_source
+    assert "BudgetReservationAudit.activate_placeholder" in invoke_source
+    assert "BudgetReservationAudit.reconcile" in invoke_source
 
 
 @pytest.mark.parametrize("mode", list(AnalysisChatDataMode))

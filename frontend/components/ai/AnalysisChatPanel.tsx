@@ -23,6 +23,7 @@ type ChatFlags = {
   live_config_write_enabled: boolean;
   streaming_enabled: boolean;
   summary_enabled: boolean;
+  budget_enforcement_enabled: boolean;
   provider_max_cost_usd: string;
   request_token_limit: number;
   daily_token_limit: number;
@@ -467,7 +468,7 @@ export function AnalysisChatPanel({ runId, graphLabel, snapshotLabel, modelLabel
                   <option value="CREATE_CHILD_ANALYSIS" disabled={!flags.child_analysis_enabled}>Análise filha</option>
                   <option value="DRAFT_PROPOSAL" disabled={!flags.proposals_enabled || !flags.governed_actions_enabled}>Executar alteração</option>
                 </select>
-                <span className="flex items-center gap-1 font-mono text-[9px] text-emerald-200"><ShieldCheck size={11} /> {flags.live_config_write_enabled ? "alteração mediante confirmação" : "alteração desativada"} · teto US$ {flags.provider_max_cost_usd}</span>
+                <span className="flex items-center gap-1 font-mono text-[9px] text-emerald-200"><ShieldCheck size={11} /> {flags.live_config_write_enabled ? "alteração mediante confirmação" : "alteração desativada"} · {flags.budget_enforcement_enabled ? `teto US$ ${flags.provider_max_cost_usd}` : "orçamento somente auditável"}</span>
               </div>
               <div className="flex gap-2">
                 <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} rows={2} placeholder={mode === "DRAFT_PROPOSAL" ? "Descreva a alteração desejada, o perfil ou configuração e o valor…" : "Pergunte sobre o diagnóstico, evidências ou limitações…"} className="min-h-14 flex-1 resize-none rounded-xl border border-[var(--border-subtle)] bg-black/20 px-3 py-2 text-sm outline-none placeholder:text-[var(--text-muted)] focus:border-cyan-300/30" />

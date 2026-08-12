@@ -34,6 +34,11 @@ test("chat sends without browser alerts and keeps inline authority gates", () =>
   assert.match(panel, /\/cancel/);
 });
 
+test("chat exposes audit-only budget mode without presenting a cost ceiling", () => {
+  assert.match(panel, /budget_enforcement_enabled/);
+  assert.match(panel, /orçamento somente auditável/);
+});
+
 test("the first message can create its conversation without a separate click", () => {
   assert.match(panel, /let activeConversationId = conversationId/);
   assert.match(panel, /if \(!activeConversationId\)/);

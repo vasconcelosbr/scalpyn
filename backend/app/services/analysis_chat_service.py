@@ -196,11 +196,16 @@ class AnalysisChatService:
             AnalysisChatDataMode.ALLOW_READONLY_REFRESH,
             AnalysisChatDataMode.DRAFT_PROPOSAL,
         }
-        if intent == "NORMAL_ANALYSIS" and provider_required and (
-            config.provider_max_cost_usd <= 0
-            or config.request_token_limit <= 0
-            or config.daily_token_limit < config.request_token_limit
-            or config.monthly_token_limit < config.daily_token_limit
+        if (
+            config.budget_enforcement_enabled
+            and intent == "NORMAL_ANALYSIS"
+            and provider_required
+            and (
+                config.provider_max_cost_usd <= 0
+                or config.request_token_limit <= 0
+                or config.daily_token_limit < config.request_token_limit
+                or config.monthly_token_limit < config.daily_token_limit
+            )
         ):
             raise AnalysisChatError("ANALYSIS_CHAT_PROVIDER_BUDGET_NOT_CONFIGURED")
         normalized = message.strip()
@@ -345,6 +350,7 @@ class AnalysisChatService:
                 "provider": effective_provider,
                 "model": effective_model,
                 "max_cost_usd": str(config.provider_max_cost_usd),
+                "budget_enforcement_enabled": config.budget_enforcement_enabled,
                 "scope": "ANALYSIS_CHAT_TURN",
                 "approved_by": str(user_id),
                 "approved_at": now.isoformat(),
@@ -367,6 +373,7 @@ class AnalysisChatService:
                     "action": "AUTHENTICATED_ANALYSIS_CHAT_SEND",
                     "user_message_id": str(user_message.id),
                     "max_cost_usd": str(config.provider_max_cost_usd),
+                    "budget_enforcement_enabled": config.budget_enforcement_enabled,
                 }),
                 approval_method="ANALYSIS_CHAT_SEND_ACTION",
                 analysis_profile_id=parent_approval.analysis_profile_id,
@@ -397,7 +404,9 @@ class AnalysisChatService:
             budget.request_token_limit = config.request_token_limit
             budget.daily_token_limit = config.daily_token_limit
             budget.monthly_token_limit = config.monthly_token_limit
-            budget.null_limit_policy = "DENY"
+            budget.null_limit_policy = (
+                "DENY" if config.budget_enforcement_enabled else "AUDIT_ONLY"
+            )
             budget.is_active = True
             await db.flush()
 
@@ -427,6 +436,7 @@ class AnalysisChatService:
                 "response_language": response_language[:16],
                 "model_approval_id": str(approval.id) if approval else None,
                 "provider_max_cost_usd": str(config.provider_max_cost_usd),
+                "budget_enforcement_enabled": config.budget_enforcement_enabled,
                 "trust_labels": {
                     "question": "USER_INPUT",
                     "parent_result": "TRUSTED_CALCULATED",

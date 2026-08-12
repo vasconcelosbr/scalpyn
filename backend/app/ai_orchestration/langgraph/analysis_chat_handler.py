@@ -600,6 +600,9 @@ class AnalysisChatGraphNodeHandler:
         state: ScalpynGraphState,
     ) -> AnalysisChatOutput:
         request_json = dict(request.request_json or {})
+        budget_enforcement_enabled = (
+            request_json.get("budget_enforcement_enabled") is not False
+        )
         resolution = await db.get(AIModelResolutionRecord, request.model_resolution_id)
         prompt = await db.get(AIPromptVersion, request.prompt_version_id)
         parent_run = await db.get(AIGraphRun, conversation.parent_analysis_run_id)
@@ -649,11 +652,16 @@ class AnalysisChatGraphNodeHandler:
                 AIBudgetPolicyRecord.is_active.is_(True),
             ))
         ).scalar_one_or_none()
-        if (
-            budget is None
-            or budget.null_limit_policy != "DENY"
-            or budget.daily_token_limit is None
-            or budget.monthly_token_limit is None
+        expected_budget_policy = (
+            "DENY" if budget_enforcement_enabled else "AUDIT_ONLY"
+        )
+        if budget is None or budget.null_limit_policy != expected_budget_policy:
+            raise ProviderBlockedError(
+                "ANALYSIS_CHAT_BUDGET_POLICY_INVALID",
+                "The chat provider requires the configured chat budget policy",
+            )
+        if budget_enforcement_enabled and (
+            budget.daily_token_limit is None or budget.monthly_token_limit is None
         ):
             raise ProviderBlockedError(
                 "ANALYSIS_CHAT_BOUNDED_BUDGET_REQUIRED",
@@ -667,10 +675,12 @@ class AnalysisChatGraphNodeHandler:
                 AIProviderKey.is_validated.is_(True),
             ))
         ).scalar_one_or_none()
-        if key is None or key.monthly_token_limit is None:
+        if key is None or (
+            budget_enforcement_enabled and key.monthly_token_limit is None
+        ):
             raise ProviderBlockedError(
                 "ANALYSIS_CHAT_VALIDATED_PROVIDER_KEY_REQUIRED",
-                "The chat provider requires an active validated key with a monthly limit",
+                "The chat provider requires an active validated provider key",
             )
 
         evidence_ids: list[UUID] = []
@@ -739,7 +749,9 @@ class AnalysisChatGraphNodeHandler:
         )
         max_output_tokens = int(approval.max_output_tokens)
         max_input_tokens = int(budget.request_token_limit) - max_output_tokens
-        if max_input_tokens <= 0 or estimated_input_tokens > max_input_tokens:
+        if budget_enforcement_enabled and (
+            max_input_tokens <= 0 or estimated_input_tokens > max_input_tokens
+        ):
             raise ProviderBlockedError(
                 "ANALYSIS_CHAT_INPUT_RESERVATION_EXCEEDED",
                 "The chat provider was blocked because the input reservation exceeds the request budget",
@@ -766,17 +778,27 @@ class AnalysisChatGraphNodeHandler:
             AIUsageRecord.module == "analysis_chat",
             AIUsageRecord.created_at >= month_start,
         ))) or 0)
-        if used_today + reserved_tokens > int(budget.daily_token_limit):
+        if (
+            budget_enforcement_enabled
+            and used_today + reserved_tokens > int(budget.daily_token_limit)
+        ):
             raise ProviderBlockedError(
                 "ANALYSIS_CHAT_DAILY_TOKEN_BUDGET_EXCEEDED",
                 "The chat provider was blocked by the daily token budget",
             )
-        if used_month + reserved_tokens > int(budget.monthly_token_limit):
+        if (
+            budget_enforcement_enabled
+            and used_month + reserved_tokens > int(budget.monthly_token_limit)
+        ):
             raise ProviderBlockedError(
                 "ANALYSIS_CHAT_MONTHLY_TOKEN_BUDGET_EXCEEDED",
                 "The chat provider was blocked by the monthly token budget",
             )
-        if int(key.tokens_used_month or 0) + reserved_tokens > int(key.monthly_token_limit):
+        if (
+            budget_enforcement_enabled
+            and int(key.tokens_used_month or 0) + reserved_tokens
+            > int(key.monthly_token_limit)
+        ):
             raise ProviderBlockedError(
                 "ANALYSIS_CHAT_PROVIDER_KEY_BUDGET_EXCEEDED",
                 "The chat provider was blocked by the provider-key monthly budget",
@@ -788,7 +810,7 @@ class AnalysisChatGraphNodeHandler:
             Decimal(estimated_input_tokens) * input_rate
             + Decimal(max_output_tokens) * output_rate
         ) / million
-        if reserved_cost > Decimal(approval.max_cost_usd):
+        if budget_enforcement_enabled and reserved_cost > Decimal(approval.max_cost_usd):
             raise ProviderBlockedError(
                 "ANALYSIS_CHAT_COST_APPROVAL_EXCEEDED",
                 "The chat provider was blocked by the per-turn cost ceiling",
@@ -875,7 +897,14 @@ class AnalysisChatGraphNodeHandler:
                 reserved_tokens=reserved_tokens,
                 actual_tokens=actual_tokens,
                 actual_cost_usd=actual_cost,
-                terminal_reason=str(response.terminal_error_code or "PROVIDER_RESPONSE_RECEIVED"),
+                terminal_reason=str(
+                    response.terminal_error_code
+                    or (
+                        "PROVIDER_RESPONSE_RECEIVED"
+                        if budget_enforcement_enabled
+                        else "AUDIT_ONLY_PROVIDER_RESPONSE_RECEIVED"
+                    )
+                ),
             ),
             celery=True,
         )
@@ -894,13 +923,15 @@ class AnalysisChatGraphNodeHandler:
             ),
             celery=True,
         )
-        reconciliation_error = next((code for exceeded, code in (
-            (actual_tokens > int(budget.request_token_limit), "ANALYSIS_CHAT_REQUEST_RECONCILIATION_EXCEEDED"),
-            (used_today + actual_tokens > int(budget.daily_token_limit), "ANALYSIS_CHAT_DAILY_RECONCILIATION_EXCEEDED"),
-            (used_month + actual_tokens > int(budget.monthly_token_limit), "ANALYSIS_CHAT_MONTHLY_RECONCILIATION_EXCEEDED"),
-            (int(usage_audit["provider_tokens_used_month"]) > int(key.monthly_token_limit), "ANALYSIS_CHAT_PROVIDER_KEY_RECONCILIATION_EXCEEDED"),
-            (actual_cost > Decimal(approval.max_cost_usd), "ANALYSIS_CHAT_COST_RECONCILIATION_EXCEEDED"),
-        ) if exceeded), None)
+        reconciliation_error = None
+        if budget_enforcement_enabled:
+            reconciliation_error = next((code for exceeded, code in (
+                (actual_tokens > int(budget.request_token_limit), "ANALYSIS_CHAT_REQUEST_RECONCILIATION_EXCEEDED"),
+                (used_today + actual_tokens > int(budget.daily_token_limit), "ANALYSIS_CHAT_DAILY_RECONCILIATION_EXCEEDED"),
+                (used_month + actual_tokens > int(budget.monthly_token_limit), "ANALYSIS_CHAT_MONTHLY_RECONCILIATION_EXCEEDED"),
+                (int(usage_audit["provider_tokens_used_month"]) > int(key.monthly_token_limit), "ANALYSIS_CHAT_PROVIDER_KEY_RECONCILIATION_EXCEEDED"),
+                (actual_cost > Decimal(approval.max_cost_usd), "ANALYSIS_CHAT_COST_RECONCILIATION_EXCEEDED"),
+            ) if exceeded), None)
         if response.terminal_error_code is not None:
             raise ProviderOutputError(str(response.terminal_error_code))
         if reconciliation_error is not None:

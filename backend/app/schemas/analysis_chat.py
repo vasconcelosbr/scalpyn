@@ -34,6 +34,7 @@ class AnalysisChatRuntimeConfig(BaseModel):
     live_config_write_enabled: bool = False
     streaming_enabled: bool = False
     summary_enabled: bool = False
+    budget_enforcement_enabled: bool = True
     summary_message_threshold: int = Field(default=10, ge=4, le=100)
     recent_message_limit: int = Field(default=10, ge=4, le=20)
     max_message_characters: int = Field(default=4000, ge=256, le=12000)
