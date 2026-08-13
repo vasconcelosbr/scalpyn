@@ -277,7 +277,7 @@ export function AnalysisChatPanel({ runId, graphLabel, snapshotLabel, modelLabel
           await new Promise((resolve) => window.setTimeout(resolve, 1000));
           const rows = await loadMessages(activeConversationId);
           const latest = [...rows].reverse().find((item) => item.role === "ASSISTANT");
-          if (latest && TERMINAL_MESSAGE.has(latest.status)) break;
+          if (latest && (TERMINAL_MESSAGE.has(latest.status) || latest.status === "INTERRUPTED")) break;
         }
       }
     } catch (caught) {

@@ -112,6 +112,26 @@ def _expand_compact_profile_changes(proposal: dict[str, Any]) -> list[dict[str, 
     return expanded
 
 
+def _retain_canonical_change_evidence(
+    changes: list[dict[str, Any]],
+    evidence_ids: set[str],
+) -> list[dict[str, Any]]:
+    """Retain only persisted parent-ledger refs and fail closed if none remain."""
+    normalized: list[dict[str, Any]] = []
+    for raw_change in changes:
+        change = dict(raw_change)
+        canonical_refs = list(dict.fromkeys(
+            str(ref)
+            for ref in change.get("evidence_refs") or []
+            if str(ref) in evidence_ids
+        ))
+        if not canonical_refs:
+            raise ValueError("Every proposed change requires evidence from the parent analysis")
+        change["evidence_refs"] = canonical_refs
+        normalized.append(change)
+    return normalized
+
+
 async def _load_canonical_evidence_refs(
     db,
     *,
@@ -419,6 +439,10 @@ class AnalysisChatGraphNodeHandler:
                 for ref in canonical_refs
                 if ref.get("evidence_id")
             }
+            typed_proposal["changes"] = _retain_canonical_change_evidence(
+                typed_proposal["changes"],
+                evidence_ids,
+            )
             plan = await create_governed_change_dry_run(
                 db,
                 run.tenant_id,

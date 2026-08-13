@@ -58,6 +58,11 @@ test("streaming stops and clears its transient card on terminal events", () => {
   assert.match(panel, /setStreamText\(""\);\s*await reader\.cancel\(\);\s*return;/);
 });
 
+test("non-streaming polling stops on human interrupts and renders the decision", () => {
+  assert.match(panel, /latest\.status === "INTERRUPTED"/);
+  assert.match(panel, /message\.pending_interrupt/);
+});
+
 test("a terminal governed turn without a proposal is shown as not generated", () => {
   assert.match(panel, /Prévia executável não gerada/);
   assert.match(panel, /Nenhum perfil foi alterado/);

@@ -130,6 +130,35 @@ def test_compact_profile_changes_reject_ambiguous_or_invalid_indexes(indexes):
         })
 
 
+def test_proposal_evidence_keeps_only_canonical_refs_without_weakening_gate():
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        _retain_canonical_change_evidence,
+    )
+
+    canonical_id = str(uuid.uuid4())
+    invalid_id = str(uuid.uuid4())
+    changes = _retain_canonical_change_evidence([{
+        "op": "replace",
+        "path": "/config/filters/rsi/max",
+        "evidence_refs": [invalid_id, canonical_id, canonical_id],
+    }], {canonical_id})
+
+    assert changes[0]["evidence_refs"] == [canonical_id]
+
+
+def test_proposal_evidence_fails_closed_without_a_canonical_ref():
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        _retain_canonical_change_evidence,
+    )
+
+    with pytest.raises(ValueError, match="requires evidence from the parent analysis"):
+        _retain_canonical_change_evidence([{
+            "op": "replace",
+            "path": "/config/filters/rsi/max",
+            "evidence_refs": [str(uuid.uuid4())],
+        }], {str(uuid.uuid4())})
+
+
 def test_compact_proposal_prompt_is_versioned_and_bounded():
     migration_path = (
         Path(__file__).resolve().parents[1]
