@@ -159,6 +159,21 @@ def test_proposal_evidence_fails_closed_without_a_canonical_ref():
         }], {str(uuid.uuid4())})
 
 
+def test_governed_proposal_authorizes_against_the_complete_parent_ledger():
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        AnalysisChatGraphNodeHandler,
+        _load_canonical_evidence_ids,
+        _load_canonical_evidence_refs,
+    )
+
+    bounded_source = inspect.getsource(_load_canonical_evidence_refs)
+    authority_source = inspect.getsource(_load_canonical_evidence_ids)
+    draft_source = inspect.getsource(AnalysisChatGraphNodeHandler._node_updates)
+    assert ".limit(12)" in bounded_source
+    assert ".limit(" not in authority_source
+    assert "evidence_ids = await _load_canonical_evidence_ids" in draft_source
+
+
 def test_compact_proposal_prompt_is_versioned_and_bounded():
     migration_path = (
         Path(__file__).resolve().parents[1]
@@ -427,7 +442,8 @@ def test_proposal_is_typed_and_human_gated_twice_before_execution():
     source = inspect.getsource(AnalysisChatGraphNodeHandler._node_updates)
     assert "create_governed_change_dry_run" in source
     assert "canonical_refs = await _load_canonical_evidence_refs" in source
-    assert 'for ref in canonical_refs' in source
+    assert "evidence_ids = await _load_canonical_evidence_ids" in source
+    assert "_retain_canonical_change_evidence" in source
     assert "execute_governed_proposal_if_confirmed" in source
     assert "approve_and_execute_governed_change" in source
     assert "ANALYSIS_CHAT_GOVERNED_CHANGE_ACTOR_MISMATCH" in source

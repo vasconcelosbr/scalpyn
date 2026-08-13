@@ -139,12 +139,10 @@ async def _load_canonical_evidence_refs(
     request: AIRequestRecord,
     conversation: AIAnalysisConversation,
 ) -> list[dict[str, Any]]:
-    """Reload the tenant-scoped evidence authority used by governed changes.
+    """Load a bounded tenant-scoped evidence selection for provider context.
 
-    Checkpoint state remains useful provider context, but it is not the
-    authority for a write proposal.  A proposal must be validated against the
-    persisted evidence rows belonging to the canonical parent analysis (plus
-    any read-only refresh performed by this exact request).
+    The bounded selection keeps the provider input stable.  Governed proposal
+    authorization uses the complete persisted ledger loaded separately below.
     """
     parent_run = await db.get(AIGraphRun, conversation.parent_analysis_run_id)
     if parent_run is None or parent_run.tenant_id != run.tenant_id:
@@ -174,6 +172,24 @@ async def _load_canonical_evidence_refs(
         "source": "REFRESHED_READONLY_DATA",
     } for row in refreshed_rows)
     return refs
+
+
+async def _load_canonical_evidence_ids(
+    db,
+    *,
+    run: AIGraphRun,
+    request: AIRequestRecord,
+    conversation: AIAnalysisConversation,
+) -> set[str]:
+    """Load the complete persisted evidence authority without prompt payloads."""
+    parent_run = await db.get(AIGraphRun, conversation.parent_analysis_run_id)
+    if parent_run is None or parent_run.tenant_id != run.tenant_id:
+        raise RuntimeError("ANALYSIS_CHAT_PARENT_EVIDENCE_SCOPE_INVALID")
+    rows = (await db.execute(select(AIToolEvidenceRecord.id).where(
+        AIToolEvidenceRecord.tenant_id == run.tenant_id,
+        AIToolEvidenceRecord.ai_request_id.in_((parent_run.ai_request_id, request.id)),
+    ))).scalars().all()
+    return {str(evidence_id) for evidence_id in rows}
 
 
 class AnalysisChatGraphNodeHandler:
@@ -434,11 +450,12 @@ class AnalysisChatGraphNodeHandler:
                 request=request,
                 conversation=conversation,
             )
-            evidence_ids = {
-                str(ref.get("evidence_id"))
-                for ref in canonical_refs
-                if ref.get("evidence_id")
-            }
+            evidence_ids = await _load_canonical_evidence_ids(
+                db,
+                run=run,
+                request=request,
+                conversation=conversation,
+            )
             typed_proposal["changes"] = _retain_canonical_change_evidence(
                 typed_proposal["changes"],
                 evidence_ids,
