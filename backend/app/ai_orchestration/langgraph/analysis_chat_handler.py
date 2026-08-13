@@ -77,6 +77,41 @@ def _normalize_provider_parent(
     })
 
 
+def _expand_compact_profile_changes(proposal: dict[str, Any]) -> list[dict[str, Any]]:
+    """Expand grouped profile indexes into the existing audited change contract."""
+    operation = str(proposal.get("operation_type") or "")
+    target = dict(proposal.get("target") or {})
+    profile_ids = [str(item) for item in target.get("profile_ids") or []]
+    expanded: list[dict[str, Any]] = []
+    for raw_change in proposal.get("changes") or []:
+        change = dict(raw_change)
+        raw_indexes = change.pop("profile_indexes", []) or []
+        if not raw_indexes:
+            expanded.append(change)
+            continue
+        if operation not in {"UPDATE_PROFILE_CONFIG_SET", "SET_PROFILE_ACTIVE_STATUS"}:
+            raise ValueError("Grouped profile indexes require a multi-profile operation")
+        if change.get("profile_id") or change.get("profile_name"):
+            raise ValueError("Grouped profile changes cannot also name one profile")
+        if not profile_ids:
+            raise ValueError("Grouped profile changes require target.profile_ids")
+        if any(isinstance(index, bool) or not isinstance(index, int) for index in raw_indexes):
+            raise ValueError("Grouped profile indexes must be integers")
+        if len(raw_indexes) != len(set(raw_indexes)):
+            raise ValueError("Grouped profile indexes must be unique")
+        if any(index < 0 or index >= len(profile_ids) for index in raw_indexes):
+            raise ValueError("Grouped profile index is outside target.profile_ids")
+        for index in raw_indexes:
+            expanded.append({
+                **change,
+                "profile_id": profile_ids[index],
+                "profile_name": None,
+            })
+    if len(expanded) > 100:
+        raise ValueError("A governed change is limited to 100 expanded changes")
+    return expanded
+
+
 async def _load_canonical_evidence_refs(
     db,
     *,
@@ -354,7 +389,7 @@ class AnalysisChatGraphNodeHandler:
                 ]
                 return {"answer": answer, "proposal_id": None}
             changes: list[dict[str, Any]] = []
-            for raw_change in raw_proposal.get("changes") or []:
+            for raw_change in _expand_compact_profile_changes(raw_proposal):
                 change = dict(raw_change)
                 if change.get("op") != "remove":
                     try:

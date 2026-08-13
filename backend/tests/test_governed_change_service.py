@@ -146,6 +146,12 @@ async def test_dry_run_requires_evidence_on_every_individual_change():
         )
 
 
+def test_dry_run_audit_collects_evidence_from_all_changes():
+    source = __import__("inspect").getsource(service.create_dry_run)
+    assert "referenced: set[str] = set()" in source
+    assert "referenced.update(change_references)" in source
+
+
 @pytest.mark.asyncio
 async def test_human_confirmed_profile_change_updates_live_config_and_audit(monkeypatch):
     user_id = uuid.uuid4()

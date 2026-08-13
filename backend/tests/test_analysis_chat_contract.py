@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import inspect
+import importlib.util
 import json
+from pathlib import Path
 from types import SimpleNamespace
 import uuid
 
@@ -69,9 +71,9 @@ def test_chat_budget_audit_only_mode_disables_every_financial_blocker():
 def test_governed_proposal_has_configured_output_allowance_and_refreshes_legacy_turns():
     config = AnalysisChatRuntimeConfig(
         enabled=True,
-        proposal_max_output_tokens=8192,
+        proposal_max_output_tokens=16384,
     )
-    assert config.proposal_max_output_tokens == 8192
+    assert config.proposal_max_output_tokens == 16384
     send_source = inspect.getsource(AnalysisChatService.send_message)
     refresh_source = inspect.getsource(
         AnalysisChatService.refresh_proposal_confirmation_contract
@@ -81,6 +83,70 @@ def test_governed_proposal_has_configured_output_allowance_and_refreshes_legacy_
     assert 'request_json.get("request_intent") != "NORMAL_ANALYSIS"' in refresh_source
     assert "ANALYSIS_CHAT_PROPOSAL_CONFIRMATION" in refresh_source
     assert "PROPOSAL_CONTRACT_REFRESHED" in refresh_source
+
+
+def test_compact_multi_profile_changes_expand_to_the_existing_audited_contract():
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        _expand_compact_profile_changes,
+    )
+
+    profile_ids = [str(uuid.uuid4()) for _ in range(3)]
+    evidence_id = str(uuid.uuid4())
+    changes = _expand_compact_profile_changes({
+        "operation_type": "UPDATE_PROFILE_CONFIG_SET",
+        "target": {"profile_ids": profile_ids},
+        "changes": [{
+            "op": "replace",
+            "path": "/scoring/thresholds/buy",
+            "value_json": "65",
+            "reason": "Shared evidence-backed threshold",
+            "evidence_refs": [evidence_id],
+            "profile_id": None,
+            "profile_name": None,
+            "profile_indexes": [0, 2],
+        }],
+    })
+
+    assert [change["profile_id"] for change in changes] == [profile_ids[0], profile_ids[2]]
+    assert all(change["evidence_refs"] == [evidence_id] for change in changes)
+    assert all("profile_indexes" not in change for change in changes)
+
+
+@pytest.mark.parametrize("indexes", [[0, 0], [2], [True]])
+def test_compact_profile_changes_reject_ambiguous_or_invalid_indexes(indexes):
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        _expand_compact_profile_changes,
+    )
+
+    with pytest.raises(ValueError, match="Grouped profile"):
+        _expand_compact_profile_changes({
+            "operation_type": "UPDATE_PROFILE_CONFIG_SET",
+            "target": {"profile_ids": [str(uuid.uuid4())]},
+            "changes": [{
+                "profile_indexes": indexes,
+                "profile_id": None,
+                "profile_name": None,
+            }],
+        })
+
+
+def test_compact_proposal_prompt_is_versioned_and_bounded():
+    migration_path = (
+        Path(__file__).resolve().parents[1]
+        / "alembic/versions/166_chat_compact_profile_proposals.py"
+    )
+    spec = importlib.util.spec_from_file_location("chat_compact_migration", migration_path)
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    prompt = migration._prompt_content()
+    change = prompt["output_schema_json"]["properties"]["proposal"]["properties"]["changes"]
+    assert migration.down_revision == "165_chat_bulk_profile_config"
+    assert prompt["semantic_version"] == "1.3.0"
+    assert change["maxItems"] == 64
+    assert change["items"]["properties"]["profile_indexes"]["maxItems"] == 32
+    assert "Never repeat identical changes per profile" in prompt["system_template"]
 
 
 def test_governed_actions_support_bulk_profile_activation_without_deletion():
