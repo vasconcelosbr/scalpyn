@@ -143,6 +143,8 @@ def test_compact_proposal_prompt_is_versioned_and_bounded():
     prompt = migration._prompt_content()
     change = prompt["output_schema_json"]["properties"]["proposal"]["properties"]["changes"]
     assert migration.down_revision == "165_chat_bulk_profile_config"
+    assert migration.revision == "166_chat_compact_proposals"
+    assert len(migration.revision) <= 32
     assert prompt["semantic_version"] == "1.3.0"
     assert change["maxItems"] == 64
     assert change["items"]["properties"]["profile_indexes"]["maxItems"] == 32

@@ -1,6 +1,6 @@
 """Compact governed multi-profile proposals.
 
-Revision ID: 166_chat_compact_profile_proposals
+Revision ID: 166_chat_compact_proposals
 Revises: 165_chat_bulk_profile_config
 Create Date: 2026-08-13
 """
@@ -16,7 +16,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "166_chat_compact_profile_proposals"
+revision = "166_chat_compact_proposals"
 down_revision = "165_chat_bulk_profile_config"
 branch_labels = None
 depends_on = None
