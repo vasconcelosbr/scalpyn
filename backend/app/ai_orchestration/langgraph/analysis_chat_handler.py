@@ -77,6 +77,50 @@ def _normalize_provider_parent(
     })
 
 
+async def _load_canonical_evidence_refs(
+    db,
+    *,
+    run: AIGraphRun,
+    request: AIRequestRecord,
+    conversation: AIAnalysisConversation,
+) -> list[dict[str, Any]]:
+    """Reload the tenant-scoped evidence authority used by governed changes.
+
+    Checkpoint state remains useful provider context, but it is not the
+    authority for a write proposal.  A proposal must be validated against the
+    persisted evidence rows belonging to the canonical parent analysis (plus
+    any read-only refresh performed by this exact request).
+    """
+    parent_run = await db.get(AIGraphRun, conversation.parent_analysis_run_id)
+    if parent_run is None or parent_run.tenant_id != run.tenant_id:
+        raise RuntimeError("ANALYSIS_CHAT_PARENT_EVIDENCE_SCOPE_INVALID")
+
+    parent_rows = list((await db.execute(select(AIToolEvidenceRecord).where(
+        AIToolEvidenceRecord.tenant_id == run.tenant_id,
+        AIToolEvidenceRecord.ai_request_id == parent_run.ai_request_id,
+    ).order_by(AIToolEvidenceRecord.created_at, AIToolEvidenceRecord.id).limit(12))).scalars().all())
+    refreshed_rows = list((await db.execute(select(AIToolEvidenceRecord).where(
+        AIToolEvidenceRecord.tenant_id == run.tenant_id,
+        AIToolEvidenceRecord.ai_request_id == request.id,
+    ).order_by(AIToolEvidenceRecord.created_at, AIToolEvidenceRecord.id).limit(4))).scalars().all())
+
+    refs = [{
+        "evidence_id": str(row.id),
+        "module": row.module_key,
+        "label": row.tool_name,
+        "source_timestamp": row.created_at.isoformat() if row.created_at else None,
+        "source": "FROZEN_ANALYSIS",
+    } for row in parent_rows]
+    refs.extend({
+        "evidence_id": str(row.id),
+        "module": row.module_key,
+        "label": row.tool_name,
+        "source_timestamp": row.created_at.isoformat() if row.created_at else None,
+        "source": "REFRESHED_READONLY_DATA",
+    } for row in refreshed_rows)
+    return refs
+
+
 class AnalysisChatGraphNodeHandler:
     def __init__(self, graph_run_id: UUID, *, celery: bool = True):
         self.graph_run_id = graph_run_id
@@ -276,29 +320,12 @@ class AnalysisChatGraphNodeHandler:
                 "tool_call_ids": call_ids,
             }
         if node_name == "retrieve_relevant_evidence":
-            parent_run = await db.get(AIGraphRun, conversation.parent_analysis_run_id)
-            rows = list((await db.execute(select(AIToolEvidenceRecord).where(
-                AIToolEvidenceRecord.tenant_id == run.tenant_id,
-                AIToolEvidenceRecord.ai_request_id == parent_run.ai_request_id,
-            ).order_by(AIToolEvidenceRecord.created_at, AIToolEvidenceRecord.id).limit(12))).scalars().all())
-            refreshed = list((await db.execute(select(AIToolEvidenceRecord).where(
-                AIToolEvidenceRecord.tenant_id == run.tenant_id,
-                AIToolEvidenceRecord.ai_request_id == request.id,
-            ).order_by(AIToolEvidenceRecord.created_at, AIToolEvidenceRecord.id).limit(4))).scalars().all())
-            refs = [{
-                "evidence_id": str(row.id),
-                "module": row.module_key,
-                "label": row.tool_name,
-                "source_timestamp": row.created_at.isoformat() if row.created_at else None,
-                "source": "FROZEN_ANALYSIS",
-            } for row in rows]
-            refs.extend({
-                "evidence_id": str(row.id),
-                "module": row.module_key,
-                "label": row.tool_name,
-                "source_timestamp": row.created_at.isoformat() if row.created_at else None,
-                "source": "REFRESHED_READONLY_DATA",
-            } for row in refreshed)
+            refs = await _load_canonical_evidence_refs(
+                db,
+                run=run,
+                request=request,
+                conversation=conversation,
+            )
             return {"selected_evidence_refs": refs, "evidence_refs": refs}
         if node_name == "decide_if_new_data_required":
             return {"new_data_queried": state.get("data_mode") == "ALLOW_READONLY_REFRESH"}
@@ -346,9 +373,15 @@ class AnalysisChatGraphNodeHandler:
                 "risk": raw_proposal.get("risk"),
                 "changes": changes,
             }
+            canonical_refs = await _load_canonical_evidence_refs(
+                db,
+                run=run,
+                request=request,
+                conversation=conversation,
+            )
             evidence_ids = {
                 str(ref.get("evidence_id"))
-                for ref in state.get("selected_evidence_refs") or []
+                for ref in canonical_refs
                 if ref.get("evidence_id")
             }
             plan = await create_governed_change_dry_run(

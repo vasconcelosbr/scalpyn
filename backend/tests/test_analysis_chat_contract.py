@@ -267,7 +267,10 @@ def test_provider_parent_id_is_normalized_to_the_canonical_conversation_run():
 
 
 def test_failed_chat_turn_persists_audited_provider_usage():
-    from app.tasks.ai_orchestration import _mark_failed
+    from app.tasks.ai_orchestration import (
+        _audited_provider_transport_attempted,
+        _mark_failed,
+    )
 
     source = inspect.getsource(_mark_failed)
     assert "AIUsageRecord" in source
@@ -275,6 +278,21 @@ def test_failed_chat_turn_persists_audited_provider_usage():
     assert "message.tokens_output" in source
     assert "message.cost_usd" in source
     assert "conversation.total_cost_usd" in source
+    assert _audited_provider_transport_attempted(
+        False,
+        reservation=SimpleNamespace(provider_transport_attempted=True),
+        usage=None,
+    ) is True
+    assert _audited_provider_transport_attempted(
+        False,
+        reservation=SimpleNamespace(provider_transport_attempted=False),
+        usage=SimpleNamespace(tokens_input=10, tokens_output=0, actual_cost=0),
+    ) is True
+    assert _audited_provider_transport_attempted(
+        False,
+        reservation=SimpleNamespace(provider_transport_attempted=False),
+        usage=SimpleNamespace(tokens_input=0, tokens_output=0, actual_cost=0),
+    ) is False
 
 
 def test_frozen_mode_executes_no_new_tools():
@@ -311,6 +329,8 @@ def test_proposal_is_typed_and_human_gated_twice_before_execution():
     from app.ai_orchestration.langgraph.analysis_chat_handler import AnalysisChatGraphNodeHandler
     source = inspect.getsource(AnalysisChatGraphNodeHandler._node_updates)
     assert "create_governed_change_dry_run" in source
+    assert "canonical_refs = await _load_canonical_evidence_refs" in source
+    assert 'for ref in canonical_refs' in source
     assert "execute_governed_proposal_if_confirmed" in source
     assert "approve_and_execute_governed_change" in source
     assert "ANALYSIS_CHAT_GOVERNED_CHANGE_ACTOR_MISMATCH" in source

@@ -234,6 +234,26 @@ def _failure_details(exc: Exception) -> dict:
     }
 
 
+def _audited_provider_transport_attempted(
+    exception_reported: bool,
+    *,
+    reservation: AIBudgetReservationRecord | None,
+    usage: AIUsageRecord | None,
+) -> bool:
+    """Prefer persisted provider audit facts over a later node exception."""
+    if exception_reported:
+        return True
+    if reservation is not None and bool(reservation.provider_transport_attempted):
+        return True
+    if usage is None:
+        return False
+    return bool(
+        int(usage.tokens_input or 0)
+        or int(usage.tokens_output or 0)
+        or Decimal(usage.actual_cost or 0) > 0
+    )
+
+
 async def _mark_failed(
     db, run_id: UUID, *, failed_node: str | None, error_kind: str,
     reason_code: str, safe_message: str, provider_transport_attempted: bool,
@@ -245,6 +265,26 @@ async def _mark_failed(
     if run is None or run.status == "CANCELLED":
         return
     now = _now()
+    request = await db.get(AIRequestRecord, run.ai_request_id)
+    request_is_scoped = request is not None and request.tenant_id == run.tenant_id
+    is_chat_request = request_is_scoped and request.request_kind in {
+        "FOLLOW_UP_CHAT", "CHILD_ANALYSIS", "PROPOSAL_DRAFT", "CONVERSATION_SUMMARY",
+    }
+    usage = None
+    reservation = None
+    if is_chat_request:
+        usage = (await db.execute(select(AIUsageRecord).where(
+            AIUsageRecord.tenant_id == run.tenant_id,
+            AIUsageRecord.ai_request_id == request.id,
+        ))).scalar_one_or_none()
+        reservation = (await db.execute(select(AIBudgetReservationRecord).where(
+            AIBudgetReservationRecord.ai_request_id == request.id
+        ).with_for_update())).scalar_one_or_none()
+    provider_transport_attempted = _audited_provider_transport_attempted(
+        provider_transport_attempted,
+        reservation=reservation,
+        usage=usage,
+    )
     run.status = "FAILED"
     run.failed_node = failed_node
     run.error_kind = error_kind[:80]
@@ -266,21 +306,14 @@ async def _mark_failed(
             job.completed_at = now
             job.lease_owner = None
             job.lease_expires_at = None
-    request = await db.get(AIRequestRecord, run.ai_request_id)
-    correlation_id = request.correlation_id if request and request.tenant_id == run.tenant_id else None
-    if request is not None and request.request_kind in {
-        "FOLLOW_UP_CHAT", "CHILD_ANALYSIS", "PROPOSAL_DRAFT", "CONVERSATION_SUMMARY",
-    }:
+    correlation_id = request.correlation_id if request_is_scoped else None
+    if is_chat_request:
         message = (await db.execute(select(AIAnalysisMessage).where(
             AIAnalysisMessage.tenant_id == run.tenant_id,
             AIAnalysisMessage.ai_request_id == request.id,
             AIAnalysisMessage.role == "ASSISTANT",
         ).with_for_update())).scalar_one_or_none()
         if message is not None:
-            usage = (await db.execute(select(AIUsageRecord).where(
-                AIUsageRecord.tenant_id == run.tenant_id,
-                AIUsageRecord.ai_request_id == request.id,
-            ))).scalar_one_or_none()
             if usage is not None:
                 first_usage_attribution = (
                     message.tokens_input is None
@@ -317,9 +350,6 @@ async def _mark_failed(
             message.provider_transport_attempted = provider_transport_attempted
             message.completed_at = now
             message.lock_version = int(message.lock_version or 0) + 1
-        reservation = (await db.execute(select(AIBudgetReservationRecord).where(
-            AIBudgetReservationRecord.ai_request_id == request.id
-        ).with_for_update())).scalar_one_or_none()
         if reservation is not None and reservation.status in {"RESERVED", "TRANSPORT_STARTED"}:
             reservation.status = "RELEASED"
             reservation.released_tokens = int(reservation.reserved_tokens or 0)

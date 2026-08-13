@@ -112,6 +112,41 @@ def test_bulk_profile_patch_keeps_each_profile_diff_separate():
 
 
 @pytest.mark.asyncio
+async def test_dry_run_requires_evidence_on_every_individual_change():
+    evidence_id = str(uuid.uuid4())
+    proposal = {
+        "operation_type": "UPDATE_PROFILE_CONFIG",
+        "target": {"profile_id": str(uuid.uuid4())},
+        "objective": "Adjust two evidenced profile parameters",
+        "risk": "Operational change",
+        "changes": [
+            {
+                "op": "replace",
+                "path": "/default_timeframe",
+                "value": "15m",
+                "evidence_refs": [evidence_id],
+            },
+            {
+                "op": "replace",
+                "path": "/scoring/thresholds/buy",
+                "value": 65,
+                "evidence_refs": [],
+            },
+        ],
+    }
+
+    with pytest.raises(ValueError, match="Every proposed change requires evidence"):
+        await service.create_dry_run(
+            _FakeDB(None),
+            uuid.uuid4(),
+            proposal=proposal,
+            conversation_id=uuid.uuid4(),
+            message_id=uuid.uuid4(),
+            evidence_ids={evidence_id},
+        )
+
+
+@pytest.mark.asyncio
 async def test_human_confirmed_profile_change_updates_live_config_and_audit(monkeypatch):
     user_id = uuid.uuid4()
     profile_id = uuid.uuid4()

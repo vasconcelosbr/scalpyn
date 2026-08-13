@@ -218,13 +218,12 @@ async def create_dry_run(
     operation = str(proposal.get("operation_type") or "")
     target = dict(proposal.get("target") or {})
     changes = list(proposal.get("changes") or [])
-    referenced = {
-        str(ref)
-        for change in changes
-        for ref in change.get("evidence_refs") or []
-    }
-    if not referenced or not referenced.issubset(evidence_ids):
-        raise ValueError("Every proposed change requires evidence from the parent analysis")
+    if not changes:
+        raise ValueError("A governed change requires at least one proposed change")
+    for change in changes:
+        referenced = {str(ref) for ref in change.get("evidence_refs") or []}
+        if not referenced or not referenced.issubset(evidence_ids):
+            raise ValueError("Every proposed change requires evidence from the parent analysis")
 
     if operation == "SET_PROFILE_ACTIVE_STATUS":
         raw_target_ids = list(target.get("profile_ids") or [])
