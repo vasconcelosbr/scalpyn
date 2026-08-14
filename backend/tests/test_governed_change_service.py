@@ -336,6 +336,14 @@ def test_concrete_proposal_prompt_rejects_pseudo_paths_and_can_return_limitation
     assert prepared_proposal["properties"]["target"]["properties"]["config_type"]["enum"] == [
         "score", None,
     ]
+    prepared_config_type = prepared_proposal["properties"]["target"]["properties"][
+        "config_type"
+    ]
+    assert prepared_config_type["anyOf"] == [
+        {"type": "string"},
+        {"type": "null"},
+    ]
+    assert "type" not in prepared_config_type
     assert prepared_proposal["additionalProperties"] is False
     assert prepared_proposal["properties"]["target"]["additionalProperties"] is False
     assert prepared_change["additionalProperties"] is False

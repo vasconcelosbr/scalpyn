@@ -93,7 +93,18 @@ def prepare_anthropic_output_schema(
         enum = normalized.get("enum")
         if not isinstance(enum, list) or not enum:
             raise ValueError("structured output schema requires a concrete type")
-        normalized["type"] = _enum_type(enum)
+        enum_types: list[str] = []
+        for value in enum:
+            value_type = _enum_type([value])
+            if value_type not in enum_types:
+                enum_types.append(value_type)
+        if len(enum_types) == 1:
+            normalized["type"] = enum_types[0]
+        else:
+            # Mixed enums (for example ["score", null]) need an explicit
+            # union. Inferring the type from only the first value leaves an
+            # internally inconsistent schema that Anthropic rejects with 400.
+            normalized["anyOf"] = [{"type": item} for item in enum_types]
     if normalized.get("type") == "object":
         normalized["additionalProperties"] = False
     return normalized
