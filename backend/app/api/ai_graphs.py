@@ -22,6 +22,7 @@ from ..models.systemic_ai import (
     AIUsageRecord,
 )
 from ..services.ai_graph_service import AIGraphRunService, GraphAccessError
+from ..services.analysis_chat_service import AnalysisChatError, AnalysisChatService
 from .config import get_current_user_id
 
 
@@ -152,6 +153,7 @@ async def create_graph_run(
         await db.commit()
         await db.refresh(run)
     except GraphAccessError as exc:
+        await db.rollback()
         raise _error(exc) from exc
     from ..tasks.ai_orchestration import start_graph_run
     start_graph_run.apply_async(args=[str(run.id)], queue="ai_orchestration")
@@ -190,6 +192,7 @@ async def get_graph_run(
         definition = await db.get(AIGraphDefinition, run.graph_definition_id)
         return _run_payload(run, request, definition)
     except GraphAccessError as exc:
+        await db.rollback()
         raise _error(exc) from exc
 
 
@@ -338,7 +341,7 @@ async def resume_graph_run(
     user_id: UUID = Depends(get_current_user_id),
 ):
     try:
-        run = await AIGraphRunService.resume(
+        run, reused, persisted_decision_id = await AIGraphRunService.resume(
             db, tenant_id=user_id, actor_user_id=user_id, run_id=run_id,
             interrupt_id=payload.interrupt_id, decision=payload.decision,
             decision_id=payload.decision_id, idempotency_key=payload.idempotency_key,
@@ -348,9 +351,13 @@ async def resume_graph_run(
         await db.refresh(run)
     except GraphAccessError as exc:
         raise _error(exc) from exc
-    from ..tasks.ai_orchestration import resume_graph_run as resume_task
-    resume_task.apply_async(args=[str(run.id), str(payload.interrupt_id)], queue="ai_orchestration")
-    return _run_payload(run)
+    if not reused:
+        from ..tasks.ai_orchestration import resume_graph_run as resume_task
+        resume_task.apply_async(
+            args=[str(run.id), str(payload.interrupt_id), str(persisted_decision_id)],
+            queue="ai_orchestration",
+        )
+    return {**_run_payload(run), "reused": reused}
 
 
 @router.post("/runs/{run_id}/cancel")
@@ -360,14 +367,44 @@ async def cancel_graph_run(
     user_id: UUID = Depends(get_current_user_id),
 ):
     try:
+        run = await AIGraphRunService.get(
+            db, tenant_id=user_id, run_id=run_id
+        )
+        definition = await db.get(AIGraphDefinition, run.graph_definition_id)
+        request = await db.get(AIRequestRecord, run.ai_request_id)
+        if definition is None:
+            raise GraphAccessError("GRAPH_DEFINITION_NOT_FOUND")
+        if definition.graph_key == "analysis-chat-v1":
+            if request is None or request.tenant_id != user_id or request.conversation_id is None:
+                raise GraphAccessError("ANALYSIS_CHAT_CANCEL_CONTEXT_MISSING")
+            if run.status not in {"COMPLETED", "FAILED", "CANCELLED"}:
+                message = await AnalysisChatService.cancel(
+                    db,
+                    tenant_id=user_id,
+                    user_id=user_id,
+                    conversation_id=request.conversation_id,
+                    graph_run_id=run.id,
+                )
+                if message is None:
+                    raise GraphAccessError("ANALYSIS_CHAT_MESSAGE_NOT_ACTIVE")
+            await db.commit()
+            await db.refresh(run)
+            return _run_payload(run, request, definition)
+
         run = await AIGraphRunService.cancel(db, tenant_id=user_id, run_id=run_id, actor_user_id=user_id)
         await db.commit()
         await db.refresh(run)
+    except AnalysisChatError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=exc.status_code, detail={"code": exc.code}
+        ) from exc
     except GraphAccessError as exc:
+        await db.rollback()
         raise _error(exc) from exc
     from ..tasks.ai_orchestration import cancel_graph_run as cancel_task
     cancel_task.apply_async(args=[str(run.id)], queue="ai_orchestration")
-    return _run_payload(run)
+    return _run_payload(run, request, definition)
 
 
 @router.get("/definitions")

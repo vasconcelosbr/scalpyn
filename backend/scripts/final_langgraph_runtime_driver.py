@@ -134,7 +134,7 @@ async def _resume_pending_record(db, run_id: UUID) -> dict:
     ).order_by(AIGraphInterrupt.created_at))).scalars().first()
     if interrupt is None:
         raise RuntimeError("GRAPH_PENDING_INTERRUPT_NOT_FOUND")
-    await AIGraphRunService.resume(
+    _run, _reused, persisted_decision_id = await AIGraphRunService.resume(
         db,
         tenant_id=run.tenant_id,
         actor_user_id=run.tenant_id,
@@ -145,13 +145,17 @@ async def _resume_pending_record(db, run_id: UUID) -> dict:
         idempotency_key=f"final-crash-resume-{uuid4()}",
         edits={},
     )
-    return {"run_id": str(run.id), "interrupt_id": str(interrupt.id)}
+    return {
+        "run_id": str(run.id),
+        "interrupt_id": str(interrupt.id),
+        "decision_id": str(persisted_decision_id),
+    }
 
 
 async def _resume_pending(run_id: UUID) -> dict:
     record = await run_db_task(lambda db: _resume_pending_record(db, run_id))
     resume_graph_run.apply_async(
-        args=[record["run_id"], record["interrupt_id"]],
+        args=[record["run_id"], record["interrupt_id"], record["decision_id"]],
         queue="ai_orchestration",
     )
     return {"action": "RESUME_QUEUED", **record}

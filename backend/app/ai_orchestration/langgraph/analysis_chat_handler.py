@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import hashlib
 import json
@@ -11,6 +12,12 @@ from typing import Any
 import uuid
 from uuid import UUID
 
+from jsonschema import (
+    FormatChecker,
+    SchemaError,
+    ValidationError,
+    validate as validate_json_schema,
+)
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 
@@ -26,6 +33,8 @@ from ...models.analysis_chat import (
 )
 from ...models.config_profile import ConfigProfile
 from ...models.ai_provider_key import AIProviderKey
+from ...models.profile import Profile
+from ...models.user import User
 from ...models.systemic_ai import (
     AIBudgetPolicyRecord,
     AIBudgetReservationRecord,
@@ -43,19 +52,310 @@ from ...services.ai_keys_service import decrypt_value
 from ...services.governed_change_service import (
     approve_and_execute as approve_and_execute_governed_change,
     create_dry_run as create_governed_change_dry_run,
+    reconcile_execution_cache,
+    validate_candidate_for_second_gate,
 )
 from ...services.systemic_langgraph_bridge import SystemicLangGraphBridge
+from ..hashing import canonical_hash
 from ..errors import (
+    GovernedProposalError,
     GraphNodeExecutionError,
     ProviderBlockedError,
     ProviderOutputError,
     ProviderTransportError,
 )
 from .state import ScalpynGraphState
+from .config import get_langgraph_settings
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+_TERMINAL_GRAPH_RUN_STATUSES = frozenset({"COMPLETED", "FAILED", "CANCELLED"})
+_ALLOWED_ANALYSIS_CHAT_PROVIDER_INTENTS = frozenset({
+    "NORMAL_ANALYSIS",
+    "FAKE_PROVIDER_CANARY",
+})
+
+
+def _validated_analysis_chat_provider_intent(request_json: dict[str, Any]) -> str:
+    """Return the exact provider intent or fail closed before transport."""
+
+    intent = str(request_json.get("request_intent") or "")
+    if intent not in _ALLOWED_ANALYSIS_CHAT_PROVIDER_INTENTS:
+        raise ProviderBlockedError(
+            "ANALYSIS_CHAT_INTENT_NOT_ALLOWED",
+            "Analysis Chat provider transport requires an explicit allowed intent",
+        )
+    return intent
+
+# This fixture is deliberately narrower than the general fake-provider path.
+# It exists only so staging can prove the complete governed Profile lifecycle
+# without a network/provider call or an active/live trading target.
+GOVERNED_STAGING_CANARY_CONTRACT = "analysis-chat-governed-profile-v1.5"
+GOVERNED_STAGING_CANARY_EMAIL = "langgraph-canary@staging.scalpyn.com.br"
+GOVERNED_STAGING_CANARY_PROFILE_NAME = "Analysis Chat Governed Canary v1.5"
+GOVERNED_STAGING_CANARY_SOURCE_VALUE = 0.52
+GOVERNED_STAGING_CANARY_CANDIDATE_VALUE = 0.58
+
+
+def governed_staging_canary_profile_config(*, value: float) -> dict[str, Any]:
+    """Canonical strict Profile fixture; never used by normal user requests."""
+    return {
+        "default_timeframe": "5m",
+        "filters": {
+            "logic": "AND",
+            "conditions": [{
+                "field": "taker_ratio",
+                "operator": ">=",
+                "value": value,
+            }],
+        },
+        "scoring": {
+            "enabled": True,
+            "weights": {
+                "signal": 25,
+                "momentum": 25,
+                "liquidity": 25,
+                "market_structure": 25,
+            },
+            "rules": [],
+            "selected_rule_ids": ["rule-adx"],
+            "thresholds": {"buy": 65, "strong_buy": 80, "neutral": 40},
+        },
+        "signals": {"logic": "AND", "conditions": []},
+        "block_rules": {"blocks": []},
+        "entry_triggers": {"logic": "AND", "conditions": []},
+    }
+
+
+def _governed_staging_canary_raw_proposal(
+    *,
+    profile_id: UUID,
+    evidence_id: UUID,
+) -> dict[str, Any]:
+    """Return the exact provider-facing prompt 1.5 proposal contract."""
+    return {
+        "operation_type": "UPDATE_PROFILE_CONFIG",
+        "target": {
+            "profile_id": str(profile_id),
+            "profile_name": GOVERNED_STAGING_CANARY_PROFILE_NAME,
+            "config_type": None,
+            "pool_id": None,
+            "profile_ids": [],
+        },
+        "objective": "Tighten the isolated staging canary taker-ratio filter",
+        "risk": "Inactive shadow-only staging fixture; mandatory rollback after proof",
+        "changes": [{
+            "op": "replace",
+            "path": "/filters/conditions/0/value",
+            "value_json": json.dumps(
+                GOVERNED_STAGING_CANARY_CANDIDATE_VALUE,
+                separators=(",", ":"),
+            ),
+            "old_value_json": json.dumps(
+                GOVERNED_STAGING_CANARY_SOURCE_VALUE,
+                separators=(",", ":"),
+            ),
+            "array_guards_json": json.dumps([{
+                "path": "/filters/conditions/0",
+                "identity": {"field": "taker_ratio"},
+            }], separators=(",", ":")),
+            "reason": "Deterministic staging proof of a monotonic eligibility restriction",
+            "evidence_refs": [str(evidence_id)],
+            "profile_id": None,
+            "profile_name": None,
+            "profile_indexes": [],
+        }],
+    }
+
+
+def _governed_canary_block(reason_code: str) -> ProviderBlockedError:
+    return ProviderBlockedError(
+        reason_code,
+        "The governed fake proposal can run only against the exact inactive staging canary fixture",
+    )
+
+
+async def _validated_governed_staging_canary_proposal(
+    db,
+    *,
+    run: AIGraphRun,
+    request: AIRequestRecord,
+    conversation: AIAnalysisConversation,
+    selected_evidence_refs: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Materialize the deterministic proposal only for the private canary marker.
+
+    The marker is written by ``staging_canary`` after the normal chat service
+    creates the turn; it is not accepted by any HTTP request schema.  Every
+    operational fact is nevertheless re-read and matched here so a copied or
+    stale marker cannot authorize a different tenant/profile/configuration.
+    """
+    request_json = dict(request.request_json or {})
+    marker = request_json.get("governed_staging_canary")
+    if marker is None:
+        return None
+    if not isinstance(marker, dict) or set(marker) != {
+        "contract_version", "profile_id", "profile_name",
+    }:
+        raise _governed_canary_block("GOVERNED_STAGING_CANARY_MARKER_INVALID")
+    if (
+        marker.get("contract_version") != GOVERNED_STAGING_CANARY_CONTRACT
+        or marker.get("profile_name") != GOVERNED_STAGING_CANARY_PROFILE_NAME
+        or request_json.get("request_intent") != "FAKE_PROVIDER_CANARY"
+        or request_json.get("data_mode") != "DRAFT_PROPOSAL"
+    ):
+        raise _governed_canary_block("GOVERNED_STAGING_CANARY_CONTRACT_MISMATCH")
+
+    environment = os.getenv("RAILWAY_ENVIRONMENT_NAME", "").lower()
+    fake_enabled = os.getenv(
+        "LANGGRAPH_FAKE_PROVIDER_CANARY_ENABLED", "false"
+    ).lower() == "true"
+    real_enabled = get_langgraph_settings().real_provider_canary_enabled
+    if "staging" not in environment or not fake_enabled or real_enabled:
+        raise _governed_canary_block("GOVERNED_STAGING_CANARY_RUNTIME_DENIED")
+
+    prompt = await db.get(AIPromptVersion, request.prompt_version_id)
+    prompt_payload = (
+        {
+            key: getattr(prompt, key)
+            for key in (
+                "prompt_key",
+                "semantic_version",
+                "system_template",
+                "user_template",
+                "input_schema_json",
+                "output_schema_json",
+                "tool_policy_json",
+                "provider_constraints_json",
+            )
+        }
+        if prompt is not None
+        else None
+    )
+    if (
+        prompt is None
+        or prompt.prompt_key != "analysis-chat-governed-change"
+        or prompt.semantic_version != "1.5.0"
+        or prompt.status != "APPROVED"
+        or prompt.approved_at is None
+        or not isinstance(prompt.output_schema_json, dict)
+        or canonical_hash(prompt_payload) != prompt.content_hash
+    ):
+        raise _governed_canary_block("GOVERNED_STAGING_CANARY_PROMPT_INVALID")
+
+    user = await db.get(User, run.tenant_id)
+    if (
+        user is None
+        or user.email != GOVERNED_STAGING_CANARY_EMAIL
+        or not bool(user.is_active)
+        or request.requested_by_user_id != user.id
+    ):
+        raise _governed_canary_block("GOVERNED_STAGING_CANARY_TENANT_DENIED")
+    try:
+        profile_id = UUID(str(marker["profile_id"]))
+    except (TypeError, ValueError) as exc:
+        raise _governed_canary_block(
+            "GOVERNED_STAGING_CANARY_PROFILE_ID_INVALID"
+        ) from exc
+    profile = (
+        await db.execute(select(Profile).where(
+            Profile.id == profile_id,
+            Profile.user_id == run.tenant_id,
+        ))
+    ).scalar_one_or_none()
+    expected_config = governed_staging_canary_profile_config(
+        value=GOVERNED_STAGING_CANARY_SOURCE_VALUE
+    )
+    if (
+        profile is None
+        or profile.name != GOVERNED_STAGING_CANARY_PROFILE_NAME
+        or bool(profile.is_active)
+        or not bool(profile.is_shadow_only)
+        or bool(profile.live_trading_enabled)
+        or bool(profile.auto_pilot_enabled)
+        or dict(profile.config or {}) != expected_config
+    ):
+        raise _governed_canary_block("GOVERNED_STAGING_CANARY_PROFILE_DIRTY")
+    active_profiles = int((await db.execute(select(func.count(Profile.id)).where(
+        Profile.user_id == run.tenant_id,
+        Profile.is_active.is_(True),
+    ))).scalar_one())
+    if active_profiles != 0:
+        raise _governed_canary_block("GOVERNED_STAGING_CANARY_ACTIVE_PROFILE_FOUND")
+
+    parent_run = await db.get(AIGraphRun, conversation.parent_analysis_run_id)
+    if parent_run is None or parent_run.tenant_id != run.tenant_id:
+        raise _governed_canary_block("GOVERNED_STAGING_CANARY_PARENT_INVALID")
+    evidence_ids: list[UUID] = []
+    for ref in selected_evidence_refs:
+        try:
+            evidence_ids.append(UUID(str(ref.get("evidence_id"))))
+        except (TypeError, ValueError):
+            continue
+    if not evidence_ids:
+        raise _governed_canary_block("GOVERNED_STAGING_CANARY_EVIDENCE_MISSING")
+    evidence_rows = list((await db.execute(select(AIToolEvidenceRecord).where(
+        AIToolEvidenceRecord.id.in_(evidence_ids),
+        AIToolEvidenceRecord.tenant_id == run.tenant_id,
+        AIToolEvidenceRecord.ai_request_id == parent_run.ai_request_id,
+        AIToolEvidenceRecord.tool_name == "strategy_profiles.get_profile",
+    ))).scalars().all())
+    matching_evidence: list[AIToolEvidenceRecord] = []
+    for evidence in evidence_rows:
+        output = dict(evidence.output_json or {})
+        rows = output.get("data") if isinstance(output.get("data"), list) else []
+        if any(
+            isinstance(row, dict)
+            and row.get("profile_id") == str(profile.id)
+            and row.get("profile_name") == profile.name
+            and row.get("config") == expected_config
+            and row.get("is_active") is False
+            and row.get("is_shadow_only") is True
+            and row.get("live_trading_enabled") is False
+            for row in rows
+        ):
+            matching_evidence.append(evidence)
+    if len(matching_evidence) != 1:
+        raise _governed_canary_block("GOVERNED_STAGING_CANARY_EVIDENCE_INVALID")
+    return _governed_staging_canary_raw_proposal(
+        profile_id=profile.id,
+        evidence_id=matching_evidence[0].id,
+    )
+
+
+@dataclass(frozen=True)
+class _ProviderInvocation:
+    tenant_id: UUID
+    request_id: UUID
+    message_id: UUID
+    parent_analysis_run_id: UUID
+    provider_key_id: UUID
+    provider: str
+    model: str
+    system_prompt: str
+    user_prompt: str
+    api_key: str = field(repr=False)
+    max_output_tokens: int
+    output_schema: dict[str, Any]
+    budget_enforcement_enabled: bool
+    reserved_tokens: int
+    reserved_cost: Decimal
+    used_today: int
+    used_month: int
+    request_token_limit: int
+    daily_token_limit: int | None
+    monthly_token_limit: int | None
+    provider_key_monthly_token_limit: int | None
+    provider_key_tokens_used_month_before: int
+    input_rate: Decimal
+    output_rate: Decimal
+    max_cost_usd: Decimal
+    pricing_snapshot_version: str
+    selected_evidence_refs: tuple[dict[str, Any], ...]
+    data_mode: str
 
 
 def _sha(value: str) -> str:
@@ -75,6 +375,47 @@ def _normalize_provider_parent(
             "PROVIDER_PARENT_ANALYSIS_RUN_ID_NORMALIZED",
         ],
     })
+
+
+def _validated_provider_answer(
+    output: Any,
+    output_schema: dict[str, Any],
+) -> AnalysisChatOutput:
+    try:
+        validate_json_schema(
+            instance=output,
+            schema=output_schema,
+            format_checker=FormatChecker(),
+        )
+    except (SchemaError, ValidationError) as exc:
+        raise ProviderOutputError("ANALYSIS_CHAT_OUTPUT_SCHEMA_INVALID") from exc
+    try:
+        return AnalysisChatOutput.model_validate(output)
+    except Exception as exc:
+        raise ProviderOutputError("ANALYSIS_CHAT_OUTPUT_SCHEMA_INVALID") from exc
+
+
+def _normalized_provider_mode(
+    provider_answer: AnalysisChatOutput,
+    *,
+    is_proposal: bool,
+    refreshed: bool,
+) -> tuple[str, str, dict[str, Any] | None]:
+    if not is_proposal:
+        return (
+            "READONLY_REFRESH" if refreshed else "EXPLANATION",
+            "REFRESHED_READONLY_DATA" if refreshed else "FROZEN_ANALYSIS",
+            None,
+        )
+    if provider_answer.answer_type == "LIMITATION":
+        if provider_answer.proposal is not None:
+            raise ProviderOutputError("ANALYSIS_CHAT_PROPOSAL_OUTPUT_INCONSISTENT")
+        return "LIMITATION", "PROPOSAL_DRAFT", None
+    if provider_answer.answer_type == "PROPOSAL":
+        if not isinstance(provider_answer.proposal, dict):
+            raise ProviderOutputError("ANALYSIS_CHAT_PROPOSAL_OUTPUT_MISSING")
+        return "PROPOSAL", "PROPOSAL_DRAFT", provider_answer.proposal
+    raise ProviderOutputError("ANALYSIS_CHAT_PROPOSAL_OUTPUT_INCONSISTENT")
 
 
 def _expand_compact_profile_changes(proposal: dict[str, Any]) -> list[dict[str, Any]]:
@@ -130,6 +471,32 @@ def _retain_canonical_change_evidence(
         change["evidence_refs"] = canonical_refs
         normalized.append(change)
     return normalized
+
+
+def _materialize_governed_proposal(
+    raw_proposal: dict[str, Any],
+    evidence_ids: set[str],
+) -> dict[str, Any]:
+    """Decode the provider's bounded string fields into the audited patch contract."""
+    changes: list[dict[str, Any]] = []
+    for raw_change in _expand_compact_profile_changes(raw_proposal):
+        change = dict(raw_change)
+        try:
+            change["value"] = json.loads(str(change.pop("value_json")))
+            change["old_value"] = json.loads(str(change.pop("old_value_json")))
+            change["array_guards"] = json.loads(
+                str(change.pop("array_guards_json"))
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("Invalid governed change JSON contract") from exc
+        changes.append(change)
+    return {
+        "operation_type": raw_proposal.get("operation_type"),
+        "target": raw_proposal.get("target") or {},
+        "objective": raw_proposal.get("objective"),
+        "risk": raw_proposal.get("risk"),
+        "changes": _retain_canonical_change_evidence(changes, evidence_ids),
+    }
 
 
 async def _load_canonical_evidence_refs(
@@ -201,62 +568,309 @@ class AnalysisChatGraphNodeHandler:
         return await run_db_task(fn, celery=self.celery)
 
     async def handle(self, node_name: str, state: ScalpynGraphState) -> dict[str, Any]:
+        if node_name == "invoke_provider":
+            return await self._handle_provider_node(state)
+
+        committed_tenant_id: UUID | None = None
+
         async def _handle(db):
-            run = (
-                await db.execute(select(AIGraphRun).where(
-                    AIGraphRun.id == self.graph_run_id
-                ).with_for_update())
-            ).scalar_one_or_none()
-            if run is None:
-                raise RuntimeError("ANALYSIS_CHAT_GRAPH_RUN_NOT_FOUND")
-            request = await db.get(AIRequestRecord, run.ai_request_id)
-            if request is None or request.tenant_id != run.tenant_id:
-                raise RuntimeError("ANALYSIS_CHAT_REQUEST_SCOPE_INVALID")
-            message = (
-                await db.execute(select(AIAnalysisMessage).where(
-                    AIAnalysisMessage.ai_request_id == request.id,
-                    AIAnalysisMessage.role == "ASSISTANT",
-                    AIAnalysisMessage.tenant_id == run.tenant_id,
-                ).with_for_update())
-            ).scalar_one_or_none()
-            if message is None:
-                raise RuntimeError("ANALYSIS_CHAT_MESSAGE_NOT_FOUND")
-            if message.status == "CANCELLED":
-                raise RuntimeError("ANALYSIS_CHAT_MESSAGE_CANCELLED")
-            # ``persist_message_result_usage`` terminalizes the canonical
-            # message before the summary and completion nodes run.  Those
-            # bookkeeping nodes must never regress it back to STREAMING.
-            if message.status not in {"COMPLETED", "BLOCKED", "FAILED", "CANCELLED"}:
-                message.status = "STREAMING"
-                message.lock_version = int(message.lock_version or 0) + 1
+            nonlocal committed_tenant_id
+            run, request, message = await self._lock_node_context(
+                db, node_name=node_name, state=state
+            )
+            committed_tenant_id = run.tenant_id
             updates = await self._node_updates(db, run, request, message, node_name, state)
-            await db.execute(insert(AIGraphEvent).values(
-                tenant_id=run.tenant_id,
-                graph_run_id=run.id,
-                event_key=f"{run.id}:{node_name}:completed",
-                event_type="NODE_COMPLETED",
-                node_name=node_name,
-                status="COMPLETED",
-                payload={
-                    "conversation_id": str(request.conversation_id),
-                    "message_id": str(message.id),
-                    "data_mode": request.request_json.get("data_mode"),
-                    "evidence_count": len(
-                        updates.get("selected_evidence_refs")
-                        or updates.get("evidence_refs") or []
-                    ),
-                },
-            ).on_conflict_do_nothing(
-                index_elements=[AIGraphEvent.graph_run_id, AIGraphEvent.event_key]
-            ))
+            await self._complete_node(db, run, request, message, node_name, updates)
             return updates
 
         try:
-            return await self._transaction(_handle)
+            updates = await self._transaction(_handle)
         except GraphNodeExecutionError:
             raise
         except Exception as exc:
             raise GraphNodeExecutionError(node_name, exc) from exc
+
+        # The governed write and NODE_COMPLETED event above are now committed.
+        # Only after that boundary may Redis be invalidated.  Reconciliation is
+        # deliberately non-terminal: an already-durable operational write must
+        # never be presented to the user as if it failed or rolled back.
+        execution = dict(updates.get("proposal_execution_result") or {})
+        execution_result = dict(execution.get("execution_result") or {})
+        if (
+            execution_result.get("cache_invalidation_status") == "PENDING_AFTER_COMMIT"
+            and committed_tenant_id is not None
+        ):
+            try:
+                reconciled = await self._transaction(
+                    lambda db: reconcile_execution_cache(
+                        db,
+                        committed_tenant_id,
+                        UUID(str(execution["proposal_id"])),
+                        decision_id=execution_result.get("approval_decision_id"),
+                    )
+                )
+            except Exception:
+                # PENDING_AFTER_COMMIT remains truthful and retryable if the
+                # reconciliation transaction itself cannot be opened.
+                return updates
+            updates["proposal_execution_result"] = reconciled
+            answer = dict(updates.get("answer") or {})
+            answer["proposal"] = reconciled
+            updates["answer"] = answer
+        return updates
+
+    async def _lock_node_context(
+        self,
+        db,
+        *,
+        node_name: str,
+        state: ScalpynGraphState,
+    ) -> tuple[AIGraphRun, AIRequestRecord, AIAnalysisMessage]:
+        run = (
+            await db.execute(select(AIGraphRun).where(
+                AIGraphRun.id == self.graph_run_id
+            ).with_for_update())
+        ).scalar_one_or_none()
+        if run is None:
+            raise RuntimeError("ANALYSIS_CHAT_GRAPH_RUN_NOT_FOUND")
+        if run.status in _TERMINAL_GRAPH_RUN_STATUSES:
+            raise RuntimeError(f"ANALYSIS_CHAT_GRAPH_RUN_{run.status}")
+        if str(run.tenant_id) != state.get("tenant_id"):
+            raise RuntimeError("ANALYSIS_CHAT_TENANT_SCOPE_INVALID")
+
+        request = await db.get(AIRequestRecord, run.ai_request_id)
+        if request is None or request.tenant_id != run.tenant_id:
+            raise RuntimeError("ANALYSIS_CHAT_REQUEST_SCOPE_INVALID")
+        message = (
+            await db.execute(select(AIAnalysisMessage).where(
+                AIAnalysisMessage.ai_request_id == request.id,
+                AIAnalysisMessage.role == "ASSISTANT",
+                AIAnalysisMessage.tenant_id == run.tenant_id,
+            ).with_for_update())
+        ).scalar_one_or_none()
+        if message is None:
+            raise RuntimeError("ANALYSIS_CHAT_MESSAGE_NOT_FOUND")
+        if message.status == "CANCELLED":
+            raise RuntimeError("ANALYSIS_CHAT_MESSAGE_CANCELLED")
+
+        now = _now()
+        settings = get_langgraph_settings()
+        run.status = "RUNNING"
+        run.current_node = node_name
+        run.heartbeat_at = now
+        run.lease_expires_at = now + timedelta(seconds=settings.lease_seconds)
+        run.updated_at = now
+        # ``persist_message_result_usage`` terminalizes the canonical message
+        # before summary/completion bookkeeping nodes run. Never regress it.
+        if message.status not in {"COMPLETED", "BLOCKED", "FAILED", "CANCELLED"}:
+            message.status = "STREAMING"
+            message.lock_version = int(message.lock_version or 0) + 1
+        return run, request, message
+
+    async def _complete_node(
+        self,
+        db,
+        run: AIGraphRun,
+        request: AIRequestRecord,
+        message: AIAnalysisMessage,
+        node_name: str,
+        updates: dict[str, Any],
+    ) -> None:
+        now = _now()
+        run.last_completed_node = node_name
+        run.heartbeat_at = now
+        run.updated_at = now
+        await db.execute(insert(AIGraphEvent).values(
+            tenant_id=run.tenant_id,
+            graph_run_id=run.id,
+            event_key=f"{run.id}:{node_name}:completed",
+            event_type="NODE_COMPLETED",
+            node_name=node_name,
+            status="COMPLETED",
+            payload={
+                "conversation_id": str(request.conversation_id),
+                "message_id": str(message.id),
+                "data_mode": request.request_json.get("data_mode"),
+                "evidence_count": len(
+                    updates.get("selected_evidence_refs")
+                    or updates.get("evidence_refs") or []
+                ),
+            },
+        ).on_conflict_do_nothing(
+            index_elements=[AIGraphEvent.graph_run_id, AIGraphEvent.event_key]
+        ))
+
+    async def _handle_provider_node(
+        self,
+        state: ScalpynGraphState,
+    ) -> dict[str, Any]:
+        """Run provider I/O between two short, committed DB phases."""
+
+        async def _prepare(db):
+            run, request, message = await self._lock_node_context(
+                db, node_name="invoke_provider", state=state
+            )
+            conversation = await db.get(
+                AIAnalysisConversation, request.conversation_id
+            )
+            if conversation is None or conversation.tenant_id != run.tenant_id:
+                raise RuntimeError("ANALYSIS_CHAT_CONVERSATION_SCOPE_INVALID")
+            intent = _validated_analysis_chat_provider_intent(
+                dict(request.request_json or {})
+            )
+            if intent == "FAKE_PROVIDER_CANARY":
+                updates = await self._node_updates(
+                    db, run, request, message, "invoke_provider", state
+                )
+                await self._complete_node(
+                    db, run, request, message, "invoke_provider", updates
+                )
+                return updates, None
+
+            runtime_config = (
+                await db.execute(select(ConfigProfile).where(
+                    ConfigProfile.user_id == run.tenant_id,
+                    ConfigProfile.pool_id.is_(None),
+                    ConfigProfile.config_type == "ai_provider_runtime",
+                    ConfigProfile.is_active.is_(True),
+                ).order_by(ConfigProfile.updated_at.desc()).limit(1))
+            ).scalar_one_or_none()
+            enabled = bool(
+                runtime_config
+                and (runtime_config.config_json or {}).get(
+                    "normal_analysis_provider_enabled"
+                ) is True
+            )
+            if not enabled:
+                raise ProviderBlockedError(
+                    "NORMAL_ANALYSIS_PROVIDER_DISABLED",
+                    "The tenant-governed normal analysis provider gate is disabled",
+                )
+            invocation = await self._prepare_normal_provider(
+                db, run, request, message, conversation, state
+            )
+            return None, invocation
+
+        try:
+            local_updates, invocation = await self._transaction(_prepare)
+            if invocation is None:
+                return local_updates or {}
+
+            async def _start_transport(db):
+                run, request, message = await self._lock_node_context(
+                    db, node_name="invoke_provider", state=state
+                )
+                if request.id != invocation.request_id or message.id != invocation.message_id:
+                    raise RuntimeError("ANALYSIS_CHAT_PROVIDER_START_SCOPE_INVALID")
+                await BudgetReservationAudit.mark_transport_started(
+                    db,
+                    tenant_id=invocation.tenant_id,
+                    ai_request_id=invocation.request_id,
+                )
+                run.provider_transport_attempted = True
+                message.provider_transport_attempted = True
+
+            # A cancel committed after preparation but before this fence stops
+            # transport.  Once this transaction commits, the ledger truthfully
+            # records that the external request may be billable.
+            await self._transaction(_start_transport)
+
+            try:
+                response = await self._invoke_normal_provider(invocation)
+            except Exception as exc:
+                await self._transaction(
+                    lambda db: BudgetReservationAudit.mark_transport_error(
+                        db,
+                        tenant_id=invocation.tenant_id,
+                        ai_request_id=invocation.request_id,
+                        reason_code="ANALYSIS_CHAT_PROVIDER_TRANSPORT_FAILED",
+                    )
+                )
+                raise ProviderTransportError(
+                    "ANALYSIS_CHAT_PROVIDER_TRANSPORT_FAILED"
+                ) from exc
+
+            usage_audit, terminal_status = await self._transaction(
+                lambda db: self._reconcile_provider_response(
+                    db, invocation=invocation, response=response
+                )
+            )
+            if terminal_status is not None:
+                raise RuntimeError(
+                    "ANALYSIS_CHAT_MESSAGE_CANCELLED_AFTER_TRANSPORT"
+                    if terminal_status == "CANCELLED"
+                    else f"ANALYSIS_CHAT_GRAPH_RUN_{terminal_status}"
+                )
+
+            actual_tokens = int(response.tokens_input) + int(response.tokens_output)
+            actual_cost = (
+                Decimal(response.tokens_input) * invocation.input_rate
+                + Decimal(response.tokens_output) * invocation.output_rate
+            ) / Decimal("1000000")
+            reconciliation_error = None
+            if invocation.budget_enforcement_enabled:
+                checks = (
+                    (
+                        actual_tokens > invocation.request_token_limit,
+                        "ANALYSIS_CHAT_REQUEST_RECONCILIATION_EXCEEDED",
+                    ),
+                    (
+                        invocation.daily_token_limit is not None
+                        and invocation.used_today + actual_tokens
+                        > invocation.daily_token_limit,
+                        "ANALYSIS_CHAT_DAILY_RECONCILIATION_EXCEEDED",
+                    ),
+                    (
+                        invocation.monthly_token_limit is not None
+                        and invocation.used_month + actual_tokens
+                        > invocation.monthly_token_limit,
+                        "ANALYSIS_CHAT_MONTHLY_RECONCILIATION_EXCEEDED",
+                    ),
+                    (
+                        invocation.provider_key_monthly_token_limit is not None
+                        and usage_audit["provider_tokens_used_month"]
+                        > invocation.provider_key_monthly_token_limit,
+                        "ANALYSIS_CHAT_PROVIDER_KEY_RECONCILIATION_EXCEEDED",
+                    ),
+                    (
+                        actual_cost > invocation.max_cost_usd,
+                        "ANALYSIS_CHAT_COST_RECONCILIATION_EXCEEDED",
+                    ),
+                )
+                reconciliation_error = next(
+                    (code for exceeded, code in checks if exceeded), None
+                )
+            if response.terminal_error_code is not None:
+                raise ProviderOutputError(str(response.terminal_error_code))
+            if reconciliation_error is not None:
+                raise ProviderTransportError(reconciliation_error)
+
+            answer = self._build_provider_answer(invocation, response)
+
+            updates = {
+                "answer": answer.model_dump(mode="json"),
+                "provider_transport_attempted": True,
+            }
+
+            async def _complete(db):
+                run, request, message = await self._lock_node_context(
+                    db, node_name="invoke_provider", state=state
+                )
+                if request.id != invocation.request_id or message.id != invocation.message_id:
+                    raise RuntimeError("ANALYSIS_CHAT_PROVIDER_FINALIZATION_SCOPE_INVALID")
+                await self._emit_tokens(
+                    db, run, request, message, answer.answer
+                )
+                await self._complete_node(
+                    db, run, request, message, "invoke_provider", updates
+                )
+                return updates
+
+            return await self._transaction(_complete)
+        except GraphNodeExecutionError:
+            raise
+        except Exception as exc:
+            raise GraphNodeExecutionError("invoke_provider", exc) from exc
 
     async def _node_updates(
         self,
@@ -424,26 +1038,6 @@ class AnalysisChatGraphNodeHandler:
                     "GOVERNED_CHANGE_REQUIRES_AN_UNAMBIGUOUS_TYPED_TARGET",
                 ]
                 return {"answer": answer, "proposal_id": None}
-            changes: list[dict[str, Any]] = []
-            for raw_change in _expand_compact_profile_changes(raw_proposal):
-                change = dict(raw_change)
-                if change.get("op") != "remove":
-                    try:
-                        change["value"] = json.loads(str(change.pop("value_json")))
-                    except (KeyError, TypeError, ValueError) as exc:
-                        raise ValueError(
-                            f"Invalid value_json for governed change path {change.get('path')}"
-                        ) from exc
-                else:
-                    change.pop("value_json", None)
-                changes.append(change)
-            typed_proposal = {
-                "operation_type": raw_proposal.get("operation_type"),
-                "target": raw_proposal.get("target") or {},
-                "objective": raw_proposal.get("objective"),
-                "risk": raw_proposal.get("risk"),
-                "changes": changes,
-            }
             canonical_refs = await _load_canonical_evidence_refs(
                 db,
                 run=run,
@@ -456,19 +1050,22 @@ class AnalysisChatGraphNodeHandler:
                 request=request,
                 conversation=conversation,
             )
-            typed_proposal["changes"] = _retain_canonical_change_evidence(
-                typed_proposal["changes"],
-                evidence_ids,
-            )
-            plan = await create_governed_change_dry_run(
-                db,
-                run.tenant_id,
-                proposal=typed_proposal,
-                conversation_id=conversation.id,
-                message_id=message.id,
-                evidence_ids=evidence_ids,
-            )
-            proposal_id = UUID(plan["proposal_id"])
+            try:
+                typed_proposal = _materialize_governed_proposal(
+                    raw_proposal,
+                    evidence_ids,
+                )
+                plan = await create_governed_change_dry_run(
+                    db,
+                    run.tenant_id,
+                    proposal=typed_proposal,
+                    conversation_id=conversation.id,
+                    message_id=message.id,
+                    evidence_ids=evidence_ids,
+                )
+                proposal_id = UUID(plan["proposal_id"])
+            except (AttributeError, KeyError, LookupError, TypeError, ValueError) as exc:
+                raise GovernedProposalError() from exc
             message.proposal_id = proposal_id
             answer["answer"] = (
                 "A prévia foi validada. Revise o diff abaixo; a configuração só será "
@@ -479,74 +1076,53 @@ class AnalysisChatGraphNodeHandler:
             answer["proposal"] = plan
             answer["warnings"] = [
                 *(answer.get("warnings") or []),
-                "GLOBAL_RISK_AND_STRATEGIES_VALIDATION_PENDING",
+                "DETERMINISTIC_CANDIDATE_VALIDATION_PENDING",
             ]
             return {"proposal_id": str(proposal_id), "answer": answer}
         if node_name == "validate_risk_and_strategy":
-            from ..module_tool_runtime import ModuleToolRuntime
-
             expected = [
                 "global_risk.validate_recommendation",
                 "strategies.validate_recommendation",
             ]
             if request_json.get("tool_allowlist") != expected:
                 raise RuntimeError("ANALYSIS_CHAT_PROPOSAL_VALIDATOR_POLICY_INVALID")
-            dataset = await db.get(AIDatasetSnapshotRecord, request.dataset_snapshot_id)
-            if dataset is None or dataset.tenant_id != run.tenant_id:
-                raise RuntimeError("ANALYSIS_CHAT_DATASET_SCOPE_INVALID")
-            runtime = ModuleToolRuntime()
-            validation_refs: list[dict[str, Any]] = []
-            validation_quality: dict[str, str] = {}
-            tool_call_ids: list[str] = []
-            for tool_name in expected:
-                audit, output = await runtime.execute(
-                    db,
-                    tenant_id=run.tenant_id,
-                    request=request,
-                    dataset=dataset,
-                    tool_name=tool_name,
-                    tool_input={"tenant_id": str(run.tenant_id), "filters": {}},
+            proposal_id = state.get("proposal_id")
+            if not proposal_id:
+                raise GovernedProposalError(
+                    "ANALYSIS_CHAT_CANDIDATE_PLAN_REQUIRED"
                 )
-                tool_call_ids.append(str(audit.id))
-                evidence = (await db.execute(select(AIToolEvidenceRecord).where(
-                    AIToolEvidenceRecord.tool_call_audit_id == audit.id,
-                    AIToolEvidenceRecord.tenant_id == run.tenant_id,
-                ))).scalar_one()
-                validation_quality[tool_name] = str(output.get("quality") or "NO_DATA")
-                validation_refs.append({
-                    "evidence_id": str(evidence.id),
-                    "module": evidence.module_key,
-                    "label": tool_name,
-                    "source_timestamp": evidence.created_at.isoformat() if evidence.created_at else None,
-                    "source": "REFRESHED_READONLY_DATA",
-                })
+            validation = await validate_candidate_for_second_gate(
+                db,
+                run.tenant_id,
+                UUID(str(proposal_id)),
+            )
             answer = dict(state.get("answer") or {})
             proposal = dict(answer.get("proposal") or {})
-            vetoed = any(value == "NO_DATA" for value in validation_quality.values())
             proposal.update({
-                "risk_validation": (
-                    "VETO_NO_DATA" if validation_quality[expected[0]] == "NO_DATA"
-                    else "PASS_READONLY_EVIDENCE"
-                ),
-                "strategy_validation": (
-                    "VETO_NO_DATA" if validation_quality[expected[1]] == "NO_DATA"
-                    else "PASS_READONLY_EVIDENCE"
-                ),
+                "candidate_validation": validation,
+                "validation_scope": validation["validation_scope"],
+                "policy_semantic_validation": validation[
+                    "policy_semantic_validation"
+                ],
                 "candidate_created": False,
                 "shadow_started": False,
             })
             answer["proposal"] = proposal
-            answer["evidence_refs"] = [*(answer.get("evidence_refs") or []), *validation_refs]
-            answer["modules_consulted"] = ["global_risk", "strategies"]
-            if vetoed:
-                answer["warnings"] = [*(answer.get("warnings") or []), "PROPOSAL_VALIDATION_VETO_NO_DATA"]
-            return {
-                "answer": answer,
-                "evidence_refs": validation_refs,
-                "selected_evidence_refs": validation_refs,
-                "tool_call_ids": tool_call_ids,
-                "readonly_tool_call_ids": tool_call_ids,
-            }
+            answer["modules_consulted"] = ["governed_change_candidate_validator"]
+            if validation["decision"] != "PASS":
+                raise GovernedProposalError(
+                    "ANALYSIS_CHAT_RISK_STRATEGY_CANDIDATE_VETO"
+                )
+            answer["warnings"] = [
+                item for item in answer.get("warnings") or []
+                if item != "DETERMINISTIC_CANDIDATE_VALIDATION_PENDING"
+            ]
+            answer["warnings"] = [
+                *answer["warnings"],
+                *validation.get("warnings", []),
+                "GOVERNED_CANDIDATE_DETERMINISTIC_VALIDATION_PASSED",
+            ]
+            return {"answer": answer}
         if node_name == "execute_governed_proposal_if_confirmed":
             proposal_id = state.get("proposal_id")
             decision = dict(state.get("interrupt_decision") or {})
@@ -564,6 +1140,25 @@ class AnalysisChatGraphNodeHandler:
                 decision_id=decision.get("decision_id"),
             )
             answer = dict(state.get("answer") or {})
+            execution_result = dict(executed.get("execution_result") or {})
+            if execution_result.get("status") == "BLOCKED":
+                reason_code = str(
+                    execution_result.get("reason_code")
+                    or "ANALYSIS_CHAT_EXECUTION_FENCE_BLOCKED"
+                )
+                answer["answer"] = (
+                    "A execução foi bloqueada pela validação final. "
+                    "Nenhuma configuração operacional foi alterada; gere uma nova prévia."
+                )
+                answer["proposal"] = executed
+                answer["limitations"] = list(dict.fromkeys([
+                    *(answer.get("limitations") or []),
+                    reason_code,
+                ]))
+                return {
+                    "answer": answer,
+                    "proposal_execution_result": executed,
+                }
             answer["answer"] = (
                 "Alteração confirmada e aplicada com registro de auditoria e rollback disponível."
             )
@@ -586,10 +1181,11 @@ class AnalysisChatGraphNodeHandler:
             if intent == "FAKE_PROVIDER_CANARY":
                 environment = os.getenv("RAILWAY_ENVIRONMENT_NAME", "").lower()
                 fake_enabled = os.getenv("LANGGRAPH_FAKE_PROVIDER_CANARY_ENABLED", "false").lower() == "true"
-                if "staging" not in environment or not fake_enabled:
+                real_enabled = get_langgraph_settings().real_provider_canary_enabled
+                if "staging" not in environment or not fake_enabled or real_enabled:
                     raise ProviderBlockedError(
                         "FAKE_PROVIDER_CANARY_DISABLED",
-                        "Fake provider transport is allowed only in the governed staging environment",
+                        "Fake provider transport requires governed staging with the real-provider canary disabled",
                     )
                 refs = list(state.get("selected_evidence_refs") or [])
                 modules = list(dict.fromkeys(str(item.get("module")) for item in refs if item.get("module")))
@@ -600,7 +1196,59 @@ class AnalysisChatGraphNodeHandler:
                 )
                 answer_type = "READONLY_REFRESH" if based_on == "REFRESHED_READONLY_DATA" else "EXPLANATION"
                 is_proposal = state.get("data_mode") == "DRAFT_PROPOSAL"
+                canary_proposal = (
+                    await _validated_governed_staging_canary_proposal(
+                        db,
+                        run=run,
+                        request=request,
+                        conversation=conversation,
+                        selected_evidence_refs=refs,
+                    )
+                    if is_proposal
+                    else None
+                )
                 summary = str(state.get("parent_result_summary") or "A análise original foi concluída.")
+                if canary_proposal is not None:
+                    prompt = await db.get(AIPromptVersion, request.prompt_version_id)
+                    if prompt is None:  # defensive against a concurrent prompt deletion
+                        raise _governed_canary_block(
+                            "GOVERNED_STAGING_CANARY_PROMPT_INVALID"
+                        )
+                    # The helper verifies prompt identity, approval and hash.
+                    # Validate this transport-free provider fixture against
+                    # the original v1.5 schema before trusted metadata is added.
+                    validated_fixture = _validated_provider_answer(
+                        {
+                            "answer": (
+                                "Deterministic v1.5 preview for the inactive "
+                                "shadow-only staging canary; final approval remains required."
+                            ),
+                            "answer_type": "PROPOSAL",
+                            "based_on": "PROPOSAL_DRAFT",
+                            "parent_analysis_run_id": str(
+                                conversation.parent_analysis_run_id
+                            ),
+                            "evidence_refs": [{
+                                "evidence_id": canary_proposal["changes"][0][
+                                    "evidence_refs"
+                                ][0],
+                            }],
+                            "proposal": canary_proposal,
+                        },
+                        dict(prompt.output_schema_json),
+                    )
+                    answer = validated_fixture.model_copy(update={
+                        "modules_consulted": modules,
+                        "evidence_refs": refs,
+                        "limitations": ["STAGING_FAKE_PROVIDER_RESPONSE"],
+                    }).model_dump(mode="json")
+                    await self._emit_tokens(
+                        db, run, request, message, answer["answer"]
+                    )
+                    return {
+                        "answer": answer,
+                        "provider_transport_attempted": False,
+                    }
                 if based_on == "REFRESHED_READONLY_DATA":
                     answer_text = (
                         f"Resultado original congelado: {summary[:700]} "
@@ -643,30 +1291,9 @@ class AnalysisChatGraphNodeHandler:
                 await self._emit_tokens(db, run, request, message, answer["answer"])
                 return {"answer": answer, "provider_transport_attempted": False}
 
-            runtime_config = (
-                await db.execute(select(ConfigProfile).where(
-                    ConfigProfile.user_id == run.tenant_id,
-                    ConfigProfile.pool_id.is_(None),
-                    ConfigProfile.config_type == "ai_provider_runtime",
-                    ConfigProfile.is_active.is_(True),
-                ).order_by(ConfigProfile.updated_at.desc()).limit(1))
-            ).scalar_one_or_none()
-            enabled = bool(
-                runtime_config
-                and (runtime_config.config_json or {}).get("normal_analysis_provider_enabled") is True
-            )
-            if not enabled:
-                raise ProviderBlockedError(
-                    "NORMAL_ANALYSIS_PROVIDER_DISABLED",
-                    "The tenant-governed normal analysis provider gate is disabled",
-                )
-            answer = await self._invoke_normal_provider(
-                db, run, request, message, conversation, state
-            )
-            return {
-                "answer": answer.model_dump(mode="json"),
-                "provider_transport_attempted": True,
-            }
+            # NORMAL_ANALYSIS is dispatched by ``_handle_provider_node`` so
+            # the HTTP transport can never run inside this DB transaction.
+            raise RuntimeError("ANALYSIS_CHAT_PROVIDER_PHASED_DISPATCH_REQUIRED")
         if node_name == "validate_chat_output":
             AnalysisChatOutput.model_validate(state.get("answer"))
             return {}
@@ -699,7 +1326,7 @@ class AnalysisChatGraphNodeHandler:
             return {"status": "COMPLETED", "terminal_reason": "ANALYSIS_CHAT_MESSAGE_COMPLETED"}
         return {}
 
-    async def _invoke_normal_provider(
+    async def _prepare_normal_provider(
         self,
         db,
         run: AIGraphRun,
@@ -707,7 +1334,7 @@ class AnalysisChatGraphNodeHandler:
         message: AIAnalysisMessage,
         conversation: AIAnalysisConversation,
         state: ScalpynGraphState,
-    ) -> AnalysisChatOutput:
+    ) -> _ProviderInvocation:
         request_json = dict(request.request_json or {})
         budget_enforcement_enabled = (
             request_json.get("budget_enforcement_enabled") is not False
@@ -925,167 +1552,249 @@ class AnalysisChatGraphNodeHandler:
                 "The chat provider was blocked by the per-turn cost ceiling",
             )
 
-        activated = await run_db_task(
-            lambda reservation_db: BudgetReservationAudit.activate_placeholder(
-                reservation_db,
-                tenant_id=run.tenant_id,
-                ai_request_id=request.id,
-                budget_policy_id=budget.id,
-                model_approval_id=approval.id,
-                provider=resolution.effective_provider,
-                model=resolution.effective_model,
-                module="analysis_chat",
-                estimated_input_tokens=estimated_input_tokens,
-                max_output_tokens=max_output_tokens,
-                request_token_limit=int(budget.request_token_limit),
-                daily_token_limit=int(budget.daily_token_limit),
-                monthly_token_limit=int(budget.monthly_token_limit),
-                reserved_tokens=reserved_tokens,
-                reserved_cost_usd=reserved_cost,
-            ),
-            celery=True,
+        activated = await BudgetReservationAudit.activate_placeholder(
+            db,
+            tenant_id=run.tenant_id,
+            ai_request_id=request.id,
+            budget_policy_id=budget.id,
+            model_approval_id=approval.id,
+            provider=resolution.effective_provider,
+            model=resolution.effective_model,
+            module="analysis_chat",
+            estimated_input_tokens=estimated_input_tokens,
+            max_output_tokens=max_output_tokens,
+            request_token_limit=int(budget.request_token_limit),
+            daily_token_limit=int(budget.daily_token_limit or 0),
+            monthly_token_limit=int(budget.monthly_token_limit or 0),
+            reserved_tokens=reserved_tokens,
+            reserved_cost_usd=reserved_cost,
         )
         if not activated["activated"]:
             raise ProviderBlockedError(
                 "ANALYSIS_CHAT_BUDGET_RESERVATION_ALREADY_ACTIVATED_NO_RETRY",
                 "The chat provider was not retried because this turn already has an activated reservation",
             )
-        try:
-            await run_db_task(
-                lambda reservation_db: BudgetReservationAudit.mark_transport_started(
-                    reservation_db,
-                    tenant_id=run.tenant_id,
-                    ai_request_id=request.id,
-                ),
-                celery=True,
-            )
-        except Exception:
-            await run_db_task(
-                lambda reservation_db: BudgetReservationAudit.release_before_transport(
-                    reservation_db,
-                    tenant_id=run.tenant_id,
-                    ai_request_id=request.id,
-                    reason_code="ANALYSIS_CHAT_TRANSPORT_START_AUDIT_FAILED",
-                ),
-                celery=True,
-            )
-            raise
-        try:
-            response = await SystemicLangGraphBridge.execute_json_provider(
-                provider=resolution.effective_provider,
-                model=resolution.effective_model,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                api_key=decrypt_value(bytes(key.api_key_encrypted)),
-                request_id=str(request.id),
-                max_output_tokens=max_output_tokens,
-                output_schema=prompt.output_schema_json,
-            )
-        except Exception as exc:
-            await run_db_task(
-                lambda reservation_db: BudgetReservationAudit.mark_transport_error(
-                    reservation_db,
-                    tenant_id=run.tenant_id,
-                    ai_request_id=request.id,
-                    reason_code="ANALYSIS_CHAT_PROVIDER_TRANSPORT_FAILED",
-                ),
-                celery=True,
-            )
-            raise ProviderTransportError("ANALYSIS_CHAT_PROVIDER_TRANSPORT_FAILED") from exc
+        return _ProviderInvocation(
+            tenant_id=run.tenant_id,
+            request_id=request.id,
+            message_id=message.id,
+            parent_analysis_run_id=conversation.parent_analysis_run_id,
+            provider_key_id=key.id,
+            provider=resolution.effective_provider,
+            model=resolution.effective_model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            api_key=decrypt_value(bytes(key.api_key_encrypted)),
+            max_output_tokens=max_output_tokens,
+            output_schema=dict(prompt.output_schema_json or {}),
+            budget_enforcement_enabled=budget_enforcement_enabled,
+            reserved_tokens=reserved_tokens,
+            reserved_cost=reserved_cost,
+            used_today=used_today,
+            used_month=used_month,
+            request_token_limit=int(budget.request_token_limit),
+            daily_token_limit=(
+                int(budget.daily_token_limit)
+                if budget.daily_token_limit is not None else None
+            ),
+            monthly_token_limit=(
+                int(budget.monthly_token_limit)
+                if budget.monthly_token_limit is not None else None
+            ),
+            provider_key_monthly_token_limit=(
+                int(key.monthly_token_limit)
+                if key.monthly_token_limit is not None else None
+            ),
+            provider_key_tokens_used_month_before=int(key.tokens_used_month or 0),
+            input_rate=input_rate,
+            output_rate=output_rate,
+            max_cost_usd=Decimal(approval.max_cost_usd),
+            pricing_snapshot_version=approval.pricing_snapshot_hash,
+            selected_evidence_refs=tuple(
+                dict(item) for item in state.get("selected_evidence_refs") or []
+            ),
+            data_mode=str(state.get("data_mode") or "FROZEN_ANALYSIS_ONLY"),
+        )
+
+    async def _invoke_normal_provider(self, invocation: _ProviderInvocation):
+        # Intentionally contains no DB/session parameter.  The reservation and
+        # TRANSPORT_STARTED audit were committed by the prepare phase.
+        return await SystemicLangGraphBridge.execute_json_provider(
+            provider=invocation.provider,
+            model=invocation.model,
+            system_prompt=invocation.system_prompt,
+            user_prompt=invocation.user_prompt,
+            api_key=invocation.api_key,
+            request_id=str(invocation.request_id),
+            max_output_tokens=invocation.max_output_tokens,
+            output_schema=invocation.output_schema,
+        )
+
+    async def _reconcile_provider_response(
+        self,
+        db,
+        *,
+        invocation: _ProviderInvocation,
+        response,
+    ) -> tuple[dict[str, int], str | None]:
+        run = (
+            await db.execute(select(AIGraphRun).where(
+                AIGraphRun.id == self.graph_run_id,
+                AIGraphRun.tenant_id == invocation.tenant_id,
+            ).with_for_update())
+        ).scalar_one_or_none()
+        message = (
+            await db.execute(select(AIAnalysisMessage).where(
+                AIAnalysisMessage.id == invocation.message_id,
+                AIAnalysisMessage.tenant_id == invocation.tenant_id,
+                AIAnalysisMessage.ai_request_id == invocation.request_id,
+            ).with_for_update())
+        ).scalar_one_or_none()
+        if run is None or message is None:
+            raise RuntimeError("ANALYSIS_CHAT_PROVIDER_RECONCILIATION_SCOPE_INVALID")
 
         actual_tokens = int(response.tokens_input) + int(response.tokens_output)
         actual_cost = (
-            Decimal(response.tokens_input) * input_rate
-            + Decimal(response.tokens_output) * output_rate
-        ) / million
-        await run_db_task(
-            lambda reservation_db: BudgetReservationAudit.reconcile(
-                reservation_db,
-                tenant_id=run.tenant_id,
-                ai_request_id=request.id,
-                reserved_tokens=reserved_tokens,
-                actual_tokens=actual_tokens,
-                actual_cost_usd=actual_cost,
-                terminal_reason=str(
-                    response.terminal_error_code
-                    or (
-                        "PROVIDER_RESPONSE_RECEIVED"
-                        if budget_enforcement_enabled
-                        else "AUDIT_ONLY_PROVIDER_RESPONSE_RECEIVED"
-                    )
-                ),
+            Decimal(response.tokens_input) * invocation.input_rate
+            + Decimal(response.tokens_output) * invocation.output_rate
+        ) / Decimal("1000000")
+        await BudgetReservationAudit.reconcile(
+            db,
+            tenant_id=invocation.tenant_id,
+            ai_request_id=invocation.request_id,
+            reserved_tokens=invocation.reserved_tokens,
+            actual_tokens=actual_tokens,
+            actual_cost_usd=actual_cost,
+            terminal_reason=str(
+                response.terminal_error_code
+                or (
+                    "PROVIDER_RESPONSE_RECEIVED"
+                    if invocation.budget_enforcement_enabled
+                    else "AUDIT_ONLY_PROVIDER_RESPONSE_RECEIVED"
+                )
             ),
-            celery=True,
         )
-        usage_audit = await run_db_task(
-            lambda usage_db: self._record_provider_usage(
-                usage_db,
-                tenant_id=run.tenant_id,
-                ai_request_id=request.id,
-                provider=resolution.effective_provider,
-                model=resolution.effective_model,
+        usage_audit = await self._record_provider_usage(
+            db,
+            tenant_id=invocation.tenant_id,
+            ai_request_id=invocation.request_id,
+            provider=invocation.provider,
+            model=invocation.model,
+            tokens_input=int(response.tokens_input),
+            tokens_output=int(response.tokens_output),
+            estimated_cost=invocation.reserved_cost,
+            actual_cost=actual_cost,
+            pricing_snapshot_version=invocation.pricing_snapshot_version,
+            provider_key_id=invocation.provider_key_id,
+            provider_key_tokens_used_month_before=(
+                invocation.provider_key_tokens_used_month_before
+            ),
+        )
+        message.provider_transport_attempted = True
+        terminal_status = (
+            "CANCELLED" if message.status == "CANCELLED" else
+            run.status if run.status in _TERMINAL_GRAPH_RUN_STATUSES else None
+        )
+        if terminal_status is not None:
+            await self._attribute_terminal_provider_usage(
+                db,
+                tenant_id=invocation.tenant_id,
+                message=message,
                 tokens_input=int(response.tokens_input),
                 tokens_output=int(response.tokens_output),
-                estimated_cost=reserved_cost,
                 actual_cost=actual_cost,
-                pricing_snapshot_version=approval.pricing_snapshot_hash,
-            ),
-            celery=True,
+            )
+        return usage_audit, terminal_status
+
+    @staticmethod
+    async def _attribute_terminal_provider_usage(
+        db,
+        *,
+        tenant_id: UUID,
+        message: AIAnalysisMessage,
+        tokens_input: int,
+        tokens_output: int,
+        actual_cost: Decimal,
+    ) -> None:
+        """Attribute a billable response even when cancellation won the race."""
+        existing = (
+            message.tokens_input,
+            message.tokens_output,
+            message.cost_usd,
         )
-        reconciliation_error = None
-        if budget_enforcement_enabled:
-            reconciliation_error = next((code for exceeded, code in (
-                (actual_tokens > int(budget.request_token_limit), "ANALYSIS_CHAT_REQUEST_RECONCILIATION_EXCEEDED"),
-                (used_today + actual_tokens > int(budget.daily_token_limit), "ANALYSIS_CHAT_DAILY_RECONCILIATION_EXCEEDED"),
-                (used_month + actual_tokens > int(budget.monthly_token_limit), "ANALYSIS_CHAT_MONTHLY_RECONCILIATION_EXCEEDED"),
-                (int(usage_audit["provider_tokens_used_month"]) > int(key.monthly_token_limit), "ANALYSIS_CHAT_PROVIDER_KEY_RECONCILIATION_EXCEEDED"),
-                (actual_cost > Decimal(approval.max_cost_usd), "ANALYSIS_CHAT_COST_RECONCILIATION_EXCEEDED"),
-            ) if exceeded), None)
-        if response.terminal_error_code is not None:
-            raise ProviderOutputError(str(response.terminal_error_code))
-        if reconciliation_error is not None:
-            raise ProviderTransportError(reconciliation_error)
-        try:
-            provider_answer = AnalysisChatOutput.model_validate(response.output)
-        except Exception as exc:
-            raise ProviderOutputError("ANALYSIS_CHAT_OUTPUT_SCHEMA_INVALID") from exc
+        if any(value is not None for value in existing):
+            if (
+                all(value is not None for value in existing)
+                and message.tokens_input == tokens_input
+                and message.tokens_output == tokens_output
+                and Decimal(message.cost_usd) == actual_cost
+            ):
+                return
+            raise RuntimeError("ANALYSIS_CHAT_TERMINAL_USAGE_ATTRIBUTION_CONFLICT")
+
+        conversation = (
+            await db.execute(
+                select(AIAnalysisConversation).where(
+                    AIAnalysisConversation.id == message.conversation_id,
+                    AIAnalysisConversation.tenant_id == tenant_id,
+                ).with_for_update()
+            )
+        ).scalar_one_or_none()
+        if conversation is None:
+            raise RuntimeError("ANALYSIS_CHAT_TERMINAL_USAGE_CONVERSATION_MISSING")
+
+        now = _now()
+        message.tokens_input = tokens_input
+        message.tokens_output = tokens_output
+        message.cost_usd = actual_cost
+        message.lock_version = int(message.lock_version or 0) + 1
+        conversation.total_tokens_input = (
+            int(conversation.total_tokens_input or 0) + tokens_input
+        )
+        conversation.total_tokens_output = (
+            int(conversation.total_tokens_output or 0) + tokens_output
+        )
+        conversation.total_cost_usd = (
+            Decimal(str(conversation.total_cost_usd or 0)) + actual_cost
+        )
+        conversation.updated_at = now
+        conversation.lock_version = int(conversation.lock_version or 0) + 1
+
+    @staticmethod
+    def _build_provider_answer(invocation: _ProviderInvocation, response) -> AnalysisChatOutput:
+        provider_answer = _validated_provider_answer(
+            response.output,
+            invocation.output_schema,
+        )
         provider_answer = _normalize_provider_parent(
             provider_answer,
-            conversation.parent_analysis_run_id,
+            invocation.parent_analysis_run_id,
         )
-
-        refs = list(state.get("selected_evidence_refs") or [])
+        refs = [dict(item) for item in invocation.selected_evidence_refs]
         modules = list(dict.fromkeys(
             str(item.get("module")) for item in refs if item.get("module")
         ))
-        refreshed = state.get("data_mode") == "ALLOW_READONLY_REFRESH"
-        is_proposal = state.get("data_mode") == "DRAFT_PROPOSAL"
-        if is_proposal and not isinstance(provider_answer.proposal, dict):
-            raise ProviderOutputError("ANALYSIS_CHAT_PROPOSAL_OUTPUT_MISSING")
-        answer = AnalysisChatOutput(
+        refreshed = invocation.data_mode == "ALLOW_READONLY_REFRESH"
+        is_proposal = invocation.data_mode == "DRAFT_PROPOSAL"
+        answer_type, based_on, proposal = _normalized_provider_mode(
+            provider_answer,
+            is_proposal=is_proposal,
+            refreshed=refreshed,
+        )
+        return AnalysisChatOutput(
             answer=provider_answer.answer,
-            answer_type=(
-                "PROPOSAL"
-                if is_proposal
-                else "READONLY_REFRESH" if refreshed else "EXPLANATION"
-            ),
-            based_on=(
-                "PROPOSAL_DRAFT"
-                if is_proposal
-                else "REFRESHED_READONLY_DATA" if refreshed else "FROZEN_ANALYSIS"
-            ),
-            parent_analysis_run_id=conversation.parent_analysis_run_id,
+            answer_type=answer_type,
+            based_on=based_on,
+            parent_analysis_run_id=invocation.parent_analysis_run_id,
             modules_consulted=modules,
             evidence_refs=refs,
             new_data_queried=refreshed,
             new_data_window=provider_answer.new_data_window,
-            proposal=provider_answer.proposal if is_proposal else None,
+            proposal=proposal,
             warnings=provider_answer.warnings,
             limitations=provider_answer.limitations,
             suggested_questions=provider_answer.suggested_questions,
         )
-        await self._emit_tokens(db, run, request, message, answer.answer)
-        return answer
 
     async def _record_provider_usage(
         self,
@@ -1100,6 +1809,8 @@ class AnalysisChatGraphNodeHandler:
         estimated_cost: Decimal,
         actual_cost: Decimal,
         pricing_snapshot_version: str,
+        provider_key_id: UUID,
+        provider_key_tokens_used_month_before: int,
     ) -> dict[str, int]:
         existing = (
             await db.execute(select(AIUsageRecord).where(
@@ -1109,14 +1820,11 @@ class AnalysisChatGraphNodeHandler:
         ).scalar_one_or_none()
         key = (
             await db.execute(select(AIProviderKey).where(
+                AIProviderKey.id == provider_key_id,
                 AIProviderKey.user_id == tenant_id,
                 AIProviderKey.provider == provider,
-                AIProviderKey.is_active.is_(True),
-                AIProviderKey.is_validated.is_(True),
             ).with_for_update())
         ).scalar_one_or_none()
-        if key is None:
-            raise RuntimeError("ANALYSIS_CHAT_PROVIDER_KEY_DISAPPEARED_AFTER_TRANSPORT")
         if existing is None:
             db.add(AIUsageRecord(
                 tenant_id=tenant_id,
@@ -1131,10 +1839,11 @@ class AnalysisChatGraphNodeHandler:
                 currency="USD",
                 pricing_snapshot_version=pricing_snapshot_version,
             ))
-            key.tokens_used_month = (
-                int(key.tokens_used_month or 0) + tokens_input + tokens_output
-            )
-            key.last_used_at = _now()
+            if key is not None:
+                key.tokens_used_month = (
+                    int(key.tokens_used_month or 0) + tokens_input + tokens_output
+                )
+                key.last_used_at = _now()
         elif (
             int(existing.tokens_input) != tokens_input
             or int(existing.tokens_output) != tokens_output
@@ -1142,7 +1851,12 @@ class AnalysisChatGraphNodeHandler:
         ):
             raise RuntimeError("ANALYSIS_CHAT_PROVIDER_USAGE_CONFLICT")
         await db.flush()
-        return {"provider_tokens_used_month": int(key.tokens_used_month or 0)}
+        provider_tokens_used_month = (
+            int(key.tokens_used_month or 0)
+            if key is not None
+            else provider_key_tokens_used_month_before + tokens_input + tokens_output
+        )
+        return {"provider_tokens_used_month": provider_tokens_used_month}
 
     async def _runtime_config(self, db, tenant_id: UUID) -> AnalysisChatRuntimeConfig:
         record = (
@@ -1326,4 +2040,3 @@ class AnalysisChatGraphNodeHandler:
             ).on_conflict_do_nothing(
                 index_elements=[AIGraphEvent.graph_run_id, AIGraphEvent.event_key]
             ))
-from ...models.ai_provider_key import AIProviderKey

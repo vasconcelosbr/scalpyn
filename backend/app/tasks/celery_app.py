@@ -105,6 +105,7 @@ _ALL_TASK_MODULES = (
         "app.tasks.ml_data_certification",
         "app.tasks.prune_indicator_snapshots",
         "app.tasks.ai_orchestration",
+        "app.tasks.governed_cache_reconciliation",
 )
 
 
@@ -114,7 +115,10 @@ def _configured_task_modules() -> tuple[str, ...]:
         item.strip() for item in os.getenv("WORKER_QUEUES", "").split(",") if item.strip()
     )
     if queues == (QUEUE_AI_ORCHESTRATION,):
-        return ("app.tasks.ai_orchestration",)
+        return (
+            "app.tasks.ai_orchestration",
+            "app.tasks.governed_cache_reconciliation",
+        )
     return _ALL_TASK_MODULES
 
 
@@ -246,6 +250,8 @@ TASK_ROUTES = {
     "app.tasks.ai_orchestration.recover_stale_graph_runs": {"queue": QUEUE_AI_ORCHESTRATION},
     "app.tasks.ai_orchestration.cancel_graph_run": {"queue": QUEUE_AI_ORCHESTRATION},
     "app.tasks.ai_orchestration.dispatch_shadow_resume_events": {"queue": QUEUE_AI_ORCHESTRATION},
+    "app.tasks.governed_cache_reconciliation.reconcile": {"queue": QUEUE_AI_ORCHESTRATION},
+    "app.tasks.governed_cache_reconciliation.dispatch_pending": {"queue": QUEUE_AI_ORCHESTRATION},
 }
 
 # Static queue declarations so beat / dispatch never rely on an "implicit"
@@ -492,6 +498,7 @@ TASK_ANNOTATIONS = {
     },
     "app.tasks.ai_orchestration.resume_graph_run": {
         "time_limit": 900, "soft_time_limit": 840, "rate_limit": "12/m", "max_retries": 0,
+        **_NO_REQUEUE_ON_WORKER_LOSS,
     },
     "app.tasks.ai_orchestration.recover_stale_graph_runs": {
         "time_limit": 120, "soft_time_limit": 100, "rate_limit": "2/m", "max_retries": 0,
@@ -502,6 +509,13 @@ TASK_ANNOTATIONS = {
     },
     "app.tasks.ai_orchestration.dispatch_shadow_resume_events": {
         "time_limit": 120, "soft_time_limit": 100, "rate_limit": "2/m", "max_retries": 0,
+        **_NO_REQUEUE_ON_WORKER_LOSS,
+    },
+    "app.tasks.governed_cache_reconciliation.reconcile": {
+        "time_limit": 60, "soft_time_limit": 50, "rate_limit": "30/m", "max_retries": 3,
+    },
+    "app.tasks.governed_cache_reconciliation.dispatch_pending": {
+        "time_limit": 60, "soft_time_limit": 50, "rate_limit": "4/m", "max_retries": 0,
         **_NO_REQUEUE_ON_WORKER_LOSS,
     },
 }
@@ -763,6 +777,11 @@ celery_app.conf.beat_schedule = {
     "ai_orchestration_shadow_resume_events": {
         "task": "app.tasks.ai_orchestration.dispatch_shadow_resume_events",
         "schedule": 60.0,
+        "options": {"queue": QUEUE_AI_ORCHESTRATION},
+    },
+    "governed_cache_reconciliation_dispatch": {
+        "task": "app.tasks.governed_cache_reconciliation.dispatch_pending",
+        "schedule": 30.0,
         "options": {"queue": QUEUE_AI_ORCHESTRATION},
     },
 }

@@ -101,6 +101,21 @@ class ProviderOutputError(RuntimeError):
         super().__init__(reason_code)
 
 
+class GovernedProposalError(RuntimeError):
+    """Typed fail-closed rejection for an unsafe or inapplicable draft."""
+
+    error_kind = "GOVERNED_PROPOSAL_INVALID"
+    provider_transport_attempted = True
+
+    def __init__(self, reason_code: str = "ANALYSIS_CHAT_PROPOSAL_NOT_APPLICABLE"):
+        self.reason_code = reason_code
+        self.safe_message = (
+            "A governed preview could not be generated because the proposed paths "
+            "do not match the current configuration contract"
+        )
+        super().__init__(reason_code)
+
+
 def fail(code: AIErrorCode, message: str, *, retryable: bool = False, http_status: int = 422,
          operator_action: str = "Review the request and audit trail", attempt: int = 1) -> AIOrchestrationError:
     return AIOrchestrationError(AIError(

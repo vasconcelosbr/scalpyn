@@ -135,6 +135,45 @@ def test_dedup_redis_unreachable_fails_open(monkeypatch, caplog):
     assert len(fake.sent) == 1
 
 
+def test_dedup_publish_failure_releases_its_lock_for_immediate_retry(monkeypatch):
+    """A broker failure must not strand the durable outbox behind the TTL."""
+    from app.tasks import task_dispatch as td
+    from app.tasks import celery_app as celery_mod
+
+    store: dict[str, Any] = {}
+    _patch_redis(monkeypatch, store)
+
+    class _FlakyCelery(_FakeCelery):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempts = 0
+
+        def send_task(self, name, *args, **kwargs):
+            self.attempts += 1
+            if self.attempts == 1:
+                raise ConnectionError("broker unavailable")
+            return super().send_task(name, *args, **kwargs)
+
+    fake = _FlakyCelery()
+    monkeypatch.setattr(celery_mod, "celery_app", fake)
+
+    with pytest.raises(ConnectionError, match="broker unavailable"):
+        td.enqueue(
+            "app.tasks.ai_orchestration.start_graph_run",
+            dedup_key="ai-graph-dispatch:start:run-1",
+            ttl_seconds=960,
+        )
+
+    assert not any(key.endswith("ai-graph-dispatch:start:run-1") for key in store)
+    retried = td.enqueue(
+        "app.tasks.ai_orchestration.start_graph_run",
+        dedup_key="ai-graph-dispatch:start:run-1",
+        ttl_seconds=960,
+    )
+    assert retried == "fake-async-id"
+    assert fake.attempts == 2
+
+
 # ── Group 2: status endpoint payload shape ─────────────────────────────────
 
 class _MiniSyncRedis:

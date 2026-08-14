@@ -8,7 +8,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..ai_orchestration.langgraph.registry import resolve_graph
-from ..models.ai_graph import AIGraphDefinition, AIGraphEvent, AIGraphInterrupt, AIGraphRun
+from ..models.ai_graph import (
+    AI_GRAPH_DISPATCH_RESUME,
+    AI_GRAPH_DISPATCH_START,
+    AIGraphDefinition,
+    AIGraphEvent,
+    AIGraphInterrupt,
+    AIGraphRun,
+)
 from ..models.systemic_ai import AIRequestRecord
 
 
@@ -73,6 +80,9 @@ class AIGraphRunService:
             thread_id=uuid4(),
             idempotency_key=idempotency_key,
             status="QUEUED",
+            dispatch_kind=AI_GRAPH_DISPATCH_START,
+            dispatch_interrupt_id=None,
+            dispatch_decision_id=None,
             state_schema_version=definition.state_schema_version,
             authority=request.authority,
         )
@@ -130,17 +140,48 @@ class AIGraphRunService:
         decision_id: UUID,
         idempotency_key: str,
         edits: dict[str, Any] | None,
-    ) -> AIGraphRun:
-        run = await AIGraphRunService.get(db, tenant_id=tenant_id, run_id=run_id)
-        interrupt_record = await db.get(AIGraphInterrupt, interrupt_id)
+    ) -> tuple[AIGraphRun, bool, UUID]:
+        run = (
+            await db.execute(select(AIGraphRun).where(
+                AIGraphRun.id == run_id,
+                AIGraphRun.tenant_id == tenant_id,
+            ).with_for_update())
+        ).scalar_one_or_none()
+        if run is None:
+            raise GraphAccessError("GRAPH_RUN_NOT_FOUND")
+        if run.status in {"COMPLETED", "FAILED", "CANCELLED"}:
+            raise GraphAccessError("GRAPH_RUN_TERMINAL")
+        interrupt_record = (
+            await db.execute(select(AIGraphInterrupt).where(
+                AIGraphInterrupt.id == interrupt_id,
+            ).with_for_update())
+        ).scalar_one_or_none()
         if (
             interrupt_record is None
             or interrupt_record.tenant_id != tenant_id
             or interrupt_record.graph_run_id != run_id
         ):
             raise GraphAccessError("GRAPH_INTERRUPT_NOT_FOUND")
+        expected_run_status = (
+            "WAITING_SHADOW"
+            if interrupt_record.interrupt_type == "SHADOW_EVIDENCE"
+            else "INTERRUPTED"
+        )
         if interrupt_record.idempotency_key == idempotency_key:
-            return run
+            if interrupt_record.decision_id is None:
+                raise GraphAccessError("GRAPH_INTERRUPT_DECISION_INVALID")
+            if run.status == "QUEUED":
+                if (
+                    run.dispatch_kind != AI_GRAPH_DISPATCH_RESUME
+                    or run.dispatch_interrupt_id != interrupt_id
+                    or run.dispatch_decision_id != interrupt_record.decision_id
+                ):
+                    raise GraphAccessError("GRAPH_RESUME_IDEMPOTENCY_CONFLICT")
+            elif run.status != expected_run_status:
+                raise GraphAccessError("GRAPH_RUN_INTERRUPT_STATE_MISMATCH")
+            return run, True, interrupt_record.decision_id
+        if run.status != expected_run_status:
+            raise GraphAccessError("GRAPH_RUN_INTERRUPT_STATE_MISMATCH")
         if interrupt_record.status != "PENDING":
             raise GraphAccessError("GRAPH_INTERRUPT_ALREADY_RESOLVED")
         if decision not in {"approve", "reject", "edit"}:
@@ -159,6 +200,9 @@ class AIGraphRunService:
         interrupt_record.idempotency_key = idempotency_key
         interrupt_record.resolved_at = now
         run.status = "QUEUED"
+        run.dispatch_kind = AI_GRAPH_DISPATCH_RESUME
+        run.dispatch_interrupt_id = interrupt_id
+        run.dispatch_decision_id = decision_id
         run.updated_at = now
         db.add(AIGraphEvent(
             tenant_id=tenant_id,
@@ -169,7 +213,7 @@ class AIGraphRunService:
             payload={"interrupt_id": str(interrupt_id), "decision": decision},
         ))
         await db.flush()
-        return run
+        return run, False, decision_id
 
     @staticmethod
     async def cancel(db: AsyncSession, *, tenant_id: UUID, run_id: UUID, actor_user_id: UUID) -> AIGraphRun:

@@ -3,6 +3,8 @@ from __future__ import annotations
 import inspect
 import importlib.util
 import json
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 import uuid
@@ -27,6 +29,24 @@ def test_chat_does_not_create_new_provider_intent():
         "NORMAL_ANALYSIS", "FAKE_PROVIDER_CANARY", "REAL_PROVIDER_CANARY",
     }
     assert "FOLLOW_UP_CHAT" in {item.value for item in AnalysisChatRequestKind}
+
+
+def test_analysis_chat_provider_transport_rejects_unknown_or_real_canary_intent():
+    from app.ai_orchestration.errors import ProviderBlockedError
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        _validated_analysis_chat_provider_intent,
+    )
+
+    assert _validated_analysis_chat_provider_intent(
+        {"request_intent": "NORMAL_ANALYSIS"}
+    ) == "NORMAL_ANALYSIS"
+    assert _validated_analysis_chat_provider_intent(
+        {"request_intent": "FAKE_PROVIDER_CANARY"}
+    ) == "FAKE_PROVIDER_CANARY"
+    for intent in ("REAL_PROVIDER_CANARY", "UNKNOWN", ""):
+        with pytest.raises(ProviderBlockedError) as exc_info:
+            _validated_analysis_chat_provider_intent({"request_intent": intent})
+        assert exc_info.value.reason_code == "ANALYSIS_CHAT_INTENT_NOT_ALLOWED"
 
 
 def test_analysis_chat_flags_fail_closed():
@@ -58,14 +78,17 @@ def test_chat_budget_audit_only_mode_disables_every_financial_blocker():
     from app.ai_orchestration.langgraph.analysis_chat_handler import AnalysisChatGraphNodeHandler
 
     send_source = inspect.getsource(AnalysisChatService.send_message)
-    invoke_source = inspect.getsource(AnalysisChatGraphNodeHandler._invoke_normal_provider)
+    invoke_source = inspect.getsource(AnalysisChatGraphNodeHandler._prepare_normal_provider)
     assert "config.budget_enforcement_enabled" in send_source
     assert '"AUDIT_ONLY"' in send_source
     assert 'request_json.get("budget_enforcement_enabled") is not False' in invoke_source
     assert invoke_source.count("if budget_enforcement_enabled") >= 3
-    assert "AUDIT_ONLY_PROVIDER_RESPONSE_RECEIVED" in invoke_source
     assert "BudgetReservationAudit.activate_placeholder" in invoke_source
-    assert "BudgetReservationAudit.reconcile" in invoke_source
+    reconcile_source = inspect.getsource(
+        AnalysisChatGraphNodeHandler._reconcile_provider_response
+    )
+    assert "AUDIT_ONLY_PROVIDER_RESPONSE_RECEIVED" in reconcile_source
+    assert "BudgetReservationAudit.reconcile" in reconcile_source
 
 
 def test_governed_proposal_has_configured_output_allowance_and_refreshes_legacy_turns():
@@ -83,6 +106,421 @@ def test_governed_proposal_has_configured_output_allowance_and_refreshes_legacy_
     assert 'request_json.get("request_intent") != "NORMAL_ANALYSIS"' in refresh_source
     assert "ANALYSIS_CHAT_PROPOSAL_CONFIRMATION" in refresh_source
     assert "PROPOSAL_CONTRACT_REFRESHED" in refresh_source
+
+
+@pytest.mark.asyncio
+async def test_proposal_confirmation_reissues_an_expired_approval(monkeypatch):
+    from app.models.systemic_ai import AIModelApprovalRecord
+    from app.services import analysis_chat_service as service_module
+
+    tenant_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    request_id = uuid.uuid4()
+    interrupt_id = uuid.uuid4()
+    old_approval_id = uuid.uuid4()
+    now = datetime(2026, 8, 13, 12, 0, tzinfo=timezone.utc)
+    locked_run = SimpleNamespace(id=run_id, tenant_id=tenant_id)
+    interrupt = SimpleNamespace(
+        id=interrupt_id,
+        tenant_id=tenant_id,
+        graph_run_id=run_id,
+        interrupt_type="PROPOSAL_CONFIRMATION",
+        status="PENDING",
+    )
+    request = SimpleNamespace(
+        id=request_id,
+        tenant_id=tenant_id,
+        prompt_version_id=uuid.uuid4(),
+        request_json={
+            "request_intent": "NORMAL_ANALYSIS",
+            "model_approval_id": str(old_approval_id),
+        },
+    )
+    reservation = SimpleNamespace(
+        status="RESERVED",
+        provider_transport_attempted=False,
+        model_approval_id=old_approval_id,
+        max_output_tokens=16384,
+    )
+    latest_prompt = SimpleNamespace(id=uuid.uuid4())
+    current_approval = SimpleNamespace(
+        id=old_approval_id,
+        tenant_id=tenant_id,
+        provider="anthropic",
+        model="claude-model",
+        max_cost_usd=Decimal("0.45"),
+        input_cost_per_million=Decimal("0.80"),
+        output_cost_per_million=Decimal("4.00"),
+        max_output_tokens=16384,
+        pricing_source_url="https://provider.invalid/pricing",
+        pricing_observed_at=now - timedelta(days=30),
+        pricing_snapshot_hash="pricing-hash",
+        analysis_profile_id=uuid.uuid4(),
+        scope="ANALYSIS_CHAT_TURN",
+        status="APPROVED",
+        expires_at=now - timedelta(hours=1),
+    )
+    message = SimpleNamespace(
+        id=uuid.uuid4(),
+        graph_run_id=run_id,
+        ai_request_id=request_id,
+        data_mode=AnalysisChatDataMode.DRAFT_PROPOSAL.value,
+        prompt_version_id=request.prompt_version_id,
+    )
+
+    class _Result:
+        def __init__(self, value):
+            self.value = value
+
+        def scalar_one_or_none(self):
+            return self.value
+
+    class _DB:
+        def __init__(self):
+            self.results = iter((locked_run, interrupt, reservation, latest_prompt))
+            self.added = []
+            self.flushed = False
+
+        async def execute(self, _statement):
+            return _Result(next(self.results))
+
+        async def get(self, model, key):
+            if key == request_id:
+                return request
+            if model is AIModelApprovalRecord and key == old_approval_id:
+                return current_approval
+            return None
+
+        def add(self, value):
+            self.added.append(value)
+
+        async def flush(self):
+            self.flushed = True
+
+    async def _runtime_config(_db, _tenant_id):
+        return AnalysisChatRuntimeConfig(proposal_max_output_tokens=16384)
+
+    monkeypatch.setattr(service_module, "_now", lambda: now)
+    monkeypatch.setattr(
+        service_module,
+        "get_langgraph_settings",
+        lambda: SimpleNamespace(model_approval_ttl_seconds=900),
+    )
+    monkeypatch.setattr(
+        AnalysisChatService, "runtime_config", staticmethod(_runtime_config)
+    )
+    db = _DB()
+
+    await AnalysisChatService.refresh_proposal_confirmation_contract(
+        db,
+        tenant_id=tenant_id,
+        user_id=tenant_id,
+        message=message,
+        interrupt_id=interrupt_id,
+        decision="approve",
+    )
+
+    replacements = [
+        item for item in db.added if isinstance(item, AIModelApprovalRecord)
+    ]
+    assert len(replacements) == 1
+    replacement = replacements[0]
+    assert replacement.id != old_approval_id
+    assert replacement.approved_at == now
+    assert replacement.expires_at == now + timedelta(seconds=900)
+    assert replacement.provider == current_approval.provider
+    assert replacement.model == current_approval.model
+    assert replacement.max_cost_usd == current_approval.max_cost_usd
+    assert replacement.input_cost_per_million == current_approval.input_cost_per_million
+    assert replacement.output_cost_per_million == current_approval.output_cost_per_million
+    assert request.request_json["model_approval_id"] == str(replacement.id)
+    assert reservation.model_approval_id == replacement.id
+    assert db.flushed is True
+
+
+@pytest.mark.asyncio
+async def test_provider_response_reconciles_after_exact_key_is_deactivated(monkeypatch):
+    from app.ai_orchestration.budget_reservation_audit import BudgetReservationAudit
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        AnalysisChatGraphNodeHandler,
+        _ProviderInvocation,
+    )
+    from app.models.systemic_ai import AIUsageRecord
+
+    tenant_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    request_id = uuid.uuid4()
+    message_id = uuid.uuid4()
+    provider_key_id = uuid.uuid4()
+    run = SimpleNamespace(id=run_id, tenant_id=tenant_id, status="RUNNING")
+    message = SimpleNamespace(
+        id=message_id,
+        tenant_id=tenant_id,
+        ai_request_id=request_id,
+        status="STREAMING",
+        provider_transport_attempted=True,
+    )
+    deactivated_key = SimpleNamespace(
+        id=provider_key_id,
+        user_id=tenant_id,
+        provider="anthropic",
+        is_active=False,
+        is_validated=False,
+        tokens_used_month=100,
+        last_used_at=None,
+    )
+    reservation = SimpleNamespace(
+        status="TRANSPORT_STARTED",
+        actual_tokens=None,
+        actual_cost_usd=None,
+        terminal_reason=None,
+    )
+
+    class _Result:
+        def __init__(self, value):
+            self.value = value
+
+        def scalar_one_or_none(self):
+            return self.value
+
+    class _DB:
+        def __init__(self):
+            self.results = iter((run, message, None, deactivated_key))
+            self.added = []
+            self.statements = []
+
+        async def execute(self, statement):
+            self.statements.append(str(statement))
+            return _Result(next(self.results))
+
+        def add(self, value):
+            self.added.append(value)
+
+        async def flush(self):
+            return None
+
+    async def _reconcile(
+        _db,
+        *,
+        tenant_id,
+        ai_request_id,
+        reserved_tokens,
+        actual_tokens,
+        actual_cost_usd,
+        terminal_reason,
+    ):
+        assert tenant_id == invocation.tenant_id
+        assert ai_request_id == invocation.request_id
+        assert reserved_tokens == invocation.reserved_tokens
+        reservation.status = "RECONCILED"
+        reservation.actual_tokens = actual_tokens
+        reservation.actual_cost_usd = actual_cost_usd
+        reservation.terminal_reason = terminal_reason
+        return {
+            "released_tokens": max(reserved_tokens - actual_tokens, 0),
+            "overage_tokens": max(actual_tokens - reserved_tokens, 0),
+        }
+
+    monkeypatch.setattr(BudgetReservationAudit, "reconcile", staticmethod(_reconcile))
+    invocation = _ProviderInvocation(
+        tenant_id=tenant_id,
+        request_id=request_id,
+        message_id=message_id,
+        parent_analysis_run_id=uuid.uuid4(),
+        provider_key_id=provider_key_id,
+        provider="anthropic",
+        model="claude-model",
+        system_prompt="system",
+        user_prompt="user",
+        api_key="not-used",
+        max_output_tokens=1024,
+        output_schema={},
+        budget_enforcement_enabled=True,
+        reserved_tokens=20,
+        reserved_cost=Decimal("0.00003000"),
+        used_today=0,
+        used_month=0,
+        request_token_limit=1000,
+        daily_token_limit=10000,
+        monthly_token_limit=100000,
+        provider_key_monthly_token_limit=100000,
+        provider_key_tokens_used_month_before=100,
+        input_rate=Decimal("1.00"),
+        output_rate=Decimal("2.00"),
+        max_cost_usd=Decimal("0.45"),
+        pricing_snapshot_version="pricing-v1",
+        selected_evidence_refs=(),
+        data_mode=AnalysisChatDataMode.FROZEN_ANALYSIS_ONLY.value,
+    )
+    response = SimpleNamespace(
+        tokens_input=10,
+        tokens_output=5,
+        terminal_error_code=None,
+    )
+    db = _DB()
+
+    usage_audit, terminal_status = await AnalysisChatGraphNodeHandler(
+        run_id, celery=False
+    )._reconcile_provider_response(
+        db,
+        invocation=invocation,
+        response=response,
+    )
+
+    expected_cost = Decimal("0.000020")
+    assert terminal_status is None
+    assert reservation.status == "RECONCILED"
+    assert reservation.actual_tokens == 15
+    assert reservation.actual_cost_usd == expected_cost
+    usages = [item for item in db.added if isinstance(item, AIUsageRecord)]
+    assert len(usages) == 1
+    assert usages[0].tokens_input == 10
+    assert usages[0].tokens_output == 5
+    assert usages[0].actual_cost == expected_cost
+    assert deactivated_key.is_active is False
+    assert deactivated_key.is_validated is False
+    assert deactivated_key.tokens_used_month == 115
+    assert usage_audit == {"provider_tokens_used_month": 115}
+    key_lookup = next(
+        statement for statement in db.statements if "ai_provider_keys" in statement
+    )
+    key_predicates = key_lookup.split("WHERE", 1)[1]
+    assert "ai_provider_keys.id" in key_predicates
+    assert "is_active" not in key_predicates
+    assert "is_validated" not in key_predicates
+
+
+@pytest.mark.asyncio
+async def test_cancel_after_provider_transport_attributes_known_usage_once(monkeypatch):
+    from app.ai_orchestration.budget_reservation_audit import BudgetReservationAudit
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        AnalysisChatGraphNodeHandler,
+        _ProviderInvocation,
+    )
+
+    tenant_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    request_id = uuid.uuid4()
+    message_id = uuid.uuid4()
+    conversation_id = uuid.uuid4()
+    run = SimpleNamespace(id=run_id, tenant_id=tenant_id, status="CANCELLED")
+    message = SimpleNamespace(
+        id=message_id,
+        tenant_id=tenant_id,
+        conversation_id=conversation_id,
+        ai_request_id=request_id,
+        status="CANCELLED",
+        provider_transport_attempted=True,
+        tokens_input=None,
+        tokens_output=None,
+        cost_usd=None,
+        lock_version=3,
+    )
+    conversation = SimpleNamespace(
+        id=conversation_id,
+        tenant_id=tenant_id,
+        total_tokens_input=100,
+        total_tokens_output=20,
+        total_cost_usd=Decimal("0.10"),
+        updated_at=None,
+        lock_version=7,
+    )
+
+    class _Result:
+        def __init__(self, value):
+            self.value = value
+
+        def scalar_one_or_none(self):
+            return self.value
+
+    class _DB:
+        def __init__(self):
+            self.results = iter((run, message, conversation))
+
+        async def execute(self, _statement):
+            return _Result(next(self.results))
+
+    async def _reconcile(_db, **_kwargs):
+        return {"released_tokens": 0, "overage_tokens": 0}
+
+    async def _record_usage(_self, _db, **kwargs):
+        assert kwargs["tokens_input"] == 10
+        assert kwargs["tokens_output"] == 5
+        assert kwargs["actual_cost"] == Decimal("0.000020")
+        return {"provider_tokens_used_month": 15}
+
+    monkeypatch.setattr(BudgetReservationAudit, "reconcile", staticmethod(_reconcile))
+    monkeypatch.setattr(
+        AnalysisChatGraphNodeHandler,
+        "_record_provider_usage",
+        _record_usage,
+    )
+    invocation = _ProviderInvocation(
+        tenant_id=tenant_id,
+        request_id=request_id,
+        message_id=message_id,
+        parent_analysis_run_id=uuid.uuid4(),
+        provider_key_id=uuid.uuid4(),
+        provider="anthropic",
+        model="claude-model",
+        system_prompt="system",
+        user_prompt="user",
+        api_key="not-used",
+        max_output_tokens=1024,
+        output_schema={},
+        budget_enforcement_enabled=True,
+        reserved_tokens=20,
+        reserved_cost=Decimal("0.00003000"),
+        used_today=0,
+        used_month=0,
+        request_token_limit=1000,
+        daily_token_limit=10000,
+        monthly_token_limit=100000,
+        provider_key_monthly_token_limit=100000,
+        provider_key_tokens_used_month_before=0,
+        input_rate=Decimal("1.00"),
+        output_rate=Decimal("2.00"),
+        max_cost_usd=Decimal("0.45"),
+        pricing_snapshot_version="pricing-v1",
+        selected_evidence_refs=(),
+        data_mode=AnalysisChatDataMode.FROZEN_ANALYSIS_ONLY.value,
+    )
+    handler = AnalysisChatGraphNodeHandler(run_id, celery=False)
+
+    usage_audit, terminal_status = await handler._reconcile_provider_response(
+        _DB(),
+        invocation=invocation,
+        response=SimpleNamespace(
+            tokens_input=10,
+            tokens_output=5,
+            terminal_error_code=None,
+        ),
+    )
+
+    assert usage_audit == {"provider_tokens_used_month": 15}
+    assert terminal_status == "CANCELLED"
+    assert message.tokens_input == 10
+    assert message.tokens_output == 5
+    assert message.cost_usd == Decimal("0.000020")
+    assert conversation.total_tokens_input == 110
+    assert conversation.total_tokens_output == 25
+    assert conversation.total_cost_usd == Decimal("0.100020")
+    assert message.lock_version == 4
+    assert conversation.lock_version == 8
+
+    class _NoQueryDB:
+        async def execute(self, _statement):
+            raise AssertionError("idempotent attribution must not reload totals")
+
+    await handler._attribute_terminal_provider_usage(
+        _NoQueryDB(),
+        tenant_id=tenant_id,
+        message=message,
+        tokens_input=10,
+        tokens_output=5,
+        actual_cost=Decimal("0.000020"),
+    )
+    assert conversation.total_cost_usd == Decimal("0.100020")
 
 
 def test_compact_multi_profile_changes_expand_to_the_existing_audited_contract():
@@ -172,6 +610,24 @@ def test_governed_proposal_authorizes_against_the_complete_parent_ledger():
     assert ".limit(12)" in bounded_source
     assert ".limit(" not in authority_source
     assert "evidence_ids = await _load_canonical_evidence_ids" in draft_source
+
+
+def test_inapplicable_governed_diff_has_a_stable_typed_failure():
+    from app.ai_orchestration.errors import GovernedProposalError
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        AnalysisChatGraphNodeHandler,
+    )
+
+    error = GovernedProposalError()
+    assert error.reason_code == "ANALYSIS_CHAT_PROPOSAL_NOT_APPLICABLE"
+    assert error.error_kind == "GOVERNED_PROPOSAL_INVALID"
+    assert "current configuration contract" in error.safe_message
+    source = inspect.getsource(AnalysisChatGraphNodeHandler._node_updates)
+    assert (
+        "except (AttributeError, KeyError, LookupError, TypeError, ValueError) as exc"
+        in source
+    )
+    assert "raise GovernedProposalError() from exc" in source
 
 
 def test_compact_proposal_prompt_is_versioned_and_bounded():
@@ -443,7 +899,7 @@ def test_proposal_is_typed_and_human_gated_twice_before_execution():
     assert "create_governed_change_dry_run" in source
     assert "canonical_refs = await _load_canonical_evidence_refs" in source
     assert "evidence_ids = await _load_canonical_evidence_ids" in source
-    assert "_retain_canonical_change_evidence" in source
+    assert "_materialize_governed_proposal" in source
     assert "execute_governed_proposal_if_confirmed" in source
     assert "approve_and_execute_governed_change" in source
     assert "ANALYSIS_CHAT_GOVERNED_CHANGE_ACTOR_MISMATCH" in source
@@ -457,13 +913,68 @@ def test_proposal_is_typed_and_human_gated_twice_before_execution():
     )
 
 
-def test_provider_normalization_preserves_typed_proposal_for_materialization():
+def test_risk_strategy_gate_uses_candidate_aware_db_validation_not_catalog_tools():
     from app.ai_orchestration.langgraph.analysis_chat_handler import AnalysisChatGraphNodeHandler
 
-    source = inspect.getsource(AnalysisChatGraphNodeHandler._invoke_normal_provider)
-    assert 'is_proposal = state.get("data_mode") == "DRAFT_PROPOSAL"' in source
-    assert 'ProviderOutputError("ANALYSIS_CHAT_PROPOSAL_OUTPUT_MISSING")' in source
-    assert "proposal=provider_answer.proposal if is_proposal else None" in source
+    source = inspect.getsource(AnalysisChatGraphNodeHandler._node_updates)
+    assert "validate_candidate_for_second_gate" in source
+    assert "ANALYSIS_CHAT_RISK_STRATEGY_CANDIDATE_VETO" in source
+    assert "GOVERNED_CANDIDATE_DETERMINISTIC_VALIDATION_PASSED" in source
+    assert 'answer["modules_consulted"] = ["governed_change_candidate_validator"]' in source
+    validator_block = source.split(
+        'if node_name == "validate_risk_and_strategy":', 1
+    )[1].split(
+        'if node_name == "execute_governed_proposal_if_confirmed":', 1
+    )[0]
+    assert "ModuleToolRuntime" not in validator_block
+    assert "runtime.execute" not in validator_block
+    assert "candidate_validation" in validator_block
+    assert '"validation_scope": validation["validation_scope"]' in validator_block
+    assert '"policy_semantic_validation": validation[' in validator_block
+    assert '"risk_validation": validation["risk_validation"]' not in validator_block
+    assert '"strategy_validation": validation["strategy_validation"]' not in validator_block
+
+
+def test_provider_normalization_preserves_typed_proposal_for_materialization():
+    from app.ai_orchestration.errors import ProviderOutputError
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        AnalysisChatGraphNodeHandler,
+        _normalized_provider_mode,
+    )
+    from app.schemas.analysis_chat import AnalysisChatOutput
+
+    source = inspect.getsource(AnalysisChatGraphNodeHandler._build_provider_answer)
+    assert 'is_proposal = invocation.data_mode == "DRAFT_PROPOSAL"' in source
+    assert "_normalized_provider_mode" in source
+
+    base = AnalysisChatOutput(
+        answer="No concrete path",
+        answer_type="LIMITATION",
+        based_on="PROPOSAL_DRAFT",
+        parent_analysis_run_id=uuid.uuid4(),
+        proposal=None,
+    )
+    assert _normalized_provider_mode(
+        base,
+        is_proposal=True,
+        refreshed=False,
+    ) == ("LIMITATION", "PROPOSAL_DRAFT", None)
+
+    with pytest.raises(ProviderOutputError) as exc_info:
+        _normalized_provider_mode(
+            base.model_copy(update={"answer_type": "PROPOSAL"}),
+            is_proposal=True,
+            refreshed=False,
+        )
+    assert exc_info.value.reason_code == "ANALYSIS_CHAT_PROPOSAL_OUTPUT_MISSING"
+
+    with pytest.raises(ProviderOutputError) as exc_info:
+        _normalized_provider_mode(
+            base.model_copy(update={"proposal": {"changes": []}}),
+            is_proposal=True,
+            refreshed=False,
+        )
+    assert exc_info.value.reason_code == "ANALYSIS_CHAT_PROPOSAL_OUTPUT_INCONSISTENT"
 
 
 def test_each_successful_turn_reconciles_a_budget_reservation():
@@ -481,19 +992,431 @@ def test_every_accepted_turn_reserves_budget_before_human_interrupts():
     assert "provider_transport_attempted=False" in source
 
 
-def test_cancel_terminalizes_job_and_releases_reserved_budget():
+def test_cancel_terminalizes_job_and_delegates_reservation_reconciliation():
     source = inspect.getsource(AnalysisChatService.cancel)
-    assert 'reservation.status = "RELEASED"' in source
+    assert "_cancel_budget_reservation(reservation, now=now)" in source
     assert 'job.status = "CANCELLED"' in source
     assert '"CANCELLED_BY_AUTHORIZED_ACTOR"' in source
 
 
+@pytest.mark.asyncio
+async def test_exact_chat_run_cancel_terminalizes_every_durable_record():
+    from app.models.ai_graph import AIGraphEvent
+
+    tenant_id = uuid.uuid4()
+    conversation_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    request_id = uuid.uuid4()
+    message = SimpleNamespace(
+        id=uuid.uuid4(),
+        tenant_id=tenant_id,
+        conversation_id=conversation_id,
+        graph_run_id=run_id,
+        ai_request_id=request_id,
+        role="ASSISTANT",
+        status="STREAMING",
+        sequence_number=2,
+        provider_transport_attempted=False,
+        lock_version=0,
+        cancelled_at=None,
+        completed_at=None,
+    )
+    run = SimpleNamespace(
+        id=run_id,
+        tenant_id=tenant_id,
+        status="RUNNING",
+        current_node="invoke_provider",
+        cancelled_at=None,
+        completed_at=None,
+        terminal_reason=None,
+        provider_transport_attempted=False,
+        heartbeat_at=None,
+        lease_owner="worker-1",
+        lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=1),
+        updated_at=None,
+    )
+    conversation = SimpleNamespace(
+        id=conversation_id,
+        tenant_id=tenant_id,
+        lock_version=4,
+        updated_at=None,
+    )
+    reservation = SimpleNamespace(
+        status="RESERVED",
+        provider_transport_attempted=False,
+        reserved_tokens=1234,
+        actual_tokens=None,
+        actual_cost_usd=None,
+        released_tokens=0,
+        terminal_reason=None,
+        released_at=None,
+        updated_at=None,
+    )
+    job = SimpleNamespace(
+        status="RUNNING",
+        completed_at=None,
+        terminal_reason=None,
+        lease_owner="worker-1",
+        lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=1),
+    )
+
+    class _Result:
+        def __init__(self, value):
+            self.value = value
+
+        def scalar_one_or_none(self):
+            return self.value
+
+    class _DB:
+        def __init__(self):
+            self.results = iter(
+                (message, run, conversation, message, reservation, job, None)
+            )
+            self.statements = []
+            self.added = []
+
+        async def execute(self, statement):
+            self.statements.append(str(statement))
+            return _Result(next(self.results))
+
+        def add(self, value):
+            self.added.append(value)
+
+    db = _DB()
+    cancelled = await AnalysisChatService.cancel(
+        db,
+        tenant_id=tenant_id,
+        user_id=tenant_id,
+        conversation_id=conversation_id,
+        graph_run_id=run_id,
+    )
+
+    assert cancelled is message
+    assert "ai_analysis_messages.graph_run_id" in db.statements[0]
+    assert message.status == "CANCELLED"
+    assert message.completed_at is not None
+    assert job.status == "CANCELLED"
+    assert job.terminal_reason == "CANCELLED_BY_AUTHORIZED_ACTOR"
+    assert reservation.status == "RELEASED"
+    assert reservation.released_tokens == 1234
+    assert reservation.terminal_reason == "CANCELLED_BEFORE_PROVIDER_TRANSPORT"
+    assert run.status == "CANCELLED"
+    assert run.terminal_reason == "CANCELLED_BY_AUTHORIZED_ACTOR"
+    events = [item for item in db.added if isinstance(item, AIGraphEvent)]
+    assert len(events) == 1
+    assert events[0].graph_run_id == run_id
+    assert events[0].event_type == "CANCELLED"
+    assert events[0].payload["message_id"] == str(message.id)
+
+
+@pytest.mark.asyncio
+async def test_cancel_after_usage_reconciliation_attributes_message_and_conversation():
+    tenant_id = uuid.uuid4()
+    conversation_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    request_id = uuid.uuid4()
+    message = SimpleNamespace(
+        id=uuid.uuid4(),
+        tenant_id=tenant_id,
+        conversation_id=conversation_id,
+        graph_run_id=run_id,
+        ai_request_id=request_id,
+        role="ASSISTANT",
+        status="STREAMING",
+        sequence_number=2,
+        provider_transport_attempted=True,
+        tokens_input=None,
+        tokens_output=None,
+        cost_usd=None,
+        lock_version=0,
+        cancelled_at=None,
+        completed_at=None,
+    )
+    run = SimpleNamespace(
+        id=run_id,
+        tenant_id=tenant_id,
+        status="RUNNING",
+        current_node="invoke_provider",
+        cancelled_at=None,
+        completed_at=None,
+        terminal_reason=None,
+        provider_transport_attempted=True,
+        heartbeat_at=None,
+        lease_owner="worker-1",
+        lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=1),
+        updated_at=None,
+    )
+    conversation = SimpleNamespace(
+        id=conversation_id,
+        tenant_id=tenant_id,
+        total_tokens_input=100,
+        total_tokens_output=20,
+        total_cost_usd=Decimal("0.10"),
+        lock_version=4,
+        updated_at=None,
+    )
+    reservation = SimpleNamespace(
+        status="RECONCILED",
+        provider_transport_attempted=True,
+        reserved_tokens=1234,
+        actual_tokens=15,
+        actual_cost_usd=Decimal("0.000020"),
+        released_tokens=1219,
+        terminal_reason="PROVIDER_RESPONSE_RECEIVED",
+        released_at=None,
+        updated_at=None,
+    )
+    job = SimpleNamespace(
+        status="RUNNING",
+        completed_at=None,
+        terminal_reason=None,
+        lease_owner="worker-1",
+        lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=1),
+    )
+    usage = SimpleNamespace(
+        tokens_input=10,
+        tokens_output=5,
+        actual_cost=Decimal("0.000020"),
+    )
+
+    class _Result:
+        def __init__(self, value):
+            self.value = value
+
+        def scalar_one_or_none(self):
+            return self.value
+
+    class _DB:
+        def __init__(self):
+            self.results = iter(
+                (message, run, conversation, message, reservation, job, usage)
+            )
+            self.added = []
+
+        async def execute(self, _statement):
+            return _Result(next(self.results))
+
+        def add(self, value):
+            self.added.append(value)
+
+    cancelled = await AnalysisChatService.cancel(
+        _DB(),
+        tenant_id=tenant_id,
+        user_id=tenant_id,
+        conversation_id=conversation_id,
+        graph_run_id=run_id,
+    )
+
+    assert cancelled is message
+    assert message.status == "CANCELLED"
+    assert message.tokens_input == 10
+    assert message.tokens_output == 5
+    assert message.cost_usd == Decimal("0.000020")
+    assert conversation.total_tokens_input == 110
+    assert conversation.total_tokens_output == 25
+    assert conversation.total_cost_usd == Decimal("0.100020")
+    assert reservation.status == "RECONCILED"
+    assert run.status == "CANCELLED"
+
+
+@pytest.mark.asyncio
+async def test_generic_graph_cancel_delegates_exact_analysis_chat_run(monkeypatch):
+    from app.api.ai_graphs import cancel_graph_run
+    from app.models.ai_graph import AIGraphDefinition
+    from app.models.systemic_ai import AIRequestRecord
+    from app.services.ai_graph_service import AIGraphRunService
+
+    tenant_id = uuid.uuid4()
+    conversation_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    request_id = uuid.uuid4()
+    definition_id = uuid.uuid4()
+    run = SimpleNamespace(
+        id=run_id,
+        ai_request_id=request_id,
+        graph_definition_id=definition_id,
+        status="RUNNING",
+        current_node="invoke_provider",
+        last_completed_node="assemble_evidence",
+        failed_node=None,
+        authority="ANALYSIS_ONLY",
+        state_schema_version="1.1.0",
+        started_at=None,
+        completed_at=None,
+        terminal_reason=None,
+        last_error_code=None,
+        last_error_safe_message=None,
+        error_kind=None,
+        provider_transport_attempted=False,
+        created_at=None,
+        updated_at=None,
+    )
+    definition = SimpleNamespace(
+        id=definition_id,
+        graph_key="analysis-chat-v1",
+        semantic_version="1.1.0",
+    )
+    request = SimpleNamespace(
+        id=request_id,
+        tenant_id=tenant_id,
+        conversation_id=conversation_id,
+        request_json={"request_intent": "NORMAL_ANALYSIS"},
+        origin_module="analysis_chat",
+        origin_view="intelligence-runs",
+        correlation_id="chat-correlation",
+    )
+    delegated = {}
+
+    class _DB:
+        def __init__(self):
+            self.committed = False
+            self.refreshed = False
+
+        async def get(self, model, key):
+            if model is AIGraphDefinition and key == definition_id:
+                return definition
+            if model is AIRequestRecord and key == request_id:
+                return request
+            return None
+
+        async def commit(self):
+            self.committed = True
+
+        async def refresh(self, value):
+            assert value is run
+            self.refreshed = True
+
+    async def _get(_db, *, tenant_id, run_id):
+        assert tenant_id == tenant_id_value
+        assert run_id == run_id_value
+        return run
+
+    async def _cancel(
+        _db,
+        *,
+        tenant_id,
+        user_id,
+        conversation_id,
+        graph_run_id,
+    ):
+        delegated.update(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            graph_run_id=graph_run_id,
+        )
+        run.status = "CANCELLED"
+        return SimpleNamespace(status="CANCELLED")
+
+    tenant_id_value = tenant_id
+    run_id_value = run_id
+    monkeypatch.setattr(AIGraphRunService, "get", staticmethod(_get))
+    monkeypatch.setattr(AnalysisChatService, "cancel", staticmethod(_cancel))
+    db = _DB()
+
+    payload = await cancel_graph_run(run_id, db=db, user_id=tenant_id)
+
+    assert delegated == {
+        "tenant_id": tenant_id,
+        "user_id": tenant_id,
+        "conversation_id": conversation_id,
+        "graph_run_id": run_id,
+    }
+    assert db.committed is True
+    assert db.refreshed is True
+    assert payload["status"] == "CANCELLED"
+    assert payload["graph_key"] == "analysis-chat-v1"
+
+
+@pytest.mark.asyncio
+async def test_broker_publish_failure_returns_durable_dispatch_pending():
+    from app.api.analysis_chat import (
+        _publish_durable_graph_dispatch,
+        decide_message,
+        send_message,
+    )
+    from app.tasks import ai_orchestration as task_module
+
+    tenant_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    run = SimpleNamespace(
+        id=run_id,
+        tenant_id=tenant_id,
+        current_node="invoke_provider",
+    )
+
+    class _BrokerDownTask:
+        @staticmethod
+        def apply_async(**_kwargs):
+            raise ConnectionError("broker unavailable")
+
+    class _DB:
+        def __init__(self):
+            self.statements = []
+            self.commits = 0
+            self.rollbacks = 0
+
+        async def execute(self, statement):
+            self.statements.append(statement)
+
+        async def commit(self):
+            self.commits += 1
+
+        async def rollback(self):
+            self.rollbacks += 1
+
+    db = _DB()
+    dispatch = await _publish_durable_graph_dispatch(
+        db,
+        run=run,
+        task=_BrokerDownTask,
+        args=[str(run_id)],
+        dispatch_key="START",
+        audit_payload={"dispatch_kind": "START"},
+    )
+
+    assert dispatch == {
+        "dispatch_pending": True,
+        "dispatch_retry": "DURABLE_QUEUED_DISPATCHER",
+        "dispatch_audit_persisted": True,
+    }
+    assert db.commits == 1
+    assert db.rollbacks == 0
+    assert len(db.statements) == 1
+    params = db.statements[0].compile().params
+    assert "DISPATCH_PENDING" in params.values()
+    assert any(
+        isinstance(value, dict)
+        and value.get("retry_strategy") == "DURABLE_QUEUED_DISPATCHER"
+        and value.get("publish_error_type") == "ConnectionError"
+        for value in params.values()
+    )
+
+    send_source = inspect.getsource(send_message)
+    decision_source = inspect.getsource(decide_message)
+    assert "_publish_durable_graph_dispatch" in send_source
+    assert "_publish_durable_graph_dispatch" in decision_source
+    dispatcher_source = inspect.getsource(task_module.dispatch_queued_graph_runs)
+    assert 'AIGraphRun.status == "QUEUED"' in dispatcher_source
+    assert "_queued_dispatch_spec" in dispatcher_source
+
+
+def test_rejected_human_gate_releases_the_pretransport_budget_reservation():
+    from app.tasks.ai_orchestration import _mark_terminal
+
+    source = inspect.getsource(_mark_terminal)
+    assert 'reservation.status == "RESERVED"' in source
+    assert 'reservation.status = "RELEASED"' in source
+    assert 'reservation.provider_transport_attempted = False' in source
+    assert 'reservation.terminal_reason = "HUMAN_GATE_REJECTED"' in source
+
+
 def test_provider_blocked_is_typed_and_releases_before_transport():
     from app.ai_orchestration.langgraph.analysis_chat_handler import AnalysisChatGraphNodeHandler
-    source = inspect.getsource(AnalysisChatGraphNodeHandler._node_updates)
+    source = inspect.getsource(AnalysisChatGraphNodeHandler._handle_provider_node)
     assert "ProviderBlockedError" in source
     assert "NORMAL_ANALYSIS_PROVIDER_DISABLED" in source
-    assert "_invoke_normal_provider" in source
+    assert "_prepare_normal_provider" in source
 
 
 def test_chat_real_provider_is_per_turn_approved_and_budget_audited():
@@ -501,12 +1424,13 @@ def test_chat_real_provider_is_per_turn_approved_and_budget_audited():
     from app.ai_orchestration.langgraph.analysis_chat_handler import AnalysisChatGraphNodeHandler
 
     send_source = inspect.getsource(AnalysisChatService.send_message)
-    invoke_source = inspect.getsource(AnalysisChatGraphNodeHandler._invoke_normal_provider)
+    prepare_source = inspect.getsource(AnalysisChatGraphNodeHandler._prepare_normal_provider)
+    invoke_source = inspect.getsource(AnalysisChatGraphNodeHandler._handle_provider_node)
     assert 'scope="ANALYSIS_CHAT_TURN"' in send_source
     assert 'approval_method="ANALYSIS_CHAT_SEND_ACTION"' in send_source
-    assert "activate_placeholder" in invoke_source
+    assert "activate_placeholder" in prepare_source
     assert "mark_transport_started" in invoke_source
-    assert "reconcile" in invoke_source
+    assert "_reconcile_provider_response" in invoke_source
     assert hasattr(BudgetReservationAudit, "activate_placeholder")
 
 
@@ -576,10 +1500,230 @@ def test_run_acquisition_does_not_read_terminal_state_before_execution():
 def test_terminal_message_cannot_regress_to_streaming_in_tail_nodes():
     from app.ai_orchestration.langgraph.analysis_chat_handler import AnalysisChatGraphNodeHandler
 
-    source = inspect.getsource(AnalysisChatGraphNodeHandler.handle)
+    source = inspect.getsource(AnalysisChatGraphNodeHandler._lock_node_context)
     assert 'message.status not in {"COMPLETED", "BLOCKED", "FAILED", "CANCELLED"}' in source
 
 
 def test_each_turn_has_a_unique_checkpoint_thread_under_the_conversation():
     source = inspect.getsource(AnalysisChatService.send_message)
     assert 'f"{conversation.thread_id}:message:{user_message.id}"' in source
+
+
+def test_chat_stream_starts_after_the_accepted_turn_boundary():
+    from app.api import analysis_chat
+
+    source = inspect.getsource(analysis_chat)
+    assert source.count('"stream_after_event_id": stream_after_event_id') == 2
+    assert "AIGraphEvent.graph_run_id == graph_run_id" in source
+
+
+def test_cancel_before_transport_releases_the_reservation():
+    from datetime import datetime, timezone
+    from app.services.analysis_chat_service import _cancel_budget_reservation
+
+    reservation = SimpleNamespace(
+        status="RESERVED",
+        provider_transport_attempted=False,
+        reserved_tokens=321,
+        actual_tokens=None,
+        actual_cost_usd=None,
+        released_tokens=0,
+        terminal_reason=None,
+        released_at=None,
+        updated_at=None,
+    )
+    now = datetime.now(timezone.utc)
+    assert _cancel_budget_reservation(reservation, now=now) is False
+    assert reservation.status == "RELEASED"
+    assert reservation.released_tokens == 321
+    assert reservation.provider_transport_attempted is False
+    assert reservation.terminal_reason == "CANCELLED_BEFORE_PROVIDER_TRANSPORT"
+
+
+def test_cancel_after_transport_keeps_the_reservation_reconcilable():
+    from datetime import datetime, timezone
+    from app.services.analysis_chat_service import _cancel_budget_reservation
+
+    reservation = SimpleNamespace(
+        status="TRANSPORT_STARTED",
+        provider_transport_attempted=True,
+        reserved_tokens=321,
+        released_tokens=0,
+        terminal_reason=None,
+        released_at=None,
+        updated_at=None,
+    )
+    now = datetime.now(timezone.utc)
+    assert _cancel_budget_reservation(reservation, now=now) is True
+    assert reservation.status == "TRANSPORT_STARTED"
+    assert reservation.released_tokens == 0
+    assert reservation.released_at is None
+    assert reservation.provider_transport_attempted is True
+    assert (
+        reservation.terminal_reason
+        == "CANCELLED_AFTER_PROVIDER_TRANSPORT_STARTED"
+    )
+
+
+def test_cancel_reconciled_fake_reservation_does_not_invent_provider_transport():
+    from datetime import datetime, timezone
+    from app.services.analysis_chat_service import _cancel_budget_reservation
+
+    reservation = SimpleNamespace(
+        status="RECONCILED",
+        provider_transport_attempted=False,
+        actual_tokens=0,
+        actual_cost_usd=Decimal("0"),
+        reserved_tokens=0,
+        released_tokens=0,
+        terminal_reason="FAKE_PROVIDER_RESPONSE_RECEIVED",
+        released_at=None,
+        updated_at=None,
+    )
+
+    assert _cancel_budget_reservation(
+        reservation,
+        now=datetime.now(timezone.utc),
+    ) is False
+    assert reservation.status == "RECONCILED"
+    assert reservation.provider_transport_attempted is False
+    assert reservation.terminal_reason == "FAKE_PROVIDER_RESPONSE_RECEIVED"
+
+
+@pytest.mark.asyncio
+async def test_terminal_graph_run_cannot_execute_another_chat_node():
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        AnalysisChatGraphNodeHandler,
+    )
+
+    run_id = uuid.uuid4()
+    run = SimpleNamespace(id=run_id, status="CANCELLED")
+
+    class _Result:
+        def scalar_one_or_none(self):
+            return run
+
+    class _DB:
+        async def execute(self, _statement):
+            return _Result()
+
+    handler = AnalysisChatGraphNodeHandler(run_id, celery=False)
+    with pytest.raises(RuntimeError, match="ANALYSIS_CHAT_GRAPH_RUN_CANCELLED"):
+        await handler._lock_node_context(
+            _DB(), node_name="validate_chat_output", state={"tenant_id": "unused"}
+        )
+
+
+@pytest.mark.asyncio
+async def test_chat_node_lifecycle_matches_the_canonical_run_lease(monkeypatch):
+    from app.ai_orchestration.langgraph import analysis_chat_handler as handler_module
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        AnalysisChatGraphNodeHandler,
+    )
+
+    run_id = uuid.uuid4()
+    tenant_id = uuid.uuid4()
+    request_id = uuid.uuid4()
+    run = SimpleNamespace(
+        id=run_id,
+        tenant_id=tenant_id,
+        ai_request_id=request_id,
+        status="RUNNING",
+        current_node=None,
+        last_completed_node=None,
+        heartbeat_at=None,
+        lease_expires_at=None,
+        updated_at=None,
+    )
+    request = SimpleNamespace(
+        id=request_id,
+        tenant_id=tenant_id,
+        conversation_id=uuid.uuid4(),
+        request_json={"data_mode": "FROZEN_ANALYSIS_ONLY"},
+    )
+    message = SimpleNamespace(
+        id=uuid.uuid4(), status="QUEUED", lock_version=0
+    )
+
+    class _Result:
+        def __init__(self, value):
+            self.value = value
+
+        def scalar_one_or_none(self):
+            return self.value
+
+    class _DB:
+        def __init__(self):
+            self.results = iter((_Result(run), _Result(message)))
+
+        async def execute(self, _statement):
+            return next(self.results, _Result(None))
+
+        async def get(self, _model, key):
+            return request if key == request_id else None
+
+    monkeypatch.setattr(
+        handler_module,
+        "get_langgraph_settings",
+        lambda: SimpleNamespace(lease_seconds=90),
+    )
+    db = _DB()
+    handler = AnalysisChatGraphNodeHandler(run_id, celery=False)
+    locked_run, locked_request, locked_message = await handler._lock_node_context(
+        db,
+        node_name="validate_chat_output",
+        state={"tenant_id": str(tenant_id)},
+    )
+    assert (locked_run, locked_request, locked_message) == (run, request, message)
+    assert run.current_node == "validate_chat_output"
+    assert run.heartbeat_at is not None
+    assert run.lease_expires_at > run.heartbeat_at
+    assert message.status == "STREAMING"
+
+    await handler._complete_node(
+        db, run, request, message, "validate_chat_output", {}
+    )
+    assert run.last_completed_node == "validate_chat_output"
+    assert run.current_node == "validate_chat_output"
+
+
+@pytest.mark.asyncio
+async def test_provider_transport_method_has_no_database_session(monkeypatch):
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        AnalysisChatGraphNodeHandler,
+    )
+    from app.services.systemic_langgraph_bridge import SystemicLangGraphBridge
+
+    parameters = inspect.signature(
+        AnalysisChatGraphNodeHandler._invoke_normal_provider
+    ).parameters
+    assert "db" not in parameters
+
+    called = {}
+
+    async def _fake_transport(**kwargs):
+        called.update(kwargs)
+        return "provider-response"
+
+    monkeypatch.setattr(
+        SystemicLangGraphBridge, "execute_json_provider", _fake_transport
+    )
+    invocation = SimpleNamespace(
+        provider="anthropic",
+        model="model",
+        system_prompt="system",
+        user_prompt="user",
+        api_key="secret",
+        request_id=uuid.uuid4(),
+        max_output_tokens=10,
+        output_schema={"type": "object"},
+    )
+    handler = AnalysisChatGraphNodeHandler(uuid.uuid4(), celery=False)
+    assert await handler._invoke_normal_provider(invocation) == "provider-response"
+    assert called["request_id"] == str(invocation.request_id)
+
+
+def test_sse_route_does_not_hold_an_injected_database_session():
+    from app.api.analysis_chat import stream_conversation
+
+    assert "db" not in inspect.signature(stream_conversation).parameters

@@ -38,6 +38,10 @@ def _make_redis_client():
 class ConfigService:
     def __init__(self):
         self.redis = _make_redis_client()
+        # Governed reconciliation runs under Celery's synchronous task wrapper,
+        # which creates a fresh asyncio loop for every task invocation.  A
+        # redis.asyncio client must not be reused across those loops.
+        self._strict_redis_factory = _make_redis_client
 
     def _get_cache_key(self, config_type: str, user_id: UUID, pool_id: Optional[UUID] = None) -> str:
         if pool_id:
@@ -117,15 +121,49 @@ class ConfigService:
 
         return new_json
 
-    async def invalidate_cache(self, config_type: str, user_id: UUID, pool_id: Optional[UUID] = None) -> None:
-        """Invalidate Redis cache for a config key. Call after ORM direct writes that bypass update_config."""
-        if not self.redis:
-            return
+    async def invalidate_cache(
+        self,
+        config_type: str,
+        user_id: UUID,
+        pool_id: Optional[UUID] = None,
+        *,
+        strict: bool = False,
+    ) -> bool:
+        """Invalidate a config key and report whether Redis confirmed it.
+
+        Existing callers remain fail-open by default.  Governed writes use
+        ``strict=True`` because they may only record reconciliation as complete
+        after Redis accepted the delete command.
+        """
+        redis_client = self._strict_redis_factory() if strict else self.redis
+        if redis_client is None:
+            if strict:
+                raise RuntimeError("Redis cache client is unavailable")
+            return False
         cache_key = self._get_cache_key(config_type, user_id, pool_id)
         try:
-            await self.redis.delete(cache_key)
+            await redis_client.delete(cache_key)
         except Exception as e:
+            if strict:
+                raise
             logger.warning("Redis cache invalidation failed (config will expire on TTL): %s", e)
+            return False
+        finally:
+            if strict:
+                close = getattr(redis_client, "aclose", None)
+                if close is None:
+                    close = getattr(redis_client, "close", None)
+                if close is not None:
+                    try:
+                        closed = close()
+                        if hasattr(closed, "__await__"):
+                            await closed
+                    except Exception as close_error:
+                        logger.warning(
+                            "Redis strict cache client close failed: %s",
+                            close_error,
+                        )
+        return True
 
 
 config_service = ConfigService()

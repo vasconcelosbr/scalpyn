@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db, run_db_task
@@ -23,6 +24,7 @@ from ..services.analysis_chat_service import AnalysisChatError, AnalysisChatServ
 from ..services.governed_change_service import (
     get_plan as get_governed_change_plan,
     plan_to_dict as governed_plan_to_dict,
+    reconcile_rollback_cache,
     rollback as rollback_governed_change,
 )
 from .config import get_current_user_id
@@ -172,6 +174,78 @@ async def _message_rows(db: AsyncSession, tenant_id: UUID, conversation_id: UUID
     return payloads
 
 
+async def _stream_after_event_id(
+    db: AsyncSession, tenant_id: UUID, graph_run_id: UUID, event_key: str,
+) -> int:
+    event_id = (
+        await db.execute(
+            select(AIGraphEvent.id)
+            .where(
+                AIGraphEvent.tenant_id == tenant_id,
+                AIGraphEvent.graph_run_id == graph_run_id,
+                AIGraphEvent.event_key == event_key,
+            )
+        )
+    ).scalar_one_or_none()
+    if event_id is None:
+        raise AnalysisChatError("ANALYSIS_CHAT_STREAM_BOUNDARY_MISSING")
+    return int(event_id)
+
+
+async def _publish_durable_graph_dispatch(
+    db: AsyncSession,
+    *,
+    run: AIGraphRun,
+    task,
+    args: list[str],
+    dispatch_key: str,
+    audit_payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Publish best-effort; the committed QUEUED run is the durable outbox."""
+    try:
+        task.apply_async(args=args, queue="ai_orchestration")
+        return {
+            "dispatch_pending": False,
+            "dispatch_retry": None,
+            "dispatch_audit_persisted": False,
+        }
+    except Exception as exc:
+        audit_persisted = False
+        try:
+            await db.execute(
+                insert(AIGraphEvent).values(
+                    tenant_id=run.tenant_id,
+                    graph_run_id=run.id,
+                    event_key=f"{run.id}:dispatch-pending:{dispatch_key}"[:200],
+                    event_type="DISPATCH_PENDING",
+                    node_name=run.current_node,
+                    status="QUEUED",
+                    payload={
+                        **audit_payload,
+                        "retry_strategy": "DURABLE_QUEUED_DISPATCHER",
+                        "publish_error_type": type(exc).__name__[:80],
+                    },
+                ).on_conflict_do_nothing(
+                    index_elements=[
+                        AIGraphEvent.graph_run_id,
+                        AIGraphEvent.event_key,
+                    ]
+                )
+            )
+            await db.commit()
+            audit_persisted = True
+        except Exception:
+            # The graph command was already committed before publish.  Even if
+            # this secondary audit write fails, the periodic dispatcher still
+            # recovers the exact durable START/RESUME command from ai_graph_runs.
+            await db.rollback()
+        return {
+            "dispatch_pending": True,
+            "dispatch_retry": "DURABLE_QUEUED_DISPATCHER",
+            "dispatch_audit_persisted": audit_persisted,
+        }
+
+
 @router.post("/api/intelligence-runs/{run_id}/conversations", status_code=201)
 async def create_conversation(
     run_id: UUID,
@@ -254,15 +328,36 @@ async def send_message(
             idempotency_key=payload.idempotency_key,
             response_language=payload.response_language,
         )
+        stream_after_event_id = await _stream_after_event_id(
+            db, user_id, graph_run.id, f"{graph_run.id}:requested"
+        )
         await db.commit()
+        dispatch = {
+            "dispatch_pending": bool(reused and graph_run.status == "QUEUED"),
+            "dispatch_retry": (
+                "DURABLE_QUEUED_DISPATCHER"
+                if reused and graph_run.status == "QUEUED"
+                else None
+            ),
+            "dispatch_audit_persisted": False,
+        }
         if not reused:
             from ..tasks.ai_orchestration import start_graph_run
-            start_graph_run.apply_async(args=[str(graph_run.id)], queue="ai_orchestration")
+            dispatch = await _publish_durable_graph_dispatch(
+                db,
+                run=graph_run,
+                task=start_graph_run,
+                args=[str(graph_run.id)],
+                dispatch_key="START",
+                audit_payload={"dispatch_kind": "START"},
+            )
         return {
             "reused": reused,
             "user_message": _message_payload(user_message),
             "assistant_message": _message_payload(assistant),
             "graph_run_id": str(graph_run.id),
+            "stream_after_event_id": stream_after_event_id,
+            **dispatch,
         }
     except AnalysisChatError as exc:
         await db.rollback()
@@ -292,7 +387,7 @@ async def decide_message(
             interrupt_id=payload.interrupt_id,
             decision=payload.decision,
         )
-        run = await AIGraphRunService.resume(
+        run, reused, persisted_decision_id = await AIGraphRunService.resume(
             db,
             tenant_id=user_id,
             actor_user_id=user_id,
@@ -303,12 +398,49 @@ async def decide_message(
             idempotency_key=payload.idempotency_key,
             edits=payload.edits,
         )
-        await db.commit()
-        from ..tasks.ai_orchestration import resume_graph_run
-        resume_graph_run.apply_async(
-            args=[str(run.id), str(payload.interrupt_id)], queue="ai_orchestration"
+        stream_after_event_id = await _stream_after_event_id(
+            db,
+            user_id,
+            run.id,
+            f"{run.id}:interrupt:{payload.interrupt_id}:{persisted_decision_id}",
         )
-        return {"status": "QUEUED", "graph_run_id": str(run.id)}
+        await db.commit()
+        dispatch = {
+            "dispatch_pending": bool(reused and run.status == "QUEUED"),
+            "dispatch_retry": (
+                "DURABLE_QUEUED_DISPATCHER"
+                if reused and run.status == "QUEUED"
+                else None
+            ),
+            "dispatch_audit_persisted": False,
+        }
+        if not reused:
+            from ..tasks.ai_orchestration import resume_graph_run
+            dispatch = await _publish_durable_graph_dispatch(
+                db,
+                run=run,
+                task=resume_graph_run,
+                args=[
+                    str(run.id),
+                    str(payload.interrupt_id),
+                    str(persisted_decision_id),
+                ],
+                dispatch_key=(
+                    f"RESUME:{payload.interrupt_id}:{persisted_decision_id}"
+                ),
+                audit_payload={
+                    "dispatch_kind": "RESUME",
+                    "interrupt_id": str(payload.interrupt_id),
+                    "decision_id": str(persisted_decision_id),
+                },
+            )
+        return {
+            "status": "QUEUED",
+            "reused": reused,
+            "graph_run_id": str(run.id),
+            "stream_after_event_id": stream_after_event_id,
+            **dispatch,
+        }
     except AnalysisChatError as exc:
         await db.rollback()
         raise _error(exc) from exc
@@ -340,6 +472,17 @@ async def rollback_proposal(
             proposal_id,
             confirmation_text=payload.confirmation_text,
         )
+        await db.commit()
+        rollback_result = dict((plan.get("execution_result") or {}).get("rollback") or {})
+        if rollback_result.get("cache_invalidation_status") == "PENDING_AFTER_COMMIT":
+            try:
+                plan = await reconcile_rollback_cache(db, user_id, proposal_id)
+                await db.commit()
+            except Exception:
+                # The rollback is already durable.  Preserve its truthful
+                # PENDING marker when the separate reconciliation transaction
+                # cannot be completed instead of reporting rollback failure.
+                await db.rollback()
         return {"status": "ROLLED_BACK", "proposal": plan}
     except LookupError as exc:
         await db.rollback()
@@ -366,7 +509,36 @@ async def cancel_conversation_message(
         raise _error(exc) from exc
 
 
-async def _stream_snapshot(tenant_id: UUID, conversation_id: UUID, after_id: int):
+async def _stream_snapshot(
+    tenant_id: UUID, conversation_id: UUID, graph_run_id: UUID, after_id: int,
+):
+    async def _query(db):
+        rows = list((await db.execute(
+            select(AIGraphEvent, AIRequestRecord)
+            .join(AIGraphRun, AIGraphRun.id == AIGraphEvent.graph_run_id)
+            .join(AIRequestRecord, AIRequestRecord.id == AIGraphRun.ai_request_id)
+            .where(
+                AIGraphEvent.tenant_id == tenant_id,
+                AIGraphEvent.graph_run_id == graph_run_id,
+                AIRequestRecord.conversation_id == conversation_id,
+                AIGraphEvent.id > after_id,
+            )
+            .order_by(AIGraphEvent.id)
+            .limit(100)
+        )).all())
+        active = (await db.execute(select(AIGraphRun.id).where(
+            AIGraphRun.id == graph_run_id,
+            AIGraphRun.tenant_id == tenant_id,
+            AIGraphRun.status.in_(("PENDING", "QUEUED", "RUNNING")),
+        ).limit(1))).scalar_one_or_none()
+        return rows, active is not None
+    return await run_db_task(_query)
+
+
+async def _legacy_stream_snapshot(
+    tenant_id: UUID, conversation_id: UUID, after_id: int,
+):
+    """Compatibility stream used only by clients deployed before run scoping."""
     async def _query(db):
         rows = list((await db.execute(
             select(AIGraphEvent, AIRequestRecord)
@@ -380,33 +552,63 @@ async def _stream_snapshot(tenant_id: UUID, conversation_id: UUID, after_id: int
             .order_by(AIGraphEvent.id)
             .limit(100)
         )).all())
-        active = (await db.execute(select(AIAnalysisMessage.id).where(
-            AIAnalysisMessage.tenant_id == tenant_id,
-            AIAnalysisMessage.conversation_id == conversation_id,
-            AIAnalysisMessage.role == "ASSISTANT",
-            AIAnalysisMessage.status.in_(("PENDING", "QUEUED", "STREAMING", "INTERRUPTED")),
-        ).limit(1))).scalar_one_or_none()
+        active = (await db.execute(
+            select(AIAnalysisMessage.id)
+            .where(
+                AIAnalysisMessage.tenant_id == tenant_id,
+                AIAnalysisMessage.conversation_id == conversation_id,
+                AIAnalysisMessage.status.in_(("PENDING", "QUEUED", "STREAMING", "INTERRUPTED")),
+            )
+            .limit(1)
+        )).scalar_one_or_none()
         return rows, active is not None
     return await run_db_task(_query)
+
+
+async def _authorize_stream(
+    tenant_id: UUID,
+    conversation_id: UUID,
+    graph_run_id: UUID | None,
+) -> None:
+    """Authorize in a short session that closes before streaming begins."""
+
+    async def _authorize(db):
+        config = await AnalysisChatService.runtime_config(db, tenant_id)
+        if not config.enabled or not config.streaming_enabled:
+            raise AnalysisChatError(
+                "ANALYSIS_CHAT_STREAMING_DISABLED", status_code=403
+            )
+        await AnalysisChatService.get_conversation(
+            db, tenant_id=tenant_id, conversation_id=conversation_id
+        )
+        if graph_run_id is None:
+            return
+        target_run = await AIGraphRunService.get(
+            db, tenant_id=tenant_id, run_id=graph_run_id
+        )
+        target_request = await db.get(AIRequestRecord, target_run.ai_request_id)
+        if target_request is None or target_request.conversation_id != conversation_id:
+            raise AnalysisChatError(
+                "ANALYSIS_CHAT_MESSAGE_NOT_FOUND", status_code=404
+            )
+
+    await run_db_task(_authorize)
 
 
 @router.get("/api/intelligence-conversations/{conversation_id}/stream")
 async def stream_conversation(
     conversation_id: UUID,
     request: Request,
+    graph_run_id: UUID | None = None,
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
-    db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ):
     try:
-        config = await AnalysisChatService.runtime_config(db, user_id)
-        if not config.enabled or not config.streaming_enabled:
-            raise AnalysisChatError("ANALYSIS_CHAT_STREAMING_DISABLED", status_code=403)
-        await AnalysisChatService.get_conversation(
-            db, tenant_id=user_id, conversation_id=conversation_id
-        )
+        await _authorize_stream(user_id, conversation_id, graph_run_id)
     except AnalysisChatError as exc:
         raise _error(exc) from exc
+    except GraphAccessError as exc:
+        raise HTTPException(status_code=404, detail={"code": str(exc)}) from exc
     try:
         cursor = max(0, int(last_event_id or 0))
     except ValueError:
@@ -425,7 +627,16 @@ async def stream_conversation(
         while True:
             if await request.is_disconnected():
                 return
-            rows, active = await _stream_snapshot(user_id, conversation_id, cursor)
+            if graph_run_id is None:
+                # Temporary compatibility for the already deployed client. New
+                # clients always scope by graph_run_id and use an exact cursor.
+                rows, active = await _legacy_stream_snapshot(
+                    user_id, conversation_id, cursor
+                )
+            else:
+                rows, active = await _stream_snapshot(
+                    user_id, conversation_id, graph_run_id, cursor
+                )
             for event, ai_request in rows:
                 cursor = int(event.id)
                 event_name = {
@@ -435,6 +646,7 @@ async def stream_conversation(
                     "INTERRUPTED": "blocked",
                     "FAILED": "blocked" if (event.payload or {}).get("error_kind") == "PROVIDER_BLOCKED" else "error",
                     "COMPLETED": "completed",
+                    "CANCELLED": "cancelled",
                 }.get(event.event_type, event.event_type.lower())
                 envelope = {
                     "event_id": cursor,

@@ -801,7 +801,10 @@ def test_dedicated_ai_worker_does_not_import_live_execution_tasks(monkeypatch):
     from app.tasks.celery_app import _configured_task_modules
 
     monkeypatch.setenv("WORKER_QUEUES", "ai_orchestration")
-    assert _configured_task_modules() == ("app.tasks.ai_orchestration",)
+    assert _configured_task_modules() == (
+        "app.tasks.ai_orchestration",
+        "app.tasks.governed_cache_reconciliation",
+    )
     monkeypatch.delenv("WORKER_QUEUES", raising=False)
     default_modules = _configured_task_modules()
     assert "app.tasks.ai_orchestration" in default_modules
@@ -841,6 +844,118 @@ def test_staging_canary_executes_one_readonly_tool_per_module():
     assert len(READONLY_CANARY_TOOLS) == len(module_capability_registry)
     assert {domains[name] for name in READONLY_CANARY_TOOLS} == set(module_capability_registry)
     assert all("create_" not in name and "persist_" not in name for name in READONLY_CANARY_TOOLS)
+
+
+@pytest.mark.asyncio
+async def test_governed_staging_canary_rejects_wrong_or_tampered_prompt(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.ai_orchestration.errors import ProviderBlockedError
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        GOVERNED_STAGING_CANARY_CONTRACT,
+        GOVERNED_STAGING_CANARY_PROFILE_NAME,
+        _validated_governed_staging_canary_proposal,
+    )
+    from app.models.systemic_ai import AIPromptVersion
+
+    tenant_id = uuid4()
+    prompt_id = uuid4()
+    marker = {
+        "contract_version": GOVERNED_STAGING_CANARY_CONTRACT,
+        "profile_id": str(uuid4()),
+        "profile_name": GOVERNED_STAGING_CANARY_PROFILE_NAME,
+    }
+    run = SimpleNamespace(tenant_id=tenant_id)
+    request = SimpleNamespace(
+        prompt_version_id=prompt_id,
+        requested_by_user_id=tenant_id,
+        request_json={
+            "request_intent": "FAKE_PROVIDER_CANARY",
+            "data_mode": "DRAFT_PROPOSAL",
+            "governed_staging_canary": marker,
+        },
+    )
+    conversation = SimpleNamespace(parent_analysis_run_id=uuid4())
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "staging")
+    monkeypatch.setenv("LANGGRAPH_FAKE_PROVIDER_CANARY_ENABLED", "true")
+    monkeypatch.setenv("LANGGRAPH_REAL_PROVIDER_CANARY_ENABLED", "false")
+
+    class FakeDB:
+        def __init__(self, prompt):
+            self.prompt = prompt
+
+        async def get(self, model, key):
+            assert model is AIPromptVersion
+            assert key == prompt_id
+            return self.prompt
+
+    prompt_fields = {
+        "prompt_key": "analysis-chat-governed-change",
+        "semantic_version": "1.5.0",
+        "status": "APPROVED",
+        "approved_at": datetime.now(timezone.utc),
+        "system_template": "system",
+        "user_template": "user",
+        "input_schema_json": {"type": "object"},
+        "output_schema_json": {"type": "object"},
+        "tool_policy_json": {},
+        "provider_constraints_json": {},
+        "content_hash": "tampered",
+    }
+    for invalid in (
+        {**prompt_fields, "semantic_version": "1.4.0"},
+        prompt_fields,
+    ):
+        with pytest.raises(ProviderBlockedError) as exc_info:
+            await _validated_governed_staging_canary_proposal(
+                FakeDB(SimpleNamespace(**invalid)),
+                run=run,
+                request=request,
+                conversation=conversation,
+                selected_evidence_refs=[],
+            )
+        assert exc_info.value.reason_code == "GOVERNED_STAGING_CANARY_PROMPT_INVALID"
+
+
+@pytest.mark.asyncio
+async def test_governed_canary_cleanup_commits_write_disable_before_rollback_failure(
+    monkeypatch,
+):
+    from app.ai_orchestration.langgraph import staging_canary
+
+    durable = {"writes_enabled": True, "profile": "candidate"}
+    calls: list[str] = []
+
+    async def disable(transaction):
+        calls.append("disable")
+        transaction["writes_enabled"] = False
+        return {"status": "COMPLETED", "runtime_write_enabled": False}
+
+    async def fail_profile_cleanup(transaction):
+        calls.append("profile")
+        transaction["profile"] = "rollback-attempted"
+        raise RuntimeError("simulated rollback failure")
+
+    async def transactional_run(callback):
+        working = dict(durable)
+        result = await callback(working)
+        durable.clear()
+        durable.update(working)
+        return result
+
+    monkeypatch.setattr(staging_canary, "_disable_governed_canary_writes", disable)
+    monkeypatch.setattr(
+        staging_canary,
+        "_cleanup_governed_canary_profile",
+        fail_profile_cleanup,
+    )
+    monkeypatch.setattr(staging_canary, "run_db_task", transactional_run)
+
+    with pytest.raises(RuntimeError, match="simulated rollback failure"):
+        await staging_canary._run_governed_canary_cleanup()
+
+    assert calls == ["disable", "profile"]
+    assert durable == {"writes_enabled": False, "profile": "candidate"}
 
 
 def test_checkpoint_inspector_authorizes_thread_before_enumerating_namespaces():

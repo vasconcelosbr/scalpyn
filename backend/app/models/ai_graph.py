@@ -7,11 +7,18 @@ models are the application authorization and audit boundary.
 from datetime import datetime, timezone
 import uuid
 
-from sqlalchemy import Boolean, Column, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean, CheckConstraint, Column, ForeignKey, Index, String, Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.types import BigInteger, TIMESTAMP
 
 from ..database import Base
+
+
+AI_GRAPH_DISPATCH_START = "START"
+AI_GRAPH_DISPATCH_RESUME = "RESUME"
 
 
 def _now():
@@ -42,6 +49,13 @@ class AIGraphRun(Base):
     __tablename__ = "ai_graph_runs"
     __table_args__ = (
         UniqueConstraint("tenant_id", "idempotency_key", name="uq_ai_graph_run_tenant_idempotency"),
+        CheckConstraint(
+            "(dispatch_kind = 'START' AND dispatch_interrupt_id IS NULL "
+            "AND dispatch_decision_id IS NULL) OR "
+            "(dispatch_kind = 'RESUME' AND dispatch_interrupt_id IS NOT NULL "
+            "AND dispatch_decision_id IS NOT NULL)",
+            name="ck_ai_graph_run_dispatch_payload",
+        ),
         Index("ix_ai_graph_run_tenant_created", "tenant_id", "created_at"),
         Index("ix_ai_graph_run_status_lease", "status", "lease_expires_at"),
         Index("ix_ai_graph_run_ai_request", "ai_request_id"),
@@ -56,6 +70,12 @@ class AIGraphRun(Base):
     checkpoint_namespace = Column(String(120), nullable=False, default="scalpyn")
     idempotency_key = Column(String(160), nullable=False)
     status = Column(String(40), nullable=False, default="QUEUED")
+    dispatch_kind = Column(
+        String(16), nullable=False, default=AI_GRAPH_DISPATCH_START,
+        server_default=AI_GRAPH_DISPATCH_START,
+    )
+    dispatch_interrupt_id = Column(UUID(as_uuid=True))
+    dispatch_decision_id = Column(UUID(as_uuid=True))
     current_node = Column(String(160))
     last_completed_node = Column(String(160))
     failed_node = Column(String(160))

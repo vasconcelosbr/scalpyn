@@ -102,6 +102,7 @@ def enqueue(
     safe_ttl = int(max(ttl_seconds, 5))
 
     redis_client = _redis_client()
+    dedup_acquired = False
     if redis_client is not None:
         try:
             acquired = redis_client.set(full_key, "1", nx=True, ex=safe_ttl)
@@ -111,6 +112,7 @@ def enqueue(
                     task_name, dedup_key, safe_ttl,
                 )
                 return None
+            dedup_acquired = True
         except Exception as exc:
             logger.warning(
                 "[dispatch] Redis SET NX failed for %s (%s) — failing open",
@@ -125,13 +127,29 @@ def enqueue(
         # underlying Celery serializer omits ``properties.timestamp``.
         _ENQUEUED_AT_HEADER: datetime.now(timezone.utc).isoformat(),
     }
-    async_result = celery_app.send_task(
-        task_name,
-        args=args,
-        kwargs=kwargs or {},
-        queue=queue,
-        headers=headers,
-    )
+    try:
+        async_result = celery_app.send_task(
+            task_name,
+            args=args,
+            kwargs=kwargs or {},
+            queue=queue,
+            headers=headers,
+        )
+    except Exception:
+        # The lock represents a successfully published delivery. If this
+        # caller acquired it but the broker rejected the publish, release only
+        # that lock so the durable outbox can retry immediately. Never delete
+        # a pre-existing lock owned by another delivery.
+        if dedup_acquired and redis_client is not None:
+            try:
+                redis_client.delete(full_key)
+            except Exception as exc:
+                logger.warning(
+                    "[dispatch] DEL after publish failure failed for %s (%s)",
+                    task_name,
+                    exc,
+                )
+        raise
     return async_result.id
 
 

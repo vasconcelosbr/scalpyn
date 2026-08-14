@@ -73,6 +73,12 @@ def prepare_anthropic_output_schema(
         if key == "items":
             normalized[key] = prepare_anthropic_output_schema(value, required=True)
             continue
+        if key in {"anyOf", "oneOf", "allOf"}:
+            normalized[key] = [
+                prepare_anthropic_output_schema(option, required=True)
+                for option in value
+            ]
+            continue
         if key == "type" and isinstance(value, list):
             normalized["anyOf"] = [{"type": item} for item in value]
             continue

@@ -32,6 +32,7 @@ from ..models.systemic_ai import (
     AIPromptVersion,
     AIRequestRecord,
     AIResultRecord,
+    AIUsageRecord,
 )
 from ..schemas.analysis_chat import (
     AnalysisChatDataMode,
@@ -47,6 +48,43 @@ def _now() -> datetime:
 
 def _sha(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _cancel_budget_reservation(
+    reservation: AIBudgetReservationRecord | None,
+    *,
+    now: datetime,
+) -> bool:
+    """Apply cancellation without erasing evidence of provider transport."""
+    if reservation is None:
+        return False
+    transport_attempted = bool(
+        reservation.provider_transport_attempted
+        or reservation.status in {"TRANSPORT_STARTED", "TRANSPORT_ERROR"}
+        or int(getattr(reservation, "actual_tokens", 0) or 0) > 0
+        or Decimal(str(getattr(reservation, "actual_cost_usd", 0) or 0)) > 0
+    )
+    if reservation.status == "RESERVED" and not transport_attempted:
+        reservation.status = "RELEASED"
+        reservation.actual_tokens = 0
+        reservation.actual_cost_usd = Decimal("0")
+        reservation.released_tokens = int(reservation.reserved_tokens or 0)
+        reservation.provider_transport_attempted = False
+        reservation.terminal_reason = "CANCELLED_BEFORE_PROVIDER_TRANSPORT"
+        reservation.released_at = now
+        reservation.updated_at = now
+    elif reservation.status == "RESERVED":
+        reservation.status = "TRANSPORT_ERROR"
+        reservation.provider_transport_attempted = True
+        reservation.terminal_reason = "CANCELLED_WITH_PROVIDER_TRANSPORT_AUDIT_CONFLICT"
+        reservation.updated_at = now
+    elif reservation.status == "TRANSPORT_STARTED":
+        # The request may still be in flight. Keep it reconcilable and never
+        # claim that its reservation was released before usage is known.
+        reservation.provider_transport_attempted = True
+        reservation.terminal_reason = "CANCELLED_AFTER_PROVIDER_TRANSPORT_STARTED"
+        reservation.updated_at = now
+    return transport_attempted
 
 
 class AnalysisChatError(RuntimeError):
@@ -146,9 +184,29 @@ class AnalysisChatService:
             return
         if message.graph_run_id is None or message.ai_request_id is None:
             raise AnalysisChatError("ANALYSIS_CHAT_PROPOSAL_CONTRACT_INVALID")
-        interrupt = await db.get(AIGraphInterrupt, interrupt_id)
+        # Keep the same lock order used by ``AIGraphRunService.resume`` so
+        # concurrent decisions cannot deadlock (run -> interrupt) or mint two
+        # proposal approvals for the same human gate.
+        locked_run = (
+            await db.execute(
+                select(AIGraphRun)
+                .where(
+                    AIGraphRun.id == message.graph_run_id,
+                    AIGraphRun.tenant_id == tenant_id,
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        interrupt = (
+            await db.execute(
+                select(AIGraphInterrupt)
+                .where(AIGraphInterrupt.id == interrupt_id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
         if (
-            interrupt is None
+            locked_run is None
+            or interrupt is None
             or interrupt.tenant_id != tenant_id
             or interrupt.graph_run_id != message.graph_run_id
             or interrupt.interrupt_type != "PROPOSAL_CONFIRMATION"
@@ -192,6 +250,7 @@ class AnalysisChatService:
             current_approval is None
             or current_approval.tenant_id != tenant_id
             or current_approval.scope != "ANALYSIS_CHAT_TURN"
+            or current_approval.status != "APPROVED"
         ):
             raise AnalysisChatError("ANALYSIS_CHAT_MODEL_APPROVAL_INVALID")
         if latest_prompt is None:
@@ -200,58 +259,63 @@ class AnalysisChatService:
         old_prompt_id = request.prompt_version_id
         request.prompt_version_id = latest_prompt.id
         message.prompt_version_id = latest_prompt.id
-        desired_output_tokens = int(config.proposal_max_output_tokens)
-        replacement_approval_id = current_approval.id
-        if int(current_approval.max_output_tokens) < desired_output_tokens:
-            now = _now()
-            replacement_approval_id = uuid.uuid4()
-            approval_payload = {
-                "id": str(replacement_approval_id),
-                "tenant_id": str(tenant_id),
-                "provider": current_approval.provider,
-                "model": current_approval.model,
-                "max_cost_usd": str(config.provider_max_cost_usd),
+        desired_output_tokens = max(
+            int(config.proposal_max_output_tokens),
+            int(current_approval.max_output_tokens),
+        )
+        # The first human gate may remain open beyond the original per-turn
+        # TTL. Always mint a fresh immutable approval while the interrupt is
+        # locked and still PENDING. Reusing an old approval would make a valid
+        # confirmation fail solely because the operator reviewed it carefully.
+        now = _now()
+        replacement_approval_id = uuid.uuid4()
+        approval_payload = {
+            "id": str(replacement_approval_id),
+            "tenant_id": str(tenant_id),
+            "provider": current_approval.provider,
+            "model": current_approval.model,
+            "max_cost_usd": str(current_approval.max_cost_usd),
+            "max_output_tokens": desired_output_tokens,
+            "scope": "ANALYSIS_CHAT_TURN",
+            "approved_by": str(user_id),
+            "approved_at": now.isoformat(),
+            "replaces_approval_id": str(current_approval.id),
+            "human_gate": "PROPOSAL_CONFIRMATION",
+        }
+        replacement = AIModelApprovalRecord(
+            id=replacement_approval_id,
+            tenant_id=tenant_id,
+            provider=current_approval.provider,
+            model=current_approval.model,
+            max_cost_usd=current_approval.max_cost_usd,
+            input_cost_per_million=current_approval.input_cost_per_million,
+            output_cost_per_million=current_approval.output_cost_per_million,
+            max_output_tokens=desired_output_tokens,
+            pricing_source_url=current_approval.pricing_source_url,
+            pricing_observed_at=current_approval.pricing_observed_at,
+            pricing_snapshot_hash=current_approval.pricing_snapshot_hash,
+            approval_phrase_hash=canonical_hash({
+                "action": "CONFIRM_GOVERNED_PROPOSAL_GENERATION",
+                "message_id": str(message.id),
+                "interrupt_id": str(interrupt_id),
                 "max_output_tokens": desired_output_tokens,
-                "scope": "ANALYSIS_CHAT_TURN",
-                "approved_by": str(user_id),
-                "approved_at": now.isoformat(),
-                "replaces_approval_id": str(current_approval.id),
-                "human_gate": "PROPOSAL_CONFIRMATION",
-            }
-            replacement = AIModelApprovalRecord(
-                id=replacement_approval_id,
-                tenant_id=tenant_id,
-                provider=current_approval.provider,
-                model=current_approval.model,
-                max_cost_usd=config.provider_max_cost_usd,
-                input_cost_per_million=current_approval.input_cost_per_million,
-                output_cost_per_million=current_approval.output_cost_per_million,
-                max_output_tokens=desired_output_tokens,
-                pricing_source_url=current_approval.pricing_source_url,
-                pricing_observed_at=current_approval.pricing_observed_at,
-                pricing_snapshot_hash=current_approval.pricing_snapshot_hash,
-                approval_phrase_hash=canonical_hash({
-                    "action": "CONFIRM_GOVERNED_PROPOSAL_GENERATION",
-                    "message_id": str(message.id),
-                    "interrupt_id": str(interrupt_id),
-                    "max_output_tokens": desired_output_tokens,
-                }),
-                approval_method="ANALYSIS_CHAT_PROPOSAL_CONFIRMATION",
-                analysis_profile_id=current_approval.analysis_profile_id,
-                scope="ANALYSIS_CHAT_TURN",
-                status="APPROVED",
-                approved_by=user_id,
-                approved_at=now,
-                expires_at=now + timedelta(
-                    seconds=get_langgraph_settings().model_approval_ttl_seconds
-                ),
-                content_hash=canonical_hash(approval_payload),
-            )
-            db.add(replacement)
-            request_json["model_approval_id"] = str(replacement_approval_id)
-            request.request_json = request_json
-            reservation.model_approval_id = replacement_approval_id
-            reservation.max_output_tokens = desired_output_tokens
+            }),
+            approval_method="ANALYSIS_CHAT_PROPOSAL_CONFIRMATION",
+            analysis_profile_id=current_approval.analysis_profile_id,
+            scope="ANALYSIS_CHAT_TURN",
+            status="APPROVED",
+            approved_by=user_id,
+            approved_at=now,
+            expires_at=now + timedelta(
+                seconds=get_langgraph_settings().model_approval_ttl_seconds
+            ),
+            content_hash=canonical_hash(approval_payload),
+        )
+        db.add(replacement)
+        request_json["model_approval_id"] = str(replacement_approval_id)
+        request.request_json = request_json
+        reservation.model_approval_id = replacement_approval_id
+        reservation.max_output_tokens = desired_output_tokens
 
         db.add(AIGraphEvent(
             tenant_id=tenant_id,
@@ -804,37 +868,64 @@ class AnalysisChatService:
 
     @staticmethod
     async def cancel(
-        db: AsyncSession, *, tenant_id: UUID, user_id: UUID, conversation_id: UUID,
+        db: AsyncSession,
+        *,
+        tenant_id: UUID,
+        user_id: UUID,
+        conversation_id: UUID,
+        graph_run_id: UUID | None = None,
     ) -> AIAnalysisMessage | None:
+        # Discover the run first, then acquire locks in the same run ->
+        # conversation -> message order used by graph execution.  Re-check the
+        # message under lock before changing any state.
+        candidate_query = select(AIAnalysisMessage).where(
+            AIAnalysisMessage.tenant_id == tenant_id,
+            AIAnalysisMessage.conversation_id == conversation_id,
+            AIAnalysisMessage.role == "ASSISTANT",
+            AIAnalysisMessage.status.in_(("PENDING", "QUEUED", "STREAMING", "INTERRUPTED")),
+        )
+        if graph_run_id is not None:
+            candidate_query = candidate_query.where(
+                AIAnalysisMessage.graph_run_id == graph_run_id
+            )
+        candidate = (
+            await db.execute(
+                candidate_query.order_by(
+                    AIAnalysisMessage.sequence_number.desc()
+                ).limit(1)
+            )
+        ).scalar_one_or_none()
+        if candidate is None:
+            return None
+        run = None
+        if candidate.graph_run_id:
+            run = (
+                await db.execute(select(AIGraphRun).where(
+                    AIGraphRun.id == candidate.graph_run_id,
+                    AIGraphRun.tenant_id == tenant_id,
+                ).with_for_update())
+            ).scalar_one_or_none()
         conversation = await AnalysisChatService.get_conversation(
             db, tenant_id=tenant_id, conversation_id=conversation_id, lock=True
         )
         message = (
             await db.execute(select(AIAnalysisMessage).where(
+                AIAnalysisMessage.id == candidate.id,
                 AIAnalysisMessage.tenant_id == tenant_id,
                 AIAnalysisMessage.conversation_id == conversation.id,
                 AIAnalysisMessage.role == "ASSISTANT",
                 AIAnalysisMessage.status.in_(("PENDING", "QUEUED", "STREAMING", "INTERRUPTED")),
-            ).order_by(AIAnalysisMessage.sequence_number.desc()).limit(1).with_for_update())
+            ).with_for_update())
         ).scalar_one_or_none()
         if message is None:
             return None
         now = _now()
-        message.status = "CANCELLED"
-        message.cancelled_at = now
-        message.provider_transport_attempted = False
+        reservation = None
         if message.ai_request_id:
             reservation = (await db.execute(select(AIBudgetReservationRecord).where(
                 AIBudgetReservationRecord.tenant_id == tenant_id,
                 AIBudgetReservationRecord.ai_request_id == message.ai_request_id,
             ).with_for_update())).scalar_one_or_none()
-            if reservation is not None and reservation.status in {"RESERVED", "TRANSPORT_STARTED"}:
-                reservation.status = "RELEASED"
-                reservation.released_tokens = int(reservation.reserved_tokens or 0)
-                reservation.provider_transport_attempted = False
-                reservation.terminal_reason = "CANCELLED_BY_AUTHORIZED_ACTOR"
-                reservation.released_at = now
-                reservation.updated_at = now
             job = (await db.execute(select(AIJobRecord).where(
                 AIJobRecord.tenant_id == tenant_id,
                 AIJobRecord.ai_request_id == message.ai_request_id,
@@ -845,13 +936,75 @@ class AnalysisChatService:
                 job.terminal_reason = "CANCELLED_BY_AUTHORIZED_ACTOR"
                 job.lease_owner = None
                 job.lease_expires_at = None
-        if message.graph_run_id:
-            run = await db.get(AIGraphRun, message.graph_run_id)
-            if run and run.tenant_id == tenant_id and run.status not in {"COMPLETED", "FAILED", "CANCELLED"}:
-                run.status = "CANCELLED"
-                run.cancelled_at = now
-                run.completed_at = now
-                run.terminal_reason = "CANCELLED_BY_AUTHORIZED_ACTOR"
+            usage = (await db.execute(select(AIUsageRecord).where(
+                AIUsageRecord.tenant_id == tenant_id,
+                AIUsageRecord.ai_request_id == message.ai_request_id,
+            ))).scalar_one_or_none()
+            if usage is not None:
+                actual_input = int(usage.tokens_input)
+                actual_output = int(usage.tokens_output)
+                actual_cost = Decimal(usage.actual_cost)
+                existing_usage = (
+                    message.tokens_input,
+                    message.tokens_output,
+                    message.cost_usd,
+                )
+                if all(value is None for value in existing_usage):
+                    message.tokens_input = actual_input
+                    message.tokens_output = actual_output
+                    message.cost_usd = actual_cost
+                    conversation.total_tokens_input = (
+                        int(conversation.total_tokens_input or 0) + actual_input
+                    )
+                    conversation.total_tokens_output = (
+                        int(conversation.total_tokens_output or 0) + actual_output
+                    )
+                    conversation.total_cost_usd = (
+                        Decimal(str(conversation.total_cost_usd or 0)) + actual_cost
+                    )
+                elif not (
+                    all(value is not None for value in existing_usage)
+                    and int(message.tokens_input) == actual_input
+                    and int(message.tokens_output) == actual_output
+                    and Decimal(message.cost_usd) == actual_cost
+                ):
+                    raise AnalysisChatError(
+                        "ANALYSIS_CHAT_TERMINAL_USAGE_ATTRIBUTION_CONFLICT"
+                    )
+        transport_attempted = _cancel_budget_reservation(reservation, now=now)
+        message.status = "CANCELLED"
+        message.cancelled_at = now
+        message.completed_at = now
+        message.provider_transport_attempted = bool(
+            message.provider_transport_attempted or transport_attempted
+        )
+        message.lock_version = int(message.lock_version or 0) + 1
+        if run is not None and run.status not in {"COMPLETED", "FAILED", "CANCELLED"}:
+            run.status = "CANCELLED"
+            run.cancelled_at = now
+            run.completed_at = now
+            run.terminal_reason = "CANCELLED_BY_AUTHORIZED_ACTOR"
+            run.provider_transport_attempted = message.provider_transport_attempted
+            run.heartbeat_at = now
+            run.lease_owner = None
+            run.lease_expires_at = None
+            run.updated_at = now
+            db.add(AIGraphEvent(
+                tenant_id=tenant_id,
+                graph_run_id=run.id,
+                event_key=f"{run.id}:cancelled",
+                event_type="CANCELLED",
+                node_name=run.current_node,
+                status="CANCELLED",
+                payload={
+                    "actor_user_id": str(user_id),
+                    "message_id": str(message.id),
+                    "provider_transport_attempted": message.provider_transport_attempted,
+                    "budget_reservation_status": (
+                        reservation.status if reservation is not None else None
+                    ),
+                },
+            ))
         conversation.updated_at = now
         conversation.lock_version = int(conversation.lock_version or 0) + 1
         return message
