@@ -179,7 +179,7 @@ async def test_proposal_confirmation_reissues_an_expired_approval(monkeypatch):
         def __init__(self):
             self.results = iter((locked_run, interrupt, reservation, latest_prompt))
             self.added = []
-            self.flushed = False
+            self.flush_snapshots = []
 
         async def execute(self, _statement):
             return _Result(next(self.results))
@@ -195,7 +195,7 @@ async def test_proposal_confirmation_reissues_an_expired_approval(monkeypatch):
             self.added.append(value)
 
         async def flush(self):
-            self.flushed = True
+            self.flush_snapshots.append(reservation.model_approval_id)
 
     async def _runtime_config(_db, _tenant_id):
         return AnalysisChatRuntimeConfig(proposal_max_output_tokens=16384)
@@ -235,7 +235,7 @@ async def test_proposal_confirmation_reissues_an_expired_approval(monkeypatch):
     assert replacement.output_cost_per_million == current_approval.output_cost_per_million
     assert request.request_json["model_approval_id"] == str(replacement.id)
     assert reservation.model_approval_id == replacement.id
-    assert db.flushed is True
+    assert db.flush_snapshots == [old_approval_id, replacement.id]
 
 
 @pytest.mark.asyncio

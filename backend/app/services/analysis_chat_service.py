@@ -312,6 +312,12 @@ class AnalysisChatService:
             content_hash=canonical_hash(approval_payload),
         )
         db.add(replacement)
+        # ``AIBudgetReservationRecord.model_approval_id`` is a real FK, but
+        # the ORM models intentionally do not expose a relationship between
+        # the reservation and its immutable approval.  Flush the approval
+        # first so SQLAlchemy cannot schedule the reservation UPDATE ahead of
+        # the approval INSERT in the same unit of work.
+        await db.flush()
         request_json["model_approval_id"] = str(replacement_approval_id)
         request.request_json = request_json
         reservation.model_approval_id = replacement_approval_id
