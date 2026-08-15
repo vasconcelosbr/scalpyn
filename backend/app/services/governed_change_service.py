@@ -2086,13 +2086,12 @@ def _profile_score_semantic_scope(
                 )
         elif operation == "UPDATE_PROFILE_CONFIG_SET":
             if (
-                len(parts) >= 4
+                len(parts) >= 3
                 and parts[0] == "profiles"
-                and parts[2] == "config"
             ):
                 profile_id = str(parts[1])
                 relevant_profile_ids.add(profile_id)
-                local_parts = parts[3:]
+                local_parts = parts[2:]
                 if profile_id in source_bulk:
                     source_for_change = _profile_root_assertions(
                         source_bulk[profile_id],
@@ -2217,10 +2216,9 @@ def _validate_profile_score_risk_authority(
             allowed = bool(parts and parts[0] in PROFILE_ROOTS)
         elif operation == "UPDATE_PROFILE_CONFIG_SET":
             allowed = (
-                len(parts) >= 4
+                len(parts) >= 3
                 and parts[0] == "profiles"
-                and parts[2] == "config"
-                and parts[3] in PROFILE_ROOTS
+                and parts[2] in PROFILE_ROOTS
             )
         elif operation == "SET_PROFILE_ACTIVE_STATUS":
             allowed = len(parts) == 3 and parts[0] == "profiles" and parts[2] == "is_active"
@@ -4751,6 +4749,8 @@ async def rollback(
     payload = dict(plan.execution_payload or {})
     result = dict(plan.execution_result or {})
     source = deepcopy((plan.rollback_plan or {}).get("source_document") or {})
+    if not source:
+        raise ValueError("Rollback snapshot is missing or corrupted")
     candidate_hash = str(result.get("new_document_hash") or "")
     now = _now()
     cache_type: str | None = None
