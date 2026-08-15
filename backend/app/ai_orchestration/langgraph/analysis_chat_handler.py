@@ -395,6 +395,45 @@ def _validated_provider_answer(
         raise ProviderOutputError("ANALYSIS_CHAT_OUTPUT_SCHEMA_INVALID") from exc
 
 
+def _translate_change_evidence_labels(
+    proposal: dict[str, Any] | None,
+    selected_evidence_refs: tuple[dict[str, Any], ...],
+) -> dict[str, Any] | None:
+    """Translate short evidence labels (E1..E12) cited in proposal.changes
+    back into real evidence UUIDs, in the exact order presented to the model
+    as ``evidence_labels`` in the prompt. A label outside the presented set
+    fails before any other proposal validation -- FIX-AC-GOV-002 Fase 4: the
+    model selects from an enumerated menu, it never emits a raw identifier.
+    """
+    if not isinstance(proposal, dict):
+        return proposal
+    label_to_id = {
+        f"E{index + 1}": str(ref.get("evidence_id"))
+        for index, ref in enumerate(selected_evidence_refs)
+    }
+    valid_labels = ", ".join(label_to_id) or "(none)"
+    changes = proposal.get("changes")
+    if not isinstance(changes, list):
+        return proposal
+    translated_changes = []
+    for raw_change in changes:
+        change = dict(raw_change)
+        raw_refs = change.get("evidence_refs")
+        if isinstance(raw_refs, list):
+            translated_refs = []
+            for label in raw_refs:
+                real_id = label_to_id.get(str(label))
+                if real_id is None:
+                    raise ProviderOutputError(
+                        f"ANALYSIS_CHAT_EVIDENCE_LABEL_INVALID: '{label}' is not "
+                        f"a supplied evidence label. Valid labels: {valid_labels}"
+                    )
+                translated_refs.append(real_id)
+            change["evidence_refs"] = translated_refs
+        translated_changes.append(change)
+    return {**proposal, "changes": translated_changes}
+
+
 def _normalized_provider_mode(
     provider_answer: AnalysisChatOutput,
     *,
@@ -1437,11 +1476,22 @@ class AnalysisChatGraphNodeHandler:
                 "The chat provider requires tenant-scoped typed evidence",
             )
         evidence_payload = [{
+            "label": f"E{index + 1}",
             "evidence_id": str(row.id),
             "module": row.module_key,
             "tool": row.tool_name,
             "output": row.output_json,
-        } for row in ordered_evidence]
+        } for index, row in enumerate(ordered_evidence)]
+        # Short enumerated labels (E1..E12), not raw UUIDs, are what the model
+        # is instructed to cite in proposal.changes[].evidence_refs. A long
+        # unstructured UUID invites hallucination; a small closed menu does
+        # not. The backend translates label -> real UUID after the response
+        # (see _translate_change_evidence_labels) and still revalidates the
+        # translated UUID against the canonical evidence pool.
+        evidence_labels = "\n".join(
+            f"{item['label']}: {item['module']}.{item['tool']}"
+            for item in evidence_payload
+        )
         values = {
             "parent_analysis": json.dumps(
                 parent_result.result_json,
@@ -1449,6 +1499,7 @@ class AnalysisChatGraphNodeHandler:
                 default=str,
                 separators=(",", ":"),
             ),
+            "evidence_labels": evidence_labels,
             "evidence": json.dumps(
                 evidence_payload,
                 ensure_ascii=False,
@@ -1770,6 +1821,12 @@ class AnalysisChatGraphNodeHandler:
             provider_answer,
             invocation.parent_analysis_run_id,
         )
+        provider_answer = provider_answer.model_copy(update={
+            "proposal": _translate_change_evidence_labels(
+                provider_answer.proposal,
+                invocation.selected_evidence_refs,
+            ),
+        })
         refs = [dict(item) for item in invocation.selected_evidence_refs]
         modules = list(dict.fromkeys(
             str(item.get("module")) for item in refs if item.get("module")

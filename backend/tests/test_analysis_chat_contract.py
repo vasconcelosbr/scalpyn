@@ -1727,3 +1727,77 @@ def test_sse_route_does_not_hold_an_injected_database_session():
     from app.api.analysis_chat import stream_conversation
 
     assert "db" not in inspect.signature(stream_conversation).parameters
+
+
+def _label_selected_evidence_refs():
+    return (
+        {"evidence_id": "11111111-1111-1111-1111-111111111111"},
+        {"evidence_id": "22222222-2222-2222-2222-222222222222"},
+        {"evidence_id": "33333333-3333-3333-3333-333333333333"},
+    )
+
+
+def test_change_evidence_label_translates_to_the_real_uuid_in_presented_order():
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        _translate_change_evidence_labels,
+    )
+
+    proposal = {
+        "operation_type": "UPDATE_PROFILE_CONFIG",
+        "changes": [
+            {"op": "replace", "path": "/x", "evidence_refs": ["E1", "E3"]},
+            {"op": "replace", "path": "/y", "evidence_refs": ["E2"]},
+        ],
+    }
+    translated = _translate_change_evidence_labels(proposal, _label_selected_evidence_refs())
+    assert translated["changes"][0]["evidence_refs"] == [
+        "11111111-1111-1111-1111-111111111111",
+        "33333333-3333-3333-3333-333333333333",
+    ]
+    assert translated["changes"][1]["evidence_refs"] == [
+        "22222222-2222-2222-2222-222222222222",
+    ]
+
+
+def test_change_evidence_label_outside_the_presented_menu_is_rejected_with_valid_labels():
+    from app.ai_orchestration.errors import ProviderOutputError
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        _translate_change_evidence_labels,
+    )
+
+    proposal = {
+        "operation_type": "UPDATE_PROFILE_CONFIG",
+        "changes": [{"op": "replace", "path": "/x", "evidence_refs": ["E7"]}],
+    }
+    with pytest.raises(ProviderOutputError) as excinfo:
+        _translate_change_evidence_labels(proposal, _label_selected_evidence_refs())
+    message = str(excinfo.value)
+    assert "E1" in message and "E2" in message and "E3" in message
+
+
+def test_change_evidence_raw_uuid_is_rejected_same_as_an_invalid_label():
+    # Regression guard for the exact fabricated UUID found in production by
+    # CHAT-003: a raw identifier is not a presented label, so it is rejected
+    # by the same path as any other unlisted label.
+    from app.ai_orchestration.errors import ProviderOutputError
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        _translate_change_evidence_labels,
+    )
+
+    proposal = {
+        "operation_type": "UPDATE_PROFILE_CONFIG",
+        "changes": [{
+            "op": "replace", "path": "/x",
+            "evidence_refs": ["d78d1afb-be11-42c5-aa3e-bcd963c9b58f"],
+        }],
+    }
+    with pytest.raises(ProviderOutputError):
+        _translate_change_evidence_labels(proposal, _label_selected_evidence_refs())
+
+
+def test_change_evidence_label_translation_is_a_noop_for_a_limitation_answer():
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        _translate_change_evidence_labels,
+    )
+
+    assert _translate_change_evidence_labels(None, _label_selected_evidence_refs()) is None
