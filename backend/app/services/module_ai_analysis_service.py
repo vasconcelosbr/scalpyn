@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..ai_orchestration.configuration_bundle_service import ConfigurationBundleService
@@ -69,6 +69,23 @@ def _uuid_or_none(value: Any) -> UUID | None:
         return UUID(str(value)) if value else None
     except (TypeError, ValueError):
         return None
+
+
+def _filter_window_bound(value: Any) -> datetime | None:
+    """Parse an explicit window_start/window_end filter value.
+
+    FIX-AC-GOV-002 Fase 7.2: an implicit "most recent N rows" cut is a
+    chronological sample by construction -- it cannot be compared against a
+    different period without silently confounding recency with whatever
+    the analysis is trying to measure. An explicit window makes the period
+    a caller decision, not an accident of query order.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 class ModuleAIAnalysisService:
@@ -160,9 +177,24 @@ class ModuleAIAnalysisService:
             statement = select(ShadowTrade).where(ShadowTrade.user_id == tenant_id)
             if ids:
                 statement = statement.where(ShadowTrade.id.in_(ids))
-            records = list((await db.execute(
-                statement.order_by(ShadowTrade.entry_timestamp.desc()).limit(limit)
-            )).scalars())
+            window_start = _filter_window_bound(filters.get("window_start"))
+            window_end = _filter_window_bound(filters.get("window_end"))
+            if window_start is not None:
+                statement = statement.where(ShadowTrade.entry_timestamp >= window_start)
+            if window_end is not None:
+                statement = statement.where(ShadowTrade.entry_timestamp <= window_end)
+            sampling_method = str(filters.get("sampling_method") or "recent")
+            if sampling_method == "random":
+                # Uniform random draw from the (optionally windowed) population,
+                # not a proxy for "most recent" -- required whenever the
+                # analysis is comparing a rate against a baseline rather than
+                # inspecting the latest activity.
+                statement = statement.order_by(func.random()).limit(limit)
+            elif sampling_method == "recent":
+                statement = statement.order_by(ShadowTrade.entry_timestamp.desc()).limit(limit)
+            else:
+                raise ValueError(f"Unsupported sampling_method: {sampling_method}")
+            records = list((await db.execute(statement)).scalars())
             return [{
                 "id": str(row.id), "event_identity": str(row.event_id or row.id),
                 "outcome": row.outcome or row.status, "lineage_status": (
