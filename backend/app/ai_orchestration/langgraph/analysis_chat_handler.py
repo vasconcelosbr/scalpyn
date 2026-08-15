@@ -598,6 +598,65 @@ async def _load_canonical_evidence_ids(
     return {str(evidence_id) for evidence_id in rows}
 
 
+async def _translate_score_rule_points(
+    db,
+    *,
+    tenant_id: UUID,
+    proposal: dict[str, Any],
+) -> dict[str, Any]:
+    """For UPDATE_CONFIG_PROFILE / config_type=score changes, translate a
+    change.rule_id (a real persisted scoring_rules[].id) into the exact
+    path/old_value_json/array_guards_json against the live score document.
+    The model selects a known rule id; the backend derives the array index,
+    old value and identity guard -- it never constructs the JSON pointer
+    itself. FIX-AC-GOV-002 Fase 5: this structurally prevents the invented-
+    path failure mode found in production (e.g.
+    /scoring/rules/rsi_overbought_penalty, which does not exist anywhere in
+    the real schema), rather than relying only on prompt guidance -- the
+    prompt already named and forbade that exact path and the model produced
+    it anyway.
+    """
+    if proposal.get("operation_type") != "UPDATE_CONFIG_PROFILE":
+        return proposal
+    target = proposal.get("target") or {}
+    if target.get("config_type") != "score":
+        return proposal
+    changes = proposal.get("changes")
+    if not isinstance(changes, list) or not any(
+        isinstance(item, dict) and item.get("rule_id") is not None for item in changes
+    ):
+        return proposal
+    score_resource = (
+        await db.execute(select(ConfigProfile).where(
+            ConfigProfile.user_id == tenant_id,
+            ConfigProfile.pool_id.is_(None),
+            ConfigProfile.config_type == "score",
+            ConfigProfile.is_active.is_(True),
+        ).order_by(ConfigProfile.updated_at.desc()).limit(1))
+    ).scalar_one_or_none()
+    rules = list((score_resource.config_json or {}).get("scoring_rules") or []) if score_resource else []
+    id_to_index = {str(rule.get("id")): index for index, rule in enumerate(rules)}
+    valid_ids = ", ".join(sorted(id_to_index)) or "(no persisted scoring rules)"
+    translated_changes = []
+    for raw_change in changes:
+        change = dict(raw_change)
+        rule_id = change.pop("rule_id", None)
+        if rule_id is not None:
+            index = id_to_index.get(str(rule_id))
+            if index is None:
+                raise ProviderOutputError(
+                    f"ANALYSIS_CHAT_SCORE_RULE_ID_INVALID: '{rule_id}' is not a "
+                    f"persisted scoring_rules id. Valid ids: {valid_ids}"
+                )
+            change["path"] = f"/scoring_rules/{index}/points"
+            change["old_value_json"] = json.dumps(rules[index].get("points"))
+            change["array_guards_json"] = json.dumps([
+                {"path": f"/scoring_rules/{index}", "identity": {"id": rule_id}}
+            ])
+        translated_changes.append(change)
+    return {**proposal, "changes": translated_changes}
+
+
 class AnalysisChatGraphNodeHandler:
     def __init__(self, graph_run_id: UUID, *, celery: bool = True):
         self.graph_run_id = graph_run_id
@@ -1077,6 +1136,11 @@ class AnalysisChatGraphNodeHandler:
                     "GOVERNED_CHANGE_REQUIRES_AN_UNAMBIGUOUS_TYPED_TARGET",
                 ]
                 return {"answer": answer, "proposal_id": None}
+            raw_proposal = await _translate_score_rule_points(
+                db,
+                tenant_id=run.tenant_id,
+                proposal=raw_proposal,
+            )
             canonical_refs = await _load_canonical_evidence_refs(
                 db,
                 run=run,

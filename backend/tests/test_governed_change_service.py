@@ -2692,6 +2692,57 @@ async def test_second_gate_validation_persists_idempotent_veto_audit(monkeypatch
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dead_path", ["/weights", "/weights/signal", "/scoring/weights", "/scoring/weights/momentum"])
+async def test_dry_run_rejects_dead_scoring_weights_before_loading_a_target(dead_path):
+    # score_engine.py's docstring and robust_indicators/score.py's explicit
+    # ``del weights`` confirm scoring.weights is dead configuration -- a
+    # governed change touching it would look successful while having zero
+    # effect on real scoring. FIX-AC-GOV-002 Fase 5.4.
+    proposal = {
+        "operation_type": "UPDATE_CONFIG_PROFILE",
+        "target": {"config_type": "score"},
+        "objective": "x",
+        "risk": "x",
+        "changes": [{"op": "replace", "path": dead_path, "value_json": "99", "evidence_refs": ["e1"]}],
+    }
+    with pytest.raises(ValueError, match="scoring.weights is dead configuration"):
+        await service.create_dry_run(
+            _FakeDB(None),
+            uuid.uuid4(),
+            proposal=proposal,
+            conversation_id=uuid.uuid4(),
+            message_id=uuid.uuid4(),
+            evidence_ids={"e1"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_dry_run_does_not_reject_unrelated_score_paths_as_dead_weights():
+    # Control case: a real, live-scoring field must not be caught by the
+    # weights deny-list.
+    proposal = {
+        "operation_type": "UPDATE_CONFIG_PROFILE",
+        "target": {"config_type": "score"},
+        "objective": "x",
+        "risk": "x",
+        "changes": [{"op": "replace", "path": "/thresholds/buy", "value_json": "70", "evidence_refs": ["e1"]}],
+    }
+    with pytest.raises(LookupError, match="Configuration profile not found"):
+        # _FakeDB(None) has no persisted score document, so the lookup that
+        # runs *after* the weights deny-list check fails instead -- proving
+        # the weights check itself did not fire for this unrelated path.
+        await service.create_dry_run(
+            _FakeDB(None),
+            uuid.uuid4(),
+            proposal=proposal,
+            conversation_id=uuid.uuid4(),
+            message_id=uuid.uuid4(),
+            evidence_ids={"e1"},
+        )
+
+
+@pytest.mark.asyncio
 async def test_dry_run_requires_evidence_on_every_individual_change():
     evidence_id = str(uuid.uuid4())
     proposal = {

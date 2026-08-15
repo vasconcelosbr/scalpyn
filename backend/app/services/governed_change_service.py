@@ -70,6 +70,15 @@ FORBIDDEN_KEY_FRAGMENTS = (
     "secret",
     "token",
 )
+# score_engine.py's own docstring: "Reading self.weights (kept on the instance
+# for back-compat but no longer drives scoring)". robust_indicators/score.py
+# calculate_score_with_confidence() accepts a ``weights`` parameter "for API
+# compatibility with the legacy engine" and immediately ``del weights`` --
+# confirmed dead configuration at both the global score document and the
+# profile scoring section. A governed change that edits it would look
+# successful while having zero effect on real scoring. FIX-AC-GOV-002 Fase
+# 5.4: block it until the underlying dead code is either removed or revived.
+DEAD_CONFIG_PATH_ROOTS = ("/weights", "/scoring/weights")
 ARRAY_IDENTITY_KEYS = frozenset({
     "field",
     "id",
@@ -3499,6 +3508,18 @@ async def create_dry_run(
     changes = list(proposal.get("changes") or [])
     if not changes:
         raise ValueError("A governed change requires at least one proposed change")
+    for change in changes:
+        change_path = str(change.get("path") or "")
+        if any(
+            change_path == root or change_path.startswith(f"{root}/")
+            for root in DEAD_CONFIG_PATH_ROOTS
+        ):
+            raise ValueError(
+                f"scoring.weights is dead configuration (accepted for API "
+                f"compatibility only, ignored by robust_indicators."
+                f"calculate_score_with_confidence); governed changes may not "
+                f"target {change_path}"
+            )
     referenced: set[str] = set()
     for change in changes:
         change_references = {str(ref) for ref in change.get("evidence_refs") or []}

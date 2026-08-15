@@ -1801,3 +1801,109 @@ def test_change_evidence_label_translation_is_a_noop_for_a_limitation_answer():
     )
 
     assert _translate_change_evidence_labels(None, _label_selected_evidence_refs()) is None
+
+
+class _ScoreDocResult:
+    def __init__(self, config_profile):
+        self._config_profile = config_profile
+
+    def scalar_one_or_none(self):
+        return self._config_profile
+
+
+class _ScoreDocDB:
+    def __init__(self, config_profile):
+        self._config_profile = config_profile
+
+    async def execute(self, _query):
+        return _ScoreDocResult(self._config_profile)
+
+
+def _score_document_config_profile():
+    from types import SimpleNamespace
+
+    return SimpleNamespace(config_json={
+        "weights": {"signal": 15},
+        "thresholds": {"buy": 68},
+        "scoring_rules": [
+            {"id": "rule_volume_24h_ge_1000000", "points": 4},
+            {"id": "rule_rsi_between_68_78", "points": 4},
+            {"id": "rule_macd_gt_0", "points": 5},
+        ],
+    })
+
+
+@pytest.mark.asyncio
+async def test_score_rule_id_translates_to_the_real_array_index_and_old_value():
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        _translate_score_rule_points,
+    )
+
+    proposal = {
+        "operation_type": "UPDATE_CONFIG_PROFILE",
+        "target": {"config_type": "score"},
+        "changes": [{
+            "op": "replace", "rule_id": "rule_rsi_between_68_78",
+            "value_json": "2", "evidence_refs": ["E1"],
+        }],
+    }
+    translated = await _translate_score_rule_points(
+        _ScoreDocDB(_score_document_config_profile()),
+        tenant_id=uuid.uuid4(),
+        proposal=proposal,
+    )
+    change = translated["changes"][0]
+    assert change["path"] == "/scoring_rules/1/points"
+    assert change["old_value_json"] == "4"
+    assert json.loads(change["array_guards_json"]) == [
+        {"path": "/scoring_rules/1", "identity": {"id": "rule_rsi_between_68_78"}}
+    ]
+    assert "rule_id" not in change
+
+
+@pytest.mark.asyncio
+async def test_score_rule_id_outside_the_persisted_set_is_rejected_with_valid_ids():
+    # Regression guard for the exact historical production failure:
+    # EXPECTED_AN_OBJECT_AT_/SCORING/RULES/RSI_OVERBOUGHT_PENALTY. The model
+    # invented "rsi_overbought_penalty"; the real id is
+    # rule_rsi_between_68_78. This must now fail before create_dry_run, with
+    # a message naming the real persisted ids.
+    from app.ai_orchestration.errors import ProviderOutputError
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        _translate_score_rule_points,
+    )
+
+    proposal = {
+        "operation_type": "UPDATE_CONFIG_PROFILE",
+        "target": {"config_type": "score"},
+        "changes": [{
+            "op": "replace", "rule_id": "rsi_overbought_penalty",
+            "value_json": "2", "evidence_refs": ["E1"],
+        }],
+    }
+    with pytest.raises(ProviderOutputError) as excinfo:
+        await _translate_score_rule_points(
+            _ScoreDocDB(_score_document_config_profile()),
+            tenant_id=uuid.uuid4(),
+            proposal=proposal,
+        )
+    assert "rule_rsi_between_68_78" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_score_rule_id_translation_is_a_noop_without_any_rule_id():
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        _translate_score_rule_points,
+    )
+
+    proposal = {
+        "operation_type": "UPDATE_PROFILE_CONFIG",
+        "target": {"profile_id": "x"},
+        "changes": [{"op": "replace", "path": "/filters/conditions/0/value", "value_json": "0.6"}],
+    }
+    translated = await _translate_score_rule_points(
+        _ScoreDocDB(_score_document_config_profile()),
+        tenant_id=uuid.uuid4(),
+        proposal=proposal,
+    )
+    assert translated == proposal
