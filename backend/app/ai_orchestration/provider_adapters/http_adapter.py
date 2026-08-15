@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import json
 from typing import Any
 
 import httpx
+from jsonschema import (
+    FormatChecker,
+    ValidationError as JSONSchemaValidationError,
+    validate as validate_json_schema,
+)
 
 from ..errors import AIError, AIErrorCode, AIOrchestrationError
 from ..reliability import classify_provider_status, retry_delays
@@ -15,6 +21,13 @@ _ANTHROPIC_UNSUPPORTED_SCHEMA_CONSTRAINTS = {
     "maximum", "maxItems", "maxLength", "maxProperties",
     "minimum", "minLength",
 }
+
+# Content-level failures the model can plausibly self-correct on a second
+# attempt, given the exact validation error. Truncation is deliberately
+# excluded: retrying with the same max_output_tokens would not fix it.
+_CONTENT_REPAIR_ERROR_CODES = frozenset({
+    "PROVIDER_OUTPUT_JSON_INVALID", "PROVIDER_OUTPUT_SCHEMA_INVALID",
+})
 
 
 def _constraint_description(schema: dict[str, Any]) -> str | None:
@@ -128,12 +141,42 @@ def _json_object(text: str) -> dict[str, Any]:
     return parsed
 
 
+def _raw_text(provider: str, payload: dict) -> str:
+    if provider == "openai":
+        return payload["choices"][0]["message"]["content"]
+    if provider == "anthropic":
+        return "\n".join(
+            block.get("text", "")
+            for block in payload.get("content", [])
+            if block.get("type") == "text"
+        )
+    return payload["candidates"][0]["content"]["parts"][0]["text"]
+
+
+def _correction_instruction(terminal_error_code: str, output_schema: dict[str, Any] | None) -> str:
+    schema_text = (
+        json.dumps(output_schema, ensure_ascii=False) if output_schema else "the required schema"
+    )
+    if terminal_error_code == "PROVIDER_OUTPUT_JSON_INVALID":
+        problem = "was not valid JSON"
+    else:
+        problem = "was valid JSON but did not satisfy the required schema"
+    return (
+        f"Your previous response {problem}. Return ONLY a corrected JSON object matching "
+        f"this schema, with no markdown fences and no explanation: {schema_text}"
+    )
+
+
 class HTTPProviderAdapter:
     """One audited transport for Anthropic, OpenAI and Gemini JSON calls."""
 
-    def __init__(self, *, timeout_seconds: float = 180.0, max_attempts: int = 3):
+    def __init__(
+        self, *, timeout_seconds: float = 180.0, max_attempts: int = 3,
+        content_repair_attempts: int = 1,
+    ):
         self.timeout_seconds = timeout_seconds
         self.max_attempts = max_attempts
+        self.content_repair_attempts = content_repair_attempts
 
     async def execute(self, *, provider: str, model: str, system_prompt: str, user_prompt: str,
                       tools: list[dict], api_key: str, request_id: str,
@@ -146,13 +189,9 @@ class HTTPProviderAdapter:
                     request_id, max_output_tokens, output_schema,
                 )
                 if response.is_success:
-                    return self._decode(
-                        provider,
-                        response.json(),
-                        raw_response_ref=(
-                            response.headers.get("request-id")
-                            or response.headers.get("x-request-id")
-                        ),
+                    return await self._decode_with_repair(
+                        client, provider, model, system_prompt, user_prompt, api_key,
+                        request_id, max_output_tokens, output_schema, response,
                     )
                 retry_after = int(response.headers.get("retry-after", "0") or 0) or None
                 policy = classify_provider_status(response.status_code, retry_after_seconds=retry_after)
@@ -169,19 +208,27 @@ class HTTPProviderAdapter:
 
     async def _post(
         self, client, provider, model, system, user, api_key, request_id,
-        max_output_tokens, output_schema=None,
+        max_output_tokens, output_schema=None, prior_attempt=None,
     ):
         headers = {"x-scalpyn-ai-request-id": request_id}
         if provider == "openai":
+            messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+            if prior_attempt is not None:
+                messages.append({"role": "assistant", "content": prior_attempt["raw_text"]})
+                messages.append({"role": "user", "content": prior_attempt["correction"]})
             return await client.post("https://api.openai.com/v1/chat/completions",
                 headers={**headers, "Authorization": f"Bearer {api_key}"},
                 json={"model": model, "temperature": 0, "max_tokens": max_output_tokens,
                       "response_format": {"type": "json_object"},
-                      "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]})
+                      "messages": messages})
         if provider == "anthropic":
+            messages = [{"role": "user", "content": user}]
+            if prior_attempt is not None:
+                messages.append({"role": "assistant", "content": prior_attempt["raw_text"]})
+                messages.append({"role": "user", "content": prior_attempt["correction"]})
             payload = {
                 "model": model, "max_tokens": max_output_tokens, "temperature": 0,
-                "system": system, "messages": [{"role": "user", "content": user}],
+                "system": system, "messages": messages,
             }
             if output_schema is not None:
                 payload["output_config"] = anthropic_output_config(output_schema)
@@ -189,12 +236,16 @@ class HTTPProviderAdapter:
                 headers={**headers, "x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
                 json=payload)
         if provider == "gemini":
+            contents = [{"role": "user", "parts": [{"text": user}]}]
+            if prior_attempt is not None:
+                contents.append({"role": "model", "parts": [{"text": prior_attempt["raw_text"]}]})
+                contents.append({"role": "user", "parts": [{"text": prior_attempt["correction"]}]})
             return await client.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
                 params={"key": api_key}, headers=headers,
                 json={"systemInstruction": {"parts": [{"text": system}]},
                       "generationConfig": {"temperature": 0, "maxOutputTokens": max_output_tokens,
                                            "responseMimeType": "application/json"},
-                      "contents": [{"role": "user", "parts": [{"text": user}]}]})
+                      "contents": contents})
         raise AIOrchestrationError(AIError(
             code=AIErrorCode.PROVIDER_NOT_CONFIGURED, retryable=False, http_status=422,
             operator_action="Configure an allowed provider", safe_message="Unsupported AI provider",
@@ -206,17 +257,18 @@ class HTTPProviderAdapter:
         payload: dict,
         *,
         raw_response_ref: str | None = None,
+        output_schema: dict[str, Any] | None = None,
     ) -> ProviderResponse:
+        text = _raw_text(provider, payload)
         if provider == "openai":
-            text = payload["choices"][0]["message"]["content"]; usage = payload.get("usage") or {}
+            usage = payload.get("usage") or {}
             tokens_in = usage.get("prompt_tokens", 0); tokens_out = usage.get("completion_tokens", 0)
             stop_reason = payload["choices"][0].get("finish_reason")
         elif provider == "anthropic":
-            text = "\n".join(block.get("text", "") for block in payload.get("content", []) if block.get("type") == "text")
             usage = payload.get("usage") or {}; tokens_in = usage.get("input_tokens", 0); tokens_out = usage.get("output_tokens", 0)
             stop_reason = payload.get("stop_reason")
         else:
-            text = payload["candidates"][0]["content"]["parts"][0]["text"]; usage = payload.get("usageMetadata") or {}
+            usage = payload.get("usageMetadata") or {}
             tokens_in = usage.get("promptTokenCount", 0); tokens_out = usage.get("candidatesTokenCount", 0)
             stop_reason = payload["candidates"][0].get("finishReason")
 
@@ -231,6 +283,11 @@ class HTTPProviderAdapter:
 
         if stop_reason in {"max_tokens", "length", "MAX_TOKENS"}:
             terminal_error_code = "PROVIDER_OUTPUT_TRUNCATED"
+        elif terminal_error_code is None and output_schema is not None:
+            try:
+                validate_json_schema(output, output_schema, format_checker=FormatChecker())
+            except JSONSchemaValidationError:
+                terminal_error_code = "PROVIDER_OUTPUT_SCHEMA_INVALID"
 
         return ProviderResponse(
             output=output,
@@ -240,3 +297,51 @@ class HTTPProviderAdapter:
             stop_reason=stop_reason,
             terminal_error_code=terminal_error_code,
         )
+
+    async def _decode_with_repair(
+        self, client, provider, model, system_prompt, user_prompt, api_key,
+        request_id, max_output_tokens, output_schema, http_response,
+    ) -> ProviderResponse:
+        """Decode a successful HTTP response, giving the model one bounded
+        chance to self-correct when the content fails JSON/schema validation.
+        The original call already happened and is billable; every repair
+        attempt's usage is accumulated into the returned totals so callers
+        never under-report actual token/cost consumption (FIX: Cenario C,
+        DIAG-AC-001 -- ProviderOutputError with no recovery path)."""
+        raw_response_ref = (
+            http_response.headers.get("request-id")
+            or http_response.headers.get("x-request-id")
+        )
+        raw_payload = http_response.json()
+        response = self._decode(
+            provider, raw_payload, raw_response_ref=raw_response_ref, output_schema=output_schema,
+        )
+        total_tokens_input = response.tokens_input
+        total_tokens_output = response.tokens_output
+        prior_raw_text = _raw_text(provider, raw_payload)
+        repair_attempts_left = self.content_repair_attempts
+
+        while response.terminal_error_code in _CONTENT_REPAIR_ERROR_CODES and repair_attempts_left > 0:
+            repair_attempts_left -= 1
+            repair_http_response = await self._post(
+                client, provider, model, system_prompt, user_prompt, api_key, request_id,
+                max_output_tokens, output_schema,
+                prior_attempt={
+                    "raw_text": prior_raw_text,
+                    "correction": _correction_instruction(response.terminal_error_code, output_schema),
+                },
+            )
+            if not repair_http_response.is_success:
+                # The original attempt already succeeded at the transport
+                # level; surface its content error rather than a transport
+                # failure from the repair call.
+                break
+            repair_payload = repair_http_response.json()
+            response = self._decode(
+                provider, repair_payload, raw_response_ref=raw_response_ref, output_schema=output_schema,
+            )
+            total_tokens_input += response.tokens_input
+            total_tokens_output += response.tokens_output
+            prior_raw_text = _raw_text(provider, repair_payload)
+
+        return replace(response, tokens_input=total_tokens_input, tokens_output=total_tokens_output)
