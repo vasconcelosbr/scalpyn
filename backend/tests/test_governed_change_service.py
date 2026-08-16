@@ -1494,6 +1494,44 @@ def test_entry_comparison_rejects_scalar_threshold_ignored_by_runtime():
     assert "comparison can contain only left/right operands" in schema_check["reason"]
 
 
+def test_block_comparison_condition_with_ordering_operator_is_not_falsely_vetoed():
+    plan, policies, profiles = _candidate_validation_fixture()
+    _install_executable_policy_semantics(policies)
+    source = deepcopy(plan.execution_payload["source_document"])
+    source["block_rules"] = {"blocks": [{
+        "name": "Estrutura EMA bearish",
+        "logic": "AND",
+        "enabled": True,
+        "conditions": [{
+            "type": "comparison",
+            "left": "price",
+            "right": "ema50",
+            "operator": "<",
+        }],
+    }]}
+    candidate = deepcopy(source)
+    candidate["default_timeframe"] = "15m"
+    plan.execution_payload["source_document"] = source
+    plan.execution_payload["candidate_document"] = candidate
+    profiles[0].config = source
+    plan.proposed_diff = [{
+        "op": "replace",
+        "path": "/default_timeframe",
+        "old_value": "5m",
+        "value": "15m",
+        "reason": "unrelated change on a profile with a comparison block condition",
+        "evidence_refs": [str(uuid.uuid4())],
+    }]
+
+    result = service._candidate_validation_result(plan, policies, profiles)
+
+    schema_check = next(
+        item for item in result["checks"]
+        if item["check"] == "PROFILE_CANDIDATE_SCHEMA"
+    )
+    assert schema_check["decision"] == "PASS"
+
+
 def test_unbound_compatible_profile_uses_conservative_global_floor_and_fence():
     plan, policies, profiles = _candidate_validation_fixture()
     _install_executable_policy_semantics(policies)

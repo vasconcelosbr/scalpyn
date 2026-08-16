@@ -977,7 +977,9 @@ def _validate_condition(
             raise ValueError(f"{path}.value has an invalid type")
         elif value is not None and not isinstance(value, (str, int, float, bool)):
             raise ValueError(f"{path}.value has an invalid type")
-        if operator in {">", ">=", "<", "<="}:
+        if operator in {">", ">=", "<", "<="} and not (
+            block and condition_type == "comparison"
+        ):
             _require_finite_number(value, path=f"{path}.value")
         if isinstance(value, float):
             _require_finite_number(value, path=f"{path}.value")
