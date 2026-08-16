@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { BrainCircuit, CheckCircle2, ExternalLink, Loader2, ShieldCheck, X } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import useSWR from "swr";
 
 import { apiGet, apiPost } from "@/lib/api";
@@ -14,7 +14,8 @@ type ModuleKey =
   | "score_engine"
   | "global_risk"
   | "strategies"
-  | "social_score";
+  | "social_score"
+  | "intelligence_runs";
 
 type Capabilities = {
   runtime_enabled: boolean;
@@ -53,6 +54,38 @@ const MODE_LABELS: Record<AnalysisProfile["analysis_mode"], string> = {
   ROOT_CAUSE_AUDIT: "Causa raiz",
 };
 
+function modelChipLabel(model: string) {
+  if (model.startsWith("claude-haiku")) return "Haiku 4.5";
+  if (model === "claude-sonnet-5") return "Sonnet 5";
+  if (model === "claude-opus-5") return "Opus 5";
+  return model;
+}
+
+type ProfileGroup = {
+  name: string;
+  description: string;
+  analysis_mode: AnalysisProfile["analysis_mode"];
+  variants: AnalysisProfile[];
+};
+
+function groupProfilesByType(profiles: AnalysisProfile[]): ProfileGroup[] {
+  const groups = new Map<string, ProfileGroup>();
+  for (const profile of profiles) {
+    const existing = groups.get(profile.name);
+    if (existing) {
+      existing.variants.push(profile);
+    } else {
+      groups.set(profile.name, {
+        name: profile.name,
+        description: profile.description,
+        analysis_mode: profile.analysis_mode,
+        variants: [profile],
+      });
+    }
+  }
+  return Array.from(groups.values());
+}
+
 function formatUsd(value: string) {
   return new Intl.NumberFormat("pt-BR", {
     style: "currency",
@@ -76,6 +109,7 @@ export function ModuleAIAnalysisAction({
 }) {
   const [open, setOpen] = useState(false);
   const [selectedProfileId, setSelectedProfileId] = useState("");
+  const [preferredModel, setPreferredModel] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -101,8 +135,21 @@ export function ModuleAIAnalysisAction({
     && capabilities.module_flags?.[originModule]
   );
   const profiles = profileData?.profiles ?? [];
+  const groups = useMemo(() => groupProfilesByType(profiles), [profiles]);
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId) ?? profiles[0] ?? null;
   const promptReady = prompt.trim().length > 0;
+
+  function selectGroup(group: ProfileGroup) {
+    const preferred = group.variants.find((variant) => variant.model === preferredModel);
+    const target = preferred ?? group.variants[0];
+    setSelectedProfileId(target.id);
+    setPreferredModel(target.model);
+  }
+
+  function selectVariant(variant: AnalysisProfile) {
+    setSelectedProfileId(variant.id);
+    setPreferredModel(variant.model);
+  }
 
   async function submit() {
     if (!selectedProfile || !promptReady) return;
@@ -173,33 +220,49 @@ export function ModuleAIAnalysisAction({
 
                   {!profilesLoading && profiles.length > 0 && (
                     <div className="space-y-2" role="radiogroup" aria-label="Perfis de análise">
-                      {profiles.map((profile) => {
-                        const selected = profile.id === selectedProfile?.id;
+                      {groups.map((group) => {
+                        const selected = group.name === selectedProfile?.name;
                         return (
-                          <button
-                            key={profile.id}
-                            type="button"
+                          <div
+                            key={group.name}
                             role="radio"
                             aria-checked={selected}
-                            onClick={() => setSelectedProfileId(profile.id)}
                             className={`w-full rounded-xl border p-4 text-left transition ${selected ? "border-cyan-300/60 bg-cyan-300/10" : "border-white/10 bg-white/[0.025] hover:border-white/20 hover:bg-white/[0.04]"}`}
                           >
-                            <div className="flex items-start justify-between gap-4">
-                              <div>
-                                <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
-                                  {selected && <CheckCircle2 size={15} className="text-cyan-300" />}
-                                  {profile.name}
+                            <button type="button" onClick={() => selectGroup(group)} className="block w-full text-left">
+                              <div className="flex items-start justify-between gap-4">
+                                <div>
+                                  <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
+                                    {selected && <CheckCircle2 size={15} className="text-cyan-300" />}
+                                    {group.name}
+                                  </div>
+                                  <p className="mt-1.5 text-xs leading-5 text-slate-400">{group.description}</p>
                                 </div>
-                                <p className="mt-1.5 text-xs leading-5 text-slate-400">{profile.description}</p>
+                                <span className="shrink-0 rounded-full border border-cyan-400/20 bg-cyan-400/5 px-2 py-1 font-mono text-[10px] text-cyan-200">{MODE_LABELS[group.analysis_mode]}</span>
                               </div>
-                              <span className="shrink-0 rounded-full border border-cyan-400/20 bg-cyan-400/5 px-2 py-1 font-mono text-[10px] text-cyan-200">{MODE_LABELS[profile.analysis_mode]}</span>
+                            </button>
+                            <div className="mt-3 flex flex-wrap gap-1.5" role="radiogroup" aria-label={`Modelo de IA para ${group.name}`}>
+                              {group.variants.map((variant) => {
+                                const variantSelected = variant.id === selectedProfile?.id;
+                                return (
+                                  <button
+                                    key={variant.id}
+                                    type="button"
+                                    role="radio"
+                                    aria-checked={variantSelected}
+                                    onClick={() => selectVariant(variant)}
+                                    title={`${variant.provider} · ${variant.model}`}
+                                    className={`rounded-md border px-2 py-1 font-mono text-[10px] transition ${variantSelected ? "border-cyan-300/70 bg-cyan-300/15 text-cyan-100" : "border-white/10 bg-black/20 text-slate-400 hover:border-white/25 hover:text-slate-200"}`}
+                                  >
+                                    {modelChipLabel(variant.model)} · até {formatUsd(variant.max_cost_usd)}
+                                  </button>
+                                );
+                              })}
                             </div>
-                            <div className="mt-3 flex flex-wrap gap-2 text-[10px] text-slate-400">
-                              <span className="rounded-md bg-black/20 px-2 py-1">{profile.provider} · {profile.model}</span>
-                              <span className="rounded-md bg-black/20 px-2 py-1">até {formatUsd(profile.max_cost_usd)} por execução</span>
+                            <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-slate-400">
                               <span className="rounded-md bg-emerald-400/10 px-2 py-1 text-emerald-300">analysis-only</span>
                             </div>
-                          </button>
+                          </div>
                         );
                       })}
                     </div>

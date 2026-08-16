@@ -8,6 +8,7 @@ import {
 
 import { apiGet, apiPost, apiPut } from "@/lib/api";
 import { AnalysisChatPanel } from "@/components/ai/AnalysisChatPanel";
+import { ModuleAIAnalysisAction } from "@/components/ai/ModuleAIAnalysisAction";
 
 type GraphRun = {
   id: string;
@@ -412,6 +413,7 @@ export default function IntelligenceRunsPage() {
             <span className="rounded-full border border-emerald-400/30 px-3 py-1.5 font-mono text-[10px] uppercase text-emerald-300">
               live write: denied
             </span>
+            <ModuleAIAnalysisAction originModule="intelligence_runs" originView="intelligence-runs" compact />
             <button onClick={() => void refresh(selectedId)} className="rounded-lg border border-[var(--border-subtle)] p-2 text-[var(--text-muted)] transition hover:border-cyan-400/40 hover:text-cyan-300" aria-label="Atualizar">
               <RefreshCw size={16} />
             </button>
