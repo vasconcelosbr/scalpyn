@@ -184,10 +184,26 @@ class HTTPProviderAdapter:
                       output_schema: dict[str, Any] | None = None) -> ProviderResponse:
         async with httpx.AsyncClient(timeout=httpx.Timeout(self.timeout_seconds, connect=20.0)) as client:
             for attempt in range(1, self.max_attempts + 1):
-                response = await self._post(
-                    client, provider, model, system_prompt, user_prompt, api_key,
-                    request_id, max_output_tokens, output_schema,
-                )
+                try:
+                    response = await self._post(
+                        client, provider, model, system_prompt, user_prompt, api_key,
+                        request_id, max_output_tokens, output_schema,
+                    )
+                except httpx.TransportError as exc:
+                    # Connection/timeout failures never reach a response object,
+                    # so the status-code retry branch below never runs for them.
+                    # Observed in production as PROVIDER_TRANSPORT_FAILED with
+                    # 0 tokens billed -- the request never completed transport.
+                    if attempt >= self.max_attempts:
+                        raise AIOrchestrationError(AIError(
+                            code=AIErrorCode.PROVIDER_TIMEOUT, retryable=True, http_status=0,
+                            operator_action="Review provider network reachability and timeout budget",
+                            safe_message="AI provider request failed", provider_error_code=type(exc).__name__,
+                            internal_detail_redacted=f"provider={provider}; transport_error={type(exc).__name__}",
+                            attempt=attempt,
+                        )) from exc
+                    await asyncio.sleep(1.0 * (2 ** attempt))
+                    continue
                 if response.is_success:
                     return await self._decode_with_repair(
                         client, provider, model, system_prompt, user_prompt, api_key,

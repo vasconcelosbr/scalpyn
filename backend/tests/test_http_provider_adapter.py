@@ -1,5 +1,9 @@
+from unittest.mock import AsyncMock
+
+import httpx
 import pytest
 
+from app.ai_orchestration.errors import AIOrchestrationError
 from app.ai_orchestration.provider_adapters.http_adapter import HTTPProviderAdapter
 
 
@@ -43,7 +47,10 @@ class _FakeClient:
 
     async def post(self, _url, **kwargs):
         self.calls.append(kwargs)
-        return self._responses[len(self.calls) - 1]
+        item = self._responses[len(self.calls) - 1]
+        if isinstance(item, BaseException):
+            raise item
+        return item
 
 
 def _adapter(monkeypatch, responses):
@@ -140,3 +147,33 @@ async def test_truncated_output_is_not_retried(monkeypatch):
 
     assert response.terminal_error_code == "PROVIDER_OUTPUT_TRUNCATED"
     assert len(client.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_recovers_from_transport_error_on_retry(monkeypatch):
+    monkeypatch.setattr("asyncio.sleep", AsyncMock())
+    adapter, client = _adapter(monkeypatch, [
+        httpx.ConnectTimeout("connect timed out"),
+        _FakeResponse(_anthropic_payload('{"answer": "ok"}', tokens_in=100, tokens_out=20)),
+    ])
+
+    response = await _run(adapter)
+
+    assert response.terminal_error_code is None
+    assert response.output == {"answer": "ok"}
+    assert len(client.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_gives_up_after_exhausting_transport_retries(monkeypatch):
+    monkeypatch.setattr("asyncio.sleep", AsyncMock())
+    adapter, client = _adapter(monkeypatch, [
+        httpx.ConnectTimeout("connect timed out"),
+        httpx.ReadTimeout("read timed out"),
+        httpx.ConnectError("connection refused"),
+    ])
+
+    with pytest.raises(AIOrchestrationError):
+        await _run(adapter)
+
+    assert len(client.calls) == 3
