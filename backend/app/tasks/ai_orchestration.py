@@ -37,6 +37,7 @@ from ..models.ai_graph import (
 from ..models.systemic_ai import AIJobRecord, AIRequestRecord, AIUsageRecord
 from ..models.systemic_ai import AIBudgetReservationRecord
 from ..models.analysis_chat import AIAnalysisConversation, AIAnalysisMessage
+from ..models.ai_provider_key import AIProviderKey
 
 
 def _now() -> datetime:
@@ -839,3 +840,24 @@ def dispatch_shadow_resume_events() -> dict:
     specs = asyncio.run(run_db_task(_ready, celery=True))
     dispatched = sum(_enqueue_dispatch(spec) is not None for spec in specs)
     return {"status": "COMPLETED", "eligible": len(specs), "dispatched": dispatched}
+
+
+@celery_app.task(name="app.tasks.ai_orchestration.reset_monthly_ai_token_usage")
+def reset_monthly_ai_token_usage() -> dict:
+    """Zero every active provider key's tokens_used_month counter.
+
+    tokens_used_month accumulates forever with nothing to reset it on a
+    calendar boundary, so a key configured with a genuinely monthly budget
+    eventually exhausts permanently instead of refreshing each month. Runs
+    once at 00:05 UTC on the 1st (see celery_app.py beat_schedule).
+    """
+    async def _reset(db):
+        keys = list((await db.execute(select(AIProviderKey).where(
+            AIProviderKey.is_active.is_(True),
+            AIProviderKey.tokens_used_month > 0,
+        ))).scalars().all())
+        for key in keys:
+            key.tokens_used_month = 0
+        return len(keys)
+    reset_count = asyncio.run(run_db_task(_reset, celery=True))
+    return {"status": "COMPLETED", "keys_reset": reset_count}

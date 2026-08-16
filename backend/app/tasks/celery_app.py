@@ -250,6 +250,7 @@ TASK_ROUTES = {
     "app.tasks.ai_orchestration.recover_stale_graph_runs": {"queue": QUEUE_AI_ORCHESTRATION},
     "app.tasks.ai_orchestration.cancel_graph_run": {"queue": QUEUE_AI_ORCHESTRATION},
     "app.tasks.ai_orchestration.dispatch_shadow_resume_events": {"queue": QUEUE_AI_ORCHESTRATION},
+    "app.tasks.ai_orchestration.reset_monthly_ai_token_usage": {"queue": QUEUE_AI_ORCHESTRATION},
     "app.tasks.governed_cache_reconciliation.reconcile": {"queue": QUEUE_AI_ORCHESTRATION},
     "app.tasks.governed_cache_reconciliation.dispatch_pending": {"queue": QUEUE_AI_ORCHESTRATION},
 }
@@ -509,6 +510,10 @@ TASK_ANNOTATIONS = {
     },
     "app.tasks.ai_orchestration.dispatch_shadow_resume_events": {
         "time_limit": 120, "soft_time_limit": 100, "rate_limit": "2/m", "max_retries": 0,
+        **_NO_REQUEUE_ON_WORKER_LOSS,
+    },
+    "app.tasks.ai_orchestration.reset_monthly_ai_token_usage": {
+        "time_limit": 60, "soft_time_limit": 50, "rate_limit": "1/m", "max_retries": 0,
         **_NO_REQUEUE_ON_WORKER_LOSS,
     },
     "app.tasks.governed_cache_reconciliation.reconcile": {
@@ -782,6 +787,15 @@ celery_app.conf.beat_schedule = {
     "governed_cache_reconciliation_dispatch": {
         "task": "app.tasks.governed_cache_reconciliation.dispatch_pending",
         "schedule": 30.0,
+        "options": {"queue": QUEUE_AI_ORCHESTRATION},
+    },
+    # tokens_used_month never resets on its own (2026-08-16 audit: a key
+    # created 2026-06-09 had accumulated past its "monthly" cap with no
+    # calendar reset, permanently blocking every AI analysis feature with
+    # MONTHLY_AI_BUDGET_EXHAUSTED). 00:05 UTC on the 1st keeps it monthly.
+    "ai_provider_key_monthly_reset": {
+        "task": "app.tasks.ai_orchestration.reset_monthly_ai_token_usage",
+        "schedule": crontab(minute=5, hour=0, day_of_month=1),
         "options": {"queue": QUEUE_AI_ORCHESTRATION},
     },
 }
