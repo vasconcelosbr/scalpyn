@@ -17,9 +17,15 @@ This migration changes exactly one leaf value (``answer.maxLength``:
 240 -> 2000, restoring the original 1.0.0 bound) on top of 169's cumulative
 contract (evidence labels + score rule_id). No other field changes.
 
-Revision ID: 170_chat_limitation_answer_length
+Revision ID: 170_chat_answer_maxlen
 Revises: 169_chat_score_rule_id
 Create Date: 2026-08-16
+
+NOTE: the first attempt at this migration used revision id
+"170_chat_limitation_answer_length" (34 chars), exceeding
+alembic_version.version_num's varchar(32) limit -- StringDataRightTruncationError
+on the final UPDATE, crash-looping the API service after 168/169 had already
+applied. Renamed to fit under 32 chars; no schema/data impact from the rename.
 """
 
 from __future__ import annotations
@@ -33,7 +39,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "170_chat_limitation_answer_length"
+revision = "170_chat_answer_maxlen"
 down_revision = "169_chat_score_rule_id"
 branch_labels = None
 depends_on = None
