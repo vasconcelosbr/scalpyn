@@ -1577,6 +1577,7 @@ class AnalysisChatGraphNodeHandler:
             "question": structured_block(
                 TrustLabel.USER_INPUT, str(request_json.get("question") or "")
             ),
+            "response_language": str(request_json.get("response_language") or "pt-BR"),
         }
         try:
             system_prompt = prompt.system_template.format_map(values)

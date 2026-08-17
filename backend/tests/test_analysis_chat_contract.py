@@ -787,6 +787,50 @@ def test_aplicar_and_modificar_imperative_stem_change_is_matched():
     assert AnalysisChatService._GOVERNED_ACTION_PREFIX.search("modifique os thresholds dos perfis")
 
 
+def test_handler_feeds_response_language_into_the_prompt_values():
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        AnalysisChatGraphNodeHandler,
+    )
+
+    source = inspect.getsource(AnalysisChatGraphNodeHandler._prepare_normal_provider)
+    assert '"response_language": str(request_json.get("response_language") or "pt-BR")' in source
+
+
+def test_response_language_migration_is_well_formed_and_format_map_safe():
+    migration_path = (
+        Path(__file__).resolve().parents[1]
+        / "alembic/versions/174_chat_response_language.py"
+    )
+    spec = importlib.util.spec_from_file_location("chat_response_language_migration", migration_path)
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    assert len(migration.revision) <= 32
+    assert migration.down_revision == "173_ai_profile_model_variants"
+
+    # The instruction text must be format_map-safe on its own: exactly one
+    # placeholder ({response_language}), no stray single braces that would
+    # raise KeyError once substituted into a template and formatted -- this
+    # is exactly the class of bug the orphaned governed-change 1.10.0 prompt
+    # shipped (a literal, unescaped {"indicator":"rsi"} JSON example).
+    instruction = migration.LANGUAGE_INSTRUCTION
+    assert instruction.format_map({"response_language": "pt-BR"})
+    assert instruction.count("{response_language}") == 1
+    assert instruction.count("{") == 1 and instruction.count("}") == 1
+
+    # The bump must target the version production actually serves --
+    # selection is `ORDER BY approved_at DESC, semantic_version DESC`, not
+    # the highest semantic_version string (semantic_version is plain text,
+    # so "1.10.0" < "1.9.0" lexicographically and never wins that tiebreak;
+    # 1.10.0 is also stale/orphaned in this table and unsafe to build on --
+    # see the comment in migration.upgrade()).
+    upgrade_source = inspect.getsource(migration.upgrade)
+    assert 'from_version="1.1.0", to_version="1.2.0"' in upgrade_source
+    assert 'from_version="1.9.0", to_version="1.9.1"' in upgrade_source
+    assert 'from_version="1.10.0"' not in upgrade_source
+
+
 def test_staging_fake_intent_is_environment_and_flag_bounded(monkeypatch):
     monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "systemic-ai-staging-20260807")
     monkeypatch.setenv("LANGGRAPH_FAKE_PROVIDER_CANARY_ENABLED", "true")
