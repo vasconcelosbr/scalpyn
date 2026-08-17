@@ -108,6 +108,7 @@ async def _find_duplicate_names(
     user_id: UUID,
     name: str,
     exclude_profile_id: Optional[UUID] = None,
+    active_only: bool = False,
 ) -> List[Dict[str, Any]]:
     """Return profiles owned by user_id with the same name (case-insensitive), excluding a given id."""
     q = select(Profile.id, Profile.name, Profile.created_at).where(
@@ -116,6 +117,8 @@ async def _find_duplicate_names(
     )
     if exclude_profile_id:
         q = q.where(Profile.id != exclude_profile_id)
+    if active_only:
+        q = q.where(Profile.is_active.is_(True))
     rows = (await db.execute(q)).fetchall()
     return [{"id": str(r.id), "name": r.name, "created_at": r.created_at.isoformat() if r.created_at else None} for r in rows]
 
@@ -175,6 +178,10 @@ async def bulk_import_profiles(
             "selected_rule_ids": [...]
         },
         "apply_to_active_profiles": true,      (optional, update existing active profiles)
+        "allow_duplicate_names": false,        (optional, default false — by default an
+                                                 item whose name matches an existing ACTIVE
+                                                 profile is rejected instead of silently
+                                                 creating a second profile with that name)
         "scoring_assignments": [               (optional, update scoring of specific
             {                                   existing profiles by id or name)
                 "profile_id": "uuid",          (or "profile_name": "...")
@@ -340,11 +347,21 @@ async def bulk_import_profiles(
     if len(profiles_data) > 200:
         raise HTTPException(status_code=400, detail="Maximum 200 profiles per import")
 
+    allow_duplicate_names = bool(payload.get("allow_duplicate_names"))
+
     for i, p in enumerate(profiles_data):
         try:
             name = (p.get("name") or "").strip()
             if not name:
                 raise ValueError("'name' is required")
+
+            if not allow_duplicate_names:
+                duplicates = await _find_duplicate_names(db, user_id, name, active_only=True)
+                if duplicates:
+                    raise ValueError(
+                        f"a profile named '{name}' already exists (id={duplicates[0]['id']}); "
+                        f"pass allow_duplicate_names=true to create another one anyway"
+                    )
 
             config_input: Dict[str, Any] = {
                 "default_timeframe": p.get("default_timeframe", "5m"),
