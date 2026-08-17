@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..ai_orchestration.configuration_bundle_service import ConfigurationBundleService
@@ -154,9 +154,19 @@ class ModuleAIAnalysisService:
             } for row in records]
 
         if module_key == "ml_models":
-            statement = select(MLModelRegistry).join(
+            # ml_model_registry.profile_id is nullable by design -- a NULL
+            # marks a global-scope model trained across every profile, not an
+            # ownership gap (ml_challenger_service.py: "L3 has 66%+ NULL
+            # profile_id"). An inner join here silently excludes every
+            # global-scope model, which in practice today is 100% of them:
+            # ml_model_registry has never contained a single non-NULL
+            # profile_id row. Outer join + OR keeps profile-scoped models
+            # correctly tenant-filtered while still surfacing global ones.
+            statement = select(MLModelRegistry).outerjoin(
                 Profile, Profile.id == MLModelRegistry.profile_id,
-            ).where(Profile.user_id == tenant_id)
+            ).where(
+                or_(MLModelRegistry.profile_id.is_(None), Profile.user_id == tenant_id)
+            )
             if ids:
                 statement = statement.where(MLModelRegistry.model_id.in_(ids))
             records = list((await db.execute(

@@ -10,8 +10,10 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
+from app.models.profile import Profile
+from app.models.profile_intelligence import MLModelRegistry
 from app.models.shadow_trade import ShadowTrade
 from app.services.module_ai_analysis_service import _filter_window_bound
 
@@ -75,3 +77,25 @@ def test_unsupported_sampling_method_is_rejected():
 def test_max_rows_is_clamped_between_one_and_five_thousand():
     assert "LIMIT 1" in _build_statement({"max_rows": 0}) or "LIMIT 1\n" in _build_statement({"max_rows": 0})
     assert "LIMIT 5000" in _build_statement({"max_rows": 999_999})
+
+
+def _build_ml_models_statement() -> str:
+    """Mirror of the ml_models branch in ModuleAIAnalysisService._rows."""
+    statement = select(MLModelRegistry).outerjoin(
+        Profile, Profile.id == MLModelRegistry.profile_id,
+    ).where(
+        or_(MLModelRegistry.profile_id.is_(None), Profile.user_id == TENANT_ID)
+    )
+    return str(statement.compile(compile_kwargs={"literal_binds": True}))
+
+
+def test_ml_models_dataset_includes_global_scope_models():
+    """ml_model_registry.profile_id is nullable by design (a NULL marks a
+    global-scope model trained across every profile, not an ownership gap --
+    every row in production has NULL profile_id today). An inner join would
+    silently exclude all of them; this must be an outer join with an
+    explicit "NULL is global, visible to everyone" branch."""
+    sql = _build_ml_models_statement()
+    assert "LEFT OUTER JOIN profiles" in sql
+    assert "ml_model_registry.profile_id IS NULL" in sql
+    assert "profiles.user_id =" in sql
