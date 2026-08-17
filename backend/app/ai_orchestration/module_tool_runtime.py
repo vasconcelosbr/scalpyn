@@ -11,6 +11,7 @@ from ..models.systemic_ai import AIToolCallAudit, AIToolEvidenceRecord
 from .contracts import Authority
 from .domain_tools import default_tool_capabilities
 from .hashing import canonical_hash
+from .shadow_portfolio_handlers import SHADOW_PORTFOLIO_HANDLERS
 from .tool_registry import ToolCapability, ToolRegistry
 
 
@@ -51,7 +52,8 @@ class ModuleToolRuntime:
     def __init__(self) -> None:
         self.registry = ToolRegistry()
         for capability in default_tool_capabilities():
-            self.registry.register(capability, _bounded_frozen_reader)
+            handler = SHADOW_PORTFOLIO_HANDLERS.get(capability.name, _bounded_frozen_reader)
+            self.registry.register(capability, handler)
 
     async def execute(
         self,

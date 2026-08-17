@@ -83,6 +83,19 @@ def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
 
 
+def _pct_change(after: float | None, entry: float | None) -> float | None:
+    """% change of a post-exit reference price relative to entry_price.
+
+    Mirrors the inline CASE expressions in shadow_trades.py's
+    shadow_trades_timeout_analysis (avg_chg_1h/2h/4h/12h/24h) -- computed
+    once per row here instead of shipping raw price_after_* columns, since
+    only the delta is ever consumed downstream.
+    """
+    if after is None or entry is None or entry == 0:
+        return None
+    return (after - entry) / entry * 100
+
+
 def _uuid_or_none(value: Any) -> UUID | None:
     try:
         return UUID(str(value)) if value else None
@@ -244,6 +257,28 @@ class ModuleAIAnalysisService:
                 "label_contract": row.label_contract_version,
                 "entry_timestamp": _iso(row.entry_timestamp), "exit_timestamp": _iso(row.exit_timestamp),
                 "status": row.status, "pnl_pct": float(row.pnl_pct) if row.pnl_pct is not None else None,
+                # Fields below back the ranked shadow_portfolio.get_* handlers
+                # (module_tool_runtime.py) -- kept as small scalars, never as
+                # nested blobs, so the 10 named tools can compute real
+                # per-metric aggregates without re-querying the database.
+                "pnl_usdt": float(row.pnl_usdt) if row.pnl_usdt is not None else None,
+                "holding_seconds": row.holding_seconds,
+                "mae_pct": row.mae_pct, "mfe_pct": row.mfe_pct,
+                "delayed_tp": row.delayed_tp, "delayed_tp_hours": row.delayed_tp_hours,
+                "timeout_post_analysis_done": bool(row.timeout_post_analysis_done),
+                "max_profit_after_timeout_pct": row.max_profit_after_timeout_pct,
+                "max_drawdown_after_timeout_pct": row.max_drawdown_after_timeout_pct,
+                "horizon_change_pct": {
+                    horizon: _pct_change(getattr(row, f"price_after_{horizon}"), row.entry_price)
+                    for horizon in ("1h", "2h", "4h", "12h", "24h")
+                },
+                "final_score": (row.config_snapshot or {}).get("final_score"),
+                "features_coverage": float(row.features_coverage) if row.features_coverage is not None else None,
+                "market_data_confidence": (
+                    float(row.market_data_confidence) if row.market_data_confidence is not None else None
+                ),
+                "oldest_indicator_age_s": row.oldest_indicator_age_s,
+                "eligible_for_training": bool(row.eligible_for_training),
             } for row in records]
 
         if module_key in _CONFIG_TYPES:
