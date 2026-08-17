@@ -92,10 +92,17 @@ def _bump(*, prompt_key: str, from_version: str, to_version: str) -> None:
         "semantic_version": content["semantic_version"],
         "system_template": content["system_template"],
         "user_template": content["user_template"],
-        "input_schema_json": content["input_schema_json"],
-        "output_schema_json": content["output_schema_json"],
-        "tool_policy_json": content["tool_policy_json"],
-        "provider_constraints_json": content["provider_constraints_json"],
+        # bind.execute() over an async JSONB column returns already-decoded
+        # Python dicts, not JSON text -- a CAST(:x AS jsonb) bind parameter
+        # needs a string. Passing the dict directly raises
+        # asyncpg.exceptions.DataError: 'dict' object has no attribute
+        # 'encode' (caught live on 2026-08-17: it silently fell through to
+        # the boot script's `alembic stamp head` fallback, which stamped the
+        # revision as applied without ever inserting these rows).
+        "input_schema_json": json.dumps(content["input_schema_json"]),
+        "output_schema_json": json.dumps(content["output_schema_json"]),
+        "tool_policy_json": json.dumps(content["tool_policy_json"]),
+        "provider_constraints_json": json.dumps(content["provider_constraints_json"]),
         "content_hash": _canonical_hash(content),
         "created_at": APPROVED_AT,
         "approved_at": APPROVED_AT,
