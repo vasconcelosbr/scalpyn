@@ -58,6 +58,25 @@ _CONFIG_TYPES = {
     "global_risk": ("risk",),
     "strategies": ("strategies", "strategy", "spot_engine"),
 }
+# Training-internals keys inside MLModelRegistry.metrics_json that carry no
+# entry-indicator signal (raw Optuna trial log, threshold-calibration sweep,
+# train/test/validation split bookkeeping) but historically dominated the
+# evidence payload's byte count -- confirmed 2026-08-17 against a live
+# root-cause-audit request: these three keys were ~159KB of a 359KB metrics
+# total across 20 models, while the one indicator-relevant key
+# (intelligence_report) was untouched by this filter.
+_ML_METRICS_TRAINING_INTERNAL_KEYS = frozenset({
+    "optuna_study", "threshold_curve", "split_diagnostics",
+})
+
+
+def _ml_metrics_for_evidence(metrics_json: Any) -> Any:
+    if not isinstance(metrics_json, dict):
+        return metrics_json
+    return {
+        key: value for key, value in metrics_json.items()
+        if key not in _ML_METRICS_TRAINING_INTERNAL_KEYS
+    }
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -141,7 +160,13 @@ class ModuleAIAnalysisService:
                     else None
                 ),
                 "version_status": versions[str(row.id)]["status"] if str(row.id) in versions else None,
-                "config": row.config,
+                # "config" is intentionally not echoed whole here: signals/
+                # entry_triggers/block_rules/filters below already extract
+                # every key from it except scoring/default_timeframe, so
+                # including it too just doubles ~67KB/request of duplicate
+                # JSON with zero new information (confirmed byte-identical
+                # against a live evidence-payload audit, 2026-08-17).
+                "scoring": (row.config or {}).get("scoring"),
                 "signals": (row.config or {}).get("signals"),
                 "entry_triggers": (row.config or {}).get("entry_triggers"),
                 "block_rules": (row.config or {}).get("block_rules"),
@@ -179,7 +204,8 @@ class ModuleAIAnalysisService:
                 "model_lane": row.strategy_skill, "market_regime": row.market_regime,
                 "dataset_version": row.dataset_version,
                 "feature_contract": row.feature_schema_version,
-                "label_contract": row.label_version, "metrics": row.metrics_json,
+                "label_contract": row.label_version,
+                "metrics": _ml_metrics_for_evidence(row.metrics_json),
                 "train_start": _iso(row.train_start), "train_end": _iso(row.train_end),
             } for row in records]
 
