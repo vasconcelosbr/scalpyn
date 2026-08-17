@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
@@ -81,6 +82,42 @@ def test_output_budget_repair_revision_fits_live_alembic_version_column():
     spec.loader.exec_module(migration)
     assert len(migration.revision) <= 32
     assert migration.down_revision == "160_systemic_output_budget"
+
+
+def test_cost_cap_migration_covers_the_real_enforcement_ceiling():
+    """AIBudgetPolicyRecord.request_token_limit (444600, never derived from
+    this table's own max_input_tokens) is the actual live gate in
+    systemic_langgraph_bridge.py -- max_cost_usd must be sized against that,
+    not the smaller 200000 figure these profiles were originally computed
+    against (confirmed live 2026-08-16: a claude-opus-5 Shadow Portfolio run
+    passed every token-count check and still hit
+    MODEL_COST_APPROVAL_LIMIT_EXCEEDED_BEFORE_CALL)."""
+    migration_path = BACKEND / "alembic/versions/175_analysis_profile_cost_cap.py"
+    spec = importlib.util.spec_from_file_location("migration_175_cost_cap", migration_path)
+    assert spec and spec.loader
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    assert len(migration.revision) <= 32
+    assert migration.down_revision == "174_chat_response_language"
+    assert migration.REAL_MAX_INPUT_TOKENS == 444_600 - 2_300
+
+    prices = {
+        "claude-haiku-4-5-20251001": (Decimal("1"), Decimal("5")),
+        "claude-sonnet-5": (Decimal("2"), Decimal("10")),
+        "claude-opus-5": (Decimal("5"), Decimal("25")),
+    }
+    max_output_tokens = 2_300
+    for model, (input_rate, output_rate) in prices.items():
+        worst_case = (
+            migration.REAL_MAX_INPUT_TOKENS * input_rate + max_output_tokens * output_rate
+        ) / Decimal("1000000")
+        cap = Decimal(migration.NEW_MAX_COST_USD[model])
+        assert worst_case <= cap, f"{model}: worst_case={worst_case} exceeds new cap={cap}"
+        # the old cap must NOT have covered it -- otherwise this migration
+        # would be raising a limit that was never actually the problem
+        old_cap = Decimal(migration.OLD_MAX_COST_USD[model])
+        assert worst_case > old_cap, f"{model}: old cap={old_cap} already covered worst_case={worst_case}"
 
 
 def test_profile_validation_fails_closed_on_expired_pricing():
