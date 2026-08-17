@@ -108,8 +108,8 @@ def default_registry() -> ProviderModelRegistry:
     common = frozenset({"text", "structured_output"})
     return ProviderModelRegistry([
         ModelCatalogEntry(provider="anthropic", model_id="claude-haiku-4-5-20251001", capabilities=common | {"tool_use"}, max_input=200_000, max_output=8_192),
-        ModelCatalogEntry(provider="anthropic", model_id="claude-sonnet-5", capabilities=common | {"tool_use"}, max_input=200_000, max_output=8_192),
-        ModelCatalogEntry(provider="anthropic", model_id="claude-opus-5", capabilities=common | {"tool_use"}, max_input=200_000, max_output=8_192),
+        ModelCatalogEntry(provider="anthropic", model_id="claude-sonnet-5", capabilities=common | {"tool_use"}, max_input=1_000_000, max_output=8_192),
+        ModelCatalogEntry(provider="anthropic", model_id="claude-opus-5", capabilities=common | {"tool_use"}, max_input=1_000_000, max_output=8_192),
         ModelCatalogEntry(provider="openai", model_id="gpt-4.1-mini", capabilities=common | {"tool_use"}, max_input=128_000, max_output=32_768),
         ModelCatalogEntry(provider="gemini", model_id="gemini-2.5-flash", capabilities=common | {"tool_use"}, max_input=1_000_000, max_output=65_536),
     ])

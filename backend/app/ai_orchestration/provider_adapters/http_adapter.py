@@ -243,7 +243,7 @@ class HTTPProviderAdapter:
                 messages.append({"role": "assistant", "content": prior_attempt["raw_text"]})
                 messages.append({"role": "user", "content": prior_attempt["correction"]})
             payload = {
-                "model": model, "max_tokens": max_output_tokens, "temperature": 0,
+                "model": model, "max_tokens": max_output_tokens,
                 "system": system, "messages": messages,
             }
             if output_schema is not None:
