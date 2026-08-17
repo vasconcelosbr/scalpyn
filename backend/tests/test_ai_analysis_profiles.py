@@ -120,6 +120,47 @@ def test_cost_cap_migration_covers_the_real_enforcement_ceiling():
         assert worst_case > old_cap, f"{model}: old cap={old_cap} already covered worst_case={worst_case}"
 
 
+def test_token_ceiling_migration_covers_a_real_753k_byte_request():
+    """Confirmed live 2026-08-17: a Shadow Portfolio "Causa raiz" run over 51
+    trades needed estimated_input_tokens=753143 (raw UTF-8 byte length of the
+    assembled prompt, not a real tokenizer count -- see
+    systemic_langgraph_bridge.py) once ml_model_registry's cross-module
+    evidence started returning real data. 175's 442300 ceiling was already
+    too small for this; both request_token_limit and the cost caps it drives
+    must move together or raising one alone just reintroduces the other
+    error."""
+    migration_path = BACKEND / "alembic/versions/176_raise_token_ceiling.py"
+    spec = importlib.util.spec_from_file_location("migration_176_token_ceiling", migration_path)
+    assert spec and spec.loader
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    assert len(migration.revision) <= 32
+    assert migration.down_revision == "175_analysis_profile_cost_cap"
+
+    observed_estimated_input_tokens = 753_143
+    assert migration.NEW_REQUEST_TOKEN_LIMIT - migration.MAX_OUTPUT_TOKENS > observed_estimated_input_tokens
+
+    # ck_ai_analysis_profile_daily_budget / _monthly_budget: daily must cover
+    # the new request ceiling, monthly must cover daily. This exact
+    # constraint rejected the first version of this migration in a dry run.
+    assert migration.NEW_DAILY_TOKEN_LIMIT >= migration.NEW_REQUEST_TOKEN_LIMIT
+    assert migration.NEW_MONTHLY_TOKEN_LIMIT >= migration.NEW_DAILY_TOKEN_LIMIT
+
+    prices = {
+        "claude-haiku-4-5-20251001": (Decimal("1"), Decimal("5")),
+        "claude-sonnet-5": (Decimal("2"), Decimal("10")),
+        "claude-opus-5": (Decimal("5"), Decimal("25")),
+    }
+    input_tokens = migration.NEW_REQUEST_TOKEN_LIMIT - migration.MAX_OUTPUT_TOKENS
+    for model, (input_rate, output_rate) in prices.items():
+        worst_case = (
+            input_tokens * input_rate + migration.MAX_OUTPUT_TOKENS * output_rate
+        ) / Decimal("1000000")
+        cap = Decimal(migration.NEW_MAX_COST_USD[model])
+        assert worst_case <= cap, f"{model}: worst_case={worst_case} exceeds new cap={cap}"
+
+
 def test_profile_validation_fails_closed_on_expired_pricing():
     migration = _migration_module()
     seeded = dict(migration.PROFILES[0])
