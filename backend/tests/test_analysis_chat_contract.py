@@ -744,6 +744,49 @@ def test_explicit_change_never_auto_routes_when_governed_writes_are_disabled():
     ) is AnalysisChatDataMode.FROZEN_ANALYSIS_ONLY
 
 
+def test_question_phrased_change_request_is_routed_to_governed_proposal():
+    """A user asking 'how do I do X' about a specific, already-named target is
+    routed the same as a direct command -- 'como remover o modo LEGACY dos 19
+    profiles?' vetoed every governed action this session because it neither
+    matched a prefix (question, not imperative) nor a target keyword ('profile'
+    is not 'perfi')."""
+    config = AnalysisChatRuntimeConfig(
+        enabled=True,
+        proposals_enabled=True,
+        governed_actions_enabled=True,
+        live_config_write_enabled=True,
+    )
+    assert AnalysisChatService._resolve_data_mode(
+        config,
+        AnalysisChatDataMode.FROZEN_ANALYSIS_ONLY,
+        "como remover o modo LEGACY dos 19 profiles?",
+    ) is AnalysisChatDataMode.DRAFT_PROPOSAL
+
+
+def test_open_ended_question_about_profiles_stays_frozen_readonly():
+    """'como' alone must not become a blanket trigger -- only 'como <verb>'
+    matches; a question with no governed verb right after 'como' stays read-only."""
+    config = AnalysisChatRuntimeConfig(
+        enabled=True,
+        proposals_enabled=True,
+        governed_actions_enabled=True,
+        live_config_write_enabled=True,
+    )
+    assert AnalysisChatService._resolve_data_mode(
+        config,
+        AnalysisChatDataMode.FROZEN_ANALYSIS_ONLY,
+        "como o RSI afeta o score desses profiles?",
+    ) is AnalysisChatDataMode.FROZEN_ANALYSIS_ONLY
+
+
+def test_aplicar_and_modificar_imperative_stem_change_is_matched():
+    """aplicar/modificar take a c->qu stem change in the imperative (aplique,
+    modifique) that the ar|e suffix group used by other -ar verbs cannot
+    produce -- this previously never matched regardless of mode or targets."""
+    assert AnalysisChatService._GOVERNED_ACTION_PREFIX.search("aplique os ajustes nos perfis")
+    assert AnalysisChatService._GOVERNED_ACTION_PREFIX.search("modifique os thresholds dos perfis")
+
+
 def test_staging_fake_intent_is_environment_and_flag_bounded(monkeypatch):
     monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "systemic-ai-staging-20260807")
     monkeypatch.setenv("LANGGRAPH_FAKE_PROVIDER_CANARY_ENABLED", "true")

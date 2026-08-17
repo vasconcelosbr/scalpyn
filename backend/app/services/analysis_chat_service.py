@@ -94,20 +94,36 @@ class AnalysisChatError(RuntimeError):
         self.status_code = status_code
 
 
+# aplicar/modificar take a c->qu stem change in the imperative ("aplique",
+# "modifique"), so they cannot share the ar|e suffix group other -ar verbs use.
+_GOVERNED_VERBS = "|".join((
+    r"realiz(?:ar|e)", r"fa[cç]a", r"fazer", r"aplicar", r"aplique",
+    r"execut(?:ar|e)", r"alter(?:ar|e)", r"ajust(?:ar|e)", r"modificar",
+    r"modifique", r"atualiz(?:ar|e)", r"corr(?:igir|ija)", r"exclu(?:ir|a)",
+    r"delet(?:ar|e)", r"remov(?:er|a)", r"desativ(?:ar|e)", r"ativ(?:ar|e)",
+    r"cri(?:ar|e)", r"implement(?:ar|e)",
+))
+
+
 class AnalysisChatService:
     _GOVERNED_ACTION_PREFIX = re.compile(
         r"^(?:por favor,?\s+)?"
+        r"(?:"
         r"(?:(?:preciso|quero)\s+que\s+(?:voc[eê]\s+)?|pode\s+(?:voc[eê]\s+)?)?"
-        r"(?:realiz(?:ar|e)|fa[cç]a|aplic(?:ar|e)|execut(?:ar|e)|alter(?:ar|e)|"
-        r"ajust(?:ar|e)|modific(?:ar|e)|atualiz(?:ar|e)|corr(?:igir|ija)|"
-        r"exclu(?:ir|a)|delet(?:ar|e)|remov(?:er|a)|desativ(?:ar|e)|"
-        r"ativ(?:ar|e)|cri(?:ar|e)|implement(?:ar|e))\b",
+        rf"(?:{_GOVERNED_VERBS})\b"
+        r"|"
+        rf"(?:como\s+(?:eu\s+)?(?:posso|fa[cç]o|faria|consigo)\s+(?:para\s+)?|como\s+|"
+        rf"(?:voc[eê]\s+)?(?:pode|poderia|consegue|conseguiria)\s+(?:voc[eê]\s+)?|"
+        rf"(?:seria|[eé])\s+poss[ií]vel\s+|"
+        rf"d[aá]\s+(?:pra|para)\s+)"
+        rf"(?:{_GOVERNED_VERBS})\b"
+        r")",
         re.IGNORECASE,
     )
     _GOVERNED_ACTION_TARGETS = (
-        "perfi", "configura", "score", "estrat", "regra", "threshold",
+        "perfi", "profile", "configura", "score", "estrat", "regra", "threshold",
         "limite", "peso", "parâmetro", "parametro", "filtro", "sinal",
-        "risco", "risk",
+        "risco", "risk", "legacy",
     )
 
     @staticmethod
