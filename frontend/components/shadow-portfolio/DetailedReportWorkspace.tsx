@@ -19,6 +19,7 @@ import {
   Upload,
 } from "lucide-react";
 import { apiGet, apiPost } from "@/lib/api";
+import { ModuleAIAnalysisAction } from "@/components/ai/ModuleAIAnalysisAction";
 
 type Source = "L3" | "L3_REJECTED" | "L1_SPECTRUM";
 type Outcome = "TP_HIT" | "SL_HIT";
@@ -523,6 +524,14 @@ export default function DetailedReportWorkspace() {
               <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 font-mono text-xs text-[#d2d8e5]">{run.total_trades} trades</span>
               <button className={buttonClass} onClick={() => fetchDownload(`/api/shadow-trade-reports/runs/${run.id}/export`, `shadow-report-${run.id}.json`)}><Download size={14} /> JSON consolidado</button>
               <button className={`${buttonClass} border-[#4f7bf7]/40 text-[#9db2ff]`} onClick={() => analyze("REPORT", run.id)} disabled={analysisBusy}><Sparkles size={14} /> Analisar seleção</button>
+              <ModuleAIAnalysisAction
+                originModule="shadow_portfolio"
+                originView="shadow-portfolio-detailed-report"
+                entityIds={[]}
+                reportRunId={run.id}
+                label="Intelligence Run desta amostra"
+                compact
+              />
             </div>
           </div>
 

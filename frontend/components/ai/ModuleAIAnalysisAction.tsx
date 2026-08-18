@@ -99,13 +99,17 @@ export function ModuleAIAnalysisAction({
   originModule,
   originView,
   entityIds = [],
+  reportRunId,
   compact = false,
+  label = "Análise por IA",
 }: {
   originModule: ModuleKey;
   originView: string;
   entityIds?: string[];
+  reportRunId?: string;
   supportsRegenerative?: boolean;
   compact?: boolean;
+  label?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [selectedProfileId, setSelectedProfileId] = useState("");
@@ -160,6 +164,7 @@ export function ModuleAIAnalysisAction({
         origin_module: originModule,
         origin_view: originView,
         entity_ids: entityIds,
+        report_run_id: reportRunId ?? null,
         filters: {},
         analysis_profile_id: selectedProfile.id,
         user_prompt: prompt.trim(),
@@ -182,7 +187,7 @@ export function ModuleAIAnalysisAction({
         title={enabled ? "Criar Intelligence Run" : "Módulo de IA desativado por feature flag"}
         className={`inline-flex items-center justify-center gap-2 rounded-lg border border-cyan-400/30 bg-cyan-400/10 font-medium text-cyan-200 transition hover:border-cyan-300/60 hover:bg-cyan-400/15 disabled:cursor-not-allowed disabled:border-slate-700 disabled:bg-slate-800/40 disabled:text-slate-500 ${compact ? "px-2.5 py-1.5 text-xs" : "px-3.5 py-2 text-sm"}`}
       >
-        <BrainCircuit size={compact ? 14 : 16} /> Análise por IA
+        <BrainCircuit size={compact ? 14 : 16} /> {label}
       </button>
 
       {open && (

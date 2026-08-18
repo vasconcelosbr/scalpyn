@@ -15,6 +15,7 @@ from ..ai_orchestration.hashing import canonical_hash
 from ..ai_orchestration.langgraph.config import get_langgraph_settings
 from ..ai_orchestration.provider_registry import default_registry
 from ..database import get_db
+from ..models.shadow_trade_analysis import ShadowTradeReportItem, ShadowTradeReportRun
 from ..models.systemic_ai import (
     AIAnalysisProfileRecord,
     AIBudgetPolicyRecord,
@@ -246,6 +247,7 @@ class CreateProfileAnalysisRequest(BaseModel):
     origin_view: str = Field(min_length=1, max_length=200)
     entity_ids: tuple[str, ...] = ()
     filters: dict[str, Any] = Field(default_factory=dict)
+    report_run_id: UUID | None = None
     analysis_profile_id: UUID
     user_prompt: str | None = Field(default=None, min_length=1, max_length=20_000)
     idempotency_key: str = Field(min_length=16, max_length=160)
@@ -322,6 +324,28 @@ async def create_module_analysis_run_from_profile(
         raise HTTPException(status_code=404, detail={"code": "ANALYSIS_PROFILE_NOT_FOUND"})
     now = datetime.now(timezone.utc)
     _validate_profile(profile, now)
+    entity_ids = payload.entity_ids
+    extra_filters: dict[str, Any] = {}
+    if payload.report_run_id is not None:
+        report_run = (
+            await db.execute(
+                select(ShadowTradeReportRun).where(
+                    ShadowTradeReportRun.id == payload.report_run_id,
+                    ShadowTradeReportRun.user_id == user_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if report_run is None:
+            raise HTTPException(status_code=404, detail={"code": "REPORT_RUN_NOT_FOUND"})
+        trade_ids = (
+            await db.execute(
+                select(ShadowTradeReportItem.shadow_trade_id)
+                .where(ShadowTradeReportItem.report_run_id == report_run.id)
+                .order_by(ShadowTradeReportItem.position)
+            )
+        ).scalars().all()
+        entity_ids = tuple(str(trade_id) for trade_id in trade_ids)
+        extra_filters["max_rows"] = max(len(entity_ids), 200)
     approval_payload = CreateModelApprovalRequest(
         provider=profile.provider,
         model=profile.model,
@@ -353,8 +377,8 @@ async def create_module_analysis_run_from_profile(
             user_id=user_id,
             origin_module=payload.origin_module,
             origin_view=payload.origin_view,
-            entity_ids=payload.entity_ids,
-            filters={**payload.filters, "analysis_profile_id": str(profile.id)},
+            entity_ids=entity_ids,
+            filters={**payload.filters, **extra_filters, "analysis_profile_id": str(profile.id)},
             analysis_mode=AnalysisMode(profile.analysis_mode),
             question=(
                 f"{profile.question_template.rstrip()}\n\n"
