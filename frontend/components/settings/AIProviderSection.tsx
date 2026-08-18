@@ -16,6 +16,7 @@ interface ProviderStatus {
   name?: string
   key_hint: string | null
   label: string | null
+  default_model?: string | null
   is_configured: boolean
   is_validated: boolean
   test_status: 'ok' | 'error' | 'pending' | null
@@ -27,6 +28,9 @@ interface ProviderStatus {
 }
 
 const MAX_TOKEN_LIMIT = 100_000_000
+
+const DEEPSEEK_MODELS = ['deepseek-v4-flash', 'deepseek-v4-pro'] as const
+const DEEPSEEK_DEFAULT_MODEL = 'deepseek-v4-flash'
 
 /** Formata tokens: 5000000 → "5.0M" · 500000 → "500k" · 999 → "999" */
 function fmtTokens(n: number | null | undefined): string {
@@ -69,6 +73,13 @@ const PMETA: Record<string, {
     usedBy: ['Análises complementares'],
     placeholder: 'AIzaSy...',
   },
+  deepseek: {
+    icon: '◈', color: '#4D6BFE',
+    bg: 'rgba(77,107,254,0.07)', border: 'rgba(77,107,254,0.2)',
+    desc: 'Provider alternativo de IA generativa (flash/pro).',
+    usedBy: ['Disponível para uso futuro'],
+    placeholder: 'sk-...',
+  },
 }
 
 function authHeaders(): HeadersInit {
@@ -93,6 +104,7 @@ function ProviderCard({ status, onRefresh }: { status: ProviderStatus; onRefresh
   const isMain = status.provider === 'anthropic'
   const [apiKey, setApiKey] = useState('')
   const [label, setLabel] = useState(status.label ?? '')
+  const [defaultModel, setDefaultModel] = useState(status.default_model ?? DEEPSEEK_DEFAULT_MODEL)
   const [limit, setLimit] = useState(status.monthly_token_limit?.toString() ?? '')
   const [showKey, setShowKey] = useState(false)
   const [editing, setEditing] = useState(!status.is_configured)
@@ -124,6 +136,7 @@ function ProviderCard({ status, onRefresh }: { status: ProviderStatus; onRefresh
           api_key: apiKey.trim(),
           label: label || null,
           monthly_token_limit: tokenLimit,
+          default_model: status.provider === 'deepseek' ? defaultModel : null,
         }),
       })
       if (!res.ok) {
@@ -215,6 +228,9 @@ function ProviderCard({ status, onRefresh }: { status: ProviderStatus; onRefresh
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>API Key</span>
               <code style={{ fontSize: 12, fontFamily: 'var(--font-mono)', background: 'var(--bg-input)', border: '1px solid var(--border-default)', borderRadius: 6, padding: '4px 10px', color: 'var(--text-secondary)' }}>{status.key_hint ?? '••••••••••••'}</code>
+              {status.provider === 'deepseek' && status.default_model && (
+                <span style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>{status.default_model}</span>
+              )}
               {status.last_tested_at && (
                 <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
                   testado {new Date(status.last_tested_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
@@ -264,6 +280,21 @@ function ProviderCard({ status, onRefresh }: { status: ProviderStatus; onRefresh
               </button>
             </div>
           </div>
+          {status.provider === 'deepseek' && (
+            <div>
+              <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Modelo</label>
+              <select
+                value={defaultModel}
+                onChange={e => setDefaultModel(e.target.value)}
+                style={{ ...inputStyle, padding: '9px 12px', fontFamily: 'var(--font-sans,sans-serif)', appearance: 'auto' }}
+              >
+                {DEEPSEEK_MODELS.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+              <p style={{ fontSize: 11, color: 'var(--text-tertiary)', margin: '4px 0 0' }}>
+                Modelo padrão para futuras integrações DeepSeek.
+              </p>
+            </div>
+          )}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div>
               <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Label (opcional)</label>
@@ -323,6 +354,14 @@ const DEFAULT_PROVIDERS: ProviderStatus[] = [
     tokens_used_month: null, monthly_token_limit: null,
     docs_url: 'https://aistudio.google.com/apikey',
   },
+  {
+    provider: 'deepseek', name: 'DeepSeek',
+    key_hint: null, label: null, default_model: DEEPSEEK_DEFAULT_MODEL,
+    is_configured: false, is_validated: false,
+    test_status: null, test_error: null, last_tested_at: null,
+    tokens_used_month: null, monthly_token_limit: null,
+    docs_url: 'https://api-docs.deepseek.com/',
+  },
 ]
 
 export default function AIProviderSection() {
@@ -358,7 +397,7 @@ export default function AIProviderSection() {
   if (loading)
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {[1, 2, 3].map(i => <div key={i} className="skeleton" style={{ height: 80, borderRadius: 12 }} />)}
+        {[1, 2, 3, 4].map(i => <div key={i} className="skeleton" style={{ height: 80, borderRadius: 12 }} />)}
       </div>
     )
 

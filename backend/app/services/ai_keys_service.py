@@ -70,6 +70,7 @@ def _safe(r) -> dict:
         "provider":            r.provider,
         "key_hint":            r.key_hint,
         "label":               r.label,
+        "default_model":       r.default_model,
         "is_active":           r.is_active,
         "is_validated":        r.is_validated,
         "test_status":         r.test_status,
@@ -107,6 +108,7 @@ async def save_ai_key(
     api_secret: Optional[str] = None,
     label: Optional[str] = None,
     monthly_token_limit: Optional[int] = None,
+    default_model: Optional[str] = None,
 ) -> dict:
     from ..models.ai_provider_key import AIProviderKey
 
@@ -123,6 +125,7 @@ async def save_ai_key(
         api_secret_encrypted=encrypt_value(api_secret) if api_secret else None,
         key_hint=make_hint(api_key),
         label=label or provider.capitalize(),
+        default_model=default_model,
         is_active=True,
         is_validated=False,
         test_status="pending",

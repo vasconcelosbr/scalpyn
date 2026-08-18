@@ -18,7 +18,10 @@ from ..database import get_db
 
 security = HTTPBearer()
 
-PROVIDERS = ("anthropic", "openai", "gemini", "coinmarketcap")
+PROVIDERS = ("anthropic", "openai", "gemini", "deepseek", "coinmarketcap")
+
+DEEPSEEK_MODELS = ("deepseek-v4-flash", "deepseek-v4-pro")
+DEEPSEEK_DEFAULT_MODEL = "deepseek-v4-flash"
 
 PROVIDER_META = {
     "anthropic": {
@@ -35,6 +38,11 @@ PROVIDER_META = {
         "name": "Gemini",
         "prefix": "AIza",
         "docs_url": "https://aistudio.google.com/apikey",
+    },
+    "deepseek": {
+        "name": "DeepSeek",
+        "prefix": "sk-",
+        "docs_url": "https://api-docs.deepseek.com/",
     },
     "coinmarketcap": {
         "name": "CoinMarketCap",
@@ -72,6 +80,7 @@ class SaveKeyRequest(BaseModel):
     api_secret: Optional[str] = None
     label: Optional[str] = Field(None, max_length=100)
     monthly_token_limit: Optional[int] = Field(None, ge=1_000, le=_MAX_TOKEN_LIMIT)
+    default_model: Optional[str] = Field(None, max_length=60)
 
 
 @router.get("/capabilities")
@@ -83,7 +92,7 @@ async def list_ai_capabilities(
     from ..services.ai_keys_service import get_ai_key_info
 
     providers = []
-    for provider in ("anthropic", "openai", "gemini"):
+    for provider in ("anthropic", "openai", "gemini", "deepseek"):
         info = await get_ai_key_info(db, user_id, provider)
         if not info:
             continue
@@ -105,7 +114,7 @@ async def list_provider_models(
     user_id: UUID = Depends(get_current_user_id),
 ):
     """Discover models available to the user's validated provider key."""
-    if provider not in ("anthropic", "openai", "gemini"):
+    if provider not in ("anthropic", "openai", "gemini", "deepseek"):
         raise HTTPException(status_code=404, detail=f"Provider não suportado: {provider}")
     from ..services.ai_keys_service import get_ai_key_info, get_decrypted_api_key
     import httpx
@@ -116,6 +125,9 @@ async def list_provider_models(
     api_key = await get_decrypted_api_key(db, user_id, provider)
     if not api_key:
         raise HTTPException(status_code=404, detail="Chave não configurada")
+
+    if provider == "deepseek":
+        return {"provider": provider, "models": [{"id": m, "name": m} for m in DEEPSEEK_MODELS]}
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -169,6 +181,7 @@ async def list_keys(
             "test_status": None,
             "key_hint": None,
             "label": None,
+            "default_model": DEEPSEEK_DEFAULT_MODEL if p == "deepseek" else None,
             "test_error": None,
             "last_tested_at": None,
             "tokens_used_month": None,
@@ -200,10 +213,20 @@ async def save_key(
             detail=f"Invalid {provider} key. Must start with \"{prefix}\".",
         )
 
+    default_model = None
+    if provider == "deepseek":
+        default_model = body.default_model or DEEPSEEK_DEFAULT_MODEL
+        if default_model not in DEEPSEEK_MODELS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid DeepSeek model. Must be one of: {', '.join(DEEPSEEK_MODELS)}.",
+            )
+
     info = await save_ai_key(
         db, user_id, provider,
         body.api_key, body.api_secret,
         body.label, body.monthly_token_limit,
+        default_model,
     )
     return {"status": "saved", "provider": provider, "key_hint": info["key_hint"]}
 
@@ -300,6 +323,32 @@ async def test_key(
             async with httpx.AsyncClient(timeout=8.0) as client:
                 resp = await client.get(
                     "https://api.openai.com/v1/models",
+                    headers={"Authorization": f"Bearer {plain_key}", "Accept": "application/json"},
+                )
+            if resp.status_code == 200:
+                models = resp.json().get("data", [])
+                return {
+                    "provider": provider,
+                    "success": True,
+                    "message": f"Conectado. {len(models)} modelos disponíveis.",
+                }
+            elif resp.status_code == 401:
+                return {"provider": provider, "success": False, "message": "Chave inválida ou expirada."}
+            else:
+                return {"provider": provider, "success": False, "message": f"Erro HTTP {resp.status_code}."}
+        except Exception as e:
+            return {"provider": provider, "success": False, "message": f"Erro de conexão: {str(e)}"}
+
+    if provider == "deepseek":
+        from ..services.ai_keys_service import get_decrypted_api_key
+        import httpx
+        plain_key = await get_decrypted_api_key(db, user_id, provider)
+        if not plain_key:
+            raise HTTPException(status_code=404, detail="Chave DeepSeek não configurada.")
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.get(
+                    "https://api.deepseek.com/v1/models",
                     headers={"Authorization": f"Bearer {plain_key}", "Accept": "application/json"},
                 )
             if resp.status_code == 200:

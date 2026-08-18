@@ -16,6 +16,7 @@ class AIProviderKey(Base):
     api_secret_encrypted = Column(LargeBinary, nullable=True)
     key_hint             = Column(String(20),  nullable=True)
     label                = Column(String(100), nullable=True)
+    default_model        = Column(String(60),  nullable=True)
     is_active            = Column(Boolean,     default=True,  nullable=False)
     is_validated         = Column(Boolean,     default=False, nullable=False)
     last_used_at         = Column(DateTime(timezone=True), nullable=True)
