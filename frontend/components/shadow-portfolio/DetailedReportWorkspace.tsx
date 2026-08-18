@@ -134,6 +134,14 @@ const SOURCE_LABEL: Record<Source, string> = {
 };
 
 const PAGE_SIZE = 50;
+// Must mirror backend/app/ai_orchestration/provider_registry.py's default_registry() --
+// /api/ai-keys/{provider}/models lists every model the live provider API exposes, which is
+// far broader than the models our ProviderModelRegistry actually recognizes (MODEL_UNKNOWN).
+const CATALOG_MODELS: Record<AIProvider["provider"], string[]> = {
+  anthropic: ["claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5-20251001"],
+  openai: ["gpt-4.1-mini"],
+  gemini: ["gemini-2.5-flash"],
+};
 const inputClass =
   "h-10 rounded-lg border border-white/10 bg-[#0d1018] px-3 text-sm text-[#e8ebf4] outline-none transition focus:border-[#4f7bf7]/70";
 const buttonClass =
@@ -283,8 +291,9 @@ export default function DetailedReportWorkspace() {
     apiGet<{ models: Array<{ id: string }> }>(`/api/ai-keys/${provider}/models`)
       .then(({ models: found }) => {
         const ids = found.map((item) => item.id);
-        setModels(ids);
-        setModel(ids[0] ?? "");
+        const supported = ids.filter((id) => CATALOG_MODELS[provider]?.includes(id));
+        setModels(supported.length ? supported : ids);
+        setModel(supported[0] ?? ids[0] ?? "");
       })
       .catch(() => {
         setModels([]);
