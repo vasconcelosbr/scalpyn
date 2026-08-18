@@ -205,6 +205,9 @@ class ModuleAIAnalysisService:
             ).where(
                 or_(MLModelRegistry.profile_id.is_(None), Profile.user_id == tenant_id)
             )
+            status_in = filters.get("status_in")
+            if status_in:
+                statement = statement.where(MLModelRegistry.status.in_(status_in))
             if ids:
                 statement = statement.where(MLModelRegistry.model_id.in_(ids))
             records = list((await db.execute(

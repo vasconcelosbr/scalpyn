@@ -91,6 +91,15 @@ class ModuleToolRuntime:
         entity_ids = tuple(request_filters.get("entity_ids") or ())
         if capability.domain != request.origin_module:
             entity_ids = ()
+            if capability.domain == "ml_models":
+                # As a supporting module (e.g. shadow_portfolio root-cause audit
+                # consulting ml_models for context), only models that ever ran in
+                # production are relevant -- "candidate"/"rejected" rows are
+                # training runs that never shipped and have no bearing on why a
+                # live trade behaved the way it did. When ml_models is the
+                # request's own origin_module (someone directly analyzing model
+                # training), the full registry stays unfiltered.
+                request_filters = {**request_filters, "status_in": ("champion", "archived")}
         rows = await ModuleAIAnalysisService._rows(
             db,
             tenant_id=tenant_id,
