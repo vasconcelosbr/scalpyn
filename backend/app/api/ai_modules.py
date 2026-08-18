@@ -32,7 +32,7 @@ PROFILE_APPROVAL_METHOD = "PREDEFINED_PROFILE"
 
 
 class CreateModelApprovalRequest(BaseModel):
-    provider: Literal["anthropic", "openai", "gemini"]
+    provider: Literal["anthropic", "openai", "gemini", "deepseek"]
     model: str = Field(min_length=1, max_length=200)
     max_cost_usd: Decimal = Field(gt=0)
     input_cost_per_million: Decimal = Field(ge=0)
@@ -232,7 +232,7 @@ class CreateModuleAnalysisRequest(BaseModel):
     analysis_mode: AnalysisMode = AnalysisMode.SYSTEMIC
     question: str = Field(min_length=1, max_length=20_000)
     authority: Authority = Authority.ANALYSIS_ONLY
-    provider: Literal["anthropic", "openai", "gemini"]
+    provider: Literal["anthropic", "openai", "gemini", "deepseek"]
     model: str = Field(min_length=1, max_length=200)
     model_approval_id: UUID
     idempotency_key: str = Field(min_length=16, max_length=160)

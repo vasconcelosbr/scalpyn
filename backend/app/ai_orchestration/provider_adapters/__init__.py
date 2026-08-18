@@ -13,7 +13,7 @@ def default_adapter_registry() -> ProviderAdapterRegistry:
         timeout_seconds=max(1.0, float(os.getenv("AI_PROVIDER_TIMEOUT_SECONDS", "180"))),
         max_attempts=max(1, int(os.getenv("AI_PROVIDER_MAX_ATTEMPTS", "3"))),
     )
-    for provider in ("anthropic", "openai", "gemini"):
+    for provider in ("anthropic", "openai", "gemini", "deepseek"):
         registry.register(provider, adapter)
     return registry
 

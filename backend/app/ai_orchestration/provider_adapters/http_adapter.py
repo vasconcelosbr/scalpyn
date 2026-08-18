@@ -142,7 +142,7 @@ def _json_object(text: str) -> dict[str, Any]:
 
 
 def _raw_text(provider: str, payload: dict) -> str:
-    if provider == "openai":
+    if provider in ("openai", "deepseek"):
         return payload["choices"][0]["message"]["content"]
     if provider == "anthropic":
         return "\n".join(
@@ -227,12 +227,16 @@ class HTTPProviderAdapter:
         max_output_tokens, output_schema=None, prior_attempt=None,
     ):
         headers = {"x-scalpyn-ai-request-id": request_id}
-        if provider == "openai":
+        if provider in ("openai", "deepseek"):
             messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
             if prior_attempt is not None:
                 messages.append({"role": "assistant", "content": prior_attempt["raw_text"]})
                 messages.append({"role": "user", "content": prior_attempt["correction"]})
-            return await client.post("https://api.openai.com/v1/chat/completions",
+            url = (
+                "https://api.openai.com/v1/chat/completions" if provider == "openai"
+                else "https://api.deepseek.com/v1/chat/completions"
+            )
+            return await client.post(url,
                 headers={**headers, "Authorization": f"Bearer {api_key}"},
                 json={"model": model, "temperature": 0, "max_tokens": max_output_tokens,
                       "response_format": {"type": "json_object"},
@@ -276,7 +280,7 @@ class HTTPProviderAdapter:
         output_schema: dict[str, Any] | None = None,
     ) -> ProviderResponse:
         text = _raw_text(provider, payload)
-        if provider == "openai":
+        if provider in ("openai", "deepseek"):
             usage = payload.get("usage") or {}
             tokens_in = usage.get("prompt_tokens", 0); tokens_out = usage.get("completion_tokens", 0)
             stop_reason = payload["choices"][0].get("finish_reason")
