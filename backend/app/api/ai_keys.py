@@ -340,7 +340,7 @@ async def test_key(
             return {"provider": provider, "success": False, "message": f"Erro de conexão: {str(e)}"}
 
     if provider == "deepseek":
-        from ..services.ai_keys_service import get_decrypted_api_key
+        from ..services.ai_keys_service import get_decrypted_api_key, mark_key_test_result
         import httpx
         plain_key = await get_decrypted_api_key(db, user_id, provider)
         if not plain_key:
@@ -353,17 +353,17 @@ async def test_key(
                 )
             if resp.status_code == 200:
                 models = resp.json().get("data", [])
-                return {
-                    "provider": provider,
-                    "success": True,
-                    "message": f"Conectado. {len(models)} modelos disponíveis.",
-                }
+                message = f"Conectado. {len(models)} modelos disponíveis."
+                await mark_key_test_result(db, user_id, provider, True, "")
+                return {"provider": provider, "success": True, "message": message}
             elif resp.status_code == 401:
-                return {"provider": provider, "success": False, "message": "Chave inválida ou expirada."}
+                message = "Chave inválida ou expirada."
             else:
-                return {"provider": provider, "success": False, "message": f"Erro HTTP {resp.status_code}."}
+                message = f"Erro HTTP {resp.status_code}."
         except Exception as e:
-            return {"provider": provider, "success": False, "message": f"Erro de conexão: {str(e)}"}
+            message = f"Erro de conexão: {str(e)}"
+        await mark_key_test_result(db, user_id, provider, False, message)
+        return {"provider": provider, "success": False, "message": message}
 
     if provider not in ("anthropic",):
         raise HTTPException(status_code=404, detail=f"Provider não suportado: {provider}.")

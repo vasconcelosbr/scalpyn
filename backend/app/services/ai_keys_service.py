@@ -209,6 +209,16 @@ async def _save_test_result(db: AsyncSession, r, success: bool, msg: str) -> Non
     await db.commit()
 
 
+async def mark_key_test_result(db: AsyncSession, user_id: UUID, provider: str, success: bool, msg: str) -> None:
+    """Persist is_validated/test_status/last_tested_at after a provider connection test.
+    Providers whose /test handler only returns an ephemeral response (never calling
+    this) leave is_validated permanently False, which silently blocks them at the
+    VALIDATED_PROVIDER_KEY_AND_BUDGET_REQUIRED gate in systemic_langgraph_bridge.py."""
+    r = await _get_record(db, user_id, provider)
+    if r is not None:
+        await _save_test_result(db, r, success, msg)
+
+
 async def test_anthropic_key(db: AsyncSession, user_id: UUID, provider: str = "anthropic") -> Tuple[bool, str]:
     r = await _get_record(db, user_id, provider)
     if not r:
