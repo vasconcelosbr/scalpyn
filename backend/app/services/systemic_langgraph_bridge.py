@@ -5,6 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 from datetime import datetime, timezone
 import json
+import logging
 import os
 from typing import Any, Awaitable, Callable
 from uuid import UUID
@@ -32,6 +33,8 @@ from ..models.systemic_ai import (
     AIToolEvidenceRecord,
 )
 from .ai_keys_service import decrypt_value
+
+logger = logging.getLogger(__name__)
 
 
 def _provider_decision_context(
@@ -532,6 +535,16 @@ class SystemicLangGraphBridge:
                 output_schema=prompt.output_schema_json,
             )
         except Exception as exc:
+            detail = getattr(exc, "detail", None)
+            logger.warning(
+                "[invoke_provider] transport call failed: exc_type=%s http_status=%s "
+                "provider_error_code=%s internal_detail=%s message=%s",
+                type(exc).__name__,
+                getattr(detail, "http_status", None),
+                getattr(detail, "provider_error_code", None),
+                getattr(detail, "internal_detail_redacted", None),
+                str(exc)[:300],
+            )
             await run_db_task(
                 lambda reservation_db: BudgetReservationAudit.mark_transport_error(
                     reservation_db,
