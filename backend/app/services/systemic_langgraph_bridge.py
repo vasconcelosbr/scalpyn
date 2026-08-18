@@ -423,22 +423,35 @@ class SystemicLangGraphBridge:
         except KeyError as exc:
             raise RuntimeError(f"PROMPT_INPUT_MISSING:{exc.args[0]}") from exc
 
-        # UTF-8 byte length is a deliberately conservative reservation bound;
-        # it avoids under-reserving for non-ASCII prompt content.
-        structured_output_reservation = 0
+        # Reservation is denominated in tokens (compared against max_input_tokens,
+        # a real Anthropic token count, and billed via cost-per-million-tokens),
+        # but UTF-8 byte length is what's cheap to measure pre-flight. Convert
+        # using the ratio migration 178 measured directly against Anthropic's own
+        # "context length" rejection boundary for this prompt shape: ~412,187
+        # bytes failed transport, ~399,952 completed, both under a real 200,000-
+        # token model -- ratio ~2.06, taken conservatively as 2.0 bytes/token.
+        # Without this conversion, byte count was compared 1:1 against a token
+        # limit, silently blocking any legitimately-sized large-evidence request
+        # (e.g. a multi-hundred-trade report) at roughly half the model's real
+        # context window.
+        BYTES_PER_ESTIMATED_TOKEN = 2
+        structured_output_reservation_bytes = 0
         if resolution.effective_provider == "anthropic":
             output_config = anthropic_output_config(prompt.output_schema_json)
             # Reserve the complete transport contract plus bounded room for the
             # provider-injected structured-output instruction.
-            structured_output_reservation = len(json.dumps(
+            structured_output_reservation_bytes = len(json.dumps(
                 {"output_config": output_config},
                 ensure_ascii=False,
                 separators=(",", ":"),
             ).encode("utf-8")) + 512
+        prompt_bytes = (
+            len((system_prompt + user_prompt).encode("utf-8"))
+            + structured_output_reservation_bytes
+        )
         estimated_input_tokens = max(
             1,
-            len((system_prompt + user_prompt).encode("utf-8"))
-            + structured_output_reservation,
+            -(-prompt_bytes // BYTES_PER_ESTIMATED_TOKEN),  # ceiling division
         )
         max_input_tokens = int(budget.request_token_limit) - int(approval.max_output_tokens)
         if max_input_tokens <= 0 or estimated_input_tokens > max_input_tokens:
