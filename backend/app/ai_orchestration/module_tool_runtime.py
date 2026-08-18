@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from jsonschema import validate
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.systemic_ai import AIToolCallAudit, AIToolEvidenceRecord
@@ -88,7 +89,8 @@ class ModuleToolRuntime:
             int(request_filters.get("max_rows") or get_langgraph_settings().tool_default_max_rows),
             int(capability.max_rows or 5_000),
         )
-        entity_ids = tuple(request_filters.get("entity_ids") or ())
+        trade_entity_ids = tuple(request_filters.get("entity_ids") or ())
+        entity_ids = trade_entity_ids
         if capability.domain != request.origin_module:
             entity_ids = ()
             if capability.domain == "ml_models":
@@ -100,6 +102,35 @@ class ModuleToolRuntime:
                 # request's own origin_module (someone directly analyzing model
                 # training), the full registry stays unfiltered.
                 request_filters = {**request_filters, "status_in": ("champion", "archived")}
+            elif capability.domain == "strategy_profiles" and request.origin_module == "shadow_portfolio" and trade_entity_ids:
+                # entity_ids here are shadow_trade IDs, not profile IDs -- resolve
+                # to the profiles actually referenced by this trade sample instead
+                # of returning every tenant profile (most of which the sample
+                # never touches).
+                from uuid import UUID
+
+                from ..models.shadow_trade import ShadowTrade
+
+                trade_uuids = []
+                for raw in trade_entity_ids:
+                    try:
+                        trade_uuids.append(UUID(raw))
+                    except ValueError:
+                        continue
+                profile_ids = (await db.execute(
+                    select(ShadowTrade.profile_id).distinct().where(
+                        ShadowTrade.id.in_(trade_uuids),
+                        ShadowTrade.profile_id.is_not(None),
+                    )
+                )).scalars().all()
+                entity_ids = tuple(str(profile_id) for profile_id in profile_ids)
+            elif capability.domain == "market_regime":
+                # "get_current" and the other 4 market_regime tools all share this
+                # generic handler and the same regime_history query -- none of them
+                # take entity_ids, so as supporting context (not the analysis's own
+                # subject) a handful of the most recent observations is the useful
+                # size, not up to 200 rows sized for an unrelated trade sample.
+                request_filters = {**request_filters, "max_rows": 5}
         rows = await ModuleAIAnalysisService._rows(
             db,
             tenant_id=tenant_id,
