@@ -155,8 +155,13 @@ async def bulk_import_profiles(
     user_id: UUID = Depends(get_current_user_id),
 ):
     """
-    Create multiple profiles from a JSON import file, or replace scoring for
-    every active profile when ``apply_to_active_profiles`` is true.
+    Create multiple profiles from a JSON import file, replace scoring for
+    every active profile when ``apply_to_active_profiles`` is true, or —
+    when ``update_indicators_only`` is true — update only the indicator
+    config (filters/signals/entry_triggers/block_rules) of existing profiles
+    matched by name, without creating new profiles, touching scoring, or
+    changing is_active/any other field. Items in "profiles" whose name has
+    no existing match are reported as "error" (not_found), never created.
 
     Expected payload:
     {
@@ -178,10 +183,19 @@ async def bulk_import_profiles(
             "selected_rule_ids": [...]
         },
         "apply_to_active_profiles": true,      (optional, update existing active profiles)
+        "update_indicators_only": false,       (optional, default false — when true, matches
+                                                 each "profiles" item to an existing profile by
+                                                 name (case-insensitive, any status) and updates
+                                                 only its filters/signals/entry_triggers/
+                                                 block_rules; never creates a profile or changes
+                                                 is_active/scoring/other fields; a name with no
+                                                 match, or more than one match, is reported as
+                                                 "error" and skipped)
         "allow_duplicate_names": false,        (optional, default false — by default an
                                                  item whose name matches an existing ACTIVE
                                                  profile is rejected instead of silently
-                                                 creating a second profile with that name)
+                                                 creating a second profile with that name;
+                                                 ignored when update_indicators_only is true)
         "scoring_assignments": [               (optional, update scoring of specific
             {                                   existing profiles by id or name)
                 "profile_id": "uuid",          (or "profile_name": "...")
@@ -348,6 +362,74 @@ async def bulk_import_profiles(
         raise HTTPException(status_code=400, detail="Maximum 200 profiles per import")
 
     allow_duplicate_names = bool(payload.get("allow_duplicate_names"))
+    update_indicators_only = bool(payload.get("update_indicators_only"))
+
+    if update_indicators_only:
+        for i, p in enumerate(profiles_data):
+            name = (p.get("name") or "").strip()
+            try:
+                if not name:
+                    raise ValueError("'name' is required")
+
+                matches = (await db.execute(
+                    select(Profile).where(Profile.user_id == user_id, Profile.name.ilike(name))
+                )).scalars().all()
+                if not matches:
+                    raise ValueError(
+                        f"no existing profile named '{name}' -- update_indicators_only never "
+                        f"creates profiles"
+                    )
+                if len(matches) > 1:
+                    raise ValueError(
+                        f"{len(matches)} profiles named '{name}' -- rename to disambiguate "
+                        f"before using update_indicators_only"
+                    )
+                profile = matches[0]
+
+                # Only filters/signals/entry_triggers/block_rules change. scoring,
+                # default_timeframe, is_active, name, description and every other
+                # profile field are preserved as-is.
+                previous_config = profile.config or {}
+                next_config = {
+                    **previous_config,
+                    "filters":        p.get("filters",        {"logic": "AND", "conditions": []}),
+                    "signals":        p.get("signals",        {"logic": "AND", "conditions": []}),
+                    "block_rules":    p.get("block_rules",    {"blocks": []}),
+                    "entry_triggers": p.get("entry_triggers", {"logic": "AND", "conditions": []}),
+                }
+                profile.config = _validate_profile_config(next_config)
+                old_version = getattr(profile, "profile_version", None)
+                new_version = datetime.now(_tz.utc)
+                profile.profile_version = new_version
+                db.add(ProfileAuditLog(
+                    user_id=user_id,
+                    profile_id=profile.id,
+                    changed_by=user_id,
+                    change_source="api",
+                    change_description=(
+                        "indicators (filters/signals/entry_triggers/block_rules) replaced "
+                        "via POST /profiles/bulk-import update_indicators_only"
+                    ),
+                    previous_config=previous_config,
+                    new_config=profile.config,
+                    previous_profile_version=old_version,
+                    new_profile_version=new_version,
+                ))
+                results.append({"index": i, "name": name, "status": "updated", "id": str(profile.id)})
+                updated += 1
+            except Exception as exc:
+                failed += 1
+                results.append({
+                    "index": i,
+                    "name": name or f"profile_{i}",
+                    "status": "error",
+                    "error": str(exc),
+                })
+
+        if updated > 0:
+            await db.commit()
+
+        return {"created": 0, "updated": updated, "failed": failed, "results": results}
 
     for i, p in enumerate(profiles_data):
         try:
