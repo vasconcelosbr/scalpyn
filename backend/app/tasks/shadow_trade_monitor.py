@@ -1008,6 +1008,25 @@ async def _advance_shadow(
         )
         ohlcv_price, ohlcv_ts = None, None
 
+    # MAE/MFE (Fase Quant 1, fix 2026-08): a fonte acima só dá ``close`` —
+    # subestima MFE/MAE de símbolos sem OHLCV 1m (candle 5m/15m/30m pode ter
+    # varrido um high/low bem além do close antes de fechar). Busca o
+    # high/low real da MESMA candle mais recente só para alimentar o
+    # tracking de extremos abaixo; NÃO participa do candidates[]/TP-SL
+    # crossing check (que continua conservador, baseado em close, como
+    # antes).
+    try:
+        ohlcv_high, ohlcv_low, ohlcv_hl_ts = await shadow_trade_service._get_current_ohlc_multi_tf(
+            db, shadow.symbol
+        )
+    except Exception:
+        logger.exception(
+            "[shadow-monitor] live-close: get_current_ohlc_multi_tf failed "
+            "for shadow_id=%s",
+            shadow.id,
+        )
+        ohlcv_high, ohlcv_low, ohlcv_hl_ts = None, None, None
+
     # Skew guard por fonte: descarta dado anterior ao entry_timestamp
     # (ticker/candle pré-entrada). Mantém a fonte cujo timestamp é
     # >= entry_ts (ou é NULL — sem como caracterizar skew, aceitamos).
@@ -1050,6 +1069,16 @@ async def _advance_shadow(
             shadow.min_price_post_entry = min_price
         if shadow.max_price_post_entry is None or max_price > shadow.max_price_post_entry:
             shadow.max_price_post_entry = max_price
+
+        # ── MAE/MFE: widen with real high/low da candle (fix 2026-08) ───
+        # Só afeta os extremos observacionais — outcome/exit_price acima
+        # continuam baseados exclusivamente em candidates[] (close).
+        if _ok(ohlcv_low, ohlcv_hl_ts):
+            if shadow.min_price_post_entry is None or ohlcv_low < shadow.min_price_post_entry:
+                shadow.min_price_post_entry = ohlcv_low
+        if _ok(ohlcv_high, ohlcv_hl_ts):
+            if shadow.max_price_post_entry is None or ohlcv_high > shadow.max_price_post_entry:
+                shadow.max_price_post_entry = ohlcv_high
 
         # ── R3 (2026-07-05): TIMEOUT precede TP/SL para trade vencido ────
         # Ver _resolve_expired_timeout. MAE/MFE acima ainda atualizam

@@ -602,6 +602,51 @@ async def _get_current_price_multi_tf(
     return float(row.close), row.time
 
 
+async def _get_current_ohlc_multi_tf(
+    db: AsyncSession,
+    symbol: str,
+    *,
+    as_of: Optional[datetime] = None,
+) -> tuple[Optional[float], Optional[float], Optional[datetime]]:
+    """``high``/``low`` da candle mais recente de ``ohlcv`` (1m/5m/15m/30m).
+
+    Sibling de ``_get_current_price_multi_tf`` (que só expõe ``close``).
+    Existe para alimentar o tracking de MAE/MFE (``min_price_post_entry``/
+    ``max_price_post_entry``) com os extremos reais da candle, em vez de
+    apenas o ``close`` — sem alterar o retorno/contrato da função original,
+    que tem outros 2 call sites (resolução de entry_price) cujo comportamento
+    não deve mudar.
+    """
+    res = await db.execute(
+        text(
+            """
+            SELECT high, low, time
+              FROM ohlcv
+             WHERE symbol = :s
+               AND timeframe IN ('1m', '5m', '15m', '30m')
+               AND (
+                   CAST(:as_of AS timestamptz) IS NULL
+                   OR time <= CAST(:as_of AS timestamptz)
+               )
+             ORDER BY time DESC
+             LIMIT 1
+            """
+        ),
+        {"s": symbol, "as_of": as_of},
+    )
+    row = res.fetchone()
+    if row is None or row.high is None or row.low is None:
+        return None, None, None
+    if not isinstance(row.time, datetime):
+        logger.error(
+            "[shadow] _get_current_ohlc_multi_tf: ohlcv.time não-datetime "
+            "(type=%s value=%r symbol=%s) — retornando None",
+            type(row.time).__name__, row.time, symbol,
+        )
+        return None, None, None
+    return float(row.high), float(row.low), row.time
+
+
 async def _get_market_metadata_price(
     db: AsyncSession, symbol: str
 ) -> tuple[Optional[float], Optional[datetime]]:
