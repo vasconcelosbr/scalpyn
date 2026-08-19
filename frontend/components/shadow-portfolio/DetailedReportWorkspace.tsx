@@ -203,8 +203,11 @@ function FacetPicker({
     <div className="rounded-xl border border-white/[0.07] bg-[#0e1119] p-3">
       <div className="mb-2 flex items-center justify-between">
         <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7f899f]">{label}</span>
-        <button className="text-[11px] text-[#7697ff] hover:text-[#9bb1ff]" onClick={() => onChange([])}>
-          Todos
+        <button
+          className="text-[11px] text-[#7697ff] hover:text-[#9bb1ff]"
+          onClick={() => onChange(selected.length === valid.length ? [] : valid.map((item) => item.id))}
+        >
+          {selected.length === valid.length && valid.length > 0 ? "Nenhum" : "Todos"}
         </button>
       </div>
       <div className="max-h-32 space-y-1 overflow-y-auto pr-1">
@@ -216,10 +219,13 @@ function FacetPicker({
               <input
                 type="checkbox"
                 className="accent-[#4f7bf7]"
-                checked={selected.includes(item.id)}
-                onChange={() =>
-                  onChange(selected.includes(item.id) ? selected.filter((id) => id !== item.id) : [...selected, item.id])
-                }
+                checked={selected.length === 0 || selected.includes(item.id)}
+                onChange={() => {
+                  const effective = selected.length === 0 ? valid.map((v) => v.id) : selected;
+                  onChange(
+                    effective.includes(item.id) ? effective.filter((id) => id !== item.id) : [...effective, item.id],
+                  );
+                }}
               />
               <span className="min-w-0 flex-1 truncate text-xs text-[#c8cfde]">{item.name}</span>
               <span className="font-mono text-[10px] text-[#657087]">{item.count}</span>
@@ -227,7 +233,9 @@ function FacetPicker({
           ))
         )}
       </div>
-      <div className="mt-2 text-[10px] text-[#657087]">{selected.length ? `${selected.length} selecionado(s)` : "Todos selecionados"}</div>
+      <div className="mt-2 text-[10px] text-[#657087]">
+        {selected.length === 0 || selected.length === valid.length ? "Todos selecionados" : `${selected.length} selecionado(s)`}
+      </div>
     </div>
   );
 }
