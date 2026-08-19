@@ -80,6 +80,7 @@ interface ParsedImportPayload {
   profiles: ImportProfile[];
   sharedScoring?: ScoringPayload;
   applyToActiveProfiles: boolean;
+  updateIndicatorsOnly: boolean;
   scoringAssignments: ScoringAssignment[];
 }
 
@@ -153,6 +154,8 @@ function parseProfilesPayload(data: ImportFilePayload | ImportProfile[]): Parsed
     data?.apply_to_active_profiles || data?.update_active_profiles || data?.active_profiles_only
   );
 
+  const updateIndicatorsOnly = !Array.isArray(data) && Boolean(data?.update_indicators_only);
+
   const scoringAssignments: ScoringAssignment[] =
     !Array.isArray(data) && Array.isArray(data?.scoring_assignments)
       ? data.scoring_assignments
@@ -200,6 +203,7 @@ function parseProfilesPayload(data: ImportFilePayload | ImportProfile[]): Parsed
     })),
     sharedScoring,
     applyToActiveProfiles,
+    updateIndicatorsOnly,
     scoringAssignments,
   };
 }
@@ -239,6 +243,7 @@ export function JsonImportBuilder({ onClose }: Props) {
   const [parsed, setParsed]             = useState<ParsedProfile[]>([]);
   const [sharedScoring, setSharedScoring] = useState<ScoringPayload | undefined>(undefined);
   const [applyToActiveProfiles, setApplyToActiveProfiles] = useState(false);
+  const [updateIndicatorsOnly, setUpdateIndicatorsOnly] = useState(false);
   const [scoringAssignments, setScoringAssignments] = useState<ScoringAssignment[]>([]);
   const [existingProfiles, setExistingProfiles] = useState<ExistingProfileRef[]>([]);
   const { config: globalScoreConfig } = useConfig("score");
@@ -317,6 +322,7 @@ export function JsonImportBuilder({ onClose }: Props) {
       setParsed(parsedList);
       setSharedScoring(parsedPayload.sharedScoring);
       setApplyToActiveProfiles(parsedPayload.applyToActiveProfiles);
+      setUpdateIndicatorsOnly(parsedPayload.updateIndicatorsOnly);
       setScoringAssignments(parsedPayload.scoringAssignments);
       setStage("preview");
     } catch (err: unknown) {
@@ -381,6 +387,7 @@ export function JsonImportBuilder({ onClose }: Props) {
           }
         : {
             ...(profilesPayload.length > 0 ? { profiles: profilesPayload } : {}),
+            ...(updateIndicatorsOnly ? { update_indicators_only: true } : {}),
             ...(sharedScoring ? { profile_scoring: sharedScoring } : {}),
             ...(scoringAssignments.length > 0 ? { scoring_assignments: scoringAssignments } : {}),
           });
@@ -432,6 +439,7 @@ export function JsonImportBuilder({ onClose }: Props) {
               : [
                   parsed.length > 0 ? `${parsed.length} profiles encontrados` : null,
                   scoringAssignments.length > 0 ? `${scoringAssignments.length} associações de scoring` : null,
+                  updateIndicatorsOnly ? "modo: atualizar indicadores de profiles existentes (sem criar)" : null,
                 ].filter(Boolean).join(" · ") + " — revise antes de importar")}
             {stage === "result"  && (applyToActiveProfiles
               ? `Atualizacao concluida: ${summary.updated} atualizados · ${summary.failed} com erro`
@@ -1003,7 +1011,7 @@ export function JsonImportBuilder({ onClose }: Props) {
               </button>
               <button
                 className="btn btn-secondary text-[12px] px-3 py-1.5"
-                onClick={() => { setParsed([]); setScoringAssignments([]); setApplyToActiveProfiles(false); setStage("upload"); setParseError(null); }}
+                onClick={() => { setParsed([]); setScoringAssignments([]); setApplyToActiveProfiles(false); setUpdateIndicatorsOnly(false); setStage("upload"); setParseError(null); }}
               >
                 Trocar arquivo
               </button>
@@ -1279,7 +1287,7 @@ export function JsonImportBuilder({ onClose }: Props) {
           </div>
 
           <div className="flex gap-3">
-            <button className="btn btn-secondary flex-1" onClick={() => { setParsed([]); setScoringAssignments([]); setRawJson(""); setApplyToActiveProfiles(false); setStage("upload"); }}>
+            <button className="btn btn-secondary flex-1" onClick={() => { setParsed([]); setScoringAssignments([]); setRawJson(""); setApplyToActiveProfiles(false); setUpdateIndicatorsOnly(false); setStage("upload"); }}>
               <Upload className="w-4 h-4 mr-2" />
               Importar outro arquivo
             </button>
