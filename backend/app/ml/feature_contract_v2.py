@@ -60,7 +60,28 @@ REGISTRY: dict[str, FeatureSpec] = {
 _ALIASES = {alias: name for name, spec in REGISTRY.items() for alias in spec.aliases}
 _DERIVED_SOURCE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     "di_trend": ("di_plus", "di_minus"),
+    "ema9_gt_ema50": ("ema9", "ema50"),
+    "ema9_gt_ema21": ("ema9", "ema21"),
+    "ema50_gt_ema200": ("ema50", "ema200"),
+    "ema_full_alignment": ("ema9", "ema50", "ema200"),
 }
+
+# AUD-IR-CTR-001 (Fase 1, L07): fields whose value is an aggregate output of
+# the score engine over the *rest* of the same snapshot (decisions_log's
+# score_components -> l3_trade_consolidation.py), not an independently
+# sourced market reading. They carry no timestamp of their own to look up --
+# their freshness is already bounded by whichever REGISTRY/directional
+# feature in the same snapshot they were computed from. Introduced by
+# commit 90d974c3 (2026-08-03) alongside L3 profile consolidation
+# (d07f7c4/5eaf5f6, 2026-08-02); the commit added a per-feature source-
+# timestamp requirement without exempting these, so every L3/L3_LAB capture
+# that included a consolidation score failed 100% of the time from
+# 2026-08-04 onward with `missing_source_timestamp:<field>` -- collapsing
+# eligible_for_training to 0% for those lanes.
+_DECISION_COMPUTED_FIELDS: frozenset[str] = frozenset({
+    "score", "signal_score", "momentum_score", "liquidity_score",
+    "market_structure_score",
+})
 
 
 # ── P0-B (auditoria captura L3 2026-07-24) ───────────────────────────────────
@@ -180,6 +201,8 @@ def _feature_source_timestamps(
     errors: list[str] = []
     for name, value in snapshot.items():
         if str(name).startswith("_") or value is None:
+            continue
+        if name in _DECISION_COMPUTED_FIELDS:
             continue
         lookup_names = (
             name,

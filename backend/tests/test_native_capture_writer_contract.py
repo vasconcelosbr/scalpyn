@@ -102,6 +102,43 @@ def test_source_timestamp_follows_canonical_alias_mapping():
     )
 
 
+def test_decision_computed_scores_do_not_require_own_source_timestamp():
+    """AUD-IR-CTR-001 (Fase 1, L07): commit 90d974c3 (2026-08-03) added the
+    per-feature source-timestamp requirement this module enforces, without
+    exempting the L3-consolidation score_components (l3_trade_consolidation.py)
+    that were merged into the snapshot by d07f7c4/5eaf5f6 the day before.
+    Every L3/L3_LAB capture that included one of these fields failed with
+    missing_source_timestamp:<field> 100% of the time from 2026-08-04
+    onward, collapsing eligible_for_training to 0% for those lanes. This
+    reproduces the exact production snapshot shape and must pass clean."""
+    source_at = datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc)
+    snapshot = {
+        "atr_pct": 1.0,
+        "ema9": 100.0, "ema50": 99.0, "ema200": 95.0,
+        "ema9_gt_ema50": True,
+        "ema_full_alignment": True,
+        "score": 0.82,
+        "signal_score": 0.5,
+        "momentum_score": 0.3,
+        "liquidity_score": 0.7,
+        "market_structure_score": 0.6,
+        **{name: None for name in REQUIRED_DIRECTIONAL_FEATURES},
+    }
+    capture = capture_native_snapshot(
+        snapshot,
+        source_snapshot={
+            "atr_pct": {"ts": source_at.isoformat()},
+            "ema9": {"ts": source_at.isoformat()},
+            "ema50": {"ts": source_at.isoformat()},
+            "ema200": {"ts": source_at.isoformat()},
+        },
+        decision_created_at=source_at + timedelta(seconds=1),
+        entry_at=source_at + timedelta(seconds=1),
+    )
+    assert capture.errors == ()
+    assert capture.source_at == source_at
+
+
 @pytest.mark.asyncio
 async def test_entry_price_lookup_is_bounded_by_decision_time():
     decision_at = datetime(2026, 7, 12, 12, 0, tzinfo=timezone.utc)
