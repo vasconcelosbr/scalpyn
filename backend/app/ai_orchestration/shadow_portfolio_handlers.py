@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..services.profile_intelligence_live_service import _INDICATOR_NAMES, _bucket
 from .tool_registry import ToolCapability
 
 
@@ -352,6 +353,57 @@ def compare_champion_candidate(
     )
 
 
+def indicator_lift(
+    capability: ToolCapability, *, rows: list[dict], dataset_hash: str, dataset_window_end: str,
+) -> dict[str, Any]:
+    """Win rate / avg pnl by (indicator, bucket), for the same 15 entry-time
+    technical indicators and bucket boundaries the profile_indicator_performance
+    miner uses (profile_intelligence_live_service.py:_INDICATOR_NAMES/_bucket) --
+    reused directly rather than redefined so the two never silently diverge.
+
+    Unlike that miner, this reads the indicator_<name> scalars already carried
+    on the frozen dataset rows (module_ai_analysis_service.py) instead of
+    querying shadow_trades.features_snapshot itself, so its evidence traces
+    to the exact same dataset_hash as every other shadow_portfolio tool in
+    this request -- not a separate rolling-window table computed on its own
+    schedule. Added 2026-08-19 after a live root-cause-audit run reported
+    "no entry features" as evidence: no shadow_portfolio tool exposed entry
+    indicator values at all before this one."""
+    completed = [r for r in rows if r.get("status") == "COMPLETED"]
+    buckets: dict[str, dict[str, list]] = {}
+    missing_indicators: set[str] = set()
+    for indicator in _INDICATOR_NAMES:
+        key = f"indicator_{indicator}"
+        for row in completed:
+            value = row.get(key)
+            if value is None:
+                missing_indicators.add(indicator)
+                continue
+            bucket = _bucket(indicator, value)
+            group = buckets.setdefault(f"{indicator}:{bucket}", {"indicator": indicator, "bucket": bucket, "rows": []})
+            group["rows"].append(row)
+
+    indicators_out = []
+    for group in buckets.values():
+        group_rows = group["rows"]
+        win = [r for r in group_rows if r.get("outcome") == "TP_HIT"]
+        indicators_out.append({
+            "indicator": group["indicator"],
+            "bucket": group["bucket"],
+            "sample_size": len(group_rows),
+            "win_rate_pct": _rate_pct(len(win), len(group_rows)),
+            "avg_pnl_pct": _mean(_pnl_values(group_rows)),
+        })
+    indicators_out.sort(key=lambda item: (item["indicator"], item["bucket"]))
+
+    quality = "NO_DATA" if not completed else ("PASS_WITH_MISSINGNESS" if missing_indicators else "PASS")
+    return _envelope(
+        capability, data={"indicator_buckets": indicators_out}, evidence_ids=_evidence_ids(rows),
+        dataset_hash=dataset_hash, dataset_window_end=dataset_window_end,
+        quality=quality, missingness=sorted(f"indicator_{name}" for name in missing_indicators),
+    )
+
+
 def no_experiment_data(
     capability: ToolCapability, *, rows: list[dict], dataset_hash: str, dataset_window_end: str,
 ) -> dict[str, Any]:
@@ -379,6 +431,7 @@ SHADOW_PORTFOLIO_HANDLERS = {
     "shadow.get_delayed_tp": delayed_tp,
     "shadow.get_outcome_horizons": outcome_horizons,
     "shadow.get_data_quality": data_quality,
+    "shadow.get_indicator_lift": indicator_lift,
     "shadow.compare_champion_candidate": compare_champion_candidate,
     "shadow.get_experiment_status": no_experiment_data,
     "shadow.get_experiment_result": no_experiment_data,

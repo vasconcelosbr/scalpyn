@@ -83,6 +83,7 @@ _MODULES = (
             "shadow.freeze_analysis_dataset", "shadow.get_performance_summary",
             "shadow.get_profile_performance", "shadow.get_score_buckets", "shadow.get_mae_mfe",
             "shadow.get_delayed_tp", "shadow.get_outcome_horizons", "shadow.get_data_quality",
+            "shadow.get_indicator_lift",
             "shadow.compare_champion_candidate", "shadow.get_experiment_status",
             "shadow.get_experiment_result",
         ),

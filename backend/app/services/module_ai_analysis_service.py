@@ -29,6 +29,7 @@ from ..models.shadow_trade import ShadowTrade
 from ..models.social_intelligence import SocialAssetObservation
 from ..models.systemic_ai import AIModelApprovalRecord
 from .ai_graph_service import AIGraphRunService
+from .profile_intelligence_live_service import _INDICATOR_NAMES
 
 
 _READ_ONLY_MODULES = {
@@ -276,6 +277,16 @@ class ModuleAIAnalysisService:
                     for horizon in ("1h", "2h", "4h", "12h", "24h")
                 },
                 "final_score": (row.config_snapshot or {}).get("final_score"),
+                # Curated scalar subset of features_snapshot (never the full blob --
+                # see module docstring: "kept as small scalars, never as nested
+                # blobs"). Same 15 indicators as the profile_indicator_performance
+                # miner (profile_intelligence_live_service.py:_INDICATOR_NAMES),
+                # reused rather than redefined so the two don't silently diverge.
+                # Backs shadow.get_indicator_lift.
+                **{
+                    f"indicator_{name}": (row.features_snapshot or {}).get(name)
+                    for name in _INDICATOR_NAMES
+                },
                 "features_coverage": float(row.features_coverage) if row.features_coverage is not None else None,
                 "market_data_confidence": (
                     float(row.market_data_confidence) if row.market_data_confidence is not None else None
