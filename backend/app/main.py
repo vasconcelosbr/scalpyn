@@ -518,7 +518,17 @@ app.include_router(websocket.router)
 
 @app.get("/api/health")
 async def health_check():
-    return {"status": "ok", "version": "0.2.0"}
+    # AUD-IR-CTR-001 (0.6): "version": "0.2.0" never changes across deploys,
+    # so operators could not tell which commit was actually running without
+    # correlating build timestamps against git log. RAILWAY_GIT_COMMIT_SHA is
+    # injected automatically by Railway for every build; "unknown" means the
+    # process is running outside Railway (local dev) or the platform stopped
+    # providing it.
+    return {
+        "status": "ok",
+        "version": "0.2.0",
+        "git_sha": _os.environ.get("RAILWAY_GIT_COMMIT_SHA", "unknown"),
+    }
 
 
 @app.get("/api/health/schema")
