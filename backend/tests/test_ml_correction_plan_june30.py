@@ -112,6 +112,33 @@ class TestShadowTimeoutAnalyzerCandleFallback:
         )
 
 
+class TestShadowTimeoutAnalyzerMinimumAge:
+    """AUD-IR-CTR-001 (Fase 1, L05/L06): the candidate-selection query had no
+    minimum-age bound, so timeout_post_analysis_done was finalized (in
+    _analyze_shadow's unconditional `finally`) before the row's own +24h
+    (often +12h) horizon had happened in wall-clock time -- price_after_24h
+    was 0/285287 all-time in prod because it queried OHLCV for a timestamp
+    still in the future. A row must not be picked up before every horizon
+    in _HORIZONS_H could possibly have real candle data."""
+
+    def _get_run_analyzer_source(self) -> str:
+        import backend.app.tasks.shadow_timeout_analyzer as m
+        return inspect.getsource(m._run_analyzer)
+
+    def test_candidate_query_bounds_by_max_horizon_age(self):
+        import backend.app.tasks.shadow_timeout_analyzer as m
+        src = self._get_run_analyzer_source()
+        assert "_min_age" in src, (
+            "_run_analyzer must gate candidates on a minimum age derived from _HORIZONS_H"
+        )
+        assert "exit_timestamp <=" in src, (
+            "_run_analyzer must only select rows old enough for every horizon to exist"
+        )
+        assert m._HORIZONS_H == sorted(m._HORIZONS_H), (
+            "max(_HORIZONS_H) is used as the age bound; horizons list shape assumed ascending-safe"
+        )
+
+
 # ---------------------------------------------------------------------------
 # FASE 4 — features_snapshot em prediction_service
 # ---------------------------------------------------------------------------

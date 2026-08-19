@@ -295,6 +295,16 @@ async def _run_analyzer() -> None:
     async with get_celery_session() as db:
         # Busca batch de TIMEOUT não processados, ordenado por exit_timestamp ASC
         # (backfill progressivo — trades mais antigos primeiro).
+        # AUD-IR-CTR-001 (Fase 1, L05/L06): timeout_post_analysis_done is set
+        # unconditionally in _analyze_shadow's `finally` the first time a row
+        # is picked up, with no minimum age check here. Since this task keeps
+        # the TIMEOUT backlog drained to zero within the hour, most rows were
+        # being finalized well before their own +24h (and often +12h) horizon
+        # had actually happened in wall-clock time -- price_after_24h was
+        # querying OHLCV for a timestamp still in the future, permanently
+        # locking in NULL (0/285287 all-time in prod). Only pick up a row
+        # once every _HORIZONS_H horizon can possibly have real candle data.
+        _min_age = timedelta(hours=max(_HORIZONS_H))
         stmt = (
             select(ShadowTrade)
             .where(
@@ -302,6 +312,7 @@ async def _run_analyzer() -> None:
                 ShadowTrade.timeout_post_analysis_done.is_(False)
                 | ShadowTrade.timeout_post_analysis_done.is_(None),
                 ShadowTrade.exit_timestamp.is_not(None),
+                ShadowTrade.exit_timestamp <= datetime.now(timezone.utc) - _min_age,
             )
             .order_by(ShadowTrade.exit_timestamp.asc())
             .limit(SHADOW_ANALYZER_BATCH_SIZE)
