@@ -994,7 +994,7 @@ _INSERT_SHADOW_SQL = text("""
         feature_source_at, feature_source_times,
         features_captured_at, features_coverage, feature_hash,
         profile_config_hash, score_engine_config_hash,
-        lineage_status, eligible_for_training
+        lineage_status, eligible_for_training, market_data_confidence
     ) VALUES (
         gen_random_uuid(),
         :decision_id, :user_id, :symbol, :strategy, :direction,
@@ -1024,7 +1024,7 @@ _INSERT_SHADOW_SQL = text("""
         :feature_source_at, CAST(:feature_source_times AS JSONB),
         :features_captured_at, :features_coverage, :feature_hash,
         :profile_config_hash, :score_engine_config_hash,
-        :lineage_status, :eligible_for_training
+        :lineage_status, :eligible_for_training, :market_data_confidence
     )
     ON CONFLICT DO NOTHING
     RETURNING id
@@ -1445,6 +1445,13 @@ async def _create_from_decision(
                     "score_engine_config_hash": _lin_score_engine_config_hash,
                     "lineage_status": lineage_status,
                     "eligible_for_training": lineage_complete and not feature_errors,
+                    # AUD-IR-CTR-001 (Fase 1, L02): already computed by
+                    # market_data_service._confidence_score and merged into
+                    # features_snap via feature_engine._apply_market_data_
+                    # overrides (confirmed present in 5659/5659 recent rows'
+                    # features_snapshot JSONB) -- was never extracted into
+                    # its own dedicated column.
+                    "market_data_confidence": features_snap.get("market_data_confidence"),
                 },
             )
     except IntegrityError as exc:
@@ -3611,6 +3618,9 @@ async def _strategy_lab_snapshot_contract(
             else "UNRESOLVED_VERSION"
         ),
         "eligible_for_training": lineage_complete and not feature_errors,
+        # AUD-IR-CTR-001 (Fase 1, L02): see the matching comment in
+        # _create_from_decision -- same gap, same fix, strategy-lab path.
+        "market_data_confidence": normalized.get("market_data_confidence"),
     }
     return normalized, contract
 
@@ -3679,7 +3689,7 @@ _INSERT_STRATEGY_LAB_SQL = text("""
         feature_source_at, feature_source_times,
         features_captured_at, features_coverage, feature_hash,
         profile_config_hash, score_engine_config_hash,
-        lineage_status, eligible_for_training
+        lineage_status, eligible_for_training, market_data_confidence
     ) VALUES (
         gen_random_uuid(),
         NULL, :user_id, :symbol, :strategy, :direction,
@@ -3703,7 +3713,7 @@ _INSERT_STRATEGY_LAB_SQL = text("""
         :feature_source_at, CAST(:feature_source_times AS JSONB),
         :features_captured_at, :features_coverage, :feature_hash,
         :profile_config_hash, :score_engine_config_hash,
-        :lineage_status, :eligible_for_training
+        :lineage_status, :eligible_for_training, :market_data_confidence
     )
     ON CONFLICT DO NOTHING
     RETURNING id
