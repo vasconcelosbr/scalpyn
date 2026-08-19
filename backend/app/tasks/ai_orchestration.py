@@ -14,7 +14,7 @@ from sqlalchemy.dialects.postgresql import insert
 
 from .celery_app import celery_app
 from .task_dispatch import enqueue
-from ..ai_orchestration.errors import GraphNodeExecutionError, ProviderBlockedError
+from ..ai_orchestration.errors import AIOrchestrationError, GraphNodeExecutionError, ProviderBlockedError
 from ..ai_orchestration.langgraph.checkpoint import postgres_checkpointer
 from ..ai_orchestration.langgraph.config import get_langgraph_settings
 from ..ai_orchestration.langgraph.graphs import build_graph
@@ -438,6 +438,26 @@ async def _mark_interrupted(db, run_id: UUID, interrupt_value):
     ).on_conflict_do_nothing(index_elements=[AIGraphEvent.graph_run_id, AIGraphEvent.event_key]))
 
 
+def _failure_diagnostics(cause: Exception) -> dict | None:
+    """AUD-IR-CTR-001 (4.3/L14): surface safe metadata that was already
+    computed before the exception was raised, instead of letting it be
+    discarded at persistence time. Never attempts to recover a raw prompt
+    or provider response -- those are deliberately never attached to any
+    exception in this module (see errors.py)."""
+    diagnostics = getattr(cause, "diagnostics", None)
+    if diagnostics:
+        return diagnostics
+    if isinstance(cause, AIOrchestrationError):
+        detail = cause.detail
+        out = {
+            "http_status": detail.http_status,
+            "provider_error_code": detail.provider_error_code,
+            "internal_detail_redacted": detail.internal_detail_redacted,
+        }
+        return {k: v for k, v in out.items() if v is not None} or None
+    return None
+
+
 def _failure_details(exc: Exception) -> dict:
     failed_node = exc.node_name if isinstance(exc, GraphNodeExecutionError) else None
     cause = exc.cause if isinstance(exc, GraphNodeExecutionError) else exc
@@ -462,6 +482,7 @@ def _failure_details(exc: Exception) -> dict:
             getattr(cause, "provider_transport_attempted", False)
         ),
         "terminal_reason": terminal_reason,
+        "diagnostics": _failure_diagnostics(cause),
     }
 
 
@@ -488,7 +509,7 @@ def _audited_provider_transport_attempted(
 async def _mark_failed(
     db, run_id: UUID, *, failed_node: str | None, error_kind: str,
     reason_code: str, safe_message: str, provider_transport_attempted: bool,
-    terminal_reason: str,
+    terminal_reason: str, diagnostics: dict | None = None,
 ):
     run = (
         await db.execute(select(AIGraphRun).where(AIGraphRun.id == run_id).with_for_update())
@@ -523,6 +544,7 @@ async def _mark_failed(
     run.last_error_safe_message = safe_message[:500]
     run.provider_transport_attempted = provider_transport_attempted
     run.terminal_reason = terminal_reason[:160]
+    run.failure_diagnostics = diagnostics
     run.completed_at = now
     run.lease_owner = None
     run.lease_expires_at = None

@@ -287,6 +287,7 @@ def test_inapplicable_governed_proposal_uses_a_stable_terminal_code():
         ),
         "provider_transport_attempted": True,
         "terminal_reason": "FAIL_CLOSED",
+        "diagnostics": None,
     }
 
 

@@ -477,7 +477,18 @@ class CanonicalGraphNodeHandler:
                 )
                 if state["result_json"].get("provider_transport_attempted") is True:
                     from ..errors import ProviderOutputError
-                    raise ProviderOutputError(reason_code)
+                    # AUD-IR-CTR-001 (4.3/L14): carry the safe diagnostic
+                    # fields execute_prepared_request already computed
+                    # instead of letting them vanish with this exception.
+                    diagnostics = {
+                        key: state["result_json"].get(key)
+                        for key in (
+                            "provider_stop_reason", "provider_response_ref",
+                            "schema_error_path", "schema_validator",
+                        )
+                        if state["result_json"].get(key) is not None
+                    }
+                    raise ProviderOutputError(reason_code, diagnostics or None)
                 raise RuntimeError(reason_code)
             recommendations = state["result_json"].get("recommendations") or []
             for recommendation in recommendations:

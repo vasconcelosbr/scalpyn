@@ -78,6 +78,7 @@ def test_provider_disabled_returns_typed_blocked_status():
         "safe_message": "normal provider disabled",
         "provider_transport_attempted": False,
         "terminal_reason": "PROVIDER_BLOCKED",
+        "diagnostics": None,
     }
 
 
@@ -93,6 +94,24 @@ def test_provider_output_failure_preserves_attempted_transport():
         "safe_message": "Provider returned an incomplete or invalid structured response",
         "provider_transport_attempted": True,
         "terminal_reason": "FAIL_CLOSED",
+        "diagnostics": None,
+    }
+
+
+def test_provider_output_failure_carries_diagnostics_when_present():
+    """AUD-IR-CTR-001 (4.3/L14): stop_reason/schema-path metadata that used
+    to be discarded before persistence must now survive onto _mark_failed's
+    input, without ever including a raw prompt or provider response body."""
+    failure = _failure_details(GraphNodeExecutionError(
+        "validate_output",
+        ProviderOutputError(
+            "PROVIDER_OUTPUT_TRUNCATED",
+            {"provider_stop_reason": "max_tokens", "provider_response_ref": "req_abc123"},
+        ),
+    ))
+    assert failure["diagnostics"] == {
+        "provider_stop_reason": "max_tokens",
+        "provider_response_ref": "req_abc123",
     }
 
 

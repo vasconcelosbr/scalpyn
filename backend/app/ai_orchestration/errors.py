@@ -95,9 +95,15 @@ class ProviderOutputError(RuntimeError):
     error_kind = "PROVIDER_OUTPUT_FAILED"
     provider_transport_attempted = True
 
-    def __init__(self, reason_code: str):
+    def __init__(self, reason_code: str, diagnostics: dict | None = None):
         self.reason_code = reason_code
         self.safe_message = "Provider returned an incomplete or invalid structured response"
+        # AUD-IR-CTR-001 (4.3/L14): only the already-safe subset of
+        # execute_prepared_request's return value -- stop_reason, schema
+        # validation path, opaque provider request-id ref. Never raw prompt
+        # or response text; callers must not widen this without re-reviewing
+        # what's safe to persist to a queryable audit table.
+        self.diagnostics = diagnostics
         super().__init__(reason_code)
 
 

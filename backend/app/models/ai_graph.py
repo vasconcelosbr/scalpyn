@@ -92,6 +92,11 @@ class AIGraphRun(Base):
     last_error_safe_message = Column(Text)
     error_kind = Column(String(80))
     provider_transport_attempted = Column(Boolean)
+    # AUD-IR-CTR-001 (4.3): safe, already-computed provider/schema-validation
+    # metadata (stop_reason, schema_error_path, http_status...) that used to be
+    # discarded the moment a node raised. Never the raw prompt or provider
+    # response body -- see errors.ProviderOutputError.diagnostics.
+    failure_diagnostics = Column(JSONB)
     created_at = Column(TIMESTAMP(timezone=True), nullable=False, default=_now)
     updated_at = Column(TIMESTAMP(timezone=True), nullable=False, default=_now, onupdate=_now)
 
