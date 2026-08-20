@@ -112,6 +112,10 @@ def default_registry() -> ProviderModelRegistry:
         ModelCatalogEntry(provider="anthropic", model_id="claude-opus-5", capabilities=common | {"tool_use"}, max_input=1_000_000, max_output=8_192),
         ModelCatalogEntry(provider="openai", model_id="gpt-4.1-mini", capabilities=common | {"tool_use"}, max_input=128_000, max_output=32_768),
         ModelCatalogEntry(provider="gemini", model_id="gemini-2.5-flash", capabilities=common | {"tool_use"}, max_input=1_000_000, max_output=65_536),
-        ModelCatalogEntry(provider="deepseek", model_id="deepseek-v4-flash", capabilities=common | {"tool_use"}, max_input=1_000_000, max_output=32_768),
-        ModelCatalogEntry(provider="deepseek", model_id="deepseek-v4-pro", capabilities=common | {"tool_use"}, max_input=1_000_000, max_output=32_768),
+        # DeepSeek V4's documented provider maximum is 384K output tokens.
+        # Keeping a lower local catalog ceiling silently reintroduces a
+        # Scalpyn-only truncation even when an analysis profile is configured
+        # to use the provider's full capacity.
+        ModelCatalogEntry(provider="deepseek", model_id="deepseek-v4-flash", capabilities=common | {"tool_use"}, max_input=1_000_000, max_output=384_000),
+        ModelCatalogEntry(provider="deepseek", model_id="deepseek-v4-pro", capabilities=common | {"tool_use"}, max_input=1_000_000, max_output=384_000),
     ])

@@ -182,7 +182,16 @@ class HTTPProviderAdapter:
                       tools: list[dict], api_key: str, request_id: str,
                       max_output_tokens: int,
                       output_schema: dict[str, Any] | None = None) -> ProviderResponse:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(self.timeout_seconds, connect=20.0)) as client:
+        # A full DeepSeek V4 analysis may legitimately run beyond the generic
+        # 180-second read timeout. Keep the connect timeout (an unreachable
+        # endpoint must still fail), but do not interrupt an in-flight V4
+        # response. Other providers retain the governed timeout.
+        timeout = (
+            httpx.Timeout(None, connect=20.0)
+            if provider == "deepseek"
+            else httpx.Timeout(self.timeout_seconds, connect=20.0)
+        )
+        async with httpx.AsyncClient(timeout=timeout) as client:
             for attempt in range(1, self.max_attempts + 1):
                 try:
                     response = await self._post(
@@ -236,11 +245,23 @@ class HTTPProviderAdapter:
                 "https://api.openai.com/v1/chat/completions" if provider == "openai"
                 else "https://api.deepseek.com/v1/chat/completions"
             )
-            return await client.post(url,
+            payload = {
+                "model": model,
+                "temperature": 0,
+                "max_tokens": max_output_tokens,
+                "response_format": {"type": "json_object"},
+                "messages": messages,
+            }
+            if provider == "deepseek":
+                # V4 defaults to thinking mode today, but make the analytical
+                # contract explicit so a provider-default change cannot reduce
+                # the depth of an Intelligence Run.
+                payload["thinking"] = {"type": "enabled"}
+            return await client.post(
+                url,
                 headers={**headers, "Authorization": f"Bearer {api_key}"},
-                json={"model": model, "temperature": 0, "max_tokens": max_output_tokens,
-                      "response_format": {"type": "json_object"},
-                      "messages": messages})
+                json=payload,
+            )
         if provider == "anthropic":
             messages = [{"role": "user", "content": user}]
             if prior_attempt is not None:

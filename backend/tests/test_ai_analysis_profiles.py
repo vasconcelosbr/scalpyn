@@ -226,3 +226,35 @@ def test_profile_selection_is_persisted_as_approval_provenance():
     assert "approval_method=PROFILE_APPROVAL_METHOD" in api_source
     assert "approval_method = Column" in model_source
     assert "analysis_profile_id = Column" in model_source
+
+
+def test_deepseek_profiles_use_the_provider_physical_output_maximum():
+    migration_path = BACKEND / "alembic/versions/187_deepseek_provider_max.py"
+    spec = importlib.util.spec_from_file_location("migration_187_deepseek_provider_max", migration_path)
+    assert spec and spec.loader
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    assert len(migration.revision) <= 32
+    assert migration.down_revision == "186_deepseek_output_16k"
+    assert migration.NEW_MAX_OUTPUT_TOKENS == 384_000
+    assert len(migration.PROFILE_SLUGS) == 6
+    assert migration.NEW_DAILY_TOKEN_LIMIT == 2_147_483_647
+    assert migration.NEW_MONTHLY_TOKEN_LIMIT == 2_147_483_647
+
+    prices = {
+        "deepseek-v4-flash": (Decimal("0.14"), Decimal("0.28")),
+        "deepseek-v4-pro": (Decimal("0.435"), Decimal("0.87")),
+    }
+    for model, (input_rate, output_rate) in prices.items():
+        worst_case = (
+            migration.MAX_INPUT_TOKENS * input_rate
+            + migration.NEW_MAX_OUTPUT_TOKENS * output_rate
+        ) / Decimal("1000000")
+        assert worst_case <= Decimal(migration.NEW_MAX_COST_USD[model])
+
+    from app.ai_orchestration.provider_registry import default_registry
+
+    registry = default_registry()
+    assert registry.get_entry("deepseek", "deepseek-v4-flash").max_output == 384_000
+    assert registry.get_entry("deepseek", "deepseek-v4-pro").max_output == 384_000

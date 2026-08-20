@@ -34,6 +34,16 @@ def _anthropic_payload(text, *, tokens_in=100, tokens_out=20, stop_reason="end_t
     }
 
 
+def _deepseek_payload(text, *, tokens_in=100, tokens_out=20, stop_reason="stop"):
+    return {
+        "choices": [{
+            "message": {"content": text, "reasoning_content": "reasoning"},
+            "finish_reason": stop_reason,
+        }],
+        "usage": {"prompt_tokens": tokens_in, "completion_tokens": tokens_out},
+    }
+
+
 class _FakeClient:
     def __init__(self, responses):
         self._responses = list(responses)
@@ -147,6 +157,36 @@ async def test_truncated_output_is_not_retried(monkeypatch):
 
     assert response.terminal_error_code == "PROVIDER_OUTPUT_TRUNCATED"
     assert len(client.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_deepseek_uses_full_provider_output_and_has_no_read_timeout(monkeypatch):
+    client = _FakeClient([
+        _FakeResponse(_deepseek_payload('{"answer": "complete"}')),
+    ])
+    client_options = {}
+
+    def client_factory(**kwargs):
+        client_options.update(kwargs)
+        return client
+
+    monkeypatch.setattr("httpx.AsyncClient", client_factory)
+    adapter = HTTPProviderAdapter()
+
+    response = await adapter.execute(
+        provider="deepseek", model="deepseek-v4-flash",
+        system_prompt="system", user_prompt="user", tools=[], api_key="key",
+        request_id="req-deepseek-full", max_output_tokens=384_000,
+        output_schema=_SCHEMA,
+    )
+
+    assert response.terminal_error_code is None
+    assert response.output == {"answer": "complete"}
+    assert client_options["timeout"].connect == 20.0
+    assert client_options["timeout"].read is None
+    payload = client.calls[0]["json"]
+    assert payload["max_tokens"] == 384_000
+    assert payload["thinking"] == {"type": "enabled"}
 
 
 @pytest.mark.asyncio
