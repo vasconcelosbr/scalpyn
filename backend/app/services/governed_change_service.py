@@ -2769,16 +2769,26 @@ def _validate_profile_score_strategy_semantics(
 def _validate_spot_candidate_against_global_risk(
     candidate: dict[str, Any],
     risk_policy: dict[str, Any],
-) -> None:
+    *,
+    source: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Apply only cross-document limits with identical runtime meaning.
 
     These fields are consumed with the same units by ``RiskEngine`` and
     ``SpotCapitalManager``.  No absent limit is defaulted: an incomplete risk
-    policy cannot authorize a governed Spot mutation.
+    policy cannot authorize a governed Spot mutation.  A legacy conflict that
+    is byte-for-byte unchanged by the candidate is retained as explicit audit
+    evidence instead of vetoing an unrelated, schema-valid Spot edit.  Any new
+    or modified conflicting value remains fail-closed.
     """
     buying = candidate.get("buying")
     if not isinstance(buying, dict):
         raise ValueError("Spot candidate lacks its buying policy section")
+    source_buying = source.get("buying") if isinstance(source, dict) else None
+    if source is not None and not isinstance(source_buying, dict):
+        raise ValueError("Spot source lacks its buying policy section")
+
+    inherited_conflicts: list[dict[str, Any]] = []
 
     numeric_limits = (
         ("capital_per_trade_pct", buying.get("capital_per_trade_pct")),
@@ -2791,17 +2801,48 @@ def _validate_spot_candidate_against_global_risk(
         _require_finite_number(policy_value, path=f"risk.{policy_key}")
         _require_finite_number(candidate_value, path=f"spot.{policy_key}")
         if candidate_value > policy_value:
-            raise ValueError(
-                f"Spot {policy_key} exceeds the persisted global risk limit"
+            source_value = (
+                source_buying.get(
+                    "max_positions_total" if policy_key == "max_positions" else policy_key
+                )
+                if isinstance(source_buying, dict)
+                else None
             )
+            if source is None or candidate_value != source_value:
+                raise ValueError(
+                    f"Spot {policy_key} exceeds the persisted global risk limit"
+                )
+            inherited_conflicts.append({
+                "spot_field": (
+                    "max_positions_total" if policy_key == "max_positions" else policy_key
+                ),
+                "risk_field": policy_key,
+                "persisted_value": candidate_value,
+                "risk_limit": policy_value,
+                "disposition": "UNCHANGED_PREEXISTING_CONFLICT",
+            })
 
     risk_order_type = risk_policy.get("default_order_type")
     if risk_order_type not in {"limit", "market"}:
         raise ValueError("risk.default_order_type is missing or invalid")
     if buying.get("order_type") != risk_order_type:
-        raise ValueError(
-            "Spot buying.order_type differs from persisted risk.default_order_type"
+        source_order_type = (
+            source_buying.get("order_type")
+            if isinstance(source_buying, dict)
+            else None
         )
+        if source is None or buying.get("order_type") != source_order_type:
+            raise ValueError(
+                "Spot buying.order_type differs from persisted risk.default_order_type"
+            )
+        inherited_conflicts.append({
+            "spot_field": "order_type",
+            "risk_field": "default_order_type",
+            "persisted_value": buying.get("order_type"),
+            "risk_limit": risk_order_type,
+            "disposition": "UNCHANGED_PREEXISTING_CONFLICT",
+        })
+    return {"inherited_conflicts": inherited_conflicts}
 
 
 def _policy_semantic_result(
@@ -2991,21 +3032,28 @@ def _policy_semantic_result(
 
     if operation == "UPDATE_CONFIG_PROFILE" and config_type == "spot_engine":
         risk_row = effective.get("risk")
+        risk_transition_evidence: dict[str, Any] = {}
         if risk_row is None:
             risk_status = "NOT_PERFORMED"
             risk_basis = "PERSISTED_RISK_POLICY_UNAVAILABLE"
         else:
             try:
-                _validate_spot_candidate_against_global_risk(
+                risk_transition_evidence = _validate_spot_candidate_against_global_risk(
                     deepcopy(payload.get("candidate_document") or {}),
                     risk_row[1],
+                    source=deepcopy(payload.get("source_document") or {}),
                 )
             except (TypeError, ValueError) as exc:
                 risk_status = "VETO"
                 risk_basis = str(exc)[:500]
             else:
                 risk_status = "PASS"
-                risk_basis = "SPOT_CANDIDATE_WITHIN_PERSISTED_GLOBAL_RISK_LIMITS"
+                risk_basis = (
+                    "SPOT_CHANGED_RISK_FIELDS_WITHIN_PERSISTED_GLOBAL_LIMITS_"
+                    "WITH_UNCHANGED_PREEXISTING_CONFLICTS"
+                    if risk_transition_evidence["inherited_conflicts"]
+                    else "SPOT_CANDIDATE_WITHIN_PERSISTED_GLOBAL_RISK_LIMITS"
+                )
         try:
             _validate_config_candidate(
                 "spot_engine", deepcopy(payload.get("candidate_document") or {})
@@ -3024,6 +3072,7 @@ def _policy_semantic_result(
                 "status": risk_status,
                 "basis": risk_basis,
                 "validator_version": _POLICY_SEMANTIC_VALIDATOR_VERSION,
+                **risk_transition_evidence,
             },
             "strategy": {
                 "status": strategy_status,
@@ -3343,6 +3392,8 @@ def _candidate_validation_result(
         effective,
         profiles,
     )
+    if semantic_evidence.get("risk", {}).get("inherited_conflicts"):
+        warnings.append("PREEXISTING_SPOT_RISK_CONFLICTS_UNCHANGED")
     for family, module in (("risk", "global_risk"), ("strategy", "strategies")):
         status = semantic_statuses[family]
         basis = semantic_evidence[family]["basis"]

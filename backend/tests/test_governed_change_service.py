@@ -1059,6 +1059,137 @@ def test_spot_trailing_and_kill_switch_change_passes_typed_governance():
     assert service._validate_config_candidate("spot_engine", candidate) == candidate
 
 
+def test_spot_unrelated_edit_preserves_and_audits_legacy_risk_conflict():
+    plan, policies, _profiles = _candidate_validation_fixture()
+    risk_record = next(item for item in policies if item.config_type == "risk")
+    risk_record.config_json = {
+        "capital_per_trade_pct": 10,
+        "max_capital_in_use_pct": 100,
+        "max_exposure_per_asset_pct": 20,
+        "max_positions": 10,
+        "max_slippage_pct": 0.1,
+        "default_order_type": "limit",
+    }
+    source = service.SpotEngineConfig().model_dump()
+    source["buying"].update({
+        "capital_per_trade_pct": 100,
+        "max_capital_in_use_pct": 100,
+        "max_exposure_per_asset_pct": 20,
+        "max_positions_total": 10,
+        "order_type": "limit",
+    })
+    source["selling"]["never_sell_at_loss"] = False
+    source["sell_flow"]["trailing"]["activation_profit_pct"] = 2.0
+    source["sell_flow"]["kill_switch"]["max_drawdown_from_hwm_pct"] = 1.0
+    candidate = deepcopy(source)
+    candidate["selling"]["never_sell_at_loss"] = True
+    candidate["sell_flow"]["trailing"]["activation_profit_pct"] = 3.0
+    candidate["sell_flow"]["kill_switch"]["max_drawdown_from_hwm_pct"] = 2.0
+    spot = next(item for item in policies if item.config_type == "spot_engine")
+    spot.config_json = source
+    plan.target_type = "CONFIG_PROFILE"
+    plan.target_id = str(spot.id)
+    plan.execution_payload = {
+        "operation_type": "UPDATE_CONFIG_PROFILE",
+        "config_profile_id": str(spot.id),
+        "config_type": "spot_engine",
+        "pool_id": None,
+        "source_document": source,
+        "candidate_document": candidate,
+    }
+    plan.proposed_diff = [
+        {
+            "op": "replace",
+            "path": "/sell_flow/trailing/activation_profit_pct",
+            "old_value": 2.0,
+            "value": 3.0,
+        },
+        {
+            "op": "replace",
+            "path": "/sell_flow/kill_switch/max_drawdown_from_hwm_pct",
+            "old_value": 1.0,
+            "value": 2.0,
+        },
+        {
+            "op": "replace",
+            "path": "/selling/never_sell_at_loss",
+            "old_value": False,
+            "value": True,
+        },
+    ]
+
+    result = service._candidate_validation_result(plan, policies, [])
+
+    assert result["decision"] == "PASS"
+    assert result["policy_semantic_validation"] == {
+        "risk": "PASS",
+        "strategy": "PASS",
+    }
+    assert result["warnings"] == ["PREEXISTING_SPOT_RISK_CONFLICTS_UNCHANGED"]
+    risk_evidence = result["policy_semantic_evidence"]["risk"]
+    assert risk_evidence["basis"] == (
+        "SPOT_CHANGED_RISK_FIELDS_WITHIN_PERSISTED_GLOBAL_LIMITS_"
+        "WITH_UNCHANGED_PREEXISTING_CONFLICTS"
+    )
+    assert risk_evidence["inherited_conflicts"] == [{
+        "spot_field": "capital_per_trade_pct",
+        "risk_field": "capital_per_trade_pct",
+        "persisted_value": 100,
+        "risk_limit": 10,
+        "disposition": "UNCHANGED_PREEXISTING_CONFLICT",
+    }]
+
+
+def test_spot_edit_still_vetoes_modified_value_above_global_risk_limit():
+    plan, policies, _profiles = _candidate_validation_fixture()
+    risk_record = next(item for item in policies if item.config_type == "risk")
+    risk_record.config_json = {
+        "capital_per_trade_pct": 10,
+        "max_capital_in_use_pct": 100,
+        "max_exposure_per_asset_pct": 20,
+        "max_positions": 10,
+        "max_slippage_pct": 0.1,
+        "default_order_type": "limit",
+    }
+    source = service.SpotEngineConfig().model_dump()
+    source["buying"].update({
+        "capital_per_trade_pct": 100,
+        "max_capital_in_use_pct": 100,
+        "max_exposure_per_asset_pct": 20,
+        "max_positions_total": 10,
+        "order_type": "limit",
+    })
+    source["selling"]["never_sell_at_loss"] = True
+    candidate = deepcopy(source)
+    candidate["buying"]["capital_per_trade_pct"] = 90
+    spot = next(item for item in policies if item.config_type == "spot_engine")
+    spot.config_json = source
+    plan.target_type = "CONFIG_PROFILE"
+    plan.target_id = str(spot.id)
+    plan.execution_payload = {
+        "operation_type": "UPDATE_CONFIG_PROFILE",
+        "config_profile_id": str(spot.id),
+        "config_type": "spot_engine",
+        "pool_id": None,
+        "source_document": source,
+        "candidate_document": candidate,
+    }
+    plan.proposed_diff = [{
+        "op": "replace",
+        "path": "/buying/capital_per_trade_pct",
+        "old_value": 100,
+        "value": 90,
+    }]
+
+    result = service._candidate_validation_result(plan, policies, [])
+
+    assert result["decision"] == "VETO"
+    assert result["risk_validation"] == "VETO"
+    assert result["policy_semantic_evidence"]["risk"]["basis"] == (
+        "Spot capital_per_trade_pct exceeds the persisted global risk limit"
+    )
+
+
 def test_direct_risk_and_strategy_documents_have_registered_candidate_schemas():
     _plan, policies, _profiles = _candidate_validation_fixture()
     _install_executable_policy_semantics(policies)
