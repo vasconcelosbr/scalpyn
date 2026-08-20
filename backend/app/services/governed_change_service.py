@@ -444,6 +444,51 @@ def _read_pointer(document: Any, path: str) -> Any:
     return current
 
 
+def derive_patch_preconditions(
+    document: dict[str, Any],
+    *,
+    path: str,
+    op: str,
+) -> tuple[Any, list[dict[str, Any]]]:
+    """Read the current leaf and derive every indexed-array identity guard.
+
+    Proposal models choose an existing path and a new value. The backend,
+    which owns the persisted document, supplies the optimistic-concurrency
+    preconditions instead of trusting the model to reproduce them.
+    """
+    normalized_op = str(op or "replace").lower()
+    if normalized_op not in {"add", "replace", "remove"}:
+        raise GovernedChangePathError(f"Unsupported patch operation: {normalized_op}")
+    parts = _decode_pointer(path)
+    current: Any = document
+    guards: list[dict[str, Any]] = []
+    for index, part in enumerate(parts):
+        partial = _pointer(parts[: index + 1])
+        is_leaf = index == len(parts) - 1
+        if isinstance(part, int):
+            if is_leaf and normalized_op == "add":
+                if not isinstance(current, list) or part != len(current):
+                    raise GovernedChangePathError(
+                        f"List additions must append at the current array length at {path}"
+                    )
+                return None, guards
+            item = _read(current, part, path=partial)
+            guards.append({
+                "path": partial,
+                "identity": deepcopy(_stable_identity(item, path=partial)),
+            })
+            current = item
+            continue
+        if is_leaf and normalized_op == "add":
+            if not isinstance(current, dict):
+                raise GovernedChangePathError(f"Expected an object at {path}")
+            if part in current:
+                raise GovernedChangePathError(f"Added field already exists at {path}")
+            return None, guards
+        current = _read(current, part, path=partial)
+    return deepcopy(current), guards
+
+
 def _assert_patch_survived_normalization(
     normalized_before: dict[str, Any],
     normalized_candidate: dict[str, Any],

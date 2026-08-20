@@ -52,6 +52,7 @@ from ...services.ai_keys_service import decrypt_value
 from ...services.governed_change_service import (
     approve_and_execute as approve_and_execute_governed_change,
     create_dry_run as create_governed_change_dry_run,
+    derive_patch_preconditions,
     reconcile_execution_cache,
     validate_candidate_for_second_gate,
 )
@@ -657,6 +658,57 @@ async def _translate_score_rule_points(
     return {**proposal, "changes": translated_changes}
 
 
+async def _hydrate_config_change_preconditions(
+    db,
+    *,
+    tenant_id: UUID,
+    proposal: dict[str, Any],
+) -> dict[str, Any]:
+    """Bind global config patches to the current persisted document."""
+    if proposal.get("operation_type") != "UPDATE_CONFIG_PROFILE":
+        return proposal
+    target = dict(proposal.get("target") or {})
+    config_type = str(target.get("config_type") or "")
+    if config_type == "score":
+        return proposal
+    if config_type not in {"spot_engine", "futures_engine", "risk", "strategy"}:
+        return proposal
+    if target.get("pool_id") is not None:
+        raise ProviderOutputError("ANALYSIS_CHAT_GLOBAL_CONFIG_POOL_MUST_BE_NULL")
+    resource = (
+        await db.execute(select(ConfigProfile).where(
+            ConfigProfile.user_id == tenant_id,
+            ConfigProfile.pool_id.is_(None),
+            ConfigProfile.config_type == config_type,
+            ConfigProfile.is_active.is_(True),
+        ).order_by(ConfigProfile.updated_at.desc()).limit(1))
+    ).scalar_one_or_none()
+    if resource is None:
+        raise ProviderOutputError(
+            f"ANALYSIS_CHAT_CONFIG_RESOURCE_NOT_FOUND: {config_type}"
+        )
+    document = dict(resource.config_json or {})
+    translated_changes = []
+    for raw_change in proposal.get("changes") or []:
+        change = dict(raw_change)
+        path = str(change.get("path") or "")
+        op = str(change.get("op") or "replace").lower()
+        try:
+            old_value, guards = derive_patch_preconditions(
+                document,
+                path=path,
+                op=op,
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ProviderOutputError(
+                f"ANALYSIS_CHAT_CONFIG_PATH_INVALID: {path}"
+            ) from exc
+        change["old_value_json"] = json.dumps(old_value, ensure_ascii=False)
+        change["array_guards_json"] = json.dumps(guards, ensure_ascii=False)
+        translated_changes.append(change)
+    return {**proposal, "changes": translated_changes}
+
+
 class AnalysisChatGraphNodeHandler:
     def __init__(self, graph_run_id: UUID, *, celery: bool = True):
         self.graph_run_id = graph_run_id
@@ -1065,6 +1117,22 @@ class AnalysisChatGraphNodeHandler:
             return {"data_mode": state.get("data_mode") or "FROZEN_ANALYSIS_ONLY"}
         if node_name == "plan_readonly_tools":
             allowlist = request_json.get("tool_allowlist") or []
+            if state.get("data_mode") == "DRAFT_PROPOSAL":
+                proposal_allowlist = request_json.get(
+                    "proposal_evidence_tool_allowlist"
+                ) or []
+                expected = [
+                    "global_risk.get_effective_policy",
+                    "strategies.get_execution_policy",
+                ]
+                if proposal_allowlist != expected:
+                    raise RuntimeError(
+                        "ANALYSIS_CHAT_PROPOSAL_EVIDENCE_TOOL_ALLOWLIST_INVALID"
+                    )
+                return {"tool_plan": [{
+                    "name": tool_name,
+                    "input": {"tenant_id": str(run.tenant_id), "filters": {}},
+                } for tool_name in expected]}
             if allowlist != ["market_regime.get_current"]:
                 raise RuntimeError("ANALYSIS_CHAT_READONLY_TOOL_ALLOWLIST_INVALID")
             return {"tool_plan": [{
@@ -1093,7 +1161,7 @@ class AnalysisChatGraphNodeHandler:
                 refs.append({
                     "kind": "REFRESHED_READONLY_DATA",
                     "tool_call_id": str(audit.id),
-                    "module": "market_regime",
+                    "module": planned["name"].split(".", 1)[0],
                     "tool": planned["name"],
                     "queried_at": _now().isoformat(),
                 })
@@ -1111,7 +1179,9 @@ class AnalysisChatGraphNodeHandler:
             )
             return {"selected_evidence_refs": refs, "evidence_refs": refs}
         if node_name == "decide_if_new_data_required":
-            return {"new_data_queried": state.get("data_mode") == "ALLOW_READONLY_REFRESH"}
+            return {"new_data_queried": state.get("data_mode") in {
+                "ALLOW_READONLY_REFRESH", "DRAFT_PROPOSAL",
+            }}
         if node_name == "create_child_analysis_if_confirmed":
             answer = AnalysisChatOutput(
                 answer=(
@@ -1137,6 +1207,11 @@ class AnalysisChatGraphNodeHandler:
                 ]
                 return {"answer": answer, "proposal_id": None}
             raw_proposal = await _translate_score_rule_points(
+                db,
+                tenant_id=run.tenant_id,
+                proposal=raw_proposal,
+            )
+            raw_proposal = await _hydrate_config_change_preconditions(
                 db,
                 tenant_id=run.tenant_id,
                 proposal=raw_proposal,

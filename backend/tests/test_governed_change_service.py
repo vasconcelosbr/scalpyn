@@ -600,6 +600,35 @@ def test_proposal_materialization_decodes_guards_and_fails_closed_on_bad_json():
         _materialize_governed_proposal(invalid, {evidence_id})
 
 
+def test_patch_preconditions_are_derived_from_the_owned_document():
+    from app.services.governed_change_service import derive_patch_preconditions
+
+    document = {
+        "sell_flow": {
+            "trailing": {"activation_profit_pct": 2.5},
+            "rules": [{"id": "primary", "threshold": 3}],
+        },
+    }
+    old_value, guards = derive_patch_preconditions(
+        document,
+        path="/sell_flow/trailing/activation_profit_pct",
+        op="replace",
+    )
+    assert old_value == 2.5
+    assert guards == []
+
+    indexed_old, indexed_guards = derive_patch_preconditions(
+        document,
+        path="/sell_flow/rules/0/threshold",
+        op="replace",
+    )
+    assert indexed_old == 3
+    assert indexed_guards == [{
+        "path": "/sell_flow/rules/0",
+        "identity": {"id": "primary"},
+    }]
+
+
 def test_chat_config_authority_excludes_self_modifying_and_secret_families():
     assert ALLOWED_CONFIG_TYPES == {
         "risk", "strategy", "score", "spot_engine", "futures_engine",

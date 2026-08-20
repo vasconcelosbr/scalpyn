@@ -93,7 +93,7 @@ def _wire_analysis_chat(builder: StateGraph) -> None:
     builder.add_edge("create_child_analysis_if_confirmed", "persist_message_result_usage")
     builder.add_conditional_edges(
         "interrupt_proposal_confirmation",
-        lambda state: route_after_confirmation(state, "retrieve_relevant_evidence"),
+        lambda state: route_after_confirmation(state, "plan_readonly_tools"),
     )
 
     def route_materialized_proposal(state):

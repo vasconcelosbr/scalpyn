@@ -911,6 +911,65 @@ def test_governed_config_scope_migration_rejects_an_unexpected_base_contract():
         })
 
 
+def test_governed_readback_prompt_treats_trailing_and_kill_switch_as_one_target():
+    versions = Path(__file__).resolve().parents[1] / "alembic/versions"
+    base_spec = importlib.util.spec_from_file_location(
+        "chat_governed_scope_base_for_readback",
+        versions / "171_chat_no_if_then_else.py",
+    )
+    assert base_spec is not None and base_spec.loader is not None
+    base = importlib.util.module_from_spec(base_spec)
+    base_spec.loader.exec_module(base)
+    previous = base._prompt_content()
+    previous["semantic_version"] = "1.9.1"
+    previous["system_template"] = previous["system_template"].replace(
+        "Answer in the question language.",
+        "The required response language is {response_language}.",
+    )
+
+    scope_spec = importlib.util.spec_from_file_location(
+        "chat_governed_scope_for_readback",
+        versions / "189_chat_governed_config_scope.py",
+    )
+    assert scope_spec is not None and scope_spec.loader is not None
+    scope = importlib.util.module_from_spec(scope_spec)
+    scope_spec.loader.exec_module(scope)
+    scoped = scope._expanded_prompt(previous)
+
+    readback_spec = importlib.util.spec_from_file_location(
+        "chat_governed_readback",
+        versions / "190_chat_governed_readback.py",
+    )
+    assert readback_spec is not None and readback_spec.loader is not None
+    readback = importlib.util.module_from_spec(readback_spec)
+    readback_spec.loader.exec_module(readback)
+    content = readback._expanded_prompt(scoped)
+    system = content["system_template"]
+    graph = readback._expanded_graph({
+        "graph_key": "analysis-chat-v1",
+        "state_schema_version": "analysis-chat-state-v1.1",
+        "node_manifest": ["interrupt_proposal_confirmation", "plan_readonly_tools"],
+        "edge_manifest": [[
+            "interrupt_proposal_confirmation", "retrieve_relevant_evidence",
+        ]],
+    })
+
+    assert len(readback.revision) <= 32
+    assert readback.down_revision == "189_chat_governed_config_scope"
+    assert content["semantic_version"] == "1.12.0"
+    assert "fields of one spot_engine resource" in system
+    assert "multiple non-overlapping changes for the same target" in system
+    assert "global_risk.get_effective_policy" in system
+    assert "strategies.get_execution_policy" in system
+    assert "backend always re-reads the persisted document" in system
+    assert "/selling/never_sell_at_loss=true" in system
+    assert graph["semantic_version"] == "1.2.0"
+    assert graph["tool_policy_version"] == "analysis-chat-governed-write-policy-v2"
+    assert graph["edge_manifest"] == [[
+        "interrupt_proposal_confirmation", "plan_readonly_tools",
+    ]]
+
+
 def test_staging_fake_intent_is_environment_and_flag_bounded(monkeypatch):
     monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "systemic-ai-staging-20260807")
     monkeypatch.setenv("LANGGRAPH_FAKE_PROVIDER_CANARY_ENABLED", "true")
@@ -921,10 +980,10 @@ def test_staging_fake_intent_is_environment_and_flag_bounded(monkeypatch):
 
 def test_analysis_chat_graph_is_immutable_and_separate():
     graph = resolve_graph("analysis-chat-v1")
-    assert graph.semantic_version == "1.1.0"
+    assert graph.semantic_version == "1.2.0"
     assert graph.state_schema_version == "analysis-chat-state-v1.1"
-    assert graph.tool_policy_version == "analysis-chat-governed-write-policy-v1"
-    assert graph.content_hash == "5eac25a787affe754fa0893a3a92a8eae247754449fb6e29b879ec055692009e"
+    assert graph.tool_policy_version == "analysis-chat-governed-write-policy-v2"
+    assert graph.content_hash == "e32f47edb76036c9b36982c623eb565d02546aef395689f1fe84b9e968af2b18"
 
 
 def test_analysis_chat_graph_compiles_all_human_gates():
@@ -2074,3 +2133,68 @@ async def test_score_rule_id_translation_is_a_noop_without_any_rule_id():
         proposal=proposal,
     )
     assert translated == proposal
+
+
+@pytest.mark.asyncio
+async def test_spot_proposal_preconditions_are_hydrated_from_current_config():
+    from types import SimpleNamespace
+
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        _hydrate_config_change_preconditions,
+    )
+
+    resource = SimpleNamespace(config_json={
+        "sell_flow": {
+            "trailing": {
+                "activation_profit_pct": 2.5,
+                "hwm_trail_pct": 1.25,
+            },
+            "kill_switch": {
+                "atr_stop_multiplier": 2.25,
+                "max_drawdown_from_hwm_pct": 1.5,
+            },
+        },
+    })
+    proposal = {
+        "operation_type": "UPDATE_CONFIG_PROFILE",
+        "target": {"config_type": "spot_engine", "pool_id": None},
+        "changes": [{
+            "op": "replace",
+            "path": path,
+            "value_json": value,
+            "old_value_json": "null",
+            "array_guards_json": "[]",
+            "evidence_refs": ["E1"],
+        } for path, value in (
+            ("/sell_flow/trailing/activation_profit_pct", "2.0"),
+            ("/sell_flow/trailing/hwm_trail_pct", "1.0"),
+            ("/sell_flow/kill_switch/atr_stop_multiplier", "2.0"),
+            ("/sell_flow/kill_switch/max_drawdown_from_hwm_pct", "1.0"),
+        )],
+    }
+
+    hydrated = await _hydrate_config_change_preconditions(
+        _ScoreDocDB(resource),
+        tenant_id=uuid.uuid4(),
+        proposal=proposal,
+    )
+    assert [json.loads(change["old_value_json"]) for change in hydrated["changes"]] == [
+        2.5, 1.25, 2.25, 1.5,
+    ]
+    assert all(change["array_guards_json"] == "[]" for change in hydrated["changes"])
+
+
+def test_proposal_confirmation_refreshes_governed_policy_evidence():
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        AnalysisChatGraphNodeHandler,
+    )
+    from app.ai_orchestration.langgraph.graphs import _wire_analysis_chat
+
+    graph_source = inspect.getsource(_wire_analysis_chat)
+    handler_source = inspect.getsource(AnalysisChatGraphNodeHandler._node_updates)
+    send_source = inspect.getsource(AnalysisChatService.send_message)
+
+    assert 'route_after_confirmation(state, "plan_readonly_tools")' in graph_source
+    assert '"global_risk.get_effective_policy"' in handler_source
+    assert '"strategies.get_execution_policy"' in handler_source
+    assert '"proposal_evidence_tool_allowlist"' in send_source

@@ -798,6 +798,14 @@ class AnalysisChatService:
                         "strategies.validate_recommendation",
                     ] if data_mode is AnalysisChatDataMode.DRAFT_PROPOSAL else []
                 ),
+                "proposal_evidence_tool_allowlist": (
+                    [
+                        "global_risk.get_effective_policy",
+                        "strategies.get_execution_policy",
+                    ]
+                    if data_mode is AnalysisChatDataMode.DRAFT_PROPOSAL
+                    else []
+                ),
             },
             request_kind=request_kind.value,
             conversation_id=conversation.id,
