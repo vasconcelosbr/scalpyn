@@ -1249,6 +1249,8 @@ export function JsonImportBuilder({ onClose }: Props) {
               <div className="text-[13px] text-[var(--text-secondary)] mt-1">
                 {applyToActiveProfiles
                   ? "profiles atualizados"
+                  : updateIndicatorsOnly
+                  ? `${summary.updated} profile${summary.updated !== 1 ? "s" : ""} com indicadores atualizados`
                   : summary.updated > 0
                   ? `${summary.created} criados · ${summary.updated} scoring atualizado${summary.updated !== 1 ? "s" : ""}`
                   : "profiles criados"}

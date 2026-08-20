@@ -148,6 +148,25 @@ def _normalize_import_scoring(
     return merged
 
 
+def _select_indicator_update_profile(matches: List[Profile], name: str) -> Profile:
+    """Select a unique match, preferring the sole active profile among duplicates."""
+    if len(matches) == 1:
+        return matches[0]
+
+    active_matches = [profile for profile in matches if profile.is_active is True]
+    if len(active_matches) == 1:
+        return active_matches[0]
+    if active_matches:
+        raise ValueError(
+            f"{len(active_matches)} active profiles named '{name}' -- deactivate or rename "
+            "duplicates before using update_indicators_only"
+        )
+    raise ValueError(
+        f"{len(matches)} inactive profiles named '{name}' -- rename to disambiguate "
+        "before using update_indicators_only"
+    )
+
+
 @router.post("/bulk-import")
 async def bulk_import_profiles(
     payload: Dict[str, Any],
@@ -161,7 +180,9 @@ async def bulk_import_profiles(
     config (filters/signals/entry_triggers/block_rules) of existing profiles
     matched by name, without creating new profiles, touching scoring, or
     changing is_active/any other field. Items in "profiles" whose name has
-    no existing match are reported as "error" (not_found), never created.
+    no existing match are reported as "error" (not_found), never created. If
+    duplicate names exist, the sole active profile is selected; multiple active
+    matches remain an error.
 
     Expected payload:
     {
@@ -189,8 +210,9 @@ async def bulk_import_profiles(
                                                  only its filters/signals/entry_triggers/
                                                  block_rules; never creates a profile or changes
                                                  is_active/scoring/other fields; a name with no
-                                                 match, or more than one match, is reported as
-                                                 "error" and skipped)
+                                                 match is reported as "error"; duplicate names
+                                                 select the sole active profile, otherwise the
+                                                 item is reported as "error" and skipped)
         "allow_duplicate_names": false,        (optional, default false — by default an
                                                  item whose name matches an existing ACTIVE
                                                  profile is rejected instead of silently
@@ -379,12 +401,7 @@ async def bulk_import_profiles(
                         f"no existing profile named '{name}' -- update_indicators_only never "
                         f"creates profiles"
                     )
-                if len(matches) > 1:
-                    raise ValueError(
-                        f"{len(matches)} profiles named '{name}' -- rename to disambiguate "
-                        f"before using update_indicators_only"
-                    )
-                profile = matches[0]
+                profile = _select_indicator_update_profile(matches, name)
 
                 # Only filters/signals/entry_triggers/block_rules change. scoring,
                 # default_timeframe, is_active, name, description and every other
