@@ -265,7 +265,7 @@ async def test_explicit_spot_preview_binds_current_values_and_fresh_evidence():
             "module": "shadow_portfolio",
             "source": "FROZEN_ANALYSIS",
         }
-        for _index in range(7)
+        for _index in range(10)
     ] + [
         {
             "evidence_id": str(row.id),
@@ -854,7 +854,10 @@ def test_governed_proposal_authorizes_against_the_complete_parent_ledger():
     bounded_source = inspect.getsource(_load_canonical_evidence_refs)
     authority_source = inspect.getsource(_load_canonical_evidence_ids)
     draft_source = inspect.getsource(AnalysisChatGraphNodeHandler._node_updates)
-    assert ".limit(12)" in bounded_source
+    assert "_ANALYSIS_CHAT_MAX_REFRESHED_EVIDENCE" in bounded_source
+    assert "_ANALYSIS_CHAT_MAX_LABELED_EVIDENCE - len(refreshed_rows)" in bounded_source
+    assert ".limit(\n        parent_limit\n    )" in bounded_source
+    assert bounded_source.index("refreshed_rows =") < bounded_source.index("parent_rows =")
     assert ".limit(" not in authority_source
     assert "evidence_ids = await _load_canonical_evidence_ids" in draft_source
 

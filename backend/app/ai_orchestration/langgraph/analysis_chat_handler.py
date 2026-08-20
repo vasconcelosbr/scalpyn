@@ -79,6 +79,8 @@ _ALLOWED_ANALYSIS_CHAT_PROVIDER_INTENTS = frozenset({
     "NORMAL_ANALYSIS",
     "FAKE_PROVIDER_CANARY",
 })
+_ANALYSIS_CHAT_MAX_LABELED_EVIDENCE = 12
+_ANALYSIS_CHAT_MAX_REFRESHED_EVIDENCE = 4
 
 
 _EXPLICIT_SPOT_RESOURCE = "spot_engine"
@@ -731,14 +733,22 @@ async def _load_canonical_evidence_refs(
     if parent_run is None or parent_run.tenant_id != run.tenant_id:
         raise RuntimeError("ANALYSIS_CHAT_PARENT_EVIDENCE_SCOPE_INVALID")
 
-    parent_rows = list((await db.execute(select(AIToolEvidenceRecord).where(
-        AIToolEvidenceRecord.tenant_id == run.tenant_id,
-        AIToolEvidenceRecord.ai_request_id == parent_run.ai_request_id,
-    ).order_by(AIToolEvidenceRecord.created_at, AIToolEvidenceRecord.id).limit(12))).scalars().all())
     refreshed_rows = list((await db.execute(select(AIToolEvidenceRecord).where(
         AIToolEvidenceRecord.tenant_id == run.tenant_id,
         AIToolEvidenceRecord.ai_request_id == request.id,
-    ).order_by(AIToolEvidenceRecord.created_at, AIToolEvidenceRecord.id).limit(4))).scalars().all())
+    ).order_by(AIToolEvidenceRecord.created_at, AIToolEvidenceRecord.id).limit(
+        _ANALYSIS_CHAT_MAX_REFRESHED_EVIDENCE
+    ))).scalars().all())
+    parent_limit = max(
+        0,
+        _ANALYSIS_CHAT_MAX_LABELED_EVIDENCE - len(refreshed_rows),
+    )
+    parent_rows = list((await db.execute(select(AIToolEvidenceRecord).where(
+        AIToolEvidenceRecord.tenant_id == run.tenant_id,
+        AIToolEvidenceRecord.ai_request_id == parent_run.ai_request_id,
+    ).order_by(AIToolEvidenceRecord.created_at, AIToolEvidenceRecord.id).limit(
+        parent_limit
+    ))).scalars().all())
 
     refs = [{
         "evidence_id": str(row.id),
