@@ -1302,7 +1302,7 @@ def test_unrelated_structural_profile_change_fails_without_runtime_scope_proof()
     assert result["decision"] == "VETO"
     assert result["risk_validation"] == "PASS"
     assert result["strategy_validation"] == "VETO"
-    assert result["policy_semantic_validator_version"] == "governed-config-policy-v2"
+    assert result["policy_semantic_validator_version"] == "governed-config-policy-v3"
     risk_evidence = result["policy_semantic_evidence"]["risk"]
     assert risk_evidence["authority_scope"] == "PROFILE_SCORE_SIGNAL_ONLY"
     assert risk_evidence["downstream_caps_hash"] == service.document_hash(
@@ -2099,6 +2099,136 @@ def test_candidate_aware_validator_vetoes_unknown_score_rule_reference():
     )
     assert score_check["decision"] == "VETO"
     assert "do not exist globally" in score_check["reason"]
+
+
+def test_unchanged_legacy_score_link_conflict_does_not_block_unrelated_atr_rule():
+    plan, policies, profiles = _candidate_validation_fixture(selected_rule_ids=[])
+    _install_executable_policy_semantics(policies)
+    source = deepcopy(plan.execution_payload["source_document"])
+    atr_block = {
+        "name": "Bloqueio ATR elevado",
+        "enabled": True,
+        "logic": "AND",
+        "conditions": [{
+            "type": "threshold",
+            "indicator": "atr_pct",
+            "operator": ">",
+            "value": 0.8,
+        }],
+    }
+    candidate = deepcopy(source)
+    candidate["block_rules"]["blocks"].append(atr_block)
+    plan.execution_payload["source_document"] = source
+    plan.execution_payload["candidate_document"] = candidate
+    plan.proposed_diff = [{
+        "op": "add",
+        "path": "/block_rules/blocks/0",
+        "old_value": None,
+        "value": atr_block,
+        "reason": "evidenced ATR veto",
+        "evidence_refs": [str(uuid.uuid4())],
+    }]
+    profiles[0].config = source
+
+    result = service._candidate_validation_result(plan, policies, profiles)
+
+    assert result["decision"] == "PASS"
+    assert result["strategy_validation"] == "PASS"
+    assert result["policy_semantic_evidence"]["strategy"]["basis"] == (
+        "ADDITIVE_BLOCK_MONOTONIC_ELIGIBILITY_RESTRICTION"
+    )
+    score_check = next(
+        item for item in result["checks"]
+        if item["check"] == "PROFILE_SCORE_LINKS"
+    )
+    assert score_check["decision"] == "PASS"
+    assert "PREEXISTING_PROFILE_SCORE_LINK_CONFLICTS_UNCHANGED" in result["warnings"]
+    assert result["profile_score_link_transitions"] == [{
+        "status": "UNCHANGED_PREEXISTING_CONFLICT",
+        "reason": "scoring.selected_rule_ids is required for an enabled score or score gate",
+        "source_projection_hash": service.document_hash(
+            service._profile_score_link_projection(source)
+        ),
+    }]
+
+
+def test_legacy_score_link_exception_rejects_a_masked_new_score_reference():
+    source = service._validate_profile_config({
+        "default_timeframe": "5m",
+        "scoring": {"enabled": True, "selected_rule_ids": []},
+    })
+    candidate = deepcopy(source)
+    candidate["block_rules"]["blocks"].append({
+        "name": "Score gate",
+        "enabled": True,
+        "logic": "AND",
+        "conditions": [{
+            "type": "threshold",
+            "indicator": "score",
+            "operator": "<",
+            "value": 50,
+        }],
+    })
+
+    with pytest.raises(
+        ValueError,
+        match="selected_rule_ids is required",
+    ):
+        service._validate_profile_score_link_transition(
+            source,
+            candidate,
+            _score_document(),
+        )
+
+
+def test_block_append_has_no_source_assertion_at_the_new_array_index():
+    source = service._validate_profile_config({
+        "block_rules": {"blocks": [{
+            "name": "Existing RSI block",
+            "enabled": True,
+            "logic": "AND",
+            "conditions": [{
+                "type": "threshold",
+                "indicator": "rsi",
+                "operator": ">",
+                "value": 80,
+            }],
+        }]},
+    })
+
+    assertions = service._profile_root_assertions(
+        source,
+        ["block_rules", "blocks", 1],
+        _score_document(),
+        origin="source.profile",
+    )
+
+    assert assertions == []
+
+
+def test_atr_block_append_is_runtime_monotonic_and_missing_data_safe():
+    from app.services.block_engine import BlockEngine
+
+    block = {
+        "name": "Bloqueio ATR elevado",
+        "enabled": True,
+        "logic": "AND",
+        "conditions": [{
+            "type": "threshold",
+            "indicator": "atr_pct",
+            "operator": ">",
+            "value": 0.8,
+        }],
+    }
+    baseline = BlockEngine({"blocks": []})
+    candidate = BlockEngine({"blocks": [block]})
+
+    assert baseline.evaluate({"atr_pct": 0.9})["blocked"] is False
+    assert candidate.evaluate({"atr_pct": 0.9})["blocked"] is True
+    assert candidate.evaluate({"atr_pct": 0.7})["blocked"] is False
+    missing = candidate.evaluate({})
+    assert missing["blocked"] is False
+    assert missing["skipped_blocks"] == ["Bloqueio ATR elevado"]
 
 
 def test_candidate_aware_validator_vetoes_a_candidate_diff_mismatch():

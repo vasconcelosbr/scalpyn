@@ -64,6 +64,9 @@ PROFILE_ROOTS = frozenset({
     "block_rules",
     "entry_triggers",
 })
+_INHERITABLE_PROFILE_SCORE_LINK_ERRORS = (
+    "scoring.selected_rule_ids is required for an enabled score or score gate",
+)
 FORBIDDEN_KEY_FRAGMENTS = (
     "api_key",
     "apikey",
@@ -177,7 +180,7 @@ _SCORE_OPERATORS = frozenset({
     "ema50>ema200", "di+>di-", "di->di+", ">prev+", ">prev",
 })
 
-_POLICY_SEMANTIC_VALIDATOR_VERSION = "governed-config-policy-v2"
+_POLICY_SEMANTIC_VALIDATOR_VERSION = "governed-config-policy-v3"
 _RISK_POLICY_REQUIRED_KEYS = frozenset({
     "take_profit_pct",
     "stop_loss_atr_multiplier",
@@ -2148,14 +2151,16 @@ def _profile_root_assertions(
             ))
         return _with_profile_runtime_gate_context(assertions, config, root)
     if root == "block_rules":
-        if (
-            len(parts) >= 3
-            and parts[1] == "blocks"
-            and isinstance(parts[2], int)
-            and isinstance(value, dict)
-            and isinstance(value.get("blocks"), list)
-            and parts[2] < len(value["blocks"])
-        ):
+        if len(parts) >= 3 and parts[1] == "blocks" and isinstance(parts[2], int):
+            if not (
+                isinstance(value, dict)
+                and isinstance(value.get("blocks"), list)
+                and parts[2] < len(value["blocks"])
+            ):
+                # An append index has no source assertion. Falling through to
+                # every existing block falsely marks untouched concepts as
+                # removed by the candidate.
+                return []
             assertions = _block_assertions(
                 {"blocks": [value["blocks"][parts[2]]]},
                 origin=f"{origin}.block_rules",
@@ -2222,6 +2227,90 @@ def _bulk_profile_documents(document: Any) -> dict[str, dict[str, Any]]:
         if isinstance(row, dict)
         and isinstance(row.get("profile_id"), (str, UUID))
         and isinstance(row.get("config"), dict)
+    }
+
+
+def _profile_score_link_projection(config: dict[str, Any]) -> dict[str, Any]:
+    """Return only Profile fields that can affect global Score references."""
+    references: list[dict[str, Any]] = []
+    for section_name in ("filters", "signals", "entry_triggers"):
+        section = config.get(section_name) or {}
+        for index, condition in enumerate(section.get("conditions") or []):
+            if not isinstance(condition, dict):
+                continue
+            field = str(condition.get("field") or condition.get("indicator") or "")
+            rule_id = condition.get("rule_id")
+            if field == "score" or rule_id is not None:
+                references.append({
+                    "path": f"/{section_name}/conditions/{index}",
+                    "field": field,
+                    "rule_id": str(rule_id) if rule_id is not None else None,
+                })
+    for block_index, block in enumerate(
+        ((config.get("block_rules") or {}).get("blocks") or [])
+    ):
+        if not isinstance(block, dict):
+            continue
+        for condition_index, condition in enumerate(block.get("conditions") or []):
+            if not isinstance(condition, dict):
+                continue
+            field = str(condition.get("field") or condition.get("indicator") or "")
+            rule_id = condition.get("rule_id")
+            if field == "score" or rule_id is not None:
+                references.append({
+                    "path": (
+                        f"/block_rules/blocks/{block_index}/conditions/"
+                        f"{condition_index}"
+                    ),
+                    "field": field,
+                    "rule_id": str(rule_id) if rule_id is not None else None,
+                })
+    return {
+        "scoring": deepcopy(config.get("scoring") or {}),
+        "references": references,
+    }
+
+
+def _validate_profile_score_link_transition(
+    source: dict[str, Any],
+    candidate: dict[str, Any],
+    score_document: dict[str, Any],
+) -> dict[str, Any]:
+    """Reject new Score-link failures while auditing an unchanged legacy one.
+
+    Historical Profiles can predate mandatory ``selected_rule_ids``.  Such a
+    conflict must not silently authorize a Score edit, but it also must not
+    block an unrelated, monotonic Block Rule addition forever.  The exception
+    is therefore narrow: the candidate must leave every score-link-bearing
+    field byte-for-byte unchanged and reproduce the same allowlisted legacy
+    validation error.  Any new, changed, global-Score, or masked conflict
+    remains fail-closed.
+    """
+    try:
+        candidate_result = validate_score_links(candidate, score_document)
+    except ValueError as candidate_exc:
+        candidate_error = str(candidate_exc)
+        if not candidate_error.startswith(_INHERITABLE_PROFILE_SCORE_LINK_ERRORS):
+            raise
+        if _profile_score_link_projection(source) != _profile_score_link_projection(candidate):
+            raise
+        try:
+            validate_score_links(source, score_document)
+        except ValueError as source_exc:
+            if str(source_exc) != candidate_error:
+                raise candidate_exc
+        else:
+            raise candidate_exc
+        return {
+            "status": "UNCHANGED_PREEXISTING_CONFLICT",
+            "reason": candidate_error,
+            "source_projection_hash": document_hash(
+                _profile_score_link_projection(source)
+            ),
+        }
+    return {
+        "status": "PASS",
+        **candidate_result,
     }
 
 
@@ -2681,6 +2770,30 @@ def _monotonic_eligibility_restriction(
     )
 
 
+def _is_additive_block_restriction(change: dict[str, Any]) -> bool:
+    """Prove a reviewed diff only appends one enabled runtime Block Rule.
+
+    ``BlockEngine.evaluate`` ORs enabled blocks: if any block triggers the
+    trade is rejected, while missing/invalid data skips only the new block.
+    Appending a valid enabled block therefore cannot make a previously
+    ineligible trade eligible.  Schema validation and the materialized append
+    path separately prove that no existing block was replaced or removed.
+    """
+    path = str(change.get("path") or "")
+    value = change.get("value")
+    return bool(
+        change.get("op") == "add"
+        and "/block_rules/blocks/" in path
+        and path.rsplit("/", 1)[-1].isdigit()
+        and change.get("old_value") is None
+        and isinstance(value, dict)
+        and value.get("enabled", True) is True
+        and isinstance(value.get("conditions"), list)
+        and bool(value["conditions"])
+        and (change.get("candidate_assertion_count") or 0) > 0
+    )
+
+
 def _validate_profile_score_strategy_semantics(
     strategy_policy: dict[str, Any],
     scope: dict[str, Any],
@@ -2736,7 +2849,10 @@ def _validate_profile_score_strategy_semantics(
             vetoes.append(
                 f"Changed path {path} has no proven hard-floor semantic mapping"
             )
-        elif change_scope.get("direct_threshold_change") is not True:
+        elif (
+            change_scope.get("direct_threshold_change") is not True
+            and not _is_additive_block_restriction(change_scope)
+        ):
             vetoes.append(
                 f"Changed path {path} is structural; only a direct threshold/value/min/max "
                 "replacement can prove conservative floor compatibility"
@@ -2765,14 +2881,22 @@ def _validate_profile_score_strategy_semantics(
     proof_modes: set[str] = set()
     for assertion in candidate_assertions:
         concept = str(assertion.get("concept") or "")
+        additive_block_restriction = any(
+            change.get("path") == assertion.get("change_path")
+            and _is_additive_block_restriction(change)
+            for change in materialized_change_scope
+        )
         assertion_vetoes: list[str] = []
-        if assertion.get("direct_threshold_change") is not True:
+        if (
+            assertion.get("direct_threshold_change") is not True
+            and not additive_block_restriction
+        ):
             assertion_vetoes.append("NOT_A_DIRECT_THRESHOLD_VALUE_MIN_OR_MAX_REPLACEMENT")
-        if assertion.get("mode") != "allow":
+        if assertion.get("mode") != "allow" and not additive_block_restriction:
             assertion_vetoes.append("ADDITIVE_SCORING_OR_BLOCK_IS_NOT_A_HARD_FLOOR")
-        if assertion.get("gate_logic") != "AND":
+        if assertion.get("gate_logic") != "AND" and not additive_block_restriction:
             assertion_vetoes.append("ASSERTION_IS_NOT_UNDER_MANDATORY_AND_LOGIC")
-        if assertion.get("required") is not True:
+        if assertion.get("required") is not True and not additive_block_restriction:
             assertion_vetoes.append("ASSERTION_IS_OPTIONAL")
         if assertion.get("enabled") is not True:
             assertion_vetoes.append("ASSERTION_IS_DISABLED")
@@ -2796,7 +2920,11 @@ def _validate_profile_score_strategy_semantics(
         compatibility_reason = "POLICY_SEMANTIC_PROOF_NOT_EVALUATED"
         source_assertion: dict[str, Any] | None = None
         proof_mode: str | None = None
-        if applicable_floors:
+        if additive_block_restriction and not unmapped_constraints:
+            proof_mode = "ADDITIVE_BLOCK_MONOTONIC_ELIGIBILITY_RESTRICTION"
+            compatible = not assertion_vetoes
+            compatibility_reason = proof_mode
+        elif applicable_floors:
             proof_mode = "CONSERVATIVE_GLOBAL_FLOOR_COMPATIBILITY"
             effective_floor = max(
                 constraint["persisted_value"]
@@ -2866,10 +2994,12 @@ def _validate_profile_score_strategy_semantics(
             vetoes.append(
                 f"Candidate removes or bypasses the touched {concept} assertion"
             )
-    if not vetoes and proof_modes == {
+    if not vetoes and proof_modes in ({
         "NO_ACTIVE_FLOOR_MONOTONIC_ELIGIBILITY_RESTRICTION"
-    }:
-        scope_basis = "NO_ACTIVE_FLOOR_MONOTONIC_ELIGIBILITY_RESTRICTION"
+    }, {
+        "ADDITIVE_BLOCK_MONOTONIC_ELIGIBILITY_RESTRICTION"
+    }):
+        scope_basis = next(iter(proof_modes))
     else:
         scope_basis = "CONSERVATIVE_GLOBAL_FLOOR_COMPATIBILITY"
     return {
@@ -3565,12 +3695,39 @@ def _candidate_validation_result(
             ),
         )
 
+    score_link_transitions: list[dict[str, Any]] = []
     if effective.get("score"):
         score_document = effective["score"][1]
 
         def _validate_score_links() -> None:
             if not isinstance(score_document.get("scoring_rules"), list):
                 raise ValueError("Effective score policy lacks a persisted scoring_rules array")
+            if operation == "UPDATE_PROFILE_CONFIG":
+                transition = _validate_profile_score_link_transition(
+                    deepcopy(payload.get("source_document") or {}),
+                    deepcopy(payload.get("candidate_document") or {}),
+                    score_document,
+                )
+                if transition["status"] != "PASS":
+                    score_link_transitions.append(transition)
+                return
+            if operation == "UPDATE_PROFILE_CONFIG_SET":
+                sources = _bulk_profile_documents(payload.get("source_document"))
+                candidates = _bulk_profile_documents(payload.get("candidate_document"))
+                if not sources or set(sources) != set(candidates):
+                    raise ValueError("Bulk Profile Score-link transition is incomplete")
+                for profile_id in sorted(sources):
+                    transition = _validate_profile_score_link_transition(
+                        sources[profile_id],
+                        candidates[profile_id],
+                        score_document,
+                    )
+                    if transition["status"] != "PASS":
+                        score_link_transitions.append({
+                            "profile_id": profile_id,
+                            **transition,
+                        })
+                return
             configs = profile_candidates
             if operation == "UPDATE_CONFIG_PROFILE" and target_family == "score":
                 configs = [profile.config or {} for profile in profiles]
@@ -3586,6 +3743,8 @@ def _candidate_validation_result(
     )
     if semantic_evidence.get("risk", {}).get("inherited_conflicts"):
         warnings.append("PREEXISTING_SPOT_RISK_CONFLICTS_UNCHANGED")
+    if score_link_transitions:
+        warnings.append("PREEXISTING_PROFILE_SCORE_LINK_CONFLICTS_UNCHANGED")
     for family, module in (("risk", "global_risk"), ("strategy", "strategies")):
         status = semantic_statuses[family]
         basis = semantic_evidence[family]["basis"]
@@ -3698,6 +3857,7 @@ def _candidate_validation_result(
         "validation_scope": validation_scope,
         "policy_semantic_validation": semantic_statuses,
         "policy_semantic_evidence": semantic_evidence,
+        "profile_score_link_transitions": score_link_transitions,
         "checks": checks,
         "warnings": warnings,
         "validated": [
@@ -4217,7 +4377,11 @@ async def create_dry_run(
                 grouped[resource.id],
             )
             if score is not None and (score.config_json or {}).get("scoring_rules") is not None:
-                validate_score_links(candidate_config, score.config_json or {})
+                _validate_profile_score_link_transition(
+                    source_config,
+                    candidate_config,
+                    score.config_json or {},
+                )
             before_rows.append({
                 "profile_id": str(resource.id),
                 "profile_name": resource.name,
@@ -4290,7 +4454,11 @@ async def create_dry_run(
             ).limit(1))
         ).scalar_one_or_none()
         if score is not None and (score.config_json or {}).get("scoring_rules") is not None:
-            validate_score_links(candidate, score.config_json or {})
+            _validate_profile_score_link_transition(
+                before,
+                candidate,
+                score.config_json or {},
+            )
         target_type = "PROFILE"
         target_id = str(resource.id)
         target_label = resource.name
@@ -4711,9 +4879,13 @@ async def approve_and_execute(
             if row is None or not isinstance(row.get("config"), dict):
                 raise ValueError("Bulk profile configuration candidate is incomplete")
             new_config = _validate_profile_config(deepcopy(row["config"]))
-            if score is not None and (score.config_json or {}).get("scoring_rules") is not None:
-                validate_score_links(new_config, score.config_json or {})
             old_config = deepcopy(resource.config or {})
+            if score is not None and (score.config_json or {}).get("scoring_rules") is not None:
+                _validate_profile_score_link_transition(
+                    old_config,
+                    new_config,
+                    score.config_json or {},
+                )
             old_version = resource.profile_version
             resource.config = new_config
             resource.profile_version = now
@@ -4746,6 +4918,13 @@ async def approve_and_execute(
         resource = resources[0]
         candidate = _validate_profile_config(candidate)
         old_config = deepcopy(resource.config or {})
+        score = _latest_global_policy_records(policy_records).get("score")
+        if score is not None and (score.config_json or {}).get("scoring_rules") is not None:
+            _validate_profile_score_link_transition(
+                old_config,
+                candidate,
+                score.config_json or {},
+            )
         old_version = resource.profile_version
         resource.config = candidate
         resource.profile_version = now
