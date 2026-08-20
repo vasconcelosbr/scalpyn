@@ -800,6 +800,10 @@ class AnalysisChatService:
                 ),
                 "proposal_evidence_tool_allowlist": (
                     [
+                        "strategy_profiles.get_profile",
+                        "score_engine.get_effective_configuration_at",
+                        "ml_models.get_governed_configuration",
+                        "social_score.get_governed_configuration",
                         "global_risk.get_effective_policy",
                         "strategies.get_execution_policy",
                     ]

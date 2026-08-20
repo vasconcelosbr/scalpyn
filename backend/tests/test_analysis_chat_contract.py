@@ -2458,6 +2458,57 @@ async def test_spot_proposal_preconditions_are_hydrated_from_current_config():
     assert all(change["array_guards_json"] == "[]" for change in hydrated["changes"])
 
 
+@pytest.mark.asyncio
+async def test_profile_append_path_is_bound_to_owned_current_array_length():
+    from types import SimpleNamespace
+
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        _hydrate_profile_change_preconditions,
+    )
+
+    profile_id = uuid.uuid4()
+    profile = SimpleNamespace(
+        id=profile_id,
+        name="ATR profile",
+        config={"block_rules": {"logic": "AND", "conditions": [{"id": "existing"}]}},
+    )
+
+    class _Scalars:
+        def all(self):
+            return [profile]
+
+    class _Result:
+        def scalars(self):
+            return _Scalars()
+
+    class _DB:
+        async def execute(self, _query):
+            return _Result()
+
+    proposal = {
+        "operation_type": "UPDATE_PROFILE_CONFIG",
+        "target": {"profile_id": str(profile_id)},
+        "changes": [{
+            "op": "add",
+            "path": "/block_rules/conditions/-",
+            "value_json": json.dumps({"id": "atr_min", "indicator": "atr_pct"}),
+            "old_value_json": "null",
+            "array_guards_json": "[]",
+            "evidence_refs": ["E1"],
+        }],
+    }
+
+    hydrated = await _hydrate_profile_change_preconditions(
+        _DB(), tenant_id=uuid.uuid4(), proposal=proposal,
+    )
+
+    assert hydrated["changes"][0]["path"] == "/block_rules/conditions/1"
+    assert hydrated["changes"][0]["profile_id"] == str(profile_id)
+    assert hydrated["changes"][0]["profile_name"] == "ATR profile"
+    assert json.loads(hydrated["changes"][0]["old_value_json"]) is None
+    assert json.loads(hydrated["changes"][0]["array_guards_json"]) == []
+
+
 def test_proposal_confirmation_refreshes_governed_policy_evidence():
     from app.ai_orchestration.langgraph.analysis_chat_handler import (
         AnalysisChatGraphNodeHandler,
@@ -2467,8 +2518,18 @@ def test_proposal_confirmation_refreshes_governed_policy_evidence():
     graph_source = inspect.getsource(_wire_analysis_chat)
     handler_source = inspect.getsource(AnalysisChatGraphNodeHandler._node_updates)
     send_source = inspect.getsource(AnalysisChatService.send_message)
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        _GOVERNED_PROPOSAL_EVIDENCE_TOOLS,
+    )
 
     assert 'route_after_confirmation(state, "plan_readonly_tools")' in graph_source
-    assert '"global_risk.get_effective_policy"' in handler_source
-    assert '"strategies.get_execution_policy"' in handler_source
+    assert list(_GOVERNED_PROPOSAL_EVIDENCE_TOOLS) == [
+        "strategy_profiles.get_profile",
+        "score_engine.get_effective_configuration_at",
+        "ml_models.get_governed_configuration",
+        "social_score.get_governed_configuration",
+        "global_risk.get_effective_policy",
+        "strategies.get_execution_policy",
+    ]
+    assert "_GOVERNED_PROPOSAL_EVIDENCE_TOOLS" in handler_source
     assert '"proposal_evidence_tool_allowlist"' in send_source

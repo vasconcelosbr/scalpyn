@@ -8,6 +8,7 @@ from jsonschema import validate
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..models.config_profile import ConfigProfile
 from ..models.systemic_ai import AIToolCallAudit, AIToolEvidenceRecord
 from .contracts import Authority
 from .domain_tools import default_tool_capabilities
@@ -84,14 +85,19 @@ class ModuleToolRuntime:
 
         request_json = request.request_json or {}
         dataset_request = request_json.get("dataset_request") or {}
-        request_filters = dict(dataset_request.get("filters") or {})
+        request_filters = dict(
+            dataset_request.get("filters")
+            or (dataset.filters if isinstance(dataset.filters, dict) else {})
+            or {}
+        )
+        evidence_origin_module = str(dataset.origin_module or request.origin_module)
         request_filters["max_rows"] = min(
             int(request_filters.get("max_rows") or get_langgraph_settings().tool_default_max_rows),
             int(capability.max_rows or 5_000),
         )
         trade_entity_ids = tuple(request_filters.get("entity_ids") or ())
         entity_ids = trade_entity_ids
-        if capability.domain != request.origin_module:
+        if capability.domain != evidence_origin_module:
             entity_ids = ()
             if capability.domain == "ml_models":
                 # As a supporting module (e.g. shadow_portfolio root-cause audit
@@ -102,7 +108,7 @@ class ModuleToolRuntime:
                 # request's own origin_module (someone directly analyzing model
                 # training), the full registry stays unfiltered.
                 request_filters = {**request_filters, "status_in": ("champion", "archived")}
-            elif capability.domain == "strategy_profiles" and request.origin_module == "shadow_portfolio" and trade_entity_ids:
+            elif capability.domain == "strategy_profiles" and evidence_origin_module == "shadow_portfolio" and trade_entity_ids:
                 # entity_ids here are shadow_trade IDs, not profile IDs -- resolve
                 # to the profiles actually referenced by this trade sample instead
                 # of returning every tenant profile (most of which the sample
@@ -131,13 +137,34 @@ class ModuleToolRuntime:
                 # subject) a handful of the most recent observations is the useful
                 # size, not up to 200 rows sized for an unrelated trade sample.
                 request_filters = {**request_filters, "max_rows": 5}
-        rows = await ModuleAIAnalysisService._rows(
-            db,
-            tenant_id=tenant_id,
-            module_key=capability.domain,
-            entity_ids=entity_ids,
-            filters=request_filters,
-        )
+        governed_config_type = {
+            "ml_models.get_governed_configuration": "ml",
+            "social_score.get_governed_configuration": "social_score",
+        }.get(tool_name)
+        if governed_config_type is not None:
+            records = list((await db.execute(select(ConfigProfile).where(
+                ConfigProfile.user_id == tenant_id,
+                ConfigProfile.pool_id.is_(None),
+                ConfigProfile.config_type == governed_config_type,
+                ConfigProfile.is_active.is_(True),
+            ).order_by(ConfigProfile.updated_at.desc()).limit(1))).scalars().all())
+            rows = [{
+                "id": str(row.id),
+                "event_identity": str(row.id),
+                "outcome": "ACTIVE_CONFIGURATION",
+                "lineage_status": "VERSIONED_BY_AUDIT",
+                "config_type": row.config_type,
+                "config": row.config_json,
+                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+            } for row in records]
+        else:
+            rows = await ModuleAIAnalysisService._rows(
+                db,
+                tenant_id=tenant_id,
+                module_key=capability.domain,
+                entity_ids=entity_ids,
+                filters=request_filters,
+            )
         handler = self.registry.handler(tool_name, "1.0.0")
         output = handler(
             capability,

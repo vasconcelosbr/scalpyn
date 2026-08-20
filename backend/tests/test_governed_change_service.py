@@ -632,10 +632,52 @@ def test_patch_preconditions_are_derived_from_the_owned_document():
 def test_chat_config_authority_excludes_self_modifying_and_secret_families():
     assert ALLOWED_CONFIG_TYPES == {
         "risk", "strategy", "score", "spot_engine", "futures_engine",
+        "ml", "social_score",
     }
     assert "ai_analysis_chat_runtime" not in ALLOWED_CONFIG_TYPES
     assert "ai_provider_runtime" not in ALLOWED_CONFIG_TYPES
-    assert "ml" not in ALLOWED_CONFIG_TYPES
+    assert "ml" in ALLOWED_CONFIG_TYPES
+    assert "social_score" in ALLOWED_CONFIG_TYPES
+
+
+def test_social_score_candidate_is_closed_and_canonical():
+    canonical = {
+        "enabled": False,
+        "spot_weight": 0.2,
+        "futures_weight": 0.2,
+        "max_age_seconds": 86400,
+        "mode": "symmetric",
+        "formula_version": "confidence_adjusted_v1",
+    }
+    assert service._validate_config_candidate("social_score", canonical) == canonical
+    with pytest.raises(ValueError, match="complete canonical document"):
+        service._validate_config_candidate(
+            "social_score", {**canonical, "unreviewed_override": True}
+        )
+
+
+def test_ml_candidate_uses_the_persisted_document_as_typed_contract():
+    source = {
+        "ml_forward_scoring_enabled": False,
+        "ml_promotion_min_test_auc": 0.65,
+        "ml_feature_contract": {"version": "v1", "features": ["rsi"]},
+    }
+    candidate = deepcopy(source)
+    candidate["ml_forward_scoring_enabled"] = True
+    candidate["ml_promotion_min_test_auc"] = 0.7
+    assert service._validate_config_candidate(
+        "ml", candidate, reference=source,
+    ) == candidate
+
+    wrong_shape = deepcopy(candidate)
+    wrong_shape["unregistered_root"] = True
+    with pytest.raises(ValueError, match="persisted object shape"):
+        service._validate_config_candidate("ml", wrong_shape, reference=source)
+
+    wrong_type = deepcopy(candidate)
+    wrong_type["ml_forward_scoring_enabled"] = "true"
+    with pytest.raises(ValueError, match="remain boolean"):
+        service._validate_config_candidate("ml", wrong_type, reference=source)
 
 
 def test_bulk_profile_patch_keeps_each_profile_diff_separate():
@@ -936,6 +978,54 @@ def test_complete_futures_engine_candidate_has_governed_risk_and_strategy_author
     )
     assert result["policy_semantic_evidence"]["strategy"]["basis"] == (
         "FUTURES_ENGINE_EXECUTION_AND_MANAGEMENT_SCHEMA_PROVEN"
+    )
+
+
+def test_ml_config_candidate_passes_typed_shape_and_persisted_veto_policies():
+    plan, policies, _profiles = _candidate_validation_fixture()
+    _install_executable_policy_semantics(policies)
+    source = {
+        "ml_forward_scoring_enabled": False,
+        "ml_promotion_min_test_auc": 0.65,
+    }
+    candidate = {**source, "ml_forward_scoring_enabled": True}
+    ml_record = SimpleNamespace(
+        id=uuid.uuid4(),
+        user_id=plan.user_id,
+        pool_id=None,
+        config_type="ml",
+        config_json=source,
+        is_active=True,
+        updated_at=datetime(2026, 8, 13, tzinfo=timezone.utc),
+    )
+    policies.append(ml_record)
+    plan.execution_payload = {
+        "operation_type": "UPDATE_CONFIG_PROFILE",
+        "config_profile_id": str(ml_record.id),
+        "config_type": "ml",
+        "pool_id": None,
+        "source_document": source,
+        "candidate_document": candidate,
+    }
+    plan.proposed_diff = [{
+        "op": "replace",
+        "path": "/ml_forward_scoring_enabled",
+        "old_value": False,
+        "value": True,
+    }]
+
+    result = service._candidate_validation_result(plan, policies, [])
+
+    assert result["decision"] == "PASS"
+    assert result["risk_validation"] == "PASS"
+    assert result["strategy_validation"] == "PASS"
+    assert any(
+        item["check"] == "ML_CANDIDATE_TYPED_PERSISTED_SHAPE"
+        and item["decision"] == "PASS"
+        for item in result["checks"]
+    )
+    assert result["policy_semantic_evidence"]["risk"]["basis"] == (
+        "ML_CONFIGURATION_TYPED_SHAPE_AND_PERSISTED_VETO_POLICIES_PROVEN"
     )
 
 

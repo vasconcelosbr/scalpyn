@@ -23,8 +23,10 @@ from ..models.config_profile import ConfigAuditLog, ConfigProfile
 from ..models.copilot import CopilotActionPlan, CopilotAuditLog
 from ..models.profile import Profile
 from ..models.profile_audit_log import ProfileAuditLog
+from ..models.social_intelligence import SocialAssetObservation
 from ..schemas.analysis_chat import AnalysisChatRuntimeConfig
 from ..schemas.futures_engine_config import FuturesEngineConfig
+from ..schemas.social_intelligence import SocialScoreConfig
 from ..schemas.spot_engine_config import SpotEngineConfig
 from ..ai_orchestration.recommendation_guard import (
     GuardDecision,
@@ -47,8 +49,10 @@ CACHE_RECONCILIATION_BACKOFF_SECONDS = (30, 60, 120, 240, 480)
 # secrets are intentionally absent.
 ALLOWED_CONFIG_TYPES = frozenset({
     "futures_engine",
+    "ml",
     "risk",
     "score",
+    "social_score",
     "spot_engine",
     "strategy",
 })
@@ -105,26 +109,32 @@ PRIMARY_ARRAY_IDENTITY_KEYS = frozenset({
 # already supports them; no value or threshold is synthesized here.
 _CANDIDATE_POLICY_TYPES = frozenset({
     "futures_engine",
+    "ml",
     "risk",
     "strategy",
     "strategies",
+    "social_score",
     "spot_engine",
     "score",
     "score_engine",
 })
 _POLICY_TYPE_PRECEDENCE = {
     "futures": ("futures_engine",),
+    "ml": ("ml",),
     "risk": ("risk",),
     "strategy": ("strategies", "strategy"),
     "spot": ("spot_engine",),
     "score": ("score", "score_engine"),
+    "social": ("social_score",),
 }
 _STRICT_CONFIG_PROFILE_TYPES = frozenset({
+    "ml",
     "risk",
     "score",
     "spot_engine",
     "futures_engine",
     "strategy",
+    "social_score",
 })
 _SPOT_REQUIRED_PERSISTED_ROOTS = frozenset({
     "scanner",
@@ -723,11 +733,90 @@ def _effective_config_candidate(
     return deepcopy(candidate)
 
 
+def _validate_ml_json_value(value: Any, *, path: str) -> None:
+    """Validate the persisted ML settings document without granting model lifecycle authority.
+
+    ML configuration is intentionally an extensible registry consumed by several scientific
+    services, so there is no single Pydantic model for the whole document. Governed changes
+    therefore use the active persisted document as the typed contract: roots must already
+    exist, nested object shapes stay closed, and scalar/list values remain JSON-safe.
+    """
+    if value is None or isinstance(value, (str, bool)):
+        return
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        _require_finite_number(value, path=path)
+        return
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            _validate_ml_json_value(item, path=f"{path}[{index}]")
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str) or not key:
+                raise ValueError(f"{path} contains an invalid key")
+            if any(fragment in key.lower() for fragment in FORBIDDEN_KEY_FRAGMENTS):
+                raise ValueError(f"{path}.{key} is outside governed ML authority")
+            _validate_ml_json_value(item, path=f"{path}.{key}")
+        return
+    raise ValueError(f"{path} contains a non-JSON value")
+
+
+def _require_ml_shape_matches(
+    candidate: Any,
+    reference: Any,
+    *,
+    path: str,
+) -> None:
+    if isinstance(reference, dict):
+        if not isinstance(candidate, dict) or set(candidate) != set(reference):
+            raise ValueError(f"{path} must preserve the persisted object shape")
+        for key in reference:
+            _require_ml_shape_matches(candidate[key], reference[key], path=f"{path}.{key}")
+        return
+    if isinstance(reference, list):
+        if not isinstance(candidate, list):
+            raise ValueError(f"{path} must remain an array")
+        return
+    if isinstance(reference, bool):
+        if not isinstance(candidate, bool):
+            raise ValueError(f"{path} must remain boolean")
+        return
+    if isinstance(reference, (int, float)) and not isinstance(reference, bool):
+        if isinstance(candidate, bool) or not isinstance(candidate, (int, float)):
+            raise ValueError(f"{path} must remain numeric")
+        return
+    if reference is None:
+        if candidate is not None:
+            raise ValueError(f"{path} is null in the persisted ML contract")
+        return
+    if not isinstance(candidate, str):
+        raise ValueError(f"{path} must remain a string")
+
+
+def _validate_ml_candidate(
+    candidate: dict[str, Any],
+    *,
+    reference: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if not isinstance(candidate, dict) or not candidate:
+        raise ValueError("ML candidate must be a complete JSON object")
+    for key in candidate:
+        if not isinstance(key, str) or not key:
+            raise ValueError("ML candidate contains an invalid root key")
+        if any(fragment in key.lower() for fragment in FORBIDDEN_KEY_FRAGMENTS):
+            raise ValueError(f"ML root is outside governed authority: {key}")
+    _validate_ml_json_value(candidate, path="ml")
+    if reference is not None:
+        _require_ml_shape_matches(candidate, reference, path="ml")
+    return candidate
+
+
 def _validate_config_candidate(
     config_type: str,
     candidate: dict[str, Any],
     *,
     enforce_invariants: bool = True,
+    reference: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if config_type == "risk":
         _validate_closed_risk_policy(candidate)
@@ -737,6 +826,15 @@ def _validate_config_candidate(
         return candidate
     if config_type == "score":
         _validate_score_candidate(candidate)
+        return candidate
+    if config_type == "ml":
+        return _validate_ml_candidate(candidate, reference=reference)
+    if config_type == "social_score":
+        validated = SocialScoreConfig.model_validate(candidate).model_dump(mode="json")
+        if validated != candidate:
+            raise ValueError(
+                "Social Score candidate must be the complete canonical document without unknown keys"
+            )
         return candidate
     if config_type == "spot_engine":
         if not isinstance(candidate, dict):
@@ -777,6 +875,31 @@ def _validate_config_candidate(
             )
         return candidate
     raise ValueError(f"Configuration family has no governed candidate schema: {config_type}")
+
+
+async def _validate_dynamic_config_constraints(
+    db: AsyncSession,
+    config_type: str,
+    candidate: dict[str, Any],
+) -> None:
+    if config_type != "social_score" or candidate.get("enabled") is not True:
+        return
+    max_age_seconds = int(candidate["max_age_seconds"])
+    now = _now()
+    oldest_allowed = now - timedelta(seconds=max_age_seconds)
+    fresh_observation_id = (
+        await db.execute(
+            select(SocialAssetObservation.id).where(
+                SocialAssetObservation.window_end >= oldest_allowed,
+                SocialAssetObservation.window_end <= now,
+                SocialAssetObservation.collected_at <= now,
+            ).limit(1)
+        )
+    ).scalar_one_or_none()
+    if fresh_observation_id is None:
+        raise ValueError(
+            "Social Score cannot be enabled without a fresh reconciled observation"
+        )
 
 
 def _iso_or_none(value: Any) -> str | None:
@@ -3117,6 +3240,50 @@ def _policy_semantic_result(
         }
         return statuses, evidence
 
+    if operation == "UPDATE_CONFIG_PROFILE" and config_type in {"ml", "social_score"}:
+        candidate = deepcopy(payload.get("candidate_document") or {})
+        source = deepcopy(payload.get("source_document") or {})
+        try:
+            _validate_config_candidate(
+                config_type,
+                candidate,
+                reference=source if config_type == "ml" else None,
+            )
+            risk_row = effective.get("risk")
+            strategy_row = effective.get("strategy")
+            if risk_row is None or strategy_row is None:
+                raise ValueError("Persisted risk and strategy policies are required")
+            _validate_closed_risk_policy(risk_row[1])
+            _validate_closed_strategy_catalog(strategy_row[1])
+        except (TypeError, ValueError) as exc:
+            status = "VETO"
+            basis = str(exc)[:500]
+        else:
+            status = "PASS"
+            basis = (
+                "ML_CONFIGURATION_TYPED_SHAPE_AND_PERSISTED_VETO_POLICIES_PROVEN"
+                if config_type == "ml"
+                else "SOCIAL_SCORE_SCHEMA_AND_PERSISTED_VETO_POLICIES_PROVEN"
+            )
+        candidate_hash = document_hash(candidate)
+        return (
+            {"risk": status, "strategy": status},
+            {
+                "risk": {
+                    "status": status,
+                    "basis": basis,
+                    "validator_version": _POLICY_SEMANTIC_VALIDATOR_VERSION,
+                    "candidate_document_hash": candidate_hash,
+                },
+                "strategy": {
+                    "status": status,
+                    "basis": basis,
+                    "validator_version": _POLICY_SEMANTIC_VALIDATOR_VERSION,
+                    "candidate_document_hash": candidate_hash,
+                },
+            },
+        )
+
     statuses = {"risk": "NOT_PERFORMED", "strategy": "NOT_PERFORMED"}
     evidence = {
         "risk": {
@@ -3182,6 +3349,10 @@ def _candidate_validation_result(
         policy_families.append(("spot", "global_risk"))
     if operation == "UPDATE_CONFIG_PROFILE" and target_config_type == "futures_engine":
         policy_families.append(("futures", "global_risk"))
+    if operation == "UPDATE_CONFIG_PROFILE" and target_config_type == "ml":
+        policy_families.append(("ml", "strategies"))
+    if operation == "UPDATE_CONFIG_PROFILE" and target_config_type == "social_score":
+        policy_families.append(("social", "strategies"))
     for family, module in policy_families:
         record = selected.get(family)
         if record is None:
@@ -3373,6 +3544,27 @@ def _candidate_validation_result(
             ),
         )
 
+    if operation == "UPDATE_CONFIG_PROFILE" and target_config_type == "ml":
+        check(
+            "ML_CANDIDATE_TYPED_PERSISTED_SHAPE",
+            "strategies",
+            lambda: _validate_config_candidate(
+                "ml",
+                deepcopy(payload.get("candidate_document") or {}),
+                reference=deepcopy(payload.get("source_document") or {}),
+            ),
+        )
+
+    if operation == "UPDATE_CONFIG_PROFILE" and target_config_type == "social_score":
+        check(
+            "SOCIAL_SCORE_CANDIDATE_SCHEMA",
+            "strategies",
+            lambda: _validate_config_candidate(
+                "social_score",
+                deepcopy(payload.get("candidate_document") or {}),
+            ),
+        )
+
     if effective.get("score"):
         score_document = effective["score"][1]
 
@@ -3431,7 +3623,7 @@ def _candidate_validation_result(
     )
 
     snapshots = []
-    for family in ("risk", "strategy", "spot", "score", "futures"):
+    for family in ("risk", "strategy", "spot", "score", "futures", "ml", "social"):
         row = effective.get(family)
         if row is None:
             continue
@@ -4132,13 +4324,25 @@ async def create_dry_run(
         if resource is None:
             raise LookupError("Configuration profile not found")
         before = deepcopy(resource.config_json or {})
+        if config_type in {"ml", "social_score"} and any(
+            str(change.get("op") or "replace").lower() != "replace"
+            for change in changes
+        ):
+            raise ValueError(
+                f"{config_type} governed changes may only replace existing fields"
+            )
         patched_candidate, diff = apply_typed_patch(before, changes)
         normalized_before = _validate_config_candidate(
             config_type,
             deepcopy(before),
             enforce_invariants=False,
         )
-        candidate = _validate_config_candidate(config_type, patched_candidate)
+        candidate = _validate_config_candidate(
+            config_type,
+            patched_candidate,
+            reference=before if config_type == "ml" else None,
+        )
+        await _validate_dynamic_config_constraints(db, config_type, candidate)
         _assert_patch_survived_normalization(
             _effective_config_candidate(config_type, normalized_before),
             _effective_config_candidate(config_type, candidate),
@@ -4575,8 +4779,13 @@ async def approve_and_execute(
                 "ANALYSIS_CHAT_EXECUTION_TARGET_MISSING"
             )
         resource = config_resource
-        candidate = _validate_config_candidate(resource.config_type, candidate)
         old_config = deepcopy(resource.config_json or {})
+        candidate = _validate_config_candidate(
+            resource.config_type,
+            candidate,
+            reference=old_config if resource.config_type == "ml" else None,
+        )
+        await _validate_dynamic_config_constraints(db, resource.config_type, candidate)
         resource.config_json = candidate
         resource.updated_at = now
         db.add(ConfigAuditLog(
@@ -5226,7 +5435,12 @@ async def rollback(
         if document_hash(resource.config_json or {}) != candidate_hash:
             raise ValueError("Configuration changed after execution; rollback would overwrite newer work")
         previous = deepcopy(resource.config_json or {})
-        source = _validate_config_candidate(resource.config_type, source)
+        source = _validate_config_candidate(
+            resource.config_type,
+            source,
+            reference=previous if resource.config_type == "ml" else None,
+        )
+        await _validate_dynamic_config_constraints(db, resource.config_type, source)
         resource.config_json = source
         resource.updated_at = now
         cache_type = resource.config_type

@@ -79,8 +79,17 @@ _ALLOWED_ANALYSIS_CHAT_PROVIDER_INTENTS = frozenset({
     "NORMAL_ANALYSIS",
     "FAKE_PROVIDER_CANARY",
 })
-_ANALYSIS_CHAT_MAX_LABELED_EVIDENCE = 12
-_ANALYSIS_CHAT_MAX_REFRESHED_EVIDENCE = 4
+_ANALYSIS_CHAT_MAX_LABELED_EVIDENCE = 16
+_ANALYSIS_CHAT_MAX_REFRESHED_EVIDENCE = 6
+
+_GOVERNED_PROPOSAL_EVIDENCE_TOOLS = (
+    "strategy_profiles.get_profile",
+    "score_engine.get_effective_configuration_at",
+    "ml_models.get_governed_configuration",
+    "social_score.get_governed_configuration",
+    "global_risk.get_effective_policy",
+    "strategies.get_execution_policy",
+)
 
 
 _EXPLICIT_SPOT_RESOURCE = "spot_engine"
@@ -857,7 +866,9 @@ async def _hydrate_config_change_preconditions(
     config_type = str(target.get("config_type") or "")
     if config_type == "score":
         return proposal
-    if config_type not in {"spot_engine", "futures_engine", "risk", "strategy"}:
+    if config_type not in {
+        "spot_engine", "futures_engine", "risk", "strategy", "ml", "social_score",
+    }:
         return proposal
     if target.get("pool_id") is not None:
         raise ProviderOutputError("ANALYSIS_CHAT_GLOBAL_CONFIG_POOL_MUST_BE_NULL")
@@ -879,6 +890,7 @@ async def _hydrate_config_change_preconditions(
         change = dict(raw_change)
         path = str(change.get("path") or "")
         op = str(change.get("op") or "replace").lower()
+        path = _materialize_append_path(document, path=path, op=op)
         try:
             old_value, guards = derive_patch_preconditions(
                 document,
@@ -889,6 +901,92 @@ async def _hydrate_config_change_preconditions(
             raise ProviderOutputError(
                 f"ANALYSIS_CHAT_CONFIG_PATH_INVALID: {path}"
             ) from exc
+        change["old_value_json"] = json.dumps(old_value, ensure_ascii=False)
+        change["array_guards_json"] = json.dumps(guards, ensure_ascii=False)
+        change["path"] = path
+        translated_changes.append(change)
+    return {**proposal, "changes": translated_changes}
+
+
+def _materialize_append_path(
+    document: dict[str, Any],
+    *,
+    path: str,
+    op: str,
+) -> str:
+    """Translate the standard JSON-Patch append marker to an audited array index."""
+    if str(op).lower() != "add" or not path.endswith("/-"):
+        return path
+    parent_path = path[:-2]
+    if not parent_path.startswith("/"):
+        raise ProviderOutputError(f"ANALYSIS_CHAT_CONFIG_PATH_INVALID: {path}")
+    current: Any = document
+    for raw in parent_path[1:].split("/"):
+        part = raw.replace("~1", "/").replace("~0", "~")
+        if isinstance(current, list):
+            if not part.isdigit() or int(part) >= len(current):
+                raise ProviderOutputError(f"ANALYSIS_CHAT_CONFIG_PATH_INVALID: {path}")
+            current = current[int(part)]
+        elif isinstance(current, dict) and part in current:
+            current = current[part]
+        else:
+            raise ProviderOutputError(f"ANALYSIS_CHAT_CONFIG_PATH_INVALID: {path}")
+    if not isinstance(current, list):
+        raise ProviderOutputError(f"ANALYSIS_CHAT_CONFIG_PATH_INVALID: {path}")
+    return f"{parent_path}/{len(current)}"
+
+
+async def _hydrate_profile_change_preconditions(
+    db,
+    *,
+    tenant_id: UUID,
+    proposal: dict[str, Any],
+) -> dict[str, Any]:
+    operation = str(proposal.get("operation_type") or "")
+    if operation not in {"UPDATE_PROFILE_CONFIG", "UPDATE_PROFILE_CONFIG_SET"}:
+        return proposal
+
+    expanded_changes = _expand_compact_profile_changes(proposal)
+    target = dict(proposal.get("target") or {})
+    default_profile_id = target.get("profile_id")
+    raw_profile_ids = {
+        str(change.get("profile_id") or default_profile_id or "")
+        for change in expanded_changes
+    }
+    if "" in raw_profile_ids:
+        raise ProviderOutputError("ANALYSIS_CHAT_PROFILE_TARGET_REQUIRED")
+    try:
+        profile_ids = {UUID(item) for item in raw_profile_ids}
+    except ValueError as exc:
+        raise ProviderOutputError("ANALYSIS_CHAT_PROFILE_TARGET_INVALID") from exc
+    resources = list((await db.execute(select(Profile).where(
+        Profile.user_id == tenant_id,
+        Profile.id.in_(profile_ids),
+    ))).scalars().all())
+    by_id = {str(resource.id): resource for resource in resources}
+    if set(by_id) != raw_profile_ids:
+        raise ProviderOutputError("ANALYSIS_CHAT_PROFILE_RESOURCE_NOT_FOUND")
+
+    translated_changes: list[dict[str, Any]] = []
+    for raw_change in expanded_changes:
+        change = dict(raw_change)
+        profile_id = str(change.get("profile_id") or default_profile_id)
+        document = dict(by_id[profile_id].config or {})
+        op = str(change.get("op") or "replace").lower()
+        path = _materialize_append_path(
+            document,
+            path=str(change.get("path") or ""),
+            op=op,
+        )
+        try:
+            old_value, guards = derive_patch_preconditions(document, path=path, op=op)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ProviderOutputError(
+                f"ANALYSIS_CHAT_PROFILE_PATH_INVALID: {path}"
+            ) from exc
+        change["profile_id"] = profile_id
+        change["profile_name"] = by_id[profile_id].name
+        change["path"] = path
         change["old_value_json"] = json.dumps(old_value, ensure_ascii=False)
         change["array_guards_json"] = json.dumps(guards, ensure_ascii=False)
         translated_changes.append(change)
@@ -1542,10 +1640,7 @@ class AnalysisChatGraphNodeHandler:
                 proposal_allowlist = request_json.get(
                     "proposal_evidence_tool_allowlist"
                 ) or []
-                expected = [
-                    "global_risk.get_effective_policy",
-                    "strategies.get_execution_policy",
-                ]
+                expected = list(_GOVERNED_PROPOSAL_EVIDENCE_TOOLS)
                 if proposal_allowlist != expected:
                     raise RuntimeError(
                         "ANALYSIS_CHAT_PROPOSAL_EVIDENCE_TOOL_ALLOWLIST_INVALID"
@@ -1633,6 +1728,11 @@ class AnalysisChatGraphNodeHandler:
                 proposal=raw_proposal,
             )
             raw_proposal = await _hydrate_config_change_preconditions(
+                db,
+                tenant_id=run.tenant_id,
+                proposal=raw_proposal,
+            )
+            raw_proposal = await _hydrate_profile_change_preconditions(
                 db,
                 tenant_id=run.tenant_id,
                 proposal=raw_proposal,

@@ -24,6 +24,7 @@ class ModuleCapability:
 def _capability(
     module_key: str,
     *,
+    version: str = "1.0.0",
     entities: tuple[str, ...],
     reads: tuple[str, ...],
     writes: tuple[str, ...] = (),
@@ -33,7 +34,7 @@ def _capability(
 ) -> ModuleCapability:
     payload = {
         "module_key": module_key,
-        "version": "1.0.0",
+        "version": version,
         "entities": entities,
         "read_tools": reads,
         "write_tools": writes,
@@ -66,12 +67,14 @@ _MODULES = (
     ),
     _capability(
         "ml_models",
+        version="1.1.0",
         entities=("ml_model_registry", "ml_evidence_registry", "algorithm_forward_validations"),
         reads=(
             "ml_models.get_registry", "ml_models.get_active_models", "ml_models.get_model_metrics",
             "ml_models.get_feature_contract", "ml_models.get_label_contract",
             "ml_models.get_training_window", "ml_models.get_drift_status",
             "ml_models.get_authority_status", "ml_models.get_recent_experiments",
+            "ml_models.get_governed_configuration",
         ),
         dependencies=("shadow_portfolio", "strategy_profiles", "dataset_quality", "audit_version_memory"),
         freshness=900,
@@ -149,12 +152,14 @@ _MODULES = (
     ),
     _capability(
         "social_score",
+        version="1.1.0",
         entities=("social_intelligence_runs", "social_asset_observations"),
         reads=(
             "social_score.get_snapshot", "social_score.get_source_breakdown",
             "social_score.get_mentions", "social_score.get_sentiment", "social_score.get_trend",
             "social_score.get_freshness", "social_score.get_coverage",
             "social_score.get_anomaly_flags", "social_score.get_data_quality",
+            "social_score.get_governed_configuration",
         ),
         dependencies=("source_quality", "market_regime"),
         freshness=300,
