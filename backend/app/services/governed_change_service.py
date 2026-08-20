@@ -41,13 +41,15 @@ CACHE_RECONCILIATION_MAX_ATTEMPTS = 6
 CACHE_RECONCILIATION_BACKOFF_SECONDS = (30, 60, 120, 240, 480)
 
 # Only configuration families with a complete deterministic candidate schema
-# may reach a governed preview. Runtime gates, policy families without a
-# semantic validator, provider credentials, ML promotion, exchange/order state
-# and secrets are intentionally absent.
+# and registered policy-semantic validation may reach a governed preview.
+# Runtime gates, provider credentials, ML promotion, exchange/order state and
+# secrets are intentionally absent.
 ALLOWED_CONFIG_TYPES = frozenset({
     "futures_engine",
+    "risk",
     "score",
     "spot_engine",
+    "strategy",
 })
 PROFILE_ROOTS = frozenset({
     "default_timeframe",
@@ -117,9 +119,11 @@ _POLICY_TYPE_PRECEDENCE = {
     "score": ("score", "score_engine"),
 }
 _STRICT_CONFIG_PROFILE_TYPES = frozenset({
+    "risk",
     "score",
     "spot_engine",
     "futures_engine",
+    "strategy",
 })
 _PROFILE_TIMEFRAMES = frozenset({"1m", "3m", "5m", "15m", "1h"})
 _PROFILE_LOGICS = frozenset({"AND", "OR"})
@@ -144,7 +148,7 @@ _SCORE_OPERATORS = frozenset({
     "ema50>ema200", "di+>di-", "di->di+", ">prev+", ">prev",
 })
 
-_POLICY_SEMANTIC_VALIDATOR_VERSION = "profile-score-policy-v1"
+_POLICY_SEMANTIC_VALIDATOR_VERSION = "governed-config-policy-v2"
 _RISK_POLICY_REQUIRED_KEYS = frozenset({
     "take_profit_pct",
     "stop_loss_atr_multiplier",
@@ -604,6 +608,12 @@ def apply_typed_patch(
 
 
 def _validate_config_candidate(config_type: str, candidate: dict[str, Any]) -> dict[str, Any]:
+    if config_type == "risk":
+        _validate_closed_risk_policy(candidate)
+        return candidate
+    if config_type == "strategy":
+        _validate_closed_strategy_catalog(candidate)
+        return candidate
     if config_type == "score":
         _validate_score_candidate(candidate)
         return candidate
@@ -2777,6 +2787,65 @@ def _policy_semantic_result(
             {"risk": risk_evidence, "strategy": strategy_evidence},
         )
 
+    if operation == "UPDATE_CONFIG_PROFILE" and config_type in {"risk", "strategy"}:
+        risk_row = effective.get("risk")
+        strategy_row = effective.get("strategy")
+        statuses: dict[str, str] = {}
+        evidence: dict[str, dict[str, Any]] = {}
+
+        if risk_row is None:
+            statuses["risk"] = "NOT_PERFORMED"
+            evidence["risk"] = {
+                "status": "NOT_PERFORMED",
+                "basis": "PERSISTED_RISK_POLICY_UNAVAILABLE",
+                "validator_version": _POLICY_SEMANTIC_VALIDATOR_VERSION,
+            }
+        else:
+            risk_record, risk_document, risk_is_target = risk_row
+            try:
+                _validate_closed_risk_policy(risk_document)
+            except (TypeError, ValueError) as exc:
+                statuses["risk"] = "VETO"
+                basis = str(exc)[:500]
+            else:
+                statuses["risk"] = "PASS"
+                basis = "RISK_POLICY_COMPLETE_SCHEMA_AND_FIELD_BOUNDS_PROVEN"
+            evidence["risk"] = {
+                "status": statuses["risk"],
+                "basis": basis,
+                "validator_version": _POLICY_SEMANTIC_VALIDATOR_VERSION,
+                "policy_config_id": str(risk_record.id),
+                "policy_document_hash": document_hash(risk_document),
+                "uses_candidate_document": risk_is_target,
+            }
+
+        if strategy_row is None:
+            statuses["strategy"] = "NOT_PERFORMED"
+            evidence["strategy"] = {
+                "status": "NOT_PERFORMED",
+                "basis": "PERSISTED_STRATEGY_POLICY_UNAVAILABLE",
+                "validator_version": _POLICY_SEMANTIC_VALIDATOR_VERSION,
+            }
+        else:
+            strategy_record, strategy_document, strategy_is_target = strategy_row
+            try:
+                _validate_closed_strategy_catalog(strategy_document)
+            except (TypeError, ValueError) as exc:
+                statuses["strategy"] = "VETO"
+                basis = str(exc)[:500]
+            else:
+                statuses["strategy"] = "PASS"
+                basis = "STRATEGY_POLICY_COMPLETE_SCHEMA_AND_FIELD_BOUNDS_PROVEN"
+            evidence["strategy"] = {
+                "status": statuses["strategy"],
+                "basis": basis,
+                "validator_version": _POLICY_SEMANTIC_VALIDATOR_VERSION,
+                "policy_config_id": str(strategy_record.id),
+                "policy_document_hash": document_hash(strategy_document),
+                "uses_candidate_document": strategy_is_target,
+            }
+        return statuses, evidence
+
     if operation == "UPDATE_CONFIG_PROFILE" and config_type == "spot_engine":
         risk_row = effective.get("risk")
         if risk_row is None:
@@ -2794,9 +2863,19 @@ def _policy_semantic_result(
             else:
                 risk_status = "PASS"
                 risk_basis = "SPOT_CANDIDATE_WITHIN_PERSISTED_GLOBAL_RISK_LIMITS"
-        # The persisted strategy catalog has no executable mapping for the
-        # Spot sell-flow/strategy fields.  Do not infer approval from silence.
-        statuses = {"risk": risk_status, "strategy": "NOT_PERFORMED"}
+        try:
+            _validate_config_candidate(
+                "spot_engine", deepcopy(payload.get("candidate_document") or {})
+            )
+        except (TypeError, ValueError) as exc:
+            strategy_status = "VETO"
+            strategy_basis = str(exc)[:500]
+        else:
+            strategy_status = "PASS"
+            strategy_basis = (
+                "SPOT_ENGINE_EXECUTION_POLICY_SCHEMA_AND_INVARIANTS_PROVEN"
+            )
+        statuses = {"risk": risk_status, "strategy": strategy_status}
         evidence = {
             "risk": {
                 "status": risk_status,
@@ -2804,9 +2883,44 @@ def _policy_semantic_result(
                 "validator_version": _POLICY_SEMANTIC_VALIDATOR_VERSION,
             },
             "strategy": {
-                "status": "NOT_PERFORMED",
-                "basis": "NO_REGISTERED_SPOT_TO_STRATEGY_POLICY_MAPPING",
+                "status": strategy_status,
+                "basis": strategy_basis,
                 "validator_version": _POLICY_SEMANTIC_VALIDATOR_VERSION,
+                "candidate_document_hash": document_hash(
+                    payload.get("candidate_document") or {}
+                ),
+            },
+        }
+        return statuses, evidence
+
+    if operation == "UPDATE_CONFIG_PROFILE" and config_type == "futures_engine":
+        try:
+            _validate_config_candidate(
+                "futures_engine", deepcopy(payload.get("candidate_document") or {})
+            )
+        except (TypeError, ValueError) as exc:
+            status = "VETO"
+            risk_basis = strategy_basis = str(exc)[:500]
+        else:
+            status = "PASS"
+            risk_basis = "FUTURES_ENGINE_RISK_SCHEMA_AND_FIELD_BOUNDS_PROVEN"
+            strategy_basis = (
+                "FUTURES_ENGINE_EXECUTION_AND_MANAGEMENT_SCHEMA_PROVEN"
+            )
+        candidate_hash = document_hash(payload.get("candidate_document") or {})
+        statuses = {"risk": status, "strategy": status}
+        evidence = {
+            "risk": {
+                "status": status,
+                "basis": risk_basis,
+                "validator_version": _POLICY_SEMANTIC_VALIDATOR_VERSION,
+                "candidate_document_hash": candidate_hash,
+            },
+            "strategy": {
+                "status": status,
+                "basis": strategy_basis,
+                "validator_version": _POLICY_SEMANTIC_VALIDATOR_VERSION,
+                "candidate_document_hash": candidate_hash,
             },
         }
         return statuses, evidence
@@ -2929,7 +3043,6 @@ def _candidate_validation_result(
             if target_config_type in {"spot_engine", "futures_engine", "risk"}
             else "strategies"
         )
-
         def _require_registered_global_target() -> None:
             if payload.get("pool_id") not in {None, ""}:
                 raise ValueError("Governed ConfigProfile target must be global (pool_id=null)")
@@ -2942,6 +3055,24 @@ def _candidate_validation_result(
             "CONFIG_PROFILE_REGISTERED_GLOBAL_SCHEMA",
             module,
             _require_registered_global_target,
+        )
+
+    if operation == "UPDATE_CONFIG_PROFILE" and target_config_type == "risk":
+        check(
+            "RISK_CANDIDATE_SCHEMA_AND_FIELD_BOUNDS",
+            "global_risk",
+            lambda: _validate_config_candidate(
+                "risk", deepcopy(payload.get("candidate_document") or {})
+            ),
+        )
+
+    if operation == "UPDATE_CONFIG_PROFILE" and target_config_type == "strategy":
+        check(
+            "STRATEGY_CANDIDATE_SCHEMA_AND_FIELD_BOUNDS",
+            "strategies",
+            lambda: _validate_config_candidate(
+                "strategy", deepcopy(payload.get("candidate_document") or {})
+            ),
         )
     if operation == "UPDATE_CONFIG_PROFILE" and target_family:
         module = (

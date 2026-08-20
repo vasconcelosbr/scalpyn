@@ -601,9 +601,9 @@ def test_proposal_materialization_decodes_guards_and_fails_closed_on_bad_json():
 
 
 def test_chat_config_authority_excludes_self_modifying_and_secret_families():
-    assert ALLOWED_CONFIG_TYPES == {"score", "spot_engine", "futures_engine"}
-    assert "risk" not in ALLOWED_CONFIG_TYPES
-    assert "strategy" not in ALLOWED_CONFIG_TYPES
+    assert ALLOWED_CONFIG_TYPES == {
+        "risk", "strategy", "score", "spot_engine", "futures_engine",
+    }
     assert "ai_analysis_chat_runtime" not in ALLOWED_CONFIG_TYPES
     assert "ai_provider_runtime" not in ALLOWED_CONFIG_TYPES
     assert "ml" not in ALLOWED_CONFIG_TYPES
@@ -859,7 +859,7 @@ def test_execution_fence_rejects_forged_unperformed_scope_for_engine_mutation():
         service._require_persisted_candidate_pass(plan, forged)
 
 
-def test_unregistered_policy_semantics_fail_closed_without_false_pass():
+def test_complete_futures_engine_candidate_has_governed_risk_and_strategy_authority():
     plan, policies, profiles = _candidate_validation_fixture()
     source = service.FuturesEngineConfig().model_dump()
     candidate = deepcopy(source)
@@ -895,20 +895,22 @@ def test_unregistered_policy_semantics_fail_closed_without_false_pass():
 
     result = service._candidate_validation_result(plan, policies, profiles)
 
-    assert result["decision"] == "VETO"
-    assert result["risk_validation"] == "NOT_PERFORMED"
-    assert result["strategy_validation"] == "NOT_PERFORMED"
+    assert result["decision"] == "PASS"
+    assert result["risk_validation"] == "PASS"
+    assert result["strategy_validation"] == "PASS"
     assert result["policy_semantic_validation"] == {
-        "risk": "NOT_PERFORMED",
-        "strategy": "NOT_PERFORMED",
+        "risk": "PASS",
+        "strategy": "PASS",
     }
-    assert not (
-        result["risk_validation"] == "PASS"
-        or result["strategy_validation"] == "PASS"
+    assert result["policy_semantic_evidence"]["risk"]["basis"] == (
+        "FUTURES_ENGINE_RISK_SCHEMA_AND_FIELD_BOUNDS_PROVEN"
+    )
+    assert result["policy_semantic_evidence"]["strategy"]["basis"] == (
+        "FUTURES_ENGINE_EXECUTION_AND_MANAGEMENT_SCHEMA_PROVEN"
     )
 
 
-def test_spot_risk_semantics_can_pass_but_missing_strategy_mapping_still_vetoes():
+def test_spot_engine_candidate_uses_its_complete_execution_policy_schema():
     plan, policies, _profiles = _candidate_validation_fixture()
     risk_record = next(item for item in policies if item.config_type == "risk")
     risk_record.config_json = {
@@ -953,12 +955,91 @@ def test_spot_risk_semantics_can_pass_but_missing_strategy_mapping_still_vetoes(
 
     result = service._candidate_validation_result(plan, policies, [])
 
-    # Risk really was evaluated; the write still cannot proceed because the
-    # persisted strategy catalog exposes no executable Spot mapping.
     assert result["risk_validation"] == "PASS"
-    assert result["strategy_validation"] == "NOT_PERFORMED"
-    assert result["decision"] == "VETO"
-    assert result["terminal_reason"] == "STRATEGY_INVARIANT_CONFLICT"
+    assert result["strategy_validation"] == "PASS"
+    assert result["decision"] == "PASS"
+    assert result["terminal_reason"] == "POLICY_SEMANTIC_GUARDS_PASS"
+    assert result["policy_semantic_evidence"]["strategy"]["basis"] == (
+        "SPOT_ENGINE_EXECUTION_POLICY_SCHEMA_AND_INVARIANTS_PROVEN"
+    )
+
+
+def test_spot_trailing_and_kill_switch_change_passes_typed_governance():
+    plan, policies, _profiles = _candidate_validation_fixture()
+    risk_record = next(item for item in policies if item.config_type == "risk")
+    risk_record.config_json = {
+        "capital_per_trade_pct": 10,
+        "max_capital_in_use_pct": 80,
+        "max_exposure_per_asset_pct": 25,
+        "max_positions": 20,
+        "max_slippage_pct": 0.1,
+        "default_order_type": "market",
+    }
+    source = service.SpotEngineConfig().model_dump()
+    source["sell_flow"]["trailing"].update({
+        "enabled": True,
+        "activation_profit_pct": 2.0,
+        "hwm_trail_pct": 1.0,
+    })
+    source["sell_flow"]["kill_switch"].update({
+        "enabled": True,
+        "atr_stop_multiplier": 2.0,
+        "max_drawdown_from_hwm_pct": 1.0,
+    })
+    candidate = deepcopy(source)
+    candidate["sell_flow"]["trailing"]["activation_profit_pct"] = 3.0
+    candidate["sell_flow"]["kill_switch"]["max_drawdown_from_hwm_pct"] = 2.0
+    spot = next(item for item in policies if item.config_type == "spot_engine")
+    spot.config_json = source
+    plan.target_type = "CONFIG_PROFILE"
+    plan.target_id = str(spot.id)
+    plan.execution_payload = {
+        "operation_type": "UPDATE_CONFIG_PROFILE",
+        "config_profile_id": str(spot.id),
+        "config_type": "spot_engine",
+        "pool_id": None,
+        "source_document": source,
+        "candidate_document": candidate,
+    }
+    plan.proposed_diff = [
+        {
+            "op": "replace",
+            "path": "/sell_flow/trailing/activation_profit_pct",
+            "old_value": 2.0,
+            "value": 3.0,
+            "reason": "approved operational adjustment",
+            "evidence_refs": [str(uuid.uuid4())],
+        },
+        {
+            "op": "replace",
+            "path": "/sell_flow/kill_switch/max_drawdown_from_hwm_pct",
+            "old_value": 1.0,
+            "value": 2.0,
+            "reason": "approved operational adjustment",
+            "evidence_refs": [str(uuid.uuid4())],
+        },
+    ]
+
+    result = service._candidate_validation_result(plan, policies, [])
+
+    assert result["decision"] == "PASS"
+    assert result["policy_semantic_validation"] == {
+        "risk": "PASS",
+        "strategy": "PASS",
+    }
+    assert service._validate_config_candidate("spot_engine", candidate) == candidate
+
+
+def test_direct_risk_and_strategy_documents_have_registered_candidate_schemas():
+    _plan, policies, _profiles = _candidate_validation_fixture()
+    _install_executable_policy_semantics(policies)
+    risk = next(item for item in policies if item.config_type == "risk").config_json
+    strategy = next(
+        item for item in policies if item.config_type == "strategy"
+    ).config_json
+
+    assert service._validate_config_candidate("risk", deepcopy(risk)) == risk
+    assert service._validate_config_candidate("strategy", deepcopy(strategy)) == strategy
 
 
 def test_unrelated_structural_profile_change_fails_without_runtime_scope_proof():
@@ -971,7 +1052,7 @@ def test_unrelated_structural_profile_change_fails_without_runtime_scope_proof()
     assert result["decision"] == "VETO"
     assert result["risk_validation"] == "PASS"
     assert result["strategy_validation"] == "VETO"
-    assert result["policy_semantic_validator_version"] == "profile-score-policy-v1"
+    assert result["policy_semantic_validator_version"] == "governed-config-policy-v2"
     risk_evidence = result["policy_semantic_evidence"]["risk"]
     assert risk_evidence["authority_scope"] == "PROFILE_SCORE_SIGNAL_ONLY"
     assert risk_evidence["downstream_caps_hash"] == service.document_hash(
@@ -2212,7 +2293,7 @@ def test_candidate_aware_validator_reconstructs_status_candidate_as_a_whole():
     assert check["decision"] == "VETO"
 
 
-@pytest.mark.parametrize("config_type", ["risk", "strategy", "score_engine", "filters"])
+@pytest.mark.parametrize("config_type", ["score_engine", "filters"])
 def test_candidate_aware_validator_vetoes_config_family_without_registered_schema(config_type):
     plan, policies, _profiles = _candidate_validation_fixture()
     source = {"enabled": True}
@@ -2243,6 +2324,43 @@ def test_candidate_aware_validator_vetoes_config_family_without_registered_schem
     )
     assert check["decision"] == "VETO"
     assert "no registered governed candidate schema" in check["reason"]
+
+
+@pytest.mark.parametrize(
+    ("config_type", "check_id"),
+    [
+        ("risk", "RISK_CANDIDATE_SCHEMA_AND_FIELD_BOUNDS"),
+        ("strategy", "STRATEGY_CANDIDATE_SCHEMA_AND_FIELD_BOUNDS"),
+    ],
+)
+def test_registered_policy_family_still_vetoes_an_invalid_candidate(
+    config_type,
+    check_id,
+):
+    plan, policies, _profiles = _candidate_validation_fixture()
+    target = next(item for item in policies if item.config_type == config_type)
+    plan.execution_payload = {
+        "operation_type": "UPDATE_CONFIG_PROFILE",
+        "config_profile_id": str(target.id),
+        "config_type": config_type,
+        "pool_id": None,
+        "source_document": {"enabled": True},
+        "candidate_document": {"enabled": False},
+    }
+    plan.proposed_diff = [{
+        "op": "replace", "path": "/enabled", "old_value": True, "value": False,
+    }]
+
+    result = service._candidate_validation_result(plan, policies, [])
+
+    assert result["decision"] == "VETO"
+    registered = next(
+        item for item in result["checks"]
+        if item["check"] == "CONFIG_PROFILE_REGISTERED_GLOBAL_SCHEMA"
+    )
+    typed = next(item for item in result["checks"] if item["check"] == check_id)
+    assert registered["decision"] == "PASS"
+    assert typed["decision"] == "VETO"
 
 
 def test_candidate_aware_validator_vetoes_pool_scoped_config_target():
@@ -2848,7 +2966,7 @@ async def test_dry_run_rejects_pool_scoped_config_before_loading_a_target():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("config_type", ["risk", "strategy", "filters"])
+@pytest.mark.parametrize("config_type", ["filters", "block", "signal"])
 async def test_dry_run_rejects_config_families_without_semantic_validator(config_type):
     evidence_id = str(uuid.uuid4())
     proposal = {

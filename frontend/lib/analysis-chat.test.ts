@@ -19,6 +19,12 @@ test("chat button is gated by completed run and persisted result", () => {
   assert.match(panel, /Conversar sobre esta análise/);
 });
 
+test("intelligence runs distinguishes approved config writes from trading authority", () => {
+  assert.match(page, /Ajustes governados só são aplicados após aprovação humana explícita/);
+  assert.match(page, /trading write: denied/);
+  assert.doesNotMatch(page, /Nenhuma execução possui autoridade de escrita live/);
+});
+
 test("chat renders model, evidence, budget and provider-blocked state", () => {
   assert.match(panel, /Provider bloqueado/);
   assert.match(panel, /evidence_refs/);

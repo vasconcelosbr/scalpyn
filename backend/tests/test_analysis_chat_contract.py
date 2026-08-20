@@ -831,6 +831,86 @@ def test_response_language_migration_is_well_formed_and_format_map_safe():
     assert 'from_version="1.10.0"' not in upgrade_source
 
 
+def test_governed_config_scope_migration_exposes_only_typed_human_approved_families():
+    from app.ai_orchestration.provider_adapters.http_adapter import (
+        anthropic_output_config,
+    )
+
+    versions = Path(__file__).resolve().parents[1] / "alembic/versions"
+
+    base_spec = importlib.util.spec_from_file_location(
+        "chat_governed_scope_base",
+        versions / "171_chat_no_if_then_else.py",
+    )
+    assert base_spec is not None and base_spec.loader is not None
+    base_migration = importlib.util.module_from_spec(base_spec)
+    base_spec.loader.exec_module(base_migration)
+    previous = base_migration._prompt_content()
+    previous["semantic_version"] = "1.9.1"
+    previous["system_template"] = previous["system_template"].replace(
+        "Answer in the question language.",
+        "The required response language is {response_language}.",
+    )
+
+    scope_spec = importlib.util.spec_from_file_location(
+        "chat_governed_config_scope_migration",
+        versions / "187_chat_governed_config_scope.py",
+    )
+    assert scope_spec is not None and scope_spec.loader is not None
+    migration = importlib.util.module_from_spec(scope_spec)
+    scope_spec.loader.exec_module(migration)
+
+    content = migration._expanded_prompt(previous)
+    schema = content["output_schema_json"]
+    system = content["system_template"]
+    target_config_type = (
+        schema["properties"]["proposal"]["anyOf"][0]["properties"]
+        ["target"]["properties"]["config_type"]
+    )
+
+    assert len(migration.revision) <= 32
+    assert migration.down_revision == "186_deepseek_output_16k"
+    assert content["semantic_version"] == "1.11.0"
+    assert target_config_type["enum"] == [
+        "score", "spot_engine", "futures_engine", "risk", "strategy", None,
+    ]
+    assert "lack a complete governed semantic validator" not in system
+    assert "/sell_flow/trailing/activation_profit_pct" in system
+    assert "/sell_flow/kill_switch/max_drawdown_from_hwm_pct" in system
+    assert "Every other config family, runtime gate" in system
+    assert content["provider_constraints_json"]["authority"] == "PROPOSAL_ONLY"
+    assert content["tool_policy_json"]["execution_requires_human_interrupt"] is True
+    assert system.format_map({"response_language": "pt-BR"})
+
+    prepared = anthropic_output_config(schema)["format"]["schema"]
+    prepared_config_type = (
+        prepared["properties"]["proposal"]["anyOf"][0]["properties"]
+        ["target"]["properties"]["config_type"]
+    )
+    assert prepared_config_type["enum"] == target_config_type["enum"]
+    assert prepared_config_type["anyOf"] == [
+        {"type": "string"},
+        {"type": "null"},
+    ]
+
+
+def test_governed_config_scope_migration_rejects_an_unexpected_base_contract():
+    versions = Path(__file__).resolve().parents[1] / "alembic/versions"
+    scope_spec = importlib.util.spec_from_file_location(
+        "chat_governed_config_scope_rejection",
+        versions / "187_chat_governed_config_scope.py",
+    )
+    assert scope_spec is not None and scope_spec.loader is not None
+    migration = importlib.util.module_from_spec(scope_spec)
+    scope_spec.loader.exec_module(migration)
+
+    with pytest.raises(RuntimeError, match="AUTHORITY_TEXT_NOT_FOUND"):
+        migration._expanded_prompt({
+            "system_template": "unexpected",
+            "output_schema_json": {},
+        })
+
+
 def test_staging_fake_intent_is_environment_and_flag_bounded(monkeypatch):
     monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "systemic-ai-staging-20260807")
     monkeypatch.setenv("LANGGRAPH_FAKE_PROVIDER_CANARY_ENABLED", "true")

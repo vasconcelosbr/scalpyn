@@ -403,7 +403,7 @@ export default function IntelligenceRunsPage() {
             </div>
             <h1 className="text-2xl font-semibold tracking-tight">Intelligence Runs</h1>
             <p className="mt-1 max-w-2xl text-sm text-[var(--text-muted)]">
-              Trilha durável de análise, checkpoints e decisões humanas. Nenhuma execução possui autoridade de escrita live.
+              Trilha durável de análise, checkpoints e decisões humanas. Ajustes governados só são aplicados após aprovação humana explícita.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -411,7 +411,7 @@ export default function IntelligenceRunsPage() {
               {capabilities?.strict_msgpack ? "checkpoint strict" : "checkpoint bloqueado"}
             </span>
             <span className="rounded-full border border-emerald-400/30 px-3 py-1.5 font-mono text-[10px] uppercase text-emerald-300">
-              live write: denied
+              trading write: denied
             </span>
             <ModuleAIAnalysisAction originModule="intelligence_runs" originView="intelligence-runs" compact />
             <button onClick={() => void refresh(selectedId)} className="rounded-lg border border-[var(--border-subtle)] p-2 text-[var(--text-muted)] transition hover:border-cyan-400/40 hover:text-cyan-300" aria-label="Atualizar">
