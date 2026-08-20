@@ -1,7 +1,7 @@
 """Expand Analysis Chat's human-approved governed configuration scope.
 
-Revision ID: 187_chat_governed_config_scope
-Revises: 186_deepseek_output_16k
+Revision ID: 189_chat_governed_config_scope
+Revises: 188_deepseek_quota_unbounded
 
 The execution service already owns the preview, typed patch, optimistic
 concurrency, second human gate, audit and rollback workflow.  The active chat
@@ -25,8 +25,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "187_chat_governed_config_scope"
-down_revision = "186_deepseek_output_16k"
+revision = "189_chat_governed_config_scope"
+down_revision = "188_deepseek_quota_unbounded"
 branch_labels = None
 depends_on = None
 

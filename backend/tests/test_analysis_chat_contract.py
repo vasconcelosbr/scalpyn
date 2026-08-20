@@ -854,7 +854,7 @@ def test_governed_config_scope_migration_exposes_only_typed_human_approved_famil
 
     scope_spec = importlib.util.spec_from_file_location(
         "chat_governed_config_scope_migration",
-        versions / "187_chat_governed_config_scope.py",
+        versions / "189_chat_governed_config_scope.py",
     )
     assert scope_spec is not None and scope_spec.loader is not None
     migration = importlib.util.module_from_spec(scope_spec)
@@ -869,7 +869,7 @@ def test_governed_config_scope_migration_exposes_only_typed_human_approved_famil
     )
 
     assert len(migration.revision) <= 32
-    assert migration.down_revision == "186_deepseek_output_16k"
+    assert migration.down_revision == "188_deepseek_quota_unbounded"
     assert content["semantic_version"] == "1.11.0"
     assert target_config_type["enum"] == [
         "score", "spot_engine", "futures_engine", "risk", "strategy", None,
@@ -898,7 +898,7 @@ def test_governed_config_scope_migration_rejects_an_unexpected_base_contract():
     versions = Path(__file__).resolve().parents[1] / "alembic/versions"
     scope_spec = importlib.util.spec_from_file_location(
         "chat_governed_config_scope_rejection",
-        versions / "187_chat_governed_config_scope.py",
+        versions / "189_chat_governed_config_scope.py",
     )
     assert scope_spec is not None and scope_spec.loader is not None
     migration = importlib.util.module_from_spec(scope_spec)
