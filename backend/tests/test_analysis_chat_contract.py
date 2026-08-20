@@ -49,6 +49,199 @@ def test_analysis_chat_provider_transport_rejects_unknown_or_real_canary_intent(
         assert exc_info.value.reason_code == "ANALYSIS_CHAT_INTENT_NOT_ALLOWED"
 
 
+def test_explicit_spot_command_is_parsed_without_provider_inference():
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        _parse_explicit_spot_proposal_command,
+    )
+
+    command = _parse_explicit_spot_proposal_command(
+        "Altere somente o spot_engine: activation_profit_pct de 2% para 3%, "
+        "max_drawdown_from_hwm_pct de 1% para 2% e never_sell_at_loss de false "
+        "para true. Mantenha atr_stop_multiplier em 2x e hwm_trail_pct em 1%. "
+        "Gere uma prévia auditável e não aplique sem minha confirmação final."
+    )
+
+    assert command is not None
+    assert [(item.field, item.old_value, item.new_value) for item in command.changes] == [
+        ("activation_profit_pct", 2, 3),
+        ("max_drawdown_from_hwm_pct", 1, 2),
+        ("never_sell_at_loss", False, True),
+    ]
+    assert [(item.field, item.value) for item in command.assertions] == [
+        ("hwm_trail_pct", 1),
+        ("atr_stop_multiplier", 2),
+    ]
+
+
+def test_explicit_spot_command_falls_back_for_unknown_or_ambiguous_fields():
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        _parse_explicit_spot_proposal_command,
+    )
+
+    assert _parse_explicit_spot_proposal_command(
+        "Altere spot_engine: unknown_runtime_gate de 1 para 2."
+    ) is None
+    assert _parse_explicit_spot_proposal_command(
+        "Altere spot_engine: activation_profit_pct para 3%."
+    ) is None
+
+
+def test_explicit_spot_preview_precedes_provider_transport_and_is_zero_cost():
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        AnalysisChatGraphNodeHandler,
+    )
+
+    invoke_source = inspect.getsource(AnalysisChatGraphNodeHandler._handle_provider_node)
+    deterministic_index = invoke_source.index("_validated_explicit_spot_proposal")
+    runtime_index = invoke_source.index('ConfigProfile.config_type == "ai_provider_runtime"')
+    provider_index = invoke_source.index("self._prepare_normal_provider")
+    assert deterministic_index < runtime_index < provider_index
+    assert '"provider_transport_attempted": False' in invoke_source
+
+    persist_source = inspect.getsource(AnalysisChatGraphNodeHandler._persist_answer)
+    assert "DETERMINISTIC_GOVERNED_PROPOSAL_RECONCILED" in persist_source
+    assert 'provider = "deterministic"' in persist_source
+    assert 'model = "governed-explicit-v1"' in persist_source
+
+
+@pytest.mark.asyncio
+async def test_explicit_spot_preview_binds_current_values_and_fresh_evidence():
+    from app.ai_orchestration.hashing import canonical_hash
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        _validated_explicit_spot_proposal,
+    )
+
+    tenant_id = uuid.uuid4()
+    request_id = uuid.uuid4()
+    prompt_id = uuid.uuid4()
+    parent_run_id = uuid.uuid4()
+    output_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "answer", "answer_type", "based_on", "parent_analysis_run_id",
+            "evidence_refs", "proposal",
+        ],
+        "properties": {
+            "answer": {"type": "string"},
+            "answer_type": {"type": "string"},
+            "based_on": {"type": "string"},
+            "parent_analysis_run_id": {"type": "string", "format": "uuid"},
+            "evidence_refs": {"type": "array", "items": {"type": "object"}},
+            "proposal": {"type": "object"},
+        },
+    }
+    prompt_fields = {
+        "prompt_key": "analysis-chat-governed-change",
+        "semantic_version": "1.12.0",
+        "system_template": "system",
+        "user_template": "user",
+        "input_schema_json": {},
+        "output_schema_json": output_schema,
+        "tool_policy_json": {},
+        "provider_constraints_json": {},
+    }
+    prompt = SimpleNamespace(
+        id=prompt_id,
+        **prompt_fields,
+        content_hash=canonical_hash(prompt_fields),
+        status="APPROVED",
+        approved_at=datetime.now(timezone.utc),
+    )
+    resource = SimpleNamespace(config_json={
+        "sell_flow": {
+            "trailing": {
+                "activation_profit_pct": 2,
+                "hwm_trail_pct": 1,
+            },
+            "kill_switch": {
+                "atr_stop_multiplier": 2,
+                "max_drawdown_from_hwm_pct": 1,
+            },
+        },
+        "selling": {"never_sell_at_loss": False},
+    })
+    evidence_rows = [
+        SimpleNamespace(
+            id=uuid.uuid4(), tool_name="global_risk.get_effective_policy"
+        ),
+        SimpleNamespace(
+            id=uuid.uuid4(), tool_name="strategies.get_execution_policy"
+        ),
+    ]
+
+    class _Result:
+        def __init__(self, *, scalar=None, rows=None):
+            self.scalar = scalar
+            self.rows = rows or []
+
+        def scalar_one_or_none(self):
+            return self.scalar
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return self.rows
+
+    class _DB:
+        def __init__(self):
+            self.results = iter((
+                _Result(scalar=resource),
+                _Result(rows=evidence_rows),
+            ))
+
+        async def get(self, _model, key):
+            return prompt if key == prompt_id else None
+
+        async def execute(self, _statement):
+            return next(self.results)
+
+    request = SimpleNamespace(
+        id=request_id,
+        prompt_version_id=prompt_id,
+        request_kind="PROPOSAL_DRAFT",
+        request_json={
+            "data_mode": "DRAFT_PROPOSAL",
+            "request_intent": "NORMAL_ANALYSIS",
+            "question": (
+                "Altere somente o spot_engine: activation_profit_pct de 2% para 3%, "
+                "max_drawdown_from_hwm_pct de 1% para 2% e never_sell_at_loss de "
+                "false para true. Mantenha atr_stop_multiplier em 2x e "
+                "hwm_trail_pct em 1%."
+            ),
+        },
+    )
+    selected_refs = [
+        {
+            "evidence_id": str(row.id),
+            "module": row.tool_name.split(".", 1)[0],
+            "source": "REFRESHED_READONLY_DATA",
+        }
+        for row in evidence_rows
+    ]
+
+    answer = await _validated_explicit_spot_proposal(
+        _DB(),
+        run=SimpleNamespace(tenant_id=tenant_id),
+        request=request,
+        conversation=SimpleNamespace(parent_analysis_run_id=parent_run_id),
+        selected_evidence_refs=selected_refs,
+    )
+
+    assert answer is not None
+    assert answer["answer_type"] == "PROPOSAL"
+    assert answer["new_data_queried"] is True
+    proposal = answer["proposal"]
+    assert proposal["target"]["config_type"] == "spot_engine"
+    assert [(change["path"], change["old_value_json"], change["value_json"])
+            for change in proposal["changes"]] == [
+        ("/sell_flow/trailing/activation_profit_pct", "2", "3"),
+        ("/sell_flow/kill_switch/max_drawdown_from_hwm_pct", "1", "2"),
+        ("/selling/never_sell_at_loss", "false", "true"),
+    ]
+
+
 def test_analysis_chat_flags_fail_closed():
     config = AnalysisChatRuntimeConfig()
     assert config.enabled is False
@@ -970,6 +1163,30 @@ def test_governed_readback_prompt_treats_trailing_and_kill_switch_as_one_target(
     ]]
 
 
+def test_explicit_proposal_graph_migration_versions_transport_free_policy():
+    versions = Path(__file__).resolve().parents[1] / "alembic" / "versions"
+    spec = importlib.util.spec_from_file_location(
+        "chat_explicit_proposal",
+        versions / "191_chat_explicit_proposal.py",
+    )
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    graph = migration._expanded_graph({
+        "graph_key": "analysis-chat-v1",
+        "semantic_version": "1.2.0",
+        "state_schema_version": "analysis-chat-state-v1.1",
+        "node_manifest": ["invoke_provider"],
+        "edge_manifest": [],
+        "tool_policy_version": "analysis-chat-governed-write-policy-v2",
+    })
+
+    assert len(migration.revision) <= 32
+    assert migration.down_revision == "190_chat_governed_readback"
+    assert graph["semantic_version"] == "1.3.0"
+    assert graph["tool_policy_version"] == "analysis-chat-governed-write-policy-v3"
+
+
 def test_staging_fake_intent_is_environment_and_flag_bounded(monkeypatch):
     monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "systemic-ai-staging-20260807")
     monkeypatch.setenv("LANGGRAPH_FAKE_PROVIDER_CANARY_ENABLED", "true")
@@ -980,10 +1197,10 @@ def test_staging_fake_intent_is_environment_and_flag_bounded(monkeypatch):
 
 def test_analysis_chat_graph_is_immutable_and_separate():
     graph = resolve_graph("analysis-chat-v1")
-    assert graph.semantic_version == "1.2.0"
+    assert graph.semantic_version == "1.3.0"
     assert graph.state_schema_version == "analysis-chat-state-v1.1"
-    assert graph.tool_policy_version == "analysis-chat-governed-write-policy-v2"
-    assert graph.content_hash == "e32f47edb76036c9b36982c623eb565d02546aef395689f1fe84b9e968af2b18"
+    assert graph.tool_policy_version == "analysis-chat-governed-write-policy-v3"
+    assert graph.content_hash == "0f4dcf16ab49053b90512d8987f32b89358d45ec636b9dcd77f82037b13e834e"
 
 
 def test_analysis_chat_graph_compiles_all_human_gates():

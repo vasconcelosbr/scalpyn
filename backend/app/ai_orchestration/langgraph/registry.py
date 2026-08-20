@@ -181,15 +181,15 @@ def _definition(graph_key: str, nodes: tuple[str, ...]) -> GraphDefinition:
 def _analysis_chat_definition() -> GraphDefinition:
     payload = {
         "graph_key": "analysis-chat-v1",
-        "semantic_version": "1.2.0",
+        "semantic_version": "1.3.0",
         "state_schema_version": "analysis-chat-state-v1.1",
         "node_manifest": list(ANALYSIS_CHAT_NODES),
         "edge_manifest": [list(edge) for edge in ANALYSIS_CHAT_EDGES],
-        "tool_policy_version": "analysis-chat-governed-write-policy-v2",
+        "tool_policy_version": "analysis-chat-governed-write-policy-v3",
     }
-    approved_at = datetime(2026, 8, 20, 18, tzinfo=timezone.utc)
+    approved_at = datetime(2026, 8, 20, 19, tzinfo=timezone.utc)
     return GraphDefinition(
-        id=uuid.uuid5(GRAPH_NAMESPACE, "analysis-chat-v1@1.2.0"),
+        id=uuid.uuid5(GRAPH_NAMESPACE, "analysis-chat-v1@1.3.0"),
         graph_key=payload["graph_key"],
         semantic_version=payload["semantic_version"],
         state_schema_version=payload["state_schema_version"],
@@ -197,7 +197,7 @@ def _analysis_chat_definition() -> GraphDefinition:
         content_hash=hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest(),
-        code_revision="190_chat_governed_readback",
+        code_revision="191_chat_explicit_proposal",
         node_manifest=ANALYSIS_CHAT_NODES,
         edge_manifest=ANALYSIS_CHAT_EDGES,
         tool_policy_version=payload["tool_policy_version"],

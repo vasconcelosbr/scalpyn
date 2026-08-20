@@ -8,6 +8,7 @@ from decimal import Decimal
 import hashlib
 import json
 import os
+import re
 from typing import Any
 import uuid
 from uuid import UUID
@@ -78,6 +79,181 @@ _ALLOWED_ANALYSIS_CHAT_PROVIDER_INTENTS = frozenset({
     "NORMAL_ANALYSIS",
     "FAKE_PROVIDER_CANARY",
 })
+
+
+_EXPLICIT_SPOT_RESOURCE = "spot_engine"
+_EXPLICIT_SPOT_FIELD_PATHS = {
+    "activation_profit_pct": "/sell_flow/trailing/activation_profit_pct",
+    "hwm_trail_pct": "/sell_flow/trailing/hwm_trail_pct",
+    "atr_stop_multiplier": "/sell_flow/kill_switch/atr_stop_multiplier",
+    "max_drawdown_from_hwm_pct": "/sell_flow/kill_switch/max_drawdown_from_hwm_pct",
+    "never_sell_at_loss": "/selling/never_sell_at_loss",
+}
+_EXPLICIT_SPOT_BOOLEAN_FIELDS = frozenset({"never_sell_at_loss"})
+_EXPLICIT_SPOT_PERCENT_FIELDS = frozenset({
+    "activation_profit_pct",
+    "hwm_trail_pct",
+    "max_drawdown_from_hwm_pct",
+})
+_EXPLICIT_SPOT_MULTIPLIER_FIELDS = frozenset({"atr_stop_multiplier"})
+_EXPLICIT_SPOT_VALUE_PATTERN = (
+    r"(?:true|false|verdadeiro|falso|[-+]?\d+(?:[\.,]\d+)?\s*(?:%|x)?)"
+)
+
+
+@dataclass(frozen=True)
+class _ExplicitSpotFieldChange:
+    field: str
+    path: str
+    old_value: bool | int | float
+    new_value: bool | int | float
+
+
+@dataclass(frozen=True)
+class _ExplicitSpotFieldAssertion:
+    field: str
+    path: str
+    value: bool | int | float
+
+
+@dataclass(frozen=True)
+class _ExplicitSpotProposalCommand:
+    changes: tuple[_ExplicitSpotFieldChange, ...]
+    assertions: tuple[_ExplicitSpotFieldAssertion, ...]
+
+
+def _parse_explicit_spot_value(
+    raw_value: str,
+    *,
+    boolean_field: bool,
+) -> bool | int | float | None:
+    normalized = raw_value.strip().lower()
+    if boolean_field:
+        return {
+            "true": True,
+            "verdadeiro": True,
+            "false": False,
+            "falso": False,
+        }.get(normalized)
+    if normalized in {"true", "false", "verdadeiro", "falso"}:
+        return None
+    numeric = re.sub(r"\s*(?:%|x)$", "", normalized).replace(",", ".")
+    try:
+        value = float(numeric)
+    except ValueError:
+        return None
+    if not (value >= 0 and value < float("inf")):
+        return None
+    return int(value) if value.is_integer() else value
+
+
+def _explicit_spot_unit_is_valid(field: str, raw_value: str) -> bool:
+    normalized = raw_value.strip().lower()
+    if field in _EXPLICIT_SPOT_BOOLEAN_FIELDS:
+        return normalized in {"true", "false", "verdadeiro", "falso"}
+    if field in _EXPLICIT_SPOT_PERCENT_FIELDS:
+        return normalized.endswith("%")
+    if field in _EXPLICIT_SPOT_MULTIPLIER_FIELDS:
+        return normalized.endswith("x")
+    return False
+
+
+def _parse_explicit_spot_proposal_command(
+    question: str,
+) -> _ExplicitSpotProposalCommand | None:
+    """Parse only a closed, explicit old-to-new global spot configuration command."""
+
+    normalized = question.strip().lower()
+    if (
+        not normalized
+        or not re.search(r"\b(?:somente|apenas)\s+(?:o\s+)?spot_engine\b", normalized)
+    ):
+        return None
+    snake_tokens = set(re.findall(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b", normalized))
+    allowed_tokens = {_EXPLICIT_SPOT_RESOURCE, *_EXPLICIT_SPOT_FIELD_PATHS}
+    if not snake_tokens.issubset(allowed_tokens):
+        return None
+
+    changes: list[_ExplicitSpotFieldChange] = []
+    assertions: list[_ExplicitSpotFieldAssertion] = []
+    sentences = re.split(r"[.!?;\n]+", normalized)
+    for field, path in _EXPLICIT_SPOT_FIELD_PATHS.items():
+        occurrences = len(re.findall(rf"\b{re.escape(field)}\b", normalized))
+        if occurrences == 0:
+            continue
+        if occurrences != 1:
+            return None
+        change_matches = list(re.finditer(
+            rf"\b{re.escape(field)}\b\s+de\s+({_EXPLICIT_SPOT_VALUE_PATTERN})"
+            rf"\s+para\s+({_EXPLICIT_SPOT_VALUE_PATTERN})",
+            normalized,
+            flags=re.IGNORECASE,
+        ))
+        assertion_matches: list[re.Match[str]] = []
+        for sentence in sentences:
+            if not re.search(r"\b(?:mantenha|manter)\b", sentence):
+                continue
+            assertion_matches.extend(re.finditer(
+                rf"\b{re.escape(field)}\b\s+em\s+({_EXPLICIT_SPOT_VALUE_PATTERN})",
+                sentence,
+                flags=re.IGNORECASE,
+            ))
+        if len(change_matches) + len(assertion_matches) != 1:
+            return None
+        is_boolean = field in _EXPLICIT_SPOT_BOOLEAN_FIELDS
+        if change_matches:
+            match = change_matches[0]
+            if not all(
+                _explicit_spot_unit_is_valid(field, match.group(index))
+                for index in (1, 2)
+            ):
+                return None
+            old_value = _parse_explicit_spot_value(
+                match.group(1), boolean_field=is_boolean
+            )
+            new_value = _parse_explicit_spot_value(
+                match.group(2), boolean_field=is_boolean
+            )
+            if old_value is None or new_value is None or old_value == new_value:
+                return None
+            changes.append(_ExplicitSpotFieldChange(
+                field=field,
+                path=path,
+                old_value=old_value,
+                new_value=new_value,
+            ))
+        else:
+            if not _explicit_spot_unit_is_valid(
+                field, assertion_matches[0].group(1)
+            ):
+                return None
+            value = _parse_explicit_spot_value(
+                assertion_matches[0].group(1), boolean_field=is_boolean
+            )
+            if value is None:
+                return None
+            assertions.append(_ExplicitSpotFieldAssertion(
+                field=field,
+                path=path,
+                value=value,
+            ))
+    if not changes:
+        return None
+    return _ExplicitSpotProposalCommand(
+        changes=tuple(changes),
+        assertions=tuple(assertions),
+    )
+
+
+def _explicit_spot_value_matches(
+    actual: Any,
+    expected: bool | int | float,
+) -> bool:
+    if isinstance(expected, bool):
+        return isinstance(actual, bool) and actual is expected
+    if isinstance(actual, bool) or not isinstance(actual, (int, float, Decimal)):
+        return False
+    return Decimal(str(actual)) == Decimal(str(expected))
 
 
 def _validated_analysis_chat_provider_intent(request_json: dict[str, Any]) -> str:
@@ -709,6 +885,188 @@ async def _hydrate_config_change_preconditions(
     return {**proposal, "changes": translated_changes}
 
 
+def _explicit_spot_block(reason_code: str, safe_message: str) -> ProviderBlockedError:
+    return ProviderBlockedError(reason_code, safe_message)
+
+
+async def _validated_explicit_spot_proposal(
+    db,
+    *,
+    run: AIGraphRun,
+    request: AIRequestRecord,
+    conversation: AIAnalysisConversation,
+    selected_evidence_refs: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Build a provider-free preview for a narrow, explicit governed command."""
+
+    request_json = dict(request.request_json or {})
+    if (
+        request_json.get("data_mode") != "DRAFT_PROPOSAL"
+        or request.request_kind != "PROPOSAL_DRAFT"
+        or request_json.get("request_intent") != "NORMAL_ANALYSIS"
+    ):
+        return None
+    command = _parse_explicit_spot_proposal_command(
+        str(request_json.get("question") or "")
+    )
+    if command is None:
+        return None
+
+    prompt = await db.get(AIPromptVersion, request.prompt_version_id)
+    prompt_payload = (
+        {
+            key: getattr(prompt, key)
+            for key in (
+                "prompt_key",
+                "semantic_version",
+                "system_template",
+                "user_template",
+                "input_schema_json",
+                "output_schema_json",
+                "tool_policy_json",
+                "provider_constraints_json",
+            )
+        }
+        if prompt is not None
+        else None
+    )
+    if (
+        prompt is None
+        or prompt.prompt_key != "analysis-chat-governed-change"
+        or prompt.status != "APPROVED"
+        or prompt.approved_at is None
+        or not isinstance(prompt.output_schema_json, dict)
+        or canonical_hash(prompt_payload) != prompt.content_hash
+    ):
+        raise _explicit_spot_block(
+            "ANALYSIS_CHAT_EXPLICIT_PROPOSAL_PROMPT_INVALID",
+            "A prévia explícita foi bloqueada porque o contrato aprovado não pôde ser validado",
+        )
+
+    resource = (
+        await db.execute(select(ConfigProfile).where(
+            ConfigProfile.user_id == run.tenant_id,
+            ConfigProfile.pool_id.is_(None),
+            ConfigProfile.config_type == _EXPLICIT_SPOT_RESOURCE,
+            ConfigProfile.is_active.is_(True),
+        ).order_by(ConfigProfile.updated_at.desc()).limit(1))
+    ).scalar_one_or_none()
+    if resource is None:
+        raise _explicit_spot_block(
+            "ANALYSIS_CHAT_EXPLICIT_CONFIG_RESOURCE_MISSING",
+            "A prévia explícita foi bloqueada porque a configuração global atual não foi encontrada",
+        )
+    document = dict(resource.config_json or {})
+    for item in (*command.changes, *command.assertions):
+        try:
+            current_value, _guards = derive_patch_preconditions(
+                document,
+                path=item.path,
+                op="replace",
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise _explicit_spot_block(
+                "ANALYSIS_CHAT_EXPLICIT_CONFIG_PATH_INVALID",
+                "A prévia explícita foi bloqueada porque um campo não existe no contrato atual",
+            ) from exc
+        expected_value = item.old_value if isinstance(
+            item, _ExplicitSpotFieldChange
+        ) else item.value
+        if not _explicit_spot_value_matches(current_value, expected_value):
+            raise _explicit_spot_block(
+                "ANALYSIS_CHAT_EXPLICIT_CONFIG_VALUE_STALE",
+                "Os valores informados não correspondem mais à configuração atual; atualize o pedido antes de gerar outra prévia",
+            )
+
+    selected_ids: list[UUID] = []
+    for ref in selected_evidence_refs:
+        try:
+            selected_ids.append(UUID(str(ref.get("evidence_id"))))
+        except (TypeError, ValueError):
+            continue
+    evidence_rows = list((await db.execute(select(AIToolEvidenceRecord).where(
+        AIToolEvidenceRecord.id.in_(selected_ids),
+        AIToolEvidenceRecord.tenant_id == run.tenant_id,
+        AIToolEvidenceRecord.ai_request_id == request.id,
+        AIToolEvidenceRecord.tool_name.in_((
+            "global_risk.get_effective_policy",
+            "strategies.get_execution_policy",
+        )),
+    ))).scalars().all()) if selected_ids else []
+    evidence_by_tool = {row.tool_name: row for row in evidence_rows}
+    required_tools = (
+        "global_risk.get_effective_policy",
+        "strategies.get_execution_policy",
+    )
+    if set(evidence_by_tool) != set(required_tools) or len(evidence_rows) != 2:
+        raise _explicit_spot_block(
+            "ANALYSIS_CHAT_EXPLICIT_PROPOSAL_EVIDENCE_MISSING",
+            "A prévia explícita foi bloqueada porque faltam evidências atuais de risco e estratégia",
+        )
+    evidence_ids = [str(evidence_by_tool[name].id) for name in required_tools]
+
+    changes: list[dict[str, Any]] = []
+    for item in command.changes:
+        current_value, guards = derive_patch_preconditions(
+            document,
+            path=item.path,
+            op="replace",
+        )
+        changes.append({
+            "op": "replace",
+            "path": item.path,
+            "value_json": json.dumps(
+                item.new_value, ensure_ascii=False, separators=(",", ":")
+            ),
+            "old_value_json": json.dumps(
+                current_value, ensure_ascii=False, separators=(",", ":")
+            ),
+            "array_guards_json": json.dumps(
+                guards, ensure_ascii=False, separators=(",", ":")
+            ),
+            "reason": f"Alteração explícita e confirmável do campo {item.field}",
+            "evidence_refs": evidence_ids,
+            "profile_id": None,
+            "profile_name": None,
+            "profile_indexes": [],
+        })
+    proposal = {
+        "operation_type": "UPDATE_CONFIG_PROFILE",
+        "target": {
+            "profile_id": None,
+            "profile_name": None,
+            "config_type": _EXPLICIT_SPOT_RESOURCE,
+            "pool_id": None,
+            "profile_ids": [],
+        },
+        "objective": "Aplicar somente os ajustes explícitos na configuração spot solicitada",
+        "risk": "Mudança operacional condicionada à validação determinística e à confirmação humana final",
+        "changes": changes,
+    }
+    validated = _validated_provider_answer({
+        "answer": (
+            "A prévia determinística foi gerada a partir dos valores atuais; "
+            "nenhuma configuração foi alterada e a confirmação final continua obrigatória."
+        ),
+        "answer_type": "PROPOSAL",
+        "based_on": "PROPOSAL_DRAFT",
+        "parent_analysis_run_id": str(conversation.parent_analysis_run_id),
+        "evidence_refs": [{"evidence_id": item} for item in evidence_ids],
+        "proposal": proposal,
+    }, dict(prompt.output_schema_json))
+    modules = list(dict.fromkeys(
+        str(ref.get("module"))
+        for ref in selected_evidence_refs
+        if ref.get("module")
+    ))
+    return validated.model_copy(update={
+        "modules_consulted": modules,
+        "evidence_refs": selected_evidence_refs,
+        "new_data_queried": True,
+        "warnings": ["DETERMINISTIC_EXPLICIT_CONFIG_PREVIEW"],
+    }).model_dump(mode="json")
+
+
 class AnalysisChatGraphNodeHandler:
     def __init__(self, graph_run_id: UUID, *, celery: bool = True):
         self.graph_run_id = graph_run_id
@@ -872,6 +1230,32 @@ class AnalysisChatGraphNodeHandler:
                 updates = await self._node_updates(
                     db, run, request, message, "invoke_provider", state
                 )
+                await self._complete_node(
+                    db, run, request, message, "invoke_provider", updates
+                )
+                return updates, None
+
+            deterministic_answer = await _validated_explicit_spot_proposal(
+                db,
+                run=run,
+                request=request,
+                conversation=conversation,
+                selected_evidence_refs=list(
+                    state.get("selected_evidence_refs") or []
+                ),
+            )
+            if deterministic_answer is not None:
+                await self._emit_tokens(
+                    db,
+                    run,
+                    request,
+                    message,
+                    deterministic_answer["answer"],
+                )
+                updates = {
+                    "answer": deterministic_answer,
+                    "provider_transport_attempted": False,
+                }
                 await self._complete_node(
                     db, run, request, message, "invoke_provider", updates
                 )
@@ -1478,7 +1862,17 @@ class AnalysisChatGraphNodeHandler:
         if node_name == "persist_message_result_usage":
             answer = AnalysisChatOutput.model_validate(state.get("answer"))
             message.tool_call_ids_json = list(state.get("tool_call_ids") or [])
-            await self._persist_answer(db, run, request, message, conversation, answer)
+            await self._persist_answer(
+                db,
+                run,
+                request,
+                message,
+                conversation,
+                answer,
+                provider_transport_attempted=state.get(
+                    "provider_transport_attempted"
+                ),
+            )
             return {"result_json": answer.model_dump(mode="json")}
         if node_name == "update_conversation_summary_if_needed":
             config = await self._runtime_config(db, run.tenant_id)
@@ -2099,7 +2493,26 @@ class AnalysisChatGraphNodeHandler:
         await db.flush()
         return reservation
 
-    async def _persist_answer(self, db, run, request, message, conversation, answer: AnalysisChatOutput) -> None:
+    async def _persist_answer(
+        self,
+        db,
+        run,
+        request,
+        message,
+        conversation,
+        answer: AnalysisChatOutput,
+        *,
+        provider_transport_attempted: bool | None = None,
+    ) -> None:
+        is_fake = request.request_json.get("request_intent") == "FAKE_PROVIDER_CANARY"
+        no_provider_required = request.request_kind == "CHILD_ANALYSIS"
+        is_deterministic = (
+            provider_transport_attempted is False
+            and not is_fake
+            and request.request_kind == "PROPOSAL_DRAFT"
+            and answer.answer_type == "PROPOSAL"
+        )
+        zero_cost_turn = is_fake or no_provider_required or is_deterministic
         existing = (
             await db.execute(select(AIResultRecord).where(
                 AIResultRecord.tenant_id == run.tenant_id,
@@ -2112,7 +2525,13 @@ class AnalysisChatGraphNodeHandler:
                 ai_request_id=request.id,
                 status="COMPLETED",
                 result_json=answer.model_dump(mode="json"),
-                terminal_reason="STAGING_FAKE" if request.request_json.get("request_intent") == "FAKE_PROVIDER_CANARY" else "ANALYSIS_CHAT",
+                terminal_reason=(
+                    "STAGING_FAKE"
+                    if is_fake
+                    else "DETERMINISTIC_GOVERNED_PROPOSAL"
+                    if is_deterministic
+                    else "ANALYSIS_CHAT"
+                ),
                 completed_at=_now(),
             )
             db.add(existing)
@@ -2123,15 +2542,20 @@ class AnalysisChatGraphNodeHandler:
                 AIUsageRecord.ai_request_id == request.id,
             ))
         ).scalar_one_or_none()
-        is_fake = request.request_json.get("request_intent") == "FAKE_PROVIDER_CANARY"
-        no_provider_required = request.request_kind == "CHILD_ANALYSIS"
-        zero_cost_turn = is_fake or no_provider_required
         if usage is None and zero_cost_turn:
             usage = AIUsageRecord(
                 tenant_id=run.tenant_id,
                 ai_request_id=request.id,
-                provider=message.effective_provider or "fake",
-                model=message.effective_model or "fake-analysis-v1",
+                provider=(
+                    "deterministic"
+                    if is_deterministic
+                    else message.effective_provider or "fake"
+                ),
+                model=(
+                    "governed-explicit-v1"
+                    if is_deterministic
+                    else message.effective_model or "fake-analysis-v1"
+                ),
                 module="analysis_chat",
                 tokens_input=0,
                 tokens_output=0,
@@ -2139,7 +2563,11 @@ class AnalysisChatGraphNodeHandler:
                 actual_cost=Decimal("0"),
                 currency="USD",
                 pricing_snapshot_version=(
-                    "ZERO_COST_FAKE_STAGING" if is_fake else "NO_PROVIDER_REQUIRED"
+                    "DETERMINISTIC_GOVERNED_PROPOSAL"
+                    if is_deterministic
+                    else "ZERO_COST_FAKE_STAGING"
+                    if is_fake
+                    else "NO_PROVIDER_REQUIRED"
                 ),
             )
             db.add(usage)
@@ -2147,13 +2575,20 @@ class AnalysisChatGraphNodeHandler:
             raise RuntimeError("ANALYSIS_CHAT_PROVIDER_USAGE_MISSING")
         reservation = await self._ensure_reservation(db, run, request)
         if zero_cost_turn:
+            if is_deterministic:
+                reservation.provider = "deterministic"
+                reservation.model = "governed-explicit-v1"
             reservation.status = "RECONCILED"
             reservation.actual_tokens = 0
             reservation.actual_cost_usd = Decimal("0")
             reservation.released_tokens = 0
             reservation.provider_transport_attempted = False
             reservation.terminal_reason = (
-                "ZERO_COST_FAKE_RECONCILED" if is_fake else "NO_PROVIDER_REQUIRED_RECONCILED"
+                "DETERMINISTIC_GOVERNED_PROPOSAL_RECONCILED"
+                if is_deterministic
+                else "ZERO_COST_FAKE_RECONCILED"
+                if is_fake
+                else "NO_PROVIDER_REQUIRED_RECONCILED"
             )
             reservation.reconciled_at = _now()
         elif reservation.status != "RECONCILED" or not reservation.provider_transport_attempted:
