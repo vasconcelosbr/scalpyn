@@ -128,7 +128,54 @@ async def test_explicit_spot_preview_binds_current_values_and_fresh_evidence():
             "based_on": {"type": "string"},
             "parent_analysis_run_id": {"type": "string", "format": "uuid"},
             "evidence_refs": {"type": "array", "items": {"type": "object"}},
-            "proposal": {"type": "object"},
+            "proposal": {
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": [
+                            "operation_type", "target", "objective", "risk", "changes",
+                        ],
+                        "properties": {
+                            "operation_type": {"const": "UPDATE_CONFIG_PROFILE"},
+                            "target": {"type": "object"},
+                            "objective": {"type": "string"},
+                            "risk": {"type": "string"},
+                            "changes": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "additionalProperties": False,
+                                    "required": [
+                                        "op", "path", "value_json", "old_value_json",
+                                        "array_guards_json", "reason", "evidence_refs",
+                                        "profile_id", "profile_name", "profile_indexes",
+                                    ],
+                                    "properties": {
+                                        "op": {"const": "replace"},
+                                        "path": {"type": "string"},
+                                        "value_json": {"type": "string"},
+                                        "old_value_json": {"type": "string"},
+                                        "array_guards_json": {"type": "string"},
+                                        "reason": {"type": "string"},
+                                        "evidence_refs": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string",
+                                                "pattern": "^E([1-9]|1[0-2])$",
+                                            },
+                                        },
+                                        "profile_id": {"type": "null"},
+                                        "profile_name": {"type": "null"},
+                                        "profile_indexes": {"type": "array"},
+                                    },
+                                },
+                            },
+                        },
+                    },
+                    {"type": "null"},
+                ],
+            },
         },
     }
     prompt_fields = {
@@ -213,6 +260,13 @@ async def test_explicit_spot_preview_binds_current_values_and_fresh_evidence():
         },
     )
     selected_refs = [
+        {
+            "evidence_id": str(uuid.uuid4()),
+            "module": "shadow_portfolio",
+            "source": "FROZEN_ANALYSIS",
+        }
+        for _index in range(7)
+    ] + [
         {
             "evidence_id": str(row.id),
             "module": row.tool_name.split(".", 1)[0],

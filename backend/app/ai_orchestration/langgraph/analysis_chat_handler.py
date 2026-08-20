@@ -1004,6 +1004,19 @@ async def _validated_explicit_spot_proposal(
             "A prévia explícita foi bloqueada porque faltam evidências atuais de risco e estratégia",
         )
     evidence_ids = [str(evidence_by_tool[name].id) for name in required_tools]
+    schema_label_by_id = {
+        str(ref.get("evidence_id")): f"E{index + 1}"
+        for index, ref in enumerate(selected_evidence_refs[:12])
+        if ref.get("evidence_id")
+    }
+    schema_evidence_labels = [
+        schema_label_by_id.get(evidence_id) for evidence_id in evidence_ids
+    ]
+    if any(label is None for label in schema_evidence_labels):
+        raise _explicit_spot_block(
+            "ANALYSIS_CHAT_EXPLICIT_PROPOSAL_EVIDENCE_LABEL_MISSING",
+            "A prévia explícita foi bloqueada porque as evidências atuais ficaram fora do contrato rotulado",
+        )
 
     changes: list[dict[str, Any]] = []
     for item in command.changes:
@@ -1043,17 +1056,30 @@ async def _validated_explicit_spot_proposal(
         "risk": "Mudança operacional condicionada à validação determinística e à confirmação humana final",
         "changes": changes,
     }
-    validated = _validated_provider_answer({
-        "answer": (
-            "A prévia determinística foi gerada a partir dos valores atuais; "
-            "nenhuma configuração foi alterada e a confirmação final continua obrigatória."
-        ),
-        "answer_type": "PROPOSAL",
-        "based_on": "PROPOSAL_DRAFT",
-        "parent_analysis_run_id": str(conversation.parent_analysis_run_id),
-        "evidence_refs": [{"evidence_id": item} for item in evidence_ids],
-        "proposal": proposal,
-    }, dict(prompt.output_schema_json))
+    schema_proposal = {
+        **proposal,
+        "changes": [
+            {**change, "evidence_refs": schema_evidence_labels}
+            for change in changes
+        ],
+    }
+    try:
+        validated = _validated_provider_answer({
+            "answer": (
+                "A prévia determinística foi gerada a partir dos valores atuais; "
+                "nenhuma configuração foi alterada e a confirmação final continua obrigatória."
+            ),
+            "answer_type": "PROPOSAL",
+            "based_on": "PROPOSAL_DRAFT",
+            "parent_analysis_run_id": str(conversation.parent_analysis_run_id),
+            "evidence_refs": [{"evidence_id": item} for item in evidence_ids],
+            "proposal": schema_proposal,
+        }, dict(prompt.output_schema_json))
+    except ProviderOutputError as exc:
+        raise _explicit_spot_block(
+            "ANALYSIS_CHAT_EXPLICIT_PROPOSAL_SCHEMA_INVALID",
+            "A prévia determinística foi bloqueada porque não corresponde ao contrato aprovado",
+        ) from exc
     modules = list(dict.fromkeys(
         str(ref.get("module"))
         for ref in selected_evidence_refs
@@ -1063,6 +1089,7 @@ async def _validated_explicit_spot_proposal(
         "modules_consulted": modules,
         "evidence_refs": selected_evidence_refs,
         "new_data_queried": True,
+        "proposal": proposal,
         "warnings": ["DETERMINISTIC_EXPLICIT_CONFIG_PREVIEW"],
     }).model_dump(mode="json")
 
