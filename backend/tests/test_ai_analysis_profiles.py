@@ -258,3 +258,19 @@ def test_deepseek_profiles_use_the_provider_physical_output_maximum():
     registry = default_registry()
     assert registry.get_entry("deepseek", "deepseek-v4-flash").max_output == 384_000
     assert registry.get_entry("deepseek", "deepseek-v4-pro").max_output == 384_000
+
+
+def test_deepseek_intelligence_run_quotas_do_not_reintroduce_internal_caps():
+    migration_path = BACKEND / "alembic/versions/188_deepseek_quota_unbounded.py"
+    spec = importlib.util.spec_from_file_location("migration_188_deepseek_quota_unbounded", migration_path)
+    assert spec and spec.loader
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    assert len(migration.revision) <= 32
+    assert migration.down_revision == "187_deepseek_provider_max"
+    assert migration.REQUEST_TOKEN_LIMIT == 1_384_000
+    assert migration.POLICY_AGGREGATE_TOKEN_LIMIT == 2_147_483_647
+    assert migration.KEY_MONTHLY_TOKEN_LIMIT == 9_223_372_036_854_775_807
+    assert set(migration.MODELS) == {"deepseek-v4-flash", "deepseek-v4-pro"}
+    assert migration.MODULE == "shadow_portfolio"
