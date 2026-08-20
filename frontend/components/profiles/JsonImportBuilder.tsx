@@ -57,6 +57,7 @@ interface ImportFilePayload {
   apply_to_active_profiles?: boolean;
   update_active_profiles?: boolean;
   active_profiles_only?: boolean;
+  update_indicators_only?: boolean;
   scoring_assignments?: ScoringAssignment[];
   scoring_rules?: unknown[];
 }
