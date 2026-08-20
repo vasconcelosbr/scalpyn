@@ -2696,7 +2696,7 @@ def test_candidate_gate_vetoes_an_unknown_score_document_key():
 
 
 @pytest.mark.parametrize("config_type", ["spot_engine", "futures_engine"])
-def test_engine_candidate_requires_complete_canonical_document(config_type):
+def test_engine_candidate_requires_complete_known_document(config_type):
     if config_type == "spot_engine":
         partial = {"selling": {"never_sell_at_loss": True}}
         canonical = service.SpotEngineConfig().default_json()
@@ -2704,13 +2704,103 @@ def test_engine_candidate_requires_complete_canonical_document(config_type):
         partial = {"risk": {"max_positions": 5}}
         canonical = service.FuturesEngineConfig().default_json()
 
-    with pytest.raises(ValueError, match="complete canonical document"):
+    with pytest.raises(ValueError, match="complete .*document"):
         service._validate_config_candidate(config_type, partial)
     assert service._validate_config_candidate(config_type, canonical) == canonical
     tampered = deepcopy(canonical)
     tampered["unknown_runtime_override"] = True
-    with pytest.raises(ValueError, match="without unknown keys"):
+    with pytest.raises(ValueError, match="unknown keys"):
         service._validate_config_candidate(config_type, tampered)
+
+
+def test_legacy_spot_document_is_preserved_while_effective_patch_is_validated():
+    source = service.SpotEngineConfig().default_json()
+    source.pop("holding_underwater")
+    source.pop("macro_filter")
+    source["buying"].pop("capital_per_trade_max_usdt")
+    source["dca"] = {
+        "enabled": False,
+        "max_total_exposure_per_asset_pct": 30.0,
+    }
+    source.update({
+        "orders": {"max_slippage_pct": 0.1},
+        "sell": {"take_profit_pct": 1.5},
+        "trailing": {"tighten_above_profit_pct": 2.0},
+    })
+    source["selling"]["never_sell_at_loss"] = False
+    source["sell_flow"]["trailing"]["activation_profit_pct"] = 2.0
+    source["sell_flow"]["kill_switch"]["max_drawdown_from_hwm_pct"] = 1.0
+
+    assert service._validate_config_candidate(
+        "spot_engine",
+        deepcopy(source),
+        enforce_invariants=False,
+    ) == source
+    with pytest.raises(ValueError, match="never_sell_at_loss=true"):
+        service._validate_config_candidate("spot_engine", deepcopy(source))
+
+    changes = [
+        {
+            "op": "replace",
+            "path": "/sell_flow/trailing/activation_profit_pct",
+            "old_value": 2.0,
+            "value": 3.0,
+            "array_guards": [],
+        },
+        {
+            "op": "replace",
+            "path": "/sell_flow/kill_switch/max_drawdown_from_hwm_pct",
+            "old_value": 1.0,
+            "value": 2.0,
+            "array_guards": [],
+        },
+        {
+            "op": "replace",
+            "path": "/selling/never_sell_at_loss",
+            "old_value": False,
+            "value": True,
+            "array_guards": [],
+        },
+    ]
+    patched, _diff = service.apply_typed_patch(source, changes)
+    candidate = service._validate_config_candidate("spot_engine", patched)
+    service._assert_patch_survived_normalization(
+        service._effective_config_candidate("spot_engine", source),
+        service._effective_config_candidate("spot_engine", candidate),
+        changes,
+    )
+
+    assert candidate["orders"] == source["orders"]
+    assert candidate["sell"] == source["sell"]
+    assert candidate["trailing"] == source["trailing"]
+    assert "holding_underwater" not in candidate
+    assert "macro_filter" not in candidate
+
+    tampered = deepcopy(candidate)
+    tampered["sell_flow"]["trailing"]["unknown_override"] = 99
+    with pytest.raises(ValueError, match="unknown keys"):
+        service._validate_config_candidate("spot_engine", tampered)
+
+    ignored_legacy_change = [{
+        "op": "replace",
+        "path": "/trailing/tighten_above_profit_pct",
+        "old_value": 2.0,
+        "value": 3.0,
+        "array_guards": [],
+    }]
+    ignored_candidate, _diff = service.apply_typed_patch(
+        source,
+        ignored_legacy_change,
+    )
+    with pytest.raises(
+        service.GovernedChangePathError,
+        match="no-op after configuration validation",
+    ):
+        service._assert_patch_survived_normalization(
+            service._effective_config_candidate("spot_engine", source),
+            service._effective_config_candidate("spot_engine", ignored_candidate),
+            ignored_legacy_change,
+        )
 
 
 def test_candidate_gate_vetoes_a_partial_spot_document_even_with_invariant_true():
@@ -2745,7 +2835,7 @@ def test_candidate_gate_vetoes_a_partial_spot_document_even_with_invariant_true(
         if item["check"] == "SPOT_CANDIDATE_SCHEMA_AND_INVARIANTS"
     )
     assert check["decision"] == "VETO"
-    assert "complete canonical document" in check["reason"]
+    assert "complete persisted document" in check["reason"]
 
 
 def test_candidate_gate_vetoes_a_partial_futures_document():

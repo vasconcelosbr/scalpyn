@@ -14,6 +14,7 @@ import json
 from typing import Any
 from uuid import UUID
 
+from pydantic import BaseModel
 from sqlalchemy import and_, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -124,6 +125,24 @@ _STRICT_CONFIG_PROFILE_TYPES = frozenset({
     "spot_engine",
     "futures_engine",
     "strategy",
+})
+_SPOT_REQUIRED_PERSISTED_ROOTS = frozenset({
+    "scanner",
+    "buying",
+    "selling",
+    "dca",
+    "sell_flow",
+})
+_SPOT_PRESERVED_COMPAT_ROOTS = frozenset({
+    # Persisted by the pre-SellFlow UI.  The current runtime ignores these
+    # roots, but removing them is a separate migration and must never be a
+    # hidden side effect of an Analysis Chat patch.
+    "orders",
+    "sell",
+    "trailing",
+    # Explicitly migrated by SpotEngineConfig.from_config_json().
+    "capital",
+    "limits",
 })
 _PROFILE_TIMEFRAMES = frozenset({"1m", "3m", "5m", "15m", "1h"})
 _PROFILE_LOGICS = frozenset({"AND", "OR"})
@@ -652,7 +671,64 @@ def apply_typed_patch(
     return candidate, diff
 
 
-def _validate_config_candidate(config_type: str, candidate: dict[str, Any]) -> dict[str, Any]:
+def _assert_known_model_keys(
+    value: Any,
+    model: type[BaseModel],
+    *,
+    path: str,
+    allowed_extra: frozenset[str] = frozenset(),
+) -> None:
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} must be an object")
+    fields = model.model_fields
+    unknown = set(value) - set(fields) - set(allowed_extra)
+    if unknown:
+        raise ValueError(
+            f"{path} contains unknown keys: {', '.join(sorted(unknown))}"
+        )
+    for key, field in fields.items():
+        child = value.get(key)
+        annotation = field.annotation
+        if (
+            isinstance(child, dict)
+            and isinstance(annotation, type)
+            and issubclass(annotation, BaseModel)
+        ):
+            _assert_known_model_keys(
+                child,
+                annotation,
+                path=f"{path}.{key}",
+                allowed_extra=(
+                    frozenset({"ranging", "exhaustion"})
+                    if path == "spot" and key == "sell_flow"
+                    else frozenset()
+                ),
+            )
+
+
+def _effective_config_candidate(
+    config_type: str,
+    candidate: dict[str, Any],
+) -> dict[str, Any]:
+    """Return the runtime-effective document without changing persistence.
+
+    Spot production documents can legitimately omit fields that the runtime
+    fills from schema defaults and can still carry preserved pre-SellFlow UI
+    roots.  Governed patches must be checked against the effective document,
+    while the persisted candidate remains byte-for-byte identical outside the
+    reviewed diff.
+    """
+    if config_type == "spot_engine":
+        return SpotEngineConfig.from_config_json(deepcopy(candidate)).model_dump()
+    return deepcopy(candidate)
+
+
+def _validate_config_candidate(
+    config_type: str,
+    candidate: dict[str, Any],
+    *,
+    enforce_invariants: bool = True,
+) -> dict[str, Any]:
     if config_type == "risk":
         _validate_closed_risk_policy(candidate)
         return candidate
@@ -663,12 +739,34 @@ def _validate_config_candidate(config_type: str, candidate: dict[str, Any]) -> d
         _validate_score_candidate(candidate)
         return candidate
     if config_type == "spot_engine":
-        validated = SpotEngineConfig.from_config_json(deepcopy(candidate)).model_dump()
-        if validated != candidate:
+        if not isinstance(candidate, dict):
+            raise ValueError("Spot candidate must be a JSON object")
+        missing = _SPOT_REQUIRED_PERSISTED_ROOTS - set(candidate)
+        if missing:
             raise ValueError(
-                "Spot candidate must be the complete canonical document without unknown keys"
+                "Spot candidate must be the complete persisted document; missing roots: "
+                f"{', '.join(sorted(missing))}"
             )
-        if validated["selling"]["never_sell_at_loss"] is not True:
+        _assert_known_model_keys(
+            candidate,
+            SpotEngineConfig,
+            path="spot",
+            allowed_extra=_SPOT_PRESERVED_COMPAT_ROOTS,
+        )
+        sell_flow = candidate.get("sell_flow")
+        sell_flow_model = SpotEngineConfig.model_fields["sell_flow"].annotation
+        required_layers = set(sell_flow_model.model_fields)
+        missing_layers = required_layers - set(sell_flow or {})
+        if missing_layers:
+            raise ValueError(
+                "Spot candidate must include every persisted sell_flow layer; missing: "
+                f"{', '.join(sorted(missing_layers))}"
+            )
+        validated = _effective_config_candidate(config_type, candidate)
+        if (
+            enforce_invariants
+            and validated["selling"]["never_sell_at_loss"] is not True
+        ):
             raise ValueError("Spot invariant requires selling.never_sell_at_loss=true")
         return candidate
     if config_type == "futures_engine":
@@ -3984,9 +4082,17 @@ async def create_dry_run(
             raise LookupError("Configuration profile not found")
         before = deepcopy(resource.config_json or {})
         patched_candidate, diff = apply_typed_patch(before, changes)
-        normalized_before = _validate_config_candidate(config_type, deepcopy(before))
+        normalized_before = _validate_config_candidate(
+            config_type,
+            deepcopy(before),
+            enforce_invariants=False,
+        )
         candidate = _validate_config_candidate(config_type, patched_candidate)
-        _assert_patch_survived_normalization(normalized_before, candidate, changes)
+        _assert_patch_survived_normalization(
+            _effective_config_candidate(config_type, normalized_before),
+            _effective_config_candidate(config_type, candidate),
+            changes,
+        )
         if config_type == "score" and candidate.get("scoring_rules") is not None:
             profiles = list((await db.execute(select(Profile).where(
                 Profile.user_id == user_id,
