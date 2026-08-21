@@ -27,7 +27,7 @@ export function getImportedProfileIndicatorOption(
   }
   return {
     value: indicatorValue,
-    label: `${indicatorValue} (importado do JSON)`,
+    label: indicatorValue,
   };
 }
 
@@ -48,15 +48,22 @@ export const PROFILE_RULE_INDICATORS: ProfileRuleIndicatorOption[] = [
   { value: "ema200", label: "EMA 200", kind: "number" },
   { value: "alpha_score", label: "Alpha Score", kind: "number" },
   { value: "rsi", label: "RSI", kind: "number" },
+  { value: "rsi_6", label: "RSI 6", kind: "number" },
+  { value: "rsi_slope_3", label: "RSI Slope (3)", kind: "number" },
   { value: "adx", label: "ADX", kind: "number" },
+  { value: "adx_acceleration", label: "ADX Acceleration", kind: "number" },
+  { value: "adx_slope_3", label: "ADX Slope (3)", kind: "number" },
   { value: "macd", label: "MACD", kind: "number" },
   { value: "macd_histogram", label: "MACD Histogram", kind: "number" },
+  { value: "macd_hist_slope_3", label: "MACD Histogram Slope (3)", kind: "number" },
+  { value: "macd_hist_slope_5", label: "MACD Histogram Slope (5)", kind: "number" },
   { value: "volume_spike", label: "Volume Spike", kind: "number" },
   { value: "taker_ratio", label: "Taker Ratio (buy/(buy+sell), 0-1)", kind: "number" },
   { value: "volume_delta", label: "Volume Delta", kind: "number" },
   { value: "orderbook_pressure", label: "Orderbook Pressure", kind: "number" },
   { value: "bid_ask_imbalance", label: "Bid/Ask Imbalance", kind: "number" },
   { value: "atr_percent", label: "ATR %", kind: "number" },
+  { value: "atr_pct", label: "ATR %", kind: "number" },
   { value: "bb_width", label: "BB Width", kind: "number" },
   { value: "spread_pct", label: "Spread %", kind: "number" },
   { value: "zscore", label: "Z-Score", kind: "number" },
@@ -79,6 +86,9 @@ export const PROFILE_RULE_INDICATORS: ProfileRuleIndicatorOption[] = [
   { value: "di_trend", label: "DI+ > DI- (Alta)", kind: "boolean" },
   { value: "atr", label: "ATR", kind: "number" },
   { value: "psar_trend", label: "PSAR Trend", kind: "string" },
+  { value: "entry_exhaustion_score", label: "Entry Exhaustion Score", kind: "number" },
+  { value: "score", label: "Alpha Score", kind: "number" },
+  { value: "momentum_score", label: "Momentum Score", kind: "number" },
 ];
 
 export const PROFILE_CONDITION_INDICATORS: ProfileConditionIndicatorOption[] = [
@@ -96,18 +106,25 @@ export const PROFILE_CONDITION_INDICATORS: ProfileConditionIndicatorOption[] = [
   { value: "obv", label: "OBV", type: "number", group: "liquidity" },
   { value: "vwap_distance_pct", label: "VWAP Distance %", type: "number", group: "liquidity" },
   { value: "rsi", label: "RSI", type: "number", group: "momentum" },
+  { value: "rsi_6", label: "RSI 6", type: "number", group: "momentum" },
+  { value: "rsi_slope_3", label: "RSI Slope (3)", type: "number", group: "momentum" },
   { value: "macd", label: "MACD", type: "number", group: "momentum" },
   { value: "macd_histogram", label: "MACD Histogram", type: "number", group: "momentum" },
+  { value: "macd_hist_slope_3", label: "MACD Histogram Slope (3)", type: "number", group: "momentum" },
+  { value: "macd_hist_slope_5", label: "MACD Histogram Slope (5)", type: "number", group: "momentum" },
   { value: "macd_signal", label: "MACD Signal", type: "string", group: "momentum" },
   { value: "stoch_k", label: "Stochastic %K", type: "number", group: "momentum" },
   { value: "stoch_d", label: "Stochastic %D", type: "number", group: "momentum" },
   { value: "zscore", label: "Z-Score", type: "number", group: "momentum" },
   { value: "adx", label: "ADX", type: "number", group: "trend" },
+  { value: "adx_acceleration", label: "ADX Acceleration", type: "number", group: "trend" },
+  { value: "adx_slope_3", label: "ADX Slope (3)", type: "number", group: "trend" },
   { value: "di_plus", label: "DI+", type: "number", group: "trend" },
   { value: "di_minus", label: "DI-", type: "number", group: "trend" },
   { value: "di_trend", label: "DI+ > DI- (Alta)", type: "boolean", group: "trend" },
   { value: "atr", label: "ATR", type: "number", group: "trend" },
   { value: "atr_percent", label: "ATR %", type: "number", group: "trend" },
+  { value: "atr_pct", label: "ATR %", type: "number", group: "trend" },
   { value: "bb_width", label: "Bollinger Width", type: "number", group: "trend" },
   { value: "psar_trend", label: "PSAR Trend", type: "string", group: "trend" },
   { value: "ema_full_alignment", label: "EMA Full Alignment", type: "boolean", group: "ema" },
@@ -117,6 +134,7 @@ export const PROFILE_CONDITION_INDICATORS: ProfileConditionIndicatorOption[] = [
   { value: "score", label: "Alpha Score", type: "number", group: "scores" },
   { value: "liquidity_score", label: "Liquidity Score", type: "number", group: "scores" },
   { value: "momentum_score", label: "Momentum Score", type: "number", group: "scores" },
+  { value: "entry_exhaustion_score", label: "Entry Exhaustion Score", type: "number", group: "scores" },
 ];
 
 type AuditSection = "filters" | "signals" | "block_rules" | "entry_triggers";

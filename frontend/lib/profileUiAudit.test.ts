@@ -58,23 +58,28 @@ test("known indicator resolves to its registered value and label", () => {
 test("select options retain a value imported from JSON instead of falling back to the first option", () => {
   const options = profileIndicatorOptionsWithImported(
     [{ value: "price", label: "Price" }, { value: "adx", label: "ADX" }],
-    "adx_slope_3",
+    "future_test_indicator",
   );
   assert.deepEqual(options[0], {
-    value: "adx_slope_3",
-    label: "adx_slope_3 (importado do JSON)",
+    value: "future_test_indicator",
+    label: "future_test_indicator",
   });
   assert.ok(options.some((option) => option.value === "price"));
 });
 
-for (const indicator of [
-  "adx_slope_3",
-  "adx_acceleration",
-  "entry_exhaustion_score",
-  "rsi_slope_3",
-  "macd_hist_slope_3",
-]) {
-  test(`${indicator} is preserved and displayed as an imported JSON option`, () => {
+for (const [indicator, label] of Object.entries({
+  adx_slope_3: "ADX Slope (3)",
+  adx_acceleration: "ADX Acceleration",
+  entry_exhaustion_score: "Entry Exhaustion Score",
+  rsi_slope_3: "RSI Slope (3)",
+  macd_hist_slope_3: "MACD Histogram Slope (3)",
+  macd_hist_slope_5: "MACD Histogram Slope (5)",
+  rsi_6: "RSI 6",
+  atr_pct: "ATR %",
+  momentum_score: "Momentum Score",
+  score: "Alpha Score",
+})) {
+  test(`${indicator} is registered and displayed with its UI label`, () => {
     const result = audit(indicator);
     const row = result.profiles[0].round_trip_audit[0];
     assert.equal(row.diff.backend_indicator, indicator);
@@ -82,12 +87,13 @@ for (const indicator of [
     assert.equal(row.diff.save_indicator, indicator);
     assert.equal(row.ui.requested_indicator_value, indicator);
     assert.equal(row.ui.indicator_value, indicator);
-    assert.equal(row.ui.indicator_label, `${indicator} (importado do JSON)`);
+    assert.equal(row.ui.indicator_label, label);
     assert.equal(row.ui.rendered_option_value, indicator);
-    assert.equal(row.ui.imported_option, true);
-    assert.equal(row.severity, "MEDIUM");
+    assert.equal(row.ui.registry_found, true);
+    assert.equal(row.ui.imported_option, false);
+    assert.equal(row.severity, null);
     assert.equal(row.round_trip_ok, true);
-    assert.ok(row.codes.includes("UNKNOWN_INDICATOR"));
+    assert.ok(!row.codes.includes("UNKNOWN_INDICATOR"));
     assert.ok(!row.codes.includes("INDICATOR_FALLBACK_TO_PRICE"));
   });
 }
@@ -157,7 +163,7 @@ test("batch UI audit aggregates only the selected profiles", () => {
   assert.equal(result.source, "frontend_batch_ui_render_model");
   assert.deepEqual(result.selection.selected_profile_ids, ["profile-1", "profile-2"]);
   assert.equal(result.summary.profiles_loaded, 2);
-  assert.equal(result.summary.profiles_with_differences, 1);
+  assert.equal(result.summary.profiles_with_differences, 0);
   assert.equal(result.summary.critical_differences, 0);
   assert.equal(result.summary.fallback_to_price_detected, 0);
   assert.equal(result.ui_rendered_profiles_metadata.safe_to_import, false);
