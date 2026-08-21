@@ -1,5 +1,6 @@
 """Unified read-only ranking endpoints for Shadow Portfolio and L3 consumers."""
 
+from datetime import date, datetime, timezone
 from typing import List
 from uuid import UUID
 
@@ -7,7 +8,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
+from ..schemas.profile_performance import ProfilePerformanceResponse
 from ..schemas.shadow_trade import ProfileReportRow
+from ..services.profile_performance_service import get_profile_performance
 from ..services.watchlist_performance_ranking_service import (
     RankingConfigError,
     get_performance_rankings,
@@ -36,6 +39,34 @@ async def shadow_portfolio_report(
     if direction == "asc":
         rows.reverse()
     return rows
+
+
+@router.get(
+    "/api/shadow-portfolio/profile-performance",
+    response_model=ProfilePerformanceResponse,
+)
+async def shadow_portfolio_profile_performance(
+    as_of: date | None = Query(None),
+    range_days: int = Query(7),
+    profile_id: UUID | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> ProfilePerformanceResponse:
+    """Daily profile monitor using the canonical ranking score and shadow data."""
+
+    selected_day = as_of or datetime.now(timezone.utc).date()
+    try:
+        return await get_profile_performance(
+            db,
+            user_id,
+            as_of=selected_day,
+            range_days=range_days,
+            profile_id=profile_id,
+        )
+    except RankingConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/api/l3/watchlists", response_model=List[ProfileReportRow])

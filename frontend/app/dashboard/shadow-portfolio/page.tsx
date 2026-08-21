@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { apiGet, ApiError } from "@/lib/api";
 import DetailedReportWorkspace from "@/components/shadow-portfolio/DetailedReportWorkspace";
+import ProfilePerformanceDashboard from "@/components/shadow-portfolio/ProfilePerformanceDashboard";
 import { ModuleAIAnalysisAction } from "@/components/ai/ModuleAIAnalysisAction";
 
 // ── theme (alinhado com /dashboard/performance) ──────────────────────────────
@@ -2265,7 +2266,7 @@ export default function ShadowPortfolioPage() {
   const [profiles, setProfiles] = useState<ProfileItem[]>([]);
   const [watchlistNames, setWatchlistNames] = useState<Record<string, string>>({});
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
-  const [mainTab, setMainTab] = useState<"trades" | "report" | "detailed-report">("trades");
+  const [mainTab, setMainTab] = useState<"trades" | "report" | "detailed-report" | "profile-performance">("trades");
   const [profileReport, setProfileReport] = useState<ProfileReportRow[]>([]);
   const [loadingReport, setLoadingReport] = useState(false);
 
@@ -2526,6 +2527,7 @@ export default function ShadowPortfolioPage() {
                 { key: "trades" as const, label: "Shadow Trades" },
                 { key: "report" as const, label: "Relatório Executivo" },
                 { key: "detailed-report" as const, label: "Relatório Detalhado" },
+                { key: "profile-performance" as const, label: "Performance Profiles" },
               ]
             ).map(({ key, label }) => {
               const active = mainTab === key;
@@ -2738,8 +2740,10 @@ export default function ShadowPortfolioPage() {
             loading={loadingReport}
             watchlistNames={watchlistNames}
           />
-        ) : (
+        ) : mainTab === "detailed-report" ? (
           <DetailedReportWorkspace />
+        ) : (
+          <ProfilePerformanceDashboard />
         )}
       </div>
 

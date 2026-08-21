@@ -295,12 +295,9 @@ def sort_rankings(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return ordered
 
 
-async def get_performance_rankings(
-    db: AsyncSession,
-    user_id: UUID,
-    *,
-    level: str | None = None,
-) -> List[Dict[str, Any]]:
+async def get_ranking_config(db: AsyncSession, user_id: UUID) -> Dict[str, Any]:
+    """Load and validate the user-owned canonical ranking contract."""
+
     config_row = (
         await db.execute(
             select(ConfigProfile)
@@ -314,7 +311,16 @@ async def get_performance_rankings(
             .limit(1)
         )
     ).scalars().first()
-    config = validate_ranking_config(config_row.config_json if config_row else {})
+    return validate_ranking_config(config_row.config_json if config_row else {})
+
+
+async def get_performance_rankings(
+    db: AsyncSession,
+    user_id: UUID,
+    *,
+    level: str | None = None,
+) -> List[Dict[str, Any]]:
+    config = await get_ranking_config(db, user_id)
     sources = config["source_filter"]
     query = text("""
         WITH selected AS (
