@@ -556,7 +556,7 @@ class ModuleAIAnalysisService:
         )
         if resolution.configured_model != resolution.effective_model:
             raise RuntimeError("CONFIGURED_EFFECTIVE_MODEL_MISMATCH")
-        prompt = initial_prompt_registry().resolve("systemic-multimodule", "2.0.6")
+        prompt = initial_prompt_registry().resolve("systemic-multimodule", "2.0.7")
         context = ContextFingerprint(
             profile_family=filters.get("profile_family"), timeframe=filters.get("timeframe"),
             market_regime=filters.get("market_regime"), social_regime=filters.get("social_regime"),

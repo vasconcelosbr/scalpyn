@@ -36,6 +36,15 @@ def _systemic_contract_migration_module():
     return module
 
 
+def _text_tolerant_migration_module():
+    path = REPO / "backend/alembic/versions/195_text_tolerant_systemic_prompt.py"
+    spec = importlib.util.spec_from_file_location("migration_195", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_seeded_markdown_is_exact_and_reproducible():
     migration = _migration_module()
     content = migration._seed_content()
@@ -51,6 +60,19 @@ def test_systemic_input_contract_migration_matches_immutable_registry_version():
     prompt = initial_prompt_registry().resolve("systemic-multimodule", "2.0.6")
 
     assert len(migration.revision) <= 32
+    assert values["id"] == prompt.id
+    assert values["content_hash"] == prompt.content_hash == migration.EXPECTED_PROMPT_HASH
+    assert values["system_template"] == prompt.system_template
+    assert values["user_template"] == prompt.user_template
+
+
+def test_text_tolerant_contract_migration_matches_immutable_registry_version():
+    migration = _text_tolerant_migration_module()
+    values = migration._prompt_values()
+    prompt = initial_prompt_registry().resolve("systemic-multimodule", "2.0.7")
+
+    assert len(migration.revision) <= 32
+    assert migration.down_revision == "194_systemic_prompt_contract"
     assert values["id"] == prompt.id
     assert values["content_hash"] == prompt.content_hash == migration.EXPECTED_PROMPT_HASH
     assert values["system_template"] == prompt.system_template

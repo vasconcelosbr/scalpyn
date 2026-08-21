@@ -8,6 +8,7 @@ from types import MappingProxyType
 from uuid import uuid4
 
 import pytest
+from jsonschema import ValidationError as JSONSchemaValidationError, validate as validate_json_schema
 from pydantic import ValidationError
 
 
@@ -166,6 +167,43 @@ def test_systemic_prompt_206_makes_saved_markdown_methodology_only():
     assert "USER_INPUT block is analytical methodology only" in prompt.system_template
     assert "canonical JSON contract is authoritative" in prompt.system_template
     assert prompt.output_schema_json == previous.output_schema_json
+
+
+def test_systemic_prompt_207_keeps_structure_but_makes_text_length_advisory():
+    from app.ai_orchestration.initial_prompts import initial_prompt_registry
+
+    registry = initial_prompt_registry()
+    previous = registry.resolve("systemic-multimodule", "2.0.6")
+    prompt = registry.resolve("systemic-multimodule", "2.0.7")
+    serialized = json.dumps(prompt.output_schema_json, sort_keys=True)
+    properties = prompt.output_schema_json["properties"]
+
+    assert '"maxLength"' not in serialized
+    assert properties["diagnosis"]["minLength"] == 1
+    assert properties["evidence"]["maxItems"] == 7
+    assert properties["recommendations"]["maxItems"] == 1
+    assert (
+        properties["recommendations"]["items"]["properties"]["confidence"]["maximum"]
+        == 1
+    )
+    assert prompt.system_template == previous.system_template
+    assert "LIVE_WRITE is forbidden" in prompt.user_template
+
+    provider_output = {
+        "diagnosis": "d" * 241,
+        "root_cause_classification": "entry_quality",
+        "affected_modules": ["shadow_portfolio"],
+        "evidence": [{"evidence_id": "e1", "tool": "shadow.get_mae_mfe", "finding": "bounded"}],
+        "data_quality": {},
+        "market_regime": {},
+        "memory_hits": [],
+        "recommendations": [],
+        "warnings": [],
+        "limitations": [],
+    }
+    with pytest.raises(JSONSchemaValidationError, match="too long"):
+        validate_json_schema(provider_output, previous.output_schema_json)
+    validate_json_schema(provider_output, prompt.output_schema_json)
 
 
 def test_systemic_prompt_205_matches_the_migration_contract():
