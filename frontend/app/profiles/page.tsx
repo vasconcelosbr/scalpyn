@@ -169,14 +169,14 @@ export default function ProfilesPage() {
           name: profile.name,
           description: profile.description,
           config: formConfig,
-          is_active: true,
+          is_active: profile.is_active,
           profile_role: profileRole,
           pipeline_order: profileRole
             ? { universe_filter: 0, primary_filter: 1, score_engine: 2, acquisition_queue: 3 }[profileRole] ?? 99
             : 99,
         };
         return buildProfileUiAudit({
-          profile: { id: profile.id, name: profile.name },
+          profile: { id: profile.id, name: profile.name, is_active: profile.is_active },
           backendConfig: profile.config as unknown as Record<string, unknown>,
           formConfig,
           savePayload,

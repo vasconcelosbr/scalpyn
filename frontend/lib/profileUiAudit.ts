@@ -152,7 +152,7 @@ interface ConditionRef {
 }
 
 interface BuildProfileUiAuditArgs {
-  profile: { id?: string; name?: string };
+  profile: { id?: string; name?: string; is_active?: boolean };
   backendConfig: Record<string, unknown>;
   formConfig: Record<string, unknown>;
   savePayload: Record<string, unknown>;
@@ -408,7 +408,42 @@ function same(a: unknown, b: unknown) {
 
 function changedFields(backend: Record<string, unknown>, current: Record<string, unknown>) {
   return ["operator", "value", "min", "max", "period", "timeframe", "enabled", "required"]
-    .filter((field) => !same(backend[field], current[field]));
+    .filter((field) => {
+      if (field === "value") {
+        const operator = String(current.operator ?? backend.operator ?? "");
+        const expectedValue = operator === "is_true"
+          ? true
+          : operator === "is_false"
+            ? false
+            : undefined;
+        if (expectedValue !== undefined && backend.value == null && current.value === expectedValue) {
+          return false;
+        }
+      }
+      return !same(backend[field], current[field]);
+    });
+}
+
+function semanticNormalizations(
+  backend: Record<string, unknown>,
+  current: Record<string, unknown>,
+) {
+  const operator = String(current.operator ?? backend.operator ?? "");
+  const expectedValue = operator === "is_true"
+    ? true
+    : operator === "is_false"
+      ? false
+      : undefined;
+  if (expectedValue !== undefined && backend.value == null && current.value === expectedValue) {
+    return [{
+      field: "value",
+      code: "BOOLEAN_OPERATOR_EXPLICIT_VALUE",
+      backend_value: backend.value ?? null,
+      form_value: current.value,
+      semantic_effect: "equivalent",
+    }];
+  }
+  return [];
 }
 
 function severityFor(codes: string[], fields: string[]): AuditSeverity | null {
@@ -452,6 +487,10 @@ export function buildProfileUiAudit({
       codes.push("INDICATOR_FALLBACK_TO_PRICE");
     }
     const fields = backendRef ? changedFields(backendRef.condition, formRef.condition) : [];
+    const normalizations = backendRef
+      ? semanticNormalizations(backendRef.condition, formRef.condition)
+      : [];
+    if (normalizations.length > 0) codes.push("SEMANTIC_BOOLEAN_NORMALIZATION");
     const severity = severityFor(codes, fields);
     return {
       key: formRef.key,
@@ -477,6 +516,7 @@ export function buildProfileUiAudit({
       save: saveRef ? clone(saveRef.condition) : null,
       diff: {
         changed_fields: fields,
+        semantic_normalizations: normalizations,
         backend_indicator: backendRef?.indicator ?? null,
         form_indicator: formRef.indicator,
         ui_indicator_value: ui.indicator_value,
@@ -493,6 +533,7 @@ export function buildProfileUiAudit({
   });
 
   const differences = roundTrip.filter((row) => row.severity !== null);
+  const normalizations = roundTrip.filter((row) => row.codes.includes("SEMANTIC_BOOLEAN_NORMALIZATION"));
   const critical = differences.filter((row) => row.severity === "CRITICAL");
   const backendIndicators = [...new Set([...backendRefs.values()].map((ref) => ref.indicator).filter(Boolean))].sort();
   const registeredIndicators = [...new Set([
@@ -512,6 +553,11 @@ export function buildProfileUiAudit({
     (indicator) => !registeredIndicators.includes(indicator)
   );
   const fallbacks = differences.filter((row) => row.codes.includes("INDICATOR_FALLBACK_TO_PRICE"));
+  const isActive = typeof profile.is_active === "boolean"
+    ? profile.is_active
+    : typeof savePayload.is_active === "boolean"
+      ? savePayload.is_active
+      : null;
 
   return {
     export_type: "scalpyn_strategy_profiles_ui_audit",
@@ -527,6 +573,10 @@ export function buildProfileUiAudit({
       unknown_indicators: unknownIndicators.length,
       unknown_indicator_occurrences: missingFromSectionRegistry.length,
       fallback_to_price_detected: fallbacks.length,
+      semantic_normalizations: normalizations.length,
+      active_profiles: isActive === true ? 1 : 0,
+      inactive_profiles: isActive === false ? 1 : 0,
+      unknown_status_profiles: isActive === null ? 1 : 0,
     },
     indicator_registry_audit: {
       backend_indicators: backendIndicators,
@@ -551,6 +601,10 @@ export function buildProfileUiAudit({
     profiles: [{
       profile_id: profile.id ?? null,
       name: profile.name ?? "",
+      is_active: isActive,
+      backend_profile_metadata: {
+        is_active: isActive,
+      },
       backend_state: configRoots(backendConfig),
       form_state: configRoots(formConfig),
       ui_state: buildUiState(formConfig),
@@ -574,6 +628,11 @@ export function buildProfilesUiAudit(
   exportedAt = new Date().toISOString(),
 ) {
   const profiles = audits.flatMap((audit) => audit.profiles);
+  const selectedProfiles = profiles.map((profile) => ({
+    profile_id: profile.profile_id,
+    name: profile.name,
+    is_active: profile.is_active,
+  }));
   const missingFromSectionRegistry = audits.flatMap(
     (audit) => audit.indicator_registry_audit.missing_from_section_registry,
   );
@@ -597,6 +656,7 @@ export function buildProfilesUiAudit(
     return {
       profile_id: profile.profile_id,
       name: profile.name,
+      is_active: profile.is_active,
       description: nullable(savePayload.description),
       profile_role: nullable(savePayload.profile_role),
       pipeline_order: nullable(savePayload.pipeline_order),
@@ -613,6 +673,7 @@ export function buildProfilesUiAudit(
     selection: {
       selected_profile_ids: profiles.map((profile) => profile.profile_id),
       selected_profile_names: profiles.map((profile) => profile.name),
+      selected_profiles: selectedProfiles,
     },
     summary: {
       profiles_loaded: profiles.length,
@@ -630,6 +691,13 @@ export function buildProfilesUiAudit(
       unknown_indicators: unknownIndicators.length,
       unknown_indicator_occurrences: missingFromSectionRegistry.length,
       fallback_to_price_detected: fallbacksDetected.length,
+      semantic_normalizations: audits.reduce(
+        (total, audit) => total + audit.summary.semantic_normalizations,
+        0,
+      ),
+      active_profiles: profiles.filter((profile) => profile.is_active === true).length,
+      inactive_profiles: profiles.filter((profile) => profile.is_active === false).length,
+      unknown_status_profiles: profiles.filter((profile) => profile.is_active === null).length,
     },
     ui_rendered_profiles_metadata: {
       audit_only: true,

@@ -31,10 +31,10 @@ function audit(backendIndicator: string, formIndicator = backendIndicator, saveI
   const formConfig = configWithIndicator(formIndicator);
   const saveConfig = configWithIndicator(saveIndicator);
   return buildProfileUiAudit({
-    profile: { id: "profile-1", name: "L3_TEST" },
+    profile: { id: "profile-1", name: "L3_TEST", is_active: true },
     backendConfig,
     formConfig,
-    savePayload: { name: "L3_TEST", config: saveConfig },
+    savePayload: { name: "L3_TEST", config: saveConfig, is_active: true },
     exportedAt: "2026-08-21T00:00:00.000Z",
   });
 }
@@ -148,13 +148,45 @@ test("UI rendered config preserves the visible imported indicator without changi
   assert.equal(saveCondition.indicator, "adx_slope_3");
 });
 
+test("explicit boolean values are reported as semantic normalizations, not differences", () => {
+  const backendConfig = configWithIndicator("ema9_gt_ema21");
+  const formConfig = configWithIndicator("ema9_gt_ema21");
+  const backendCondition = backendConfig.block_rules.blocks[0].conditions[0] as Record<string, unknown>;
+  const formCondition = formConfig.block_rules.blocks[0].conditions[0] as Record<string, unknown>;
+  backendCondition.type = "boolean";
+  backendCondition.operator = "is_true";
+  delete backendCondition.value;
+  formCondition.type = "boolean";
+  formCondition.operator = "is_true";
+  formCondition.value = true;
+
+  const result = buildProfileUiAudit({
+    profile: { id: "profile-boolean", name: "L3_BOOLEAN", is_active: false },
+    backendConfig,
+    formConfig,
+    savePayload: { name: "L3_BOOLEAN", config: formConfig, is_active: false },
+    exportedAt: "2026-08-21T00:00:00.000Z",
+  });
+  const row = result.profiles[0].round_trip_audit[0];
+
+  assert.equal(result.summary.profiles_with_differences, 0);
+  assert.equal(result.summary.conditions_with_differences, 0);
+  assert.equal(result.summary.semantic_normalizations, 1);
+  assert.equal(result.summary.inactive_profiles, 1);
+  assert.equal(row.severity, null);
+  assert.deepEqual(row.diff.changed_fields, []);
+  assert.equal(row.diff.semantic_normalizations[0].semantic_effect, "equivalent");
+  assert.ok(row.codes.includes("SEMANTIC_BOOLEAN_NORMALIZATION"));
+  assert.equal(row.round_trip_ok, true);
+});
+
 test("batch UI audit aggregates only the selected profiles", () => {
   const first = audit("adx_slope_3");
   const second = buildProfileUiAudit({
-    profile: { id: "profile-2", name: "L3_SECOND" },
+    profile: { id: "profile-2", name: "L3_SECOND", is_active: false },
     backendConfig: configWithIndicator("stoch_k"),
     formConfig: configWithIndicator("stoch_k"),
-    savePayload: { name: "L3_SECOND", config: configWithIndicator("stoch_k") },
+    savePayload: { name: "L3_SECOND", config: configWithIndicator("stoch_k"), is_active: false },
     exportedAt: "2026-08-21T00:00:00.000Z",
   });
 
@@ -162,14 +194,23 @@ test("batch UI audit aggregates only the selected profiles", () => {
 
   assert.equal(result.source, "frontend_batch_ui_render_model");
   assert.deepEqual(result.selection.selected_profile_ids, ["profile-1", "profile-2"]);
+  assert.deepEqual(result.selection.selected_profiles, [
+    { profile_id: "profile-1", name: "L3_TEST", is_active: true },
+    { profile_id: "profile-2", name: "L3_SECOND", is_active: false },
+  ]);
   assert.equal(result.summary.profiles_loaded, 2);
   assert.equal(result.summary.profiles_with_differences, 0);
   assert.equal(result.summary.critical_differences, 0);
   assert.equal(result.summary.fallback_to_price_detected, 0);
+  assert.equal(result.summary.active_profiles, 1);
+  assert.equal(result.summary.inactive_profiles, 1);
+  assert.equal(result.summary.unknown_status_profiles, 0);
   assert.equal(result.ui_rendered_profiles_metadata.safe_to_import, false);
   const renderedProfile = result.ui_rendered_profiles[0] as unknown as {
+    is_active: boolean;
     block_rules: { blocks: Array<{ conditions: Array<{ indicator: string }> }> };
   };
+  assert.equal(renderedProfile.is_active, true);
   assert.equal(
     renderedProfile.block_rules.blocks[0].conditions[0].indicator,
     "adx_slope_3",
