@@ -178,8 +178,9 @@ def test_frontend_uses_profile_selection_without_technical_cost_form():
     assert "/ai/modules/analysis-profiles" in source
     assert "/ai/modules/analysis-runs/from-profile" in source
     assert "Escolha o perfil da análise" in source
-    assert "Prompt da análise" in source
-    assert "user_prompt: prompt.trim()" in source
+    assert "Escolha o prompt da análise" in source
+    assert "analysis_prompt_version_id: selectedPrompt.current_version.id" in source
+    assert "prompt_complement: promptComplement.trim() || null" in source
     assert "!selectedProfile || !promptReady" in source
     for removed_label in (
         "Máximo de tokens de entrada",

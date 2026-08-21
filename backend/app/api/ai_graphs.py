@@ -17,7 +17,8 @@ from ..database import get_db
 from ..models.ai_graph import AIGraphDefinition, AIGraphRun
 from ..models.config_profile import ConfigProfile
 from ..models.systemic_ai import (
-    AIBudgetReservationRecord, AIConfigurationBundleRecord, AIDatasetSnapshotRecord, AIModelResolutionRecord,
+    AIAnalysisPromptVersionRecord, AIBudgetReservationRecord, AIConfigurationBundleRecord,
+    AIDatasetSnapshotRecord, AIModelResolutionRecord,
     AIPromptVersion, AIRequestRecord, AIResultRecord, AIToolEvidenceRecord,
     AIUsageRecord,
 )
@@ -212,6 +213,10 @@ async def get_graph_context(
     definition = await db.get(AIGraphDefinition, run.graph_definition_id)
     resolution = await db.get(AIModelResolutionRecord, request.model_resolution_id)
     prompt = await db.get(AIPromptVersion, request.prompt_version_id)
+    analysis_prompt = (
+        await db.get(AIAnalysisPromptVersionRecord, request.analysis_prompt_version_id)
+        if request.analysis_prompt_version_id else None
+    )
     dataset = await db.get(AIDatasetSnapshotRecord, request.dataset_snapshot_id)
     bundle = await db.get(AIConfigurationBundleRecord, request.configuration_bundle_id)
     result = (await db.execute(select(AIResultRecord).where(
@@ -241,6 +246,15 @@ async def get_graph_context(
             "key": prompt.prompt_key if prompt else None,
             "version": prompt.semantic_version if prompt else None,
             "hash": prompt.content_hash if prompt else None,
+        },
+        "analysis_prompt": {
+            "id": str(analysis_prompt.prompt_id) if analysis_prompt else None,
+            "version_id": str(analysis_prompt.id) if analysis_prompt else None,
+            "name": analysis_prompt.name_snapshot if analysis_prompt else None,
+            "version_number": analysis_prompt.version_number if analysis_prompt else None,
+            "hash": analysis_prompt.content_hash if analysis_prompt else None,
+            "source_type": analysis_prompt.source_type if analysis_prompt else None,
+            "source_filename": analysis_prompt.source_filename if analysis_prompt else None,
         },
         "dataset": {
             "id": str(dataset.id) if dataset else None,

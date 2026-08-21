@@ -511,6 +511,8 @@ app.include_router(analysis_chat_api.router)
 # Seven tenant-scoped module entrypoints; every request becomes a canonical graph run.
 from .api import ai_modules as ai_modules_api  # noqa: E402
 app.include_router(ai_modules_api.router)
+from .api import analysis_prompts as analysis_prompts_api  # noqa: E402
+app.include_router(analysis_prompts_api.router)
 
 # WebSocket
 app.include_router(websocket.router)

@@ -91,6 +91,51 @@ class AIAnalysisProfileRecord(Base):
     updated_at = Column(TIMESTAMP(timezone=True), nullable=False, default=_now)
 
 
+class AIAnalysisPromptRecord(Base):
+    __tablename__ = "ai_analysis_prompts"
+    __table_args__ = (
+        UniqueConstraint("name_key", name="uq_ai_analysis_prompt_name_key"),
+        Index("ix_ai_analysis_prompt_status_updated", "status", "updated_at"),
+    )
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(160), nullable=False)
+    name_key = Column(String(160), nullable=False)
+    status = Column(String(20), nullable=False, default="ACTIVE")
+    current_version_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("ai_analysis_prompt_versions.id", ondelete="RESTRICT", use_alter=True),
+    )
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
+    updated_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
+    archived_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, default=_now)
+    updated_at = Column(TIMESTAMP(timezone=True), nullable=False, default=_now)
+    archived_at = Column(TIMESTAMP(timezone=True))
+
+
+class AIAnalysisPromptVersionRecord(Base):
+    __tablename__ = "ai_analysis_prompt_versions"
+    __table_args__ = (
+        UniqueConstraint("prompt_id", "version_number", name="uq_ai_analysis_prompt_version"),
+        Index("ix_ai_analysis_prompt_version_prompt_created", "prompt_id", "created_at"),
+    )
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    prompt_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("ai_analysis_prompts.id", ondelete="RESTRICT", use_alter=True),
+        nullable=False,
+    )
+    version_number = Column(Integer, nullable=False)
+    name_snapshot = Column(String(160), nullable=False)
+    description_snapshot = Column(Text)
+    content_markdown = Column(Text, nullable=False)
+    content_hash = Column(String(64), nullable=False)
+    source_type = Column(String(20), nullable=False)
+    source_filename = Column(String(255))
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, default=_now)
+
+
 class AIModelApprovalRecord(Base):
     __tablename__ = "ai_model_approvals"
     __table_args__ = (
@@ -215,6 +260,10 @@ class AIRequestRecord(Base):
     correlation_id = Column(String(160), nullable=False)
     model_resolution_id = Column(UUID(as_uuid=True), ForeignKey("ai_model_resolutions.id", ondelete="RESTRICT"), nullable=False)
     prompt_version_id = Column(UUID(as_uuid=True), ForeignKey("ai_prompt_versions.id", ondelete="RESTRICT"), nullable=False)
+    analysis_prompt_version_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("ai_analysis_prompt_versions.id", ondelete="RESTRICT"),
+    )
     dataset_snapshot_id = Column(UUID(as_uuid=True), ForeignKey("ai_dataset_snapshots.id", ondelete="RESTRICT"), nullable=False)
     configuration_bundle_id = Column(UUID(as_uuid=True), ForeignKey("ai_configuration_bundles.id", ondelete="RESTRICT"), nullable=False)
     request_json = Column(JSONB, nullable=False)

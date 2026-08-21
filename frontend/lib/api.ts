@@ -143,6 +143,13 @@ export function apiPut<T = any>(endpoint: string, body?: any) {
   });
 }
 
+export function apiPatch<T = unknown>(endpoint: string, body?: unknown) {
+  return apiFetch<T>(endpoint, {
+    method: 'PATCH',
+    body: body ? JSON.stringify(body) : undefined,
+  });
+}
+
 export function apiDelete<T = any>(endpoint: string) {
   return apiFetch<T>(endpoint, { method: 'DELETE' });
 }

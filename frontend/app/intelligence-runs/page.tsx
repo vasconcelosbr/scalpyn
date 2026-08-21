@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity, AlertTriangle, Boxes, Check, ChevronRight, CircleDot, Clock3,
+  Activity, AlertTriangle, BookOpen, Boxes, Check, ChevronRight, CircleDot, Clock3,
   FileSearch, GitBranch, Lightbulb, Pause, RefreshCw, ShieldCheck, Square, X,
 } from "lucide-react";
 
 import { apiGet, apiPost, apiPut } from "@/lib/api";
 import { AnalysisChatPanel } from "@/components/ai/AnalysisChatPanel";
+import { AnalysisPromptLibrary } from "@/components/ai/AnalysisPromptLibrary";
 import { ModuleAIAnalysisAction } from "@/components/ai/ModuleAIAnalysisAction";
 
 type GraphRun = {
@@ -101,6 +102,7 @@ type AnalysisRecommendation = {
 type RunContext = {
   model: { configured_provider: string | null; configured_model: string | null; effective_provider: string | null; effective_model: string | null; resolution_reason: string | null };
   prompt: { key: string | null; version: string | null; hash: string | null };
+  analysis_prompt: { id: string | null; version_id: string | null; name: string | null; version_number: number | null; hash: string | null; source_type: string | null; source_filename: string | null };
   dataset: { id: string | null; hash: string | null; contract_version: string | null; quality_status: string | null; row_count: number | null; module_context_refs: Record<string, unknown> | null; context_manifest: { modules_consulted?: string[]; tools_called?: string[]; evidence_ids?: string[] } | null };
   bundle: { id: string | null; hash: string | null; lineage_status: string | null; lineage_refs: Record<string, unknown> | null };
   result: {
@@ -252,6 +254,7 @@ function AnalysisResultPanel({ context }: { context: RunContext }) {
 }
 
 export default function IntelligenceRunsPage() {
+  const [activeTab, setActiveTab] = useState<"runs" | "prompts">("runs");
   const [runs, setRuns] = useState<GraphRun[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [events, setEvents] = useState<GraphEvent[]>([]);
@@ -420,6 +423,12 @@ export default function IntelligenceRunsPage() {
           </div>
         </header>
 
+        <div className="mb-4 flex w-fit rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/80 p-1">
+          <button type="button" onClick={() => setActiveTab("runs")} className={`rounded-lg px-4 py-2 text-xs font-medium transition ${activeTab === "runs" ? "bg-cyan-300 text-cyan-950" : "text-[var(--text-muted)] hover:text-cyan-200"}`}>Execuções</button>
+          <button type="button" onClick={() => setActiveTab("prompts")} className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-medium transition ${activeTab === "prompts" ? "bg-cyan-300 text-cyan-950" : "text-[var(--text-muted)] hover:text-cyan-200"}`}><BookOpen size={13} /> Biblioteca de prompts</button>
+        </div>
+
+        {activeTab === "prompts" ? <AnalysisPromptLibrary /> : <>
         {error && (
           <div className="mb-4 flex items-center gap-2 rounded-xl border border-rose-400/30 bg-rose-400/10 px-4 py-3 text-sm text-rose-200">
             <AlertTriangle size={16} /> {error}
@@ -527,7 +536,8 @@ export default function IntelligenceRunsPage() {
                 <dl className="space-y-2 text-[var(--text-muted)]">
                   <div><dt className="text-[10px] uppercase tracking-wider">Graph</dt><dd className="mt-0.5 font-mono text-[var(--text-primary)]">{selected.graph_key ?? "—"} · {selected.graph_version ?? "—"}</dd></div>
                   <div><dt className="text-[10px] uppercase tracking-wider">Model</dt><dd className="mt-0.5 font-mono text-[var(--text-primary)]">{runContext.model.configured_provider}/{runContext.model.configured_model}</dd><dd className="font-mono text-cyan-300">effective: {runContext.model.effective_provider}/{runContext.model.effective_model}</dd></div>
-                  <div><dt className="text-[10px] uppercase tracking-wider">Prompt</dt><dd className="mt-0.5 font-mono text-[var(--text-primary)]">{runContext.prompt.key}@{runContext.prompt.version}</dd></div>
+                  <div><dt className="text-[10px] uppercase tracking-wider">Prompt sistêmico</dt><dd className="mt-0.5 font-mono text-[var(--text-primary)]">{runContext.prompt.key}@{runContext.prompt.version}</dd></div>
+                  <div><dt className="text-[10px] uppercase tracking-wider">Prompt selecionado</dt><dd className="mt-0.5 font-mono text-[var(--text-primary)]">{runContext.analysis_prompt.name ? `${runContext.analysis_prompt.name} · v${runContext.analysis_prompt.version_number}` : "Legado / não vinculado"}</dd>{runContext.analysis_prompt.hash && <dd className="truncate font-mono text-cyan-300">sha256:{runContext.analysis_prompt.hash}</dd>}</div>
                   <div><dt className="text-[10px] uppercase tracking-wider">Dataset</dt><dd className="mt-0.5 font-mono text-[var(--text-primary)]">{runContext.dataset.quality_status ?? "—"} · rows {runContext.dataset.row_count ?? "—"}</dd><dd className="truncate font-mono">{runContext.dataset.id ?? "—"}</dd></div>
                   <div><dt className="text-[10px] uppercase tracking-wider">Bundle</dt><dd className="mt-0.5 font-mono text-[var(--text-primary)]">{runContext.bundle.lineage_status ?? "—"}</dd><dd className="truncate font-mono">{runContext.bundle.id ?? "—"}</dd></div>
                   <div><dt className="text-[10px] uppercase tracking-wider">Modules consulted</dt><dd className="mt-0.5 leading-5 text-[var(--text-primary)]">{runContext.dataset.context_manifest?.modules_consulted?.join(" · ") || "—"}</dd></div>
@@ -579,6 +589,7 @@ export default function IntelligenceRunsPage() {
             )}
           </aside>
         </div>
+        </>}
       </div>
     </main>
   );

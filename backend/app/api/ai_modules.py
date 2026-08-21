@@ -17,6 +17,8 @@ from ..ai_orchestration.provider_registry import default_registry
 from ..database import get_db
 from ..models.shadow_trade_analysis import ShadowTradeReportItem, ShadowTradeReportRun
 from ..models.systemic_ai import (
+    AIAnalysisPromptRecord,
+    AIAnalysisPromptVersionRecord,
     AIAnalysisProfileRecord,
     AIBudgetPolicyRecord,
     AIModelApprovalRecord,
@@ -29,6 +31,7 @@ router = APIRouter(prefix="/api/ai/modules", tags=["AI Modules"])
 
 MODEL_APPROVAL_PHRASE = "APROVO MODELO E CUSTO"
 PROFILE_APPROVAL_METHOD = "PREDEFINED_PROFILE"
+MAX_EFFECTIVE_QUESTION_CHARACTERS = 140_000
 
 
 class CreateModelApprovalRequest(BaseModel):
@@ -230,7 +233,7 @@ class CreateModuleAnalysisRequest(BaseModel):
     entity_ids: tuple[str, ...] = ()
     filters: dict[str, Any] = Field(default_factory=dict)
     analysis_mode: AnalysisMode = AnalysisMode.SYSTEMIC
-    question: str = Field(min_length=1, max_length=20_000)
+    question: str = Field(min_length=1, max_length=140_000)
     authority: Authority = Authority.ANALYSIS_ONLY
     provider: Literal["anthropic", "openai", "gemini", "deepseek"]
     model: str = Field(min_length=1, max_length=200)
@@ -249,18 +252,30 @@ class CreateProfileAnalysisRequest(BaseModel):
     filters: dict[str, Any] = Field(default_factory=dict)
     report_run_id: UUID | None = None
     analysis_profile_id: UUID
+    analysis_prompt_version_id: UUID | None = None
+    prompt_complement: str | None = Field(default=None, min_length=1, max_length=20_000)
     user_prompt: str | None = Field(default=None, min_length=1, max_length=20_000)
     idempotency_key: str = Field(min_length=16, max_length=160)
 
-    @field_validator("user_prompt")
+    @field_validator("user_prompt", "prompt_complement")
     @classmethod
-    def user_prompt_must_contain_text(cls, value: str | None) -> str | None:
+    def optional_prompt_text_must_contain_text(cls, value: str | None) -> str | None:
         if value is None:
             return None
         normalized = value.strip()
         if not normalized:
-            raise ValueError("user_prompt must contain text")
+            raise ValueError("prompt text must contain text")
         return normalized
+
+    @model_validator(mode="after")
+    def prompt_contract_is_unambiguous(self):
+        if self.user_prompt and self.analysis_prompt_version_id:
+            raise ValueError("user_prompt is legacy-only when no saved prompt is selected")
+        if self.prompt_complement and not self.analysis_prompt_version_id:
+            raise ValueError("prompt_complement requires analysis_prompt_version_id")
+        if self.user_prompt and self.prompt_complement:
+            raise ValueError("user_prompt and prompt_complement are mutually exclusive")
+        return self
 
 
 def _profile_response(profile: AIAnalysisProfileRecord) -> dict[str, Any]:
@@ -295,6 +310,36 @@ def _validate_profile(profile: AIAnalysisProfileRecord, now: datetime) -> None:
         raise HTTPException(status_code=409, detail={"code": "ANALYSIS_PROFILE_MODE_DENIED"})
     if canonical_hash(analysis_profile_snapshot(profile)) != profile.profile_hash:
         raise HTTPException(status_code=409, detail={"code": "ANALYSIS_PROFILE_HASH_DRIFT"})
+
+
+def _compose_profile_question(
+    profile_template: str,
+    *,
+    prompt_version: AIAnalysisPromptVersionRecord | None,
+    prompt_complement: str | None,
+    legacy_user_prompt: str | None,
+) -> str:
+    question = profile_template
+    if prompt_version is not None:
+        question = (
+            f"{profile_template.rstrip()}\n\n"
+            f"Prompt de análise selecionado — {prompt_version.name_snapshot} "
+            f"(v{prompt_version.version_number}, sha256:{prompt_version.content_hash}):\n"
+            f"{prompt_version.content_markdown}"
+        )
+        if prompt_complement:
+            question += f"\n\nComplemento específico desta execução:\n{prompt_complement}"
+    elif legacy_user_prompt:
+        question = (
+            f"{profile_template.rstrip()}\n\n"
+            f"Pergunta específica do usuário:\n{legacy_user_prompt}"
+        )
+    if len(question) > MAX_EFFECTIVE_QUESTION_CHARACTERS:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "ANALYSIS_PROMPT_EFFECTIVE_QUESTION_TOO_LARGE"},
+        )
+    return question
 
 
 @router.get("/analysis-profiles")
@@ -346,6 +391,38 @@ async def create_module_analysis_run_from_profile(
         ).scalars().all()
         entity_ids = tuple(str(trade_id) for trade_id in trade_ids)
         extra_filters["max_rows"] = max(len(entity_ids), 200)
+    analysis_prompt_binding: dict[str, Any] | None = None
+    analysis_prompt_version: AIAnalysisPromptVersionRecord | None = None
+    if payload.analysis_prompt_version_id is not None:
+        analysis_prompt_version = await db.get(
+            AIAnalysisPromptVersionRecord,
+            payload.analysis_prompt_version_id,
+        )
+        if analysis_prompt_version is None:
+            raise HTTPException(status_code=404, detail={"code": "ANALYSIS_PROMPT_VERSION_NOT_FOUND"})
+        analysis_prompt = await db.get(AIAnalysisPromptRecord, analysis_prompt_version.prompt_id)
+        if analysis_prompt is None:
+            raise HTTPException(status_code=404, detail={"code": "ANALYSIS_PROMPT_NOT_FOUND"})
+        if analysis_prompt.status != "ACTIVE":
+            raise HTTPException(status_code=409, detail={"code": "ANALYSIS_PROMPT_ARCHIVED"})
+        if analysis_prompt.current_version_id != analysis_prompt_version.id:
+            raise HTTPException(status_code=409, detail={"code": "ANALYSIS_PROMPT_VERSION_NOT_CURRENT"})
+        analysis_prompt_binding = {
+            "prompt_id": str(analysis_prompt.id),
+            "version_id": str(analysis_prompt_version.id),
+            "name": analysis_prompt_version.name_snapshot,
+            "version_number": analysis_prompt_version.version_number,
+            "content_hash": analysis_prompt_version.content_hash,
+            "source_type": analysis_prompt_version.source_type,
+            "source_filename": analysis_prompt_version.source_filename,
+            "prompt_complement": payload.prompt_complement,
+        }
+    question = _compose_profile_question(
+        profile.question_template,
+        prompt_version=analysis_prompt_version,
+        prompt_complement=payload.prompt_complement,
+        legacy_user_prompt=payload.user_prompt,
+    )
     approval_payload = CreateModelApprovalRequest(
         provider=profile.provider,
         model=profile.model,
@@ -380,17 +457,16 @@ async def create_module_analysis_run_from_profile(
             entity_ids=entity_ids,
             filters={**payload.filters, **extra_filters, "analysis_profile_id": str(profile.id)},
             analysis_mode=AnalysisMode(profile.analysis_mode),
-            question=(
-                f"{profile.question_template.rstrip()}\n\n"
-                f"Pergunta específica do usuário:\n{payload.user_prompt}"
-                if payload.user_prompt
-                else profile.question_template
-            ),
+            question=question,
             authority=Authority.ANALYSIS_ONLY,
             provider=profile.provider,
             model=profile.model,
             model_approval_id=approval.id,
             idempotency_key=payload.idempotency_key,
+            analysis_prompt_version_id=(
+                payload.analysis_prompt_version_id if analysis_prompt_binding else None
+            ),
+            analysis_prompt_binding=analysis_prompt_binding,
         )
         await db.commit()
         await db.refresh(run)
@@ -407,6 +483,7 @@ async def create_module_analysis_run_from_profile(
         "authority": run.authority,
         "graph_definition_id": str(run.graph_definition_id),
         "analysis_profile": _profile_response(profile),
+        "analysis_prompt": analysis_prompt_binding,
     }
 
 

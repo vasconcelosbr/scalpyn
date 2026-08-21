@@ -113,7 +113,8 @@ class AIRequest(BaseModel):
     prompt_version: str | None = Field(default=None, max_length=40)
     dataset_request: CanonicalDatasetRequest
     configuration_scope: ConfigurationScope
-    question: str = Field(min_length=1, max_length=20_000)
+    question: str = Field(min_length=1, max_length=140_000)
+    analysis_prompt_version_id: UUID | None = None
     frozen_context: dict[str, Any] = Field(default_factory=dict)
     tool_allowlist: tuple[str, ...] = ()
     correlation_id: str = Field(min_length=1, max_length=160)

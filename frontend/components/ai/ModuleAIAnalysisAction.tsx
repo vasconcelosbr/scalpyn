@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { BrainCircuit, CheckCircle2, ExternalLink, Loader2, ShieldCheck, X } from "lucide-react";
+import { BrainCircuit, CheckCircle2, ExternalLink, Loader2, Search, ShieldCheck, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import useSWR from "swr";
 
 import { apiGet, apiPost } from "@/lib/api";
+import type { AnalysisPromptListResponse } from "@/lib/analysis-prompts";
 
 type ModuleKey =
   | "strategy_profiles"
@@ -114,7 +115,9 @@ export function ModuleAIAnalysisAction({
   const [open, setOpen] = useState(false);
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [preferredModel, setPreferredModel] = useState<string | null>(null);
-  const [prompt, setPrompt] = useState("");
+  const [selectedPromptVersionId, setSelectedPromptVersionId] = useState("");
+  const [promptSearch, setPromptSearch] = useState("");
+  const [promptComplement, setPromptComplement] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [run, setRun] = useState<RunResponse | null>(null);
@@ -132,16 +135,49 @@ export function ModuleAIAnalysisAction({
     (path: string) => apiGet<AnalysisProfilesResponse>(path),
     { revalidateOnFocus: false },
   );
+  const {
+    data: promptData,
+    error: promptError,
+    isLoading: promptsLoading,
+  } = useSWR<AnalysisPromptListResponse>(
+    open ? "/ai/modules/analysis-prompts" : null,
+    (path: string) => apiGet<AnalysisPromptListResponse>(path),
+    { revalidateOnFocus: false },
+  );
 
   const enabled = Boolean(
     capabilities?.runtime_enabled
     && capabilities.entrypoints_enabled
     && capabilities.module_flags?.[originModule]
   );
-  const profiles = profileData?.profiles ?? [];
+  const profiles = useMemo(() => profileData?.profiles ?? [], [profileData?.profiles]);
   const groups = useMemo(() => groupProfilesByType(profiles), [profiles]);
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId) ?? profiles[0] ?? null;
-  const promptReady = prompt.trim().length > 0;
+  const prompts = useMemo(() => promptData?.items ?? [], [promptData?.items]);
+  const filteredPrompts = useMemo(() => {
+    const search = promptSearch.trim().toLocaleLowerCase("pt-BR");
+    if (!search) return prompts;
+    return prompts.filter((prompt) => (
+      `${prompt.name} ${prompt.current_version.description ?? ""}`.toLocaleLowerCase("pt-BR").includes(search)
+    ));
+  }, [promptSearch, prompts]);
+  const selectedPrompt = prompts.find(
+    (prompt) => prompt.current_version.id === selectedPromptVersionId,
+  ) ?? null;
+  const promptReady = Boolean(selectedPrompt);
+
+  function openModal() {
+    setRun(null);
+    setError(null);
+    setSelectedPromptVersionId("");
+    setPromptSearch("");
+    setPromptComplement("");
+    setOpen(true);
+  }
+
+  function closeModal() {
+    setOpen(false);
+  }
 
   function selectGroup(group: ProfileGroup) {
     const preferred = group.variants.find((variant) => variant.model === preferredModel);
@@ -156,7 +192,7 @@ export function ModuleAIAnalysisAction({
   }
 
   async function submit() {
-    if (!selectedProfile || !promptReady) return;
+    if (!selectedProfile || !selectedPrompt) return;
     setBusy(true);
     setError(null);
     try {
@@ -167,7 +203,8 @@ export function ModuleAIAnalysisAction({
         report_run_id: reportRunId ?? null,
         filters: {},
         analysis_profile_id: selectedProfile.id,
-        user_prompt: prompt.trim(),
+        analysis_prompt_version_id: selectedPrompt.current_version.id,
+        prompt_complement: promptComplement.trim() || null,
         idempotency_key: `module-analysis-profile-${crypto.randomUUID()}`,
       });
       setRun(created);
@@ -182,7 +219,7 @@ export function ModuleAIAnalysisAction({
     <>
       <button
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={openModal}
         disabled={!enabled}
         title={enabled ? "Criar Intelligence Run" : "Módulo de IA desativado por feature flag"}
         className={`inline-flex items-center justify-center gap-2 rounded-lg border border-cyan-400/30 bg-cyan-400/10 font-medium text-cyan-200 transition hover:border-cyan-300/60 hover:bg-cyan-400/15 disabled:cursor-not-allowed disabled:border-slate-700 disabled:bg-slate-800/40 disabled:text-slate-500 ${compact ? "px-2.5 py-1.5 text-xs" : "px-3.5 py-2 text-sm"}`}
@@ -198,7 +235,7 @@ export function ModuleAIAnalysisAction({
                 <div className="flex items-center gap-2 text-cyan-300"><BrainCircuit size={17} /><span className="text-sm font-semibold">Análise sistêmica</span></div>
                 <p className="mt-1 text-xs text-slate-400">{originModule} · escolha um perfil e crie a análise</p>
               </div>
-              <button type="button" onClick={() => setOpen(false)} className="rounded-lg p-1.5 text-slate-500 hover:bg-white/5 hover:text-slate-200" aria-label="Fechar"><X size={17} /></button>
+              <button type="button" onClick={closeModal} className="rounded-lg p-1.5 text-slate-500 hover:bg-white/5 hover:text-slate-200" aria-label="Fechar"><X size={17} /></button>
             </div>
 
             <div className="space-y-4 overflow-y-auto p-5">
@@ -277,17 +314,66 @@ export function ModuleAIAnalysisAction({
                     <p className="rounded-xl border border-amber-400/20 bg-amber-400/5 px-4 py-3 text-xs text-amber-100/80">Nenhum perfil de análise válido está disponível.</p>
                   )}
                   {profileError && <p className="rounded-lg border border-rose-400/20 bg-rose-400/10 px-3 py-2 text-xs text-rose-200">Não foi possível carregar os perfis governados.</p>}
+                  <div className="space-y-2">
+                    <div>
+                      <p className="text-sm font-medium text-slate-100">Escolha o prompt da análise</p>
+                      <p className="mt-1 text-xs text-slate-400">Uma versão ativa e imutável será vinculada a esta execução.</p>
+                    </div>
+                    <label className="relative block">
+                      <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                      <input
+                        value={promptSearch}
+                        onChange={(event) => setPromptSearch(event.target.value)}
+                        placeholder="Buscar prompt salvo"
+                        className="w-full rounded-xl border border-white/10 bg-black/20 py-2.5 pl-9 pr-3 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-400/50"
+                      />
+                    </label>
+                    {promptsLoading && <div className="flex items-center gap-2 rounded-xl border border-white/10 px-4 py-4 text-xs text-slate-400"><Loader2 size={14} className="animate-spin" /> Carregando biblioteca…</div>}
+                    {!promptsLoading && filteredPrompts.length > 0 && (
+                      <div className="max-h-56 space-y-2 overflow-y-auto pr-1" role="radiogroup" aria-label="Prompts de análise">
+                        {filteredPrompts.map((savedPrompt) => {
+                          const selected = savedPrompt.current_version.id === selectedPromptVersionId;
+                          return (
+                            <button
+                              key={savedPrompt.id}
+                              type="button"
+                              role="radio"
+                              aria-checked={selected}
+                              onClick={() => setSelectedPromptVersionId(savedPrompt.current_version.id)}
+                              className={`w-full rounded-xl border p-3 text-left transition ${selected ? "border-cyan-300/60 bg-cyan-300/10" : "border-white/10 bg-white/[0.025] hover:border-white/20"}`}
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <p className="flex items-center gap-2 text-sm font-medium text-slate-100">{selected && <CheckCircle2 size={14} className="text-cyan-300" />}{savedPrompt.name}</p>
+                                  {savedPrompt.current_version.description && <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-400">{savedPrompt.current_version.description}</p>}
+                                </div>
+                                <span className="shrink-0 rounded-md border border-white/10 px-2 py-1 font-mono text-[9px] text-slate-400">v{savedPrompt.current_version.version_number}</span>
+                              </div>
+                              <p className="mt-2 truncate font-mono text-[9px] text-slate-500">sha256:{savedPrompt.current_version.content_hash}</p>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {!promptsLoading && prompts.length === 0 && (
+                      <div className="rounded-xl border border-amber-400/20 bg-amber-400/5 px-4 py-3 text-xs leading-5 text-amber-100/80">
+                        Nenhum prompt ativo está disponível. Cadastre um na aba Biblioteca de prompts em Intelligence Runs.
+                      </div>
+                    )}
+                    {!promptsLoading && prompts.length > 0 && filteredPrompts.length === 0 && <p className="text-xs text-slate-500">Nenhum prompt corresponde à busca.</p>}
+                    {promptError && <p className="rounded-lg border border-rose-400/20 bg-rose-400/10 px-3 py-2 text-xs text-rose-200">Não foi possível carregar a biblioteca de prompts.</p>}
+                  </div>
                   <label className="block text-xs font-medium text-slate-200">
-                    Prompt da análise
+                    Complemento desta execução — opcional
                     <textarea
-                      value={prompt}
-                      onChange={(event) => setPrompt(event.target.value)}
+                      value={promptComplement}
+                      onChange={(event) => setPromptComplement(event.target.value)}
                       rows={4}
-                      required
-                      placeholder="Digite o que você deseja que a IA analise, compare ou explique."
+                      maxLength={20_000}
+                      placeholder="Acrescente uma pergunta ou orientação específica para esta amostra."
                       className="mt-2 w-full resize-y rounded-xl border border-white/10 bg-black/20 px-3 py-2.5 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-400/50"
                     />
-                    <span className="mt-1.5 block text-[11px] font-normal text-slate-500">O perfil define o método; este prompt define a sua pergunta.</span>
+                    <span className="mt-1.5 block text-[11px] font-normal text-slate-500">O conteúdo salvo não é alterado; o complemento fica congelado apenas nesta execução.</span>
                   </label>
                   {selectedProfile && (
                     <p className="rounded-lg border border-emerald-400/15 bg-emerald-400/5 px-3 py-2 text-[11px] leading-4 text-emerald-100/70">
@@ -301,7 +387,7 @@ export function ModuleAIAnalysisAction({
 
             {!run && (
               <div className="flex items-center justify-end gap-2 border-t border-white/10 px-5 py-4">
-                <button type="button" onClick={() => setOpen(false)} className="rounded-lg px-3 py-2 text-sm text-slate-400 hover:text-slate-100">Cancelar</button>
+                <button type="button" onClick={closeModal} className="rounded-lg px-3 py-2 text-sm text-slate-400 hover:text-slate-100">Cancelar</button>
                 <button type="button" onClick={() => void submit()} disabled={busy || !selectedProfile || !promptReady} className="inline-flex items-center gap-2 rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-cyan-950 disabled:cursor-not-allowed disabled:opacity-40">
                   {busy && <Loader2 size={15} className="animate-spin" />} Criar Intelligence Run
                 </button>

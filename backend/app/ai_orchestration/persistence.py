@@ -72,6 +72,7 @@ class SQLAlchemyAIPersistence:
                 analysis_mode=value.analysis_mode.value, authority=value.authority.value,
                 question_hash=canonical_hash(value.question), correlation_id=value.correlation_id,
                 model_resolution_id=self.resolution.id, prompt_version_id=self.prompt.id,
+                analysis_prompt_version_id=value.analysis_prompt_version_id,
                 dataset_snapshot_id=self.dataset_id,
                 configuration_bundle_id=self.bundle_id, request_json=value.model_dump(mode="json"),
                 created_at=value.created_at,

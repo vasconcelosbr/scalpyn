@@ -403,6 +403,8 @@ class ModuleAIAnalysisService:
         filters: dict[str, Any], analysis_mode: AnalysisMode, question: str,
         authority: Authority, provider: str, model: str, model_approval_id: UUID,
         idempotency_key: str, graph_key_override: str | None = None,
+        analysis_prompt_version_id: UUID | None = None,
+        analysis_prompt_binding: dict[str, Any] | None = None,
     ):
         settings = get_langgraph_settings()
         settings.require_runtime()
@@ -572,6 +574,7 @@ class ModuleAIAnalysisService:
             prompt_key=prompt.prompt_key, prompt_version=prompt.semantic_version,
             dataset_request=dataset_request, configuration_scope=ConfigurationScope(),
             question=question,
+            analysis_prompt_version_id=analysis_prompt_version_id,
             frozen_context={
                 "rows": rows, "context_manifest": context_manifest.model_dump(mode="json"),
                 "context": context.model_dump(mode="json"), "context_fingerprint": context.digest,
@@ -581,6 +584,7 @@ class ModuleAIAnalysisService:
                 }),
                 "model_approval_id": str(model_approval_id),
                 "model_max_cost_usd": str(approval.max_cost_usd),
+                "analysis_prompt": analysis_prompt_binding,
             },
             tool_allowlist=tuple(tool_allowlist),
             correlation_id=idempotency_key,
