@@ -394,8 +394,13 @@ function changedFields(backend: Record<string, unknown>, current: Record<string,
 }
 
 function severityFor(codes: string[], fields: string[]): AuditSeverity | null {
-  if (codes.length > 0) return "CRITICAL";
+  if (codes.some((code) => [
+    "INDICATOR_FALLBACK_TO_PRICE",
+    "INDICATOR_CHANGED_DURING_DESERIALIZE",
+    "INDICATOR_CHANGED_DURING_SERIALIZE",
+  ].includes(code))) return "CRITICAL";
   if (fields.some((field) => ["operator", "value", "min", "max", "period"].includes(field))) return "HIGH";
+  if (codes.includes("UNKNOWN_INDICATOR")) return "MEDIUM";
   if (fields.some((field) => ["timeframe", "enabled", "required"].includes(field))) return "MEDIUM";
   return null;
 }
@@ -461,7 +466,11 @@ export function buildProfileUiAudit({
         ui_rendered_option_value: ui.rendered_option_value,
         save_indicator: saveRef?.indicator ?? null,
       },
-      round_trip_ok: codes.length === 0 && fields.length === 0 && Boolean(saveRef),
+      round_trip_ok: !codes.some((code) => [
+        "INDICATOR_FALLBACK_TO_PRICE",
+        "INDICATOR_CHANGED_DURING_DESERIALIZE",
+        "INDICATOR_CHANGED_DURING_SERIALIZE",
+      ].includes(code)) && fields.length === 0 && Boolean(saveRef),
     };
   });
 

@@ -538,6 +538,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
     [config, currentSavePayload, name, profile?.id]
   );
   const criticalAuditCount = auditPreview.summary.critical_differences;
+  const importedIndicatorCount = auditPreview.summary.unknown_indicator_occurrences;
 
   const handleSave = async () => {
     if (!name.trim()) { alert("Profile name is required"); return; }
@@ -949,9 +950,24 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
           <div>
             <p className="font-semibold">Divergência crítica entre o backend e o estado apresentado pela UI</p>
             <p className="mt-1 text-red-200/80">
-              {criticalAuditCount} condição{criticalAuditCount === 1 ? "" : "ões"} possui indicador desconhecido,
-              fallback visual ou alteração de identidade. Exporte o diagnóstico antes de salvar; o Save será bloqueado
-              enquanto a divergência existir.
+              {criticalAuditCount} condição{criticalAuditCount === 1 ? "" : "ões"} possui fallback visual ou alteração
+              de identidade. Exporte o diagnóstico antes de salvar; o Save será bloqueado enquanto a divergência existir.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {importedIndicatorCount > 0 && (
+        <div
+          className="flex items-start gap-3 rounded-xl border border-yellow-500/30 bg-yellow-500/8 p-4 text-[13px] text-yellow-300"
+          data-testid="profile-ui-audit-imported-indicator-warning"
+        >
+          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+          <div>
+            <p className="font-semibold">Indicadores preservados do JSON fora do catálogo da UI</p>
+            <p className="mt-1 text-yellow-200/80">
+              {importedIndicatorCount} indicador{importedIndicatorCount === 1 ? "" : "es"} está sendo exibido com o valor
+              importado original. Isso não altera o profile nem bloqueia o Save; valide o suporte no motor antes de ativá-lo.
             </p>
           </div>
         </div>

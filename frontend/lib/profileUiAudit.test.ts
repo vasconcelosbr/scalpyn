@@ -85,7 +85,8 @@ for (const indicator of [
     assert.equal(row.ui.indicator_label, `${indicator} (importado do JSON)`);
     assert.equal(row.ui.rendered_option_value, indicator);
     assert.equal(row.ui.imported_option, true);
-    assert.equal(row.round_trip_ok, false);
+    assert.equal(row.severity, "MEDIUM");
+    assert.equal(row.round_trip_ok, true);
     assert.ok(row.codes.includes("UNKNOWN_INDICATOR"));
     assert.ok(!row.codes.includes("INDICATOR_FALLBACK_TO_PRICE"));
   });
@@ -99,6 +100,8 @@ test("unknown future indicator is never silently serialized as price", () => {
   assert.equal(row.ui.requested_indicator_value, "future_test_indicator");
   assert.equal(row.ui.indicator_value, "future_test_indicator");
   assert.equal(row.ui.registry_found, false);
+  assert.equal(row.severity, "MEDIUM");
+  assert.equal(row.round_trip_ok, true);
   assert.ok(row.codes.includes("UNKNOWN_INDICATOR"));
   assert.equal(result.summary.fallback_to_price_detected, 0);
 });
@@ -155,7 +158,7 @@ test("batch UI audit aggregates only the selected profiles", () => {
   assert.deepEqual(result.selection.selected_profile_ids, ["profile-1", "profile-2"]);
   assert.equal(result.summary.profiles_loaded, 2);
   assert.equal(result.summary.profiles_with_differences, 1);
-  assert.equal(result.summary.critical_differences, 1);
+  assert.equal(result.summary.critical_differences, 0);
   assert.equal(result.summary.fallback_to_price_detected, 0);
   assert.equal(result.ui_rendered_profiles_metadata.safe_to_import, false);
   const renderedProfile = result.ui_rendered_profiles[0] as unknown as {
