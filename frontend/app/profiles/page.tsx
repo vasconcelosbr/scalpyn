@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Plus, Settings2, Trash2, Play, Copy, Layers, ListChecks, FileJson } from "lucide-react";
+import { Plus, Settings2, Trash2, Play, Copy, Layers, ListChecks, FileJson, Download, FileDown, Loader2 } from "lucide-react";
 import { apiGet, apiPost, apiDelete, apiPut } from "@/lib/api";
-import { ProfileBuilder } from "@/components/profiles/ProfileBuilder";
+import { ProfileBuilder, normalizeProfileConfig } from "@/components/profiles/ProfileBuilder";
 import { ProfileCard } from "@/components/profiles/ProfileCard";
 import { BulkProfileBuilder } from "@/components/profiles/BulkProfileBuilder";
 import { JsonImportBuilder } from "@/components/profiles/JsonImportBuilder";
 import { ModuleAIAnalysisAction } from "@/components/ai/ModuleAIAnalysisAction";
+import { buildProfileUiAudit, buildProfilesUiAudit } from "@/lib/profileUiAudit";
 
 interface Profile {
   id: string;
@@ -17,6 +18,8 @@ interface Profile {
   config: ProfileConfig;
   created_at: string;
   updated_at: string;
+  profile_role?: "universe_filter" | "primary_filter" | "score_engine" | "acquisition_queue" | null;
+  pipeline_order?: number;
 }
 
 interface ProfileConfig {
@@ -51,6 +54,8 @@ export default function ProfilesPage() {
   const [showBuilder, setShowBuilder] = useState(false);
   const [showBulkBuilder, setShowBulkBuilder] = useState(false);
   const [showJsonImport, setShowJsonImport] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportingUiAudit, setExportingUiAudit] = useState(false);
   const [editingProfile, setEditingProfile] = useState<Profile | null>(null);
   const [testResults, setTestResults] = useState<any>(null);
   const [selectedProfiles, setSelectedProfiles] = useState<Set<string>>(new Set());
@@ -127,6 +132,75 @@ export default function ProfilesPage() {
     }
   };
 
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const payload = await apiGet("/profiles/export");
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `scalpyn-strategy-profiles-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (e: unknown) {
+      alert(`Falha ao exportar profiles: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleExportUiAudit = () => {
+    const selected = profiles.filter((profile) => selectedProfiles.has(profile.id));
+    if (selected.length === 0) {
+      alert("Selecione ao menos um profile para exportar a auditoria da UI.");
+      return;
+    }
+
+    setExportingUiAudit(true);
+    try {
+      const exportedAt = new Date().toISOString();
+      const audits = selected.map((profile) => {
+        const formConfig = normalizeProfileConfig(profile.config);
+        const profileRole = profile.profile_role ?? null;
+        const savePayload = {
+          name: profile.name,
+          description: profile.description,
+          config: formConfig,
+          is_active: profile.is_active,
+          profile_role: profileRole,
+          pipeline_order: profileRole
+            ? { universe_filter: 0, primary_filter: 1, score_engine: 2, acquisition_queue: 3 }[profileRole] ?? 99
+            : 99,
+        };
+        return buildProfileUiAudit({
+          profile: { id: profile.id, name: profile.name, is_active: profile.is_active },
+          backendConfig: profile.config as unknown as Record<string, unknown>,
+          formConfig,
+          savePayload,
+          trigger: "manual_export",
+          exportedAt,
+        });
+      });
+      const payload = buildProfilesUiAudit(audits, exportedAt);
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `scalpyn-strategy-profiles-ui-audit-${exportedAt.slice(0, 10)}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (e: unknown) {
+      alert(`Falha ao exportar auditoria da UI: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setExportingUiAudit(false);
+    }
+  };
+
   if (showBuilder) {
     return (
       <ProfileBuilder
@@ -182,8 +256,8 @@ export default function ProfilesPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex justify-between items-center">
-        <div>
+      <div className="flex flex-col gap-4 2xl:flex-row 2xl:items-start 2xl:justify-between">
+        <div className="shrink-0">
           <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">
             Strategy Profiles
           </h1>
@@ -191,7 +265,7 @@ export default function ProfilesPage() {
             Define custom filters, scoring weights, and signal conditions.
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center justify-end gap-3">
           <ModuleAIAnalysisAction
             originModule="strategy_profiles"
             originView="profiles-list"
@@ -233,6 +307,32 @@ export default function ProfilesPage() {
           >
             <FileJson className="w-4 h-4 mr-2" />
             Import JSON
+          </button>
+          <button
+            className="btn btn-secondary"
+            onClick={() => void handleExport()}
+            disabled={exporting}
+            title="Exportar todos os profiles em JSON para auditoria e correção"
+            data-testid="export-profiles-json-btn"
+          >
+            {exporting
+              ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              : <Download className="w-4 h-4 mr-2" />}
+            Exportar JSON
+          </button>
+          <button
+            className="btn btn-secondary"
+            onClick={handleExportUiAudit}
+            disabled={exportingUiAudit || selectedProfiles.size === 0}
+            title={selectedProfiles.size > 0
+              ? `Exportar o estado da UI de ${selectedProfiles.size} profile(s) selecionado(s)`
+              : "Selecione ao menos um profile para exportar a auditoria da UI"}
+            data-testid="export-selected-profiles-ui-audit-btn"
+          >
+            {exportingUiAudit
+              ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              : <FileDown className="w-4 h-4 mr-2" />}
+            Export UI Audit
           </button>
           <button
             className="btn btn-primary"
