@@ -537,6 +537,17 @@ export function buildProfilesUiAudit(
   const unknownIndicators = [...new Set(
     missingFromSectionRegistry.map((row) => row.indicator),
   )].sort();
+  const uiRenderedProfiles = profiles.map((profile) => {
+    const savePayload = object(profile.save_payload);
+    return {
+      profile_id: profile.profile_id,
+      name: profile.name,
+      description: nullable(savePayload.description),
+      profile_role: nullable(savePayload.profile_role),
+      pipeline_order: nullable(savePayload.pipeline_order),
+      ...clone(object(profile.ui_rendered_config)),
+    };
+  });
 
   return {
     export_type: "scalpyn_strategy_profiles_ui_audit",
@@ -565,6 +576,12 @@ export function buildProfilesUiAudit(
       unknown_indicator_occurrences: missingFromSectionRegistry.length,
       fallback_to_price_detected: fallbacksDetected.length,
     },
+    ui_rendered_profiles_metadata: {
+      audit_only: true,
+      safe_to_import: false,
+      reason: "Esta lista reproduz os valores efetivamente renderizados pela UI, inclusive fallbacks incorretos.",
+    },
+    ui_rendered_profiles: uiRenderedProfiles,
     indicator_registry_audit: {
       backend_indicators: backendIndicators,
       frontend_registered_indicators: frontendRegisteredIndicators,

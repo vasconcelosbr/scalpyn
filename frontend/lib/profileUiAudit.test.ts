@@ -138,5 +138,13 @@ test("batch UI audit aggregates only the selected profiles", () => {
   assert.equal(result.summary.profiles_with_differences, 1);
   assert.equal(result.summary.critical_differences, 1);
   assert.equal(result.summary.fallback_to_price_detected, 1);
+  assert.equal(result.ui_rendered_profiles_metadata.safe_to_import, false);
+  const renderedProfile = result.ui_rendered_profiles[0] as unknown as {
+    block_rules: { blocks: Array<{ conditions: Array<{ indicator: string }> }> };
+  };
+  assert.equal(
+    renderedProfile.block_rules.blocks[0].conditions[0].indicator,
+    "price",
+  );
   assert.equal(result.profiles.length, 2);
 });
