@@ -15,7 +15,11 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..ai_orchestration.budget_reservation_audit import BudgetReservationAudit
-from ..ai_orchestration.contracts import AIRequestIntent, AIResult
+from ..ai_orchestration.contracts import (
+    AIRequestIntent,
+    AIResult,
+    MAX_AI_REQUEST_QUESTION_CHARS,
+)
 from ..ai_orchestration.errors import ProviderBlockedError, ProviderTransportError
 from ..ai_orchestration.provider_adapters import (
     AnthropicSDKTextAdapter, CopilotProviderTransport, anthropic_output_config,
@@ -406,7 +410,11 @@ class SystemicLangGraphBridge:
             AIUsageRecord.module == request.origin_module,
             AIUsageRecord.created_at >= month_start,
         ))) or 0)
-        question = structured_block(TrustLabel.USER_INPUT, str(request_json.get("question") or ""))
+        question = structured_block(
+            TrustLabel.USER_INPUT,
+            str(request_json.get("question") or ""),
+            max_chars=MAX_AI_REQUEST_QUESTION_CHARS,
+        )
         context_json = _provider_decision_context(frozen_context, tool_evidence_rows)
         values = {
             "question": question,
@@ -604,6 +612,9 @@ class SystemicLangGraphBridge:
                 "provider_output_schema_valid": False,
                 "provider_stop_reason": response.stop_reason,
                 "provider_response_ref": response.raw_response_ref,
+                "schema_error_path": list(response.schema_error_path),
+                "schema_validator": response.schema_validator,
+                "repair_attempts": response.repair_attempts,
             }
 
         try:
@@ -620,6 +631,7 @@ class SystemicLangGraphBridge:
                 "provider_response_ref": response.raw_response_ref,
                 "schema_error_path": [str(item) for item in exc.absolute_path][:8],
                 "schema_validator": str(exc.validator),
+                "repair_attempts": response.repair_attempts,
             }
         if reconciliation_error is not None:
             return {

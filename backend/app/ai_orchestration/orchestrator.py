@@ -9,7 +9,7 @@ from jsonschema import ValidationError, validate
 from .budget_service import BudgetPolicy, BudgetService
 from .configuration_bundle_service import ConfigurationBundle
 from .context import TenantAIContext
-from .contracts import AIRequest, AIResult, AIUsage
+from .contracts import AIRequest, AIResult, AIUsage, MAX_AI_REQUEST_QUESTION_CHARS
 from .dataset_service import CanonicalAnalysisDataset, CanonicalDatasetService
 from .errors import AIErrorCode, fail
 from .invariant_validator import InvariantValidator, RuntimeInvariantState
@@ -69,7 +69,11 @@ class AIOrchestrationService:
         )
 
         sanitized_values = dict(prompt_values)
-        sanitized_values["question"] = structured_block(TrustLabel.USER_INPUT, request.question)
+        sanitized_values["question"] = structured_block(
+            TrustLabel.USER_INPUT,
+            request.question,
+            max_chars=MAX_AI_REQUEST_QUESTION_CHARS,
+        )
         system_prompt, user_prompt = self.prompt_registry.render(prompt, sanitized_values)
         job = LeaseJob.queued(tenant_id=context.tenant_id, purpose=request.origin_module, identity={
             "dataset": dataset.dataset_hash, "bundle": bundle.bundle_hash, "prompt": prompt.content_hash,

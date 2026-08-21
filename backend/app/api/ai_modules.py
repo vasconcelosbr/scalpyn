@@ -10,7 +10,11 @@ from pydantic import AnyHttpUrl, BaseModel, Field, field_validator, model_valida
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..ai_orchestration.contracts import AnalysisMode, Authority
+from ..ai_orchestration.contracts import (
+    AnalysisMode,
+    Authority,
+    MAX_AI_REQUEST_QUESTION_CHARS,
+)
 from ..ai_orchestration.hashing import canonical_hash
 from ..ai_orchestration.langgraph.config import get_langgraph_settings
 from ..ai_orchestration.provider_registry import default_registry
@@ -31,7 +35,7 @@ router = APIRouter(prefix="/api/ai/modules", tags=["AI Modules"])
 
 MODEL_APPROVAL_PHRASE = "APROVO MODELO E CUSTO"
 PROFILE_APPROVAL_METHOD = "PREDEFINED_PROFILE"
-MAX_EFFECTIVE_QUESTION_CHARACTERS = 140_000
+MAX_EFFECTIVE_QUESTION_CHARACTERS = MAX_AI_REQUEST_QUESTION_CHARS
 
 
 class CreateModelApprovalRequest(BaseModel):

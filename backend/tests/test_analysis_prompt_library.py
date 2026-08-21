@@ -12,6 +12,7 @@ import pytest
 
 from app.api.ai_modules import CreateProfileAnalysisRequest, _compose_profile_question
 from app.api.analysis_prompts import PromptVersionPayload, content_hash, require_admin
+from app.ai_orchestration.initial_prompts import initial_prompt_registry
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -26,6 +27,15 @@ def _migration_module():
     return module
 
 
+def _systemic_contract_migration_module():
+    path = REPO / "backend/alembic/versions/194_systemic_prompt_input_contract.py"
+    spec = importlib.util.spec_from_file_location("migration_194", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_seeded_markdown_is_exact_and_reproducible():
     migration = _migration_module()
     content = migration._seed_content()
@@ -33,6 +43,17 @@ def test_seeded_markdown_is_exact_and_reproducible():
     assert len(content.encode("utf-8")) == 24_282
     assert content_hash(content) == migration.PROMPT_HASH
     assert content.startswith("# SCALPYN")
+
+
+def test_systemic_input_contract_migration_matches_immutable_registry_version():
+    migration = _systemic_contract_migration_module()
+    values = migration._prompt_values()
+    prompt = initial_prompt_registry().resolve("systemic-multimodule", "2.0.6")
+
+    assert values["id"] == prompt.id
+    assert values["content_hash"] == prompt.content_hash == migration.EXPECTED_PROMPT_HASH
+    assert values["system_template"] == prompt.system_template
+    assert values["user_template"] == prompt.user_template
 
 
 def test_prompt_payload_normalizes_markdown_and_validates_upload():

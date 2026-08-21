@@ -127,6 +127,23 @@ async def test_gives_up_after_exhausting_repair_attempts(monkeypatch):
     assert response.terminal_error_code == "PROVIDER_OUTPUT_JSON_INVALID"
     assert response.tokens_input == 190
     assert response.tokens_output == 45
+    assert response.repair_attempts == 1
+    assert len(client.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_preserves_final_schema_validation_diagnostics(monkeypatch):
+    adapter, client = _adapter(monkeypatch, [
+        _FakeResponse(_anthropic_payload('{"answer": 1}')),
+        _FakeResponse(_anthropic_payload('{"answer": false}')),
+    ])
+
+    response = await _run(adapter)
+
+    assert response.terminal_error_code == "PROVIDER_OUTPUT_SCHEMA_INVALID"
+    assert response.schema_error_path == ("answer",)
+    assert response.schema_validator == "type"
+    assert response.repair_attempts == 1
     assert len(client.calls) == 2
 
 
@@ -187,6 +204,8 @@ async def test_deepseek_uses_full_provider_output_and_has_no_read_timeout(monkey
     payload = client.calls[0]["json"]
     assert payload["max_tokens"] == 384_000
     assert payload["thinking"] == {"type": "enabled"}
+    assert "Canonical output JSON Schema" in payload["messages"][0]["content"]
+    assert '"required":["answer"]' in payload["messages"][0]["content"]
 
 
 @pytest.mark.asyncio

@@ -99,7 +99,7 @@ class CanonicalGraphNodeHandler:
                 for key in (
                     "error_code", "terminal_reason", "provider_output_schema_valid",
                     "provider_stop_reason", "provider_response_ref", "schema_validator",
-                    "provider_transport_attempted",
+                    "provider_transport_attempted", "repair_attempts",
                 ):
                     value = result_json.get(key)
                     if value is not None:

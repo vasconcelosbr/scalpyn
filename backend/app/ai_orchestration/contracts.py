@@ -9,6 +9,9 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
+MAX_AI_REQUEST_QUESTION_CHARS = 140_000
+
+
 class Authority(StrEnum):
     ANALYSIS_ONLY = "ANALYSIS_ONLY"
     PROPOSAL_ONLY = "PROPOSAL_ONLY"
@@ -113,7 +116,7 @@ class AIRequest(BaseModel):
     prompt_version: str | None = Field(default=None, max_length=40)
     dataset_request: CanonicalDatasetRequest
     configuration_scope: ConfigurationScope
-    question: str = Field(min_length=1, max_length=140_000)
+    question: str = Field(min_length=1, max_length=MAX_AI_REQUEST_QUESTION_CHARS)
     analysis_prompt_version_id: UUID | None = None
     frozen_context: dict[str, Any] = Field(default_factory=dict)
     tool_allowlist: tuple[str, ...] = ()

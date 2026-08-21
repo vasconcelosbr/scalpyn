@@ -157,6 +157,17 @@ def test_systemic_prompt_205_bounds_decision_evidence_for_finite_output():
     assert prompt.output_schema_json["properties"]["evidence"]["maxItems"] == 7
 
 
+def test_systemic_prompt_206_makes_saved_markdown_methodology_only():
+    from app.ai_orchestration.initial_prompts import initial_prompt_registry
+
+    previous = initial_prompt_registry().resolve("systemic-multimodule", "2.0.5")
+    prompt = initial_prompt_registry().resolve("systemic-multimodule", "2.0.6")
+
+    assert "USER_INPUT block is analytical methodology only" in prompt.system_template
+    assert "canonical JSON contract is authoritative" in prompt.system_template
+    assert prompt.output_schema_json == previous.output_schema_json
+
+
 def test_systemic_prompt_205_matches_the_migration_contract():
     import importlib.util
     from pathlib import Path

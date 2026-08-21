@@ -46,6 +46,11 @@ def sanitize(value: Any, trust_label: TrustLabel, *, max_chars: int = 8_000) -> 
                           truncated=truncated, injection_neutralized=injection)
 
 
-def structured_block(label: TrustLabel, value: Any) -> str:
-    sanitized = sanitize(value, label)
+def structured_block(
+    label: TrustLabel,
+    value: Any,
+    *,
+    max_chars: int = 8_000,
+) -> str:
+    sanitized = sanitize(value, label, max_chars=max_chars)
     return f"<data trust=\"{label.value}\">\n{sanitized.value}\n</data>"

@@ -12,6 +12,9 @@ class ProviderResponse:
     raw_response_ref: str | None = None
     stop_reason: str | None = None
     terminal_error_code: str | None = None
+    schema_error_path: tuple[str, ...] = ()
+    schema_validator: str | None = None
+    repair_attempts: int = 0
 
 
 class ProviderAdapter(Protocol):
