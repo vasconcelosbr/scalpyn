@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildProfileUiAudit, resolveProfileUiIndicator } from "./profileUiAudit";
+import { buildProfileUiAudit, buildProfilesUiAudit, resolveProfileUiIndicator } from "./profileUiAudit";
 
 function configWithIndicator(indicator: string) {
   return {
@@ -93,4 +93,25 @@ test("indicator identity change during serialize is critical", () => {
   const row = result.profiles[0].round_trip_audit[0];
   assert.equal(row.severity, "CRITICAL");
   assert.ok(row.codes.includes("INDICATOR_CHANGED_DURING_SERIALIZE"));
+});
+
+test("batch UI audit aggregates only the selected profiles", () => {
+  const first = audit("adx_slope_3");
+  const second = buildProfileUiAudit({
+    profile: { id: "profile-2", name: "L3_SECOND" },
+    backendConfig: configWithIndicator("stoch_k"),
+    formConfig: configWithIndicator("stoch_k"),
+    savePayload: { name: "L3_SECOND", config: configWithIndicator("stoch_k") },
+    exportedAt: "2026-08-21T00:00:00.000Z",
+  });
+
+  const result = buildProfilesUiAudit([first, second], "2026-08-21T00:00:00.000Z");
+
+  assert.equal(result.source, "frontend_batch_ui_render_model");
+  assert.deepEqual(result.selection.selected_profile_ids, ["profile-1", "profile-2"]);
+  assert.equal(result.summary.profiles_loaded, 2);
+  assert.equal(result.summary.profiles_with_differences, 1);
+  assert.equal(result.summary.critical_differences, 1);
+  assert.equal(result.summary.fallback_to_price_detected, 1);
+  assert.equal(result.profiles.length, 2);
 });

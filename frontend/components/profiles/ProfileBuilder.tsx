@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useRef } from "react";
-import { AlertTriangle, ArrowLeft, FileDown, Save, Play, ShieldOff, Zap, Plus, Trash2, Target } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Save, Play, ShieldOff, Zap, Plus, Trash2, Target } from "lucide-react";
 import { apiPost } from "@/lib/api";
 import { buildProfileUiAudit, PROFILE_RULE_INDICATORS } from "@/lib/profileUiAudit";
 import { ConditionBuilder, NumericInput, type ScoreRule } from "./ConditionBuilder";
@@ -284,7 +284,7 @@ function normalizeBuilderCondition(raw: any, index: number) {
   };
 }
 
-function normalizeProfileConfig(rawConfig: any) {
+export function normalizeProfileConfig(rawConfig: any) {
   return {
     ...DEFAULT_CONFIG,
     ...(rawConfig || {}),
@@ -536,8 +536,6 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
     [config, currentSavePayload, name, profile?.id]
   );
   const criticalAuditCount = auditPreview.summary.critical_differences;
-
-  const handleExportUiAudit = () => downloadAudit(buildAudit("manual_export"));
 
   const handleSave = async () => {
     if (!name.trim()) { alert("Profile name is required"); return; }
@@ -929,16 +927,6 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
             size="sm"
             onSuccess={handlePresetIASuccess}
           />
-        )}
-        {profile?.id && (
-          <button
-            className="btn btn-secondary"
-            onClick={handleExportUiAudit}
-            data-testid="export-profile-ui-audit-btn"
-          >
-            <FileDown className="w-4 h-4 mr-2" />
-            Export UI Audit
-          </button>
         )}
         <button className="btn btn-secondary" onClick={handleTest} disabled={testing} data-testid="test-config-btn">
           <Play className="w-4 h-4 mr-2" />

@@ -448,3 +448,70 @@ export function buildProfileUiAudit({
     }],
   };
 }
+
+type ProfileUiAudit = ReturnType<typeof buildProfileUiAudit>;
+
+export function buildProfilesUiAudit(
+  audits: ProfileUiAudit[],
+  exportedAt = new Date().toISOString(),
+) {
+  const profiles = audits.flatMap((audit) => audit.profiles);
+  const missingFromSectionRegistry = audits.flatMap(
+    (audit) => audit.indicator_registry_audit.missing_from_section_registry,
+  );
+  const fallbacksDetected = audits.flatMap(
+    (audit) => audit.indicator_registry_audit.fallbacks_detected,
+  );
+  const backendIndicators = [...new Set(audits.flatMap(
+    (audit) => audit.indicator_registry_audit.backend_indicators,
+  ))].sort();
+  const frontendRegisteredIndicators = [...new Set(audits.flatMap(
+    (audit) => audit.indicator_registry_audit.frontend_registered_indicators,
+  ))].sort();
+  const missingFromFrontendRegistry = [...new Set(audits.flatMap(
+    (audit) => audit.indicator_registry_audit.missing_from_frontend_registry,
+  ))].sort();
+  const unknownIndicators = [...new Set(
+    missingFromSectionRegistry.map((row) => row.indicator),
+  )].sort();
+
+  return {
+    export_type: "scalpyn_strategy_profiles_ui_audit",
+    schema_version: 1,
+    exported_at: exportedAt,
+    trigger: "manual_export" as const,
+    source: "frontend_batch_ui_render_model",
+    selection: {
+      selected_profile_ids: profiles.map((profile) => profile.profile_id),
+      selected_profile_names: profiles.map((profile) => profile.name),
+    },
+    summary: {
+      profiles_loaded: profiles.length,
+      profiles_with_differences: audits.filter(
+        (audit) => audit.summary.profiles_with_differences > 0,
+      ).length,
+      conditions_with_differences: audits.reduce(
+        (total, audit) => total + audit.summary.conditions_with_differences,
+        0,
+      ),
+      critical_differences: audits.reduce(
+        (total, audit) => total + audit.summary.critical_differences,
+        0,
+      ),
+      unknown_indicators: unknownIndicators.length,
+      unknown_indicator_occurrences: missingFromSectionRegistry.length,
+      fallback_to_price_detected: fallbacksDetected.length,
+    },
+    indicator_registry_audit: {
+      backend_indicators: backendIndicators,
+      frontend_registered_indicators: frontendRegisteredIndicators,
+      missing_from_frontend_registry: missingFromFrontendRegistry,
+      missing_from_section_registry: missingFromSectionRegistry,
+      unused_frontend_indicators: frontendRegisteredIndicators.filter(
+        (indicator) => !backendIndicators.includes(indicator),
+      ),
+      fallbacks_detected: fallbacksDetected,
+    },
+    profiles,
+  };
+}
