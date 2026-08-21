@@ -148,10 +148,10 @@ function createRuleCondition(type: RuleConditionType = "threshold"): RuleConditi
   };
 }
 
-function normalizeRuleCondition(raw: any): RuleCondition {
+function normalizeRuleCondition(raw: any, fallbackId = `cond_${Date.now()}`): RuleCondition {
   if (raw?.type === "comparison" || (raw?.left && raw?.right)) {
     return {
-      id: raw?.id || `cond_${Date.now()}`,
+      id: raw?.id || fallbackId,
       type: "comparison",
       left: raw?.left || "price",
       operator: raw?.operator || ">",
@@ -167,7 +167,7 @@ function normalizeRuleCondition(raw: any): RuleCondition {
       : "threshold";
 
   return {
-    id: raw?.id || `cond_${Date.now()}`,
+    id: raw?.id || fallbackId,
     type: inferredType,
     indicator,
     operator: raw?.operator || (inferredType === "boolean" ? "is_true" : "<"),
@@ -185,8 +185,8 @@ function normalizeRuleCondition(raw: any): RuleCondition {
   };
 }
 
-function normalizeBlockRule(raw: any): BlockRule {
-  const id = raw?.id || `block_${Date.now()}`;
+function normalizeBlockRule(raw: any, blockIndex = 0): BlockRule {
+  const id = raw?.id || `block_loaded_${blockIndex}`;
   const base = {
     id,
     name: raw?.name || "New Block",
@@ -200,7 +200,9 @@ function normalizeBlockRule(raw: any): BlockRule {
   if (Array.isArray(raw?.conditions) && raw.conditions.length > 0) {
     return {
       ...base,
-      conditions: raw.conditions.map(normalizeRuleCondition),
+      conditions: raw.conditions.map((condition: any, conditionIndex: number) =>
+        normalizeRuleCondition(condition, `${id}_condition_${conditionIndex}`)
+      ),
     };
   }
 
@@ -261,8 +263,8 @@ function normalizeBlockRule(raw: any): BlockRule {
   };
 }
 
-function normalizeEntryTrigger(raw: any): EntryTrigger {
-  const normalized = normalizeRuleCondition(raw);
+function normalizeEntryTrigger(raw: any, triggerIndex = 0): EntryTrigger {
+  const normalized = normalizeRuleCondition(raw, `entry_trigger_loaded_${triggerIndex}`);
   return {
     ...normalized,
     id: raw?.id || normalized.id,
@@ -840,10 +842,10 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
 
     const fixBlocks = (blocks: any[]): any[] => {
       if (!Array.isArray(blocks)) return [];
-      return blocks.map((block) => normalizeBlockRule({
+      return blocks.map((block, blockIndex) => normalizeBlockRule({
         ...block,
         indicator: FIELD_ALIASES[block.indicator || ""] || block.indicator,
-      }));
+      }, blockIndex));
     };
 
     return {
@@ -864,12 +866,12 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
       entry_triggers: incoming.entry_triggers ? {
         logic: incoming.entry_triggers.logic || "AND",
         logic_preview_text: incoming.entry_triggers.logic_preview_text,
-        conditions: fixConditions(incoming.entry_triggers.conditions ?? []).map((c: any) => normalizeEntryTrigger({
+        conditions: fixConditions(incoming.entry_triggers.conditions ?? []).map((c: any, triggerIndex: number) => normalizeEntryTrigger({
           ...c,
           indicator: c.field || c.indicator || "rsi",
           enabled: c.enabled !== false,
           required: c.required || false,
-        })),
+        }, triggerIndex)),
         scoring: incoming.entry_triggers.scoring ?? { ...DEFAULT_SCORING_CONFIG },
       } : { logic: "AND", conditions: [], scoring: { ...DEFAULT_SCORING_CONFIG } },
     };

@@ -155,11 +155,68 @@ export function resolveProfileUiIndicator(
   const registered = options.find((option) => option.value === indicatorValue);
   const rendered = registered ?? options[0] ?? { value: "", label: "" };
   return {
-    indicator_value: indicatorValue,
+    requested_indicator_value: indicatorValue,
+    indicator_value: rendered.value,
     indicator_label: rendered.label,
     rendered_option_value: rendered.value,
     registry_found: Boolean(registered),
   };
+}
+
+function renderConditionConfig(
+  section: AuditSection,
+  conditionValue: Record<string, unknown>,
+) {
+  const condition = object(conditionValue);
+  const rendered = clone(condition);
+  const type = String(condition.type ?? "threshold");
+
+  if (type === "comparison" || (condition.left && condition.right)) {
+    rendered.left = resolveProfileUiIndicator(
+      section,
+      condition,
+      String(condition.left ?? ""),
+    ).indicator_value;
+    rendered.right = resolveProfileUiIndicator(
+      section,
+      condition,
+      String(condition.right ?? ""),
+    ).indicator_value;
+    return rendered;
+  }
+
+  const field = Object.prototype.hasOwnProperty.call(condition, "field")
+    ? "field"
+    : "indicator";
+  rendered[field] = resolveProfileUiIndicator(
+    section,
+    condition,
+    String(condition[field] ?? ""),
+  ).indicator_value;
+  return rendered;
+}
+
+function buildUiRenderedConfig(configValue: Record<string, unknown>) {
+  const config = clone(object(configValue));
+
+  for (const section of ["filters", "signals", "entry_triggers"] as const) {
+    const sectionConfig = object(config[section]);
+    sectionConfig.conditions = array(sectionConfig.conditions).map((condition) =>
+      renderConditionConfig(section, condition)
+    );
+    config[section] = sectionConfig;
+  }
+
+  const blockRules = object(config.block_rules);
+  blockRules.blocks = array(blockRules.blocks).map((block) => ({
+    ...block,
+    conditions: array(block.conditions).map((condition) =>
+      renderConditionConfig("block_rules", condition)
+    ),
+  }));
+  config.block_rules = blockRules;
+
+  return config;
 }
 
 function collectConditionRefs(configValue: Record<string, unknown>): ConditionRef[] {
@@ -339,7 +396,7 @@ export function buildProfileUiAudit({
     if (
       backendRef?.indicator
       && backendRef.indicator !== "price"
-      && (ui.rendered_option_value === "price" || ui.indicator_label === "Price")
+      && (ui.indicator_value === "price" || ui.indicator_label === "Price")
     ) {
       codes.push("INDICATOR_FALLBACK_TO_PRICE");
     }
@@ -403,7 +460,7 @@ export function buildProfileUiAudit({
 
   return {
     export_type: "scalpyn_strategy_profiles_ui_audit",
-    schema_version: 1,
+    schema_version: 2,
     exported_at: exportedAt,
     trigger,
     source: "frontend_runtime_state",
@@ -442,6 +499,12 @@ export function buildProfileUiAudit({
       backend_state: configRoots(backendConfig),
       form_state: configRoots(formConfig),
       ui_state: buildUiState(formConfig),
+      ui_rendered_config_metadata: {
+        audit_only: true,
+        safe_to_import: false,
+        reason: "Esta configuracao reproduz os valores efetivamente renderizados pela UI, inclusive fallbacks incorretos.",
+      },
+      ui_rendered_config: buildUiRenderedConfig(formConfig),
       save_payload: clone(savePayload),
       ui_backend_diffs: differences,
       round_trip_audit: roundTrip,
@@ -477,7 +540,7 @@ export function buildProfilesUiAudit(
 
   return {
     export_type: "scalpyn_strategy_profiles_ui_audit",
-    schema_version: 1,
+    schema_version: 2,
     exported_at: exportedAt,
     trigger: "manual_export" as const,
     source: "frontend_batch_ui_render_model",

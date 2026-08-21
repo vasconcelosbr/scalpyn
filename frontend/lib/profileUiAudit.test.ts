@@ -41,6 +41,7 @@ test("known indicator resolves to its registered value and label", () => {
     "stoch_k",
   );
   assert.deepEqual(resolved, {
+    requested_indicator_value: "stoch_k",
     indicator_value: "stoch_k",
     indicator_label: "Stoch %K",
     rendered_option_value: "stoch_k",
@@ -61,7 +62,8 @@ for (const indicator of [
     assert.equal(row.diff.backend_indicator, indicator);
     assert.equal(row.diff.form_indicator, indicator);
     assert.equal(row.diff.save_indicator, indicator);
-    assert.equal(row.ui.indicator_value, indicator);
+    assert.equal(row.ui.requested_indicator_value, indicator);
+    assert.equal(row.ui.indicator_value, "price");
     assert.equal(row.ui.indicator_label, "Price");
     assert.equal(row.ui.rendered_option_value, "price");
     assert.equal(row.round_trip_ok, false);
@@ -75,6 +77,8 @@ test("unknown future indicator is never silently serialized as price", () => {
   const row = result.profiles[0].round_trip_audit[0];
   assert.equal(row.diff.form_indicator, "future_test_indicator");
   assert.equal(row.diff.save_indicator, "future_test_indicator");
+  assert.equal(row.ui.requested_indicator_value, "future_test_indicator");
+  assert.equal(row.ui.indicator_value, "price");
   assert.equal(row.ui.registry_found, false);
   assert.ok(row.codes.includes("UNKNOWN_INDICATOR"));
   assert.equal(result.summary.fallback_to_price_detected, 1);
@@ -93,6 +97,27 @@ test("indicator identity change during serialize is critical", () => {
   const row = result.profiles[0].round_trip_audit[0];
   assert.equal(row.severity, "CRITICAL");
   assert.ok(row.codes.includes("INDICATOR_CHANGED_DURING_SERIALIZE"));
+});
+
+test("UI rendered config mirrors the visible Price fallback without changing form or save state", () => {
+  const result = audit("adx_slope_3");
+  const profile = result.profiles[0];
+  type ConfigWithBlock = {
+    block_rules: { blocks: Array<{ conditions: Array<{ indicator: string }> }> };
+  };
+  const renderedConfig = profile.ui_rendered_config as ConfigWithBlock;
+  const formConfig = profile.form_state as ConfigWithBlock;
+  const saveConfig = profile.save_payload.config as ConfigWithBlock;
+  const renderedCondition = renderedConfig.block_rules.blocks[0].conditions[0];
+  const formCondition = formConfig.block_rules.blocks[0].conditions[0];
+  const saveCondition = saveConfig.block_rules.blocks[0].conditions[0];
+
+  assert.equal(result.schema_version, 2);
+  assert.equal(profile.ui_rendered_config_metadata.audit_only, true);
+  assert.equal(profile.ui_rendered_config_metadata.safe_to_import, false);
+  assert.equal(renderedCondition.indicator, "price");
+  assert.equal(formCondition.indicator, "adx_slope_3");
+  assert.equal(saveCondition.indicator, "adx_slope_3");
 });
 
 test("batch UI audit aggregates only the selected profiles", () => {
