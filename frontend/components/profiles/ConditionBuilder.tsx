@@ -2,6 +2,7 @@
 
 import { Plus, Trash2 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
+import { PROFILE_CONDITION_INDICATORS } from "@/lib/profileUiAudit";
 
 export function numFmt(n: number | null): string {
   if (n === null) return "";
@@ -105,43 +106,7 @@ interface ConditionBuilderProps {
   showPoints?: boolean;
 }
 
-const INDICATOR_FIELDS = [
-  { value: "volume_24h", label: "Volume 24h", type: "number", group: "price" },
-  { value: "market_cap", label: "Market Cap", type: "number", group: "price" },
-  { value: "price", label: "Preco", type: "number", group: "price" },
-  { value: "change_24h", label: "Variacao 24h %", type: "number", group: "price" },
-  { value: "spread_pct", label: "Spread %", type: "number", group: "liquidity" },
-  { value: "orderbook_depth_usdt", label: "Profundidade Book (USDT)", type: "number", group: "liquidity" },
-  { value: "taker_ratio", label: "Taker Ratio (buy/(buy+sell), 0-1)", type: "number", group: "liquidity" },
-  { value: "volume_spike", label: "Volume Spike", type: "number", group: "liquidity" },
-  { value: "volume_delta", label: "Volume Delta", type: "number", group: "liquidity" },
-  { value: "orderbook_pressure", label: "Orderbook Pressure", type: "number", group: "liquidity" },
-  { value: "bid_ask_imbalance", label: "Bid/Ask Imbalance", type: "number", group: "liquidity" },
-  { value: "obv", label: "OBV", type: "number", group: "liquidity" },
-  { value: "vwap_distance_pct", label: "VWAP Distance %", type: "number", group: "liquidity" },
-  { value: "rsi", label: "RSI", type: "number", group: "momentum" },
-  { value: "macd", label: "MACD", type: "number", group: "momentum" },
-  { value: "macd_histogram", label: "MACD Histogram", type: "number", group: "momentum" },
-  { value: "macd_signal", label: "MACD Signal", type: "string", group: "momentum" },
-  { value: "stoch_k", label: "Stochastic %K", type: "number", group: "momentum" },
-  { value: "stoch_d", label: "Stochastic %D", type: "number", group: "momentum" },
-  { value: "zscore", label: "Z-Score", type: "number", group: "momentum" },
-  { value: "adx", label: "ADX", type: "number", group: "trend" },
-  { value: "di_plus", label: "DI+", type: "number", group: "trend" },
-  { value: "di_minus", label: "DI-", type: "number", group: "trend" },
-  { value: "di_trend", label: "DI+ > DI- (Alta)", type: "boolean", group: "trend" },
-  { value: "atr", label: "ATR", type: "number", group: "trend" },
-  { value: "atr_percent", label: "ATR %", type: "number", group: "trend" },
-  { value: "bb_width", label: "Bollinger Width", type: "number", group: "trend" },
-  { value: "psar_trend", label: "PSAR Trend", type: "string", group: "trend" },
-  { value: "ema_full_alignment", label: "EMA Full Alignment", type: "boolean", group: "ema" },
-  { value: "ema9_gt_ema21", label: "EMA9 > EMA21", type: "boolean", group: "ema" },
-  { value: "ema9_gt_ema50", label: "EMA9 > EMA50", type: "boolean", group: "ema" },
-  { value: "ema50_gt_ema200", label: "EMA50 > EMA200", type: "boolean", group: "ema" },
-  { value: "score", label: "Alpha Score", type: "number", group: "scores" },
-  { value: "liquidity_score", label: "Liquidity Score", type: "number", group: "scores" },
-  { value: "momentum_score", label: "Momentum Score", type: "number", group: "scores" },
-];
+const INDICATOR_FIELDS = PROFILE_CONDITION_INDICATORS;
 
 const OPERATORS = [
   { value: ">", label: ">" },

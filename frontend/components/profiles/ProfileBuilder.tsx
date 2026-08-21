@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
-import { ArrowLeft, Save, Play, ShieldOff, Zap, Plus, Trash2, Target } from "lucide-react";
+import { useState, useMemo, useRef } from "react";
+import { AlertTriangle, ArrowLeft, FileDown, Save, Play, ShieldOff, Zap, Plus, Trash2, Target } from "lucide-react";
 import { apiPost } from "@/lib/api";
+import { buildProfileUiAudit, PROFILE_RULE_INDICATORS } from "@/lib/profileUiAudit";
 import { ConditionBuilder, NumericInput, type ScoreRule } from "./ConditionBuilder";
 import { WeightSliders } from "./WeightSliders";
 import PresetIAButton from "./PresetIAButton";
@@ -25,12 +26,6 @@ interface Condition {
 
 type RuleConditionType = "threshold" | "boolean" | "comparison";
 type RuleValue = string | number | boolean | null | undefined;
-
-interface RuleIndicatorOption {
-  value: string;
-  label: string;
-  kind: "number" | "boolean" | "string";
-}
 
 interface RuleCondition {
   id: string;
@@ -64,47 +59,7 @@ interface EntryTrigger extends RuleCondition {
   period?: number;
 }
 
-const RULE_INDICATORS: RuleIndicatorOption[] = [
-  { value: "price", label: "Price", kind: "number" },
-  { value: "ema5", label: "EMA 5", kind: "number" },
-  { value: "ema9", label: "EMA 9", kind: "number" },
-  { value: "ema21", label: "EMA 21", kind: "number" },
-  { value: "ema50", label: "EMA 50", kind: "number" },
-  { value: "ema200", label: "EMA 200", kind: "number" },
-  { value: "alpha_score", label: "Alpha Score", kind: "number" },
-  { value: "rsi", label: "RSI", kind: "number" },
-  { value: "adx", label: "ADX", kind: "number" },
-  { value: "macd", label: "MACD", kind: "number" },
-  { value: "macd_histogram", label: "MACD Histogram", kind: "number" },
-  { value: "volume_spike", label: "Volume Spike", kind: "number" },
-  { value: "taker_ratio", label: "Taker Ratio (buy/(buy+sell), 0-1)", kind: "number" },
-  { value: "volume_delta", label: "Volume Delta", kind: "number" },
-  { value: "orderbook_pressure", label: "Orderbook Pressure", kind: "number" },
-  { value: "bid_ask_imbalance", label: "Bid/Ask Imbalance", kind: "number" },
-  { value: "atr_percent", label: "ATR %", kind: "number" },
-  { value: "bb_width", label: "BB Width", kind: "number" },
-  { value: "spread_pct", label: "Spread %", kind: "number" },
-  { value: "zscore", label: "Z-Score", kind: "number" },
-  { value: "funding_rate", label: "Funding Rate", kind: "number" },
-  { value: "volume_24h", label: "Volume 24h", kind: "number" },
-  { value: "stoch_k", label: "Stoch %K", kind: "number" },
-  { value: "stoch_d", label: "Stoch %D", kind: "number" },
-  { value: "di_plus", label: "DI+", kind: "number" },
-  { value: "di_minus", label: "DI-", kind: "number" },
-  { value: "ema_full_alignment", label: "EMA Full Alignment", kind: "boolean" },
-  { value: "ema9_gt_ema21", label: "EMA9 > EMA21", kind: "boolean" },
-  { value: "ema9_gt_ema50", label: "EMA9 > EMA50", kind: "boolean" },
-  { value: "ema50_gt_ema200", label: "EMA50 > EMA200", kind: "boolean" },
-  { value: "market_cap", label: "Market Cap", kind: "number" },
-  { value: "change_24h", label: "Variacao 24h %", kind: "number" },
-  { value: "orderbook_depth_usdt", label: "Profundidade Book (USDT)", kind: "number" },
-  { value: "obv", label: "OBV", kind: "number" },
-  { value: "vwap_distance_pct", label: "VWAP Distance %", kind: "number" },
-  { value: "macd_signal", label: "MACD Signal", kind: "string" },
-  { value: "di_trend", label: "DI+ > DI- (Alta)", kind: "boolean" },
-  { value: "atr", label: "ATR", kind: "number" },
-  { value: "psar_trend", label: "PSAR Trend", kind: "string" },
-];
+const RULE_INDICATORS = PROFILE_RULE_INDICATORS;
 
 const RULE_INDICATOR_MAP = new Map(RULE_INDICATORS.map((indicator) => [indicator.value, indicator]));
 const NUMERIC_RULE_INDICATORS = RULE_INDICATORS.filter((indicator) => indicator.kind === "number");
@@ -504,6 +459,9 @@ function ScoreEngineConfigPanel({
 
 export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProps) {
   const { config: globalScoreConfig } = useConfig("score");
+  const backendConfigRef = useRef<Record<string, unknown>>(
+    JSON.parse(JSON.stringify(profile?.config ?? {}))
+  );
   const [name, setName]                     = useState(profile?.name || "");
   const [description, setDescription]       = useState(profile?.description || "");
   const [config, setConfig]                 = useState<any>(() => normalizeProfileConfig(profile?.config));
@@ -530,10 +488,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
     [globalScoreConfig]
   );
 
-  const handleSave = async () => {
-    if (!name.trim()) { alert("Profile name is required"); return; }
-    setSaving(true);
-    const profileData = {
+  const currentSavePayload = useMemo(() => ({
       name,
       description,
       config,
@@ -542,7 +497,61 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
       pipeline_order: profileRole
         ? { universe_filter: 0, primary_filter: 1, score_engine: 2, acquisition_queue: 3 }[profileRole] ?? 99
         : 99,
-    };
+    }),
+    [config, description, name, profileRole]
+  );
+
+  const buildAudit = (trigger: "manual_export" | "pre_save", savePayload = currentSavePayload) =>
+    buildProfileUiAudit({
+      profile: { id: profile?.id, name },
+      backendConfig: backendConfigRef.current,
+      formConfig: config,
+      savePayload,
+      trigger,
+    });
+
+  const downloadAudit = (audit: ReturnType<typeof buildProfileUiAudit>) => {
+    const safeName = (name || "profile").replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+    const date = new Date().toISOString().slice(0, 10);
+    const blob = new Blob([JSON.stringify(audit, null, 2)], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `scalpyn-${safeName || "profile"}-ui-audit-${date}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const auditPreview = useMemo(
+    () => buildProfileUiAudit({
+      profile: { id: profile?.id, name },
+      backendConfig: backendConfigRef.current,
+      formConfig: config,
+      savePayload: currentSavePayload,
+      trigger: "manual_export",
+      exportedAt: "preview",
+    }),
+    [config, currentSavePayload, name, profile?.id]
+  );
+  const criticalAuditCount = auditPreview.summary.critical_differences;
+
+  const handleExportUiAudit = () => downloadAudit(buildAudit("manual_export"));
+
+  const handleSave = async () => {
+    if (!name.trim()) { alert("Profile name is required"); return; }
+    const profileData = currentSavePayload;
+    const preSaveAudit = buildAudit("pre_save", profileData);
+    if (preSaveAudit.summary.critical_differences > 0) {
+      downloadAudit(preSaveAudit);
+      alert(
+        `Save bloqueado: ${preSaveAudit.summary.critical_differences} divergência(s) crítica(s) entre backend, formulário e UI. `
+        + "Um snapshot de auditoria pré-save foi baixado."
+      );
+      return;
+    }
+    setSaving(true);
     onSave(profileData);
     setSaving(false);
   };
@@ -921,6 +930,16 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
             onSuccess={handlePresetIASuccess}
           />
         )}
+        {profile?.id && (
+          <button
+            className="btn btn-secondary"
+            onClick={handleExportUiAudit}
+            data-testid="export-profile-ui-audit-btn"
+          >
+            <FileDown className="w-4 h-4 mr-2" />
+            Export UI Audit
+          </button>
+        )}
         <button className="btn btn-secondary" onClick={handleTest} disabled={testing} data-testid="test-config-btn">
           <Play className="w-4 h-4 mr-2" />
           {testing ? "Testing..." : "Test Config"}
@@ -930,6 +949,23 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
           {saving ? "Saving..." : "Save Profile"}
         </button>
       </div>
+
+      {criticalAuditCount > 0 && (
+        <div
+          className="flex items-start gap-3 rounded-xl border border-red-500/30 bg-red-500/8 p-4 text-[13px] text-red-300"
+          data-testid="profile-ui-audit-critical-warning"
+        >
+          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+          <div>
+            <p className="font-semibold">Divergência crítica entre o backend e o estado apresentado pela UI</p>
+            <p className="mt-1 text-red-200/80">
+              {criticalAuditCount} condição{criticalAuditCount === 1 ? "" : "ões"} possui indicador desconhecido,
+              fallback visual ou alteração de identidade. Exporte o diagnóstico antes de salvar; o Save será bloqueado
+              enquanto a divergência existir.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Basic Info + Watchlist */}
       <div className="card">
