@@ -50,6 +50,7 @@ def test_systemic_input_contract_migration_matches_immutable_registry_version():
     values = migration._prompt_values()
     prompt = initial_prompt_registry().resolve("systemic-multimodule", "2.0.6")
 
+    assert len(migration.revision) <= 32
     assert values["id"] == prompt.id
     assert values["content_hash"] == prompt.content_hash == migration.EXPECTED_PROMPT_HASH
     assert values["system_template"] == prompt.system_template

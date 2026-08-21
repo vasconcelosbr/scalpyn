@@ -1,6 +1,6 @@
 """Preserve saved analysis methodology under the canonical output contract.
 
-Revision ID: 194_systemic_prompt_input_contract
+Revision ID: 194_systemic_prompt_contract
 Revises: 193_analysis_prompt_library
 """
 
@@ -13,7 +13,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "194_systemic_prompt_input_contract"
+revision = "194_systemic_prompt_contract"
 down_revision = "193_analysis_prompt_library"
 branch_labels = None
 depends_on = None
