@@ -41,6 +41,23 @@ from .ai_keys_service import decrypt_value
 logger = logging.getLogger(__name__)
 
 
+def _estimated_provider_input_tokens(prompt_bytes: int, provider: str) -> int:
+    """Conservatively convert transport bytes into provider input tokens.
+
+    The generic 2 bytes/token estimate is calibrated for Anthropic's
+    structured-output transport. DeepSeek's tokenizer is materially denser for
+    the JSON-heavy, Portuguese systemic-analysis payload: a reconciled
+    production request used 580,233 input tokens for 743,929 transport bytes
+    (1.282 bytes/token). Use 1.2 bytes/token for DeepSeek so reservation remains
+    fail-closed with roughly 7% headroom instead of letting an oversized request
+    reach the provider as HTTP 400.
+    """
+
+    if provider == "deepseek":
+        return max(1, -(-(prompt_bytes * 5) // 6))  # ceil(bytes / 1.2)
+    return max(1, -(-prompt_bytes // 2))
+
+
 def _provider_decision_context(
     frozen_context: dict[str, Any],
     tool_evidence_rows: list[AIToolEvidenceRecord],
@@ -55,6 +72,25 @@ def _provider_decision_context(
     typed_tool_evidence: list[dict[str, Any]] = []
     for row in tool_evidence_rows:
         output = row.output_json
+        if isinstance(output, dict):
+            output = dict(output)
+            # These row identifiers belong to the durable evidence ledger. The
+            # provider cites the canonical tool-evidence UUID below, so sending
+            # hundreds of source-row UUIDs again adds no decision information.
+            output.pop("evidence_ids", None)
+            # freeze_analysis_dataset returns the same raw rows already present
+            # in frozen_context. Keep its canonical evidence reference and
+            # quality/freshness metadata, but do not duplicate the dataset in
+            # the provider payload.
+            frozen_rows = decision_frozen.get("rows")
+            if (
+                row.tool_name == "shadow.freeze_analysis_dataset"
+                and isinstance(frozen_rows, list)
+            ):
+                output["data"] = {
+                    "row_count": len(frozen_rows),
+                    "embedded_in_frozen_context": True,
+                }
         evidence = {
             "evidence_id": str(row.id),
             "module": row.module_key,
@@ -434,18 +470,9 @@ class SystemicLangGraphBridge:
         except KeyError as exc:
             raise RuntimeError(f"PROMPT_INPUT_MISSING:{exc.args[0]}") from exc
 
-        # Reservation is denominated in tokens (compared against max_input_tokens,
-        # a real Anthropic token count, and billed via cost-per-million-tokens),
-        # but UTF-8 byte length is what's cheap to measure pre-flight. Convert
-        # using the ratio migration 178 measured directly against Anthropic's own
-        # "context length" rejection boundary for this prompt shape: ~412,187
-        # bytes failed transport, ~399,952 completed, both under a real 200,000-
-        # token model -- ratio ~2.06, taken conservatively as 2.0 bytes/token.
-        # Without this conversion, byte count was compared 1:1 against a token
-        # limit, silently blocking any legitimately-sized large-evidence request
-        # (e.g. a multi-hundred-trade report) at roughly half the model's real
-        # context window.
-        BYTES_PER_ESTIMATED_TOKEN = 2
+        # Reservation is denominated in provider tokens, while UTF-8 byte length
+        # is the deterministic pre-flight measurement available here. Convert
+        # with a provider-specific conservative ratio before any external call.
         structured_output_reservation_bytes = 0
         if resolution.effective_provider == "anthropic":
             output_config = anthropic_output_config(prompt.output_schema_json)
@@ -460,9 +487,9 @@ class SystemicLangGraphBridge:
             len((system_prompt + user_prompt).encode("utf-8"))
             + structured_output_reservation_bytes
         )
-        estimated_input_tokens = max(
-            1,
-            -(-prompt_bytes // BYTES_PER_ESTIMATED_TOKEN),  # ceiling division
+        estimated_input_tokens = _estimated_provider_input_tokens(
+            prompt_bytes,
+            resolution.effective_provider,
         )
         max_input_tokens = int(budget.request_token_limit) - int(approval.max_output_tokens)
         if max_input_tokens <= 0 or estimated_input_tokens > max_input_tokens:

@@ -1957,6 +1957,55 @@ def test_provider_decision_context_keeps_rows_and_outputs_without_ledger_duplica
     assert "output_hash" not in payload["typed_tool_evidence"][0]
 
 
+def test_provider_decision_context_deduplicates_frozen_rows_and_source_ids():
+    from app.services.systemic_langgraph_bridge import _provider_decision_context
+
+    rows = [{"id": f"row-{index}", "score": index} for index in range(3)]
+    output = {
+        "tool": "shadow.freeze_analysis_dataset",
+        "contract_version": "1.0.0",
+        "data": rows,
+        "evidence_ids": [row["id"] for row in rows],
+        "quality": "PASS",
+        "freshness": {"dataset_hash": "dataset-hash"},
+        "missingness": [],
+    }
+    evidence = SimpleNamespace(
+        id=uuid.uuid4(), module_key="shadow_portfolio",
+        tool_name="shadow.freeze_analysis_dataset", output_json=output,
+        output_hash="hash", quality="PASS",
+        freshness_json={"dataset_hash": "dataset-hash"},
+    )
+
+    payload = json.loads(_provider_decision_context(
+        {"rows": rows, "context": {"timeframe": "1h"}},
+        [evidence],
+    ))
+    provider_output = payload["typed_tool_evidence"][0]["output"]
+
+    assert payload["frozen_context"]["rows"] == rows
+    assert provider_output["data"] == {
+        "row_count": 3,
+        "embedded_in_frozen_context": True,
+    }
+    assert "evidence_ids" not in provider_output
+    assert output["data"] == rows
+    assert output["evidence_ids"] == ["row-0", "row-1", "row-2"]
+
+
+def test_deepseek_input_estimate_uses_production_calibrated_headroom():
+    from app.services.systemic_langgraph_bridge import _estimated_provider_input_tokens
+
+    transport_bytes = 743_929
+    reconciled_deepseek_tokens = 580_233
+
+    estimate = _estimated_provider_input_tokens(transport_bytes, "deepseek")
+
+    assert estimate == 619_941
+    assert estimate > reconciled_deepseek_tokens
+    assert _estimated_provider_input_tokens(transport_bytes, "anthropic") == 371_965
+
+
 def test_running_summary_is_versioned_hashed_and_does_not_replace_evidence():
     from app.ai_orchestration.langgraph.analysis_chat_handler import AnalysisChatGraphNodeHandler
     source = inspect.getsource(AnalysisChatGraphNodeHandler._node_updates)
