@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Plus, Settings2, Trash2, Play, Copy, Layers, ListChecks, FileJson } from "lucide-react";
+import { Plus, Settings2, Trash2, Play, Copy, Layers, ListChecks, FileJson, Download, Loader2 } from "lucide-react";
 import { apiGet, apiPost, apiDelete, apiPut } from "@/lib/api";
 import { ProfileBuilder } from "@/components/profiles/ProfileBuilder";
 import { ProfileCard } from "@/components/profiles/ProfileCard";
@@ -51,6 +51,7 @@ export default function ProfilesPage() {
   const [showBuilder, setShowBuilder] = useState(false);
   const [showBulkBuilder, setShowBulkBuilder] = useState(false);
   const [showJsonImport, setShowJsonImport] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [editingProfile, setEditingProfile] = useState<Profile | null>(null);
   const [testResults, setTestResults] = useState<any>(null);
   const [selectedProfiles, setSelectedProfiles] = useState<Set<string>>(new Set());
@@ -124,6 +125,26 @@ export default function ProfilesPage() {
       fetchProfiles();
     } catch (e: any) {
       alert(`Failed to duplicate: ${e.message}`);
+    }
+  };
+
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const payload = await apiGet("/profiles/export");
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `scalpyn-strategy-profiles-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (e: unknown) {
+      alert(`Falha ao exportar profiles: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -233,6 +254,18 @@ export default function ProfilesPage() {
           >
             <FileJson className="w-4 h-4 mr-2" />
             Import JSON
+          </button>
+          <button
+            className="btn btn-secondary"
+            onClick={() => void handleExport()}
+            disabled={exporting}
+            title="Exportar todos os profiles em JSON para auditoria e correção"
+            data-testid="export-profiles-json-btn"
+          >
+            {exporting
+              ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              : <Download className="w-4 h-4 mr-2" />}
+            Exportar JSON
           </button>
           <button
             className="btn btn-primary"

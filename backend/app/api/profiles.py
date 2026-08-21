@@ -70,6 +70,48 @@ def _profile_to_dict(profile: Profile) -> Dict[str, Any]:
     }
 
 
+def _profile_to_export_dict(profile: Profile) -> Dict[str, Any]:
+    """Return a lossless, import-compatible profile snapshot for external audit."""
+    config = profile.config or {}
+
+    def _iso(value: Any) -> Optional[str]:
+        return value.isoformat() if value else None
+
+    generated_from_suggestion_id = getattr(profile, "generated_from_suggestion_id", None)
+    return {
+        "profile_id": str(profile.id),
+        "name": profile.name,
+        "description": profile.description or "",
+        "funnel_role": getattr(profile, "profile_role", None),
+        "pipeline_order": getattr(profile, "pipeline_order", None),
+        "pipeline_label": getattr(profile, "pipeline_label", None),
+        "default_timeframe": config.get("default_timeframe", "5m"),
+        "filters": config.get("filters", {"logic": "AND", "conditions": []}),
+        "scoring": config.get("scoring", {}),
+        "signals": config.get("signals", {"logic": "AND", "conditions": []}),
+        "block_rules": config.get("block_rules", {"blocks": []}),
+        "entry_triggers": config.get("entry_triggers", {"logic": "AND", "conditions": []}),
+        "audit_metadata": {
+            "is_active": profile.is_active,
+            "profile_type": getattr(profile, "profile_type", "STANDARD"),
+            "profile_version": _iso(getattr(profile, "profile_version", None)),
+            "generated_by": getattr(profile, "generated_by", None),
+            "generated_from_suggestion_id": (
+                str(generated_from_suggestion_id) if generated_from_suggestion_id else None
+            ),
+            "is_shadow_only": getattr(profile, "is_shadow_only", False),
+            "live_trading_enabled": getattr(profile, "live_trading_enabled", False),
+            "auto_pilot_enabled": getattr(profile, "auto_pilot_enabled", False),
+            "auto_pilot_config": getattr(profile, "auto_pilot_config", {}) or {},
+            "preset_ia_last_run": _iso(getattr(profile, "preset_ia_last_run", None)),
+            "preset_ia_config": getattr(profile, "preset_ia_config", None),
+            "created_at": _iso(profile.created_at),
+            "updated_at": _iso(profile.updated_at),
+            "config_snapshot": config,
+        },
+    }
+
+
 # ============================================================================
 # PROFILE CRUD
 # ============================================================================
@@ -84,6 +126,47 @@ async def get_profiles(
     result = await db.execute(query)
     profiles = result.scalars().all()
     return {"profiles": [_profile_to_dict(p) for p in profiles]}
+
+
+@router.get("/export")
+async def export_profiles(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """Export every persisted profile as an auditable, correction-ready JSON file."""
+    query = select(Profile).where(Profile.user_id == user_id).order_by(
+        Profile.name.asc(),
+        Profile.created_at.asc(),
+    )
+    profiles = (await db.execute(query)).scalars().all()
+    exported_profiles = [_profile_to_export_dict(profile) for profile in profiles]
+    profiles_by_name: Dict[str, List[Profile]] = {}
+    for profile in profiles:
+        profiles_by_name.setdefault(profile.name.strip().casefold(), []).append(profile)
+    duplicate_name_groups = [
+        {
+            "name": matches[0].name,
+            "profiles": [
+                {
+                    "profile_id": str(profile.id),
+                    "name": profile.name,
+                    "is_active": profile.is_active,
+                }
+                for profile in matches
+            ],
+        }
+        for matches in profiles_by_name.values()
+        if len(matches) > 1
+    ]
+    return {
+        "export_type": "scalpyn_strategy_profiles",
+        "schema_version": 1,
+        "exported_at": datetime.now(_tz.utc).isoformat(),
+        "profiles_count": len(exported_profiles),
+        "duplicate_name_groups": duplicate_name_groups,
+        "update_indicators_only": True,
+        "profiles": exported_profiles,
+    }
 
 
 @router.get("/{profile_id}")
@@ -393,15 +476,34 @@ async def bulk_import_profiles(
                 if not name:
                     raise ValueError("'name' is required")
 
-                matches = (await db.execute(
-                    select(Profile).where(Profile.user_id == user_id, Profile.name.ilike(name))
-                )).scalars().all()
-                if not matches:
-                    raise ValueError(
-                        f"no existing profile named '{name}' -- update_indicators_only never "
-                        f"creates profiles"
-                    )
-                profile = _select_indicator_update_profile(matches, name)
+                raw_profile_id = p.get("profile_id") or p.get("id")
+                if raw_profile_id:
+                    try:
+                        profile_id = UUID(str(raw_profile_id))
+                    except ValueError:
+                        raise ValueError(f"invalid profile_id: {raw_profile_id}")
+                    profile = (await db.execute(
+                        select(Profile).where(Profile.id == profile_id, Profile.user_id == user_id)
+                    )).scalars().first()
+                    if not profile:
+                        raise ValueError(
+                            f"no existing profile with profile_id '{raw_profile_id}' -- "
+                            "update_indicators_only never creates profiles"
+                        )
+                    if profile.name.casefold() != name.casefold():
+                        raise ValueError(
+                            f"profile_id '{raw_profile_id}' belongs to '{profile.name}', not '{name}'"
+                        )
+                else:
+                    matches = (await db.execute(
+                        select(Profile).where(Profile.user_id == user_id, Profile.name.ilike(name))
+                    )).scalars().all()
+                    if not matches:
+                        raise ValueError(
+                            f"no existing profile named '{name}' -- update_indicators_only never "
+                            f"creates profiles"
+                        )
+                    profile = _select_indicator_update_profile(matches, name)
 
                 # Only filters/signals/entry_triggers/block_rules change. scoring,
                 # default_timeframe, is_active, name, description and every other
