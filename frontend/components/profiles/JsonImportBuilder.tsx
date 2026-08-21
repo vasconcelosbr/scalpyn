@@ -543,7 +543,20 @@ export function JsonImportBuilder({ onClose }: Props) {
               <FileJson className="w-4 h-4 text-[var(--text-tertiary)]" />
               Estrutura esperada
             </h3>
+            <div className="rounded-lg border border-[var(--accent-primary)]/20 bg-[var(--accent-primary)]/5 p-3 text-[12px] leading-relaxed text-[var(--text-secondary)]">
+              <p className="font-semibold text-[var(--text-primary)]">
+                Atualizar profiles existentes sem criar duplicados
+              </p>
+              <p className="mt-1">
+                Use <code className="text-[var(--accent-primary)]">&quot;update_indicators_only&quot;: true</code>. Em cada
+                profile, inclua o <code className="text-[var(--accent-primary)]">profile_id</code> (recomendado) e o
+                <code className="text-[var(--accent-primary)]">name</code> correspondente. Esse modo nunca cria profiles e
+                substitui somente <code>filters</code>, <code>signals</code>, <code>block_rules</code> e <code>entry_triggers</code>;
+                scoring, status e os demais campos são preservados.
+              </p>
+            </div>
             <pre className="text-[11px] text-[var(--text-secondary)] font-mono overflow-x-auto leading-relaxed">{`{
+  "update_indicators_only": false,           // true = atualiza profiles existentes; nunca cria profiles
   "apply_to_active_profiles": false,          // true = nao cria profiles; substitui scoring de todos os ativos
   "profile_scoring": {
     "enabled": true,
@@ -557,7 +570,8 @@ export function JsonImportBuilder({ onClose }: Props) {
   },
   "profiles": [
     {
-      "name": "L3_TREND_FORTE_V1",           // obrigatório
+      "profile_id": "00000000-0000-0000-0000-000000000000", // recomendado no update; evita ambiguidade por nome
+      "name": "L3_TREND_FORTE_V1",           // obrigatório; deve corresponder ao profile_id
       "description": "texto livre",          // opcional
       "funnel_role": "acquisition_queue",    // universe_filter | primary_filter | score_engine | acquisition_queue
       "pipeline_label": "L3_TREND_V1",      // opcional
