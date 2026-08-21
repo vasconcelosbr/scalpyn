@@ -13,6 +13,32 @@ export interface ProfileConditionIndicatorOption {
   group: string;
 }
 
+interface ProfileIndicatorSelectOption {
+  value: string;
+  label: string;
+}
+
+export function getImportedProfileIndicatorOption(
+  indicatorValue: string | undefined,
+  options: readonly ProfileIndicatorSelectOption[],
+): ProfileIndicatorSelectOption | null {
+  if (!indicatorValue || options.some((option) => option.value === indicatorValue)) {
+    return null;
+  }
+  return {
+    value: indicatorValue,
+    label: `${indicatorValue} (importado do JSON)`,
+  };
+}
+
+export function profileIndicatorOptionsWithImported(
+  options: readonly ProfileIndicatorSelectOption[],
+  indicatorValue: string | undefined,
+) {
+  const imported = getImportedProfileIndicatorOption(indicatorValue, options);
+  return imported ? [imported, ...options] : [...options];
+}
+
 export const PROFILE_RULE_INDICATORS: ProfileRuleIndicatorOption[] = [
   { value: "price", label: "Price", kind: "number" },
   { value: "ema5", label: "EMA 5", kind: "number" },
@@ -153,13 +179,15 @@ export function resolveProfileUiIndicator(
 ) {
   const options = optionsFor(section, condition);
   const registered = options.find((option) => option.value === indicatorValue);
-  const rendered = registered ?? options[0] ?? { value: "", label: "" };
+  const imported = getImportedProfileIndicatorOption(indicatorValue, options);
+  const rendered = registered ?? imported ?? options[0] ?? { value: "", label: "" };
   return {
     requested_indicator_value: indicatorValue,
     indicator_value: rendered.value,
     indicator_label: rendered.label,
     rendered_option_value: rendered.value,
     registry_found: Boolean(registered),
+    imported_option: Boolean(imported),
   };
 }
 

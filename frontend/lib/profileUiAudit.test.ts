@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildProfileUiAudit, buildProfilesUiAudit, resolveProfileUiIndicator } from "./profileUiAudit";
+import {
+  buildProfileUiAudit,
+  buildProfilesUiAudit,
+  profileIndicatorOptionsWithImported,
+  resolveProfileUiIndicator,
+} from "./profileUiAudit";
 
 function configWithIndicator(indicator: string) {
   return {
@@ -46,7 +51,20 @@ test("known indicator resolves to its registered value and label", () => {
     indicator_label: "Stoch %K",
     rendered_option_value: "stoch_k",
     registry_found: true,
+    imported_option: false,
   });
+});
+
+test("select options retain a value imported from JSON instead of falling back to the first option", () => {
+  const options = profileIndicatorOptionsWithImported(
+    [{ value: "price", label: "Price" }, { value: "adx", label: "ADX" }],
+    "adx_slope_3",
+  );
+  assert.deepEqual(options[0], {
+    value: "adx_slope_3",
+    label: "adx_slope_3 (importado do JSON)",
+  });
+  assert.ok(options.some((option) => option.value === "price"));
 });
 
 for (const indicator of [
@@ -56,19 +74,20 @@ for (const indicator of [
   "rsi_slope_3",
   "macd_hist_slope_3",
 ]) {
-  test(`${indicator} is preserved through form and save while the Price fallback is audited`, () => {
+  test(`${indicator} is preserved and displayed as an imported JSON option`, () => {
     const result = audit(indicator);
     const row = result.profiles[0].round_trip_audit[0];
     assert.equal(row.diff.backend_indicator, indicator);
     assert.equal(row.diff.form_indicator, indicator);
     assert.equal(row.diff.save_indicator, indicator);
     assert.equal(row.ui.requested_indicator_value, indicator);
-    assert.equal(row.ui.indicator_value, "price");
-    assert.equal(row.ui.indicator_label, "Price");
-    assert.equal(row.ui.rendered_option_value, "price");
+    assert.equal(row.ui.indicator_value, indicator);
+    assert.equal(row.ui.indicator_label, `${indicator} (importado do JSON)`);
+    assert.equal(row.ui.rendered_option_value, indicator);
+    assert.equal(row.ui.imported_option, true);
     assert.equal(row.round_trip_ok, false);
     assert.ok(row.codes.includes("UNKNOWN_INDICATOR"));
-    assert.ok(row.codes.includes("INDICATOR_FALLBACK_TO_PRICE"));
+    assert.ok(!row.codes.includes("INDICATOR_FALLBACK_TO_PRICE"));
   });
 }
 
@@ -78,10 +97,10 @@ test("unknown future indicator is never silently serialized as price", () => {
   assert.equal(row.diff.form_indicator, "future_test_indicator");
   assert.equal(row.diff.save_indicator, "future_test_indicator");
   assert.equal(row.ui.requested_indicator_value, "future_test_indicator");
-  assert.equal(row.ui.indicator_value, "price");
+  assert.equal(row.ui.indicator_value, "future_test_indicator");
   assert.equal(row.ui.registry_found, false);
   assert.ok(row.codes.includes("UNKNOWN_INDICATOR"));
-  assert.equal(result.summary.fallback_to_price_detected, 1);
+  assert.equal(result.summary.fallback_to_price_detected, 0);
 });
 
 test("indicator identity change during deserialize is critical", () => {
@@ -99,7 +118,7 @@ test("indicator identity change during serialize is critical", () => {
   assert.ok(row.codes.includes("INDICATOR_CHANGED_DURING_SERIALIZE"));
 });
 
-test("UI rendered config mirrors the visible Price fallback without changing form or save state", () => {
+test("UI rendered config preserves the visible imported indicator without changing form or save state", () => {
   const result = audit("adx_slope_3");
   const profile = result.profiles[0];
   type ConfigWithBlock = {
@@ -115,7 +134,7 @@ test("UI rendered config mirrors the visible Price fallback without changing for
   assert.equal(result.schema_version, 2);
   assert.equal(profile.ui_rendered_config_metadata.audit_only, true);
   assert.equal(profile.ui_rendered_config_metadata.safe_to_import, false);
-  assert.equal(renderedCondition.indicator, "price");
+  assert.equal(renderedCondition.indicator, "adx_slope_3");
   assert.equal(formCondition.indicator, "adx_slope_3");
   assert.equal(saveCondition.indicator, "adx_slope_3");
 });
@@ -137,14 +156,14 @@ test("batch UI audit aggregates only the selected profiles", () => {
   assert.equal(result.summary.profiles_loaded, 2);
   assert.equal(result.summary.profiles_with_differences, 1);
   assert.equal(result.summary.critical_differences, 1);
-  assert.equal(result.summary.fallback_to_price_detected, 1);
+  assert.equal(result.summary.fallback_to_price_detected, 0);
   assert.equal(result.ui_rendered_profiles_metadata.safe_to_import, false);
   const renderedProfile = result.ui_rendered_profiles[0] as unknown as {
     block_rules: { blocks: Array<{ conditions: Array<{ indicator: string }> }> };
   };
   assert.equal(
     renderedProfile.block_rules.blocks[0].conditions[0].indicator,
-    "price",
+    "adx_slope_3",
   );
   assert.equal(result.profiles.length, 2);
 });

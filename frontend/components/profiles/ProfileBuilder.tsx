@@ -3,7 +3,7 @@
 import { useState, useMemo, useRef } from "react";
 import { AlertTriangle, ArrowLeft, Save, Play, ShieldOff, Zap, Plus, Trash2, Target } from "lucide-react";
 import { apiPost } from "@/lib/api";
-import { buildProfileUiAudit, PROFILE_RULE_INDICATORS } from "@/lib/profileUiAudit";
+import { buildProfileUiAudit, PROFILE_RULE_INDICATORS, profileIndicatorOptionsWithImported } from "@/lib/profileUiAudit";
 import { ConditionBuilder, NumericInput, type ScoreRule } from "./ConditionBuilder";
 import { WeightSliders } from "./WeightSliders";
 import PresetIAButton from "./PresetIAButton";
@@ -1243,7 +1243,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                                   value={condition.left || "price"}
                                   onChange={(e) => updateBlockCondition(block.id, condition.id, { left: e.target.value })}
                                 >
-                                  {NUMERIC_RULE_INDICATORS.map((indicator) => (
+                                  {profileIndicatorOptionsWithImported(NUMERIC_RULE_INDICATORS, condition.left).map((indicator) => (
                                     <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
                                   ))}
                                 </select>
@@ -1274,7 +1274,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                                   value={condition.right || "ema9"}
                                   onChange={(e) => updateBlockCondition(block.id, condition.id, { right: e.target.value })}
                                 >
-                                  {NUMERIC_RULE_INDICATORS.map((indicator) => (
+                                  {profileIndicatorOptionsWithImported(NUMERIC_RULE_INDICATORS, condition.right).map((indicator) => (
                                     <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
                                   ))}
                                 </select>
@@ -1286,7 +1286,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                                   value={condition.indicator || "ema9_gt_ema21"}
                                   onChange={(e) => updateBlockCondition(block.id, condition.id, { indicator: e.target.value })}
                                 >
-                                  {BOOLEAN_RULE_INDICATORS.map((indicator) => (
+                                  {profileIndicatorOptionsWithImported(BOOLEAN_RULE_INDICATORS, condition.indicator).map((indicator) => (
                                     <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
                                   ))}
                                 </select>
@@ -1325,7 +1325,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                                   value={condition.indicator || "rsi"}
                                   onChange={(e) => updateBlockCondition(block.id, condition.id, { indicator: e.target.value })}
                                 >
-                                  {NUMERIC_RULE_INDICATORS.map((indicator) => (
+                                  {profileIndicatorOptionsWithImported(NUMERIC_RULE_INDICATORS, condition.indicator).map((indicator) => (
                                     <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
                                   ))}
                                 </select>
@@ -1501,7 +1501,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                           value={trig.left || "price"}
                           onChange={(e) => updateTrigger(trig.id, "left", e.target.value)}
                         >
-                          {NUMERIC_RULE_INDICATORS.map((indicator) => (
+                          {profileIndicatorOptionsWithImported(NUMERIC_RULE_INDICATORS, trig.left).map((indicator) => (
                             <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
                           ))}
                         </select>
@@ -1519,7 +1519,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                           value={trig.right || "ema9"}
                           onChange={(e) => updateTrigger(trig.id, "right", e.target.value)}
                         >
-                          {NUMERIC_RULE_INDICATORS.map((indicator) => (
+                          {profileIndicatorOptionsWithImported(NUMERIC_RULE_INDICATORS, trig.right).map((indicator) => (
                             <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
                           ))}
                         </select>
@@ -1531,7 +1531,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                           value={trig.indicator || "ema9_gt_ema21"}
                           onChange={(e) => updateTrigger(trig.id, "indicator", e.target.value)}
                         >
-                          {BOOLEAN_RULE_INDICATORS.map((indicator) => (
+                          {profileIndicatorOptionsWithImported(BOOLEAN_RULE_INDICATORS, trig.indicator).map((indicator) => (
                             <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
                           ))}
                         </select>
@@ -1555,7 +1555,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                           value={trig.indicator || "rsi"}
                           onChange={(e) => updateTrigger(trig.id, "indicator", e.target.value)}
                         >
-                          {NUMERIC_RULE_INDICATORS.map((indicator) => (
+                          {profileIndicatorOptionsWithImported(NUMERIC_RULE_INDICATORS, trig.indicator).map((indicator) => (
                             <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
                           ))}
                         </select>

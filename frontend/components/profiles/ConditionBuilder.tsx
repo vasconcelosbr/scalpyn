@@ -2,7 +2,7 @@
 
 import { Plus, Trash2 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
-import { PROFILE_CONDITION_INDICATORS } from "@/lib/profileUiAudit";
+import { PROFILE_CONDITION_INDICATORS, getImportedProfileIndicatorOption } from "@/lib/profileUiAudit";
 
 export function numFmt(n: number | null): string {
   if (n === null) return "";
@@ -238,6 +238,7 @@ export function ConditionBuilder({
         const selectedRule = getSelectedRule(condition);
         const ruleLocked = Boolean(showPoints && selectedRule);
         const points = Number(selectedRule?.points ?? condition.points ?? 0);
+        const importedField = getImportedProfileIndicatorOption(condition.field, INDICATOR_FIELDS);
 
         return (
           <div
@@ -275,6 +276,11 @@ export function ConditionBuilder({
               }}
               data-testid={`condition-field-${index}`}
             >
+              {importedField && (
+                <optgroup label="Importado do JSON">
+                  <option value={importedField.value}>{importedField.label}</option>
+                </optgroup>
+              )}
               <optgroup label="Preco e Volume">
                 {fieldsByGroup("price").map((field) => (
                   <option key={field.value} value={field.value}>{field.label}</option>

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ArrowLeft, Save, Plus, Trash2, Check, AlertTriangle, Play } from "lucide-react";
 import { apiPut } from "@/lib/api";
+import { PROFILE_RULE_INDICATORS, profileIndicatorOptionsWithImported } from "@/lib/profileUiAudit";
 import { ConditionBuilder, NumericInput } from "./ConditionBuilder";
 
 // ── Shared types (mirrors ProfileBuilder) ─────────────────────────────────────
@@ -51,43 +52,7 @@ interface BulkProfileBuilderProps {
 type ActiveTab = "filters" | "scoring" | "signals" | "block_rules" | "entry_triggers";
 
 // ── Constants (mirrors ProfileBuilder) ───────────────────────────────────────
-const RULE_INDICATORS = [
-  { value: "rsi",                    label: "RSI",                               kind: "number" },
-  { value: "adx",                    label: "ADX",                               kind: "number" },
-  { value: "macd",                   label: "MACD",                              kind: "number" },
-  { value: "macd_histogram",         label: "MACD Histogram",                    kind: "number" },
-  { value: "bb_width",               label: "BB Width",                          kind: "number" },
-  { value: "stoch_k",                label: "Stoch %K",                          kind: "number" },
-  { value: "stoch_d",                label: "Stoch %D",                          kind: "number" },
-  { value: "zscore",                 label: "Z-Score",                           kind: "number" },
-  { value: "volume_spike",           label: "Volume Spike",                      kind: "number" },
-  { value: "volume_delta",           label: "Volume Delta",                      kind: "number" },
-  { value: "atr_percent",            label: "ATR %",                             kind: "number" },
-  { value: "di_plus",                label: "DI+",                               kind: "number" },
-  { value: "di_minus",               label: "DI-",                               kind: "number" },
-  { value: "taker_ratio",            label: "Taker Ratio (buy/(buy+sell), 0-1)", kind: "number" },
-  { value: "orderbook_pressure",     label: "Orderbook Pressure",                kind: "number" },
-  { value: "bid_ask_imbalance",      label: "Bid/Ask Imbalance",                 kind: "number" },
-  { value: "atr",                    label: "ATR",                               kind: "number" },
-  { value: "spread_pct",             label: "Spread %",                          kind: "number" },
-  { value: "funding_rate",           label: "Funding Rate",                      kind: "number" },
-  { value: "volume_24h",             label: "Volume 24h",                        kind: "number" },
-  { value: "market_cap",             label: "Market Cap",                        kind: "number" },
-  { value: "change_24h",             label: "Variacao 24h %",                    kind: "number" },
-  { value: "orderbook_depth_usdt",   label: "Profundidade Book (USDT)",          kind: "number" },
-  { value: "obv",                    label: "OBV",                               kind: "number" },
-  { value: "vwap_distance_pct",      label: "VWAP Distance %",                   kind: "number" },
-  { value: "ema5",                   label: "EMA5",                              kind: "number" },
-  { value: "ema9",                   label: "EMA9",                              kind: "number" },
-  { value: "ema21",                  label: "EMA21",                             kind: "number" },
-  { value: "ema50",                  label: "EMA50",                             kind: "number" },
-  { value: "ema200",                 label: "EMA200",                            kind: "number" },
-  { value: "ema_full_alignment",     label: "EMA Full Alignment",                kind: "boolean" },
-  { value: "ema9_gt_ema21",          label: "EMA9 > EMA21",                      kind: "boolean" },
-  { value: "ema9_gt_ema50",          label: "EMA9 > EMA50",                      kind: "boolean" },
-  { value: "ema50_gt_ema200",        label: "EMA50 > EMA200",                    kind: "boolean" },
-  { value: "di_trend",               label: "DI+ > DI- (Alta)",                  kind: "boolean" },
-];
+const RULE_INDICATORS = PROFILE_RULE_INDICATORS;
 
 const NUMERIC_RULE_INDICATORS  = RULE_INDICATORS.filter((i) => i.kind === "number");
 const BOOLEAN_RULE_INDICATORS  = RULE_INDICATORS.filter((i) => i.kind === "boolean");
@@ -640,7 +605,7 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                                 value={condition.left || "price"}
                                 onChange={(e) => updateBlockCondition(block.id, condition.id, { left: e.target.value })}
                               >
-                                {NUMERIC_RULE_INDICATORS.map((i) => (
+                                {profileIndicatorOptionsWithImported(NUMERIC_RULE_INDICATORS, condition.left).map((i) => (
                                   <option key={i.value} value={i.value}>{i.label}</option>
                                 ))}
                               </select>
@@ -671,7 +636,7 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                                 value={condition.right || "ema9"}
                                 onChange={(e) => updateBlockCondition(block.id, condition.id, { right: e.target.value })}
                               >
-                                {NUMERIC_RULE_INDICATORS.map((i) => (
+                                {profileIndicatorOptionsWithImported(NUMERIC_RULE_INDICATORS, condition.right).map((i) => (
                                   <option key={i.value} value={i.value}>{i.label}</option>
                                 ))}
                               </select>
@@ -683,7 +648,7 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                                 value={condition.indicator || "ema9_gt_ema21"}
                                 onChange={(e) => updateBlockCondition(block.id, condition.id, { indicator: e.target.value })}
                               >
-                                {BOOLEAN_RULE_INDICATORS.map((i) => (
+                                {profileIndicatorOptionsWithImported(BOOLEAN_RULE_INDICATORS, condition.indicator).map((i) => (
                                   <option key={i.value} value={i.value}>{i.label}</option>
                                 ))}
                               </select>
@@ -709,7 +674,7 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                                 value={condition.indicator || "rsi"}
                                 onChange={(e) => updateBlockCondition(block.id, condition.id, { indicator: e.target.value })}
                               >
-                                {NUMERIC_RULE_INDICATORS.map((i) => (
+                                {profileIndicatorOptionsWithImported(NUMERIC_RULE_INDICATORS, condition.indicator).map((i) => (
                                   <option key={i.value} value={i.value}>{i.label}</option>
                                 ))}
                               </select>
@@ -872,7 +837,7 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                           value={trig.left || "price"}
                           onChange={(e) => updateTrigger(trig.id, "left", e.target.value)}
                         >
-                          {NUMERIC_RULE_INDICATORS.map((i) => (
+                          {profileIndicatorOptionsWithImported(NUMERIC_RULE_INDICATORS, trig.left).map((i) => (
                             <option key={i.value} value={i.value}>{i.label}</option>
                           ))}
                         </select>
@@ -890,7 +855,7 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                           value={trig.right || "ema9"}
                           onChange={(e) => updateTrigger(trig.id, "right", e.target.value)}
                         >
-                          {NUMERIC_RULE_INDICATORS.map((i) => (
+                          {profileIndicatorOptionsWithImported(NUMERIC_RULE_INDICATORS, trig.right).map((i) => (
                             <option key={i.value} value={i.value}>{i.label}</option>
                           ))}
                         </select>
@@ -902,7 +867,7 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                           value={trig.indicator || "ema9_gt_ema21"}
                           onChange={(e) => updateTrigger(trig.id, "indicator", e.target.value)}
                         >
-                          {BOOLEAN_RULE_INDICATORS.map((i) => (
+                          {profileIndicatorOptionsWithImported(BOOLEAN_RULE_INDICATORS, trig.indicator).map((i) => (
                             <option key={i.value} value={i.value}>{i.label}</option>
                           ))}
                         </select>
@@ -927,7 +892,7 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                           value={trig.indicator || "rsi"}
                           onChange={(e) => updateTrigger(trig.id, "indicator", e.target.value)}
                         >
-                          {NUMERIC_RULE_INDICATORS.map((i) => (
+                          {profileIndicatorOptionsWithImported(NUMERIC_RULE_INDICATORS, trig.indicator).map((i) => (
                             <option key={i.value} value={i.value}>{i.label}</option>
                           ))}
                         </select>
