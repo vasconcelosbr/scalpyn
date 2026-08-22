@@ -95,6 +95,13 @@
   gap: 10px;
 }
 
+.heroActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .downloadButton {
   display: inline-flex;
   align-items: center;
@@ -216,6 +223,7 @@
 @media (max-width: 1100px) {
   .hero { align-items: stretch; flex-direction: column; }
   .heroAside { justify-items: stretch; }
+  .heroActions { justify-content: flex-end; }
   .downloadButton { justify-self: end; }
   .heroMeta { min-width: 0; }
   .auditGrid, .snapshotGrid { grid-template-columns: 1fr; }
@@ -226,6 +234,7 @@
   .shell { padding: 16px 12px 36px; }
   .summaryGrid { grid-template-columns: 1fr; }
   .heroMeta { grid-template-columns: 1fr; }
+  .heroActions { flex-direction: column; }
   .downloadButton { width: 100%; justify-self: stretch; }
   .cardHeader, .section { padding: 14px; }
   .detailRow { grid-template-columns: 1fr; gap: 4px; }

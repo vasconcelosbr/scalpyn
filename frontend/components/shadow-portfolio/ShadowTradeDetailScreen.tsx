@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Activity, AlertTriangle, ArrowLeft, Clock, Crosshair, Database, Download } from "lucide-react";
 
+import { ModuleAIAnalysisAction } from "@/components/ai/ModuleAIAnalysisAction";
 import { ApiError, apiGet } from "@/lib/api";
 import { buildShadowTradeExport, shadowTradeExportFilename } from "./shadowTradeExport";
 import { TradeCandlestickChart } from "./TradeCandlestickChart";
@@ -278,16 +279,25 @@ export function ShadowTradeDetailScreen({ shadowId }: { shadowId: string }) {
             </div>
           </div>
           <div className={styles.heroAside}>
-            <button
-              type="button"
-              className={styles.downloadButton}
-              onClick={downloadJson}
-              disabled={!chartSettled}
-              title={chartSettled ? "Baixar todas as informações deste trade em JSON" : "Aguardando os dados do gráfico"}
-            >
-              <Download size={14} aria-hidden="true" />
-              Baixar JSON completo
-            </button>
+            <div className={styles.heroActions}>
+              <ModuleAIAnalysisAction
+                originModule="shadow_portfolio"
+                originView="shadow-portfolio-trade-detail"
+                entityIds={[data.id]}
+                label="Análise por IA"
+                compact
+              />
+              <button
+                type="button"
+                className={styles.downloadButton}
+                onClick={downloadJson}
+                disabled={!chartSettled}
+                title={chartSettled ? "Baixar todas as informações deste trade em JSON" : "Aguardando os dados do gráfico"}
+              >
+                <Download size={14} aria-hidden="true" />
+                Baixar JSON completo
+              </button>
+            </div>
             <div className={styles.heroMeta}>
               <div className={styles.heroStat}><div className={styles.heroStatLabel}>P&amp;L</div><div className={`${styles.heroStatValue} ${pnlClass}`}>{fmtPct(data.pnl_pct)}</div></div>
               <div className={styles.heroStat}><div className={styles.heroStatLabel}>Resultado</div><div className={`${styles.heroStatValue} ${pnlClass}`}>{fmtUsd(data.pnl_usdt)}</div></div>
