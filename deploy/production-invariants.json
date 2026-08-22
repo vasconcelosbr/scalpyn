@@ -109,6 +109,45 @@
           ]
         }
       ]
+    },
+    {
+      "id": "l3-gate-v2-shadow-observation",
+      "description": "Signals and entry triggers are independently compiled against one point-in-time hash without operational effect before approval",
+      "files": [
+        {
+          "path": "backend/app/services/l3_gate_compiler_v2.py",
+          "contains_all": [
+            "CONTRACT_VERSION = \"l3_gate_v2\"",
+            "operational_effect\": False",
+            "signals[\"gate_passed\"] and entry[\"gate_passed\"]",
+            "evaluation_envelope_hash"
+          ]
+        },
+        {
+          "path": "backend/app/tasks/pipeline_scan.py",
+          "contains_all": [
+            "GATE V2 POINT-IN-TIME ENVELOPE (SHADOW ONLY)",
+            "metrics[\"l3_gate_v2\"] = gate_v2",
+            "legacy path preserved"
+          ]
+        },
+        {
+          "path": "backend/app/services/shadow_trade_service.py",
+          "contains_all": [
+            "config_snap[\"l3_gate_v2\"] = deepcopy(_l3_gate_v2)",
+            "outside features_snapshot"
+          ]
+        },
+        {
+          "path": "backend/tests/test_l3_gate_compiler_v2.py",
+          "contains_all": [
+            "test_lit_incident_is_shadow_blocked_by_independent_signals",
+            "test_uni_incident_is_shadow_blocked_by_entry_triggers",
+            "test_pipeline_dual_evaluation_keeps_legacy_authoritative",
+            "test_observational_failure_never_changes_legacy_decision"
+          ]
+        }
+      ]
     }
   ]
 }

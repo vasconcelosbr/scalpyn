@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import os
+from copy import deepcopy
 from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -1523,6 +1524,19 @@ async def _inject_live_order_flow(
         if live_val is not None:
             updated[asset_key] = live_val
             overridden.append(asset_key)
+    updated["_l3_live_order_flow_meta"] = {
+        "captured_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "source_at": (
+            live.get("source_at")
+            or live.get("latest_trade_time")
+            or live.get("last_trade_time")
+            or live.get("timestamp")
+        ),
+        "data_age_seconds": age,
+        "window_seconds": window,
+        "source": live.get("taker_source"),
+        "overridden_fields": overridden,
+    }
 
     logger.debug(
         "[L3][%s] live_order_flow injected age=%s window=%ds source=%s overrode=%s",
@@ -1549,6 +1563,8 @@ async def _evaluate_l3_decisions(
     flow injection). Sem esses parâmetros (call sites legados), o
     comportamento é o original (lê só do DB).
     """
+    from ..services.l3_gate_compiler_v2 import evaluate_l3_gate_v2
+    from ..services.l3_gate_v2_metrics import observe_gate_v2
     from ..services.profile_engine import ProfileEngine
 
     engine = ProfileEngine(profile_config)
@@ -1595,6 +1611,30 @@ async def _evaluate_l3_decisions(
                 if isinstance(v, (int, float, bool, str)) and k in _LIVE_ORDER_FLOW_FIELDS:
                     asset[k] = v
 
+        # ── GATE V2 POINT-IN-TIME ENVELOPE (SHADOW ONLY) ────────────────
+        # Re-score an isolated copy after live flow injection.  The legacy
+        # asset and its precomputed score remain untouched, so this dual run
+        # cannot change the operational decision before governed promotion.
+        evaluated_at = datetime.now(timezone.utc)
+        v2_asset = deepcopy(asset)
+        v2_error: Exception | None = None
+        try:
+            await _apply_robust_authoritative_scoring(
+                [v2_asset],
+                score_config=score_config,
+                is_futures=bool(asset.get("is_futures")),
+                db=None,
+                user_id=None,
+                watchlist_id=None,
+                emit_metrics=False,
+            )
+        except Exception as exc:
+            v2_error = exc
+            logger.exception(
+                "[L3_GATE_V2] observational score failed symbol=%s; legacy path preserved",
+                asset.get("symbol"),
+            )
+
         started_at = datetime.now(timezone.utc)
         processed = engine.evaluate_asset(asset)
         latency_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
@@ -1610,6 +1650,72 @@ async def _evaluate_l3_decisions(
                 l3_pass = True
                 decision = "ALLOW"
 
+        if v2_error is None:
+            v2_score = float(v2_asset.get("_score") or 0.0)
+            gate_v2 = evaluate_l3_gate_v2(
+                asset=v2_asset,
+                profile_config=profile_config,
+                score=v2_score,
+                score_context=v2_asset.get("_score_components") or {},
+                evaluated_at=evaluated_at,
+                base_eligible=bool(
+                    not processed.get("blocked")
+                    and processed.get("passed_filter", False)
+                ),
+                legacy_decision=decision,
+            )
+        else:
+            gate_v2 = {
+                "contract_version": "l3_gate_v2",
+                "promotion_status": "SHADOW_ONLY",
+                "operational_effect": False,
+                "human_approval_required": True,
+                "evaluated_at": evaluated_at.isoformat().replace("+00:00", "Z"),
+                "evaluation_envelope_hash": None,
+                "score": {"value": None, "evaluation_envelope_hash": None},
+                "base_eligible": None,
+                "signals": {
+                    "gate_passed": False, "reason_codes": ["EVALUATION_ERROR"],
+                    "failed": [], "skipped": [], "conditions": [],
+                },
+                "entry_triggers": {
+                    "gate_passed": False, "reason_codes": ["EVALUATION_ERROR"],
+                    "failed": [], "skipped": [], "conditions": [],
+                },
+                "legacy_decision": decision,
+                "shadow_decision": "ERROR",
+                "would_authorize": False,
+                "decision_drift": False,
+                "reason_codes": ["EVALUATION_ERROR"],
+            }
+        observe_gate_v2(gate_v2)
+        reasons = _decision_reason_map(processed, has_signal_conditions)
+        reasons["_sections"] = {
+            "score_rules": {
+                "score": gate_v2["score"]["value"],
+                "evaluation_envelope_hash": gate_v2["evaluation_envelope_hash"],
+            },
+            "signals": {
+                "gate_passed": gate_v2["signals"]["gate_passed"],
+                "reason_codes": gate_v2["signals"]["reason_codes"],
+                "failed": gate_v2["signals"]["failed"],
+                "skipped": gate_v2["signals"]["skipped"],
+            },
+            "entry_triggers": {
+                "gate_passed": gate_v2["entry_triggers"]["gate_passed"],
+                "reason_codes": gate_v2["entry_triggers"]["reason_codes"],
+                "failed": gate_v2["entry_triggers"]["failed"],
+                "skipped": gate_v2["entry_triggers"]["skipped"],
+            },
+        }
+        metrics = _decision_metrics(asset, processed)
+        metrics["l3_gate_v2"] = gate_v2
+        logger.info(
+            "[L3_GATE_V2] symbol=%s legacy=%s shadow=%s drift=%s hash=%s operational=false",
+            asset.get("symbol"), decision, gate_v2["shadow_decision"],
+            gate_v2["decision_drift"], gate_v2["evaluation_envelope_hash"],
+        )
+
         decisions.append({
             "symbol": asset.get("symbol"),
             "strategy": strategy_level,
@@ -1619,8 +1725,9 @@ async def _evaluate_l3_decisions(
             "l1_pass": True,
             "l2_pass": True,
             "l3_pass": l3_pass,
-            "reasons": _decision_reason_map(processed, has_signal_conditions),
-            "metrics": _decision_metrics(asset, processed),
+            "reasons": reasons,
+            "metrics": metrics,
+            "gate_evaluation_v2": gate_v2,
             "latency_ms": latency_ms,
             # Defesa em profundidade (Task #292): se _apply_robust_authoritative_scoring
             # não rodou (fallback path) ou um caller futuro montar dict sem
@@ -1899,6 +2006,7 @@ async def _apply_robust_authoritative_scoring(
     db=None,
     user_id=None,
     watchlist_id=None,
+    emit_metrics: bool = True,
 ) -> dict[str, int]:
     """Apply the authoritative robust score to every asset.
 
@@ -1986,7 +2094,7 @@ async def _apply_robust_authoritative_scoring(
             )
 
         # Emit retained Phase 1 metrics for every symbol with envelopes.
-        if envelopes:
+        if envelopes and emit_metrics:
             try:
                 if result is not None:
                     set_indicator_confidence(
@@ -1999,7 +2107,12 @@ async def _apply_robust_authoritative_scoring(
             except Exception:
                 pass
 
-        if result is not None and result.rejected and result.rejection_reason:
+        if (
+            emit_metrics
+            and result is not None
+            and result.rejected
+            and result.rejection_reason
+        ):
             try:
                 reason_key = result.rejection_reason.split(":", 1)[0]
                 increment_rejection(reason_key)

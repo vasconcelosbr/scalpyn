@@ -1289,6 +1289,13 @@ async def _create_from_decision(
         config_snap["social_score"] = _social_context
         config_snap["technical_score"] = (decision.metrics or {}).get("technical_score")
         config_snap["final_score"] = (decision.metrics or {}).get("final_score")
+    # Gate v2 is immutable observational lineage.  Persist the exact object
+    # produced by pipeline_scan so decision audit and shadow trade expose the
+    # same point-in-time envelope hash.  It remains outside features_snapshot
+    # and therefore outside ML training/inference.
+    _l3_gate_v2 = (decision.metrics or {}).get("l3_gate_v2")
+    if isinstance(_l3_gate_v2, dict):
+        config_snap["l3_gate_v2"] = deepcopy(_l3_gate_v2)
     # Merge caller-provided metadata (e.g. l3_decision, l3_score, l3_reasons for
     # L3_REJECTED / L3_SIMULATED) into config_snapshot so outcomes can be correlated
     # with gate labels after closure.
