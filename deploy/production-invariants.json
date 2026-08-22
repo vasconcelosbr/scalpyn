@@ -71,6 +71,13 @@
             "test_empty_global_entry_triggers_cannot_erase_profile_triggers",
             "test_uni_snapshot_is_blocked_after_safe_runtime_merge"
           ]
+        },
+        {
+          "path": "backend/tests/test_shadow_watchlist_lineage.py",
+          "contains_all": [
+            "test_pipeline_scan_threads_rules_snapshot_to_all_l3_shadow_paths",
+            "rules_snapshot=profile_config"
+          ]
         }
       ]
     },

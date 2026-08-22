@@ -169,6 +169,8 @@ class TestFunctionSignatures:
         assert "profile_id=str(profile_id)" in source
         assert "profile_name=profile_name" in source
         assert "profile_version=profile_version" in source
+        assert "rules_snapshot=" in source
+        assert "deepcopy(rules_snapshot)" in source
 
     def test_pipeline_scan_passes_profile_lineage_to_l3_rejected(self):
         source = Path("backend/app/tasks/pipeline_scan.py").read_text(encoding="utf-8")
@@ -178,6 +180,7 @@ class TestFunctionSignatures:
         assert "profile_id=str(wl.profile_id)" in call
         assert "profile_name=_wl_profile_name" in call
         assert "profile_version=_wl_profile_version" in call
+        assert "rules_snapshot=profile_config" in call
 
     def test_create_l3_rejected_accepts_lineage(self):
         from backend.app.services.shadow_trade_service import create_l3_rejected_inline_shadows
@@ -189,6 +192,7 @@ class TestFunctionSignatures:
         assert "profile_id" in params
         assert "profile_name" in params
         assert "profile_version" in params
+        assert "rules_snapshot" in params
 
     def test_pipeline_scan_passes_profile_lineage_to_l1_spectrum(self):
         source = Path("backend/app/tasks/pipeline_scan.py").read_text(encoding="utf-8")
@@ -273,6 +277,19 @@ class TestFunctionSignatures:
         assert "watchlist_name" in params
         assert "watchlist_level" in params
         assert "source_watchlist_id" in params
+        assert "rules_snapshot" in params
+
+    def test_pipeline_scan_threads_rules_snapshot_to_all_l3_shadow_paths(self):
+        source = Path("backend/app/tasks/pipeline_scan.py").read_text(encoding="utf-8")
+        for call_name in (
+            "_create_bypass_shadows(",
+            "create_l3_rejected_inline_shadows(",
+            "create_l3_simulated_shadows(",
+        ):
+            call_start = source.index(f"await {call_name}")
+            call_end = source.index("\n                            )", call_start)
+            call = source[call_start:call_end]
+            assert "rules_snapshot=profile_config" in call
 
     def test_create_l1_spectrum_accepts_lineage(self):
         from backend.app.services.shadow_trade_service import create_l1_spectrum_shadows

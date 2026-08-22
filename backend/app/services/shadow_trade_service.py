@@ -2128,6 +2128,7 @@ async def create_l3_rejected_inline_shadows(
     profile_id: Optional[Any] = None,
     profile_version: Optional[datetime] = None,
     profile_name: Optional[str] = None,
+    rules_snapshot: Optional[Dict[str, Any]] = None,
     watchlist_id: Optional[str] = None,
     watchlist_name: Optional[str] = None,
     watchlist_level: Optional[str] = None,
@@ -2221,6 +2222,9 @@ async def create_l3_rejected_inline_shadows(
             profile_id=str(profile_id) if profile_id is not None else None,
             profile_name=profile_name,
             profile_version=profile_version,
+            rules_snapshot=(
+                deepcopy(rules_snapshot) if rules_snapshot is not None else None
+            ),
             lineage_confidence="EXACT",
             lineage_source="pipeline_scan",
             lineage_resolved_at=_dt.now(_tz.utc),
@@ -2646,6 +2650,7 @@ async def create_l3_simulated_shadows(
     profile_id: Optional[Any] = None,
     profile_version: Optional[datetime] = None,
     profile_name: Optional[str] = None,
+    rules_snapshot: Optional[Dict[str, Any]] = None,
     watchlist_id: Optional[str] = None,
     watchlist_name: Optional[str] = None,
     watchlist_level: Optional[str] = None,
@@ -2743,6 +2748,9 @@ async def create_l3_simulated_shadows(
             profile_id=str(profile_id) if profile_id else None,
             profile_name=profile_name,
             profile_version=profile_version,
+            rules_snapshot=(
+                deepcopy(rules_snapshot) if rules_snapshot is not None else None
+            ),
             lineage_confidence="EXACT",
             lineage_source="pipeline_scan",
             lineage_resolved_at=_dt.now(_tz.utc),

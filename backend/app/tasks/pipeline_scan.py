@@ -4186,6 +4186,7 @@ async def _run_pipeline_scan():
                                             profile_id=str(wl.profile_id) if wl.profile_id else None,
                                             profile_name=_wl_profile_name,
                                             profile_version=_wl_profile_version,
+                                            rules_snapshot=profile_config,
                                         )
                                         logger.info(
                                             "[BypassShadow] wl=%s: %d score-bypassed"
@@ -4340,6 +4341,7 @@ async def _run_pipeline_scan():
                                 profile_id=str(wl.profile_id) if wl.profile_id else None,
                                 profile_name=_wl_profile_name,
                                 profile_version=_wl_profile_version,
+                                rules_snapshot=profile_config,
                             )
                         except Exception as _l3rej_exc:
                             logger.warning(
@@ -4367,6 +4369,7 @@ async def _run_pipeline_scan():
                                 profile_id=str(wl.profile_id) if wl.profile_id else None,
                                 profile_name=_wl_profile_name,
                                 profile_version=_wl_profile_version,
+                                rules_snapshot=profile_config,
                             )
                         except Exception as _l3sim_exc:
                             logger.warning(
