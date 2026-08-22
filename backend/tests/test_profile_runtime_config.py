@@ -8,7 +8,6 @@ PROFILE_ENTRY_TRIGGERS = {
     "logic": "AND",
     "conditions": [
         {
-            "id": "uni-bb-width",
             "indicator": "bb_width",
             "operator": "between",
             "min": 0.03,
@@ -17,7 +16,6 @@ PROFILE_ENTRY_TRIGGERS = {
             "enabled": True,
         },
         {
-            "id": "uni-macd-histogram",
             "indicator": "macd_histogram",
             "operator": ">",
             "value": 0,
@@ -89,6 +87,6 @@ def test_uni_snapshot_is_blocked_after_safe_runtime_merge():
 
     assert result["allowed"] is False
     assert set(result["failed_required"]) == {
-        "uni-bb-width",
-        "uni-macd-histogram",
+        "bb_width",
+        "macd_histogram",
     }

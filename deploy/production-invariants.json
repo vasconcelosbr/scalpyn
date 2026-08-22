@@ -59,6 +59,13 @@
           ]
         },
         {
+          "path": "backend/app/services/block_engine.py",
+          "contains_all": [
+            "_entry_trigger_identifier",
+            "condition.get(\"indicator\")"
+          ]
+        },
+        {
           "path": "backend/tests/test_profile_runtime_config.py",
           "contains_all": [
             "test_empty_global_entry_triggers_cannot_erase_profile_triggers",

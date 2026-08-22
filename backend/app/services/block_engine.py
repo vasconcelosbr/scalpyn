@@ -24,6 +24,17 @@ _CMP = {
 }
 
 
+def _entry_trigger_identifier(condition: Dict[str, Any]) -> str:
+    """Return an auditable identifier even when UI-authored rules omit id."""
+    return str(
+        condition.get("id")
+        or condition.get("indicator")
+        or condition.get("field")
+        or condition.get("left")
+        or "?"
+    )
+
+
 def _aggregate_skip_reason(evaluated: List[tuple]) -> str:
     """Pick the most informative skip reason from a list of evaluated conditions.
 
@@ -292,7 +303,7 @@ class BlockEngine:
 
         for cond in required:
             status = self._eval_trigger_status(cond, eval_data)
-            cond_id = cond.get("id", "?")
+            cond_id = _entry_trigger_identifier(cond)
             if status == RuleStatus.PASS:
                 matched.append(cond_id)
             elif status == RuleStatus.SKIPPED:
@@ -312,7 +323,7 @@ class BlockEngine:
         optional_decided = 0
         for cond in optional:
             status = self._eval_trigger_status(cond, eval_data)
-            cond_id = cond.get("id", "?")
+            cond_id = _entry_trigger_identifier(cond)
             if status == RuleStatus.PASS:
                 optional_matched.append(cond_id)
                 optional_decided += 1
