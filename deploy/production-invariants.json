@@ -40,6 +40,32 @@
           ]
         }
       ]
+    },
+    {
+      "id": "l3-entry-trigger-runtime-guard",
+      "description": "Non-empty profile entry triggers cannot be erased by an empty global override",
+      "files": [
+        {
+          "path": "backend/app/services/profile_runtime_config.py",
+          "contains_all": [
+            "merge_profile_runtime_block_config",
+            "L3_CONFIG_GUARD"
+          ]
+        },
+        {
+          "path": "backend/app/tasks/pipeline_scan.py",
+          "contains_all": [
+            "merge_profile_runtime_block_config"
+          ]
+        },
+        {
+          "path": "backend/tests/test_profile_runtime_config.py",
+          "contains_all": [
+            "test_empty_global_entry_triggers_cannot_erase_profile_triggers",
+            "test_uni_snapshot_is_blocked_after_safe_runtime_merge"
+          ]
+        }
+      ]
     }
   ]
 }

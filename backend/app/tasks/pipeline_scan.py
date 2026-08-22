@@ -23,6 +23,7 @@ from uuid import UUID, uuid4
 
 from ..tasks.celery_app import celery_app
 from ..services.pipeline_rejections import evaluate_rejections
+from ..services.profile_runtime_config import merge_profile_runtime_block_config
 from ..utils.pipeline_profile_filters import (
     STRICT_META_FIELDS,
     effective_pipeline_level,
@@ -2877,15 +2878,10 @@ async def _run_pipeline_scan():
                             async with db.begin_nested():
                                 _block_cfg = await _block_cs.get_config(db, "block", wl.user_id)
                             if _block_cfg:
-                                _overrides = {}
-                                _br = _block_cfg.get("block_rules")
-                                _et = _block_cfg.get("entry_triggers")
-                                if _br is not None:
-                                    _overrides["block_rules"] = _br
-                                if _et is not None:
-                                    _overrides["entry_triggers"] = _et
-                                if _overrides:
-                                    profile_config = {**profile_config, **_overrides}
+                                profile_config = merge_profile_runtime_block_config(
+                                    profile_config,
+                                    _block_cfg,
+                                )
                         except Exception as _bc_exc:
                             logger.warning(
                                 "[PipelineScan] %s: block config read failed (%s) — using profile.config block_rules",

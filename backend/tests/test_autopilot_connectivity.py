@@ -22,6 +22,7 @@ import pytest
 
 PIPELINE_SCAN_PATH = pathlib.Path(__file__).parent.parent / "app" / "tasks" / "pipeline_scan.py"
 PROFILE_ENGINE_PATH = pathlib.Path(__file__).parent.parent / "app" / "services" / "profile_engine.py"
+RUNTIME_CONFIG_PATH = pathlib.Path(__file__).parent.parent / "app" / "services" / "profile_runtime_config.py"
 
 
 def _read(path: pathlib.Path) -> str:
@@ -65,8 +66,11 @@ class TestBlockRulesConnected:
         )
 
     def test_block_rules_merged_into_profile_config(self):
-        src = _read(PIPELINE_SCAN_PATH)
-        assert '_block_cfg.get("block_rules")' in src or "_block_cfg.get('block_rules')" in src, (
+        pipeline_src = _read(PIPELINE_SCAN_PATH)
+        merge_src = _read(RUNTIME_CONFIG_PATH)
+        assert "merge_profile_runtime_block_config" in pipeline_src
+        assert 'global_block_config.get("block_rules")' in merge_src or \
+               "global_block_config.get('block_rules')" in merge_src, (
             "block_rules from block_config must be merged into profile_config"
         )
 
@@ -79,8 +83,11 @@ class TestBlockRulesConnected:
 
 class TestEntryTriggersConnected:
     def test_entry_triggers_merged_into_profile_config(self):
-        src = _read(PIPELINE_SCAN_PATH)
-        assert '_block_cfg.get("entry_triggers")' in src or "_block_cfg.get('entry_triggers')" in src, (
+        pipeline_src = _read(PIPELINE_SCAN_PATH)
+        merge_src = _read(RUNTIME_CONFIG_PATH)
+        assert "merge_profile_runtime_block_config" in pipeline_src
+        assert 'global_block_config.get("entry_triggers")' in merge_src or \
+               "global_block_config.get('entry_triggers')" in merge_src, (
             "entry_triggers from block_config must be merged into profile_config"
         )
 
@@ -103,12 +110,13 @@ class TestAllowlistHasNoFiltersStub:
         from app.services.autopilot_engine import _GUARDRAILS_DEFAULTS
         can_adjust = _GUARDRAILS_DEFAULTS.get("autopilot_can_adjust", [])
         pipeline_src = _read(PIPELINE_SCAN_PATH)
+        merge_src = _read(RUNTIME_CONFIG_PATH)
 
         connected_keys = {
             "scoring_rules":  'get_config(db, "score"' in pipeline_src,
             "minimum_score":  "_autopilot_min" in pipeline_src,
-            "block_rules":    '_block_cfg.get("block_rules")' in pipeline_src,
-            "entry_triggers": '_block_cfg.get("entry_triggers")' in pipeline_src,
+            "block_rules":    'global_block_config.get("block_rules")' in merge_src,
+            "entry_triggers": 'global_block_config.get("entry_triggers")' in merge_src,
         }
 
         for key in can_adjust:
