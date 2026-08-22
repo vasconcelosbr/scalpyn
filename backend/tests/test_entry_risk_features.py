@@ -200,6 +200,10 @@ def test_capture_and_migration_are_fail_closed_and_point_in_time():
     assert "timeframe = '5m'" in capture
     assert "market_type = 'spot'" in capture
     assert "time + interval '5 minutes' <= :entry_at" in capture
+    # asyncpg cannot infer a nullable bind used by both ``IS NULL`` and
+    # ``lower()``.  Keep the explicit cast so live captures do not fail with
+    # AmbiguousParameterError when exchange is populated.
+    assert capture.count("CAST(:exchange AS text)") == 3
     assert "FOR UPDATE OF st SKIP LOCKED" in capture
     assert "LEGACY_UNVERIFIABLE" not in migration
     for status in ("NOT_AVAILABLE", "PENDING", "VALID", "PARTIAL", "INVALID", "ERROR"):

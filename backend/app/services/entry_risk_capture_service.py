@@ -83,9 +83,9 @@ async def _capture_one(db: AsyncSession, row: Mapping[str, Any]) -> dict[str, An
            AND market_type = 'spot'
            AND time + interval '5 minutes' <= :entry_at
            AND (
-               :exchange IS NULL
-               OR lower(exchange) = lower(:exchange)
-               OR (lower(:exchange) IN ('gate','gate.io') AND lower(exchange) IN ('gate','gate.io'))
+               CAST(:exchange AS text) IS NULL
+               OR lower(exchange) = lower(CAST(:exchange AS text))
+               OR (lower(CAST(:exchange AS text)) IN ('gate','gate.io') AND lower(exchange) IN ('gate','gate.io'))
            )
          ORDER BY time DESC
          LIMIT 50
