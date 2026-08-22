@@ -951,6 +951,11 @@ async def toggle_watchlist_profile(
 
 def _validate_profile_config(config: Dict[str, Any]) -> Dict[str, Any]:
     """Validate and normalize profile configuration."""
+    from ..services.entry_risk_features import (
+        assert_no_observational_execution_fields,
+    )
+
+    assert_no_observational_execution_fields(config)
     validated = {
         "default_timeframe": config.get("default_timeframe", "5m")
     }

@@ -88,6 +88,9 @@ CRITICAL_COLUMNS: List[Tuple[str, str]] = [
     # per-feature lineage map; missing either must fail at boot, not at train.
     ("shadow_trades", "feature_source_at"),
     ("shadow_trades", "feature_source_times"),
+    ("shadow_trades", "entry_risk_features_json"),
+    ("shadow_trades", "entry_risk_capture_status"),
+    ("shadow_trades", "entry_risk_captured_at"),
     # Added by migration 167. Every durable graph dispatch reads these fields;
     # a worker must fail its schema gate instead of interpreting a missing
     # START/RESUME tuple or crashing only after a human decision is accepted.

@@ -287,6 +287,39 @@ class ModuleAIAnalysisService:
                     f"indicator_{name}": (row.features_snapshot or {}).get(name)
                     for name in _INDICATOR_NAMES
                 },
+                "legacy_entry_exhaustion_score": (
+                    (row.features_snapshot or {}).get("entry_exhaustion_score")
+                ),
+                "momentum_intensity_score": (
+                    ((row.entry_risk_features_json or {}).get("momentum_intensity") or {}).get(
+                        "momentum_intensity_score"
+                    )
+                ),
+                "exhaustion_risk_score": (
+                    ((row.entry_risk_features_json or {}).get("exhaustion_risk") or {}).get(
+                        "exhaustion_risk_score"
+                    )
+                ),
+                "entry_risk_capture_status": row.entry_risk_capture_status,
+                "entry_risk_contract_valid": (
+                    ((row.entry_risk_features_json or {}).get("contract_status") or {}).get(
+                        "entry_risk_contract_valid"
+                    )
+                ),
+                "entry_risk_semantics": (
+                    "MONITOR_ONLY; values are not calibrated probabilities and have no operational effect"
+                ),
+                "entry_risk_component_breakdown": {
+                    "legacy": (
+                        ((row.entry_risk_features_json or {}).get("legacy") or {}).get("components")
+                    ),
+                    "momentum_intensity": (
+                        ((row.entry_risk_features_json or {}).get("momentum_intensity") or {}).get("components")
+                    ),
+                    "exhaustion_risk": (
+                        ((row.entry_risk_features_json or {}).get("exhaustion_risk") or {}).get("dimensions")
+                    ),
+                },
                 "features_coverage": float(row.features_coverage) if row.features_coverage is not None else None,
                 "market_data_confidence": (
                     float(row.market_data_confidence) if row.market_data_confidence is not None else None

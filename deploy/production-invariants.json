@@ -73,6 +73,35 @@
           ]
         }
       ]
+    },
+    {
+      "id": "entry-risk-observational-only",
+      "description": "Entry-risk candidate scores remain point-in-time observational fields with no execution or ML consumer",
+      "files": [
+        {
+          "path": "backend/app/services/entry_risk_features.py",
+          "contains_all": [
+            "OBSERVATIONAL_ONLY_FIELDS",
+            "assert_no_observational_execution_fields",
+            "operational_effect\": False"
+          ]
+        },
+        {
+          "path": "backend/app/ml/feature_extractor.py",
+          "contains_all": [
+            "momentum_intensity_score",
+            "exhaustion_risk_score",
+            "FORBIDDEN_OPERATIONAL_PREFIXES"
+          ]
+        },
+        {
+          "path": "backend/tests/test_entry_risk_features.py",
+          "contains_all": [
+            "test_operational_config_cannot_be_enabled_in_v1",
+            "test_candidate_scores_have_no_execution_consumers"
+          ]
+        }
+      ]
     }
   ]
 }

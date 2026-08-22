@@ -242,6 +242,9 @@ def build_indicators_snapshot(
             "value": merged.values.get(key),
             "source_group": meta.get("group"),
             "ts": ts.isoformat() if ts is not None else None,
+            "timeframe": meta.get("timeframe"),
+            "observed_timeframes": meta.get("observed_timeframes") or [],
+            "timeframe_conflict": bool(meta.get("timeframe_conflict", False)),
             "stale": meta.get("stale", False),
         }
     return snapshot

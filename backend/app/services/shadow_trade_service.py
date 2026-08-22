@@ -994,7 +994,8 @@ _INSERT_SHADOW_SQL = text("""
         feature_source_at, feature_source_times,
         features_captured_at, features_coverage, feature_hash,
         profile_config_hash, score_engine_config_hash,
-        lineage_status, eligible_for_training
+        lineage_status, eligible_for_training,
+        entry_risk_features_json, entry_risk_capture_status
     ) VALUES (
         gen_random_uuid(),
         :decision_id, :user_id, :symbol, :strategy, :direction,
@@ -1024,7 +1025,8 @@ _INSERT_SHADOW_SQL = text("""
         :feature_source_at, CAST(:feature_source_times AS JSONB),
         :features_captured_at, :features_coverage, :feature_hash,
         :profile_config_hash, :score_engine_config_hash,
-        :lineage_status, :eligible_for_training
+        :lineage_status, :eligible_for_training,
+        CAST(:entry_risk_features_json AS JSONB), :entry_risk_capture_status
     )
     ON CONFLICT DO NOTHING
     RETURNING id
@@ -1241,6 +1243,9 @@ async def _create_from_decision(
         sl_price = None
 
     _source_snapshot = (decision.metrics or {}).get("indicators_snapshot") or {}
+    from .entry_risk_features import pending_entry_risk_payload
+
+    _entry_risk_pending = pending_entry_risk_payload(_source_snapshot)
     native_capture = capture_native_snapshot(
         _build_features_snapshot(decision),
         source_snapshot=_source_snapshot,
@@ -1445,6 +1450,10 @@ async def _create_from_decision(
                     "score_engine_config_hash": _lin_score_engine_config_hash,
                     "lineage_status": lineage_status,
                     "eligible_for_training": lineage_complete and not feature_errors,
+                    "entry_risk_features_json": json.dumps(
+                        _entry_risk_pending, default=str
+                    ),
+                    "entry_risk_capture_status": "PENDING",
                 },
             )
     except IntegrityError as exc:
@@ -3679,7 +3688,8 @@ _INSERT_STRATEGY_LAB_SQL = text("""
         feature_source_at, feature_source_times,
         features_captured_at, features_coverage, feature_hash,
         profile_config_hash, score_engine_config_hash,
-        lineage_status, eligible_for_training
+        lineage_status, eligible_for_training,
+        entry_risk_features_json, entry_risk_capture_status
     ) VALUES (
         gen_random_uuid(),
         NULL, :user_id, :symbol, :strategy, :direction,
@@ -3703,7 +3713,8 @@ _INSERT_STRATEGY_LAB_SQL = text("""
         :feature_source_at, CAST(:feature_source_times AS JSONB),
         :features_captured_at, :features_coverage, :feature_hash,
         :profile_config_hash, :score_engine_config_hash,
-        :lineage_status, :eligible_for_training
+        :lineage_status, :eligible_for_training,
+        CAST(:entry_risk_features_json AS JSONB), :entry_risk_capture_status
     )
     ON CONFLICT DO NOTHING
     RETURNING id
@@ -3898,6 +3909,10 @@ async def create_strategy_lab_shadows(
                     config_snap["feature_source_times"] = snapshot_contract.get(
                         "feature_source_times_map", {}
                     )
+                    from .entry_risk_features import pending_entry_risk_payload
+                    _entry_risk_pending = pending_entry_risk_payload(
+                        feature_metadata or source_snapshot
+                    )
                     try:
                         async with own_db.begin_nested():
                             res = await own_db.execute(
@@ -3939,6 +3954,10 @@ async def create_strategy_lab_shadows(
                                     "lineage_confidence": "EXACT" if watchlist_id else None,
                                     "lineage_source": "pipeline_scan" if watchlist_id else None,
                                     "lineage_resolved_at": promotion_at if watchlist_id else None,
+                                    "entry_risk_features_json": _json.dumps(
+                                        _entry_risk_pending, default=str
+                                    ),
+                                    "entry_risk_capture_status": "PENDING",
                                 },
                             )
                     except IntegrityError as exc:
@@ -4150,6 +4169,10 @@ async def create_strategy_lab_rejected_shadows(
                     config_snap["feature_source_times"] = snapshot_contract.get(
                         "feature_source_times_map", {}
                     )
+                    from .entry_risk_features import pending_entry_risk_payload
+                    _entry_risk_pending = pending_entry_risk_payload(
+                        feature_metadata or source_snapshot
+                    )
                     try:
                         async with own_db.begin_nested():
                             res = await own_db.execute(
@@ -4191,6 +4214,10 @@ async def create_strategy_lab_rejected_shadows(
                                     "lineage_confidence": "EXACT" if watchlist_id else None,
                                     "lineage_source": "pipeline_scan" if watchlist_id else None,
                                     "lineage_resolved_at": promotion_at if watchlist_id else None,
+                                    "entry_risk_features_json": _json.dumps(
+                                        _entry_risk_pending, default=str
+                                    ),
+                                    "entry_risk_capture_status": "PENDING",
                                 },
                             )
                     except IntegrityError as exc:

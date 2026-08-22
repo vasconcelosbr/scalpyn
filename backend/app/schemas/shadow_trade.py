@@ -77,6 +77,9 @@ class ShadowTradeDetail(ShadowTradeRead):
     # Snapshot dos indicadores no momento da SAÍDA (TP/SL/TIMEOUT).
     # NULL para shadows ainda em RUNNING ou criados antes da migration 051.
     features_snapshot_exit: Optional[Dict[str, Any]] = None
+    entry_risk_features: Optional[Dict[str, Any]] = None
+    entry_risk_capture_status: str = "NOT_AVAILABLE"
+    entry_risk_captured_at: Optional[datetime] = None
     # Auditoria L1/L2/L3 — replicado da decision_log original (espelha
     # o painel de drill-down em /decisions). Preenchido apenas quando
     # ``decision_id`` aponta para uma linha existente em ``decisions_log``.

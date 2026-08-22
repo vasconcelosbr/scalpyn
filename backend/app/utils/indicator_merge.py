@@ -124,12 +124,15 @@ def _make_meta(
     grp: str,
     age: float,
     ts: Optional[datetime],
+    timeframe: Optional[str] = None,
     source: Optional[str] = None,
     confidence: Optional[float] = None,
     status: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build a per-key meta dict, optionally enriched with envelope fields."""
     m: Dict[str, Any] = {"group": grp, "age_seconds": age, "timestamp": ts}
+    if timeframe is not None:
+        m["timeframe"] = timeframe
     if source is not None:
         m["source"] = source
     if confidence is not None:
@@ -233,6 +236,9 @@ class MergedIndicators:
                 "indicator_status": m.get("indicator_status"),
                 "timestamp": m.get("timestamp").isoformat()
                 if m.get("timestamp") is not None else None,
+                "timeframe": m.get("timeframe"),
+                "observed_timeframes": m.get("observed_timeframes") or [],
+                "timeframe_conflict": bool(m.get("timeframe_conflict", False)),
                 "stale": m.get("stale", False),
                 "age_seconds": m.get("age_seconds"),
             }
@@ -240,7 +246,7 @@ class MergedIndicators:
 
 
 def merge_indicator_rows(
-    rows: List[Tuple[str, Optional[datetime], Dict[str, Any]]],
+    rows: List[Tuple],
     now: Optional[datetime] = None,
     *,
     include_stale: bool = False,
@@ -248,7 +254,8 @@ def merge_indicator_rows(
     """Merge a list of (group, timestamp, indicators_dict) tuples for ONE symbol.
 
     Args:
-        rows:          Each entry is (scheduler_group, row_timestamp, indicators_dict).
+        rows:          Each entry is ``(group, timestamp, indicators)`` or the
+                       additive ``(group, timestamp, timeframe, indicators)``.
         now:           Current UTC time used to compute ages.  Defaults to utcnow().
         include_stale: When True, stale rows are still included in ``values``
                        (merged normally) so callers like the drilldown endpoint
@@ -271,9 +278,14 @@ def merge_indicator_rows(
     # When ``include_stale`` is True, stale rows are kept in ``live`` (so
     # their values participate in the merge) AND recorded in ``stale_rows``
     # (so per-key metadata still carries ``stale=True``).
-    live: List[Tuple[str, Optional[datetime], Dict[str, Any], float, bool]] = []
-    stale_rows: List[Tuple[str, Optional[datetime], Dict[str, Any], float]] = []
-    for grp, ts, ind_json in rows:
+    live: List[Tuple[str, Optional[datetime], Optional[str], Dict[str, Any], float, bool]] = []
+    stale_rows: List[Tuple[str, Optional[datetime], Optional[str], Dict[str, Any], float]] = []
+    for row in rows:
+        if len(row) == 4:
+            grp, ts, timeframe, ind_json = row
+        else:
+            grp, ts, ind_json = row
+            timeframe = None
         ts_utc = _ensure_utc(ts)
         stale_limit = _GROUP_STALE.get(grp, STRUCTURAL_STALE_SECONDS)
         if ts_utc is not None:
@@ -284,18 +296,18 @@ def merge_indicator_rows(
                     grp, ts_utc.isoformat(), age, stale_limit,
                     " (included)" if include_stale else "",
                 )
-                stale_rows.append((grp, ts_utc, ind_json or {}, age))
+                stale_rows.append((grp, ts_utc, timeframe, ind_json or {}, age))
                 if include_stale:
-                    live.append((grp, ts_utc, ind_json or {}, age, True))
+                    live.append((grp, ts_utc, timeframe, ind_json or {}, age, True))
                 continue
-            live.append((grp, ts_utc, ind_json or {}, age, False))
+            live.append((grp, ts_utc, timeframe, ind_json or {}, age, False))
         else:
-            live.append((grp, None, ind_json or {}, float("inf"), False))
+            live.append((grp, None, timeframe, ind_json or {}, float("inf"), False))
 
     # ── Step 2: Inter-group drift cap ─────────────────────────────────────────
     # Pick latest timestamp per group from live rows.
     ts_by_group: Dict[str, Optional[datetime]] = {}
-    for grp, ts_utc, _, _age, _stale in live:
+    for grp, ts_utc, _timeframe, _, _age, _stale in live:
         existing = ts_by_group.get(grp)
         if existing is None or (ts_utc is not None and ts_utc > existing):
             ts_by_group[grp] = ts_utc
@@ -325,8 +337,8 @@ def merge_indicator_rows(
                 )
             for entry in live:
                 if entry[0] in stale_groups:
-                    stale_rows.append((entry[0], entry[1], entry[2], entry[3]))
-            live = [(g, t, d, a, s) for g, t, d, a, s in live if g not in stale_groups]
+                    stale_rows.append((entry[0], entry[1], entry[2], entry[3], entry[4]))
+            live = [entry for entry in live if entry[0] not in stale_groups]
 
     # ── Step 3: Per-key latest-timestamp-wins merge ───────────────────────────
     # For each indicator key:
@@ -335,8 +347,9 @@ def merge_indicator_rows(
     #     newest timestamp.  Microstructure is the tiebreak if timestamps are
     #     equal (its faster cadence means it is at least as fresh as structural).
     result = MergedIndicators()
+    observed_timeframes: Dict[str, set[str]] = {}
 
-    for grp, ts_utc, ind_json, age, is_stale in live:
+    for grp, ts_utc, timeframe, ind_json, age, is_stale in live:
         for k, raw in ind_json.items():
             if isinstance(raw, dict) and "value" in raw:
                 v = raw["value"]
@@ -353,10 +366,13 @@ def merge_indicator_rows(
             else:
                 continue
 
+            if timeframe:
+                observed_timeframes.setdefault(k, set()).add(str(timeframe))
+
             existing_meta = result.meta.get(k)
             if existing_meta is None:
                 result.values[k] = v
-                m = _make_meta(grp, age, ts_utc, env_source, env_confidence, env_status)
+                m = _make_meta(grp, age, ts_utc, timeframe, env_source, env_confidence, env_status)
                 m["stale"] = is_stale
                 result.meta[k] = m
                 continue
@@ -394,7 +410,7 @@ def merge_indicator_rows(
 
             if should_overwrite:
                 result.values[k] = v
-                m = _make_meta(grp, age, ts_utc, env_source, env_confidence, env_status)
+                m = _make_meta(grp, age, ts_utc, timeframe, env_source, env_confidence, env_status)
                 m["stale"] = is_stale
                 result.meta[k] = m
 
@@ -445,7 +461,7 @@ def merge_indicator_rows(
     # surface staleness information to the UI without using stale values in
     # filter/scoring logic.  Non-stale keys that already exist in meta are not
     # overwritten (a fresh value always wins the metadata slot).
-    for grp, ts_utc, ind_json, age in stale_rows:
+    for grp, ts_utc, timeframe, ind_json, age in stale_rows:
         for k, raw in ind_json.items():
             if isinstance(raw, dict) and "value" in raw:
                 env_source = raw.get("source")
@@ -457,9 +473,11 @@ def merge_indicator_rows(
                 env_status = None
             else:
                 continue
+            if timeframe:
+                observed_timeframes.setdefault(k, set()).add(str(timeframe))
             if k not in result.meta:
                 # Key has no live entry — record as stale (value omitted)
-                m = _make_meta(grp, age, ts_utc, env_source, env_confidence, env_status)
+                m = _make_meta(grp, age, ts_utc, timeframe, env_source, env_confidence, env_status)
                 m["stale"] = True
                 result.meta[k] = m
             # If a live entry exists for this key, don't overwrite with stale meta.
@@ -468,6 +486,9 @@ def merge_indicator_rows(
     for k, m in result.meta.items():
         if "stale" not in m:
             m["stale"] = False
+        timeframes = sorted(observed_timeframes.get(k) or [])
+        m["observed_timeframes"] = timeframes
+        m["timeframe_conflict"] = len(timeframes) > 1
 
     return result
 
@@ -532,11 +553,12 @@ async def fetch_merged_indicators(
                 SELECT req.symbol,
                        grp.scheduler_group,
                        latest.time,
+                       latest.timeframe,
                        latest.indicators_json
                 FROM requested req
                 CROSS JOIN scheduler_groups grp
                 CROSS JOIN LATERAL (
-                    SELECT i.time, i.indicators_json
+                    SELECT i.time, i.timeframe, i.indicators_json
                     FROM indicators i
                     WHERE i.symbol = req.symbol
                       AND i.scheduler_group = grp.scheduler_group
@@ -553,6 +575,7 @@ async def fetch_merged_indicators(
             by_sym[r.symbol].append((
                 r.scheduler_group or "combined",
                 r.time,
+                r.timeframe,
                 r.indicators_json or {},
             ))
 
@@ -562,10 +585,10 @@ async def fetch_merged_indicators(
             # do not mix sources when the new dual schedulers are active.
             has_separated = any(
                 g in ("structural", "microstructure")
-                for g, _t, _d in row_list
+                for g, _t, _tf, _d in row_list
             )
             if has_separated:
-                row_list = [(g, t, d) for g, t, d in row_list if g != "combined"]
+                row_list = [(g, t, tf, d) for g, t, tf, d in row_list if g != "combined"]
             merged[sym] = merge_indicator_rows(row_list, now=now, include_stale=include_stale)
 
         # Legacy fallback for symbols still missing
@@ -610,10 +633,10 @@ async def _fetch_legacy(db, symbols: List[str]) -> List:
                 WITH requested(symbol) AS (
                     SELECT unnest(CAST(:syms AS text[]))
                 )
-                SELECT latest.symbol, latest.time, latest.indicators_json
+                SELECT latest.symbol, latest.time, latest.timeframe, latest.indicators_json
                 FROM requested req
                 CROSS JOIN LATERAL (
-                    SELECT i.symbol, i.time, i.indicators_json
+                    SELECT i.symbol, i.time, i.timeframe, i.indicators_json
                     FROM indicators i
                     WHERE i.symbol = req.symbol
                       AND i.time > now() - interval '2 hours'
@@ -647,7 +670,12 @@ def _add_legacy_rows(
     for r in legacy_rows:
         if r.symbol not in merged:
             ts = _ensure_utc(r.time)
-            by_sym[r.symbol].append(("combined", ts, r.indicators_json or {}))
+            by_sym[r.symbol].append((
+                "combined",
+                ts,
+                getattr(r, "timeframe", None),
+                r.indicators_json or {},
+            ))
 
     for sym, row_list in by_sym.items():
         if sym not in merged:

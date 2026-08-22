@@ -311,6 +311,11 @@ def _to_detail(
         features_snapshot_exit=row.features_snapshot_exit
         if isinstance(row.features_snapshot_exit, dict)
         else None,
+        entry_risk_features=row.entry_risk_features_json
+        if isinstance(row.entry_risk_features_json, dict)
+        else None,
+        entry_risk_capture_status=row.entry_risk_capture_status,
+        entry_risk_captured_at=row.entry_risk_captured_at,
         btc_price_at_entry=float(row.btc_price_at_entry)
         if row.btc_price_at_entry is not None else None,
         btc_change_1h_pct=float(row.btc_change_1h_pct)
@@ -1059,6 +1064,99 @@ async def get_shadow_trade_chart(
         outcome=row.outcome,
         candles=candles,
     )
+
+
+@router.get("/entry-risk/reconciliation")
+async def get_entry_risk_reconciliation(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    # Report is tenant-scoped at the query boundary.  Keep the public helper
+    # generic for offline/operator reports and use the scoped query here.
+    rows = (await db.execute(text("""
+        SELECT entry_risk_capture_status AS status, count(*) AS count,
+               min(created_at) AS oldest_created_at
+          FROM shadow_trades
+         WHERE user_id = :user_id
+         GROUP BY entry_risk_capture_status
+         ORDER BY entry_risk_capture_status
+    """), {"user_id": user_id})).mappings().all()
+    quality = (await db.execute(text("""
+        SELECT
+          count(*) FILTER (
+            WHERE entry_risk_capture_status = 'PENDING'
+              AND created_at < now() - interval '10 minutes'
+          ) AS pending_over_sla,
+          count(*) FILTER (
+            WHERE entry_risk_capture_status IN ('VALID','PARTIAL')
+              AND entry_risk_features_json #>> '{candle_window,candle_window_hash}' IS NULL
+          ) AS missing_candle_hash,
+          count(*) FILTER (
+            WHERE entry_risk_features_json #> '{contract_status,reason_codes}'
+                  ? 'LEGACY_SNAPSHOT_MISMATCH'
+          ) AS legacy_snapshot_mismatch
+        FROM shadow_trades
+        WHERE user_id = :user_id
+    """), {"user_id": user_id})).mappings().one()
+    return {
+        "schema_version": "entry_risk_reconciliation_v1",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "by_status": [dict(row) for row in rows],
+        "pending_over_sla": int(quality["pending_over_sla"] or 0),
+        "missing_candle_hash": int(quality["missing_candle_hash"] or 0),
+        "legacy_snapshot_mismatch": int(
+            quality["legacy_snapshot_mismatch"] or 0
+        ),
+    }
+
+
+@router.get("/entry-risk/dataset")
+async def get_entry_risk_dataset(
+    limit: int = Query(default=1000, ge=1, le=10000),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    """Analytical projection; it is not consumed by production ML training."""
+    rows = (await db.execute(text("""
+        SELECT id, symbol, profile_id, source, entry_timestamp, outcome, pnl_pct,
+               entry_risk_capture_status, entry_risk_features_json
+          FROM shadow_trades
+         WHERE user_id = :user_id
+           AND entry_risk_features_json IS NOT NULL
+         ORDER BY entry_timestamp DESC NULLS LAST
+         LIMIT :limit
+    """), {"user_id": user_id, "limit": limit})).mappings().all()
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        payload = row["entry_risk_features_json"] or {}
+        legacy = payload.get("legacy") or {}
+        momentum = payload.get("momentum_intensity") or {}
+        exhaustion = payload.get("exhaustion_risk") or {}
+        contract = payload.get("contract_status") or {}
+        items.append({
+            "trade_id": str(row["id"]),
+            "symbol": row["symbol"],
+            "profile_id": str(row["profile_id"]) if row["profile_id"] else None,
+            "source": row["source"],
+            "entry_timestamp": row["entry_timestamp"],
+            "outcome": row["outcome"],
+            "pnl_pct": row["pnl_pct"],
+            "entry_risk_capture_status": row["entry_risk_capture_status"],
+            "legacy_entry_exhaustion_score": legacy.get("entry_exhaustion_score"),
+            "momentum_intensity_score": momentum.get("momentum_intensity_score"),
+            "exhaustion_risk_score": exhaustion.get("exhaustion_risk_score"),
+            "momentum_intensity_components": momentum.get("components"),
+            "exhaustion_risk_components": exhaustion.get("dimensions"),
+            "entry_risk_contract_valid": contract.get("entry_risk_contract_valid", False),
+            "entry_risk_eligible_for_training": contract.get(
+                "entry_risk_eligible_for_training", False
+            ),
+        })
+    return {
+        "schema_version": "entry_risk_analytical_dataset_v1",
+        "training_consumer_enabled": False,
+        "items": items,
+    }
 
 
 @router.get("/{shadow_id}", response_model=ShadowTradeDetail)

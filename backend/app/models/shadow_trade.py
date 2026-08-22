@@ -102,6 +102,14 @@ class ShadowTrade(Base):
     # Mesmo formato FLAT do entry (ver ``_build_features_snapshot``).
     features_snapshot_exit = Column(JSONB, nullable=True)
 
+    # Versioned, observational entry-risk contract.  It is deliberately
+    # separate from the flat ML snapshot and has no execution consumer.
+    entry_risk_features_json = Column(JSONB, nullable=True)
+    entry_risk_capture_status = Column(
+        String(32), nullable=False, default="NOT_AVAILABLE"
+    )
+    entry_risk_captured_at = Column(DateTime(timezone=True), nullable=True)
+
     # Canonical immutable lineage (migrations 131/133). Historical rows may
     # remain unresolved, but every new native capture must populate this set.
     event_id = Column(UUID(as_uuid=True), nullable=True, index=True)

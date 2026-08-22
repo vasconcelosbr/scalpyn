@@ -106,6 +106,7 @@ _ALL_TASK_MODULES = (
         "app.tasks.prune_indicator_snapshots",
         "app.tasks.ai_orchestration",
         "app.tasks.governed_cache_reconciliation",
+        "app.tasks.entry_risk_capture",
 )
 
 
@@ -205,6 +206,7 @@ TASK_ROUTES = {
     # Shadow labels are analytical/OHLCV work; isolate them on structural_compute
     # so neither live execution nor pipeline scans can starve label closure.
     "app.tasks.shadow_trade_monitor.run":           {"queue": QUEUE_STRUCTURAL_COMPUTE},
+    "app.tasks.entry_risk_capture.reconcile":       {"queue": QUEUE_STRUCTURAL_COMPUTE},
 
     # Shadow Timeout Analyzer (Fase Quant) — análise passiva pós-timeout.
     # Structural queue: carga moderada (OHLCV lookup por trade × batch),
@@ -415,6 +417,11 @@ TASK_ANNOTATIONS = {
         **_EXECUTION_GUARDS,
         "time_limit": 300,
         "soft_time_limit": 270,
+        "rate_limit": "12/h",
+        **_NO_REQUEUE_ON_WORKER_LOSS,
+    },
+    "app.tasks.entry_risk_capture.reconcile":       {
+        **_STRUCTURAL_GUARDS,
         "rate_limit": "12/h",
         **_NO_REQUEUE_ON_WORKER_LOSS,
     },
@@ -688,6 +695,12 @@ celery_app.conf.beat_schedule = {
     "shadow_trade_monitor": {
         "task": "app.tasks.shadow_trade_monitor.run",
         "schedule": float(os.environ.get("SHADOW_MONITOR_INTERVAL_S", 300)),
+        "options": {"queue": QUEUE_STRUCTURAL_COMPUTE},
+    },
+    "entry_risk_capture_reconcile": {
+        "task": "app.tasks.entry_risk_capture.reconcile",
+        "schedule": 300.0,
+        "kwargs": {"limit": 100},
         "options": {"queue": QUEUE_STRUCTURAL_COMPUTE},
     },
     # Shadow Timeout Analyzer (Fase Quant) — análise passiva pós-timeout.

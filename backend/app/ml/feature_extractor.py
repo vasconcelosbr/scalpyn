@@ -110,11 +110,21 @@ ML_EXCLUDED_FIELDS: frozenset = frozenset({
     "score_components",
     "score_max",
     "signal_direction",
+    "entry_exhaustion_score",
+    "legacy_entry_exhaustion_score",
+    "momentum_intensity_score",
+    "exhaustion_risk_score",
+    "momentum_intensity_components",
+    "exhaustion_risk_components",
 })
 
 FORBIDDEN_OPERATIONAL_PREFIXES: tuple[str, ...] = (
     "crypto_ev",
     "post_model_operational",
+    "entry_risk",
+    "momentum_intensity",
+    "exhaustion_risk",
+    "legacy_entry_exhaustion",
 )
 
 

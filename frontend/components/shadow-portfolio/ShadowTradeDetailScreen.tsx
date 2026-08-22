@@ -240,6 +240,10 @@ export function ShadowTradeDetailScreen({ shadowId }: { shadowId: string }) {
   const exitMetrics = data?.exit_metrics ?? (
     data?.features_snapshot_exit?.["_capture_failed"] === true ? {} : data?.features_snapshot_exit ?? {}
   );
+  const entryRisk = data?.entry_risk_features ?? {};
+  const legacyRisk = (entryRisk.legacy ?? {}) as Record<string, unknown>;
+  const momentumRisk = (entryRisk.momentum_intensity ?? {}) as Record<string, unknown>;
+  const exhaustionRisk = (entryRisk.exhaustion_risk ?? {}) as Record<string, unknown>;
   const pnlClass = data?.pnl_pct === null || data?.pnl_pct === undefined ? "" : data.pnl_pct >= 0 ? styles.positive : styles.negative;
   const chartWindow = useMemo(() => chart ? `${fmtDateTime(chart.window_start, true)} → ${fmtDateTime(chart.window_end, true)}` : "—", [chart]);
 
@@ -355,6 +359,32 @@ export function ShadowTradeDetailScreen({ shadowId }: { shadowId: string }) {
           </section>
 
           <DecisionAudit data={data} />
+
+          <section className={styles.card}>
+            <div className={styles.cardHeader}>
+              <h2 className={styles.cardTitle}><Activity size={15} /> Risco de entrada · observacional</h2>
+              <div className={styles.cardMeta}>
+                <span>MONITOR_ONLY</span>
+                <span>{data.entry_risk_capture_status}</span>
+              </div>
+            </div>
+            <div className={styles.section}>
+              <div className={styles.summaryGrid}>
+                <div className={styles.detailGroup}>
+                  <div className={styles.detailGroupTitle}>Entry Exhaustion Legacy</div>
+                  <DetailRow label="Score" value={fmtValue(legacyRisk.entry_exhaustion_score)} />
+                  <DetailRow label="Uso" value="Observational / deprecated for decision" />
+                </div>
+                <div className={styles.detailGroup}>
+                  <div className={styles.detailGroupTitle}>Novos conceitos</div>
+                  <DetailRow label="Momentum Intensity" value={fmtValue(momentumRisk.momentum_intensity_score)} />
+                  <DetailRow label="Exhaustion Risk" value={fmtValue(exhaustionRisk.exhaustion_risk_score)} />
+                  <DetailRow label="Efeito operacional" value="FALSE · não são probabilidades" />
+                </div>
+              </div>
+              <SnapshotPanel title="Entry Risk Features v1" data={data.entry_risk_features ?? null} />
+            </div>
+          </section>
 
           <section className={styles.card}>
             <div className={styles.cardHeader}><h2 className={styles.cardTitle}><Activity size={15} /> Indicadores e configuração</h2><div className={styles.cardMeta}><span>Todos os campos persistidos, sem rolagem interna</span></div></div>

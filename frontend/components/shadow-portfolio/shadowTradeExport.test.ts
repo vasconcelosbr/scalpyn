@@ -15,6 +15,13 @@ const detail = {
   exit_metrics: { adx: 21, rsi: 40, state: "closed" },
   features_snapshot: { adx: 18 },
   features_snapshot_exit: { adx: 21 },
+  entry_risk_features: {
+    legacy: { entry_exhaustion_score: 61.2, operational_effect: false },
+    momentum_intensity: { momentum_intensity_score: null, operational_effect: false },
+    exhaustion_risk: { exhaustion_risk_score: null, operational_effect: false },
+  },
+  entry_risk_capture_status: "VALID",
+  entry_risk_captured_at: "2026-08-01T12:16:00Z",
   amount_usdt: 100,
 } as unknown as ShadowTradeDetail;
 
@@ -42,11 +49,15 @@ test("keeps raw data and builds an analysis-friendly comparison", () => {
     chartError: null,
   });
 
-  assert.equal(exported.export_metadata.schema_version, "1.0.0");
+  assert.equal(exported.export_metadata.schema_version, "2.1.0");
   assert.equal(exported.export_metadata.completeness.chart_loaded, true);
   assert.equal(exported.chart?.markers.sell.outcome, "TP_HIT");
   assert.equal(exported.raw.trade_detail, detail);
   assert.equal(exported.raw.chart_response, chart);
+  assert.equal(exported.entry_risk.capture_status, "VALID");
+  assert.equal(exported.entry_risk.momentum_intensity_score, null);
+  assert.equal(exported.entry_risk.exhaustion_risk_score, null);
+  assert.equal(exported.entry_risk.operational_effect, false);
   assert.deepEqual(exported.indicator_analysis.comparison.find((item) => item.indicator === "adx"), {
     indicator: "adx",
     entry: 18,

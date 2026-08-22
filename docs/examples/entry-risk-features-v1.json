@@ -1,0 +1,52 @@
+{
+  "schema_version": "entry_risk_features_v1",
+  "context": {
+    "symbol": "UNI_USDT",
+    "exchange": "gate",
+    "market_type": "spot",
+    "entry_timestamp": "2026-08-22T15:15:29.836000+00:00",
+    "profile_family": "L3_BB_MIDDLE_RETEST_V1",
+    "regime": {"regime": "UNKNOWN"}
+  },
+  "candle_window": {
+    "timeframe": "5m",
+    "closed_candle": true,
+    "window_size": 50,
+    "candle_cutoff": "2026-08-22T15:15:00+00:00",
+    "candle_window_hash": "example-only-not-production-evidence",
+    "canonicalization_version": "ohlcv_window_v1"
+  },
+  "legacy": {
+    "entry_exhaustion_score": 61.2,
+    "status": "OBSERVATIONAL_LEGACY",
+    "legacy": true,
+    "deprecated_for_risk_decision": true,
+    "semantic_role": "momentum_extension_legacy",
+    "operational_effect": false,
+    "formula_version": "entry_exhaustion_legacy_v1",
+    "normalization_version": "entry_exhaustion_legacy_norm_v1",
+    "components": {}
+  },
+  "momentum_intensity": {
+    "momentum_intensity_score": null,
+    "status": "MONITOR_ONLY",
+    "operational_effect": false,
+    "formula_version": null,
+    "components": {}
+  },
+  "exhaustion_risk": {
+    "exhaustion_risk_score": null,
+    "status": "MONITOR_ONLY",
+    "operational_effect": false,
+    "formula_version": null,
+    "dimensions": {"extension": {}, "deceleration": {}, "confirmation_loss": {}}
+  },
+  "contract_status": {
+    "status": "PARTIAL",
+    "entry_risk_contract_valid": false,
+    "entry_risk_eligible_for_training": false,
+    "point_in_time_valid": true,
+    "reconstructible": true,
+    "reason_codes": ["REGIME_UNKNOWN"]
+  }
+}

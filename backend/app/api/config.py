@@ -16,6 +16,7 @@ from ..services.crypto_ev_config import default_crypto_ev_config
 from ..schemas.social_intelligence import SocialScoreConfig
 from ..schemas.ai_provider_runtime_config import AIProviderRuntimeConfig
 from ..schemas.analysis_chat import AnalysisChatRuntimeConfig
+from ..schemas.entry_risk_observation import EntryRiskObservationConfig
 
 security = HTTPBearer()
 
@@ -104,6 +105,18 @@ async def update_config(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id)
 ):
+    if config_type in {"score", "signal", "block"}:
+        from ..services.entry_risk_features import (
+            assert_no_observational_execution_fields,
+        )
+
+        try:
+            assert_no_observational_execution_fields(payload)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
     if config_type == "social_score":
         validated = SocialScoreConfig.model_validate(payload)
         if validated.enabled:
@@ -133,6 +146,10 @@ async def update_config(
         # the persisted config canonical and makes runtime flag updates
         # reversible through this endpoint.
         payload = AnalysisChatRuntimeConfig.model_validate(payload).model_dump(mode="json")
+    elif config_type == "entry_risk_observation":
+        # v1 is observation-only by construction.  Literal[False] rejects an
+        # attempted operational activation instead of silently accepting it.
+        payload = EntryRiskObservationConfig.model_validate(payload).model_dump(mode="json")
     updated = await config_service.update_config(
         db=db,
         config_type=config_type,

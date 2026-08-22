@@ -230,7 +230,7 @@ async def build_trade_export(
         {
             "export_metadata": {
                 "schema": "scalpyn.shadow_trade_export",
-                "schema_version": "2.0.0",
+                "schema_version": "2.1.0",
                 "generated_at": datetime.now(timezone.utc),
                 "report_run_id": report_run_id,
                 "completeness": {
@@ -270,6 +270,26 @@ async def build_trade_export(
                 "indicators_at_entry": trade.features_snapshot,
                 "indicators_at_exit": trade.features_snapshot_exit,
                 "exit_metrics": trade.exit_metrics_json,
+                "entry_risk_features": trade.entry_risk_features_json,
+            },
+            "entry_risk": {
+                "capture_status": trade.entry_risk_capture_status,
+                "captured_at": trade.entry_risk_captured_at,
+                "entry_risk_features": trade.entry_risk_features_json,
+                "entry_exhaustion_score": (
+                    (trade.features_snapshot or {}).get("entry_exhaustion_score")
+                ),
+                "momentum_intensity_score": (
+                    ((trade.entry_risk_features_json or {}).get("momentum_intensity") or {}).get(
+                        "momentum_intensity_score"
+                    )
+                ),
+                "exhaustion_risk_score": (
+                    ((trade.entry_risk_features_json or {}).get("exhaustion_risk") or {}).get(
+                        "exhaustion_risk_score"
+                    )
+                ),
+                "operational_effect": False,
             },
             "indicator_analysis": {
                 "entry_metrics": entry,
@@ -439,6 +459,12 @@ async def list_detailed_report_trades(
                 "lineage_confidence": trade.lineage_confidence,
                 "entry_snapshot_present": bool(trade.features_snapshot),
                 "exit_snapshot_present": bool(trade.features_snapshot_exit),
+                "entry_risk_capture_status": trade.entry_risk_capture_status,
+                "entry_risk_contract_valid": (
+                    ((trade.entry_risk_features_json or {}).get("contract_status") or {}).get(
+                        "entry_risk_contract_valid"
+                    )
+                ),
             }
         )
     return {"items": jsonable_encoder(items), "page": page, "page_size": page_size, "total": run.total_trades}

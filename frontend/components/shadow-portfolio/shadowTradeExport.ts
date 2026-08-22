@@ -1,7 +1,7 @@
 import type { ShadowTradeChartResponse, ShadowTradeDetail } from "./types";
 
 export const SHADOW_TRADE_EXPORT_SCHEMA = "scalpyn.shadow_trade_export";
-export const SHADOW_TRADE_EXPORT_VERSION = "1.0.0";
+export const SHADOW_TRADE_EXPORT_VERSION = "2.1.0";
 
 interface ExportOptions {
   generatedAt?: string;
@@ -141,6 +141,20 @@ export function buildShadowTradeExport(
       profile_rules: detail.rules_snapshot,
       indicators_at_entry: detail.features_snapshot,
       indicators_at_exit: detail.features_snapshot_exit,
+      entry_risk_features: detail.entry_risk_features,
+    },
+    entry_risk: {
+      capture_status: detail.entry_risk_capture_status,
+      captured_at: detail.entry_risk_captured_at,
+      entry_risk_features: detail.entry_risk_features,
+      entry_exhaustion_score: detail.features_snapshot?.entry_exhaustion_score ?? null,
+      momentum_intensity_score: (
+        detail.entry_risk_features?.momentum_intensity as Record<string, unknown> | undefined
+      )?.momentum_intensity_score ?? null,
+      exhaustion_risk_score: (
+        detail.entry_risk_features?.exhaustion_risk as Record<string, unknown> | undefined
+      )?.exhaustion_risk_score ?? null,
+      operational_effect: false,
     },
     indicator_analysis: {
       entry_metrics: entryMetrics,

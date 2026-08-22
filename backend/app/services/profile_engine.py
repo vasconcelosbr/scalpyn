@@ -156,6 +156,9 @@ class ProfileEngine:
             profile_config: Full profile config dict with filters, scoring, signals
         """
         self.profile = profile_config or {}
+        from .entry_risk_features import assert_no_observational_execution_fields
+
+        assert_no_observational_execution_fields(self.profile)
         self.rule_engine = RuleEngine()
         self.default_timeframe = self.profile.get("default_timeframe", "5m")
 

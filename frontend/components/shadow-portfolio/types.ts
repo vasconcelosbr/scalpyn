@@ -33,6 +33,9 @@ export interface ShadowTradeDetail {
   config_snapshot: Record<string, unknown> | null;
   features_snapshot: Record<string, unknown> | null;
   features_snapshot_exit: Record<string, unknown> | null;
+  entry_risk_features?: Record<string, unknown> | null;
+  entry_risk_capture_status?: "NOT_AVAILABLE" | "PENDING" | "VALID" | "PARTIAL" | "INVALID" | "ERROR";
+  entry_risk_captured_at?: string | null;
   decision_strategy: string | null;
   decision_score: number | null;
   decision_decision: string | null;
