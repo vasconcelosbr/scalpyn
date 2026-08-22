@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "canonical_branch": "main",
+  "production_surfaces": {
+    "backend": "backend",
+    "frontend": "frontend"
+  },
+  "required_features": [
+    {
+      "id": "profile-performance-dashboard",
+      "description": "Read-only Performance Profiles monitor in Shadow Portfolio",
+      "files": [
+        {
+          "path": "backend/app/api/performance_rankings.py",
+          "contains_all": [
+            "/shadow-portfolio/profile-performance",
+            "get_profile_performance"
+          ]
+        },
+        {
+          "path": "backend/app/services/profile_performance_service.py",
+          "contains_all": [
+            "get_profile_performance",
+            "get_ranking_config",
+            "score_metrics"
+          ]
+        },
+        {
+          "path": "frontend/app/dashboard/shadow-portfolio/page.tsx",
+          "contains_all": [
+            "profile-performance",
+            "ProfilePerformanceDashboard"
+          ]
+        },
+        {
+          "path": "frontend/components/shadow-portfolio/ProfilePerformanceDashboard.tsx",
+          "contains_all": [
+            "Performance dos Profiles",
+            "profilePerformance"
+          ]
+        }
+      ]
+    }
+  ]
+}

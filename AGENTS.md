@@ -29,6 +29,16 @@
 ## Docs
 Read docs/ folder for complete architecture specs, Gate.io API mapping, and implementation roadmap.
 
+## Production Deployment Guardrail
+
+For every request that deploys, redeploys, promotes, or rolls back Scalpyn production on Railway or Vercel, load and follow the `scalpyn-deploy-source-guardrails` skill before any external mutation.
+
+- Production artifacts must be built from a clean worktree whose `HEAD` exactly matches `origin/main`. Do not deploy a feature-branch or dirty-worktree snapshot.
+- Run `scripts/verify_deploy_source.ps1` before deployment. A failed canonical-source, ancestry, or required-feature check blocks the release.
+- A release is not complete until provider state is terminal (`SUCCESS` on Railway and/or `READY` on Vercel), relevant runtime checks pass, and frontend changes have authenticated UI proof.
+- After verification, append the release evidence to the skill ledger using the script's `record` mode. Do not record `NOT_CONFIRMED` evidence as successful.
+- An explicitly authorized emergency rollback is an exception requiring user approval and a documented reconciliation back into `main`; it must not silently become the new canonical source.
+
 ## Disciplina de Evidência — Anti-Fabricação de Números
 
 **Regra-mãe: EVIDÊNCIA-OU-SILÊNCIO.** Todo número num relatório/análise deve ser:

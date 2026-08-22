@@ -1,0 +1,21 @@
+name: Verify Production Source Guard
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: Verify canonical source and release invariants
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify deploy source
+        shell: pwsh
+        run: ./scripts/verify_deploy_source.ps1 -ExpectedRemoteRef origin/main
