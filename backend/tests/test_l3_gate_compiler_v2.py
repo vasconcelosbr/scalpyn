@@ -223,6 +223,75 @@ async def test_pipeline_dual_evaluation_keeps_legacy_authoritative(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_every_evaluation_is_persisted_before_edge_filtering(monkeypatch):
+    from app.services import l3_gate_evaluation_store
+    from app.tasks import pipeline_scan
+
+    captured = []
+
+    class Savepoint:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeDb:
+        def begin_nested(self):
+            return Savepoint()
+
+    async def fake_live(**kwargs):
+        return dict(kwargs["indicators"]), True
+
+    async def fake_score(assets, **kwargs):
+        assets[0]["_score"] = 80.83
+        assets[0]["alpha_score"] = 80.83
+        assets[0]["_score_components"] = {"matched_rule_ids": ["robust_rule"]}
+        return {"bucketed": 1, "robust_used": 1, "fallbacks": 0}
+
+    async def fake_persist(db, decisions, **kwargs):
+        captured.extend(decisions)
+        assert kwargs["watchlist_id"] == "watchlist-1"
+        assert kwargs["profile_id"] == "profile-1"
+        return {"expected": 1, "captured": 1, "inserted": 1}
+
+    monkeypatch.setattr(pipeline_scan, "_inject_live_order_flow", fake_live)
+    monkeypatch.setattr(pipeline_scan, "_apply_robust_authoritative_scoring", fake_score)
+    monkeypatch.setattr(
+        l3_gate_evaluation_store,
+        "persist_gate_evaluations",
+        fake_persist,
+    )
+
+    decisions = await pipeline_scan._evaluate_l3_decisions(
+        [{
+            "symbol": "LIT_USDT",
+            "_score": 80.83,
+            "alpha_score": 80.83,
+            "score": 80.83,
+            "indicators": {
+                "taker_ratio": 0.078999,
+                "volume_delta": -741.93,
+                "vwap_distance_pct": 6.5658,
+                "rsi": 62,
+                "macd_histogram": 0.1,
+            },
+        }],
+        PROFILE,
+        "L3",
+        score_config={},
+        db=FakeDb(),
+        user_id="user-1",
+        watchlist_id="watchlist-1",
+        profile_id="profile-1",
+        profile_name="L3_RSI_COOLDOWN_RELOAD_V1",
+    )
+
+    assert captured == decisions
+    assert captured[0]["metrics"]["l3_gate_v2"]["operational_effect"] is False
+
+
+@pytest.mark.asyncio
 async def test_observational_failure_never_changes_legacy_decision(monkeypatch):
     from app.tasks import pipeline_scan
 

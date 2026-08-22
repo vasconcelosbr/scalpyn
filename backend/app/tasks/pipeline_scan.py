@@ -1554,6 +1554,9 @@ async def _evaluate_l3_decisions(
     db=None,
     user_id=None,
     pool_id=None,
+    watchlist_id=None,
+    profile_id=None,
+    profile_name=None,
 ) -> list[dict]:
     """Avaliar candidatos L3 (rules + entry triggers) e produzir decisions.
 
@@ -1741,6 +1744,34 @@ async def _evaluate_l3_decisions(
             "_processed": processed,
             "_asset": asset,
         })
+
+    # Durable capture is deliberately placed here, before the caller applies
+    # edge-triggered decision-log filtering. Stable ALLOW/BLOCK evaluations
+    # must remain auditable even when no decisions_log transition is emitted.
+    if db is not None and user_id is not None and watchlist_id is not None and decisions:
+        try:
+            from ..services.l3_gate_evaluation_store import (
+                persist_gate_evaluations,
+            )
+
+            async with db.begin_nested():
+                await persist_gate_evaluations(
+                    db,
+                    decisions,
+                    user_id=user_id,
+                    watchlist_id=watchlist_id,
+                    profile_id=profile_id,
+                    profile_name=profile_name,
+                )
+        except Exception:
+            from ..services.l3_gate_v2_metrics import observe_gate_capture
+
+            observe_gate_capture("error")
+            logger.exception(
+                "[L3_GATE_V2_CAPTURE] status=ERROR expected=%d "
+                "watchlist_id=%s profile_id=%s; legacy path preserved",
+                len(decisions), watchlist_id, profile_id,
+            )
 
     return decisions
 
@@ -1931,6 +1962,30 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
             row.id, row.symbol, round(float(row.score or 0), 2), row.decision, row.event_type or "—",
         )
         payloads.append(payload)
+
+    # Optional denormalized linkage. The dedicated evaluation row already
+    # exists before edge filtering; this link only makes later audits cheaper.
+    # A rolling deploy where the migration is not visible yet must never roll
+    # back the canonical decisions_log insert.
+    if any((payload.get("metrics") or {}).get("l3_gate_v2") for payload in payloads):
+        try:
+            from ..services.l3_gate_evaluation_store import (
+                link_decision_evaluation,
+            )
+
+            async with db.begin_nested():
+                for payload in payloads:
+                    await link_decision_evaluation(
+                        db,
+                        decision_id=payload["id"],
+                        payload=payload,
+                    )
+        except Exception:
+            logger.warning(
+                "[L3_GATE_V2_CAPTURE] decision linkage failed; "
+                "hash-based audit remains available",
+                exc_info=True,
+            )
 
     # Log summary
     logger.info(
@@ -3383,6 +3438,11 @@ async def _run_pipeline_scan():
                         rejected_rows,
                         execution_id=execution_id,
                     )
+                    _capture_prof_meta = (
+                        profile_meta_map.get(wl.profile_id)
+                        if wl.profile_id else {}
+                    ) or {}
+                    _capture_profile_name = _capture_prof_meta.get("name")
                     decisions = await _evaluate_l3_decisions(
                         profile_passed,
                         profile_config,
@@ -3395,6 +3455,9 @@ async def _run_pipeline_scan():
                         db=db,
                         user_id=wl.user_id,
                         pool_id=wl.source_pool_id,
+                        watchlist_id=wl.id,
+                        profile_id=wl.profile_id,
+                        profile_name=_capture_profile_name,
                     )
                     # Technical filters/signals have now passed. Only at this
                     # point may Social Score change ranking or block a final
@@ -3420,6 +3483,13 @@ async def _run_pipeline_scan():
                                 _asset,
                                 _decision.get("_processed") or {},
                             )
+                            # Preserve the exact point-in-time envelope hash
+                            # captured before decision-log filtering. Social
+                            # scoring is legacy-only in this shadow phase and
+                            # must not replace the observational audit payload.
+                            _gate_v2 = _decision.get("gate_evaluation_v2")
+                            if isinstance(_gate_v2, dict):
+                                _decision["metrics"]["l3_gate_v2"] = _gate_v2
                             _decision.setdefault("reasons", {})["social_score"] = {
                                 "applied": bool(_context.get("applied")),
                                 "fallback_reason": _context.get("fallback_reason"),
@@ -4259,6 +4329,9 @@ async def _run_pipeline_scan():
                                     db=db,
                                     user_id=wl.user_id,
                                     pool_id=wl.source_pool_id,
+                                    watchlist_id=wl.id,
+                                    profile_id=wl.profile_id,
+                                    profile_name=_capture_profile_name,
                                 )
                                 _bypass_allow = [
                                     d for d in _bypass_decisions

@@ -91,6 +91,12 @@ CRITICAL_COLUMNS: List[Tuple[str, str]] = [
     ("shadow_trades", "entry_risk_features_json"),
     ("shadow_trades", "entry_risk_capture_status"),
     ("shadow_trades", "entry_risk_captured_at"),
+    # Added by migration 197. Every observational L3 gate evaluation is
+    # written before edge-triggered decisions_log filtering. Missing this
+    # table would silently erase the natural canary again.
+    ("l3_gate_v2_evaluations", "evaluation_envelope_hash"),
+    ("l3_gate_v2_evaluations", "operational_effect"),
+    ("l3_gate_v2_evaluations", "payload"),
     # Added by migration 167. Every durable graph dispatch reads these fields;
     # a worker must fail its schema gate instead of interpreting a missing
     # START/RESUME tuple or crashing only after a human decision is accepted.

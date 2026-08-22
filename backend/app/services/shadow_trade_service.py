@@ -1485,7 +1485,25 @@ async def _create_from_decision(
         raise
 
     row = res.fetchone()
-    return row[0] if row is not None else None
+    shadow_trade_id = row[0] if row is not None else None
+    if shadow_trade_id is not None and isinstance(_l3_gate_v2, dict):
+        try:
+            from .l3_gate_evaluation_store import link_shadow_evaluation
+
+            async with db.begin_nested():
+                await link_shadow_evaluation(
+                    db,
+                    shadow_trade_id=shadow_trade_id,
+                    gate_payload=_l3_gate_v2,
+                )
+        except Exception:
+            logger.warning(
+                "[L3_GATE_V2_CAPTURE] shadow linkage failed shadow_trade_id=%s; "
+                "config_snapshot hash remains authoritative",
+                shadow_trade_id,
+                exc_info=True,
+            )
+    return shadow_trade_id
 
 
 # ── public own-session helpers ───────────────────────────────────────────────

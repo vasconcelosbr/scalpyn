@@ -128,7 +128,25 @@
           "contains_all": [
             "GATE V2 POINT-IN-TIME ENVELOPE (SHADOW ONLY)",
             "metrics[\"l3_gate_v2\"] = gate_v2",
+            "persist_gate_evaluations",
             "legacy path preserved"
+          ]
+        },
+        {
+          "path": "backend/app/services/l3_gate_evaluation_store.py",
+          "contains_all": [
+            "INSERT INTO l3_gate_v2_evaluations",
+            "ON CONFLICT (evaluation_envelope_hash) DO UPDATE",
+            "status=COUNT_MISMATCH",
+            "operational_effect_must_be_false"
+          ]
+        },
+        {
+          "path": "backend/alembic/versions/197_l3_gate_v2_evaluations.py",
+          "contains_all": [
+            "l3_gate_v2_evaluations",
+            "ck_l3_gate_v2_observational_only",
+            "uq_l3_gate_v2_envelope_hash"
           ]
         },
         {
@@ -144,7 +162,15 @@
             "test_lit_incident_is_shadow_blocked_by_independent_signals",
             "test_uni_incident_is_shadow_blocked_by_entry_triggers",
             "test_pipeline_dual_evaluation_keeps_legacy_authoritative",
+            "test_every_evaluation_is_persisted_before_edge_filtering",
             "test_observational_failure_never_changes_legacy_decision"
+          ]
+        },
+        {
+          "path": "backend/tests/test_l3_gate_evaluation_store.py",
+          "contains_all": [
+            "test_persistence_is_idempotent_and_reports_replay",
+            "test_invalid_capture_is_visible_as_count_mismatch"
           ]
         }
       ]

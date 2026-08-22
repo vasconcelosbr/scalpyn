@@ -19,9 +19,15 @@ try:
         "Observational L3 gate v2 section outcomes",
         ["section", "outcome"],
     )
+    _CAPTURE_OUTCOMES = Counter(
+        "l3_gate_v2_capture_total",
+        "Durable capture outcomes for observational L3 gate v2 evaluations",
+        ["outcome"],
+    )
 except Exception as exc:  # pragma: no cover - optional in local tests
     _EVALUATIONS = None
     _SECTION_OUTCOMES = None
+    _CAPTURE_OUTCOMES = None
     logger.debug("prometheus_client unavailable: %s", exc)
 
 
@@ -41,3 +47,23 @@ def observe_gate_v2(result: dict) -> None:
     except Exception:
         logger.debug("failed to emit L3 gate v2 metrics", exc_info=True)
 
+
+def observe_gate_capture(outcome: str) -> None:
+    """Count durable-capture outcomes using a bounded label vocabulary."""
+
+    if _CAPTURE_OUTCOMES is None:
+        return
+    allowed = {
+        "inserted",
+        "replayed",
+        "invalid",
+        "count_mismatch",
+        "error",
+        "decision_linked",
+        "shadow_linked",
+    }
+    normalized = outcome if outcome in allowed else "error"
+    try:
+        _CAPTURE_OUTCOMES.labels(outcome=normalized).inc()
+    except Exception:
+        logger.debug("failed to emit L3 gate v2 capture metric", exc_info=True)
