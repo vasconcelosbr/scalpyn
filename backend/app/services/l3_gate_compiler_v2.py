@@ -124,6 +124,11 @@ def _evaluate_section(
         for result in results
         if result["required"] and result["status"] == RuleStatus.FAIL.value
     ]
+    required_skipped = [
+        result["condition_id"]
+        for result in results
+        if result["required"] and result["status"] == RuleStatus.SKIPPED.value
+    ]
     decided_optional = [
         result
         for result in results
@@ -139,9 +144,12 @@ def _evaluate_section(
     elif required_failures:
         passed = False
         section_reasons = ["REQUIRED_CONDITION_FAILED"]
+    elif required_skipped:
+        passed = False
+        section_reasons = ["REQUIRED_CONDITION_SKIPPED"]
     elif not decided_optional:
-        # Preserve the current missing-data policy: SKIPPED is observable but
-        # is not silently converted into a FAIL in this shadow contract.
+        # Optional missing data remains observable without becoming a failure.
+        # Required missing data is handled fail-closed above.
         passed = True
         section_reasons = ["ALL_DECIDABLE_CONDITIONS_PASSED_OR_SKIPPED"]
     elif logic == "OR":
@@ -161,6 +169,7 @@ def _evaluate_section(
         "failed": [r["condition_id"] for r in results if r["status"] == RuleStatus.FAIL.value],
         "failed_required": required_failures,
         "skipped": [r["condition_id"] for r in results if r["status"] == RuleStatus.SKIPPED.value],
+        "skipped_required": required_skipped,
         "conditions": results,
     }
 
@@ -240,4 +249,3 @@ def evaluate_l3_gate_v2(
             + (["ENTRY_TRIGGERS_GATE_FAILED"] if not entry["gate_passed"] else [])
         ),
     }
-

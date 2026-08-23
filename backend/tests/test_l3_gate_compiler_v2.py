@@ -122,7 +122,7 @@ def test_score_gates_audit_share_one_deterministic_hash():
     assert first["entry_triggers"]["evaluation_envelope_hash"] == expected
 
 
-def test_sections_are_mandatory_but_skipped_policy_is_only_observed():
+def test_sections_are_mandatory_and_optional_skips_remain_observational():
     missing_section = deepcopy(PROFILE)
     missing_section["signals"]["conditions"] = []
     missing = evaluate_l3_gate_v2(
@@ -152,6 +152,46 @@ def test_sections_are_mandatory_but_skipped_policy_is_only_observed():
     )
     assert skipped["signals"]["skipped"] == ["unknown"]
     assert skipped["signals"]["gate_passed"] is True
+
+
+@pytest.mark.parametrize("section", ["signals", "entry_triggers"])
+def test_required_skipped_condition_blocks_shadow_authorization(section):
+    profile = deepcopy(PROFILE)
+    condition = {
+        "id": "missing_required_volume",
+        "indicator": "volume_spike",
+        "field": "volume_spike",
+        "operator": ">=",
+        "value": 0.8,
+        "required": True,
+    }
+    profile[section]["conditions"] = [condition]
+
+    result = evaluate_l3_gate_v2(
+        asset={
+            "symbol": "ICP_USDT",
+            "indicators": {
+                "taker_ratio": 0.7,
+                "volume_delta": 10,
+                "vwap_distance_pct": 1,
+                "rsi": 62,
+                "macd_histogram": 0.2,
+                "volume_spike": None,
+            },
+        },
+        profile_config=profile,
+        score=90,
+        score_context={},
+        evaluated_at=datetime(2026, 8, 23, tzinfo=timezone.utc),
+        base_eligible=True,
+        legacy_decision="ALLOW",
+    )
+
+    assert result[section]["gate_passed"] is False
+    assert result[section]["skipped_required"] == ["missing_required_volume"]
+    assert result[section]["reason_codes"] == ["REQUIRED_CONDITION_SKIPPED"]
+    assert result["shadow_decision"] == "BLOCK"
+    assert result["operational_effect"] is False
 
 
 def test_no_operational_consumer_is_exposed_by_contract():
