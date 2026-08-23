@@ -2513,13 +2513,15 @@ export default function ShadowPortfolioPage() {
           >
             Shadow Portfolio
           </h1>
-          <ModuleAIAnalysisAction
-            originModule="shadow_portfolio"
-            originView="shadow-portfolio"
-            entityIds={(list?.items ?? []).map((item) => item.id)}
-            supportsRegenerative
-            compact
-          />
+          {mainTab !== "detailed-report" && (
+            <ModuleAIAnalysisAction
+              originModule="shadow_portfolio"
+              originView="shadow-portfolio"
+              entityIds={(list?.items ?? []).map((item) => item.id)}
+              supportsRegenerative
+              compact
+            />
+          )}
           </div>
           <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
             {(

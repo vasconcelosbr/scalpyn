@@ -537,7 +537,7 @@ export default function DetailedReportWorkspace() {
                 originView="shadow-portfolio-detailed-report"
                 entityIds={[]}
                 reportRunId={run.id}
-                label="Intelligence Run desta amostra"
+                label={`Análise por IA (${run.total_trades} trades)`}
                 compact
               />
             </div>
