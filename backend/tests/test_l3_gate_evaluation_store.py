@@ -20,6 +20,13 @@ def _decision(*, hash_value: str = "a" * 64, operational_effect: bool = False):
         "signals": {"gate_passed": False, "conditions": []},
         "entry_triggers": {"gate_passed": True, "conditions": []},
     }
+    if operational_effect:
+        gate.update(
+            {
+                "promotion_status": "OPERATIONAL",
+                "operational_decision": "BLOCK",
+            }
+        )
     return {
         "symbol": "LIT_USDT",
         "timeframe": "5m",
@@ -39,18 +46,59 @@ def test_capture_row_preserves_observational_contract():
 
     assert row["evaluation_envelope_hash"] == "a" * 64
     assert row["decision_drift"] is True
+    assert row["operational_effect"] is False
     assert '"operational_effect":false' in row["payload"]
+
+
+def test_capture_row_preserves_governed_operational_contract():
+    row = _capture_row(
+        _decision(operational_effect=True),
+        user_id=None,
+        watchlist_id=None,
+        profile_id=None,
+        profile_name=None,
+    )
+
+    assert row["operational_effect"] is True
+    assert '"operational_decision":"BLOCK"' in row["payload"]
 
 
 @pytest.mark.parametrize(
     ("decision", "reason"),
     [
         (_decision(hash_value="bad"), "evaluation_envelope_hash_invalid"),
-        (_decision(operational_effect=True), "operational_effect_must_be_false"),
     ],
 )
-def test_capture_row_rejects_invalid_or_operational_payload(decision, reason):
+def test_capture_row_rejects_invalid_payload(decision, reason):
     with pytest.raises(ValueError, match=reason):
+        _capture_row(
+            decision,
+            user_id=None,
+            watchlist_id=None,
+            profile_id=None,
+            profile_name=None,
+        )
+
+
+def test_capture_row_rejects_incomplete_operational_metadata():
+    decision = _decision()
+    decision["gate_evaluation_v2"]["operational_effect"] = True
+
+    with pytest.raises(ValueError, match="operational_promotion_metadata_invalid"):
+        _capture_row(
+            decision,
+            user_id=None,
+            watchlist_id=None,
+            profile_id=None,
+            profile_name=None,
+        )
+
+
+def test_capture_row_rejects_operational_label_without_effect():
+    decision = _decision()
+    decision["gate_evaluation_v2"]["promotion_status"] = "OPERATIONAL"
+
+    with pytest.raises(ValueError, match="operational_promotion_metadata_invalid"):
         _capture_row(
             decision,
             user_id=None,

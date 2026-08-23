@@ -48,6 +48,38 @@ _DEFAULT_STALENESS_MINUTES: int = int(
     os.environ.get("PIPELINE_SCAN_STALENESS_MINUTES", "60")
 )
 
+_TRUE_ENV_VALUES = frozenset({"1", "true", "yes", "on"})
+
+
+def _l3_gate_v2_operational_enabled() -> bool:
+    """Return whether the explicitly promoted L3 gate v2 is authoritative."""
+
+    configured = os.environ.get("L3_GATE_V2_OPERATIONAL", "false")
+    return configured.strip().lower() in _TRUE_ENV_VALUES
+
+
+def _apply_l3_gate_v2_operational_promotion(
+    *, legacy_decision: str, legacy_l3_pass: bool, gate_v2: dict
+) -> tuple[str, bool]:
+    """Apply the reversible operational promotion without mutating profile rules."""
+
+    if not _l3_gate_v2_operational_enabled():
+        return legacy_decision, legacy_l3_pass
+
+    gate_decision = gate_v2.get("shadow_decision")
+    operational_decision = (
+        gate_decision if gate_decision in {"ALLOW", "BLOCK"} else "BLOCK"
+    )
+    gate_v2.update(
+        {
+            "promotion_status": "OPERATIONAL",
+            "operational_effect": True,
+            "operational_decision": operational_decision,
+            "human_approval_required": False,
+        }
+    )
+    return operational_decision, operational_decision == "ALLOW"
+
 
 def _ml_gate_should_block(ml_result: dict | None) -> bool:
     """P2 (Fase 1.6): o ML gate só rebaixa um L3 ALLOW → BLOCK quando um modelo
@@ -1614,10 +1646,9 @@ async def _evaluate_l3_decisions(
                 if isinstance(v, (int, float, bool, str)) and k in _LIVE_ORDER_FLOW_FIELDS:
                     asset[k] = v
 
-        # ── GATE V2 POINT-IN-TIME ENVELOPE (SHADOW ONLY) ────────────────
-        # Re-score an isolated copy after live flow injection.  The legacy
-        # asset and its precomputed score remain untouched, so this dual run
-        # cannot change the operational decision before governed promotion.
+        # ── GATE V2 POINT-IN-TIME ENVELOPE ───────────────────────────────
+        # Re-score an isolated copy after live flow injection. The gate only
+        # becomes authoritative through the governed runtime promotion flag.
         evaluated_at = datetime.now(timezone.utc)
         v2_asset = deepcopy(asset)
         v2_error: Exception | None = None
@@ -1634,7 +1665,7 @@ async def _evaluate_l3_decisions(
         except Exception as exc:
             v2_error = exc
             logger.exception(
-                "[L3_GATE_V2] observational score failed symbol=%s; legacy path preserved",
+                "[L3_GATE_V2] evaluation failed symbol=%s; promotion policy will apply",
                 asset.get("symbol"),
             )
 
@@ -1691,6 +1722,12 @@ async def _evaluate_l3_decisions(
                 "decision_drift": False,
                 "reason_codes": ["EVALUATION_ERROR"],
             }
+        legacy_decision = decision
+        decision, l3_pass = _apply_l3_gate_v2_operational_promotion(
+            legacy_decision=legacy_decision,
+            legacy_l3_pass=l3_pass,
+            gate_v2=gate_v2,
+        )
         observe_gate_v2(gate_v2)
         reasons = _decision_reason_map(processed, has_signal_conditions)
         reasons["_sections"] = {
@@ -1710,13 +1747,21 @@ async def _evaluate_l3_decisions(
                 "failed": gate_v2["entry_triggers"]["failed"],
                 "skipped": gate_v2["entry_triggers"]["skipped"],
             },
+            "authorization": {
+                "mode": "L3_GATE_V2" if gate_v2["operational_effect"] else "LEGACY",
+                "legacy_decision": legacy_decision,
+                "gate_v2_decision": gate_v2["shadow_decision"],
+                "final_decision": decision,
+                "operational_effect": gate_v2["operational_effect"],
+            },
         }
         metrics = _decision_metrics(asset, processed)
         metrics["l3_gate_v2"] = gate_v2
         logger.info(
-            "[L3_GATE_V2] symbol=%s legacy=%s shadow=%s drift=%s hash=%s operational=false",
-            asset.get("symbol"), decision, gate_v2["shadow_decision"],
+            "[L3_GATE_V2] symbol=%s legacy=%s v2=%s final=%s drift=%s hash=%s operational=%s",
+            asset.get("symbol"), legacy_decision, gate_v2["shadow_decision"], decision,
             gate_v2["decision_drift"], gate_v2["evaluation_envelope_hash"],
+            gate_v2["operational_effect"],
         )
 
         decisions.append({

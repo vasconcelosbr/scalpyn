@@ -111,8 +111,8 @@
       ]
     },
     {
-      "id": "l3-gate-v2-shadow-observation",
-      "description": "Signals and entry triggers are independently compiled against one point-in-time hash without operational effect before approval",
+      "id": "l3-gate-v2-operational-promotion",
+      "description": "Approved L3 gate v2 independently requires signals and entry triggers and is activated only by a reversible runtime flag",
       "files": [
         {
           "path": "backend/app/services/l3_gate_compiler_v2.py",
@@ -127,10 +127,11 @@
         {
           "path": "backend/app/tasks/pipeline_scan.py",
           "contains_all": [
-            "GATE V2 POINT-IN-TIME ENVELOPE (SHADOW ONLY)",
+            "L3_GATE_V2_OPERATIONAL",
+            "_apply_l3_gate_v2_operational_promotion",
             "metrics[\"l3_gate_v2\"] = gate_v2",
             "persist_gate_evaluations",
-            "legacy path preserved"
+            "operational_decision"
           ]
         },
         {
@@ -139,15 +140,15 @@
             "INSERT INTO l3_gate_v2_evaluations",
             "ON CONFLICT (evaluation_envelope_hash) DO UPDATE",
             "status=COUNT_MISMATCH",
-            "operational_effect_must_be_false"
+            "operational_promotion_metadata_invalid"
           ]
         },
         {
-          "path": "backend/alembic/versions/197_l3_gate_v2_evaluations.py",
+          "path": "backend/alembic/versions/198_l3_gate_v2_operational.py",
           "contains_all": [
             "l3_gate_v2_evaluations",
-            "ck_l3_gate_v2_observational_only",
-            "uq_l3_gate_v2_envelope_hash"
+            "ck_l3_gate_v2_operational_payload_match",
+            "ck_l3_gate_v2_operational_metadata"
           ]
         },
         {
@@ -163,16 +164,20 @@
             "test_lit_incident_is_shadow_blocked_by_independent_signals",
             "test_uni_incident_is_shadow_blocked_by_entry_triggers",
             "test_pipeline_dual_evaluation_keeps_legacy_authoritative",
+            "test_operational_promotion_preserves_v2_allow",
+            "test_pipeline_operational_promotion_blocks_lit_incident",
             "test_every_evaluation_is_persisted_before_edge_filtering",
             "test_required_skipped_condition_blocks_shadow_authorization",
-            "test_observational_failure_never_changes_legacy_decision"
+            "test_observational_failure_never_changes_legacy_decision",
+            "test_operational_evaluation_error_fails_closed"
           ]
         },
         {
           "path": "backend/tests/test_l3_gate_evaluation_store.py",
           "contains_all": [
             "test_persistence_is_idempotent_and_reports_replay",
-            "test_invalid_capture_is_visible_as_count_mismatch"
+            "test_invalid_capture_is_visible_as_count_mismatch",
+            "test_capture_row_preserves_governed_operational_contract"
           ]
         }
       ]

@@ -27,7 +27,7 @@ _UPSERT = text("""
         CAST(:watchlist_id AS UUID), CAST(:profile_id AS UUID),
         :profile_name, :symbol, :timeframe, :evaluated_at,
         :legacy_decision, :shadow_decision, :decision_drift,
-        false, CAST(:payload AS JSONB)
+        :operational_effect, CAST(:payload AS JSONB)
     )
     ON CONFLICT (evaluation_envelope_hash) DO UPDATE
        SET last_seen_at = now(),
@@ -79,8 +79,16 @@ def _capture_row(
         raise ValueError("evaluation_envelope_hash_invalid")
     if payload.get("contract_version") != "l3_gate_v2":
         raise ValueError("contract_version_invalid")
-    if payload.get("operational_effect") is not False:
-        raise ValueError("operational_effect_must_be_false")
+    operational_effect = payload.get("operational_effect")
+    if not isinstance(operational_effect, bool):
+        raise ValueError("operational_effect_must_be_boolean")
+    if operational_effect and (
+        payload.get("promotion_status") != "OPERATIONAL"
+        or payload.get("operational_decision") not in {"ALLOW", "BLOCK"}
+    ):
+        raise ValueError("operational_promotion_metadata_invalid")
+    if not operational_effect and payload.get("promotion_status") == "OPERATIONAL":
+        raise ValueError("operational_promotion_metadata_invalid")
 
     return {
         "evaluation_envelope_hash": envelope_hash,
@@ -94,6 +102,7 @@ def _capture_row(
         "legacy_decision": str(payload.get("legacy_decision") or "UNKNOWN"),
         "shadow_decision": str(payload.get("shadow_decision") or "UNKNOWN"),
         "decision_drift": bool(payload.get("decision_drift", False)),
+        "operational_effect": operational_effect,
         "payload": json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str),
     }
 

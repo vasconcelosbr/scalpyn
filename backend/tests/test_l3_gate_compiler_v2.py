@@ -209,9 +209,38 @@ def test_no_operational_consumer_is_exposed_by_contract():
     assert result["human_approval_required"] is True
 
 
+def test_operational_promotion_preserves_v2_allow(monkeypatch):
+    from app.tasks import pipeline_scan
+
+    monkeypatch.setenv("L3_GATE_V2_OPERATIONAL", "true")
+    gate = _evaluate({
+        "symbol": "SAFE_USDT",
+        "indicators": {
+            "taker_ratio": 0.7,
+            "volume_delta": 1,
+            "vwap_distance_pct": 1,
+            "rsi": 62,
+            "macd_histogram": 1,
+        },
+    })
+
+    decision, l3_pass = pipeline_scan._apply_l3_gate_v2_operational_promotion(
+        legacy_decision="ALLOW",
+        legacy_l3_pass=True,
+        gate_v2=gate,
+    )
+
+    assert decision == "ALLOW"
+    assert l3_pass is True
+    assert gate["operational_decision"] == "ALLOW"
+    assert gate["operational_effect"] is True
+
+
 @pytest.mark.asyncio
 async def test_pipeline_dual_evaluation_keeps_legacy_authoritative(monkeypatch):
     from app.tasks import pipeline_scan
+
+    monkeypatch.delenv("L3_GATE_V2_OPERATIONAL", raising=False)
 
     profile = deepcopy(PROFILE)
     asset = {
@@ -260,6 +289,66 @@ async def test_pipeline_dual_evaluation_keeps_legacy_authoritative(monkeypatch):
     assert gate["operational_effect"] is False
     assert decision["reasons"]["_sections"]["signals"]["failed"] == ["taker", "delta"]
     assert gate["evaluation_envelope_hash"] == gate["score"]["evaluation_envelope_hash"]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_operational_promotion_blocks_lit_incident(monkeypatch):
+    from app.tasks import pipeline_scan
+
+    monkeypatch.setenv("L3_GATE_V2_OPERATIONAL", "true")
+
+    async def fake_live(**kwargs):
+        updated = dict(kwargs["indicators"])
+        updated.update({"taker_ratio": 0.078999, "volume_delta": -741.93})
+        return updated, True
+
+    async def fake_score(assets, **kwargs):
+        assets[0]["_score"] = 80.83
+        assets[0]["alpha_score"] = 80.83
+        assets[0]["_score_components"] = {"matched_rule_ids": ["robust_rule"]}
+        return {"bucketed": 1, "robust_used": 1, "fallbacks": 0}
+
+    monkeypatch.setattr(pipeline_scan, "_inject_live_order_flow", fake_live)
+    monkeypatch.setattr(pipeline_scan, "_apply_robust_authoritative_scoring", fake_score)
+
+    decisions = await pipeline_scan._evaluate_l3_decisions(
+        [{
+            "symbol": "LIT_USDT",
+            "_score": 80.83,
+            "alpha_score": 80.83,
+            "score": 80.83,
+            "is_futures": False,
+            "indicators": {
+                "taker_ratio": 0.7,
+                "volume_delta": 10,
+                "vwap_distance_pct": 6.5658,
+                "rsi": 62,
+                "macd_histogram": 0.1,
+            },
+        }],
+        deepcopy(PROFILE),
+        "L3",
+        score_config={},
+        db=object(),
+        user_id="user",
+    )
+    decision = decisions[0]
+    gate = decision["metrics"]["l3_gate_v2"]
+
+    assert gate["legacy_decision"] == "ALLOW"
+    assert gate["shadow_decision"] == "BLOCK"
+    assert gate["operational_decision"] == "BLOCK"
+    assert gate["promotion_status"] == "OPERATIONAL"
+    assert gate["operational_effect"] is True
+    assert decision["decision"] == "BLOCK"
+    assert decision["l3_pass"] is False
+    assert decision["reasons"]["_sections"]["authorization"] == {
+        "mode": "L3_GATE_V2",
+        "legacy_decision": "ALLOW",
+        "gate_v2_decision": "BLOCK",
+        "final_decision": "BLOCK",
+        "operational_effect": True,
+    }
 
 
 @pytest.mark.asyncio
@@ -335,6 +424,8 @@ async def test_every_evaluation_is_persisted_before_edge_filtering(monkeypatch):
 async def test_observational_failure_never_changes_legacy_decision(monkeypatch):
     from app.tasks import pipeline_scan
 
+    monkeypatch.delenv("L3_GATE_V2_OPERATIONAL", raising=False)
+
     async def fail_score(*args, **kwargs):
         raise RuntimeError("shadow evaluator unavailable")
 
@@ -360,6 +451,43 @@ async def test_observational_failure_never_changes_legacy_decision(monkeypatch):
     assert decisions[0]["decision"] == "ALLOW"
     assert decisions[0]["metrics"]["l3_gate_v2"]["shadow_decision"] == "ERROR"
     assert decisions[0]["metrics"]["l3_gate_v2"]["operational_effect"] is False
+
+
+@pytest.mark.asyncio
+async def test_operational_evaluation_error_fails_closed(monkeypatch):
+    from app.tasks import pipeline_scan
+
+    monkeypatch.setenv("L3_GATE_V2_OPERATIONAL", "true")
+
+    async def fail_score(*args, **kwargs):
+        raise RuntimeError("v2 evaluator unavailable")
+
+    monkeypatch.setattr(pipeline_scan, "_apply_robust_authoritative_scoring", fail_score)
+    decisions = await pipeline_scan._evaluate_l3_decisions(
+        [{
+            "symbol": "SAFE_USDT",
+            "_score": 90,
+            "alpha_score": 90,
+            "score": 90,
+            "indicators": {
+                "taker_ratio": 0.7,
+                "volume_delta": 1,
+                "vwap_distance_pct": 1,
+                "rsi": 62,
+                "macd_histogram": 1,
+            },
+        }],
+        PROFILE,
+        "L3",
+        score_config={},
+    )
+
+    gate = decisions[0]["metrics"]["l3_gate_v2"]
+    assert gate["shadow_decision"] == "ERROR"
+    assert gate["operational_decision"] == "BLOCK"
+    assert gate["operational_effect"] is True
+    assert decisions[0]["decision"] == "BLOCK"
+    assert decisions[0]["l3_pass"] is False
 
 
 def test_shadow_writer_copies_exact_gate_contract_outside_ml_features():
