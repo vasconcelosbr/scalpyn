@@ -12,6 +12,7 @@ import {
 import {
   blockThresholdIndicatorOptions,
   hasCurrentPriceThreshold,
+  hasInvalidBetweenBounds,
   isCurrentPriceThreshold,
 } from "@/lib/profileRuleSemantics";
 
@@ -363,6 +364,10 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
   const applyChanges = async () => {
     if (hasCurrentPriceThreshold(config.block_rules.blocks)) {
       alert("Price é o preço atual do ativo. Em Block Rules, altere esta condição para Comparison e escolha o indicador de comparação.");
+      return;
+    }
+    if (hasInvalidBetweenBounds(config)) {
+      alert("Toda condição between exige Min e Max preenchidos, com Min menor ou igual a Max.");
       return;
     }
     const missingBreakoutReference = JSON.stringify(config).includes('"breakout_distance_pct"') && (
@@ -790,9 +795,9 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                                   const op = e.target.value;
                                   updateBlockCondition(block.id, condition.id, {
                                     operator: op,
-                                    value: op === "between" ? undefined : (condition.value ?? 0),
-                                    min: op === "between" ? Number(condition.value ?? condition.min ?? 0) : undefined,
-                                    max: op === "between" ? Number(condition.max ?? 100) : undefined,
+                                    value: op === "between" ? undefined : condition.value,
+                                    min: undefined,
+                                    max: undefined,
                                   });
                                 }}
                               >
@@ -805,17 +810,19 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                                   <input
                                     type="number"
                                     className="input h-8 w-20 text-[12px] font-mono"
-                                    value={condition.min ?? 0}
-                                    onChange={(e) => updateBlockCondition(block.id, condition.id, { min: parseFloat(e.target.value) || 0 })}
+                                    value={condition.min ?? ""}
+                                    onChange={(e) => updateBlockCondition(block.id, condition.id, { min: e.target.value === "" ? undefined : Number(e.target.value) })}
                                     placeholder="Min"
+                                    required
                                   />
                                   <span className="text-[11px] text-[var(--text-secondary)]">–</span>
                                   <input
                                     type="number"
                                     className="input h-8 w-20 text-[12px] font-mono"
-                                    value={condition.max ?? 100}
-                                    onChange={(e) => updateBlockCondition(block.id, condition.id, { max: parseFloat(e.target.value) || 0 })}
+                                    value={condition.max ?? ""}
+                                    onChange={(e) => updateBlockCondition(block.id, condition.id, { max: e.target.value === "" ? undefined : Number(e.target.value) })}
                                     placeholder="Max"
+                                    required
                                   />
                                 </>
                                   ) : (
@@ -1013,14 +1020,13 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                           onChange={(e) => {
                             const op = e.target.value;
                             if (op === "between") {
-                              const minVal = typeof trig.value === "number" ? trig.value : (parseFloat(String(trig.value ?? 0)) || 0);
                               updateTrigger(trig.id, "operator", op);
-                              updateTrigger(trig.id, "min", minVal);
-                              updateTrigger(trig.id, "max", 100);
+                              updateTrigger(trig.id, "min", undefined);
+                              updateTrigger(trig.id, "max", undefined);
                               updateTrigger(trig.id, "value", undefined);
                             } else if (trig.operator === "between") {
                               updateTrigger(trig.id, "operator", op);
-                              updateTrigger(trig.id, "value", trig.min ?? 0);
+                              updateTrigger(trig.id, "value", undefined);
                               updateTrigger(trig.id, "min", undefined);
                               updateTrigger(trig.id, "max", undefined);
                             } else {
@@ -1036,15 +1042,15 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                           <>
                             <NumericInput
                               className="input h-8 text-[12px] w-20 font-mono"
-                              value={typeof trig.min === "number" ? trig.min : 0}
-                              onChange={(v) => updateTrigger(trig.id, "min", v)}
+                              value={typeof trig.min === "number" ? trig.min : null}
+                              onChange={(v) => updateTrigger(trig.id, "min", v ?? undefined)}
                               placeholder="Min"
                             />
                             <span className="text-[11px] text-[var(--text-secondary)] font-medium">e</span>
                             <NumericInput
                               className="input h-8 text-[12px] w-20 font-mono"
-                              value={typeof trig.max === "number" ? trig.max : 100}
-                              onChange={(v) => updateTrigger(trig.id, "max", v)}
+                              value={typeof trig.max === "number" ? trig.max : null}
+                              onChange={(v) => updateTrigger(trig.id, "max", v ?? undefined)}
                               placeholder="Max"
                             />
                           </>

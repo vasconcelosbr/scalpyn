@@ -30,7 +30,7 @@ export function NumericInput({
   "data-testid": dataTestId,
 }: {
   value: number | null;
-  onChange: (v: number) => void;
+  onChange: (v: number | null) => void;
   disabled?: boolean;
   className?: string;
   placeholder?: string;
@@ -56,8 +56,7 @@ export function NumericInput({
       onChange={(e) => {
         const v = e.target.value;
         setRaw(v);
-        const parsed = numParse(v);
-        if (parsed !== null) onChange(parsed);
+        onChange(numParse(v));
       }}
       onBlur={() => {
         focused.current = false;
@@ -412,11 +411,13 @@ export function ConditionBuilder({
                   category: undefined,
                 };
                 if (operator === "between") {
-                  updates.min = typeof condition.value === "number" ? condition.value : 0;
-                  updates.max = 100;
+                  updates.min = undefined;
+                  updates.max = undefined;
                   updates.value = undefined;
                 } else if (condition.operator === "between") {
-                  updates.value = condition.min ?? 0;
+                  updates.value = undefined;
+                  updates.min = undefined;
+                  updates.max = undefined;
                 }
                 updateCondition(index, updates);
               }}
@@ -463,9 +464,9 @@ export function ConditionBuilder({
               <>
                 <NumericInput
                   className="input w-20"
-                  value={typeof condition.min === "number" ? condition.min : 0}
+                  value={typeof condition.min === "number" ? condition.min : null}
                   onChange={(v) => updateCondition(index, {
-                    min: v,
+                    min: v ?? undefined,
                     rule_id: undefined,
                     points: 0,
                     category: undefined,
@@ -477,9 +478,9 @@ export function ConditionBuilder({
                 <span className="text-[var(--text-secondary)] text-xs font-medium">e</span>
                 <NumericInput
                   className="input w-20"
-                  value={typeof condition.max === "number" ? condition.max : 100}
+                  value={typeof condition.max === "number" ? condition.max : null}
                   onChange={(v) => updateCondition(index, {
-                    max: v,
+                    max: v ?? undefined,
                     rule_id: undefined,
                     points: 0,
                     category: undefined,
