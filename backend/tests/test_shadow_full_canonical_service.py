@@ -34,7 +34,13 @@ def _trade() -> ShadowTrade:
         config_snapshot={"final_score": 80},
         features_snapshot=_features(1.0), features_snapshot_exit=_features(2.0),
         exit_metrics_json={"pnl_pct": 1.2}, rules_snapshot={"entry_triggers": []},
-        entry_risk_features_json={"contract_status": {"entry_risk_contract_valid": True}},
+        entry_risk_features_json={
+            "contract_status": {
+                "status": "VALID",
+                "entry_risk_contract_valid": True,
+                "reason_codes": [],
+            }
+        },
         orchestrator_payload={"source": "test"}, reason_codes=[],
         feature_source_times={"ema21_distance_pct": now.isoformat()},
         event_id=uuid.uuid4(), snapshot_id=uuid.uuid4(), profile_id=uuid.uuid4(),
@@ -46,7 +52,7 @@ def _trade() -> ShadowTrade:
         profile_config_hash="b" * 64, score_engine_config_hash="c" * 64,
         lineage_status="CANONICAL", watchlist_id=uuid.uuid4(), watchlist_name="L3",
         watchlist_level="L3", lineage_confidence="HIGH", lineage_source="NATIVE",
-        lineage_resolved_at=now, entry_risk_capture_status="CAPTURED",
+        lineage_resolved_at=now, entry_risk_capture_status="VALID",
         entry_risk_captured_at=now, label_resolved_at=now,
     )
 
@@ -83,6 +89,73 @@ def test_missing_required_indicator_blocks_capture():
         canonical_trade_payload(uuid.uuid4(), 0, trade)
     assert exc_info.value.code == "REQUIRED_FIELD_MISSING"
     assert "snapshots.entry_features.ema21_distance_pct" in exc_info.value.details["paths"]
+
+
+def test_reconstructible_partial_risk_snapshot_with_reasons_is_complete_evidence():
+    trade = _trade()
+    trade.entry_risk_capture_status = "PARTIAL"
+    trade.entry_risk_features_json = {
+        "contract_status": {
+            "status": "PARTIAL",
+            "entry_risk_contract_valid": False,
+            "reconstructible": True,
+            "reason_codes": ["LEGACY_SNAPSHOT_MISMATCH"],
+        }
+    }
+
+    payload = canonical_trade_payload(uuid.uuid4(), 0, trade)
+
+    assert payload["snapshots"]["entry_risk"]["contract_status"] == (
+        trade.entry_risk_features_json["contract_status"]
+    )
+
+
+@pytest.mark.parametrize("status", ["PENDING", "ERROR", "INVALID", "NOT_AVAILABLE"])
+def test_non_terminal_risk_snapshot_blocks_capture(status: str):
+    trade = _trade()
+    trade.entry_risk_capture_status = status
+    trade.entry_risk_features_json = {
+        "contract_status": {
+            "status": status,
+            "entry_risk_contract_valid": False,
+            "reconstructible": False,
+            "reason_codes": [f"{status}_RISK_CAPTURE"],
+        }
+    }
+
+    with pytest.raises(ShadowCanonicalContractError) as exc_info:
+        canonical_trade_payload(uuid.uuid4(), 0, trade)
+
+    assert "snapshots.entry_risk.contract_status.status" in exc_info.value.details["paths"]
+
+
+@pytest.mark.parametrize(
+    ("reconstructible", "reason_codes", "missing_path"),
+    [
+        (False, ["MISSING_COMPONENT"], "snapshots.entry_risk.contract_status.reconstructible"),
+        (True, [], "snapshots.entry_risk.contract_status.reason_codes"),
+    ],
+)
+def test_incomplete_partial_risk_snapshot_blocks_capture(
+    reconstructible: bool,
+    reason_codes: list[str],
+    missing_path: str,
+):
+    trade = _trade()
+    trade.entry_risk_capture_status = "PARTIAL"
+    trade.entry_risk_features_json = {
+        "contract_status": {
+            "status": "PARTIAL",
+            "entry_risk_contract_valid": False,
+            "reconstructible": reconstructible,
+            "reason_codes": reason_codes,
+        }
+    }
+
+    with pytest.raises(ShadowCanonicalContractError) as exc_info:
+        canonical_trade_payload(uuid.uuid4(), 0, trade)
+
+    assert missing_path in exc_info.value.details["paths"]
 
 
 def test_sharding_is_deterministic_and_keeps_each_trade_whole_once():

@@ -161,12 +161,22 @@ def _required_missing(payload: dict[str, Any]) -> list[str]:
     for name in REQUIRED_SNAPSHOTS:
         if not isinstance(snapshots.get(name), dict) or not snapshots[name]:
             missing.append(f"snapshots.{name}")
-    if (
-        ((snapshots.get("entry_risk") or {}).get("contract_status") or {}).get(
-            "entry_risk_contract_valid"
-        ) is not True
-    ):
+    entry_risk = snapshots.get("entry_risk") or {}
+    risk_status = entry_risk.get("contract_status") or {}
+    contract_valid = risk_status.get("entry_risk_contract_valid")
+    terminal_status = str(risk_status.get("status") or "").upper()
+    capture_status = str(trade.get("entry_risk_capture_status") or "").upper()
+    if not isinstance(contract_valid, bool):
         missing.append("snapshots.entry_risk.contract_status.entry_risk_contract_valid")
+    if terminal_status not in {"VALID", "PARTIAL"}:
+        missing.append("snapshots.entry_risk.contract_status.status")
+    if capture_status != terminal_status:
+        missing.append("trade.entry_risk_capture_status")
+    if terminal_status == "PARTIAL":
+        if risk_status.get("reconstructible") is not True:
+            missing.append("snapshots.entry_risk.contract_status.reconstructible")
+        if not isinstance(risk_status.get("reason_codes"), list) or not risk_status["reason_codes"]:
+            missing.append("snapshots.entry_risk.contract_status.reason_codes")
     completed = trade.get("status") == "COMPLETED" or trade.get("outcome") is not None
     if completed:
         for field in REQUIRED_COMPLETED_TRADE_FIELDS:
