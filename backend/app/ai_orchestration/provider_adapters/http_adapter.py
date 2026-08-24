@@ -30,6 +30,21 @@ _CONTENT_REPAIR_ERROR_CODES = frozenset({
 })
 
 
+def _safe_provider_error(response: httpx.Response) -> tuple[str, str]:
+    """Return bounded provider diagnostics without retaining request content."""
+    error_type = str(response.status_code)
+    error_message = ""
+    try:
+        payload = response.json()
+        error = payload.get("error") if isinstance(payload, dict) else None
+        if isinstance(error, dict):
+            error_type = str(error.get("type") or error.get("code") or error_type)[:80]
+            error_message = str(error.get("message") or "")[:400]
+    except (TypeError, ValueError):
+        pass
+    return error_type, " ".join(error_message.split())
+
+
 def _constraint_description(schema: dict[str, Any]) -> str | None:
     constraints = [
         f"{key}={schema[key]}"
@@ -230,11 +245,16 @@ class HTTPProviderAdapter:
                 policy = classify_provider_status(response.status_code, retry_after_seconds=retry_after)
                 delays = retry_delays(policy, max_attempts=self.max_attempts)
                 if not policy.retryable or attempt >= self.max_attempts:
+                    provider_error_code, provider_error_message = _safe_provider_error(response)
                     raise AIOrchestrationError(AIError(
                         code=policy.code, retryable=policy.retryable, http_status=response.status_code,
                         operator_action="Review provider configuration, budget, and audit telemetry",
-                        safe_message="AI provider request failed", provider_error_code=str(response.status_code),
-                        internal_detail_redacted=f"provider={provider}; status={response.status_code}", attempt=attempt,
+                        safe_message="AI provider request failed", provider_error_code=provider_error_code,
+                        internal_detail_redacted=(
+                            f"provider={provider}; status={response.status_code}; "
+                            f"provider_error={provider_error_code}; message={provider_error_message}"
+                        ),
+                        attempt=attempt,
                     ))
                 await asyncio.sleep(delays[attempt - 1])
         raise AssertionError("unreachable")

@@ -272,11 +272,12 @@ async def _execute_shadow_provider_plan(
             shard.error_safe_message = exc.detail.safe_message
             shard.completed_at = datetime.now(timezone.utc)
             logger.warning(
-                "Canonical shard provider failed request=%s shard=%s code=%s http_status=%s",
+                "Canonical shard provider failed request=%s shard=%s code=%s http_status=%s detail=%s",
                 request.id,
                 shard.shard_index,
                 exc.detail.code.value,
                 exc.detail.http_status,
+                exc.detail.internal_detail_redacted,
             )
             await db.flush()
             return ProviderResponse(

@@ -236,3 +236,25 @@ async def test_gives_up_after_exhausting_transport_retries(monkeypatch):
         await _run(adapter)
 
     assert len(client.calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_bad_request_keeps_only_bounded_provider_diagnostics(monkeypatch):
+    adapter, _ = _adapter(monkeypatch, [
+        _FakeResponse(
+            {
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "  output_config.format.schema: unsupported free-form object  ",
+                }
+            },
+            status_code=400,
+        ),
+    ])
+
+    with pytest.raises(AIOrchestrationError) as exc_info:
+        await _run(adapter)
+
+    assert exc_info.value.detail.provider_error_code == "invalid_request_error"
+    assert "unsupported free-form object" in exc_info.value.detail.internal_detail_redacted
+    assert "user" not in exc_info.value.detail.internal_detail_redacted
