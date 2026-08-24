@@ -84,8 +84,7 @@
         {
           "path": "frontend/lib/shadowPortfolioAnalysisScope.test.ts",
           "contains_all": [
-            "reportRunId={run.id}",
-            "Análise por IA"
+            "detailed reports cannot start an Intelligence Run from the paginated trade list"
           ]
         }
       ]
