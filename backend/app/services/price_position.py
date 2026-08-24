@@ -110,7 +110,10 @@ def calculate_price_position(
         "ema50_distance_pct", "ema200_distance_pct",
         "vwap_distance_pct",
         "bb_upper_distance_pct", "bb_middle_distance_pct", "bb_lower_distance_pct",
-        *(f"recent_high_{window}_distance_pct" for window in RECENT_HIGH_WINDOWS),
+        "recent_high_5m_distance_pct",
+        "recent_high_15m_distance_pct",
+        "recent_high_30m_distance_pct",
+        "recent_high_1h_distance_pct",
         "recent_low_15m_distance_pct",
         "price_change_1m_pct", "price_change_5m_pct", "price_change_15m_pct",
     ]
