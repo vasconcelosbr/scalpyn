@@ -48,6 +48,49 @@
       ]
     },
     {
+      "id": "shadow-report-ai-full-scope-bounded-payload",
+      "description": "Detailed Report AI keeps the immutable full report scope while compacting repeated per-trade provider metadata",
+      "files": [
+        {
+          "path": "frontend/components/shadow-portfolio/DetailedReportWorkspace.tsx",
+          "contains_all": [
+            "report_run_id: scope === \"REPORT\" ? targetId : null",
+            "Análise por IA (${run.total_trades} trades)"
+          ]
+        },
+        {
+          "path": "backend/app/api/ai_modules.py",
+          "contains_all": [
+            "payload.report_run_id",
+            "ShadowTradeReportItem.report_run_id == report_run.id",
+            "extra_filters[\"max_rows\"] = max(len(entity_ids), 200)"
+          ]
+        },
+        {
+          "path": "backend/app/services/systemic_langgraph_bridge.py",
+          "contains_all": [
+            "_compact_entry_risk_components",
+            "_provider_frozen_rows",
+            "entry_risk_component_breakdown"
+          ]
+        },
+        {
+          "path": "backend/tests/test_analysis_chat_contract.py",
+          "contains_all": [
+            "test_provider_decision_context_compacts_entry_risk_metadata_without_dropping_rows",
+            "assert len(provider_rows) == 164"
+          ]
+        },
+        {
+          "path": "frontend/lib/shadowPortfolioAnalysisScope.test.ts",
+          "contains_all": [
+            "reportRunId: run.id",
+            "Análise por IA"
+          ]
+        }
+      ]
+    },
+    {
       "id": "l3-entry-trigger-runtime-guard",
       "description": "Non-empty profile entry triggers cannot be erased by an empty global override",
       "files": [

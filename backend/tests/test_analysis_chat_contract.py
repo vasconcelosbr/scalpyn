@@ -1993,6 +1993,73 @@ def test_provider_decision_context_deduplicates_frozen_rows_and_source_ids():
     assert output["evidence_ids"] == ["row-0", "row-1", "row-2"]
 
 
+def test_provider_decision_context_compacts_entry_risk_metadata_without_dropping_rows():
+    from app.services.systemic_langgraph_bridge import _provider_decision_context
+
+    component = {
+        "legacy": {
+            "acceleration_5": {
+                "weight": 0.2,
+                "raw_value": 2.1,
+                "data_source": "ohlcv",
+                "contribution": 11.05,
+                "fallback_used": False,
+                "fallback_reason": None,
+                "normalized_value": 55.27,
+                "source_timeframe": "5m",
+            },
+        },
+        "momentum_intensity": {
+            "adx": {
+                "stale": False,
+                "available": True,
+                "raw_value": 19.16,
+                "data_source": "microstructure",
+                "reason_codes": [],
+                "source_timeframe": "5m",
+                "source_timestamp": "2026-08-24T02:37:54Z",
+            },
+            "flow_strength": {
+                "stale": False,
+                "available": False,
+                "raw_value": None,
+                "reason_codes": ["MISSING_COMPONENT"],
+                "observed_timeframes": [],
+            },
+        },
+    }
+    rows = [
+        {"id": f"trade-{index}", "outcome": "SL_HIT",
+         "entry_risk_component_breakdown": component}
+        for index in range(164)
+    ]
+
+    payload = json.loads(_provider_decision_context(
+        {"rows": rows, "context": {"scope": "detailed-report"}},
+        [],
+    ))
+    provider_rows = payload["frozen_context"]["rows"]
+
+    assert len(provider_rows) == 164
+    assert [row["id"] for row in provider_rows] == [row["id"] for row in rows]
+    assert provider_rows[0]["entry_risk_component_breakdown"] == {
+        "legacy": {
+            "acceleration_5": {
+                "raw_value": 2.1,
+                "normalized_value": 55.27,
+                "contribution": 11.05,
+            },
+        },
+        "momentum_intensity": {
+            "adx": 19.16,
+            "flow_strength": {"missing": ["MISSING_COMPONENT"]},
+        },
+    }
+    assert rows[0]["entry_risk_component_breakdown"] is component
+    assert "data_source" in component["legacy"]["acceleration_5"]
+    assert len(json.dumps(provider_rows)) < len(json.dumps(rows)) * 0.45
+
+
 def test_deepseek_input_estimate_uses_production_calibrated_headroom():
     from app.services.systemic_langgraph_bridge import _estimated_provider_input_tokens
 

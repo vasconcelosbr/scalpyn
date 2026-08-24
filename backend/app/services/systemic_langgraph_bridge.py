@@ -58,6 +58,65 @@ def _estimated_provider_input_tokens(prompt_bytes: int, provider: str) -> int:
     return max(1, -(-prompt_bytes // 2))
 
 
+def _compact_entry_risk_components(value: Any) -> Any:
+    """Keep per-trade decision values without repeating capture metadata."""
+
+    if not isinstance(value, dict):
+        return value
+    leaf_keys = {
+        "raw_value", "normalized_value", "contribution", "available",
+        "stale", "reason_codes", "fallback_used", "fallback_reason",
+        "timeframe_conflict", "observed_timeframes",
+    }
+    if leaf_keys.intersection(value):
+        if value.get("available") is False:
+            return {"missing": value.get("reason_codes") or ["UNAVAILABLE"]}
+        is_legacy_component = (
+            value.get("normalized_value") is not None
+            or value.get("contribution") is not None
+        )
+        if is_legacy_component:
+            compact: Any = {
+                key: item for key, item in (
+                    ("raw_value", value.get("raw_value")),
+                    ("normalized_value", value.get("normalized_value")),
+                    ("contribution", value.get("contribution")),
+                ) if item is not None
+            }
+        else:
+            compact = value.get("raw_value")
+        annotations: dict[str, Any] = {}
+        if value.get("stale") is True:
+            annotations["stale"] = True
+        if value.get("timeframe_conflict") is True:
+            annotations["timeframe_conflict"] = True
+        if value.get("fallback_used") is True:
+            annotations["fallback"] = value.get("fallback_reason") or True
+        if annotations:
+            compact = {"value": compact, **annotations}
+        return compact
+    return {
+        key: _compact_entry_risk_components(item)
+        for key, item in value.items()
+    }
+
+
+def _provider_frozen_rows(rows: Any) -> Any:
+    if not isinstance(rows, list):
+        return rows
+    compact_rows: list[Any] = []
+    for row in rows:
+        if not isinstance(row, dict) or "entry_risk_component_breakdown" not in row:
+            compact_rows.append(row)
+            continue
+        compact_row = dict(row)
+        compact_row["entry_risk_component_breakdown"] = (
+            _compact_entry_risk_components(row["entry_risk_component_breakdown"])
+        )
+        compact_rows.append(compact_row)
+    return compact_rows
+
+
 def _provider_decision_context(
     frozen_context: dict[str, Any],
     tool_evidence_rows: list[AIToolEvidenceRecord],
@@ -65,7 +124,10 @@ def _provider_decision_context(
     """Serialize every decision datum without resending ledger-only metadata."""
 
     decision_frozen = {
-        key: frozen_context[key]
+        key: (
+            _provider_frozen_rows(frozen_context[key])
+            if key == "rows" else frozen_context[key]
+        )
         for key in ("rows", "context")
         if key in frozen_context
     }
