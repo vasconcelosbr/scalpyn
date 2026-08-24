@@ -14,6 +14,8 @@ export interface BlockRuleValue {
   conditions?: RuleConditionValue[];
 }
 
+export const COMPARISON_OPERATORS = [">", "<", ">=", "<=", "==", "!=", "between"] as const;
+
 export function blockThresholdIndicatorOptions<T extends RuleIndicatorValue>(indicators: T[]): T[] {
   return indicators.filter((indicator) => indicator.value !== "price");
 }

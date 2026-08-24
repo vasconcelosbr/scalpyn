@@ -163,6 +163,65 @@ def test_block_engine_supports_comparison_groups():
     assert result["triggered_blocks"] == ["Downtrend"]
 
 
+def test_block_engine_supports_between_on_one_comparison_indicator():
+    engine = BlockEngine(
+        {
+            "blocks": [
+                {
+                    "id": "ema21_range",
+                    "name": "EMA21 distance range",
+                    "enabled": True,
+                    "logic": "AND",
+                    "conditions": [
+                        {
+                            "id": "ema21_between",
+                            "type": "comparison",
+                            "left": "ema21_distance_pct",
+                            "operator": "between",
+                            "min": -7.25,
+                            "max": 13.5,
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+
+    matching = engine.evaluate({"ema21_distance_pct": 0.0})
+    outside = engine.evaluate({"ema21_distance_pct": 20.0})
+
+    assert matching["blocked"] is True
+    assert matching["triggered_blocks"] == ["EMA21 distance range"]
+    assert matching["skipped_blocks"] == []
+    assert outside["blocked"] is False
+
+
+def test_comparison_between_without_bounds_does_not_match():
+    engine = BlockEngine(
+        {
+            "blocks": [
+                {
+                    "id": "missing_range",
+                    "name": "Missing range",
+                    "enabled": True,
+                    "conditions": [
+                        {
+                            "id": "missing_bounds",
+                            "type": "comparison",
+                            "left": "ema21_distance_pct",
+                            "operator": "between",
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+
+    result = engine.evaluate({"ema21_distance_pct": 0.0})
+
+    assert result["blocked"] is False
+
+
 def test_block_engine_keeps_legacy_threshold_behavior_for_existing_rules():
     engine = BlockEngine(
         {
@@ -235,3 +294,43 @@ def test_profile_engine_applies_entry_trigger_comparisons():
 
     assert blocked_entry["entry"]["allowed"] is False
     assert allowed_entry["entry"]["allowed"] is True
+
+
+def test_profile_engine_applies_entry_trigger_comparison_between():
+    engine = ProfileEngine(
+        {
+            "entry_triggers": {
+                "logic": "AND",
+                "conditions": [
+                    {
+                        "id": "entry_range",
+                        "type": "comparison",
+                        "left": "ema21_distance_pct",
+                        "operator": "between",
+                        "min": -7.25,
+                        "max": 13.5,
+                        "required": True,
+                        "enabled": True,
+                    }
+                ],
+            }
+        }
+    )
+
+    allowed_entry = engine.evaluate_asset(
+        {
+            "symbol": "BTC_USDT",
+            "price": 100,
+            "indicators": {"ema21_distance_pct": 0.0},
+        }
+    )
+    blocked_entry = engine.evaluate_asset(
+        {
+            "symbol": "BTC_USDT",
+            "price": 100,
+            "indicators": {"ema21_distance_pct": 20.0},
+        }
+    )
+
+    assert allowed_entry["entry"]["allowed"] is True
+    assert blocked_entry["entry"]["allowed"] is False

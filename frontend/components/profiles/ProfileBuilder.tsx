@@ -15,6 +15,7 @@ import {
 } from "@/lib/indicatorCatalog";
 import {
   blockThresholdIndicatorOptions,
+  COMPARISON_OPERATORS,
   hasCurrentPriceThreshold,
   hasInvalidBetweenBounds,
   isCurrentPriceThreshold,
@@ -176,7 +177,6 @@ const RULE_TYPE_OPTIONS: { value: RuleConditionType; label: string }[] = [
   { value: "comparison", label: "Comparison" },
 ];
 
-const COMPARISON_OPERATORS = [">", "<", ">=", "<=", "==", "!="];
 const THRESHOLD_OPERATORS = [">", "<", ">=", "<=", "==", "!=", "between"];
 
 function createRuleCondition(type: RuleConditionType = "threshold"): RuleCondition {
@@ -217,6 +217,8 @@ function normalizeRuleCondition(raw: any): RuleCondition {
       left: raw?.left || "price",
       operator: raw?.operator || ">",
       right: raw?.right || "ema9",
+      min: raw?.min,
+      max: raw?.max,
       period: raw?.period,
     };
   }
@@ -791,7 +793,9 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
       let conditionText = "";
 
       if (trigger.type === "comparison") {
-        conditionText = `${trigger.left} ${trigger.operator} ${trigger.right}`;
+        conditionText = trigger.operator === "between"
+          ? `${trigger.left} between ${trigger.min} and ${trigger.max}`
+          : `${trigger.left} ${trigger.operator} ${trigger.right}`;
       } else if (trigger.type === "boolean") {
         const booleanValue =
           trigger.operator === "is_false" || trigger.value === false
@@ -1276,21 +1280,46 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                                 <select
                                   className="input h-8 text-[12px] w-20"
                                   value={condition.operator}
-                                  onChange={(e) => updateBlockCondition(block.id, condition.id, { operator: e.target.value })}
+                                  onChange={(e) => updateBlockCondition(block.id, condition.id, {
+                                    operator: e.target.value,
+                                    min: undefined,
+                                    max: undefined,
+                                  })}
                                 >
                                   {COMPARISON_OPERATORS.map((operator) => (
                                     <option key={operator} value={operator}>{operator}</option>
                                   ))}
                                 </select>
-                                <select
-                                  className="input h-8 text-[12px] min-w-[120px]"
-                                  value={condition.right || "ema9"}
-                                  onChange={(e) => updateBlockCondition(block.id, condition.id, { right: e.target.value })}
-                                >
-                                  {COMPARABLE_NUMERIC_RULE_INDICATORS.map((indicator) => (
-                                    <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
-                                  ))}
-                                </select>
+                                {condition.operator === "between" ? (
+                                  <>
+                                    <input
+                                      type="number"
+                                      className="input h-8 w-20 text-[12px] font-mono"
+                                      value={condition.min ?? ""}
+                                      onChange={(e) => updateBlockCondition(block.id, condition.id, { min: e.target.value === "" ? undefined : Number(e.target.value) })}
+                                      placeholder="Min"
+                                      required
+                                    />
+                                    <input
+                                      type="number"
+                                      className="input h-8 w-20 text-[12px] font-mono"
+                                      value={condition.max ?? ""}
+                                      onChange={(e) => updateBlockCondition(block.id, condition.id, { max: e.target.value === "" ? undefined : Number(e.target.value) })}
+                                      placeholder="Max"
+                                      required
+                                    />
+                                  </>
+                                ) : (
+                                  <select
+                                    className="input h-8 text-[12px] min-w-[120px]"
+                                    value={condition.right || "ema9"}
+                                    onChange={(e) => updateBlockCondition(block.id, condition.id, { right: e.target.value })}
+                                  >
+                                    {COMPARABLE_NUMERIC_RULE_INDICATORS.map((indicator) => (
+                                      <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
+                                    ))}
+                                  </select>
+                                )}
                               </>
                             ) : condition.type === "boolean" ? (
                               <>
@@ -1551,21 +1580,42 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                         <select
                           className="input h-8 text-[12px] w-20"
                           value={trig.operator}
-                          onChange={(e) => updateTrigger(trig.id, "operator", e.target.value)}
+                          onChange={(e) => {
+                            updateTrigger(trig.id, "operator", e.target.value);
+                            updateTrigger(trig.id, "min", undefined);
+                            updateTrigger(trig.id, "max", undefined);
+                          }}
                         >
                           {COMPARISON_OPERATORS.map((operator) => (
                             <option key={operator} value={operator}>{operator}</option>
                           ))}
                         </select>
-                        <select
-                          className="input h-8 text-[12px] w-36"
-                          value={trig.right || "ema9"}
-                          onChange={(e) => updateTrigger(trig.id, "right", e.target.value)}
-                        >
-                          {COMPARABLE_NUMERIC_RULE_INDICATORS.map((indicator) => (
-                            <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
-                          ))}
-                        </select>
+                        {trig.operator === "between" ? (
+                          <>
+                            <NumericInput
+                              className="input h-8 text-[12px] w-20 font-mono"
+                              value={typeof trig.min === "number" ? trig.min : null}
+                              onChange={(value) => updateTrigger(trig.id, "min", value ?? undefined)}
+                              placeholder="Min"
+                            />
+                            <NumericInput
+                              className="input h-8 text-[12px] w-20 font-mono"
+                              value={typeof trig.max === "number" ? trig.max : null}
+                              onChange={(value) => updateTrigger(trig.id, "max", value ?? undefined)}
+                              placeholder="Max"
+                            />
+                          </>
+                        ) : (
+                          <select
+                            className="input h-8 text-[12px] w-36"
+                            value={trig.right || "ema9"}
+                            onChange={(e) => updateTrigger(trig.id, "right", e.target.value)}
+                          >
+                            {COMPARABLE_NUMERIC_RULE_INDICATORS.map((indicator) => (
+                              <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
+                            ))}
+                          </select>
+                        )}
                       </>
                     ) : trig.type === "boolean" ? (
                       <>

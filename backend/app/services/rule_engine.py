@@ -202,7 +202,11 @@ class RuleEngine:
             left_field = condition.get("left", "")
             right_field = condition.get("right", "")
             actual_value = self._get_nested_value(data, left_field)
-            target_value = self._get_nested_value(data, right_field)
+            target_value = (
+                None
+                if operator_str == "between"
+                else self._get_nested_value(data, right_field)
+            )
             detail = {
                 "type": "comparison",
                 "left": left_field,
@@ -214,7 +218,11 @@ class RuleEngine:
                 "status": RuleStatus.FAIL.value,
             }
             left_ok, left_reason = is_valid(actual_value, left_field)
-            right_ok, right_reason = is_valid(target_value, right_field)
+            right_ok, right_reason = (
+                (True, None)
+                if operator_str == "between"
+                else is_valid(target_value, right_field)
+            )
             if not left_ok or not right_ok:
                 reason = left_reason if not left_ok else right_reason
                 detail["reason"] = (reason or SkipReason.INDICATOR_NOT_AVAILABLE).value
@@ -297,11 +305,13 @@ class RuleEngine:
         
         # Between operator
         if operator_str == "between":
-            min_val = condition.get("min", float("-inf"))
-            max_val = condition.get("max", float("inf"))
+            min_val = condition.get("min")
+            max_val = condition.get("max")
+            if min_val is None or max_val is None:
+                return False
             try:
                 actual_num = float(actual)
-                return min_val <= actual_num <= max_val
+                return float(min_val) <= actual_num <= float(max_val)
             except (ValueError, TypeError):
                 return False
         

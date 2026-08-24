@@ -3,10 +3,15 @@ import test from "node:test";
 
 import {
   blockThresholdIndicatorOptions,
+  COMPARISON_OPERATORS,
   hasCurrentPriceThreshold,
   hasInvalidBetweenBounds,
   isCurrentPriceThreshold,
 } from "./profileRuleSemantics";
+
+test("Comparison exposes between for explicit Min and Max bounds", () => {
+  assert.equal(COMPARISON_OPERATORS.includes("between"), true);
+});
 
 test("Price is excluded from Block Rule threshold options", () => {
   const options = blockThresholdIndicatorOptions([
