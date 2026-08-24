@@ -71,6 +71,17 @@ def test_price_position_computes_all_requested_metrics_from_closed_candles():
     assert result["price_change_15m_pct"] > result["price_change_5m_pct"]
 
 
+def test_ema21_distance_uses_fixed_ema_period_21():
+    frame = _frame_5m()
+    result = calculate_price_position(frame, as_of=AS_OF)
+    closed = pd.to_numeric(frame.iloc[:-1]["close"], errors="coerce")
+    price = float(closed.iloc[-1])
+    ema21 = float(closed.ewm(span=21, adjust=False).mean().iloc[-1])
+    expected = round((price - ema21) / ema21 * 100.0, 4)
+
+    assert result["ema21_distance_pct"] == expected
+
+
 def test_recent_high_excludes_base_and_partial_candles():
     frame = _frame_5m()
     closed_base_index = len(frame) - 2

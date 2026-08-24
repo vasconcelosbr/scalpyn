@@ -9,6 +9,11 @@ import {
   PRICE_POSITION_INDICATORS,
   PRICE_POSITION_INDICATOR_VALUES,
 } from "@/lib/indicatorCatalog";
+import {
+  blockThresholdIndicatorOptions,
+  hasCurrentPriceThreshold,
+  isCurrentPriceThreshold,
+} from "@/lib/profileRuleSemantics";
 
 // ── Shared types (mirrors ProfileBuilder) ─────────────────────────────────────
 type RuleConditionType = "threshold" | "comparison" | "boolean";
@@ -96,6 +101,7 @@ const RULE_INDICATORS = [
 ];
 
 const NUMERIC_RULE_INDICATORS  = RULE_INDICATORS.filter((i) => i.kind === "number");
+const BLOCK_THRESHOLD_RULE_INDICATORS = blockThresholdIndicatorOptions(NUMERIC_RULE_INDICATORS);
 const COMPARABLE_NUMERIC_RULE_INDICATORS = NUMERIC_RULE_INDICATORS.filter(
   (indicator) => indicator.value !== "breakout_distance_pct",
 );
@@ -355,6 +361,10 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
 
   // ── Apply ──────────────────────────────────────────────────────────────────
   const applyChanges = async () => {
+    if (hasCurrentPriceThreshold(config.block_rules.blocks)) {
+      alert("Price é o preço atual do ativo. Em Block Rules, altere esta condição para Comparison e escolha o indicador de comparação.");
+      return;
+    }
     const missingBreakoutReference = JSON.stringify(config).includes('"breakout_distance_pct"') && (
       [...config.filters.conditions, ...config.signals.conditions, ...config.entry_triggers.conditions]
         .some((condition: any) => (condition.field || condition.indicator) === "breakout_distance_pct" && !condition.reference_window)
@@ -733,25 +743,34 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                                   reference_window: undefined,
                                 })}
                               >
-                                {NUMERIC_RULE_INDICATORS.map((i) => (
+                                {isCurrentPriceThreshold(condition) && (
+                                  <option value="price" disabled>Price — use Comparison</option>
+                                )}
+                                {BLOCK_THRESHOLD_RULE_INDICATORS.map((i) => (
                                   <option key={i.value} value={i.value}>{i.label}</option>
                                 ))}
                               </select>
-                              {condition.indicator === "breakout_distance_pct" && (
-                                <select
-                                  className="input h-8 text-[12px] w-20"
-                                  value={condition.reference_window || ""}
-                                  onChange={(e) => updateBlockCondition(block.id, condition.id, { reference_window: e.target.value || undefined })}
-                                  required
-                                  aria-label="Breakout reference window"
-                                >
-                                  <option value="" disabled>Janela</option>
-                                  {BREAKOUT_REFERENCE_WINDOWS.map((window) => (
-                                    <option key={window} value={window}>{window}</option>
-                                  ))}
-                                </select>
-                              )}
-                              {PERIOD_DEFAULTS[condition.indicator || ""] !== undefined && (
+                              {isCurrentPriceThreshold(condition) ? (
+                                <span className="text-[11px] text-amber-400">
+                                  Preço atual do ativo. Altere o tipo para Comparison.
+                                </span>
+                              ) : (
+                                <>
+                                  {condition.indicator === "breakout_distance_pct" && (
+                                    <select
+                                      className="input h-8 text-[12px] w-20"
+                                      value={condition.reference_window || ""}
+                                      onChange={(e) => updateBlockCondition(block.id, condition.id, { reference_window: e.target.value || undefined })}
+                                      required
+                                      aria-label="Breakout reference window"
+                                    >
+                                      <option value="" disabled>Janela</option>
+                                      {BREAKOUT_REFERENCE_WINDOWS.map((window) => (
+                                        <option key={window} value={window}>{window}</option>
+                                      ))}
+                                    </select>
+                                  )}
+                                  {PERIOD_DEFAULTS[condition.indicator || ""] !== undefined && (
                                 <input
                                   type="number"
                                   className="input h-8 w-20 text-[12px] font-mono text-center"
@@ -763,8 +782,8 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                                   placeholder={`P:${PERIOD_DEFAULTS[condition.indicator || ""]}`}
                                   title={`Period (default: ${PERIOD_DEFAULTS[condition.indicator || ""]})`}
                                 />
-                              )}
-                              <select
+                                  )}
+                                  <select
                                 className="input h-8 text-[12px] w-24"
                                 value={condition.operator}
                                 onChange={(e) => {
@@ -780,8 +799,8 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                                 {THRESHOLD_OPERATORS.map((op) => (
                                   <option key={op} value={op}>{op === "between" ? "between" : op}</option>
                                 ))}
-                              </select>
-                              {condition.operator === "between" ? (
+                                  </select>
+                                  {condition.operator === "between" ? (
                                 <>
                                   <input
                                     type="number"
@@ -799,13 +818,15 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                                     placeholder="Max"
                                   />
                                 </>
-                              ) : (
-                                <input
-                                  type="number"
-                                  className="input h-8 w-24 text-[12px] font-mono"
-                                  value={typeof condition.value === "number" ? condition.value : Number(condition.value ?? 0)}
-                                  onChange={(e) => updateBlockCondition(block.id, condition.id, { value: parseFloat(e.target.value) || 0 })}
-                                />
+                                  ) : (
+                                    <input
+                                      type="number"
+                                      className="input h-8 w-24 text-[12px] font-mono"
+                                      value={typeof condition.value === "number" ? condition.value : Number(condition.value ?? 0)}
+                                      onChange={(e) => updateBlockCondition(block.id, condition.id, { value: parseFloat(e.target.value) || 0 })}
+                                    />
+                                  )}
+                                </>
                               )}
                             </>
                           )}

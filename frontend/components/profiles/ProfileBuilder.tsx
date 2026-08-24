@@ -13,6 +13,11 @@ import {
   PRICE_POSITION_INDICATORS,
   PRICE_POSITION_INDICATOR_VALUES,
 } from "@/lib/indicatorCatalog";
+import {
+  blockThresholdIndicatorOptions,
+  hasCurrentPriceThreshold,
+  isCurrentPriceThreshold,
+} from "@/lib/profileRuleSemantics";
 
 interface ProfileBuilderProps {
   profile?: any;
@@ -114,6 +119,7 @@ const RULE_INDICATORS: RuleIndicatorOption[] = [
 
 const RULE_INDICATOR_MAP = new Map(RULE_INDICATORS.map((indicator) => [indicator.value, indicator]));
 const NUMERIC_RULE_INDICATORS = RULE_INDICATORS.filter((indicator) => indicator.kind === "number");
+const BLOCK_THRESHOLD_RULE_INDICATORS = blockThresholdIndicatorOptions(NUMERIC_RULE_INDICATORS);
 const COMPARABLE_NUMERIC_RULE_INDICATORS = NUMERIC_RULE_INDICATORS.filter(
   (indicator) => indicator.value !== "breakout_distance_pct",
 );
@@ -552,6 +558,10 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
 
   const handleSave = async () => {
     if (!name.trim()) { alert("Profile name is required"); return; }
+    if (hasCurrentPriceThreshold(config.block_rules?.blocks)) {
+      alert("Price é o preço atual do ativo. Em Block Rules, altere esta condição para Comparison e escolha o indicador de comparação.");
+      return;
+    }
     if (hasBreakoutWithoutReference(config)) {
       alert("Breakout Distance % exige uma janela de referência (5m, 15m, 30m ou 1h).");
       return;
@@ -1326,25 +1336,34 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                                     reference_window: undefined,
                                   })}
                                 >
-                                  {NUMERIC_RULE_INDICATORS.map((indicator) => (
+                                  {isCurrentPriceThreshold(condition) && (
+                                    <option value="price" disabled>Price — use Comparison</option>
+                                  )}
+                                  {BLOCK_THRESHOLD_RULE_INDICATORS.map((indicator) => (
                                     <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
                                   ))}
                                 </select>
-                                {condition.indicator === "breakout_distance_pct" && (
-                                  <select
-                                    className="input h-8 text-[12px] w-20"
-                                    value={condition.reference_window || ""}
-                                    onChange={(e) => updateBlockCondition(block.id, condition.id, { reference_window: e.target.value || undefined })}
-                                    required
-                                    aria-label="Breakout reference window"
-                                  >
-                                    <option value="" disabled>Janela</option>
-                                    {BREAKOUT_REFERENCE_WINDOWS.map((window) => (
-                                      <option key={window} value={window}>{window}</option>
-                                    ))}
-                                  </select>
-                                )}
-                                {PERIOD_DEFAULTS[condition.indicator || ""] !== undefined && (
+                                {isCurrentPriceThreshold(condition) ? (
+                                  <span className="text-[11px] text-amber-400">
+                                    Preço atual do ativo. Altere o tipo para Comparison.
+                                  </span>
+                                ) : (
+                                  <>
+                                    {condition.indicator === "breakout_distance_pct" && (
+                                      <select
+                                        className="input h-8 text-[12px] w-20"
+                                        value={condition.reference_window || ""}
+                                        onChange={(e) => updateBlockCondition(block.id, condition.id, { reference_window: e.target.value || undefined })}
+                                        required
+                                        aria-label="Breakout reference window"
+                                      >
+                                        <option value="" disabled>Janela</option>
+                                        {BREAKOUT_REFERENCE_WINDOWS.map((window) => (
+                                          <option key={window} value={window}>{window}</option>
+                                        ))}
+                                      </select>
+                                    )}
+                                    {PERIOD_DEFAULTS[condition.indicator || ""] !== undefined && (
                                   <input
                                     type="number"
                                     className="input h-8 w-20 text-[12px] font-mono text-center"
@@ -1356,8 +1375,8 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                                     placeholder={`P:${PERIOD_DEFAULTS[condition.indicator || ""]}`}
                                     title={`Period (default: ${PERIOD_DEFAULTS[condition.indicator || ""]})`}
                                   />
-                                )}
-                                <select
+                                    )}
+                                    <select
                                   className="input h-8 text-[12px] w-24"
                                   value={condition.operator}
                                   onChange={(e) => {
@@ -1373,8 +1392,8 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                                   {THRESHOLD_OPERATORS.map((operator) => (
                                     <option key={operator} value={operator}>{operator === "between" ? "between" : operator}</option>
                                   ))}
-                                </select>
-                                {condition.operator === "between" ? (
+                                    </select>
+                                    {condition.operator === "between" ? (
                                   <>
                                     <input
                                       type="number"
@@ -1391,13 +1410,15 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                                       placeholder="Max"
                                     />
                                   </>
-                                ) : (
-                                  <input
-                                    type="number"
-                                    className="input h-8 w-24 text-[12px] font-mono"
-                                    value={typeof condition.value === "number" ? condition.value : Number(condition.value ?? 0)}
-                                    onChange={(e) => updateBlockCondition(block.id, condition.id, { value: parseFloat(e.target.value) || 0 })}
-                                  />
+                                    ) : (
+                                      <input
+                                        type="number"
+                                        className="input h-8 w-24 text-[12px] font-mono"
+                                        value={typeof condition.value === "number" ? condition.value : Number(condition.value ?? 0)}
+                                        onChange={(e) => updateBlockCondition(block.id, condition.id, { value: parseFloat(e.target.value) || 0 })}
+                                      />
+                                    )}
+                                  </>
                                 )}
                               </>
                             )}
