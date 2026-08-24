@@ -172,6 +172,27 @@ def test_capture_only_status_migration_extends_single_canonical_head():
     assert "'FAILED','CANCELLED','CAPTURED'" in migration
 
 
+def test_anthropic_canonical_shard_schema_has_no_free_form_objects():
+    from app.ai_orchestration.provider_adapters import anthropic_output_config
+    from app.services.systemic_langgraph_bridge import _SHADOW_SHARD_OUTPUT_SCHEMA
+
+    schema = anthropic_output_config(_SHADOW_SHARD_OUTPUT_SCHEMA)["format"]["schema"]
+
+    def assert_explicit_objects(node: object) -> None:
+        if isinstance(node, dict):
+            if node.get("type") == "object":
+                assert isinstance(node.get("properties"), dict)
+                assert node["properties"]
+                assert node.get("additionalProperties") is False
+            for value in node.values():
+                assert_explicit_objects(value)
+        elif isinstance(node, list):
+            for value in node:
+                assert_explicit_objects(value)
+
+    assert_explicit_objects(schema)
+
+
 def test_sharding_is_deterministic_and_keeps_each_trade_whole_once():
     dataset_id = uuid.uuid4()
     items = tuple(_item(index, padding=800) for index in range(5))

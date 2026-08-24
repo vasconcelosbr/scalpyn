@@ -21,7 +21,11 @@ from ..ai_orchestration.contracts import (
     AIResult,
     MAX_AI_REQUEST_QUESTION_CHARS,
 )
-from ..ai_orchestration.errors import ProviderBlockedError, ProviderTransportError
+from ..ai_orchestration.errors import (
+    AIOrchestrationError,
+    ProviderBlockedError,
+    ProviderTransportError,
+)
 from ..ai_orchestration.provider_adapters import (
     AnthropicSDKTextAdapter, CopilotProviderTransport, anthropic_output_config,
     default_adapter_registry,
@@ -65,7 +69,19 @@ _SHADOW_SHARD_OUTPUT_SCHEMA = {
                 "additionalProperties": False,
             },
         },
-        "evidence": {"type": "array", "items": {"type": "object"}},
+        "evidence": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["shadow_trade_id", "finding", "source_paths"],
+                "properties": {
+                    "shadow_trade_id": {"type": "string"},
+                    "finding": {"type": "string"},
+                    "source_paths": {"type": "array", "items": {"type": "string"}},
+                },
+                "additionalProperties": False,
+            },
+        },
         "warnings": {"type": "array", "items": {"type": "string"}},
     },
     "additionalProperties": False,
@@ -249,6 +265,23 @@ async def _execute_shadow_provider_plan(
                 request_id=shard.provider_request_ref,
                 max_output_tokens=shard_max_output_tokens,
                 output_schema=_SHADOW_SHARD_OUTPUT_SCHEMA,
+            )
+        except AIOrchestrationError as exc:
+            shard.status = "FAILED"
+            shard.error_code = exc.detail.code.value
+            shard.error_safe_message = exc.detail.safe_message
+            shard.completed_at = datetime.now(timezone.utc)
+            logger.warning(
+                "Canonical shard provider failed request=%s shard=%s code=%s http_status=%s",
+                request.id,
+                shard.shard_index,
+                exc.detail.code.value,
+                exc.detail.http_status,
+            )
+            await db.flush()
+            return ProviderResponse(
+                output={}, tokens_input=tokens_input, tokens_output=tokens_output,
+                terminal_error_code="SHARD_FAILED",
             )
         except Exception:
             shard.status = "FAILED"

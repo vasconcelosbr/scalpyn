@@ -2676,7 +2676,11 @@ async def test_canonical_shadow_chat_reuses_every_complete_shard_and_reconciles_
                         "shadow_trade_id": str(trade_ids[call_index]),
                         "item_hash": hashes[call_index],
                     }],
-                    "evidence": [{"trade": str(trade_ids[call_index])}],
+                    "evidence": [{
+                        "shadow_trade_id": str(trade_ids[call_index]),
+                        "finding": "trade processed",
+                        "source_paths": ["snapshots.entry_features.ema21_distance_pct"],
+                    }],
                     "warnings": [],
                 },
                 tokens_input=10,
