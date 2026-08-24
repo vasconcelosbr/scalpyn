@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 import uuid
 
@@ -156,6 +157,19 @@ def test_incomplete_partial_risk_snapshot_blocks_capture(
         canonical_trade_payload(uuid.uuid4(), 0, trade)
 
     assert missing_path in exc_info.value.details["paths"]
+
+
+def test_capture_only_status_migration_extends_single_canonical_head():
+    migration = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "200_ai_graph_run_captured_status.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'revision = "200_ai_graph_run_captured"' in migration
+    assert 'down_revision = "199_shadow_full_canonical"' in migration
+    assert "'FAILED','CANCELLED','CAPTURED'" in migration
 
 
 def test_sharding_is_deterministic_and_keeps_each_trade_whole_once():
