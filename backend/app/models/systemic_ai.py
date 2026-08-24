@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 import uuid
 
-from sqlalchemy import Boolean, Column, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Column, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.types import TIMESTAMP
 
@@ -240,6 +240,79 @@ class AIDatasetSnapshotRecord(Base):
     configuration_bundle_id = Column(UUID(as_uuid=True), ForeignKey("ai_configuration_bundles.id", ondelete="RESTRICT"), nullable=False)
     quality_status = Column(String(48), nullable=False)
     quality_findings = Column(JSONB, nullable=False, default=list)
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, default=_now)
+
+
+class AIDatasetSnapshotItemRecord(Base):
+    __tablename__ = "ai_dataset_snapshot_items"
+    __table_args__ = (
+        UniqueConstraint("dataset_snapshot_id", "report_position", name="uq_ai_dataset_item_position"),
+        UniqueConstraint("dataset_snapshot_id", "shadow_trade_id", name="uq_ai_dataset_item_trade"),
+        Index("ix_ai_dataset_item_snapshot_position", "dataset_snapshot_id", "report_position"),
+        Index("ix_ai_dataset_item_tenant_report", "tenant_id", "report_run_id"),
+        CheckConstraint("report_position >= 0", name="ck_ai_dataset_item_position_nonnegative"),
+        CheckConstraint("payload_bytes > 0", name="ck_ai_dataset_item_payload_bytes_positive"),
+        CheckConstraint("estimated_tokens > 0", name="ck_ai_dataset_item_tokens_positive"),
+    )
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    dataset_snapshot_id = Column(
+        UUID(as_uuid=True), ForeignKey("ai_dataset_snapshots.id", ondelete="CASCADE"), nullable=False,
+    )
+    report_run_id = Column(
+        UUID(as_uuid=True), ForeignKey("shadow_trade_report_runs.id", ondelete="RESTRICT"), nullable=False,
+    )
+    shadow_trade_id = Column(
+        UUID(as_uuid=True), ForeignKey("shadow_trades.id", ondelete="RESTRICT"), nullable=False,
+    )
+    report_position = Column(Integer, nullable=False)
+    canonical_json = Column(JSONB, nullable=False)
+    item_hash = Column(String(64), nullable=False)
+    payload_bytes = Column(Integer, nullable=False)
+    estimated_tokens = Column(Integer, nullable=False)
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, default=_now)
+
+
+class AIAnalysisShardRecord(Base):
+    __tablename__ = "ai_analysis_shards"
+    __table_args__ = (
+        UniqueConstraint("ai_request_id", "shard_index", name="uq_ai_analysis_shard_request_index"),
+        Index("ix_ai_analysis_shard_request_index", "ai_request_id", "shard_index"),
+        Index("ix_ai_analysis_shard_tenant_status", "tenant_id", "status"),
+        CheckConstraint("shard_index >= 0", name="ck_ai_analysis_shard_index_nonnegative"),
+        CheckConstraint("item_count > 0", name="ck_ai_analysis_shard_item_count_positive"),
+        CheckConstraint("payload_bytes > 0", name="ck_ai_analysis_shard_payload_bytes_positive"),
+        CheckConstraint("estimated_input_tokens > 0", name="ck_ai_analysis_shard_tokens_positive"),
+        CheckConstraint(
+            "status IN ('PLANNED','RUNNING','COMPLETED','FAILED','RECONCILED')",
+            name="ck_ai_analysis_shard_status",
+        ),
+    )
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    ai_request_id = Column(UUID(as_uuid=True), ForeignKey("ai_requests.id", ondelete="CASCADE"), nullable=False)
+    dataset_snapshot_id = Column(
+        UUID(as_uuid=True), ForeignKey("ai_dataset_snapshots.id", ondelete="RESTRICT"), nullable=False,
+    )
+    shard_index = Column(Integer, nullable=False)
+    status = Column(String(32), nullable=False, default="PLANNED")
+    item_count = Column(Integer, nullable=False)
+    item_ids = Column(JSONB, nullable=False)
+    item_hashes = Column(JSONB, nullable=False)
+    payload_hash = Column(String(64), nullable=False)
+    payload_bytes = Column(Integer, nullable=False)
+    estimated_input_tokens = Column(Integer, nullable=False)
+    reserved_tokens = Column(Integer, nullable=False, default=0)
+    tokens_input = Column(Integer)
+    tokens_output = Column(Integer)
+    provider_request_ref = Column(String(255))
+    provider_response_ref = Column(String(255))
+    result_json = Column(JSONB)
+    error_code = Column(String(80))
+    error_safe_message = Column(Text)
+    attempt = Column(Integer, nullable=False, default=0)
+    started_at = Column(TIMESTAMP(timezone=True))
+    completed_at = Column(TIMESTAMP(timezone=True))
     created_at = Column(TIMESTAMP(timezone=True), nullable=False, default=_now)
 
 

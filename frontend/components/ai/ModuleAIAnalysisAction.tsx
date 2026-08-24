@@ -5,7 +5,7 @@ import { BrainCircuit, CheckCircle2, ExternalLink, Loader2, Search, ShieldCheck,
 import { useMemo, useState } from "react";
 import useSWR from "swr";
 
-import { apiGet, apiPost } from "@/lib/api";
+import { ApiError, apiGet, apiPost } from "@/lib/api";
 import type { AnalysisPromptListResponse } from "@/lib/analysis-prompts";
 
 type ModuleKey =
@@ -94,6 +94,31 @@ function formatUsd(value: string) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(Number(value));
+}
+
+function analysisCreationError(caught: unknown): string {
+  if (!(caught instanceof ApiError) || !caught.rawBody) {
+    return caught instanceof Error ? caught.message : "Não foi possível criar a análise.";
+  }
+  try {
+    const parsed = JSON.parse(caught.rawBody) as {
+      detail?: { code?: string; block_reason?: string; missing_fields?: string[] };
+    };
+    const detail = parsed.detail;
+    if (detail?.code === "REQUIRED_FIELD_MISSING") {
+      const fields = detail.missing_fields?.join(", ") || "não informados";
+      return `Análise bloqueada: faltam campos obrigatórios no relatório (${fields}). Nenhuma resposta parcial foi gerada.`;
+    }
+    if (detail?.code === "REPORT_ROW_MISMATCH") {
+      return "Análise bloqueada: a quantidade ou a ordem dos trades não corresponde ao relatório materializado.";
+    }
+    if (detail?.code) {
+      return `Análise bloqueada: ${detail.block_reason || detail.code}. Nenhuma resposta parcial foi gerada.`;
+    }
+  } catch {
+    // Fall through to the standard API error message.
+  }
+  return caught.message;
 }
 
 export function ModuleAIAnalysisAction({
@@ -209,7 +234,7 @@ export function ModuleAIAnalysisAction({
       });
       setRun(created);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Não foi possível criar a análise.");
+      setError(analysisCreationError(caught));
     } finally {
       setBusy(false);
     }

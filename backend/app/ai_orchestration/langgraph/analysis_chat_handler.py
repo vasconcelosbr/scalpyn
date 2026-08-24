@@ -37,8 +37,10 @@ from ...models.ai_provider_key import AIProviderKey
 from ...models.profile import Profile
 from ...models.user import User
 from ...models.systemic_ai import (
+    AIAnalysisShardRecord,
     AIBudgetPolicyRecord,
     AIBudgetReservationRecord,
+    AIDatasetSnapshotItemRecord,
     AIDatasetSnapshotRecord,
     AIModelApprovalRecord,
     AIModelResolutionRecord,
@@ -57,7 +59,17 @@ from ...services.governed_change_service import (
     reconcile_execution_cache,
     validate_candidate_for_second_gate,
 )
-from ...services.systemic_langgraph_bridge import SystemicLangGraphBridge
+from ...services.shadow_full_canonical_service import (
+    CONTRACT_VERSION as SHADOW_CANONICAL_CONTRACT_VERSION,
+    ShadowCanonicalContractError,
+    provider_shard_payload,
+)
+from ...services.systemic_langgraph_bridge import (
+    SystemicLangGraphBridge,
+    _SHADOW_SHARD_OUTPUT_SCHEMA,
+    _estimated_provider_input_tokens,
+    _shadow_synthesis_schema,
+)
 from ..hashing import canonical_hash
 from ..errors import (
     GovernedProposalError,
@@ -68,6 +80,7 @@ from ..errors import (
 )
 from .state import ScalpynGraphState
 from .config import get_langgraph_settings
+from ..runtime import ProviderResponse
 
 
 def _now() -> datetime:
@@ -544,6 +557,8 @@ class _ProviderInvocation:
     pricing_snapshot_version: str
     selected_evidence_refs: tuple[dict[str, Any], ...]
     data_mode: str
+    canonical_shadow_shards: tuple[dict[str, Any], ...] = ()
+    shadow_shard_max_output_tokens: int = 0
 
 
 def _sha(value: str) -> str:
@@ -1480,7 +1495,8 @@ class AnalysisChatGraphNodeHandler:
             if invocation.budget_enforcement_enabled:
                 checks = (
                     (
-                        actual_tokens > invocation.request_token_limit,
+                        not getattr(invocation, "canonical_shadow_shards", ())
+                        and actual_tokens > invocation.request_token_limit,
                         "ANALYSIS_CHAT_REQUEST_RECONCILIATION_EXCEEDED",
                     ),
                     (
@@ -2052,7 +2068,12 @@ class AnalysisChatGraphNodeHandler:
         prompt = await db.get(AIPromptVersion, request.prompt_version_id)
         parent_run = await db.get(AIGraphRun, conversation.parent_analysis_run_id)
         parent_result = await db.get(AIResultRecord, conversation.parent_result_id)
-        if not all((resolution, prompt, parent_run, parent_result)):
+        parent_request = (
+            await db.get(AIRequestRecord, parent_run.ai_request_id)
+            if parent_run is not None else None
+        )
+        dataset = await db.get(AIDatasetSnapshotRecord, request.dataset_snapshot_id)
+        if not all((resolution, prompt, parent_run, parent_result, parent_request, dataset)):
             raise ProviderBlockedError(
                 "ANALYSIS_CHAT_CANONICAL_LINEAGE_INVALID",
                 "The chat provider was blocked because canonical lineage is incomplete",
@@ -2061,6 +2082,9 @@ class AnalysisChatGraphNodeHandler:
             resolution.tenant_id != run.tenant_id
             or parent_run.tenant_id != run.tenant_id
             or parent_result.tenant_id != run.tenant_id
+            or parent_request.tenant_id != run.tenant_id
+            or dataset.tenant_id != run.tenant_id
+            or parent_request.dataset_snapshot_id != dataset.id
         ):
             raise ProviderBlockedError(
                 "ANALYSIS_CHAT_TENANT_SCOPE_INVALID",
@@ -2162,6 +2186,93 @@ class AnalysisChatGraphNodeHandler:
             f"{item['label']}: {item['module']}.{item['tool']}"
             for item in evidence_payload
         )
+        canonical_shadow_shards: tuple[dict[str, Any], ...] = ()
+        is_shadow_parent = parent_request.origin_module == "shadow_portfolio"
+        if is_shadow_parent:
+            manifest = dict(dataset.context_manifest or {})
+            if (
+                dataset.contract_version != SHADOW_CANONICAL_CONTRACT_VERSION
+                or manifest.get("coverage_status") != "RECONCILED_COMPLETE"
+                or manifest.get("legacy_incomplete") is not False
+            ):
+                raise ProviderBlockedError(
+                    "ANALYSIS_CHAT_LEGACY_SHADOW_RUN_BLOCKED",
+                    "Shadow Portfolio chat requires a reconciled complete canonical run",
+                )
+            canonical_items = list((await db.execute(select(
+                AIDatasetSnapshotItemRecord
+            ).where(
+                AIDatasetSnapshotItemRecord.tenant_id == run.tenant_id,
+                AIDatasetSnapshotItemRecord.dataset_snapshot_id == dataset.id,
+            ).order_by(AIDatasetSnapshotItemRecord.report_position))).scalars())
+            canonical_shard_rows = list((await db.execute(select(
+                AIAnalysisShardRecord
+            ).where(
+                AIAnalysisShardRecord.tenant_id == run.tenant_id,
+                AIAnalysisShardRecord.ai_request_id == parent_request.id,
+                AIAnalysisShardRecord.dataset_snapshot_id == dataset.id,
+            ).order_by(AIAnalysisShardRecord.shard_index))).scalars())
+            if (
+                len(canonical_items) != dataset.row_count
+                or not canonical_shard_rows
+                or len(canonical_shard_rows) != int(manifest.get("shard_count") or 0)
+                or [row.shard_index for row in canonical_shard_rows]
+                != list(range(len(canonical_shard_rows)))
+            ):
+                raise ProviderBlockedError(
+                    "ANALYSIS_DATA_INCOMPLETE",
+                    "Canonical Shadow Portfolio chat items or shards are incomplete",
+                )
+            by_record_id = {str(item.id): item for item in canonical_items}
+            seen_record_ids: list[str] = []
+            planned: list[dict[str, Any]] = []
+            for shard in canonical_shard_rows:
+                shard_items = [by_record_id.get(str(item_id)) for item_id in (shard.item_ids or [])]
+                if any(item is None for item in shard_items) or len(shard_items) != shard.item_count:
+                    raise ProviderBlockedError(
+                        "DATASET_RECONCILIATION_FAILED",
+                        "Canonical Shadow Portfolio chat shard membership diverged",
+                    )
+                try:
+                    raw_payload = provider_shard_payload(dataset.id, shard, shard_items)
+                except ShadowCanonicalContractError as exc:
+                    raise ProviderBlockedError(
+                        exc.code,
+                        "Canonical Shadow Portfolio chat payload hash diverged",
+                    ) from exc
+                seen_record_ids.extend(str(item.id) for item in shard_items)
+                planned.append({
+                    "shard_index": shard.shard_index,
+                    "payload_hash": shard.payload_hash,
+                    "expected_items": tuple(
+                        (str(item.shadow_trade_id), item.item_hash) for item in shard_items
+                    ),
+                    "system_prompt": (
+                        "You are a read-only Shadow Portfolio evidence extractor for a follow-up "
+                        "question. Read every complete trade in this shard exactly once. Do not "
+                        "omit fields or invent values. Return every supplied shadow_trade_id and "
+                        "item_hash exactly."
+                    ),
+                    "user_prompt": (
+                        f"Follow-up question:\n{request_json.get('question') or ''}\n\n"
+                        f"Canonical shard payload (sha256:{shard.payload_hash}):\n"
+                        + json.dumps(
+                            raw_payload,
+                            ensure_ascii=False,
+                            default=str,
+                            separators=(",", ":"),
+                        )
+                    ),
+                })
+            if (
+                len(seen_record_ids) != len(set(seen_record_ids))
+                or set(seen_record_ids) != set(by_record_id)
+            ):
+                raise ProviderBlockedError(
+                    "DATASET_RECONCILIATION_FAILED",
+                    "Canonical Shadow Portfolio chat shards do not cover every item exactly once",
+                )
+            canonical_shadow_shards = tuple(planned)
         values = {
             "parent_analysis": json.dumps(
                 parent_result.result_json,
@@ -2200,21 +2311,92 @@ class AnalysisChatGraphNodeHandler:
                 ensure_ascii=False,
                 separators=(",", ":"),
             ).encode("utf-8")) + 512
-        estimated_input_tokens = max(
-            1,
-            len((system_prompt + user_prompt).encode("utf-8"))
-            + structured_output_reservation,
-        )
         max_output_tokens = int(approval.max_output_tokens)
-        max_input_tokens = int(budget.request_token_limit) - max_output_tokens
-        if budget_enforcement_enabled and (
-            max_input_tokens <= 0 or estimated_input_tokens > max_input_tokens
-        ):
-            raise ProviderBlockedError(
-                "ANALYSIS_CHAT_INPUT_RESERVATION_EXCEEDED",
-                "The chat provider was blocked because the input reservation exceeds the request budget",
+        reservation_max_output_tokens = max_output_tokens
+        if canonical_shadow_shards:
+            provider_runtime = (
+                await db.execute(select(ConfigProfile).where(
+                    ConfigProfile.user_id == run.tenant_id,
+                    ConfigProfile.pool_id.is_(None),
+                    ConfigProfile.config_type == "ai_provider_runtime",
+                    ConfigProfile.is_active.is_(True),
+                ).order_by(ConfigProfile.updated_at.desc()).limit(1))
+            ).scalar_one_or_none()
+            runtime_values = dict((provider_runtime.config_json if provider_runtime else {}) or {})
+            if runtime_values.get("shadow_full_canonical_provider_enabled") is not True:
+                raise ProviderBlockedError(
+                    "SHADOW_FULL_CANONICAL_DISABLED",
+                    "Canonical Shadow Portfolio chat is disabled",
+                )
+            shard_max_output_tokens = int(
+                runtime_values.get("shadow_shard_max_output_tokens") or 0
             )
-        reserved_tokens = estimated_input_tokens + max_output_tokens
+            synthesis_limit = int(
+                runtime_values.get("shadow_synthesis_max_output_tokens") or 0
+            )
+            if shard_max_output_tokens <= 0 or synthesis_limit <= 0:
+                raise ProviderBlockedError(
+                    "SHADOW_CANONICAL_PROVIDER_LIMITS_REQUIRED",
+                    "Canonical Shadow Portfolio chat provider limits are missing",
+                )
+            max_output_tokens = min(max_output_tokens, synthesis_limit)
+            shard_schema_bytes = len(json.dumps(
+                _SHADOW_SHARD_OUTPUT_SCHEMA,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")) + 512
+            shard_input_tokens = 0
+            for planned in canonical_shadow_shards:
+                estimate = _estimated_provider_input_tokens(
+                    len((planned["system_prompt"] + planned["user_prompt"]).encode("utf-8"))
+                    + shard_schema_bytes,
+                    resolution.effective_provider,
+                )
+                if estimate + shard_max_output_tokens > int(budget.request_token_limit):
+                    raise ProviderBlockedError(
+                        "SHARD_CONTEXT_EXCEEDED",
+                        "A complete canonical Shadow Portfolio chat shard exceeds provider context",
+                    )
+                shard_input_tokens += estimate
+            synthesis_schema = _shadow_synthesis_schema(
+                dict(prompt.output_schema_json or {}), len(canonical_shadow_shards)
+            )
+            synthesis_schema_bytes = len(json.dumps(
+                synthesis_schema,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")) + 512
+            synthesis_input_tokens = _estimated_provider_input_tokens(
+                len((system_prompt + user_prompt).encode("utf-8"))
+                + synthesis_schema_bytes,
+                resolution.effective_provider,
+            ) + len(canonical_shadow_shards) * shard_max_output_tokens
+            if synthesis_input_tokens + max_output_tokens > int(budget.request_token_limit):
+                raise ProviderBlockedError(
+                    "SHARD_CONTEXT_EXCEEDED",
+                    "Canonical Shadow Portfolio chat synthesis exceeds provider context",
+                )
+            estimated_input_tokens = shard_input_tokens + synthesis_input_tokens
+            reservation_max_output_tokens = (
+                len(canonical_shadow_shards) * shard_max_output_tokens
+                + max_output_tokens
+            )
+        else:
+            shard_max_output_tokens = 0
+            estimated_input_tokens = max(
+                1,
+                len((system_prompt + user_prompt).encode("utf-8"))
+                + structured_output_reservation,
+            )
+            max_input_tokens = int(budget.request_token_limit) - max_output_tokens
+            if budget_enforcement_enabled and (
+                max_input_tokens <= 0 or estimated_input_tokens > max_input_tokens
+            ):
+                raise ProviderBlockedError(
+                    "ANALYSIS_CHAT_INPUT_RESERVATION_EXCEEDED",
+                    "The chat provider was blocked because the input reservation exceeds the request budget",
+                )
+        reserved_tokens = estimated_input_tokens + reservation_max_output_tokens
         now = _now()
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         month_start = day_start.replace(day=1)
@@ -2266,7 +2448,7 @@ class AnalysisChatGraphNodeHandler:
         output_rate = Decimal(approval.output_cost_per_million)
         reserved_cost = (
             Decimal(estimated_input_tokens) * input_rate
-            + Decimal(max_output_tokens) * output_rate
+            + Decimal(reservation_max_output_tokens) * output_rate
         ) / million
         if budget_enforcement_enabled and reserved_cost > Decimal(approval.max_cost_usd):
             raise ProviderBlockedError(
@@ -2284,7 +2466,7 @@ class AnalysisChatGraphNodeHandler:
             model=resolution.effective_model,
             module="analysis_chat",
             estimated_input_tokens=estimated_input_tokens,
-            max_output_tokens=max_output_tokens,
+            max_output_tokens=reservation_max_output_tokens,
             request_token_limit=int(budget.request_token_limit),
             daily_token_limit=int(budget.daily_token_limit or 0),
             monthly_token_limit=int(budget.monthly_token_limit or 0),
@@ -2336,11 +2518,164 @@ class AnalysisChatGraphNodeHandler:
                 dict(item) for item in state.get("selected_evidence_refs") or []
             ),
             data_mode=str(state.get("data_mode") or "FROZEN_ANALYSIS_ONLY"),
+            canonical_shadow_shards=canonical_shadow_shards,
+            shadow_shard_max_output_tokens=shard_max_output_tokens,
         )
 
     async def _invoke_normal_provider(self, invocation: _ProviderInvocation):
         # Intentionally contains no DB/session parameter.  The reservation and
         # TRANSPORT_STARTED audit were committed by the prepare phase.
+        canonical_shadow_shards = getattr(invocation, "canonical_shadow_shards", ())
+        if canonical_shadow_shards:
+            tokens_input = 0
+            tokens_output = 0
+            shard_evidence: list[dict[str, Any]] = []
+            provider_executor = SystemicLangGraphBridge.execute_json_provider
+            for planned in canonical_shadow_shards:
+                try:
+                    shard_response = await provider_executor(
+                        provider=invocation.provider,
+                        model=invocation.model,
+                        system_prompt=planned["system_prompt"],
+                        user_prompt=planned["user_prompt"],
+                        api_key=invocation.api_key,
+                        request_id=(
+                            f"{invocation.request_id}:canonical-chat-shard:"
+                            f"{planned['shard_index']}"
+                        ),
+                        max_output_tokens=invocation.shadow_shard_max_output_tokens,
+                        output_schema=_SHADOW_SHARD_OUTPUT_SCHEMA,
+                    )
+                except Exception:
+                    return ProviderResponse(
+                        output={},
+                        tokens_input=tokens_input,
+                        tokens_output=tokens_output,
+                        terminal_error_code="SHARD_FAILED",
+                    )
+                tokens_input += int(shard_response.tokens_input)
+                tokens_output += int(shard_response.tokens_output)
+                if shard_response.terminal_error_code is not None:
+                    return ProviderResponse(
+                        output={},
+                        tokens_input=tokens_input,
+                        tokens_output=tokens_output,
+                        terminal_error_code="SHARD_FAILED",
+                        raw_response_ref=shard_response.raw_response_ref,
+                    )
+                try:
+                    validate_json_schema(
+                        shard_response.output,
+                        _SHADOW_SHARD_OUTPUT_SCHEMA,
+                    )
+                except ValidationError:
+                    return ProviderResponse(
+                        output={},
+                        tokens_input=tokens_input,
+                        tokens_output=tokens_output,
+                        terminal_error_code="SHARD_FAILED",
+                    )
+                expected = dict(planned["expected_items"])
+                processed = shard_response.output.get("processed_items") or []
+                seen: dict[str, str] = {}
+                for item in processed:
+                    trade_id = str((item or {}).get("shadow_trade_id") or "")
+                    item_hash = str((item or {}).get("item_hash") or "")
+                    if (
+                        not trade_id
+                        or trade_id in seen
+                        or expected.get(trade_id) != item_hash
+                    ):
+                        return ProviderResponse(
+                            output={},
+                            tokens_input=tokens_input,
+                            tokens_output=tokens_output,
+                            terminal_error_code="DATASET_RECONCILIATION_FAILED",
+                        )
+                    seen[trade_id] = item_hash
+                if seen != expected:
+                    return ProviderResponse(
+                        output={},
+                        tokens_input=tokens_input,
+                        tokens_output=tokens_output,
+                        terminal_error_code="DATASET_RECONCILIATION_FAILED",
+                    )
+                shard_evidence.append({
+                    "shard_index": planned["shard_index"],
+                    "payload_hash": planned["payload_hash"],
+                    "result": shard_response.output,
+                })
+
+            synthesis_schema = _shadow_synthesis_schema(
+                invocation.output_schema,
+                len(canonical_shadow_shards),
+            )
+            synthesis_user_prompt = (
+                f"{invocation.user_prompt}\n\n"
+                "Complete canonical Shadow Portfolio shard evidence for this follow-up. "
+                "Use every shard and return referenced_shards with every shard index exactly once:\n"
+                + json.dumps(
+                    shard_evidence,
+                    ensure_ascii=False,
+                    default=str,
+                    separators=(",", ":"),
+                )
+            )
+            try:
+                synthesis_response = await provider_executor(
+                    provider=invocation.provider,
+                    model=invocation.model,
+                    system_prompt=invocation.system_prompt,
+                    user_prompt=synthesis_user_prompt,
+                    api_key=invocation.api_key,
+                    request_id=f"{invocation.request_id}:canonical-chat-synthesis",
+                    max_output_tokens=invocation.max_output_tokens,
+                    output_schema=synthesis_schema,
+                )
+            except Exception:
+                return ProviderResponse(
+                    output={},
+                    tokens_input=tokens_input,
+                    tokens_output=tokens_output,
+                    terminal_error_code="SHARD_FAILED",
+                )
+            tokens_input += int(synthesis_response.tokens_input)
+            tokens_output += int(synthesis_response.tokens_output)
+            if synthesis_response.terminal_error_code is not None:
+                return ProviderResponse(
+                    output={},
+                    tokens_input=tokens_input,
+                    tokens_output=tokens_output,
+                    terminal_error_code="SHARD_FAILED",
+                    raw_response_ref=synthesis_response.raw_response_ref,
+                )
+            try:
+                validate_json_schema(synthesis_response.output, synthesis_schema)
+            except ValidationError:
+                return ProviderResponse(
+                    output={},
+                    tokens_input=tokens_input,
+                    tokens_output=tokens_output,
+                    terminal_error_code="SHARD_FAILED",
+                )
+            expected_shards = list(range(len(canonical_shadow_shards)))
+            if sorted(synthesis_response.output.get("referenced_shards") or []) != expected_shards:
+                return ProviderResponse(
+                    output={},
+                    tokens_input=tokens_input,
+                    tokens_output=tokens_output,
+                    terminal_error_code="DATASET_RECONCILIATION_FAILED",
+                )
+            output = dict(synthesis_response.output)
+            output.pop("referenced_shards", None)
+            return ProviderResponse(
+                output=output,
+                tokens_input=tokens_input,
+                tokens_output=tokens_output,
+                raw_response_ref=synthesis_response.raw_response_ref,
+                stop_reason=synthesis_response.stop_reason,
+                repair_attempts=synthesis_response.repair_attempts,
+            )
         return await SystemicLangGraphBridge.execute_json_provider(
             provider=invocation.provider,
             model=invocation.model,

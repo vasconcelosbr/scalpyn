@@ -36,6 +36,42 @@ type GraphRun = {
   correlation_id: string | null;
   graph_key: string | null;
   graph_version: string | null;
+  input_contract_version: string | null;
+  capture_at: string | null;
+  report_run_id: string | null;
+  source_item_count: number | null;
+  processed_item_count: number | null;
+  coverage_status: string | null;
+  shard_count: number | null;
+  dataset_hash: string | null;
+  legacy_incomplete: boolean;
+};
+
+type CoverageManifest = {
+  input_contract_version: string | null;
+  capture_at: string | null;
+  report_run_id: string | null;
+  source_item_count: number | null;
+  processed_item_count: number | null;
+  coverage_status: string | null;
+  shard_count: number | null;
+  dataset_hash: string | null;
+  legacy_incomplete: boolean;
+  coverage_by_path: Record<string, { present: number; null: number }>;
+  missing_required_fields: Array<Record<string, unknown>>;
+  blocking_reason: string | null;
+  shards: Array<{
+    id: string;
+    shard_index: number;
+    status: string;
+    item_count: number;
+    payload_hash: string;
+    estimated_input_tokens: number;
+    tokens_input: number | null;
+    tokens_output: number | null;
+    error_code: string | null;
+    error_safe_message: string | null;
+  }>;
 };
 
 type GraphEvent = {
@@ -65,6 +101,10 @@ type Capabilities = {
   regenerative_shadow_enabled: boolean;
   real_provider_canary_enabled: boolean;
   normal_analysis_provider_enabled: boolean;
+  shadow_full_canonical_capture_enabled: boolean;
+  shadow_full_canonical_provider_enabled: boolean;
+  shadow_shard_max_output_tokens: number;
+  shadow_synthesis_max_output_tokens: number;
   strict_msgpack: boolean;
   live_write: boolean;
   module_flags: Record<string, boolean>;
@@ -260,6 +300,7 @@ export default function IntelligenceRunsPage() {
   const [events, setEvents] = useState<GraphEvent[]>([]);
   const [interrupts, setInterrupts] = useState<GraphInterrupt[]>([]);
   const [runContext, setRunContext] = useState<RunContext | null>(null);
+  const [coverage, setCoverage] = useState<CoverageManifest | null>(null);
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionBusy, setActionBusy] = useState(false);
@@ -299,15 +340,17 @@ export default function IntelligenceRunsPage() {
   const refreshDetail = useCallback(async (runId: string) => {
     const requestSequence = ++detailRequestSequence.current;
     try {
-      const [timeline, interruptResponse, contextResponse] = await Promise.all([
+      const [timeline, interruptResponse, contextResponse, coverageResponse] = await Promise.all([
         apiGet<{ items: GraphEvent[] }>(`/ai/graphs/runs/${runId}/timeline?limit=200`),
         apiGet<{ items: GraphInterrupt[] }>(`/ai/graphs/runs/${runId}/interrupts`),
         apiGet<RunContext>(`/ai/graphs/runs/${runId}/context`),
+        apiGet<CoverageManifest>(`/ai/graphs/runs/${runId}/coverage`),
       ]);
       if (requestSequence !== detailRequestSequence.current) return;
       setEvents(timeline.items);
       setInterrupts(interruptResponse.items);
       setRunContext(contextResponse);
+      setCoverage(coverageResponse);
     } catch (caught) {
       if (requestSequence !== detailRequestSequence.current) return;
       setError(caught instanceof Error ? caught.message : "Falha ao carregar a trilha");
@@ -322,6 +365,7 @@ export default function IntelligenceRunsPage() {
       setEvents([]);
       setInterrupts([]);
       setRunContext(null);
+      setCoverage(null);
     }
   }, [selectedId, refreshDetail]);
 
@@ -383,7 +427,13 @@ export default function IntelligenceRunsPage() {
     try {
       await apiPut(
         `/config/ai_provider_runtime?change_description=${encodeURIComponent(`Intelligence Runs: ${action} gate normal`)}`,
-        { normal_analysis_provider_enabled: nextValue },
+        {
+          normal_analysis_provider_enabled: nextValue,
+          shadow_full_canonical_capture_enabled: capabilities.shadow_full_canonical_capture_enabled,
+          shadow_full_canonical_provider_enabled: capabilities.shadow_full_canonical_provider_enabled,
+          shadow_shard_max_output_tokens: capabilities.shadow_shard_max_output_tokens,
+          shadow_synthesis_max_output_tokens: capabilities.shadow_synthesis_max_output_tokens,
+        },
       );
       await refresh(selectedId);
     } catch (caught) {
@@ -436,6 +486,22 @@ export default function IntelligenceRunsPage() {
         )}
 
         {selected && runContext && <AnalysisResultPanel context={runContext} />}
+        {selected?.origin_module === "shadow_portfolio" && selected.legacy_incomplete && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-400/30 bg-rose-400/[.08] px-4 py-3 text-sm text-rose-100">
+            <div>
+              <p className="font-medium">Dados incompletos — contrato legado</p>
+              <p className="mt-1 text-xs leading-5 text-rose-100/70">Recomendações e conversas estão bloqueadas porque esta execução não recebeu o relatório canônico integral.</p>
+            </div>
+            {selected.report_run_id && (
+              <ModuleAIAnalysisAction originModule="shadow_portfolio" originView="intelligence-runs-recapture" reportRunId={selected.report_run_id} compact />
+            )}
+            {!selected.report_run_id && (
+              <a href="/dashboard/shadow-portfolio" className="rounded-lg border border-rose-300/30 bg-rose-300/10 px-3 py-2 text-xs font-medium text-rose-100 transition hover:border-rose-200/50">
+                Criar nova análise com dados completos
+              </a>
+            )}
+          </div>
+        )}
         {selected?.status === "FAILED" && runContext?.result.status !== "COMPLETED" && (
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-400/30 bg-amber-400/[.06] px-4 py-3 text-sm text-amber-100">
             <div>
@@ -449,7 +515,7 @@ export default function IntelligenceRunsPage() {
             )}
           </div>
         )}
-        {selected?.status === "COMPLETED" && runContext?.result.status === "COMPLETED" && (
+        {selected?.status === "COMPLETED" && runContext?.result.status === "COMPLETED" && !selected.legacy_incomplete && (
           <AnalysisChatPanel
             runId={selected.id}
             graphLabel={`${selected.graph_key ?? "analysis"}@${selected.graph_version ?? "—"}`}
@@ -475,6 +541,11 @@ export default function IntelligenceRunsPage() {
                   </div>
                   <p className="truncate text-sm font-medium">{runTitle(run)}</p>
                   <p className="mt-1 truncate font-mono text-[10px] text-cyan-300/70">{run.origin_module ?? run.graph_key ?? "canonical"}</p>
+                  {run.origin_module === "shadow_portfolio" && (
+                    <p className={`mt-2 font-mono text-[9px] uppercase ${run.legacy_incomplete ? "text-rose-300" : "text-emerald-300"}`}>
+                      {run.legacy_incomplete ? "Dados incompletos — contrato legado" : run.coverage_status === "RECONCILED_COMPLETE" ? "Dados completos" : "Captura canônica em processamento"}
+                    </p>
+                  )}
                   <div className="mt-2 flex items-center justify-between text-[10px] text-[var(--text-muted)]">
                     <span>{run.authority}</span><span>{when(run.updated_at)}</span>
                   </div>
@@ -539,6 +610,15 @@ export default function IntelligenceRunsPage() {
                   <div><dt className="text-[10px] uppercase tracking-wider">Prompt sistêmico</dt><dd className="mt-0.5 font-mono text-[var(--text-primary)]">{runContext.prompt.key}@{runContext.prompt.version}</dd></div>
                   <div><dt className="text-[10px] uppercase tracking-wider">Prompt selecionado</dt><dd className="mt-0.5 font-mono text-[var(--text-primary)]">{runContext.analysis_prompt.name ? `${runContext.analysis_prompt.name} · v${runContext.analysis_prompt.version_number}` : "Legado / não vinculado"}</dd>{runContext.analysis_prompt.hash && <dd className="truncate font-mono text-cyan-300">sha256:{runContext.analysis_prompt.hash}</dd>}</div>
                   <div><dt className="text-[10px] uppercase tracking-wider">Dataset</dt><dd className="mt-0.5 font-mono text-[var(--text-primary)]">{runContext.dataset.quality_status ?? "—"} · rows {runContext.dataset.row_count ?? "—"}</dd><dd className="truncate font-mono">{runContext.dataset.id ?? "—"}</dd></div>
+                  {selected.origin_module === "shadow_portfolio" && (
+                    <>
+                      <div><dt className="text-[10px] uppercase tracking-wider">Cobertura</dt><dd className={`mt-0.5 font-mono ${coverage?.legacy_incomplete ? "text-rose-300" : coverage?.coverage_status === "RECONCILED_COMPLETE" ? "text-emerald-300" : "text-cyan-300"}`}>{coverage?.legacy_incomplete ? "Dados incompletos — contrato legado" : coverage?.coverage_status === "RECONCILED_COMPLETE" ? "Dados completos" : "Captura canônica em processamento"}</dd><dd className="font-mono text-[var(--text-primary)]">{coverage?.processed_item_count ?? 0} / {coverage?.source_item_count ?? "—"} processados</dd></div>
+                      <div><dt className="text-[10px] uppercase tracking-wider">Contrato / captura</dt><dd className="mt-0.5 break-all font-mono text-[var(--text-primary)]">{coverage?.input_contract_version ?? "—"}</dd><dd>{when(coverage?.capture_at ?? null)}</dd></div>
+                      <div><dt className="text-[10px] uppercase tracking-wider">Blocos</dt><dd className="mt-1 space-y-1">{coverage?.shards.length ? coverage.shards.map((shard) => <span key={shard.id} className={`block rounded border px-2 py-1 font-mono text-[10px] ${shard.status === "RECONCILED" ? "border-emerald-400/20 text-emerald-300" : shard.status === "FAILED" ? "border-rose-400/20 text-rose-300" : "border-cyan-400/20 text-cyan-300"}`}>#{shard.shard_index + 1} · {shard.status} · {shard.item_count} trades</span>) : "—"}</dd></div>
+                      {(coverage?.missing_required_fields.length ?? 0) > 0 && <div><dt className="text-[10px] uppercase tracking-wider text-rose-300">Campos ausentes</dt><dd className="mt-1 break-words text-rose-200">{JSON.stringify(coverage?.missing_required_fields)}</dd></div>}
+                      {coverage?.blocking_reason && <div><dt className="text-[10px] uppercase tracking-wider text-rose-300">Motivo do bloqueio</dt><dd className="mt-1 font-mono text-rose-200">{coverage.blocking_reason}</dd></div>}
+                    </>
+                  )}
                   <div><dt className="text-[10px] uppercase tracking-wider">Bundle</dt><dd className="mt-0.5 font-mono text-[var(--text-primary)]">{runContext.bundle.lineage_status ?? "—"}</dd><dd className="truncate font-mono">{runContext.bundle.id ?? "—"}</dd></div>
                   <div><dt className="text-[10px] uppercase tracking-wider">Modules consulted</dt><dd className="mt-0.5 leading-5 text-[var(--text-primary)]">{runContext.dataset.context_manifest?.modules_consulted?.join(" · ") || "—"}</dd></div>
                   <div><dt className="text-[10px] uppercase tracking-wider">Tool calls / memory</dt><dd className="mt-0.5 font-mono text-[var(--text-primary)]">{runContext.dataset.context_manifest?.tools_called?.length ?? 0} / {runContext.result.memory_hits.length}</dd></div>

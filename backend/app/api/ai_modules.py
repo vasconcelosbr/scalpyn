@@ -19,13 +19,15 @@ from ..ai_orchestration.hashing import canonical_hash
 from ..ai_orchestration.langgraph.config import get_langgraph_settings
 from ..ai_orchestration.provider_registry import default_registry
 from ..database import get_db
-from ..models.shadow_trade_analysis import ShadowTradeReportItem, ShadowTradeReportRun
+from ..models.shadow_trade_analysis import ShadowTradeReportRun
 from ..models.systemic_ai import (
     AIAnalysisPromptRecord,
     AIAnalysisPromptVersionRecord,
     AIAnalysisProfileRecord,
+    AIDatasetSnapshotRecord,
     AIBudgetPolicyRecord,
     AIModelApprovalRecord,
+    AIRequestRecord,
 )
 from ..services.module_ai_analysis_service import ModuleAIAnalysisService
 from .config import get_current_user_id
@@ -282,6 +284,18 @@ class CreateProfileAnalysisRequest(BaseModel):
         return self
 
 
+def _runtime_error_http_detail(exc: RuntimeError) -> dict[str, Any]:
+    code = str(getattr(exc, "code", None) or str(exc).split(":", 1)[0])
+    detail: dict[str, Any] = {"code": code}
+    evidence = getattr(exc, "details", None)
+    if isinstance(evidence, dict) and evidence:
+        detail["block_reason"] = code
+        detail["evidence"] = evidence
+        if isinstance(evidence.get("paths"), list):
+            detail["missing_fields"] = evidence["paths"]
+    return detail
+
+
 def _profile_response(profile: AIAnalysisProfileRecord) -> dict[str, Any]:
     return {
         "id": str(profile.id),
@@ -375,7 +389,11 @@ async def create_module_analysis_run_from_profile(
     _validate_profile(profile, now)
     entity_ids = payload.entity_ids
     extra_filters: dict[str, Any] = {}
+    if payload.origin_module == "shadow_portfolio" and payload.report_run_id is None:
+        raise HTTPException(status_code=422, detail={"code": "SHADOW_REPORT_RUN_REQUIRED"})
     if payload.report_run_id is not None:
+        if payload.origin_module != "shadow_portfolio":
+            raise HTTPException(status_code=422, detail={"code": "REPORT_RUN_SCOPE_INVALID"})
         report_run = (
             await db.execute(
                 select(ShadowTradeReportRun).where(
@@ -386,15 +404,8 @@ async def create_module_analysis_run_from_profile(
         ).scalar_one_or_none()
         if report_run is None:
             raise HTTPException(status_code=404, detail={"code": "REPORT_RUN_NOT_FOUND"})
-        trade_ids = (
-            await db.execute(
-                select(ShadowTradeReportItem.shadow_trade_id)
-                .where(ShadowTradeReportItem.report_run_id == report_run.id)
-                .order_by(ShadowTradeReportItem.position)
-            )
-        ).scalars().all()
-        entity_ids = tuple(str(trade_id) for trade_id in trade_ids)
-        extra_filters["max_rows"] = max(len(entity_ids), 200)
+        entity_ids = ()
+        extra_filters["report_run_id"] = str(report_run.id)
     analysis_prompt_binding: dict[str, Any] | None = None
     analysis_prompt_version: AIAnalysisPromptVersionRecord | None = None
     if payload.analysis_prompt_version_id is not None:
@@ -471,15 +482,25 @@ async def create_module_analysis_run_from_profile(
                 payload.analysis_prompt_version_id if analysis_prompt_binding else None
             ),
             analysis_prompt_binding=analysis_prompt_binding,
+            report_run_id=payload.report_run_id,
+            max_shard_input_tokens=profile.max_input_tokens,
         )
         await db.commit()
         await db.refresh(run)
     except RuntimeError as exc:
-        code = str(exc).split(":", 1)[0]
+        detail = _runtime_error_http_detail(exc)
+        code = detail["code"]
         status = 403 if code.endswith(("DENIED", "READ_ONLY")) else 409
-        raise HTTPException(status_code=status, detail={"code": code}) from exc
+        raise HTTPException(status_code=status, detail=detail) from exc
     from ..tasks.ai_orchestration import start_graph_run
-    start_graph_run.apply_async(args=[str(run.id)], queue="ai_orchestration")
+    if run.status == "QUEUED":
+        start_graph_run.apply_async(args=[str(run.id)], queue="ai_orchestration")
+    request_record = await db.get(AIRequestRecord, run.ai_request_id)
+    dataset_record = (
+        await db.get(AIDatasetSnapshotRecord, request_record.dataset_snapshot_id)
+        if request_record else None
+    )
+    manifest = dict((dataset_record.context_manifest if dataset_record else {}) or {})
     return {
         "id": str(run.id),
         "ai_request_id": str(run.ai_request_id),
@@ -488,6 +509,15 @@ async def create_module_analysis_run_from_profile(
         "graph_definition_id": str(run.graph_definition_id),
         "analysis_profile": _profile_response(profile),
         "analysis_prompt": analysis_prompt_binding,
+        "input_contract_version": dataset_record.contract_version if dataset_record else None,
+        "capture_at": manifest.get("capture_at"),
+        "report_run_id": manifest.get("report_run_id"),
+        "source_item_count": manifest.get("source_item_count"),
+        "processed_item_count": manifest.get("processed_item_count"),
+        "coverage_status": manifest.get("coverage_status"),
+        "shard_count": manifest.get("shard_count"),
+        "dataset_hash": dataset_record.dataset_hash if dataset_record else None,
+        "legacy_incomplete": manifest.get("legacy_incomplete", True),
     }
 
 
@@ -497,6 +527,11 @@ async def create_module_analysis_run(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ):
+    if payload.origin_module == "shadow_portfolio":
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "SHADOW_PROFILE_AND_REPORT_RUN_REQUIRED"},
+        )
     try:
         run = await ModuleAIAnalysisService.create_run(
             db, tenant_id=user_id, user_id=user_id,
@@ -510,9 +545,10 @@ async def create_module_analysis_run(
         await db.commit()
         await db.refresh(run)
     except RuntimeError as exc:
-        code = str(exc).split(":", 1)[0]
+        detail = _runtime_error_http_detail(exc)
+        code = detail["code"]
         status = 403 if code.endswith(("DENIED", "READ_ONLY")) else 409
-        raise HTTPException(status_code=status, detail={"code": code}) from exc
+        raise HTTPException(status_code=status, detail=detail) from exc
     from ..tasks.ai_orchestration import start_graph_run
     start_graph_run.apply_async(args=[str(run.id)], queue="ai_orchestration")
     return {

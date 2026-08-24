@@ -48,43 +48,70 @@
       ]
     },
     {
-      "id": "shadow-report-ai-full-scope-bounded-payload",
-      "description": "Detailed Report AI keeps the immutable full report scope while compacting repeated per-trade provider metadata",
+      "id": "shadow-portfolio-full-canonical-ai-contract",
+      "description": "Shadow Portfolio AI is report-backed, complete, sharded without splitting trades, reconciled by hash, and has no summarized fallback",
       "files": [
         {
-          "path": "frontend/components/shadow-portfolio/DetailedReportWorkspace.tsx",
+          "path": "backend/app/services/shadow_full_canonical_service.py",
           "contains_all": [
-            "report_run_id: scope === \"REPORT\" ? targetId : null",
-            "Análise por IA (${run.total_trades} trades)"
+            "shadow-portfolio-full-canonical-v1",
+            "features_snapshot_exit",
+            "provider_shard_payload",
+            "reconcile_shard_results",
+            "DATASET_RECONCILIATION_FAILED"
           ]
         },
         {
-          "path": "backend/app/api/ai_modules.py",
+          "path": "backend/app/services/module_ai_analysis_service.py",
           "contains_all": [
-            "payload.report_run_id",
-            "ShadowTradeReportItem.report_run_id == report_run.id",
-            "extra_filters[\"max_rows\"] = max(len(entity_ids), 200)"
+            "SHADOW_REPORT_RUN_REQUIRED",
+            "capture_report",
+            "persist_capture",
+            "shadow_full_canonical_capture_enabled",
+            "shadow_full_canonical_provider_enabled",
+            "SHADOW_CANONICAL_CAPTURE_ONLY"
           ]
         },
         {
           "path": "backend/app/services/systemic_langgraph_bridge.py",
           "contains_all": [
-            "_compact_entry_risk_components",
-            "_provider_frozen_rows",
-            "entry_risk_component_breakdown"
+            "_execute_shadow_provider_plan",
+            "referenced_shards",
+            "SHARD_CONTEXT_EXCEEDED",
+            "DATASET_RECONCILIATION_FAILED"
           ]
         },
         {
-          "path": "backend/tests/test_analysis_chat_contract.py",
+          "path": "backend/app/ai_orchestration/langgraph/analysis_chat_handler.py",
           "contains_all": [
-            "test_provider_decision_context_compacts_entry_risk_metadata_without_dropping_rows",
-            "assert len(provider_rows) == 164"
+            "canonical_shadow_shards",
+            "provider_shard_payload",
+            "canonical-chat-shard",
+            "referenced_shards"
           ]
         },
         {
-          "path": "frontend/lib/shadowPortfolioAnalysisScope.test.ts",
+          "path": "backend/tests/test_module_ai_analysis_dataset_sampling.py",
           "contains_all": [
-            "detailed reports cannot start an Intelligence Run from the paginated trade list"
+            "_INDICATOR_NAMES",
+            "max_rows",
+            "shadow_capture is not None"
+          ]
+        },
+        {
+          "path": "backend/tests/test_shadow_full_canonical_service.py",
+          "contains_all": [
+            "test_provider_payload_supplies_exact_persisted_item_hash_and_reconciles_once",
+            "test_sharding_is_deterministic_and_keeps_each_trade_whole_once",
+            "test_missing_required_indicator_blocks_capture"
+          ]
+        },
+        {
+          "path": "frontend/app/intelligence-runs/page.tsx",
+          "contains_all": [
+            "Dados completos",
+            "Dados incompletos — contrato legado",
+            "Criar nova análise com dados completos"
           ]
         }
       ]

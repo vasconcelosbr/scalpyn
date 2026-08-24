@@ -29,6 +29,7 @@ from ..models.systemic_ai import (
     AIJobRecord,
     AIModelApprovalRecord,
     AIModelResolutionRecord,
+    AIDatasetSnapshotRecord,
     AIPromptVersion,
     AIRequestRecord,
     AIResultRecord,
@@ -372,6 +373,25 @@ class AnalysisChatService:
             raise AnalysisChatError(f"ANALYSIS_CHAT_MODE_DISABLED:{mode.value}", status_code=403)
 
     @staticmethod
+    async def _require_complete_shadow_parent(
+        db: AsyncSession, *, tenant_id: UUID, run: AIGraphRun,
+    ) -> None:
+        request = await db.get(AIRequestRecord, run.ai_request_id)
+        if request is None or request.tenant_id != tenant_id:
+            raise AnalysisChatError("ANALYSIS_CHAT_PARENT_LINEAGE_INVALID")
+        if request.origin_module != "shadow_portfolio":
+            return
+        dataset = await db.get(AIDatasetSnapshotRecord, request.dataset_snapshot_id)
+        manifest = dict((dataset.context_manifest if dataset else {}) or {})
+        if (
+            dataset is None
+            or dataset.contract_version != "shadow-portfolio-full-canonical-v1"
+            or manifest.get("coverage_status") != "RECONCILED_COMPLETE"
+            or manifest.get("legacy_incomplete") is not False
+        ):
+            raise AnalysisChatError("ANALYSIS_DATA_INCOMPLETE", status_code=409)
+
+    @staticmethod
     async def create_conversation(
         db: AsyncSession, *, tenant_id: UUID, user_id: UUID, run_id: UUID, title: str | None,
     ) -> AIAnalysisConversation:
@@ -393,6 +413,9 @@ class AnalysisChatService:
         )
         if run.status != "COMPLETED" or result.status != "COMPLETED":
             raise AnalysisChatError("ANALYSIS_CHAT_PARENT_RUN_NOT_ELIGIBLE")
+        await AnalysisChatService._require_complete_shadow_parent(
+            db, tenant_id=tenant_id, run=run,
+        )
         conversation_id = uuid.uuid4()
         conversation = AIAnalysisConversation(
             id=conversation_id,
@@ -555,6 +578,9 @@ class AnalysisChatService:
             raise AnalysisChatError("ANALYSIS_CHAT_PARENT_CONTRACT_INVALID")
         canonical_run, canonical_result = await AnalysisChatService._canonical_parent(
             db, tenant_id=tenant_id, run=parent_run, result=parent_result
+        )
+        await AnalysisChatService._require_complete_shadow_parent(
+            db, tenant_id=tenant_id, run=canonical_run,
         )
         if canonical_run.id != parent_run.id:
             if int(conversation.message_count or 0) != 0:

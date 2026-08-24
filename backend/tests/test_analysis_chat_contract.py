@@ -2649,3 +2649,106 @@ def test_proposal_confirmation_refreshes_governed_policy_evidence():
     ]
     assert "_GOVERNED_PROPOSAL_EVIDENCE_TOOLS" in handler_source
     assert '"proposal_evidence_tool_allowlist"' in send_source
+
+
+@pytest.mark.asyncio
+async def test_canonical_shadow_chat_reuses_every_complete_shard_and_reconciles_hashes(monkeypatch):
+    from app.ai_orchestration.langgraph.analysis_chat_handler import (
+        AnalysisChatGraphNodeHandler,
+        _ProviderInvocation,
+    )
+    from app.ai_orchestration.runtime import ProviderResponse
+    from app.schemas.analysis_chat import AnalysisChatOutput
+    from app.services.systemic_langgraph_bridge import SystemicLangGraphBridge
+
+    parent_id = uuid.uuid4()
+    trade_ids = [uuid.uuid4(), uuid.uuid4()]
+    hashes = ["a" * 64, "b" * 64]
+    calls = []
+
+    async def _provider(**kwargs):
+        calls.append(kwargs)
+        call_index = len(calls) - 1
+        if call_index < 2:
+            return ProviderResponse(
+                output={
+                    "processed_items": [{
+                        "shadow_trade_id": str(trade_ids[call_index]),
+                        "item_hash": hashes[call_index],
+                    }],
+                    "evidence": [{"trade": str(trade_ids[call_index])}],
+                    "warnings": [],
+                },
+                tokens_input=10,
+                tokens_output=5,
+            )
+        return ProviderResponse(
+            output={
+                "answer": "Resposta baseada nos dois blocos completos.",
+                "answer_type": "FOLLOW_UP",
+                "based_on": "FULL_CANONICAL_DATASET",
+                "parent_analysis_run_id": str(parent_id),
+                "referenced_shards": [0, 1],
+            },
+            tokens_input=20,
+            tokens_output=7,
+        )
+
+    monkeypatch.setattr(
+        SystemicLangGraphBridge,
+        "execute_json_provider",
+        staticmethod(_provider),
+    )
+    invocation = _ProviderInvocation(
+        tenant_id=uuid.uuid4(),
+        request_id=uuid.uuid4(),
+        message_id=uuid.uuid4(),
+        parent_analysis_run_id=parent_id,
+        provider_key_id=uuid.uuid4(),
+        provider="anthropic",
+        model="claude-model",
+        system_prompt="synthesis system",
+        user_prompt="synthesis user",
+        api_key="not-used",
+        max_output_tokens=1024,
+        output_schema=AnalysisChatOutput.model_json_schema(),
+        budget_enforcement_enabled=True,
+        reserved_tokens=10_000,
+        reserved_cost=Decimal("1"),
+        used_today=0,
+        used_month=0,
+        request_token_limit=100_000,
+        daily_token_limit=1_000_000,
+        monthly_token_limit=2_000_000,
+        provider_key_monthly_token_limit=2_000_000,
+        provider_key_tokens_used_month_before=0,
+        input_rate=Decimal("1"),
+        output_rate=Decimal("1"),
+        max_cost_usd=Decimal("10"),
+        pricing_snapshot_version="pricing-v1",
+        selected_evidence_refs=(),
+        data_mode=AnalysisChatDataMode.FROZEN_ANALYSIS_ONLY.value,
+        canonical_shadow_shards=tuple({
+            "shard_index": index,
+            "payload_hash": hashes[index],
+            "expected_items": ((str(trade_ids[index]), hashes[index]),),
+            "system_prompt": f"shard system {index}",
+            "user_prompt": f"complete canonical trade {trade_ids[index]}",
+        } for index in range(2)),
+        shadow_shard_max_output_tokens=512,
+    )
+
+    response = await AnalysisChatGraphNodeHandler(
+        uuid.uuid4(), celery=False
+    )._invoke_normal_provider(invocation)
+
+    assert len(calls) == 3
+    assert [call["request_id"].split(":")[-1] for call in calls[:2]] == ["0", "1"]
+    assert "complete canonical trade" in calls[0]["user_prompt"]
+    assert "complete canonical trade" in calls[1]["user_prompt"]
+    assert calls[2]["output_schema"]["properties"]["referenced_shards"]
+    assert response.tokens_input == 40
+    assert response.tokens_output == 17
+    assert response.terminal_error_code is None
+    assert "referenced_shards" not in response.output
+    assert response.output["based_on"] == "FULL_CANONICAL_DATASET"

@@ -119,6 +119,27 @@ def test_normal_gate_config_has_no_canary_authority_and_defaults_closed():
         AIProviderRuntimeConfig.model_validate({"real_provider_canary_enabled": True})
 
 
+def test_shadow_canonical_capture_and_provider_have_separate_fail_closed_gates():
+    capture_only = AIProviderRuntimeConfig(
+        shadow_full_canonical_capture_enabled=True,
+        shadow_full_canonical_provider_enabled=False,
+    )
+    assert capture_only.shadow_full_canonical_capture_enabled is True
+    assert capture_only.shadow_full_canonical_provider_enabled is False
+    with pytest.raises(ValidationError):
+        AIProviderRuntimeConfig(
+            shadow_full_canonical_capture_enabled=False,
+            shadow_full_canonical_provider_enabled=True,
+            shadow_shard_max_output_tokens=1024,
+            shadow_synthesis_max_output_tokens=2048,
+        )
+    with pytest.raises(ValidationError):
+        AIProviderRuntimeConfig(
+            shadow_full_canonical_capture_enabled=True,
+            shadow_full_canonical_provider_enabled=True,
+        )
+
+
 def test_failed_node_is_preserved_outside_node_transaction():
     failure = _failure_details(GraphNodeExecutionError(
         "invoke_provider",

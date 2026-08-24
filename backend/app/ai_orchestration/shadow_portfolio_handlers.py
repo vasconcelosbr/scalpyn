@@ -10,13 +10,10 @@ module_tool_runtime.py) -- 11 differently-named tools returning byte-
 identical output, confirmed 2026-08-17 against a live root-cause-audit
 request (10 of 11 outputs shared the exact same data hash).
 
-Each function below computes its own real aggregate from the rows already
-fetched by ModuleAIAnalysisService._rows(module_key="shadow_portfolio", ...)
--- enriched there with mae_pct/mfe_pct/delayed_tp/horizon_change_pct/
-final_score/features_coverage/etc. Pure functions, no DB access (matches
-the existing synchronous handler(capability, rows=..., ...) call site in
-module_tool_runtime.py) -- the row set was already tenant/entity-scoped and
-frozen upstream.
+Each function below computes its own real aggregate from the complete
+canonical items persisted for one report-backed Intelligence Run. Pure
+functions keep the calculations deterministic after the runtime has verified
+tenant scope, item count, contract version, and dataset hash.
 
 Aggregation logic mirrors, at reduced precision, the equivalent dashboard
 endpoints in api/shadow_trades.py (shadow_trades_summary, shadow_trades_
@@ -24,17 +21,64 @@ analytics, shadow_trades_timeout_analysis) so the AI's numbers agree with
 what an operator sees on screen for the same population, rather than
 inventing a parallel definition of win rate / MAE / MFE / recovery.
 
-freeze_analysis_dataset is intentionally NOT covered here -- returning the
-raw frozen rows unaltered is its actual contract (the frozen dataset the
-draft analysis is built from), not a stub.
+freeze_analysis_dataset returns only the verified coverage manifest. Raw
+trades reach the provider exclusively through the hashed canonical shards;
+the tool layer never creates a second summarized dataset.
 """
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
-from ..services.profile_intelligence_live_service import _INDICATOR_NAMES, _bucket
 from .tool_registry import ToolCapability
+
+
+def _pct_change(after: Any, entry: Any) -> float | None:
+    try:
+        after_value = float(after)
+        entry_value = float(entry)
+    except (TypeError, ValueError):
+        return None
+    if entry_value == 0:
+        return None
+    return (after_value - entry_value) / entry_value * 100
+
+
+def canonical_analytics_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Derive compact calculation views from complete persisted canonical items.
+
+    No feature catalog is consulted: every finite numeric value in both full
+    feature snapshots remains discoverable through ``indicators_by_phase``.
+    """
+    output: list[dict[str, Any]] = []
+    for canonical in rows:
+        trade = dict(canonical.get("trade") or {})
+        snapshots = canonical.get("snapshots") or {}
+        entry_features = dict(snapshots.get("entry_features") or {})
+        exit_features = dict(snapshots.get("exit_features") or {})
+        configuration = snapshots.get("configuration") or {}
+        risk = snapshots.get("entry_risk") or {}
+        output.append({
+            **trade,
+            "id": str(trade.get("id") or ""),
+            "event_identity": str(trade.get("event_id") or trade.get("id") or ""),
+            "lineage_status": trade.get("lineage_status"),
+            "final_score": configuration.get("final_score"),
+            "horizon_change_pct": {
+                horizon: _pct_change(trade.get(f"price_after_{horizon}"), trade.get("entry_price"))
+                for horizon in ("1h", "2h", "4h", "12h", "24h")
+            },
+            "entry_risk_contract_valid": (
+                (risk.get("contract_status") or {}).get("entry_risk_contract_valid")
+            ),
+            "indicators_by_phase": {
+                "entry": entry_features,
+                "exit": exit_features,
+            },
+            "canonical_item_hash": None,
+        })
+    return output
 
 
 def _envelope(
@@ -356,51 +400,86 @@ def compare_champion_candidate(
 def indicator_lift(
     capability: ToolCapability, *, rows: list[dict], dataset_hash: str, dataset_window_end: str,
 ) -> dict[str, Any]:
-    """Win rate / avg pnl by (indicator, bucket), for the same 15 entry-time
-    technical indicators and bucket boundaries the profile_indicator_performance
-    miner uses (profile_intelligence_live_service.py:_INDICATOR_NAMES/_bucket) --
-    reused directly rather than redefined so the two never silently diverge.
-
-    Unlike that miner, this reads the indicator_<name> scalars already carried
-    on the frozen dataset rows (module_ai_analysis_service.py) instead of
-    querying shadow_trades.features_snapshot itself, so its evidence traces
-    to the exact same dataset_hash as every other shadow_portfolio tool in
-    this request -- not a separate rolling-window table computed on its own
-    schedule. Added 2026-08-19 after a live root-cause-audit run reported
-    "no entry features" as evidence: no shadow_portfolio tool exposed entry
-    indicator values at all before this one."""
+    """Discover every numeric entry/exit indicator and calculate quartile lift."""
     completed = [r for r in rows if r.get("status") == "COMPLETED"]
-    buckets: dict[str, dict[str, list]] = {}
-    missing_indicators: set[str] = set()
-    for indicator in _INDICATOR_NAMES:
-        key = f"indicator_{indicator}"
-        for row in completed:
-            value = row.get(key)
-            if value is None:
-                missing_indicators.add(indicator)
+    numeric: dict[tuple[str, str], list[tuple[float, dict[str, Any]]]] = {}
+    all_names: dict[str, set[str]] = {"entry": set(), "exit": set()}
+    for row in completed:
+        for phase, features in (row.get("indicators_by_phase") or {}).items():
+            if phase not in all_names or not isinstance(features, dict):
                 continue
-            bucket = _bucket(indicator, value)
-            group = buckets.setdefault(f"{indicator}:{bucket}", {"indicator": indicator, "bucket": bucket, "rows": []})
-            group["rows"].append(row)
+            all_names[phase].update(str(name) for name in features)
+            for indicator, raw_value in features.items():
+                if isinstance(raw_value, bool):
+                    continue
+                try:
+                    value = float(raw_value)
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(value):
+                    numeric.setdefault((phase, str(indicator)), []).append((value, row))
 
     indicators_out = []
-    for group in buckets.values():
-        group_rows = group["rows"]
-        win = [r for r in group_rows if r.get("outcome") == "TP_HIT"]
-        indicators_out.append({
-            "indicator": group["indicator"],
-            "bucket": group["bucket"],
-            "sample_size": len(group_rows),
-            "win_rate_pct": _rate_pct(len(win), len(group_rows)),
-            "avg_pnl_pct": _mean(_pnl_values(group_rows)),
-        })
-    indicators_out.sort(key=lambda item: (item["indicator"], item["bucket"]))
+    for (phase, indicator), observations in sorted(numeric.items()):
+        observations.sort(key=lambda pair: pair[0])
+        bucket_size = max(1, math.ceil(len(observations) / 4))
+        for index in range(4):
+            group = observations[index * bucket_size:(index + 1) * bucket_size]
+            if not group:
+                continue
+            group_rows = [row for _, row in group]
+            wins = [row for row in group_rows if row.get("outcome") == "TP_HIT"]
+            indicators_out.append({
+                "phase": phase,
+                "indicator": indicator,
+                "bucket": index + 1,
+                "value_min": group[0][0],
+                "value_max": group[-1][0],
+                "sample_size": len(group_rows),
+                "win_rate_pct": _rate_pct(len(wins), len(group_rows)),
+                "avg_pnl_pct": _mean(_pnl_values(group_rows)),
+            })
 
+    missing_indicators = sorted(
+        f"{phase}.{indicator}"
+        for phase, names in all_names.items()
+        for indicator in names
+        if (phase, indicator) not in numeric
+    )
     quality = "NO_DATA" if not completed else ("PASS_WITH_MISSINGNESS" if missing_indicators else "PASS")
     return _envelope(
         capability, data={"indicator_buckets": indicators_out}, evidence_ids=_evidence_ids(rows),
         dataset_hash=dataset_hash, dataset_window_end=dataset_window_end,
-        quality=quality, missingness=sorted(f"indicator_{name}" for name in missing_indicators),
+        quality=quality, missingness=missing_indicators,
+    )
+
+
+def dataset_manifest(
+    capability: ToolCapability, *, rows: list[dict], dataset_hash: str, dataset_window_end: str,
+) -> dict[str, Any]:
+    """Verify the persisted complete dataset without echoing or truncating rows."""
+    evidence_ids = [
+        str((row.get("trade") or {}).get("id"))
+        for row in rows
+        if (row.get("trade") or {}).get("id")
+    ]
+    contracts = sorted({str(row.get("input_contract_version")) for row in rows})
+    reports = sorted({str(row.get("report_run_id")) for row in rows})
+    quality = "PASS" if rows and len(contracts) == 1 and len(reports) == 1 else "BLOCKED"
+    return _envelope(
+        capability,
+        data={
+            "verification_only": True,
+            "item_count": len(rows),
+            "input_contract_versions": contracts,
+            "report_run_ids": reports,
+            "dataset_hash": dataset_hash,
+        },
+        evidence_ids=evidence_ids,
+        dataset_hash=dataset_hash,
+        dataset_window_end=dataset_window_end,
+        quality=quality,
+        missingness=[] if quality == "PASS" else ["canonical_dataset_manifest"],
     )
 
 
@@ -424,6 +503,7 @@ def no_experiment_data(
 
 
 SHADOW_PORTFOLIO_HANDLERS = {
+    "shadow.freeze_analysis_dataset": dataset_manifest,
     "shadow.get_performance_summary": performance_summary,
     "shadow.get_profile_performance": profile_performance,
     "shadow.get_score_buckets": score_buckets,

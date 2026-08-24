@@ -12,9 +12,11 @@ from __future__ import annotations
 
 from app.ai_orchestration.shadow_portfolio_handlers import (
     SHADOW_PORTFOLIO_HANDLERS,
+    canonical_analytics_rows,
     compare_champion_candidate,
     data_quality,
     delayed_tp,
+    indicator_lift,
     mae_mfe,
     no_experiment_data,
     outcome_horizons,
@@ -51,14 +53,12 @@ def _row(**overrides) -> dict:
     return base
 
 
-def test_all_eleven_tool_names_are_distinct_across_the_catalog():
-    """freeze_analysis_dataset intentionally falls back to the raw-row
-    reader (module_tool_runtime.py) -- everything else must have its own
-    entry here, one function per name."""
+def test_all_shadow_tool_names_have_explicit_handlers():
     expected = {
         "shadow.get_performance_summary", "shadow.get_profile_performance",
         "shadow.get_score_buckets", "shadow.get_mae_mfe", "shadow.get_delayed_tp",
         "shadow.get_outcome_horizons", "shadow.get_data_quality",
+        "shadow.get_indicator_lift", "shadow.freeze_analysis_dataset",
         "shadow.compare_champion_candidate", "shadow.get_experiment_status",
         "shadow.get_experiment_result",
     }
@@ -225,3 +225,35 @@ def test_no_experiment_data_is_honest_not_fabricated():
     assert out["quality"] == "NO_DATA"
     assert out["data"] == {"experiments_found": 0}
     assert out["evidence_ids"] == []
+
+
+def test_indicator_lift_discovers_unlisted_entry_and_exit_indicators():
+    canonical = [{
+        "trade": {
+            "id": "trade-1",
+            "event_id": "event-1",
+            "status": "COMPLETED",
+            "outcome": "TP_HIT",
+            "pnl_pct": 1.25,
+            "entry_price": 10,
+        },
+        "snapshots": {
+            "entry_features": {"brand_new_entry_indicator": 4.2},
+            "exit_features": {"brand_new_exit_indicator": -0.7},
+            "configuration": {"final_score": 80},
+            "entry_risk": {"contract_status": {"entry_risk_contract_valid": True}},
+        },
+    }]
+    rows = canonical_analytics_rows(canonical)
+    out = indicator_lift(
+        _capability("shadow.get_indicator_lift"),
+        rows=rows,
+        dataset_hash=DATASET_HASH,
+        dataset_window_end=DATASET_WINDOW_END,
+    )
+    discovered = {
+        (bucket["phase"], bucket["indicator"])
+        for bucket in out["data"]["indicator_buckets"]
+    }
+    assert ("entry", "brand_new_entry_indicator") in discovered
+    assert ("exit", "brand_new_exit_indicator") in discovered

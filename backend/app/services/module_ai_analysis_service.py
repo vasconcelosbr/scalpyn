@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,7 +16,7 @@ from ..ai_orchestration.contracts import (
 )
 from ..ai_orchestration.dataset_service import CanonicalDatasetService
 from ..ai_orchestration.initial_prompts import initial_prompt_registry
-from ..ai_orchestration.job_service import LeaseJob
+from ..ai_orchestration.job_service import AIJobState, LeaseJob
 from ..ai_orchestration.langgraph.config import get_langgraph_settings
 from ..ai_orchestration.module_registry import module_capability_registry
 from ..ai_orchestration.multimodule_contracts import AnalysisContextManifest, ModuleContextRefs
@@ -29,7 +29,11 @@ from ..models.shadow_trade import ShadowTrade
 from ..models.social_intelligence import SocialAssetObservation
 from ..models.systemic_ai import AIModelApprovalRecord
 from .ai_graph_service import AIGraphRunService
-from .profile_intelligence_live_service import _INDICATOR_NAMES
+from .shadow_full_canonical_service import (
+    CONTRACT_VERSION as SHADOW_CANONICAL_CONTRACT_VERSION,
+    capture_report,
+    persist_capture,
+)
 
 
 _READ_ONLY_MODULES = {
@@ -227,106 +231,7 @@ class ModuleAIAnalysisService:
             } for row in records]
 
         if module_key == "shadow_portfolio":
-            statement = select(ShadowTrade).where(ShadowTrade.user_id == tenant_id)
-            if ids:
-                statement = statement.where(ShadowTrade.id.in_(ids))
-            window_start = _filter_window_bound(filters.get("window_start"))
-            window_end = _filter_window_bound(filters.get("window_end"))
-            if window_start is not None:
-                statement = statement.where(ShadowTrade.entry_timestamp >= window_start)
-            if window_end is not None:
-                statement = statement.where(ShadowTrade.entry_timestamp <= window_end)
-            sampling_method = str(filters.get("sampling_method") or "recent")
-            if sampling_method == "random":
-                # Uniform random draw from the (optionally windowed) population,
-                # not a proxy for "most recent" -- required whenever the
-                # analysis is comparing a rate against a baseline rather than
-                # inspecting the latest activity.
-                statement = statement.order_by(func.random()).limit(limit)
-            elif sampling_method == "recent":
-                statement = statement.order_by(ShadowTrade.entry_timestamp.desc()).limit(limit)
-            else:
-                raise ValueError(f"Unsupported sampling_method: {sampling_method}")
-            records = list((await db.execute(statement)).scalars())
-            return [{
-                "id": str(row.id), "event_identity": str(row.event_id or row.id),
-                "outcome": row.outcome or row.status, "lineage_status": (
-                    "CANONICAL" if row.event_id and row.profile_version_id and row.score_engine_version_id
-                    else "UNRESOLVED"
-                ),
-                "symbol": row.symbol, "profile_id": str(row.profile_id) if row.profile_id else None,
-                "profile_version_id": str(row.profile_version_id) if row.profile_version_id else None,
-                "score_engine_version_id": str(row.score_engine_version_id) if row.score_engine_version_id else None,
-                "feature_contract": row.feature_schema_version,
-                "label_contract": row.label_contract_version,
-                "entry_timestamp": _iso(row.entry_timestamp), "exit_timestamp": _iso(row.exit_timestamp),
-                "status": row.status, "pnl_pct": float(row.pnl_pct) if row.pnl_pct is not None else None,
-                # Fields below back the ranked shadow_portfolio.get_* handlers
-                # (module_tool_runtime.py) -- kept as small scalars, never as
-                # nested blobs, so the 10 named tools can compute real
-                # per-metric aggregates without re-querying the database.
-                "pnl_usdt": float(row.pnl_usdt) if row.pnl_usdt is not None else None,
-                "holding_seconds": row.holding_seconds,
-                "mae_pct": row.mae_pct, "mfe_pct": row.mfe_pct,
-                "delayed_tp": row.delayed_tp, "delayed_tp_hours": row.delayed_tp_hours,
-                "timeout_post_analysis_done": bool(row.timeout_post_analysis_done),
-                "max_profit_after_timeout_pct": row.max_profit_after_timeout_pct,
-                "max_drawdown_after_timeout_pct": row.max_drawdown_after_timeout_pct,
-                "horizon_change_pct": {
-                    horizon: _pct_change(getattr(row, f"price_after_{horizon}"), row.entry_price)
-                    for horizon in ("1h", "2h", "4h", "12h", "24h")
-                },
-                "final_score": (row.config_snapshot or {}).get("final_score"),
-                # Curated scalar subset of features_snapshot (never the full blob --
-                # see module docstring: "kept as small scalars, never as nested
-                # blobs"). Same 15 indicators as the profile_indicator_performance
-                # miner (profile_intelligence_live_service.py:_INDICATOR_NAMES),
-                # reused rather than redefined so the two don't silently diverge.
-                # Backs shadow.get_indicator_lift.
-                **{
-                    f"indicator_{name}": (row.features_snapshot or {}).get(name)
-                    for name in _INDICATOR_NAMES
-                },
-                "legacy_entry_exhaustion_score": (
-                    (row.features_snapshot or {}).get("entry_exhaustion_score")
-                ),
-                "momentum_intensity_score": (
-                    ((row.entry_risk_features_json or {}).get("momentum_intensity") or {}).get(
-                        "momentum_intensity_score"
-                    )
-                ),
-                "exhaustion_risk_score": (
-                    ((row.entry_risk_features_json or {}).get("exhaustion_risk") or {}).get(
-                        "exhaustion_risk_score"
-                    )
-                ),
-                "entry_risk_capture_status": row.entry_risk_capture_status,
-                "entry_risk_contract_valid": (
-                    ((row.entry_risk_features_json or {}).get("contract_status") or {}).get(
-                        "entry_risk_contract_valid"
-                    )
-                ),
-                "entry_risk_semantics": (
-                    "MONITOR_ONLY; values are not calibrated probabilities and have no operational effect"
-                ),
-                "entry_risk_component_breakdown": {
-                    "legacy": (
-                        ((row.entry_risk_features_json or {}).get("legacy") or {}).get("components")
-                    ),
-                    "momentum_intensity": (
-                        ((row.entry_risk_features_json or {}).get("momentum_intensity") or {}).get("components")
-                    ),
-                    "exhaustion_risk": (
-                        ((row.entry_risk_features_json or {}).get("exhaustion_risk") or {}).get("dimensions")
-                    ),
-                },
-                "features_coverage": float(row.features_coverage) if row.features_coverage is not None else None,
-                "market_data_confidence": (
-                    float(row.market_data_confidence) if row.market_data_confidence is not None else None
-                ),
-                "oldest_indicator_age_s": row.oldest_indicator_age_s,
-                "eligible_for_training": bool(row.eligible_for_training),
-            } for row in records]
+            raise RuntimeError("SHADOW_CANONICAL_REPORT_REQUIRED")
 
         if module_key in _CONFIG_TYPES:
             records = list((await db.execute(select(ConfigProfile).where(
@@ -438,6 +343,8 @@ class ModuleAIAnalysisService:
         idempotency_key: str, graph_key_override: str | None = None,
         analysis_prompt_version_id: UUID | None = None,
         analysis_prompt_binding: dict[str, Any] | None = None,
+        report_run_id: UUID | None = None,
+        max_shard_input_tokens: int | None = None,
     ):
         settings = get_langgraph_settings()
         settings.require_runtime()
@@ -460,6 +367,11 @@ class ModuleAIAnalysisService:
             raise RuntimeError("AI_GRAPH_OVERRIDE_DENIED")
         if graph_key_override == "copilot-systemic-v2" and not origin_view.startswith("copilot"):
             raise RuntimeError("AI_COPILOT_GRAPH_ORIGIN_DENIED")
+        if origin_module == "shadow_portfolio" and report_run_id is None:
+            raise RuntimeError("SHADOW_REPORT_RUN_REQUIRED")
+        if origin_module == "shadow_portfolio" and not max_shard_input_tokens:
+            raise RuntimeError("SHARD_CONTEXT_LIMIT_REQUIRED")
+        shadow_provider_enabled = True
 
         approval = await db.get(AIModelApprovalRecord, model_approval_id)
         now = datetime.now(timezone.utc)
@@ -474,20 +386,53 @@ class ModuleAIAnalysisService:
             or approval.expires_at <= now
         ):
             raise RuntimeError("MODEL_COST_APPROVAL_INVALID")
+        if origin_module == "shadow_portfolio":
+            runtime_config = (await db.execute(select(ConfigProfile).where(
+                ConfigProfile.user_id == tenant_id,
+                ConfigProfile.pool_id.is_(None),
+                ConfigProfile.config_type == "ai_provider_runtime",
+                ConfigProfile.is_active.is_(True),
+            ).order_by(ConfigProfile.updated_at.desc()).limit(1))).scalar_one_or_none()
+            runtime_values = dict((runtime_config.config_json if runtime_config else {}) or {})
+            if runtime_values.get("shadow_full_canonical_capture_enabled") is not True:
+                raise RuntimeError("SHADOW_FULL_CANONICAL_DISABLED")
+            shadow_provider_enabled = (
+                runtime_values.get("shadow_full_canonical_provider_enabled") is True
+            )
 
-        rows = await cls._rows(
-            db, tenant_id=tenant_id, module_key=origin_module,
-            entity_ids=entity_ids, filters=filters,
-        )
+        dataset_snapshot_id = uuid4()
+        shadow_capture = None
+        if origin_module == "shadow_portfolio":
+            shadow_capture = await capture_report(
+                db,
+                tenant_id=tenant_id,
+                report_run_id=report_run_id,
+                dataset_snapshot_id=dataset_snapshot_id,
+                max_shard_input_tokens=int(max_shard_input_tokens),
+                captured_at=now,
+            )
+            rows = [item.payload for item in shadow_capture.items]
+            filters = {
+                **filters,
+                "report_run_id": str(report_run_id),
+                "input_contract_version": SHADOW_CANONICAL_CONTRACT_VERSION,
+            }
+            entity_ids = tuple(str(item.shadow_trade_id) for item in shadow_capture.items)
+        else:
+            rows = await cls._rows(
+                db, tenant_id=tenant_id, module_key=origin_module,
+                entity_ids=entity_ids, filters=filters,
+            )
         if not rows:
             raise RuntimeError("AI_MODULE_DATASET_EMPTY")
         window_start = now - timedelta(microseconds=1)
         timestamps = []
         for row in rows:
+            timestamp_source = row.get("trade") if shadow_capture is not None else row
             for key in ("entry_timestamp", "window_start", "train_start", "updated_at"):
-                if row.get(key):
+                if timestamp_source.get(key):
                     try:
-                        timestamps.append(datetime.fromisoformat(str(row[key])))
+                        timestamps.append(datetime.fromisoformat(str(timestamp_source[key])))
                     except ValueError:
                         pass
         if timestamps:
@@ -510,11 +455,26 @@ class ModuleAIAnalysisService:
             if any(veto_tool in item.read_tools for item in module_capability_registry.values()):
                 tool_allowlist.append(veto_tool)
         tool_allowlist = list(dict.fromkeys(tool_allowlist))
+        context_manifest_kwargs: dict[str, Any] = {}
+        if shadow_capture is not None:
+            context_manifest_kwargs = {
+                **shadow_capture.manifest,
+                "capture_at": shadow_capture.captured_at,
+                "report_run_id": shadow_capture.report_run_id,
+                "ordered_item_hashes": tuple(shadow_capture.manifest["ordered_item_hashes"]),
+                "shard_plan": tuple(shadow_capture.manifest["shard_plan"]),
+                "missing_required_fields": (),
+            }
         context_manifest = AnalysisContextManifest(
             modules_requested=(origin_module,), modules_consulted=(origin_module, *dependencies),
             tools_called=(), freshness={origin_module: capability.freshness_sla_seconds},
             quality={origin_module: "PENDING_GATE"},
-            evidence_ids=tuple(str(row["id"]) for row in rows),
+            evidence_ids=tuple(
+                str((row.get("trade") or {}).get("id")) if shadow_capture is not None
+                else str(row["id"])
+                for row in rows
+            ),
+            **context_manifest_kwargs,
         )
         policy_records = list((await db.execute(select(ConfigProfile).where(
             ConfigProfile.user_id == tenant_id,
@@ -527,9 +487,10 @@ class ModuleAIAnalysisService:
         for record in policy_records:
             policies.setdefault(record.config_type, record)
         first_row = rows[0]
-        profile_id = _uuid_or_none(first_row.get("profile_id"))
-        profile_version_id = _uuid_or_none(first_row.get("profile_version_id"))
-        score_engine_version_id = _uuid_or_none(first_row.get("score_engine_version_id"))
+        first_trade = first_row.get("trade") if shadow_capture is not None else first_row
+        profile_id = _uuid_or_none(first_trade.get("profile_id"))
+        profile_version_id = _uuid_or_none(first_trade.get("profile_version_id"))
+        score_engine_version_id = _uuid_or_none(first_trade.get("score_engine_version_id"))
         ml_model_id = _uuid_or_none(first_row.get("id")) if origin_module == "ml_models" else None
         market_regime_id = await db.scalar(text("""
             SELECT id FROM regime_history ORDER BY detected_at DESC LIMIT 1
@@ -557,8 +518,14 @@ class ModuleAIAnalysisService:
             strategy_policy_version_id=strategy_policy.id if strategy_policy else None,
             spot_policy_version_id=spot_policy.id if spot_policy else None,
             exit_policy_version_id=strategy_policy.id if strategy_policy else None,
-            feature_contract_version=first_row.get("feature_contract"),
-            label_contract_version=first_row.get("label_contract"),
+            feature_contract_version=(
+                first_trade.get("feature_schema_version") if shadow_capture is not None
+                else first_row.get("feature_contract")
+            ),
+            label_contract_version=(
+                first_trade.get("label_contract_version") if shadow_capture is not None
+                else first_row.get("label_contract")
+            ),
             ml_model_id=ml_model_id,
             model_lane=first_row.get("model_lane"),
             market_regime_id=_uuid_or_none(market_regime_id),
@@ -580,6 +547,12 @@ class ModuleAIAnalysisService:
                 "entity_ids": list(entity_ids), "filters": filters,
             }, origin_module=origin_module,
             module_context_refs=ModuleContextRefs(), context_manifest=context_manifest,
+            contract_version=(
+                SHADOW_CANONICAL_CONTRACT_VERSION if shadow_capture is not None
+                else "systemic-multimodule-v1"
+            ),
+            dataset_content_hash=(shadow_capture.dataset_hash if shadow_capture is not None else None),
+            dataset_snapshot_id=dataset_snapshot_id,
         )
         resolution = default_registry().resolve(
             requested_provider=provider, requested_model=model,
@@ -609,7 +582,8 @@ class ModuleAIAnalysisService:
             question=question,
             analysis_prompt_version_id=analysis_prompt_version_id,
             frozen_context={
-                "rows": rows, "context_manifest": context_manifest.model_dump(mode="json"),
+                **({} if shadow_capture is not None else {"rows": rows}),
+                "context_manifest": context_manifest.model_dump(mode="json"),
                 "context": context.model_dump(mode="json"), "context_fingerprint": context.digest,
                 "mutation_fingerprint": mutation_fingerprint({
                     "origin_module": origin_module, "entity_ids": list(entity_ids),
@@ -628,11 +602,25 @@ class ModuleAIAnalysisService:
             ("configuration_bundle", bundle), ("dataset", dataset), ("request", request),
         ):
             await persistence(kind, value)
+        if shadow_capture is not None:
+            await persist_capture(
+                db,
+                tenant_id=tenant_id,
+                ai_request_id=request.ai_request_id,
+                dataset_snapshot_id=dataset.dataset_snapshot_id,
+                capture=shadow_capture,
+            )
         selected_graph_key = graph_key_override or cls._graph_key(analysis_mode)
         job = LeaseJob.queued(
             tenant_id=tenant_id, purpose=origin_module,
             identity={"request": str(request.ai_request_id), "graph": selected_graph_key},
         )
+        if shadow_capture is not None and not shadow_provider_enabled:
+            job = job.terminalize(
+                status=AIJobState.CANCELLED,
+                reason="SHADOW_CANONICAL_CAPTURE_ONLY",
+                now=now,
+            )
         await persistence("job", job)
         run = await AIGraphRunService.create(
             db, tenant_id=tenant_id, user_id=user_id,
@@ -640,5 +628,9 @@ class ModuleAIAnalysisService:
             idempotency_key=idempotency_key,
         )
         run.ai_job_id = job.id
+        if shadow_capture is not None and not shadow_provider_enabled:
+            run.status = "CAPTURED"
+            run.terminal_reason = "SHADOW_CANONICAL_CAPTURE_ONLY"
+            run.completed_at = now
         await db.flush()
         return run

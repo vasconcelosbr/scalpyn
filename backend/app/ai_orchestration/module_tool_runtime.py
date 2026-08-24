@@ -13,7 +13,7 @@ from ..models.systemic_ai import AIToolCallAudit, AIToolEvidenceRecord
 from .contracts import Authority
 from .domain_tools import default_tool_capabilities
 from .hashing import canonical_hash
-from .shadow_portfolio_handlers import SHADOW_PORTFOLIO_HANDLERS
+from .shadow_portfolio_handlers import SHADOW_PORTFOLIO_HANDLERS, canonical_analytics_rows
 from .tool_registry import ToolCapability, ToolRegistry
 
 
@@ -91,10 +91,11 @@ class ModuleToolRuntime:
             or {}
         )
         evidence_origin_module = str(dataset.origin_module or request.origin_module)
-        request_filters["max_rows"] = min(
-            int(request_filters.get("max_rows") or get_langgraph_settings().tool_default_max_rows),
-            int(capability.max_rows or 5_000),
-        )
+        if capability.domain != "shadow_portfolio":
+            request_filters["max_rows"] = min(
+                int(request_filters.get("max_rows") or get_langgraph_settings().tool_default_max_rows),
+                int(capability.max_rows or 5_000),
+            )
         trade_entity_ids = tuple(request_filters.get("entity_ids") or ())
         entity_ids = trade_entity_ids
         if capability.domain != evidence_origin_module:
@@ -157,6 +158,26 @@ class ModuleToolRuntime:
                 "config": row.config_json,
                 "updated_at": row.updated_at.isoformat() if row.updated_at else None,
             } for row in records]
+        elif capability.domain == "shadow_portfolio":
+            from ..services.shadow_full_canonical_service import (
+                CONTRACT_VERSION as SHADOW_CANONICAL_CONTRACT_VERSION,
+                load_canonical_items,
+            )
+
+            if dataset.contract_version != SHADOW_CANONICAL_CONTRACT_VERSION:
+                raise RuntimeError("ANALYSIS_DATA_INCOMPLETE")
+            canonical_rows = await load_canonical_items(
+                db,
+                tenant_id=tenant_id,
+                dataset_snapshot_id=dataset.id,
+            )
+            if len(canonical_rows) != dataset.row_count:
+                raise RuntimeError("DATASET_RECONCILIATION_FAILED")
+            rows = (
+                canonical_rows
+                if tool_name == "shadow.freeze_analysis_dataset"
+                else canonical_analytics_rows(canonical_rows)
+            )
         else:
             rows = await ModuleAIAnalysisService._rows(
                 db,
@@ -173,7 +194,11 @@ class ModuleToolRuntime:
             dataset_window_end=dataset.window_end.isoformat(),
         )
         validate(output, capability.output_schema)
-        if isinstance(output.get("data"), list) and capability.max_rows is not None:
+        if (
+            capability.domain != "shadow_portfolio"
+            and isinstance(output.get("data"), list)
+            and capability.max_rows is not None
+        ):
             if len(output["data"]) > capability.max_rows:
                 raise RuntimeError("TOOL_MAX_ROWS_EXCEEDED")
 

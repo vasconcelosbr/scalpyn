@@ -18,7 +18,7 @@ from ..models.ai_graph import AIGraphDefinition, AIGraphRun
 from ..models.config_profile import ConfigProfile
 from ..models.systemic_ai import (
     AIAnalysisPromptVersionRecord, AIBudgetReservationRecord, AIConfigurationBundleRecord,
-    AIDatasetSnapshotRecord, AIModelResolutionRecord,
+    AIAnalysisShardRecord, AIDatasetSnapshotRecord, AIModelResolutionRecord,
     AIPromptVersion, AIRequestRecord, AIResultRecord, AIToolEvidenceRecord,
     AIUsageRecord,
 )
@@ -56,7 +56,29 @@ class StagingCrashResumeRequest(BaseModel):
     run_id: UUID | None = None
 
 
-def _run_payload(run, request=None, definition=None) -> dict[str, Any]:
+def _coverage_payload(request=None, dataset=None) -> dict[str, Any]:
+    is_shadow = bool(request and request.origin_module == "shadow_portfolio")
+    manifest = dict((dataset.context_manifest if dataset else {}) or {})
+    canonical = bool(
+        is_shadow
+        and dataset
+        and dataset.contract_version == "shadow-portfolio-full-canonical-v1"
+        and manifest.get("legacy_incomplete") is False
+    )
+    return {
+        "input_contract_version": dataset.contract_version if dataset else None,
+        "capture_at": manifest.get("capture_at"),
+        "report_run_id": manifest.get("report_run_id"),
+        "source_item_count": manifest.get("source_item_count") if canonical else (dataset.row_count if dataset else None),
+        "processed_item_count": manifest.get("processed_item_count") if canonical else None,
+        "coverage_status": manifest.get("coverage_status") if canonical else ("LEGACY_INCOMPLETE" if is_shadow else None),
+        "shard_count": manifest.get("shard_count") if canonical else None,
+        "dataset_hash": dataset.dataset_hash if dataset else None,
+        "legacy_incomplete": bool(is_shadow and not canonical),
+    }
+
+
+def _run_payload(run, request=None, definition=None, dataset=None) -> dict[str, Any]:
     request_intent = None
     if request is not None:
         try:
@@ -88,6 +110,7 @@ def _run_payload(run, request=None, definition=None) -> dict[str, Any]:
         "correlation_id": request.correlation_id if request else None,
         "graph_key": definition.graph_key if definition else None,
         "graph_version": definition.semantic_version if definition else None,
+        **_coverage_payload(request, dataset),
     }
 
 
@@ -99,7 +122,7 @@ def _error(exc: GraphAccessError) -> HTTPException:
     return HTTPException(status_code=status, detail={"code": code})
 
 
-def _result_payload(result: AIResultRecord | None) -> dict[str, Any]:
+def _result_payload(result: AIResultRecord | None, *, legacy_incomplete: bool = False) -> dict[str, Any]:
     """Return the user-facing, persisted analysis without internal lineage fields."""
     if result is None:
         return {
@@ -128,7 +151,7 @@ def _result_payload(result: AIResultRecord | None) -> dict[str, Any]:
     return {
         "status": result.status,
         "analysis": safe_analysis,
-        "recommendations": _list("recommendations"),
+        "recommendations": [] if legacy_incomplete else _list("recommendations"),
         "warnings": _list("warnings"),
         "limitations": _list("limitations"),
         "memory_hits": memory_hits,
@@ -169,14 +192,18 @@ async def list_graph_runs(
     user_id: UUID = Depends(get_current_user_id),
 ):
     rows = list((await db.execute(
-        select(AIGraphRun, AIRequestRecord, AIGraphDefinition)
+        select(AIGraphRun, AIRequestRecord, AIGraphDefinition, AIDatasetSnapshotRecord)
         .join(AIRequestRecord, AIRequestRecord.id == AIGraphRun.ai_request_id)
         .join(AIGraphDefinition, AIGraphDefinition.id == AIGraphRun.graph_definition_id)
+        .join(AIDatasetSnapshotRecord, AIDatasetSnapshotRecord.id == AIRequestRecord.dataset_snapshot_id)
         .where(AIGraphRun.tenant_id == user_id)
         .order_by(AIGraphRun.created_at.desc()).offset(offset).limit(limit)
     )).all())
     return {
-        "items": [_run_payload(run, request, definition) for run, request, definition in rows],
+        "items": [
+            _run_payload(run, request, definition, dataset)
+            for run, request, definition, dataset in rows
+        ],
         "limit": limit, "offset": offset,
     }
 
@@ -191,7 +218,8 @@ async def get_graph_run(
         run = await AIGraphRunService.get(db, tenant_id=user_id, run_id=run_id)
         request = await db.get(AIRequestRecord, run.ai_request_id)
         definition = await db.get(AIGraphDefinition, run.graph_definition_id)
-        return _run_payload(run, request, definition)
+        dataset = await db.get(AIDatasetSnapshotRecord, request.dataset_snapshot_id) if request else None
+        return _run_payload(run, request, definition, dataset)
     except GraphAccessError as exc:
         await db.rollback()
         raise _error(exc) from exc
@@ -234,7 +262,7 @@ async def get_graph_context(
         AIToolEvidenceRecord.ai_request_id == request.id,
     ).order_by(AIToolEvidenceRecord.created_at, AIToolEvidenceRecord.id))).scalars())
     return {
-        "run": _run_payload(run, request, definition),
+        "run": _run_payload(run, request, definition, dataset),
         "model": {
             "configured_provider": resolution.configured_provider if resolution else None,
             "configured_model": resolution.configured_model if resolution else None,
@@ -271,7 +299,10 @@ async def get_graph_context(
             "lineage_status": bundle.lineage_status if bundle else None,
             "lineage_refs": bundle.lineage_refs if bundle else None,
         },
-        "result": _result_payload(result),
+        "result": _result_payload(
+            result,
+            legacy_incomplete=_coverage_payload(request, dataset)["legacy_incomplete"],
+        ),
         "usage": {
             "tokens_input": usage.tokens_input if usage else None,
             "tokens_output": usage.tokens_output if usage else None,
@@ -328,6 +359,54 @@ async def get_graph_timeline(
         "id": event.id, "event_type": event.event_type, "node_name": event.node_name,
         "status": event.status, "payload": event.payload, "created_at": event.created_at,
     } for event in events], "limit": limit, "offset": offset}
+
+
+@router.get("/runs/{run_id}/coverage")
+async def get_graph_coverage(
+    run_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    try:
+        run = await AIGraphRunService.get(db, tenant_id=user_id, run_id=run_id)
+    except GraphAccessError as exc:
+        raise _error(exc) from exc
+    request = await db.get(AIRequestRecord, run.ai_request_id)
+    if request is None or request.tenant_id != user_id:
+        raise HTTPException(status_code=404, detail={"code": "AI_REQUEST_NOT_FOUND"})
+    dataset = await db.get(AIDatasetSnapshotRecord, request.dataset_snapshot_id)
+    if dataset is None or dataset.tenant_id != user_id:
+        raise HTTPException(status_code=404, detail={"code": "AI_DATASET_NOT_FOUND"})
+    shards = list((await db.execute(select(AIAnalysisShardRecord).where(
+        AIAnalysisShardRecord.tenant_id == user_id,
+        AIAnalysisShardRecord.ai_request_id == request.id,
+    ).order_by(AIAnalysisShardRecord.shard_index))).scalars())
+    manifest = dict(dataset.context_manifest or {})
+    return {
+        **_coverage_payload(request, dataset),
+        "coverage_by_path": manifest.get("coverage_by_path") or {},
+        "missing_required_fields": manifest.get("missing_required_fields") or [],
+        "blocking_reason": (
+            run.last_error_code
+            if run.status == "FAILED"
+            else None
+        ),
+        "shards": [{
+            "id": str(shard.id),
+            "shard_index": shard.shard_index,
+            "status": shard.status,
+            "item_count": shard.item_count,
+            "payload_hash": shard.payload_hash,
+            "payload_bytes": shard.payload_bytes,
+            "estimated_input_tokens": shard.estimated_input_tokens,
+            "tokens_input": shard.tokens_input,
+            "tokens_output": shard.tokens_output,
+            "error_code": shard.error_code,
+            "error_safe_message": shard.error_safe_message,
+            "started_at": shard.started_at,
+            "completed_at": shard.completed_at,
+        } for shard in shards],
+    }
 
 
 @router.get("/runs/{run_id}/interrupts")
@@ -458,6 +537,22 @@ async def graph_capabilities(
         "normal_analysis_provider_enabled": bool(
             runtime_config
             and (runtime_config.config_json or {}).get("normal_analysis_provider_enabled") is True
+        ),
+        "shadow_full_canonical_capture_enabled": bool(
+            runtime_config
+            and (runtime_config.config_json or {}).get("shadow_full_canonical_capture_enabled") is True
+        ),
+        "shadow_full_canonical_provider_enabled": bool(
+            runtime_config
+            and (runtime_config.config_json or {}).get("shadow_full_canonical_provider_enabled") is True
+        ),
+        "shadow_shard_max_output_tokens": int(
+            ((runtime_config.config_json or {}).get("shadow_shard_max_output_tokens") or 0)
+            if runtime_config else 0
+        ),
+        "shadow_synthesis_max_output_tokens": int(
+            ((runtime_config.config_json or {}).get("shadow_synthesis_max_output_tokens") or 0)
+            if runtime_config else 0
         ),
         "strict_msgpack": settings.strict_msgpack,
         "authorities": ["ANALYSIS_ONLY", "PROPOSAL_ONLY", "CANDIDATE_ONLY", "SHADOW_ONLY"],

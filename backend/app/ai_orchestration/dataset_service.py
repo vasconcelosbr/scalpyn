@@ -72,20 +72,31 @@ class CanonicalDatasetService:
               label_contract_version: str | None = None,
               origin_module: str | None = None,
               module_context_refs: ModuleContextRefs | None = None,
-              context_manifest: AnalysisContextManifest | None = None) -> CanonicalAnalysisDataset:
+              context_manifest: AnalysisContextManifest | None = None,
+              contract_version: str = "systemic-multimodule-v1",
+              dataset_content_hash: str | None = None,
+              dataset_snapshot_id: UUID | None = None) -> CanonicalAnalysisDataset:
         frozen_rows = tuple(dict(row) for row in rows)
         if not frozen_rows:
             raise fail(AIErrorCode.DATASET_EMPTY, "Canonical dataset is empty")
-        row_ids = [str(row.get("id")) for row in frozen_rows if row.get("id") is not None]
+        row_ids = [
+            str(row.get("id") or (row.get("trade") or {}).get("id"))
+            for row in frozen_rows
+            if row.get("id") is not None or (row.get("trade") or {}).get("id") is not None
+        ]
         findings: list[dict[str, Any]] = []
         identities: dict[str, set[str]] = {}
         missing_lineage = 0
         for row in frozen_rows:
-            identity = str(row.get("event_identity") or row.get("id") or "")
-            outcome = str(row.get("outcome") or "")
+            trade = row.get("trade") or {}
+            identity = str(
+                row.get("event_identity") or row.get("id")
+                or trade.get("event_id") or trade.get("id") or ""
+            )
+            outcome = str(row.get("outcome") or trade.get("outcome") or trade.get("status") or "")
             if identity:
                 identities.setdefault(identity, set()).add(outcome)
-            if row.get("lineage_status") in (None, "", "UNRESOLVED"):
+            if (row.get("lineage_status") or trade.get("lineage_status")) in (None, "", "UNRESOLVED"):
                 missing_lineage += 1
         conflicts = sorted(identity for identity, outcomes in identities.items() if len(outcomes - {""}) > 1)
         duplicate_count = len(row_ids) - len(set(row_ids))
@@ -101,7 +112,7 @@ class CanonicalDatasetService:
         else:
             quality_status = "PASS"
         dataset_payload = {
-            "tenant_id": str(tenant_id), "contract_version": "systemic-multimodule-v1",
+            "tenant_id": str(tenant_id), "contract_version": contract_version,
             "origin_module": origin_module or request.domain.lower(),
             "module_context_refs": (module_context_refs or ModuleContextRefs()).model_dump(mode="json"),
             "context_manifest": context_manifest.model_dump(mode="json") if context_manifest else None,
@@ -114,7 +125,9 @@ class CanonicalDatasetService:
             "feature_contract_version": feature_contract_version, "label_contract_version": label_contract_version,
         }
         return CanonicalAnalysisDataset(
-            tenant_id=tenant_id, origin_module=origin_module or request.domain.lower(),
+            **({"dataset_snapshot_id": dataset_snapshot_id} if dataset_snapshot_id else {}),
+            tenant_id=tenant_id, contract_version=contract_version,
+            origin_module=origin_module or request.domain.lower(),
             module_context_refs=module_context_refs or ModuleContextRefs(),
             context_manifest=context_manifest,
             source_tables=self.DOMAIN_TABLES[request.domain],
@@ -122,7 +135,8 @@ class CanonicalDatasetService:
             outcome_contract=request.outcome_contract, time_anchor=request.time_anchor,
             window_start=request.window_start, window_end=request.window_end, filters=request.filters,
             exclusions=request.exclusions, row_count=len(frozen_rows), row_ids_hash=dataset_payload["row_ids_hash"],
-            query_hash=dataset_payload["query_hash"], dataset_hash=canonical_hash(dataset_payload),
+            query_hash=dataset_payload["query_hash"],
+            dataset_hash=dataset_content_hash or canonical_hash(dataset_payload),
             configuration_bundle_id=configuration_bundle_id,
             feature_contract_version=feature_contract_version, label_contract_version=label_contract_version,
             quality_status=quality_status, quality_findings=tuple(findings),

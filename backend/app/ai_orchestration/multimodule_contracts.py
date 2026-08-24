@@ -27,6 +27,19 @@ class AnalysisContextManifest(BaseModel):
     evidence_ids: tuple[str, ...]
     conflicts: tuple[dict[str, Any], ...] = ()
     vetoes: tuple[dict[str, Any], ...] = ()
+    input_contract_version: str | None = None
+    capture_at: datetime | None = None
+    report_run_id: UUID | None = None
+    source_item_count: int | None = None
+    processed_item_count: int | None = None
+    coverage_status: str | None = None
+    shard_count: int | None = None
+    dataset_hash: str | None = None
+    legacy_incomplete: bool = True
+    coverage_by_path: dict[str, dict[str, int]] = Field(default_factory=dict)
+    ordered_item_hashes: tuple[str, ...] = ()
+    shard_plan: tuple[dict[str, Any], ...] = ()
+    missing_required_fields: tuple[dict[str, Any], ...] = ()
 
 
 class StructuredRecommendation(BaseModel):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from decimal import Decimal
 from datetime import datetime, timezone
 import json
@@ -32,13 +33,343 @@ from ..database import run_db_task
 from ..models.ai_provider_key import AIProviderKey
 from ..models.config_profile import ConfigProfile
 from ..models.systemic_ai import (
-    AIBudgetPolicyRecord, AIConfigurationBundleRecord, AIDatasetSnapshotRecord, AIModelResolutionRecord,
+    AIAnalysisShardRecord, AIBudgetPolicyRecord, AIConfigurationBundleRecord,
+    AIDatasetSnapshotItemRecord, AIDatasetSnapshotRecord, AIModelResolutionRecord,
     AIModelApprovalRecord, AIPromptVersion, AIRequestRecord, AIResultRecord, AIUsageRecord,
     AIToolEvidenceRecord,
 )
 from .ai_keys_service import decrypt_value
+from .shadow_full_canonical_service import (
+    CONTRACT_VERSION as SHADOW_CANONICAL_CONTRACT_VERSION,
+    ShadowCanonicalContractError,
+    provider_shard_payload,
+    reconcile_shard_results,
+)
 
 logger = logging.getLogger(__name__)
+
+
+_SHADOW_SHARD_OUTPUT_SCHEMA = {
+    "type": "object",
+    "required": ["processed_items", "evidence", "warnings"],
+    "properties": {
+        "processed_items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["shadow_trade_id", "item_hash"],
+                "properties": {
+                    "shadow_trade_id": {"type": "string"},
+                    "item_hash": {"type": "string"},
+                },
+                "additionalProperties": False,
+            },
+        },
+        "evidence": {"type": "array", "items": {"type": "object"}},
+        "warnings": {"type": "array", "items": {"type": "string"}},
+    },
+    "additionalProperties": False,
+}
+
+
+def _shadow_synthesis_schema(base: dict[str, Any], shard_count: int) -> dict[str, Any]:
+    schema = copy.deepcopy(base)
+    required = list(schema.get("required") or ())
+    if "referenced_shards" not in required:
+        required.append("referenced_shards")
+    schema["required"] = required
+    properties = dict(schema.get("properties") or {})
+    properties["referenced_shards"] = {
+        "type": "array",
+        "minItems": shard_count,
+        "maxItems": shard_count,
+        "items": {"type": "integer", "minimum": 0},
+        "uniqueItems": True,
+    }
+    schema["properties"] = properties
+    return schema
+
+
+async def _shadow_provider_plan(
+    db: AsyncSession,
+    *,
+    request: AIRequestRecord,
+    dataset: AIDatasetSnapshotRecord,
+    question: str,
+    provider: str,
+    shard_max_output_tokens: int,
+    synthesis_max_output_tokens: int,
+    request_token_limit: int,
+    prompt: AIPromptVersion,
+    bundle: AIConfigurationBundleRecord,
+    tool_evidence_rows: list[AIToolEvidenceRecord],
+) -> dict[str, Any]:
+    items = list((await db.execute(select(AIDatasetSnapshotItemRecord).where(
+        AIDatasetSnapshotItemRecord.tenant_id == request.tenant_id,
+        AIDatasetSnapshotItemRecord.dataset_snapshot_id == dataset.id,
+    ).order_by(AIDatasetSnapshotItemRecord.report_position))).scalars())
+    shards = list((await db.execute(select(AIAnalysisShardRecord).where(
+        AIAnalysisShardRecord.tenant_id == request.tenant_id,
+        AIAnalysisShardRecord.ai_request_id == request.id,
+    ).order_by(AIAnalysisShardRecord.shard_index))).scalars())
+    if len(items) != dataset.row_count or not shards:
+        raise RuntimeError("ANALYSIS_DATA_INCOMPLETE")
+    by_record_id = {str(item.id): item for item in items}
+    shard_prompts: list[dict[str, Any]] = []
+    shard_schema_bytes = len(json.dumps(
+        _SHADOW_SHARD_OUTPUT_SCHEMA,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")) + 512
+    for shard in shards:
+        shard_items = [by_record_id.get(str(item_id)) for item_id in (shard.item_ids or [])]
+        if any(item is None for item in shard_items) or len(shard_items) != shard.item_count:
+            raise RuntimeError("DATASET_RECONCILIATION_FAILED")
+        try:
+            raw_payload = provider_shard_payload(dataset.id, shard, shard_items)
+        except ShadowCanonicalContractError as exc:
+            raise RuntimeError(exc.code) from exc
+        system_prompt = (
+            "You are a read-only Shadow Portfolio evidence extractor. Read every complete trade in this "
+            "shard exactly once. Do not omit fields, invent values, recommend changes, or use outside data. "
+            "Return every processed shadow_trade_id with the exact supplied item_hash."
+        )
+        user_prompt = (
+            f"Analysis question:\n{question}\n\nCanonical shard payload (sha256:{shard.payload_hash}):\n"
+            + json.dumps(raw_payload, ensure_ascii=False, default=str, separators=(",", ":"))
+        )
+        estimated_input = _estimated_provider_input_tokens(
+            len((system_prompt + user_prompt).encode("utf-8")) + shard_schema_bytes,
+            provider,
+        )
+        if estimated_input + shard_max_output_tokens > request_token_limit:
+            raise RuntimeError("SHARD_CONTEXT_EXCEEDED")
+        shard.estimated_input_tokens = estimated_input
+        shard.reserved_tokens = estimated_input + shard_max_output_tokens
+        shard_prompts.append({
+            "record": shard,
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+        })
+
+    typed_evidence = _provider_decision_context({}, tool_evidence_rows)
+    synthesis_base = {
+        "question": question,
+        "dataset_manifest": dataset.context_manifest,
+        "configuration_bundle": bundle.bundle_json,
+        "deterministic_tool_evidence": json.loads(typed_evidence),
+        "shard_evidence": [],
+    }
+    values = {
+        "question": question,
+        "evidence": json.dumps(synthesis_base, ensure_ascii=False, default=str, separators=(",", ":")),
+        "dataset": json.dumps(synthesis_base, ensure_ascii=False, default=str, separators=(",", ":")),
+        "configuration": json.dumps(bundle.bundle_json, ensure_ascii=False, default=str, separators=(",", ":")),
+        "context": json.dumps(synthesis_base, ensure_ascii=False, default=str, separators=(",", ":")),
+    }
+    system_prompt = prompt.system_template.format_map(values)
+    user_prompt = prompt.user_template.format_map(values)
+    synthesis_schema = _shadow_synthesis_schema(prompt.output_schema_json, len(shards))
+    synthesis_schema_bytes = len(json.dumps(
+        synthesis_schema,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")) + 512
+    synthesis_base_input = _estimated_provider_input_tokens(
+        len((system_prompt + user_prompt).encode("utf-8")) + synthesis_schema_bytes,
+        provider,
+    )
+    reserved_synthesis_input = synthesis_base_input + len(shards) * shard_max_output_tokens
+    if reserved_synthesis_input + synthesis_max_output_tokens > request_token_limit:
+        raise RuntimeError("SHARD_CONTEXT_EXCEEDED")
+    total_estimated_input = sum(item["record"].estimated_input_tokens for item in shard_prompts) + reserved_synthesis_input
+    total_max_output = len(shards) * shard_max_output_tokens + synthesis_max_output_tokens
+    return {
+        "items": items,
+        "shards": shards,
+        "shard_prompts": shard_prompts,
+        "synthesis_base": synthesis_base,
+        "total_estimated_input": total_estimated_input,
+        "total_max_output": total_max_output,
+        "synthesis_max_output_tokens": synthesis_max_output_tokens,
+        "synthesis_schema": synthesis_schema,
+    }
+
+
+async def _execute_shadow_provider_plan(
+    db: AsyncSession,
+    *,
+    plan: dict[str, Any],
+    request: AIRequestRecord,
+    provider: str,
+    model: str,
+    api_key: str,
+    shard_max_output_tokens: int,
+    prompt: AIPromptVersion,
+) -> ProviderResponse:
+    tokens_input = 0
+    tokens_output = 0
+    shard_outputs: list[dict[str, Any]] = []
+    provider_executor = SystemicLangGraphBridge.execute_json_provider
+    for planned in plan["shard_prompts"]:
+        shard: AIAnalysisShardRecord = planned["record"]
+        if shard.status == "COMPLETED" and isinstance(shard.result_json, dict):
+            try:
+                validate(shard.result_json, _SHADOW_SHARD_OUTPUT_SCHEMA)
+            except ValidationError:
+                return ProviderResponse(
+                    output={}, tokens_input=tokens_input, tokens_output=tokens_output,
+                    terminal_error_code="SHARD_FAILED",
+                )
+            tokens_input += int(shard.tokens_input or 0)
+            tokens_output += int(shard.tokens_output or 0)
+            shard_outputs.append({
+                "shard_index": shard.shard_index,
+                "payload_hash": shard.payload_hash,
+                "result": shard.result_json,
+            })
+            continue
+        if shard.status != "PLANNED":
+            return ProviderResponse(
+                output={}, tokens_input=tokens_input, tokens_output=tokens_output,
+                terminal_error_code="SHARD_FAILED",
+            )
+        shard.status = "RUNNING"
+        shard.attempt += 1
+        shard.started_at = datetime.now(timezone.utc)
+        shard.provider_request_ref = f"{request.id}:shard:{shard.shard_index}"
+        await db.flush()
+        try:
+            shard_response = await provider_executor(
+                provider=provider,
+                model=model,
+                system_prompt=planned["system_prompt"],
+                user_prompt=planned["user_prompt"],
+                api_key=api_key,
+                request_id=shard.provider_request_ref,
+                max_output_tokens=shard_max_output_tokens,
+                output_schema=_SHADOW_SHARD_OUTPUT_SCHEMA,
+            )
+        except Exception:
+            shard.status = "FAILED"
+            shard.error_code = "SHARD_FAILED"
+            shard.error_safe_message = "Provider transport failed for a canonical shard"
+            shard.completed_at = datetime.now(timezone.utc)
+            await db.flush()
+            return ProviderResponse(
+                output={}, tokens_input=tokens_input, tokens_output=tokens_output,
+                terminal_error_code="SHARD_FAILED",
+            )
+        tokens_input += int(shard_response.tokens_input)
+        tokens_output += int(shard_response.tokens_output)
+        shard.tokens_input = int(shard_response.tokens_input)
+        shard.tokens_output = int(shard_response.tokens_output)
+        shard.provider_response_ref = shard_response.raw_response_ref
+        shard.completed_at = datetime.now(timezone.utc)
+        if shard_response.terminal_error_code is not None:
+            shard.status = "FAILED"
+            shard.error_code = "SHARD_FAILED"
+            shard.error_safe_message = "Provider returned an incomplete canonical shard result"
+            await db.flush()
+            return ProviderResponse(
+                output={}, tokens_input=tokens_input, tokens_output=tokens_output,
+                terminal_error_code="SHARD_FAILED",
+                raw_response_ref=shard_response.raw_response_ref,
+            )
+        try:
+            validate(shard_response.output, _SHADOW_SHARD_OUTPUT_SCHEMA)
+        except ValidationError:
+            shard.status = "FAILED"
+            shard.error_code = "SHARD_FAILED"
+            shard.error_safe_message = "Provider shard result failed the canonical schema"
+            await db.flush()
+            return ProviderResponse(
+                output={}, tokens_input=tokens_input, tokens_output=tokens_output,
+                terminal_error_code="SHARD_FAILED",
+            )
+        shard.status = "COMPLETED"
+        shard.result_json = shard_response.output
+        shard_outputs.append({
+            "shard_index": shard.shard_index,
+            "payload_hash": shard.payload_hash,
+            "result": shard_response.output,
+        })
+        await db.flush()
+
+    try:
+        reconcile_shard_results(expected_items=plan["items"], shards=plan["shards"])
+    except ShadowCanonicalContractError:
+        return ProviderResponse(
+            output={}, tokens_input=tokens_input, tokens_output=tokens_output,
+            terminal_error_code="DATASET_RECONCILIATION_FAILED",
+        )
+
+    synthesis_context = {**plan["synthesis_base"], "shard_evidence": shard_outputs}
+    serialized = json.dumps(synthesis_context, ensure_ascii=False, default=str, separators=(",", ":"))
+    values = {
+        "question": synthesis_context["question"],
+        "evidence": serialized,
+        "dataset": serialized,
+        "configuration": json.dumps(
+            synthesis_context["configuration_bundle"], ensure_ascii=False, default=str, separators=(",", ":"),
+        ),
+        "context": serialized,
+    }
+    system_prompt = prompt.system_template.format_map(values)
+    user_prompt = prompt.user_template.format_map(values)
+    try:
+        synthesis_response = await provider_executor(
+            provider=provider,
+            model=model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            api_key=api_key,
+            request_id=f"{request.id}:synthesis",
+            max_output_tokens=plan["synthesis_max_output_tokens"],
+            output_schema=plan["synthesis_schema"],
+        )
+    except Exception:
+        return ProviderResponse(
+            output={}, tokens_input=tokens_input, tokens_output=tokens_output,
+            terminal_error_code="SHARD_FAILED",
+        )
+    tokens_input += int(synthesis_response.tokens_input)
+    tokens_output += int(synthesis_response.tokens_output)
+    if synthesis_response.terminal_error_code is not None:
+        return ProviderResponse(
+            output=synthesis_response.output, tokens_input=tokens_input, tokens_output=tokens_output,
+            terminal_error_code="SHARD_FAILED", raw_response_ref=synthesis_response.raw_response_ref,
+        )
+    try:
+        validate(synthesis_response.output, plan["synthesis_schema"])
+    except ValidationError:
+        return ProviderResponse(
+            output=synthesis_response.output, tokens_input=tokens_input, tokens_output=tokens_output,
+            terminal_error_code="SHARD_FAILED", raw_response_ref=synthesis_response.raw_response_ref,
+        )
+    referenced = synthesis_response.output.get("referenced_shards")
+    expected = list(range(len(plan["shards"])))
+    if sorted(referenced or []) != expected:
+        return ProviderResponse(
+            output=synthesis_response.output, tokens_input=tokens_input, tokens_output=tokens_output,
+            terminal_error_code="DATASET_RECONCILIATION_FAILED",
+            raw_response_ref=synthesis_response.raw_response_ref,
+        )
+    for shard in plan["shards"]:
+        shard.status = "RECONCILED"
+    manifest = dict(plan["synthesis_base"]["dataset_manifest"] or {})
+    manifest["processed_item_count"] = len(plan["items"])
+    manifest["coverage_status"] = "RECONCILED_COMPLETE"
+    plan["dataset_manifest"] = manifest
+    await db.flush()
+    return ProviderResponse(
+        output=synthesis_response.output,
+        tokens_input=tokens_input,
+        tokens_output=tokens_output,
+        raw_response_ref=synthesis_response.raw_response_ref,
+        stop_reason=synthesis_response.stop_reason,
+        repair_attempts=synthesis_response.repair_attempts,
+    )
 
 
 def _estimated_provider_input_tokens(prompt_bytes: int, provider: str) -> int:
@@ -427,6 +758,7 @@ class SystemicLangGraphBridge:
             raise RuntimeError("GRAPH_TYPED_TOOL_EVIDENCE_REQUIRED")
 
         normal_provider_enabled = False
+        runtime_config = None
         if request_intent is AIRequestIntent.NORMAL_ANALYSIS:
             runtime_config = (await db.execute(select(ConfigProfile).where(
                 ConfigProfile.user_id == request.tenant_id,
@@ -487,6 +819,20 @@ class SystemicLangGraphBridge:
             or budget.monthly_token_limit is None
         ):
             raise RuntimeError("BOUNDED_AI_BUDGET_POLICY_REQUIRED")
+        is_shadow_canonical = (
+            request.origin_module == "shadow_portfolio"
+            and dataset.contract_version == SHADOW_CANONICAL_CONTRACT_VERSION
+        )
+        shadow_runtime: dict[str, Any] = {}
+        if request.origin_module == "shadow_portfolio":
+            if not is_shadow_canonical:
+                raise RuntimeError("ANALYSIS_DATA_INCOMPLETE")
+            shadow_runtime = dict((runtime_config.config_json if runtime_config else {}) or {})
+            if shadow_runtime.get("shadow_full_canonical_provider_enabled") is not True:
+                raise RuntimeError("SHADOW_FULL_CANONICAL_DISABLED")
+            for field in ("shadow_shard_max_output_tokens", "shadow_synthesis_max_output_tokens"):
+                if not isinstance(shadow_runtime.get(field), int) or int(shadow_runtime[field]) <= 0:
+                    raise RuntimeError("SHADOW_CANONICAL_PROVIDER_LIMITS_REQUIRED")
         now = datetime.now(timezone.utc)
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         month_start = day_start.replace(day=1)
@@ -513,24 +859,43 @@ class SystemicLangGraphBridge:
             str(request_json.get("question") or ""),
             max_chars=MAX_AI_REQUEST_QUESTION_CHARS,
         )
-        context_json = _provider_decision_context(frozen_context, tool_evidence_rows)
-        values = {
-            "question": question,
-            "evidence": context_json,
-            "dataset": context_json,
-            "configuration": json.dumps(
-                bundle.bundle_json,
-                ensure_ascii=False,
-                default=str,
-                separators=(",", ":"),
-            ),
-            "context": context_json,
-        }
-        try:
-            system_prompt = prompt.system_template.format_map(values)
-            user_prompt = prompt.user_template.format_map(values)
-        except KeyError as exc:
-            raise RuntimeError(f"PROMPT_INPUT_MISSING:{exc.args[0]}") from exc
+        shadow_plan = None
+        if is_shadow_canonical:
+            shadow_plan = await _shadow_provider_plan(
+                db,
+                request=request,
+                dataset=dataset,
+                question=question,
+                provider=resolution.effective_provider,
+                shard_max_output_tokens=int(shadow_runtime["shadow_shard_max_output_tokens"]),
+                synthesis_max_output_tokens=int(shadow_runtime["shadow_synthesis_max_output_tokens"]),
+                request_token_limit=int(budget.request_token_limit),
+                prompt=prompt,
+                bundle=bundle,
+                tool_evidence_rows=tool_evidence_rows,
+            )
+            estimated_input_tokens = int(shadow_plan["total_estimated_input"])
+            total_max_output_tokens = int(shadow_plan["total_max_output"])
+            system_prompt = user_prompt = ""
+        else:
+            context_json = _provider_decision_context(frozen_context, tool_evidence_rows)
+            values = {
+                "question": question,
+                "evidence": context_json,
+                "dataset": context_json,
+                "configuration": json.dumps(
+                    bundle.bundle_json,
+                    ensure_ascii=False,
+                    default=str,
+                    separators=(",", ":"),
+                ),
+                "context": context_json,
+            }
+            try:
+                system_prompt = prompt.system_template.format_map(values)
+                user_prompt = prompt.user_template.format_map(values)
+            except KeyError as exc:
+                raise RuntimeError(f"PROMPT_INPUT_MISSING:{exc.args[0]}") from exc
 
         # Reservation is denominated in provider tokens, while UTF-8 byte length
         # is the deterministic pre-flight measurement available here. Convert
@@ -545,20 +910,23 @@ class SystemicLangGraphBridge:
                 ensure_ascii=False,
                 separators=(",", ":"),
             ).encode("utf-8")) + 512
-        prompt_bytes = (
-            len((system_prompt + user_prompt).encode("utf-8"))
-            + structured_output_reservation_bytes
-        )
-        estimated_input_tokens = _estimated_provider_input_tokens(
-            prompt_bytes,
-            resolution.effective_provider,
-        )
-        max_input_tokens = int(budget.request_token_limit) - int(approval.max_output_tokens)
-        if max_input_tokens <= 0 or estimated_input_tokens > max_input_tokens:
-            raise RuntimeError("AI_INPUT_RESERVATION_EXCEEDED")
-        reserved_tokens = estimated_input_tokens + int(approval.max_output_tokens)
-        if reserved_tokens > int(budget.request_token_limit):
-            raise RuntimeError("AI_REQUEST_TOKEN_BUDGET_EXCEEDED")
+        if is_shadow_canonical:
+            reserved_tokens = estimated_input_tokens + total_max_output_tokens
+        else:
+            prompt_bytes = (
+                len((system_prompt + user_prompt).encode("utf-8"))
+                + structured_output_reservation_bytes
+            )
+            estimated_input_tokens = _estimated_provider_input_tokens(
+                prompt_bytes,
+                resolution.effective_provider,
+            )
+            max_input_tokens = int(budget.request_token_limit) - int(approval.max_output_tokens)
+            if max_input_tokens <= 0 or estimated_input_tokens > max_input_tokens:
+                raise RuntimeError("AI_INPUT_RESERVATION_EXCEEDED")
+            reserved_tokens = estimated_input_tokens + int(approval.max_output_tokens)
+            if reserved_tokens > int(budget.request_token_limit):
+                raise RuntimeError("AI_REQUEST_TOKEN_BUDGET_EXCEEDED")
         if used_today + reserved_tokens > int(budget.daily_token_limit):
             raise RuntimeError("AI_DAILY_TOKEN_BUDGET_EXCEEDED")
         if used_month + reserved_tokens > int(budget.monthly_token_limit):
@@ -568,7 +936,7 @@ class SystemicLangGraphBridge:
         output_rate = Decimal(approval.output_cost_per_million)
         reserved_cost = (
             Decimal(estimated_input_tokens) * input_rate
-            + Decimal(approval.max_output_tokens) * output_rate
+            + Decimal(total_max_output_tokens if is_shadow_canonical else approval.max_output_tokens) * output_rate
         ) / million
         if reserved_cost > Decimal(approval.max_cost_usd):
             raise RuntimeError("MODEL_COST_APPROVAL_LIMIT_EXCEEDED_BEFORE_CALL")
@@ -586,7 +954,10 @@ class SystemicLangGraphBridge:
                 model=resolution.effective_model,
                 module=request.origin_module,
                 estimated_input_tokens=estimated_input_tokens,
-                max_output_tokens=int(approval.max_output_tokens),
+                max_output_tokens=(
+                    int(total_max_output_tokens) if is_shadow_canonical
+                    else int(approval.max_output_tokens)
+                ),
                 request_token_limit=int(budget.request_token_limit),
                 daily_token_limit=int(budget.daily_token_limit),
                 monthly_token_limit=int(budget.monthly_token_limit),
@@ -621,16 +992,28 @@ class SystemicLangGraphBridge:
             )
             raise
         try:
-            response = await SystemicLangGraphBridge.execute_json_provider(
-                provider=resolution.effective_provider,
-                model=resolution.effective_model,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                api_key=api_key,
-                request_id=str(request.id),
-                max_output_tokens=int(approval.max_output_tokens),
-                output_schema=prompt.output_schema_json,
-            )
+            if is_shadow_canonical:
+                response = await _execute_shadow_provider_plan(
+                    db,
+                    plan=shadow_plan,
+                    request=request,
+                    provider=resolution.effective_provider,
+                    model=resolution.effective_model,
+                    api_key=api_key,
+                    shard_max_output_tokens=int(shadow_runtime["shadow_shard_max_output_tokens"]),
+                    prompt=prompt,
+                )
+            else:
+                response = await SystemicLangGraphBridge.execute_json_provider(
+                    provider=resolution.effective_provider,
+                    model=resolution.effective_model,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    api_key=api_key,
+                    request_id=str(request.id),
+                    max_output_tokens=int(approval.max_output_tokens),
+                    output_schema=prompt.output_schema_json,
+                )
         except Exception as exc:
             detail = getattr(exc, "detail", None)
             logger.warning(
@@ -658,7 +1041,10 @@ class SystemicLangGraphBridge:
             + Decimal(response.tokens_output) * output_rate
         ) / million
         reconciliation_error = next((code for exceeded, code in (
-            (token_total > int(budget.request_token_limit), "AI_REQUEST_TOKEN_RECONCILIATION_EXCEEDED"),
+            (
+                not is_shadow_canonical and token_total > int(budget.request_token_limit),
+                "AI_REQUEST_TOKEN_RECONCILIATION_EXCEEDED",
+            ),
             (used_today + token_total > int(budget.daily_token_limit), "AI_DAILY_TOKEN_RECONCILIATION_EXCEEDED"),
             (used_month + token_total > int(budget.monthly_token_limit), "AI_MONTHLY_TOKEN_RECONCILIATION_EXCEEDED"),
             (int(key.tokens_used_month or 0) + token_total > int(key.monthly_token_limit), "MONTHLY_AI_BUDGET_RECONCILIATION_EXCEEDED"),
@@ -707,7 +1093,10 @@ class SystemicLangGraphBridge:
             }
 
         try:
-            validate(response.output, prompt.output_schema_json)
+            if is_shadow_canonical:
+                validate(response.output, shadow_plan["synthesis_schema"])
+            else:
+                validate(response.output, prompt.output_schema_json)
         except ValidationError as exc:
             return {
                 "ai_request_id": str(request.id),
@@ -731,6 +1120,8 @@ class SystemicLangGraphBridge:
                 "provider_output_schema_valid": True,
             }
 
+        if is_shadow_canonical:
+            dataset.context_manifest = shadow_plan.get("dataset_manifest") or dataset.context_manifest
         result_json = {
             "ai_request_id": str(request.id),
             "status": "COMPLETED",
@@ -754,6 +1145,14 @@ class SystemicLangGraphBridge:
             "warnings": response.output.get("warnings") or [],
             "limitations": response.output.get("limitations") or [],
             "context_manifest": dataset.context_manifest,
+            "input_contract_version": dataset.contract_version,
+            "capture_at": (dataset.context_manifest or {}).get("capture_at"),
+            "report_run_id": (dataset.context_manifest or {}).get("report_run_id"),
+            "source_item_count": (dataset.context_manifest or {}).get("source_item_count"),
+            "processed_item_count": (dataset.context_manifest or {}).get("processed_item_count"),
+            "coverage_status": (dataset.context_manifest or {}).get("coverage_status"),
+            "shard_count": (dataset.context_manifest or {}).get("shard_count"),
+            "legacy_incomplete": False if is_shadow_canonical else True,
             "usage": {
                 "tokens_input": int(response.tokens_input),
                 "tokens_output": int(response.tokens_output),
