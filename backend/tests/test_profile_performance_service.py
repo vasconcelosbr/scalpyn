@@ -7,6 +7,7 @@ import pytest
 
 from app.services.profile_performance_service import (
     DEFAULT_MONITORING_POLICY,
+    build_profile_daily_performance_response,
     build_profile_performance_response,
     calculate_trend,
     monitoring_policy_from_config,
@@ -176,3 +177,41 @@ def test_contract_is_read_only_and_endpoint_is_batched():
     assert '"/api/shadow-portfolio/profile-performance"' in api
     assert "range_days" in api
     assert "profile_id" in api
+
+
+def test_daily_l3_performance_uses_daily_closed_trades_and_preserves_empty_days():
+    as_of = date(2026, 8, 21)
+    response = build_profile_daily_performance_response(
+        [
+            {
+                "metric_date": as_of - timedelta(days=1),
+                "daily_closed_trades": 4,
+                "daily_wins": 3,
+                "daily_pnl_usdt": 12.5,
+            },
+            {
+                "metric_date": as_of,
+                "daily_closed_trades": 0,
+                "daily_wins": 0,
+                "daily_pnl_usdt": 0,
+            },
+        ],
+        as_of=as_of,
+        range_key="15d",
+    )
+
+    assert response.range == "15d"
+    assert response.points[0].win_rate == 0.75
+    assert response.points[0].pnl_usdt == 12.5
+    assert response.points[1].win_rate is None
+    assert response.points[1].pnl_usdt == 0
+
+
+def test_daily_contract_is_read_only_and_supports_total_range():
+    service = Path("backend/app/services/profile_performance_service.py").read_text(encoding="utf-8").upper()
+    api = Path("backend/app/api/performance_rankings.py").read_text(encoding="utf-8")
+    assert "PROFILE_DAILY_PERFORMANCE_QUERY" in service
+    assert "UPDATE SHADOW_TRADES" not in service
+    assert "DELETE FROM SHADOW_TRADES" not in service
+    assert '"/api/shadow-portfolio/profile-performance/daily"' in api
+    assert '"TOTAL"' in service

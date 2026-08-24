@@ -8,13 +8,15 @@
   "required_features": [
     {
       "id": "profile-performance-dashboard",
-      "description": "Read-only Performance Profiles monitor in Shadow Portfolio",
+      "description": "Read-only Performance Profiles monitor and daily L3 evolution in Shadow Portfolio",
       "files": [
         {
           "path": "backend/app/api/performance_rankings.py",
           "contains_all": [
             "/shadow-portfolio/profile-performance",
-            "get_profile_performance"
+            "get_profile_performance",
+            "/shadow-portfolio/profile-performance/daily",
+            "get_profile_daily_performance"
           ]
         },
         {
@@ -22,7 +24,9 @@
           "contains_all": [
             "get_profile_performance",
             "get_ranking_config",
-            "score_metrics"
+            "score_metrics",
+            "PROFILE_DAILY_PERFORMANCE_QUERY",
+            "build_profile_daily_performance_response"
           ]
         },
         {
@@ -36,7 +40,9 @@
           "path": "frontend/components/shadow-portfolio/ProfilePerformanceDashboard.tsx",
           "contains_all": [
             "Performance dos Profiles",
-            "profilePerformance"
+            "profilePerformance",
+            "Evolução diária L3",
+            "profileDailyPerformanceRequestPath"
           ]
         }
       ]

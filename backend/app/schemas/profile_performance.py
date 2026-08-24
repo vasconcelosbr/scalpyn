@@ -15,6 +15,7 @@ ProfileMonitorStatus = Literal[
     "DETERIORATING",
     "LOW_SAMPLE",
 ]
+ProfileDailyRange = Literal["7d", "15d", "30d", "90d", "total"]
 
 
 class ProfileTrendEvidence(BaseModel):
@@ -36,6 +37,23 @@ class ProfilePerformanceHistoryPoint(BaseModel):
     win_rate: Optional[float] = None
     pnl_usdt: float
     holding_seconds: Optional[float] = None
+
+
+class ProfileDailyPerformancePoint(BaseModel):
+    date: date
+    closed_trades: int
+    wins: int
+    win_rate: Optional[float] = None
+    pnl_usdt: float
+
+
+class ProfileDailyPerformanceResponse(BaseModel):
+    contract_version: str
+    as_of: date
+    range: ProfileDailyRange
+    timezone: str
+    points: List[ProfileDailyPerformancePoint]
+    metric_definitions: Dict[str, str]
 
 
 class ProfilePerformanceRow(BaseModel):

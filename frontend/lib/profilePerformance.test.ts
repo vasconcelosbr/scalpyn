@@ -7,6 +7,7 @@ import {
   formatUsd,
   filterProfileRows,
   heatmapColor,
+  profileDailyPerformanceRequestPath,
   profilePerformanceRequestPath,
   sortProfileRows,
   type ProfilePerformanceRow,
@@ -71,6 +72,18 @@ test("profile request path carries the selected date and period", () => {
   assert.equal(
     profilePerformanceRequestPath("2026-08-21", 14),
     "/api/shadow-portfolio/profile-performance?as_of=2026-08-21&range_days=14",
+  );
+});
+
+
+test("daily evolution request path supports bounded and total ranges", () => {
+  assert.equal(
+    profileDailyPerformanceRequestPath("2026-08-21", "15d"),
+    "/api/shadow-portfolio/profile-performance/daily?as_of=2026-08-21&range=15d",
+  );
+  assert.equal(
+    profileDailyPerformanceRequestPath("2026-08-21", "total"),
+    "/api/shadow-portfolio/profile-performance/daily?as_of=2026-08-21&range=total",
   );
 });
 

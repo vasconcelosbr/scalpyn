@@ -19,7 +19,18 @@ import {
   TrendingUp,
   X,
 } from "lucide-react";
-import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import {
+  Bar,
+  CartesianGrid,
+  Cell,
+  ComposedChart,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 import { ApiError, apiGet } from "@/lib/api";
 import {
@@ -32,9 +43,12 @@ import {
   filterProfileRows,
   heatmapColor,
   historyMetricValue,
+  profileDailyPerformanceRequestPath,
   profilePerformanceRequestPath,
   sortProfileRows,
   type ProfileMonitorStatus,
+  type ProfileDailyPerformanceResponse,
+  type ProfileDailyRange,
   type ProfilePerformanceHighlight,
   type ProfilePerformanceMetric,
   type ProfilePerformanceResponse,
@@ -95,6 +109,14 @@ function displayDate(value: string): string {
     year: "numeric",
     timeZone: "UTC",
   }).toUpperCase();
+}
+
+function compactDate(value: string): string {
+  return new Date(`${value}T12:00:00Z`).toLocaleDateString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    timeZone: "UTC",
+  });
 }
 
 function deltaColor(value: number | null): string {
@@ -228,6 +250,136 @@ export function EmptyProfilesState() {
       <div className="text-sm font-semibold" style={{ color: C.text }}>Nenhum profile L3 disponível.</div>
       <div className="mt-2 text-xs" style={{ color: C.muted }}>A aba continuará disponível quando profiles e shadow trades forem registrados.</div>
     </div>
+  );
+}
+
+function L3DailyEvolution({ asOf }: { asOf: string }) {
+  const [range, setRange] = useState<ProfileDailyRange>("7d");
+  const [data, setData] = useState<ProfileDailyPerformanceResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.resolve()
+      .then(() => {
+        if (cancelled) return null;
+        setLoading(true);
+        setError(null);
+        return apiGet<ProfileDailyPerformanceResponse>(profileDailyPerformanceRequestPath(asOf, range));
+      })
+      .then((response) => {
+        if (!cancelled && response) setData(response);
+      })
+      .catch((caught: unknown) => {
+        if (cancelled) return;
+        setError(caught instanceof ApiError ? caught.toDescriptiveString() : caught instanceof Error ? caught.message : "Erro desconhecido");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [asOf, range]);
+
+  const currentData = data?.range === range && data.as_of === asOf ? data : null;
+  const points = useMemo(() => currentData?.points ?? [], [currentData]);
+  const tablePoints = useMemo(() => [...points].reverse(), [points]);
+  const ranges: { value: ProfileDailyRange; label: string }[] = [
+    { value: "7d", label: "7d" },
+    { value: "15d", label: "15d" },
+    { value: "30d", label: "30d" },
+    { value: "90d", label: "90d" },
+    { value: "total", label: "Total" },
+  ];
+
+  return (
+    <section className="rounded-xl border bg-[#10121a]" style={{ borderColor: C.border }}>
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b px-4 py-4" style={{ borderColor: C.border }}>
+        <div>
+          <h2 className="m-0 text-sm font-semibold" style={{ color: C.text }}>Evolução diária L3</h2>
+          <p className="mt-1 text-[10.5px]" style={{ color: C.muted }}>Win Rate dos trades finalizados e P&amp;L Total realizado em cada dia UTC.</p>
+        </div>
+        <div className="flex gap-1" aria-label="Período da evolução diária L3">
+          {ranges.map((option) => (
+            <button
+              key={option.value}
+              onClick={() => setRange(option.value)}
+              className="rounded-md border px-3 py-2 text-[10px] font-semibold"
+              style={{
+                color: range === option.value ? "white" : C.muted,
+                background: range === option.value ? C.blue : C.elevated,
+                borderColor: range === option.value ? C.blue : C.border,
+              }}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {error && !currentData ? (
+        <div className="px-4 py-12 text-center text-xs text-red-300">Não foi possível carregar a evolução diária: {error}</div>
+      ) : loading && !currentData ? (
+        <div className="m-4 h-72 animate-pulse rounded-lg bg-white/[0.035]" aria-label="Carregando evolução diária L3" />
+      ) : points.length === 0 ? (
+        <div className="px-4 py-12 text-center text-xs" style={{ color: C.muted }}>Sem trades L3 finalizados no período selecionado.</div>
+      ) : (
+        <div className="grid gap-0 xl:grid-cols-[minmax(0,1.6fr)_minmax(360px,0.8fr)]">
+          <div className="min-w-0 border-b p-4 xl:border-b-0 xl:border-r" style={{ borderColor: C.border }}>
+            <div className="h-[320px] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={points} margin={{ top: 10, right: 8, bottom: 4, left: 0 }}>
+                  <CartesianGrid stroke="rgba(255,255,255,0.05)" vertical={false} />
+                  <XAxis dataKey="date" tickFormatter={compactDate} minTickGap={26} tick={{ fill: C.dim, fontSize: 9 }} axisLine={false} tickLine={false} />
+                  <YAxis yAxisId="rate" domain={[0, 1]} tickFormatter={(value) => `${Math.round(Number(value) * 100)}%`} tick={{ fill: C.dim, fontSize: 9 }} axisLine={false} tickLine={false} width={38} />
+                  <YAxis yAxisId="pnl" orientation="right" tickFormatter={(value) => `$${Number(value).toFixed(0)}`} tick={{ fill: C.dim, fontSize: 9 }} axisLine={false} tickLine={false} width={48} />
+                  <Tooltip
+                    formatter={(value, name) => [name === "Win Rate L3" ? formatRate(Number(value)) : formatUsd(Number(value)), name]}
+                    labelFormatter={(value) => displayDate(String(value))}
+                    contentStyle={{ background: C.elevated, border: `1px solid ${C.borderStrong}`, borderRadius: 8, fontSize: 10 }}
+                  />
+                  <Bar yAxisId="pnl" dataKey="pnl_usdt" name="P&L Total do dia" barSize={10} radius={[3, 3, 0, 0]}>
+                    {points.map((point) => <Cell key={point.date} fill={point.pnl_usdt >= 0 ? C.green : C.red} fillOpacity={0.52} />)}
+                  </Bar>
+                  <Line yAxisId="rate" type="monotone" dataKey="win_rate" name="Win Rate L3" stroke={C.blue} strokeWidth={2.2} dot={{ r: 2.2, fill: C.blue }} activeDot={{ r: 4 }} isAnimationActive={false} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-4 text-[10px]" style={{ color: C.muted }}>
+              <span className="inline-flex items-center gap-2"><span className="h-0.5 w-5 bg-[#4f7bf7]" /> Win Rate L3</span>
+              <span className="inline-flex items-center gap-2"><span className="h-2.5 w-3 rounded-sm bg-[#22b97a]/60" /> P&amp;L positivo</span>
+              <span className="inline-flex items-center gap-2"><span className="h-2.5 w-3 rounded-sm bg-[#e5484d]/60" /> P&amp;L negativo</span>
+            </div>
+          </div>
+
+          <div className="max-h-[390px] overflow-auto">
+            <table className="w-full min-w-[430px] border-collapse text-[11px]">
+              <thead className="sticky top-0 z-10 bg-[#0d0f16] text-[9.5px] uppercase tracking-[0.08em]" style={{ color: C.muted }}>
+                <tr>
+                  <th className="px-3 py-3 text-left">Data</th>
+                  <th className="px-3 py-3 text-right">Finalizados</th>
+                  <th className="px-3 py-3 text-right">Win Rate L3</th>
+                  <th className="px-3 py-3 text-right">P&amp;L Total do dia</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/[0.055]">
+                {tablePoints.map((point) => (
+                  <tr key={point.date}>
+                    <td className="whitespace-nowrap px-3 py-2.5" style={{ color: C.text }}>{displayDate(point.date)}</td>
+                    <td className="px-3 py-2.5 text-right font-mono" style={{ color: C.muted }} title={`${point.wins} trades positivos`}>{point.closed_trades.toLocaleString("pt-BR")}</td>
+                    <td className="px-3 py-2.5 text-right font-mono font-semibold" style={{ color: point.win_rate == null ? C.dim : C.blue }}>{formatRate(point.win_rate)}</td>
+                    <td className="px-3 py-2.5 text-right font-mono font-semibold" style={{ color: deltaColor(point.pnl_usdt) }}>{formatUsd(point.pnl_usdt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      {error && currentData ? <div className="border-t px-4 py-2 text-[10px] text-amber-200" style={{ borderColor: C.border }}>Atualização falhou: {error}. Mantendo os últimos dados carregados.</div> : null}
+    </section>
   );
 }
 
@@ -634,6 +786,8 @@ export default function ProfilePerformanceDashboard() {
         <HighlightCard label="Maior deterioração" item={data.highlights.biggest_deterioration} detail={(item) => `EV ${formatSigned(item.ev_period_change)} em ${rangeDays}d`} accent={C.red} />
         <HighlightCard label="Maior P&L" item={data.highlights.highest_pnl} detail={(item) => formatUsd(item.pnl_period_usdt)} accent={C.green} />
       </section>
+
+      <L3DailyEvolution asOf={asOf} />
 
       <section className="rounded-xl border bg-[#10121a]" style={{ borderColor: C.border }}>
         <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-4" style={{ borderColor: C.border }}>

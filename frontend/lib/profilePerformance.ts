@@ -1,6 +1,7 @@
 export type ProfileTrend = "IMPROVING" | "STABLE" | "DETERIORATING" | "INSUFFICIENT_DATA";
 export type ProfileMonitorStatus = "POSITIVE" | "STABLE" | "ATTENTION" | "DETERIORATING" | "LOW_SAMPLE";
 export type ProfilePerformanceMetric = "ev_score" | "win_rate" | "pnl_usdt" | "trades" | "holding_seconds";
+export type ProfileDailyRange = "7d" | "15d" | "30d" | "90d" | "total";
 export type ProfilePerformanceSortKey =
   | "trades"
   | "ev_score"
@@ -99,6 +100,23 @@ export interface ProfilePerformanceResponse {
   metric_definitions: Record<string, string>;
 }
 
+export interface ProfileDailyPerformancePoint {
+  date: string;
+  closed_trades: number;
+  wins: number;
+  win_rate: number | null;
+  pnl_usdt: number;
+}
+
+export interface ProfileDailyPerformanceResponse {
+  contract_version: string;
+  as_of: string;
+  range: ProfileDailyRange;
+  timezone: string;
+  points: ProfileDailyPerformancePoint[];
+  metric_definitions: Record<string, string>;
+}
+
 export const STATUS_LABEL: Record<ProfileMonitorStatus, string> = {
   POSITIVE: "Positivo",
   STABLE: "Estável",
@@ -171,6 +189,11 @@ export function filterProfileRows(
 export function profilePerformanceRequestPath(asOf: string, rangeDays: 7 | 14 | 30): string {
   const params = new URLSearchParams({ as_of: asOf, range_days: String(rangeDays) });
   return `/api/shadow-portfolio/profile-performance?${params}`;
+}
+
+export function profileDailyPerformanceRequestPath(asOf: string, range: ProfileDailyRange): string {
+  const params = new URLSearchParams({ as_of: asOf, range });
+  return `/api/shadow-portfolio/profile-performance/daily?${params}`;
 }
 
 export function historyMetricValue(

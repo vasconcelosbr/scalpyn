@@ -11,6 +11,9 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..schemas.profile_performance import (
+    ProfileDailyPerformancePoint,
+    ProfileDailyPerformanceResponse,
+    ProfileDailyRange,
     ProfilePerformanceHighlight,
     ProfilePerformanceHighlights,
     ProfilePerformanceHistoryPoint,
@@ -27,8 +30,16 @@ from .watchlist_performance_ranking_service import (
 
 
 CONTRACT_VERSION = "profile-performance-v1"
+DAILY_CONTRACT_VERSION = "profile-performance-daily-v1"
 DISPLAY_TIMEZONE = "UTC"
 ALLOWED_RANGE_DAYS = {7, 14, 30}
+DAILY_RANGE_DAYS: Dict[ProfileDailyRange, int | None] = {
+    "7d": 7,
+    "15d": 15,
+    "30d": 30,
+    "90d": 90,
+    "total": None,
+}
 
 
 @dataclass(frozen=True)
@@ -171,6 +182,53 @@ PROFILE_PERFORMANCE_QUERY = text("""
 """)
 
 
+PROFILE_DAILY_PERFORMANCE_QUERY = text("""
+    WITH eligible_trades AS (
+        SELECT
+            COALESCE(st.exit_timestamp, st.completed_at, st.updated_at, st.created_at) AS close_at,
+            st.pnl_pct,
+            st.pnl_usdt
+        FROM shadow_trades AS st
+        JOIN pipeline_watchlists AS pw
+          ON pw.id = st.watchlist_id
+         AND pw.user_id = st.user_id
+         AND pw.profile_id = st.profile_id
+         AND UPPER(pw.level) = 'L3'
+        WHERE st.user_id = :uid
+          AND st.profile_id IS NOT NULL
+          AND st.status = 'COMPLETED'
+          AND st.source = ANY(CAST(:sources AS text[]))
+          AND COALESCE(st.exit_timestamp, st.completed_at, st.updated_at, st.created_at)
+              < CAST(:as_of AS date) + INTERVAL '1 day'
+    ), bounds AS (
+        SELECT COALESCE(
+            CAST(:series_start AS date),
+            MIN(close_at)::date,
+            CAST(:as_of AS date)
+        ) AS series_start
+        FROM eligible_trades
+    ), days AS (
+        SELECT day::date AS metric_date
+        FROM generate_series(
+            (SELECT series_start FROM bounds)::timestamp,
+            CAST(:as_of AS date)::timestamp,
+            INTERVAL '1 day'
+        ) AS day
+    )
+    SELECT
+        d.metric_date,
+        COUNT(t.close_at) FILTER (WHERE t.pnl_pct IS NOT NULL)::integer AS daily_closed_trades,
+        COUNT(t.close_at) FILTER (WHERE t.pnl_pct > 0)::integer AS daily_wins,
+        COALESCE(SUM(t.pnl_usdt), 0)::double precision AS daily_pnl_usdt
+    FROM days AS d
+    LEFT JOIN eligible_trades AS t
+      ON t.close_at >= d.metric_date::timestamp
+     AND t.close_at < d.metric_date::timestamp + INTERVAL '1 day'
+    GROUP BY d.metric_date
+    ORDER BY d.metric_date
+""")
+
+
 def _int(row: Mapping[str, Any], key: str) -> int:
     return int(row.get(key) or 0)
 
@@ -182,6 +240,36 @@ def _float(row: Mapping[str, Any], key: str) -> float:
 def _optional_float(row: Mapping[str, Any], key: str) -> float | None:
     value = row.get(key)
     return float(value) if value is not None else None
+
+
+def build_profile_daily_performance_response(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    as_of: date,
+    range_key: ProfileDailyRange,
+) -> ProfileDailyPerformanceResponse:
+    points = []
+    for row in rows:
+        closed_trades = _int(row, "daily_closed_trades")
+        wins = _int(row, "daily_wins")
+        points.append(ProfileDailyPerformancePoint(
+            date=_as_date(row["metric_date"]),
+            closed_trades=closed_trades,
+            wins=wins,
+            win_rate=round(wins / closed_trades, 6) if closed_trades else None,
+            pnl_usdt=round(_float(row, "daily_pnl_usdt"), 4),
+        ))
+    return ProfileDailyPerformanceResponse(
+        contract_version=DAILY_CONTRACT_VERSION,
+        as_of=as_of,
+        range=range_key,
+        timezone=DISPLAY_TIMEZONE,
+        points=points,
+        metric_definitions={
+            "win_rate": "Daily completed L3 trades with pnl_pct > 0 divided by daily completed L3 trades with pnl_pct.",
+            "pnl_day": "Sum of pnl_usdt for L3 trades assigned to the UTC day in which each trade closed.",
+        },
+    )
 
 
 def _as_date(value: Any) -> date | None:
@@ -579,3 +667,36 @@ async def get_profile_performance(
         )
     ).mappings().all()
     return build_profile_performance_response(rows, config, as_of=as_of, range_days=range_days)
+
+
+async def get_profile_daily_performance(
+    db: AsyncSession,
+    user_id: UUID,
+    *,
+    as_of: date,
+    range_key: ProfileDailyRange,
+) -> ProfileDailyPerformanceResponse:
+    if range_key not in DAILY_RANGE_DAYS:
+        raise ValueError("range must be one of 7d, 15d, 30d, 90d or total")
+    if as_of > datetime.now(timezone.utc).date():
+        raise ValueError("as_of cannot be in the future")
+
+    config = await get_ranking_config(db, user_id)
+    range_days = DAILY_RANGE_DAYS[range_key]
+    series_start = as_of - timedelta(days=range_days - 1) if range_days else None
+    rows = (
+        await db.execute(
+            PROFILE_DAILY_PERFORMANCE_QUERY,
+            {
+                "uid": str(user_id),
+                "sources": config["source_filter"],
+                "series_start": series_start,
+                "as_of": as_of,
+            },
+        )
+    ).mappings().all()
+    return build_profile_daily_performance_response(
+        rows,
+        as_of=as_of,
+        range_key=range_key,
+    )
