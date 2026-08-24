@@ -229,6 +229,64 @@
           ]
         }
       ]
+    },
+    {
+      "id": "profile-price-position-indicators",
+      "description": "Closed-candle Price Position metrics are computed, rule-resolved, and exposed on every profile authoring surface",
+      "files": [
+        {
+          "path": "backend/app/services/price_position.py",
+          "contains_all": [
+            "calculate_price_position",
+            "ema21_distance_pct",
+            "recent_high_1h_distance_pct",
+            "price_change_1m_pct",
+            "BREAKOUT_REFERENCE_INDICATORS"
+          ]
+        },
+        {
+          "path": "backend/app/services/rule_engine.py",
+          "contains_all": [
+            "breakout_distance_pct",
+            "reference_window",
+            "resolved_indicator"
+          ]
+        },
+        {
+          "path": "frontend/lib/indicatorCatalog.ts",
+          "contains_all": [
+            "PRICE_POSITION_INDICATORS",
+            "ema9_distance_pct",
+            "bb_upper_distance_pct",
+            "recent_high_5m_distance_pct",
+            "breakout_distance_pct"
+          ]
+        },
+        {
+          "path": "frontend/components/profiles/ProfileBuilder.tsx",
+          "contains_all": [
+            "PRICE_POSITION_INDICATORS",
+            "BREAKOUT_REFERENCE_WINDOWS",
+            "hasBreakoutWithoutReference"
+          ]
+        },
+        {
+          "path": "frontend/app/settings/score/page.tsx",
+          "contains_all": [
+            "PRICE_POSITION_INDICATORS",
+            "Price Position",
+            "reference_window"
+          ]
+        },
+        {
+          "path": "backend/tests/test_price_position.py",
+          "contains_all": [
+            "test_recent_high_excludes_base_and_partial_candles",
+            "test_robust_scoring_resolves_breakout_reference_window",
+            "test_frontend_uses_one_price_position_catalog_on_every_profile_surface"
+          ]
+        }
+      ]
     }
   ]
 }

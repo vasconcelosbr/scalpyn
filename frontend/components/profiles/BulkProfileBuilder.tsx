@@ -4,6 +4,11 @@ import { useState } from "react";
 import { ArrowLeft, Save, Plus, Trash2, Check, AlertTriangle, Play } from "lucide-react";
 import { apiPut } from "@/lib/api";
 import { ConditionBuilder, NumericInput } from "./ConditionBuilder";
+import {
+  BREAKOUT_REFERENCE_WINDOWS,
+  PRICE_POSITION_INDICATORS,
+  PRICE_POSITION_INDICATOR_VALUES,
+} from "@/lib/indicatorCatalog";
 
 // ── Shared types (mirrors ProfileBuilder) ─────────────────────────────────────
 type RuleConditionType = "threshold" | "comparison" | "boolean";
@@ -19,6 +24,7 @@ interface RuleCondition {
   min?: number;
   max?: number;
   period?: number;
+  reference_window?: string;
 }
 
 interface BlockRule {
@@ -52,6 +58,7 @@ type ActiveTab = "filters" | "scoring" | "signals" | "block_rules" | "entry_trig
 
 // ── Constants (mirrors ProfileBuilder) ───────────────────────────────────────
 const RULE_INDICATORS = [
+  ...PRICE_POSITION_INDICATORS,
   { value: "rsi",                    label: "RSI",                               kind: "number" },
   { value: "adx",                    label: "ADX",                               kind: "number" },
   { value: "macd",                   label: "MACD",                              kind: "number" },
@@ -76,7 +83,6 @@ const RULE_INDICATORS = [
   { value: "change_24h",             label: "Variacao 24h %",                    kind: "number" },
   { value: "orderbook_depth_usdt",   label: "Profundidade Book (USDT)",          kind: "number" },
   { value: "obv",                    label: "OBV",                               kind: "number" },
-  { value: "vwap_distance_pct",      label: "VWAP Distance %",                   kind: "number" },
   { value: "ema5",                   label: "EMA5",                              kind: "number" },
   { value: "ema9",                   label: "EMA9",                              kind: "number" },
   { value: "ema21",                  label: "EMA21",                             kind: "number" },
@@ -90,6 +96,9 @@ const RULE_INDICATORS = [
 ];
 
 const NUMERIC_RULE_INDICATORS  = RULE_INDICATORS.filter((i) => i.kind === "number");
+const COMPARABLE_NUMERIC_RULE_INDICATORS = NUMERIC_RULE_INDICATORS.filter(
+  (indicator) => indicator.value !== "breakout_distance_pct",
+);
 const BOOLEAN_RULE_INDICATORS  = RULE_INDICATORS.filter((i) => i.kind === "boolean");
 const BOOLEAN_RULE_INDICATOR_VALUES = new Set(BOOLEAN_RULE_INDICATORS.map((i) => i.value));
 
@@ -98,7 +107,6 @@ const PERIOD_DEFAULTS: Record<string, number> = {
   atr_percent: 14, stoch_k: 14, stoch_d: 14,
   macd: 12, macd_histogram: 12, bb_width: 20,
   zscore: 20, volume_spike: 20, volume_delta: 20,
-  vwap_distance_pct: 20,
   ema5: 5, ema9: 9, ema21: 21, ema50: 50, ema200: 200,
 };
 
@@ -106,6 +114,7 @@ const NO_TF_INDICATORS = new Set([
   "alpha_score", "price", "volume_24h", "spread_pct", "taker_ratio",
   "ema_full_alignment", "ema9_gt_ema21", "ema9_gt_ema50",
   "ema50_gt_ema200", "orderbook_pressure", "bid_ask_imbalance", "funding_rate",
+  ...PRICE_POSITION_INDICATOR_VALUES,
 ]);
 
 const TIMEFRAME_OPTIONS = [
@@ -168,6 +177,7 @@ function normalizeRuleCondition(raw: any): RuleCondition {
     min: raw?.min,
     max: raw?.max,
     period: raw?.period,
+    reference_window: raw?.reference_window,
   };
 }
 
@@ -345,6 +355,17 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
 
   // ── Apply ──────────────────────────────────────────────────────────────────
   const applyChanges = async () => {
+    const missingBreakoutReference = JSON.stringify(config).includes('"breakout_distance_pct"') && (
+      [...config.filters.conditions, ...config.signals.conditions, ...config.entry_triggers.conditions]
+        .some((condition: any) => (condition.field || condition.indicator) === "breakout_distance_pct" && !condition.reference_window)
+      || config.block_rules.blocks.some((block) => block.conditions.some(
+        (condition) => condition.indicator === "breakout_distance_pct" && !condition.reference_window,
+      ))
+    );
+    if (missingBreakoutReference) {
+      alert("Breakout Distance % exige uma janela de referência (5m, 15m, 30m ou 1h).");
+      return;
+    }
     setSaving(true);
     let ok = 0, fail = 0;
 
@@ -640,7 +661,7 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                                 value={condition.left || "price"}
                                 onChange={(e) => updateBlockCondition(block.id, condition.id, { left: e.target.value })}
                               >
-                                {NUMERIC_RULE_INDICATORS.map((i) => (
+                                {COMPARABLE_NUMERIC_RULE_INDICATORS.map((i) => (
                                   <option key={i.value} value={i.value}>{i.label}</option>
                                 ))}
                               </select>
@@ -671,7 +692,7 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                                 value={condition.right || "ema9"}
                                 onChange={(e) => updateBlockCondition(block.id, condition.id, { right: e.target.value })}
                               >
-                                {NUMERIC_RULE_INDICATORS.map((i) => (
+                                {COMPARABLE_NUMERIC_RULE_INDICATORS.map((i) => (
                                   <option key={i.value} value={i.value}>{i.label}</option>
                                 ))}
                               </select>
@@ -707,12 +728,29 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                               <select
                                 className="input h-8 text-[12px] min-w-[140px]"
                                 value={condition.indicator || "rsi"}
-                                onChange={(e) => updateBlockCondition(block.id, condition.id, { indicator: e.target.value })}
+                                onChange={(e) => updateBlockCondition(block.id, condition.id, {
+                                  indicator: e.target.value,
+                                  reference_window: undefined,
+                                })}
                               >
                                 {NUMERIC_RULE_INDICATORS.map((i) => (
                                   <option key={i.value} value={i.value}>{i.label}</option>
                                 ))}
                               </select>
+                              {condition.indicator === "breakout_distance_pct" && (
+                                <select
+                                  className="input h-8 text-[12px] w-20"
+                                  value={condition.reference_window || ""}
+                                  onChange={(e) => updateBlockCondition(block.id, condition.id, { reference_window: e.target.value || undefined })}
+                                  required
+                                  aria-label="Breakout reference window"
+                                >
+                                  <option value="" disabled>Janela</option>
+                                  {BREAKOUT_REFERENCE_WINDOWS.map((window) => (
+                                    <option key={window} value={window}>{window}</option>
+                                  ))}
+                                </select>
+                              )}
                               {PERIOD_DEFAULTS[condition.indicator || ""] !== undefined && (
                                 <input
                                   type="number"
@@ -872,7 +910,7 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                           value={trig.left || "price"}
                           onChange={(e) => updateTrigger(trig.id, "left", e.target.value)}
                         >
-                          {NUMERIC_RULE_INDICATORS.map((i) => (
+                          {COMPARABLE_NUMERIC_RULE_INDICATORS.map((i) => (
                             <option key={i.value} value={i.value}>{i.label}</option>
                           ))}
                         </select>
@@ -890,7 +928,7 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                           value={trig.right || "ema9"}
                           onChange={(e) => updateTrigger(trig.id, "right", e.target.value)}
                         >
-                          {NUMERIC_RULE_INDICATORS.map((i) => (
+                          {COMPARABLE_NUMERIC_RULE_INDICATORS.map((i) => (
                             <option key={i.value} value={i.value}>{i.label}</option>
                           ))}
                         </select>
@@ -925,12 +963,29 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                         <select
                           className="input h-8 text-[12px] w-36"
                           value={trig.indicator || "rsi"}
-                          onChange={(e) => updateTrigger(trig.id, "indicator", e.target.value)}
+                          onChange={(e) => {
+                            updateTrigger(trig.id, "indicator", e.target.value);
+                            updateTrigger(trig.id, "reference_window", undefined);
+                          }}
                         >
                           {NUMERIC_RULE_INDICATORS.map((i) => (
                             <option key={i.value} value={i.value}>{i.label}</option>
                           ))}
                         </select>
+                        {trig.indicator === "breakout_distance_pct" && (
+                          <select
+                            className="input h-8 text-[12px] w-20"
+                            value={trig.reference_window || ""}
+                            onChange={(e) => updateTrigger(trig.id, "reference_window", e.target.value || undefined)}
+                            required
+                            aria-label="Breakout reference window"
+                          >
+                            <option value="" disabled>Janela</option>
+                            {BREAKOUT_REFERENCE_WINDOWS.map((window) => (
+                              <option key={window} value={window}>{window}</option>
+                            ))}
+                          </select>
+                        )}
                         <select
                           className="input h-8 text-[12px] w-20"
                           value={trig.operator}

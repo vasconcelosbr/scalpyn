@@ -1,6 +1,7 @@
 """Feature Engine — calculates technical indicators dynamically from config."""
 
 import logging
+from datetime import datetime
 from typing import Dict, Any, Optional
 import pandas as pd
 import numpy as np
@@ -19,6 +20,9 @@ class FeatureEngine:
         df: pd.DataFrame,
         market_data: Optional[Dict[str, Any]] = None,
         group: Optional[str] = None,
+        timeframe: Optional[str] = None,
+        df_1m: Optional[pd.DataFrame] = None,
+        as_of: Optional[datetime] = None,
     ) -> Dict[str, Any]:
         """Calculate enabled indicators for the given OHLCV DataFrame.
 
@@ -170,7 +174,6 @@ class FeatureEngine:
             _EMA_MICRO_KEYS = frozenset({
                 "ema5", "ema9", "ema10", "ema21",
                 "ema9_gt_ema21",   # EMA9 vs EMA21 — both in micro
-                "ema9_distance_pct",
             })
 
             if group == "structural":
@@ -229,12 +232,17 @@ class FeatureEngine:
             if "atr_pct" in results:
                 results["atr_percent"] = results["atr_pct"]
 
-            # Derived: EMA 9 distance as percentage of current price
-            _close_for_dist = results.get("close") or results.get("close_5m")
-            if "ema9" in results and _close_for_dist and _close_for_dist > 0 and results["ema9"] > 0:
-                results["ema9_distance_pct"] = round(
-                    (_close_for_dist - results["ema9"]) / results["ema9"] * 100, 4
-                )
+            if group == "microstructure" or timeframe == "5m":
+                from .price_position import calculate_price_position
+
+                bollinger_config = self.config.get("bollinger", {})
+                results.update(calculate_price_position(
+                    df,
+                    df_1m=df_1m,
+                    as_of=as_of,
+                    bollinger_period=int(bollinger_config.get("period", 20)),
+                    bollinger_deviation=float(bollinger_config.get("deviation", 2.0)),
+                ))
 
             results.update(self._calc_directional_features(df))
 

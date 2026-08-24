@@ -797,11 +797,30 @@ async def _compute_5m_async():
                         "quote_volume": float(r.quote_volume) if r.quote_volume is not None else None,
                     } for r in reversed(rows)])
 
+                    one_minute_result = await db.execute(text("""
+                        SELECT time, open, high, low, close, volume, quote_volume
+                        FROM ohlcv
+                        WHERE symbol = :symbol AND timeframe = '1m'
+                        ORDER BY time DESC
+                        LIMIT 10
+                    """), {"symbol": symbol})
+                    one_minute_rows = one_minute_result.fetchall()
+                    df_1m = pd.DataFrame([{
+                        "time": r.time, "open": float(r.open), "high": float(r.high),
+                        "low": float(r.low), "close": float(r.close), "volume": float(r.volume),
+                        "quote_volume": float(r.quote_volume) if r.quote_volume is not None else None,
+                    } for r in reversed(one_minute_rows)]) if one_minute_rows else None
+
                     market_data = await market_data_service.fetch_indicator_fallbacks(
                         symbol,
                         existing_data=metadata_map.get(symbol),
                     )
-                    results = engine.calculate(df, market_data=market_data)
+                    results = engine.calculate(
+                        df,
+                        market_data=market_data,
+                        timeframe="5m",
+                        df_1m=df_1m,
+                    )
                     if not results:
                         continue
 

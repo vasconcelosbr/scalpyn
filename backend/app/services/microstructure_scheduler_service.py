@@ -50,7 +50,7 @@ def _is_scheduler_group_drift(exc: BaseException) -> bool:
 DEFAULT_INTERVAL_SECONDS = 300        # 5 min
 DEFAULT_CONCURRENCY = 3
 DEFAULT_FIRST_RUN_DELAY_SECONDS = 15  # fire quickly after structural
-DEFAULT_OHLCV_LIMIT = 100             # 100 × 5m ≈ 8 h of data
+DEFAULT_OHLCV_LIMIT = 220             # EMA200 + closed-candle safety margin
 # Order-flow look-back window fed to get_order_flow_data().  Must be ≤
 # TRADE_BUFFER_TTL_SECONDS (360 s) in event_handlers so the Redis buffer
 # is guaranteed to cover the full window.  Tune via env var when the
@@ -316,11 +316,29 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore,
     async with semaphore:
         # Fetch 5m OHLCV for volume/VWAP computation
         try:
-            df = await market_data_service.fetch_ohlcv(symbol, TIMEFRAME,
-                                                        limit=DEFAULT_OHLCV_LIMIT)
+            fetched_5m, fetched_1m = await asyncio.gather(
+                market_data_service.fetch_ohlcv(
+                    symbol, TIMEFRAME, limit=DEFAULT_OHLCV_LIMIT
+                ),
+                market_data_service.fetch_ohlcv(symbol, "1m", limit=50),
+                return_exceptions=True,
+            )
+            if isinstance(fetched_5m, BaseException):
+                raise fetched_5m
+            df = fetched_5m
+            if isinstance(fetched_1m, BaseException):
+                logger.warning(
+                    "[MICRO-SCHED] fetch_ohlcv 1m failed for %s: %s",
+                    symbol,
+                    fetched_1m,
+                )
+                df_1m = None
+            else:
+                df_1m = fetched_1m
         except Exception as exc:
             logger.warning("[MICRO-SCHED] fetch_ohlcv failed for %s: %s", symbol, exc)
             df = None
+            df_1m = None
 
         # Always fetch live orderbook for spread/depth/taker data
         try:
@@ -334,8 +352,13 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore,
         if df is not None and not df.empty:
             engine = FeatureEngine(DEFAULT_INDICATORS)
             try:
-                results = engine.calculate(df, market_data=spread_payload or None,
-                                           group=SCHEDULER_GROUP) or {}
+                results = engine.calculate(
+                    df,
+                    market_data=spread_payload or None,
+                    group=SCHEDULER_GROUP,
+                    timeframe=TIMEFRAME,
+                    df_1m=df_1m,
+                ) or {}
             except Exception as exc:
                 logger.warning("[MICRO-SCHED] FeatureEngine failed for %s: %s", symbol, exc)
                 results = {}

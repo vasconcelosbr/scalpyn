@@ -4,8 +4,13 @@ import { useState, useEffect, useRef } from "react";
 import { AlertCircle, FileJson, Save, RefreshCw, Plus, Trash2, Upload, X } from "lucide-react";
 import { useConfig } from "@/hooks/useConfig";
 import { ModuleAIAnalysisAction } from "@/components/ai/ModuleAIAnalysisAction";
+import {
+  BREAKOUT_REFERENCE_WINDOWS,
+  PRICE_POSITION_INDICATORS,
+  PRICE_POSITION_INDICATOR_VALUES,
+} from "@/lib/indicatorCatalog";
 
-const INDICATORS = [
+const CORE_INDICATORS = [
   "price", "market_cap", "change_24h", "volume_24h",
   "ema5", "ema9", "ema21", "ema50", "ema200",
   "alpha_score", "score", "liquidity_score", "momentum_score",
@@ -14,10 +19,11 @@ const INDICATORS = [
   "taker_buy_volume", "taker_sell_volume", "volume_spike", "volume_delta",
   "di_plus", "di_minus", "di_trend", "spread_pct", "orderbook_depth_usdt",
   "orderbook_pressure", "bid_ask_imbalance", "bb_width", "stoch_k", "stoch_d",
-  "vwap_distance_pct", "obv", "atr", "atr_pct", "atr_percent", "psar_trend",
-  "zscore", "funding_rate", "ema9_distance_pct", "ema9_gt_ema21",
+  "obv", "atr", "atr_pct", "atr_percent", "psar_trend",
+  "zscore", "funding_rate", "ema9_gt_ema21",
   "ema9_gt_ema50", "ema50_gt_ema200", "ema_full_alignment",
 ];
+const INDICATORS = [...CORE_INDICATORS, ...PRICE_POSITION_INDICATORS.map((indicator) => indicator.value)];
 
 const OPERATORS = ["<=", ">=", "<", ">", "=", "==", "!=", "between", "is_true", "is_false", "ema9>ema50>ema200", "ema9>ema50", "ema50>ema200", "di+>di-", "di->di+", ">prev+", ">prev"];
 type CategoryKey = "liquidity" | "market_structure" | "momentum" | "signal";
@@ -73,6 +79,22 @@ const DEFAULT_RULE_CATEGORIES: Record<string, string> = {
   zscore: "momentum",
   vwap_distance_pct: "momentum",
   ema9_distance_pct: "momentum",
+  ema5_distance_pct: "market_structure",
+  ema21_distance_pct: "market_structure",
+  ema50_distance_pct: "market_structure",
+  ema200_distance_pct: "market_structure",
+  bb_upper_distance_pct: "market_structure",
+  bb_middle_distance_pct: "market_structure",
+  bb_lower_distance_pct: "market_structure",
+  recent_high_5m_distance_pct: "market_structure",
+  recent_high_15m_distance_pct: "market_structure",
+  recent_high_30m_distance_pct: "market_structure",
+  recent_high_1h_distance_pct: "market_structure",
+  recent_low_15m_distance_pct: "market_structure",
+  breakout_distance_pct: "signal",
+  price_change_1m_pct: "momentum",
+  price_change_5m_pct: "momentum",
+  price_change_15m_pct: "momentum",
   adx_acceleration: "signal",
   volume_delta: "signal",
   funding_rate: "signal",
@@ -83,7 +105,7 @@ const DEFAULT_RULE_CATEGORIES: Record<string, string> = {
 };
 
 // Indicators where "between" range is the most common use-case
-const RANGE_INDICATORS = new Set(["rsi", "stoch_k", "stoch_d", "adx", "vwap_distance_pct", "bb_width", "ema9_distance_pct", "atr_pct", "atr_percent", "zscore", "funding_rate"]);
+const RANGE_INDICATORS = new Set(["rsi", "stoch_k", "stoch_d", "adx", "bb_width", "atr_pct", "atr_percent", "zscore", "funding_rate", ...PRICE_POSITION_INDICATOR_VALUES]);
 const BOOLEAN_INDICATORS = new Set(["ema_full_alignment", "ema9_gt_ema21", "ema9_gt_ema50", "ema50_gt_ema200", "di_trend"]);
 const VALUELESS_OPERATORS = new Set(["is_true", "is_false", "ema9>ema50>ema200", "ema9>ema50", "ema50>ema200", "di+>di-", "di->di+", ">prev"]);
 
@@ -96,6 +118,7 @@ interface ScoreRule {
   max?: number | null;
   points: number;
   category: CategoryKey | string;
+  reference_window?: string;
 }
 
 interface ScoreImportResult {
@@ -200,7 +223,13 @@ function normalizeImportedRule(raw: unknown, index: number): ScoreRule {
     operator,
     points: toNumber(raw.points, 0),
     category,
+    reference_window: indicator === "breakout_distance_pct"
+      ? String(raw.reference_window || "")
+      : undefined,
   };
+  if (indicator === "breakout_distance_pct" && !BREAKOUT_REFERENCE_WINDOWS.includes(rule.reference_window as any)) {
+    throw new Error(`scoring_rules[${index}].reference_window deve ser 5m, 15m, 30m ou 1h`);
+  }
 
   if (operator === "between") {
     rule.min = toNumber(raw.min, 0);
@@ -308,6 +337,10 @@ export default function ScoreEngineSettings() {
   }, [config]);
 
   const handleSave = async () => {
+    if (rules.some((rule) => rule.indicator === "breakout_distance_pct" && !BREAKOUT_REFERENCE_WINDOWS.includes(rule.reference_window as any))) {
+      alert("Breakout Distance % exige uma janela de referência (5m, 15m, 30m ou 1h).");
+      return;
+    }
     setSaving(true);
     try {
       await updateConfig({
@@ -466,14 +499,36 @@ export default function ScoreEngineSettings() {
                           : RANGE_INDICATORS.has(ind) && !["<=",">=","<",">","=","==","!=","between"].includes(rule.operator) ? "between"
                           : rule.operator;
                         updateRule(rule.id, "indicator", ind);
+                        updateRule(rule.id, "reference_window", undefined);
                         if (op !== rule.operator) updateRule(rule.id, "operator", op);
                         updateRule(rule.id, "category", DEFAULT_RULE_CATEGORIES[ind] || rule.category || "momentum");
                       }}
                     >
-                      {INDICATORS.map((i) => (
-                        <option key={i} value={i}>{i}</option>
-                      ))}
+                      <optgroup label="Core">
+                        {CORE_INDICATORS.map((i) => (
+                          <option key={i} value={i}>{i}</option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="Price Position">
+                        {PRICE_POSITION_INDICATORS.map((indicator) => (
+                          <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
+                        ))}
+                      </optgroup>
                     </select>
+                    {rule.indicator === "breakout_distance_pct" && (
+                      <select
+                        className="input h-8 text-[13px] w-36 mt-1"
+                        value={rule.reference_window || ""}
+                        onChange={(e) => updateRule(rule.id, "reference_window", e.target.value || undefined)}
+                        required
+                        aria-label="Breakout reference window"
+                      >
+                        <option value="" disabled>Reference window</option>
+                        {BREAKOUT_REFERENCE_WINDOWS.map((window) => (
+                          <option key={window} value={window}>{window}</option>
+                        ))}
+                      </select>
+                    )}
                   </td>
 
                   {/* Operator */}

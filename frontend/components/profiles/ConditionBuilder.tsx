@@ -2,6 +2,11 @@
 
 import { Plus, Trash2 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
+import {
+  BREAKOUT_REFERENCE_WINDOWS,
+  PRICE_POSITION_INDICATORS,
+  PRICE_POSITION_INDICATOR_VALUES,
+} from "@/lib/indicatorCatalog";
 
 export function numFmt(n: number | null): string {
   if (n === null) return "";
@@ -79,6 +84,7 @@ export interface ScoreRule {
   max?: number;
   points?: number;
   category?: string;
+  reference_window?: string;
 }
 
 interface Condition {
@@ -94,6 +100,7 @@ interface Condition {
   rule_id?: string;
   points?: number;
   category?: string;
+  reference_window?: string;
 }
 
 interface ConditionBuilderProps {
@@ -118,7 +125,12 @@ const INDICATOR_FIELDS = [
   { value: "orderbook_pressure", label: "Orderbook Pressure", type: "number", group: "liquidity" },
   { value: "bid_ask_imbalance", label: "Bid/Ask Imbalance", type: "number", group: "liquidity" },
   { value: "obv", label: "OBV", type: "number", group: "liquidity" },
-  { value: "vwap_distance_pct", label: "VWAP Distance %", type: "number", group: "liquidity" },
+  ...PRICE_POSITION_INDICATORS.map((indicator) => ({
+    value: indicator.value,
+    label: indicator.label,
+    type: indicator.kind,
+    group: indicator.group,
+  })),
   { value: "rsi", label: "RSI", type: "number", group: "momentum" },
   { value: "macd", label: "MACD", type: "number", group: "momentum" },
   { value: "macd_histogram", label: "MACD Histogram", type: "number", group: "momentum" },
@@ -180,7 +192,6 @@ const PERIOD_DEFAULTS: Record<string, number> = {
   volume_spike: 20,
   obv: 20,
   volume_delta: 20,
-  vwap_distance_pct: 20,
 };
 
 const NO_TF_INDICATORS = new Set([
@@ -190,13 +201,15 @@ const NO_TF_INDICATORS = new Set([
   "di_trend", "ema_full_alignment", "ema9_gt_ema21",
   "ema9_gt_ema50", "ema50_gt_ema200", "psar_trend",
   "macd_signal",
+  ...PRICE_POSITION_INDICATOR_VALUES,
 ]);
 
 function buildRuleLabel(rule: ScoreRule) {
   const points = Number(rule.points ?? 0);
   const category = (rule.category || "").replaceAll("_", " ");
+  const reference = rule.reference_window ? ` • ${rule.reference_window}` : "";
   if (rule.operator === "between") {
-    return `${rule.operator} ${rule.min ?? "?"} - ${rule.max ?? "?"} • ${points} pts${category ? ` • ${category}` : ""}`;
+    return `${rule.operator} ${rule.min ?? "?"} - ${rule.max ?? "?"}${reference} • ${points} pts${category ? ` • ${category}` : ""}`;
   }
   return `${rule.operator} ${rule.value ?? "—"} • ${points} pts${category ? ` • ${category}` : ""}`;
 }
@@ -211,6 +224,7 @@ function applyScoreRule(rule: ScoreRule): Partial<Condition> {
     rule_id: rule.id,
     points: Number(rule.points ?? 0),
     category: rule.category,
+    reference_window: rule.reference_window,
   };
 }
 
@@ -293,6 +307,7 @@ export function ConditionBuilder({
                   rule_id: undefined,
                   points: 0,
                   category: undefined,
+                  reference_window: undefined,
                 };
 
                 if (firstRule) {
@@ -320,6 +335,11 @@ export function ConditionBuilder({
                   <option key={field.value} value={field.value}>{field.label}</option>
                 ))}
               </optgroup>
+              <optgroup label="Price Position">
+                {fieldsByGroup("price_position").map((field) => (
+                  <option key={field.value} value={field.value}>{field.label}</option>
+                ))}
+              </optgroup>
               <optgroup label="Momentum">
                 {fieldsByGroup("momentum").map((field) => (
                   <option key={field.value} value={field.value}>{field.label}</option>
@@ -341,6 +361,21 @@ export function ConditionBuilder({
                 ))}
               </optgroup>
             </select>
+
+            {condition.field === "breakout_distance_pct" && (
+              <select
+                className="input w-24"
+                value={condition.reference_window || ""}
+                onChange={(event) => updateCondition(index, { reference_window: event.target.value || undefined })}
+                aria-label="Breakout reference window"
+                required
+              >
+                <option value="" disabled>Janela</option>
+                {BREAKOUT_REFERENCE_WINDOWS.map((window) => (
+                  <option key={window} value={window}>{window}</option>
+                ))}
+              </select>
+            )}
 
             {showPoints && availableRules.length > 0 && (
               <select

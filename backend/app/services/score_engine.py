@@ -51,6 +51,19 @@ _IND_LABELS: Dict[str, str] = {
     "stoch_d": "Stoch%D", "bb_width": "BB Width", "volume_24h": "Vol 24h",
     "zscore": "Z-Score", "psar_trend": "PSAR", "atr_pct": "ATR%", "atr": "ATR",
     "atr_percent": "ATR%", "ema9_distance_pct": "EMA9 Dist%",
+    "ema5_distance_pct": "EMA5 Dist%", "ema21_distance_pct": "EMA21 Dist%",
+    "ema50_distance_pct": "EMA50 Dist%", "ema200_distance_pct": "EMA200 Dist%",
+    "bb_upper_distance_pct": "BB Upper Dist%", "bb_middle_distance_pct": "BB Middle Dist%",
+    "bb_lower_distance_pct": "BB Lower Dist%",
+    "recent_high_5m_distance_pct": "High 5m Dist%",
+    "recent_high_15m_distance_pct": "High 15m Dist%",
+    "recent_high_30m_distance_pct": "High 30m Dist%",
+    "recent_high_1h_distance_pct": "High 1h Dist%",
+    "recent_low_15m_distance_pct": "Low 15m Dist%",
+    "breakout_distance_pct": "Breakout Dist%",
+    "price_change_1m_pct": "Price Change 1m%",
+    "price_change_5m_pct": "Price Change 5m%",
+    "price_change_15m_pct": "Price Change 15m%",
     "ema5": "EMA5", "ema9": "EMA9", "ema21": "EMA21",
     "ema50": "EMA50", "ema200": "EMA200",
     "ema9_gt_ema21": "EMA 9>21", "volume_delta": "Vol Delta",
@@ -81,6 +94,22 @@ _IND_CATEGORY: Dict[str, str] = {
     "macd_histogram": "momentum", "stoch_k": "momentum",
     "stoch_d": "momentum", "zscore": "momentum", "vwap_distance_pct": "momentum",
     "ema9_distance_pct": "momentum",
+    "ema5_distance_pct": "market_structure",
+    "ema21_distance_pct": "market_structure",
+    "ema50_distance_pct": "market_structure",
+    "ema200_distance_pct": "market_structure",
+    "bb_upper_distance_pct": "market_structure",
+    "bb_middle_distance_pct": "market_structure",
+    "bb_lower_distance_pct": "market_structure",
+    "recent_high_5m_distance_pct": "market_structure",
+    "recent_high_15m_distance_pct": "market_structure",
+    "recent_high_30m_distance_pct": "market_structure",
+    "recent_high_1h_distance_pct": "market_structure",
+    "recent_low_15m_distance_pct": "market_structure",
+    "breakout_distance_pct": "signal",
+    "price_change_1m_pct": "momentum",
+    "price_change_5m_pct": "momentum",
+    "price_change_15m_pct": "momentum",
     "adx_acceleration": "signal", "volume_delta": "signal",
     "funding_rate": "signal", "ema9_gt_ema21": "signal",
     "ema9_gt_ema50": "signal",
@@ -117,6 +146,8 @@ def _values_match(left: Any, right: Any) -> bool:
 def _condition_matches_rule(condition: Dict[str, Any], rule: Dict[str, Any]) -> bool:
     field = condition.get("field") or condition.get("indicator")
     if field != rule.get("indicator"):
+        return False
+    if field == "breakout_distance_pct" and condition.get("reference_window") != rule.get("reference_window"):
         return False
 
     condition_operator = condition.get("operator")
@@ -422,7 +453,12 @@ class ScoreEngine:
             # Indicator payloads use the envelope shape
             # ``{"value": v, "status": ...}``. Unwrap so every operator
             # below compares against the scalar instead of the dict.
-            return unwrap_envelope_value(indicators.get(name))
+            lookup_name = name
+            if name == "breakout_distance_pct":
+                from .price_position import resolve_breakout_indicator
+
+                lookup_name = resolve_breakout_indicator(rule.get("reference_window")) or ""
+            return unwrap_envelope_value(indicators.get(lookup_name))
 
         if operator_str == "is_true":
             actual = get_indicator_value(indicator_name)
@@ -619,7 +655,12 @@ class ScoreEngine:
                 actual = _ind("di_minus")
                 cond = "DI- > DI+"
             elif operator_str == "between":
-                actual = _ind(indicator)
+                if indicator == "breakout_distance_pct":
+                    from .price_position import resolve_breakout_indicator
+
+                    actual = _ind(resolve_breakout_indicator(rule.get("reference_window")) or "")
+                else:
+                    actual = _ind(indicator)
                 mn, mx = rule.get("min", 0), rule.get("max", 100)
                 cond = f"{lbl} {mn}–{mx}"
             else:
@@ -643,6 +684,7 @@ class ScoreEngine:
                 "type": "positive" if pts > 0 else ("penalty" if pts < 0 else "neutral"),
                 "condition_text": cond,
                 "category": resolve_rule_category(rule),
+                "reference_window": rule.get("reference_window"),
             }
             robust_info = robust_lookup.get(str(rule_id))
             if robust_info is not None:

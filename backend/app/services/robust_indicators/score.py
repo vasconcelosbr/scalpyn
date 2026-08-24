@@ -281,6 +281,10 @@ def calculate_score_with_confidence(
 
         category = _resolve_category(rule)
         resolved_name = _OPERATOR_ENVELOPE_REMAP.get(rule_operator, name)
+        if name == "breakout_distance_pct":
+            from ..price_position import resolve_breakout_indicator
+
+            resolved_name = resolve_breakout_indicator(rule.get("reference_window")) or ""
         env = envelopes.get(resolved_name)
         if env is None or not env.is_usable:
             continue
@@ -302,6 +306,7 @@ def calculate_score_with_confidence(
                 "confidence": env.confidence,
                 "data_available": True,
                 "category": category,
+                "reference_window": rule.get("reference_window"),
             })
 
     if points_denominator > 0:

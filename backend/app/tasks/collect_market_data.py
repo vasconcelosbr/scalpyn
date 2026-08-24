@@ -698,7 +698,23 @@ async def _collect_5m_async():
             sym_market_type = symbol_market_type.get(symbol, "spot")
             try:
                 logger.info(f"[COLLECT][START] symbol={symbol} timeframe=5m")
-                df = await market_data_service.fetch_ohlcv(symbol, "5m", limit=288)
+                fetched_5m, fetched_1m = await asyncio.gather(
+                    market_data_service.fetch_ohlcv(symbol, "5m", limit=288),
+                    market_data_service.fetch_ohlcv(symbol, "1m", limit=50),
+                    return_exceptions=True,
+                )
+                if isinstance(fetched_5m, BaseException):
+                    raise fetched_5m
+                df = fetched_5m
+                if isinstance(fetched_1m, BaseException):
+                    logger.warning(
+                        "[COLLECT][1m_UNAVAILABLE] symbol=%s error=%s",
+                        symbol,
+                        fetched_1m,
+                    )
+                    df_1m = None
+                else:
+                    df_1m = fetched_1m
                 logger.info(f"[COLLECT][RESULT] symbol={symbol} result={type(df).__name__} rows={len(df) if df is not None else 'None'}")
 
                 if df is None:
@@ -753,6 +769,34 @@ async def _collect_5m_async():
                             rows=rows_payload,
                         ),
                     )
+                    if df_1m is not None and not df_1m.empty:
+                        rows_1m_payload = tuple(
+                            {
+                                "time": row["time"],
+                                "open": float(row["open"]),
+                                "high": float(row["high"]),
+                                "low": float(row["low"]),
+                                "close": float(row["close"]),
+                                "volume": float(row["volume"]),
+                                "quote_volume": float(row.get(
+                                    "quote_volume",
+                                    float(row["close"]) * float(row["volume"]),
+                                )),
+                            }
+                            for _, row in df_1m.iterrows()
+                        )
+                        await _pq.enqueue_or_log(
+                            producer="collect-1m-price-position",
+                            msg=_pq.OhlcvBatch(
+                                category="ingest",
+                                enqueued_at=_pq.now_monotonic(),
+                                symbol=symbol,
+                                exchange=df_1m.attrs.get("exchange", "gate.io"),
+                                timeframe="1m",
+                                market_type=sym_market_type,
+                                rows=rows_1m_payload,
+                            ),
+                        )
                     await _pq.enqueue_or_log(
                         producer="collect-5m",
                         msg=_pq.MarketMetadataUpsert(
@@ -788,6 +832,26 @@ async def _collect_5m_async():
                                     "volume":      float(row["volume"]),
                                     "quote_volume": float(row.get("quote_volume", float(row["close"]) * float(row["volume"]))),
                                 })
+
+                            if df_1m is not None and not df_1m.empty:
+                                for _, row in df_1m.iterrows():
+                                    await db.execute(text("""
+                                        INSERT INTO ohlcv (time, symbol, exchange, timeframe, market_type, open, high, low, close, volume, quote_volume)
+                                        VALUES (:time, :symbol, :exchange, :timeframe, :market_type, :open, :high, :low, :close, :volume, :quote_volume)
+                                        ON CONFLICT DO NOTHING
+                                    """), {
+                                        "time": row["time"],
+                                        "symbol": symbol,
+                                        "exchange": df_1m.attrs.get("exchange", "gate.io"),
+                                        "timeframe": "1m",
+                                        "market_type": sym_market_type,
+                                        "open": float(row["open"]),
+                                        "high": float(row["high"]),
+                                        "low": float(row["low"]),
+                                        "close": float(row["close"]),
+                                        "volume": float(row["volume"]),
+                                        "quote_volume": float(row.get("quote_volume", float(row["close"]) * float(row["volume"]))),
+                                    })
 
                             # 2026-05-08 — REMOVED redundant market_metadata UPSERT.
                             # Three sources already keep market_metadata.price fresh

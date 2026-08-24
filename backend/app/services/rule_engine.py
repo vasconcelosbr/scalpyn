@@ -192,6 +192,11 @@ class RuleEngine:
         """
         condition_type = (condition.get("type") or "threshold").lower()
         field = condition.get("field", "")
+        lookup_field = field
+        if field == "breakout_distance_pct":
+            from .price_position import resolve_breakout_indicator
+
+            lookup_field = resolve_breakout_indicator(condition.get("reference_window")) or ""
         operator_str = condition.get("operator", "==")
         if condition_type == "comparison":
             left_field = condition.get("left", "")
@@ -222,7 +227,7 @@ class RuleEngine:
             target_value = condition.get("value")
 
             # Get actual value from data (support nested fields with dot notation)
-            actual_value = self._get_nested_value(data, field)
+            actual_value = self._get_nested_value(data, lookup_field)
 
             detail = {
                 "field": field,
@@ -232,8 +237,11 @@ class RuleEngine:
                 "passed": False,
                 "status": RuleStatus.FAIL.value,
             }
+            if field == "breakout_distance_pct":
+                detail["reference_window"] = condition.get("reference_window")
+                detail["resolved_indicator"] = lookup_field or None
 
-            valid, reason = is_valid(actual_value, field)
+            valid, reason = is_valid(actual_value, lookup_field or field)
             if not valid:
                 detail["reason"] = (reason or SkipReason.INDICATOR_NOT_AVAILABLE).value
                 detail["status"] = RuleStatus.SKIPPED.value

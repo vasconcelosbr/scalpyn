@@ -1158,7 +1158,7 @@ def _validate_condition(
     allowed = {
         "id", "field", "operator", "value", "min", "max", "period", "timeframe",
         "required", "enabled", "rule_id", "type", "indicator", "left", "right",
-        "name", "description", "source",
+        "name", "description", "source", "reference_window",
     }
     unknown = set(condition) - allowed
     if unknown:
@@ -1220,6 +1220,11 @@ def _validate_condition(
     if condition.get("period") is not None:
         if isinstance(condition["period"], bool) or not isinstance(condition["period"], int) or condition["period"] <= 0:
             raise ValueError(f"{path}.period must be a positive integer")
+    if field == "breakout_distance_pct":
+        if condition.get("reference_window") not in {"5m", "15m", "30m", "1h"}:
+            raise ValueError(f"{path}.reference_window is required for breakout_distance_pct")
+    elif condition.get("reference_window") is not None:
+        raise ValueError(f"{path}.reference_window is only valid for breakout_distance_pct")
     for key in ("required", "enabled"):
         if key in condition and not isinstance(condition[key], bool):
             raise ValueError(f"{path}.{key} must be boolean")
@@ -1296,7 +1301,7 @@ def _validate_score_rule(rule: Any, *, path: str) -> str:
         required=frozenset({"id", "indicator", "operator", "points", "category"}),
         optional=frozenset({
             "value", "min", "max", "name", "enabled", "description", "source",
-            "period", "timeframe",
+            "period", "timeframe", "reference_window",
         }),
         path=path,
     )
@@ -1324,6 +1329,11 @@ def _validate_score_rule(rule: Any, *, path: str) -> str:
         or rule["period"] <= 0
     ):
         raise ValueError(f"{path}.period must be a positive integer")
+    if rule["indicator"] == "breakout_distance_pct":
+        if rule.get("reference_window") not in {"5m", "15m", "30m", "1h"}:
+            raise ValueError(f"{path}.reference_window is required for breakout_distance_pct")
+    elif rule.get("reference_window") is not None:
+        raise ValueError(f"{path}.reference_window is only valid for breakout_distance_pct")
     if operator == "between":
         for key in ("min", "max"):
             if key not in rule:
@@ -1370,7 +1380,7 @@ def _validate_flat_block(block: Any, *, path: str) -> None:
         raise ValueError(f"{path} must be an object")
     common = frozenset({
         "id", "name", "enabled", "reason", "description", "source", "rule_id",
-        "timeframe", "period",
+        "timeframe", "period", "reference_window",
     })
     block_type = block.get("type")
     if block_type is None:
@@ -1436,6 +1446,9 @@ def _validate_flat_block(block: Any, *, path: str) -> None:
         or block["period"] <= 0
     ):
         raise ValueError(f"{path}.period must be a positive integer")
+    if block.get("indicator") == "breakout_distance_pct":
+        if block.get("reference_window") not in {"5m", "15m", "30m", "1h"}:
+            raise ValueError(f"{path}.reference_window is required for breakout_distance_pct")
 
 
 def _validate_generated_profile_metadata(value: Any) -> None:
