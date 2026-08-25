@@ -1,7 +1,7 @@
 import type { ShadowTradeChartResponse, ShadowTradeDetail } from "./types";
 
 export const SHADOW_TRADE_EXPORT_SCHEMA = "scalpyn.shadow_trade_export";
-export const SHADOW_TRADE_EXPORT_VERSION = "2.1.0";
+export const SHADOW_TRADE_EXPORT_VERSION = "2.2.0";
 
 interface ExportOptions {
   generatedAt?: string;
@@ -44,6 +44,12 @@ function buildIndicatorComparison(entry: Record<string, unknown>, exit: Record<s
     });
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
 export function buildShadowTradeExport(
   detail: ShadowTradeDetail,
   chart: ShadowTradeChartResponse | null,
@@ -54,6 +60,17 @@ export function buildShadowTradeExport(
   const entryMetrics = detail.entry_metrics ?? detail.features_snapshot ?? {};
   const exitCaptureFailed = detail.features_snapshot_exit?.["_capture_failed"] === true;
   const exitMetrics = detail.exit_metrics ?? (exitCaptureFailed ? {} : detail.features_snapshot_exit ?? {});
+  const decisionMetrics = detail.decision_metrics ?? {};
+  const l3Gate = asRecord(
+    decisionMetrics.l3_gate_v2 ?? detail.config_snapshot?.l3_gate_v2,
+  );
+  const blockRulesAudit = asRecord(
+    l3Gate.block_rules ?? decisionMetrics.block_rules_audit,
+  );
+  const rulesSnapshot = detail.rules_snapshot ?? {};
+  const blockRulesLineage = asRecord(
+    decisionMetrics.block_rules_lineage ?? rulesSnapshot._block_rules_lineage,
+  );
 
   return {
     export_metadata: {
@@ -136,9 +153,20 @@ export function buildShadowTradeExport(
       reasons: detail.decision_reasons,
       metrics: detail.decision_metrics,
     },
+    lineage: {
+      profile_id: detail.profile_id,
+      profile_version: detail.profile_version,
+      profile_version_id: blockRulesLineage.profile_version_id ?? null,
+      profile_config_hash: blockRulesLineage.profile_config_hash ?? null,
+      profile_block_rules_hash: blockRulesLineage.profile_block_rules_hash ?? null,
+      global_block_rules_hash: blockRulesLineage.global_block_rules_hash ?? null,
+      effective_block_rules_hash: blockRulesLineage.effective_block_rules_hash ?? null,
+    },
     snapshots: {
       config: detail.config_snapshot,
       profile_rules: detail.rules_snapshot,
+      block_rules_audit: Object.keys(blockRulesAudit).length ? blockRulesAudit : null,
+      block_rules_lineage: Object.keys(blockRulesLineage).length ? blockRulesLineage : null,
       indicators_at_entry: detail.features_snapshot,
       indicators_at_exit: detail.features_snapshot_exit,
       entry_risk_features: detail.entry_risk_features,

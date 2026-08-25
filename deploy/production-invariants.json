@@ -157,6 +157,55 @@
       ]
     },
     {
+      "id": "l3-block-rules-composition-contract",
+      "description": "Global and profile L3 block rules compose deterministically, preserve lineage, reject conflicts, and reach the operational veto",
+      "files": [
+        {
+          "path": "backend/app/services/profile_runtime_config.py",
+          "contains_all": [
+            "merge_block_rules",
+            "BLOCK_RULE_CONFIG_CONFLICT",
+            "PROFILE_BLOCK_RULES_DROPPED",
+            "effective_block_rules_hash"
+          ]
+        },
+        {
+          "path": "backend/app/tasks/pipeline_scan.py",
+          "contains_all": [
+            "observe_block_rules",
+            "block_rules_audit",
+            "effective_block_rules_hash",
+            "unsafe block-rule assembly; watchlist evaluation aborted fail-closed"
+          ]
+        },
+        {
+          "path": "backend/app/services/l3_gate_compiler_v2.py",
+          "contains_all": [
+            "block_rules_audit",
+            "profile_block_rules_hash",
+            "global_block_rules_hash",
+            "effective_block_rules_hash"
+          ]
+        },
+        {
+          "path": "backend/tests/test_profile_runtime_config.py",
+          "contains_all": [
+            "test_merge_block_rules_preserves_global_first_deterministic_order",
+            "test_merge_block_rules_rejects_same_id_with_different_definition",
+            "test_profile_rule_survives_global_merge_and_blocks",
+            "test_profile_confluence_rule_does_not_overblock_when_one_condition_fails",
+            "test_virtual_specific_rule_reaches_operational_pipeline_and_vetoes"
+          ]
+        },
+        {
+          "path": "backend/tests/test_l3_gate_compiler_v2.py",
+          "contains_all": [
+            "test_block_rules_audit_and_lineage_share_the_gate_envelope"
+          ]
+        }
+      ]
+    },
+    {
       "id": "entry-risk-observational-only",
       "description": "Entry-risk candidate scores remain point-in-time observational fields with no execution or ML consumer",
       "files": [

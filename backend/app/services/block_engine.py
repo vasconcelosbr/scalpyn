@@ -93,22 +93,45 @@ class BlockEngine:
         skipped: List[str] = []
         details: Dict[str, str] = {}
         skipped_details: Dict[str, str] = {}
+        rule_audits: List[Dict[str, Any]] = []
 
         for block in self.blocks:
-            if not block.get("enabled", True):
-                continue
-
             block_id = block.get("id", "?")
             block_name = block.get("name", block_id)
+            rule_audit: Dict[str, Any] = {
+                "id": block_id,
+                "name": block_name,
+                "enabled": bool(block.get("enabled", True)),
+                "logic": str(block.get("logic", "AND")).upper(),
+                "timeframe": block.get("timeframe"),
+                "evaluated": False,
+                "matched": False,
+                "status": "DISABLED",
+                "conditions": [],
+            }
+            if not block.get("enabled", True):
+                rule_audits.append(rule_audit)
+                continue
 
             if block.get("conditions"):
-                status, reason = self._evaluate_block_group(block, indicators)
+                status, reason, condition_audits = self._evaluate_block_group(
+                    block, indicators
+                )
+                rule_audit.update(
+                    {
+                        "evaluated": status != RuleStatus.SKIPPED,
+                        "matched": status == RuleStatus.PASS,
+                        "status": status.value,
+                        "conditions": condition_audits,
+                    }
+                )
                 if status == RuleStatus.PASS:
                     triggered.append(block_name)
                     details[block_id] = reason
                 elif status == RuleStatus.SKIPPED:
                     skipped.append(block_name)
                     skipped_details[block_id] = reason
+                rule_audits.append(rule_audit)
                 continue
 
             block_type = block.get("type", "threshold")
@@ -120,9 +143,34 @@ class BlockEngine:
             # for them so they retain their existing behaviour. The DSL
             # evaluator already short-circuits to False on missing operands.
             if block_type == "condition":
-                if self._evaluate_string_condition(block, indicators):
+                is_triggered = self._evaluate_string_condition(block, indicators)
+                rule_audit.update(
+                    {
+                        "evaluated": True,
+                        "matched": is_triggered,
+                        "status": (
+                            RuleStatus.PASS.value
+                            if is_triggered
+                            else RuleStatus.FAIL.value
+                        ),
+                        "conditions": [
+                            {
+                                "type": "condition",
+                                "expression": block.get("condition"),
+                                "result": is_triggered,
+                                "status": (
+                                    RuleStatus.PASS.value
+                                    if is_triggered
+                                    else RuleStatus.FAIL.value
+                                ),
+                            }
+                        ],
+                    }
+                )
+                if is_triggered:
                     triggered.append(block_name)
                     details[block_id] = f"Condition '{block.get('condition')}' matched"
+                rule_audits.append(rule_audit)
                 continue
 
             actual = unwrap_envelope_value(indicators.get(indicator))
@@ -133,6 +181,17 @@ class BlockEngine:
                 skipped.append(block_name)
                 skipped_details[block_id] = reason_value
                 log_skipped(indicator, actual, skip_reason or SkipReason.INDICATOR_NOT_AVAILABLE)
+                rule_audit.update(
+                    {
+                        "status": RuleStatus.SKIPPED.value,
+                        "conditions": [
+                            self._legacy_condition_audit(
+                                block, actual, result=None, status=RuleStatus.SKIPPED
+                            )
+                        ],
+                    }
+                )
+                rule_audits.append(rule_audit)
                 continue
 
             try:
@@ -143,6 +202,17 @@ class BlockEngine:
                 skipped.append(block_name)
                 skipped_details[block_id] = SkipReason.INDICATOR_INVALID_VALUE.value
                 log_skipped(indicator, actual, SkipReason.INDICATOR_INVALID_VALUE)
+                rule_audit.update(
+                    {
+                        "status": RuleStatus.SKIPPED.value,
+                        "conditions": [
+                            self._legacy_condition_audit(
+                                block, actual, result=None, status=RuleStatus.SKIPPED
+                            )
+                        ],
+                    }
+                )
+                rule_audits.append(rule_audit)
                 continue
 
             is_triggered = False
@@ -176,6 +246,30 @@ class BlockEngine:
             if is_triggered:
                 triggered.append(block_name)
                 details[block_id] = reason
+            rule_audit.update(
+                {
+                    "evaluated": True,
+                    "matched": is_triggered,
+                    "status": (
+                        RuleStatus.PASS.value
+                        if is_triggered
+                        else RuleStatus.FAIL.value
+                    ),
+                    "conditions": [
+                        self._legacy_condition_audit(
+                            block,
+                            actual,
+                            result=not is_triggered,
+                            status=(
+                                RuleStatus.FAIL
+                                if is_triggered
+                                else RuleStatus.PASS
+                            ),
+                        )
+                    ],
+                }
+            )
+            rule_audits.append(rule_audit)
 
         return {
             "blocked": len(triggered) > 0,
@@ -183,11 +277,18 @@ class BlockEngine:
             "skipped_blocks": skipped,
             "details": details,
             "skipped_details": skipped_details,
+            "configured": bool(self.blocks),
+            "evaluated_blocks": [
+                audit["name"] for audit in rule_audits if audit["evaluated"]
+            ],
+            "matched_blocks": triggered,
+            "blocked_by": triggered,
+            "rules": rule_audits,
         }
 
     def _evaluate_block_group(
         self, block: Dict[str, Any], indicators: Dict[str, Any]
-    ) -> tuple[RuleStatus, str]:
+    ) -> tuple[RuleStatus, str, List[Dict[str, Any]]]:
         """Evaluate a grouped block (multiple conditions joined by AND/OR).
 
         Returns a tristate:
@@ -212,28 +313,84 @@ class BlockEngine:
             )
             evaluated.append((status, detail, condition))
 
+        condition_audits = [
+            self._group_condition_audit(condition, detail, status)
+            for status, detail, condition in evaluated
+        ]
+
         if not evaluated:
-            return RuleStatus.FAIL, ""
+            return RuleStatus.FAIL, "", condition_audits
 
         if logic == "OR":
             decided = [item for item in evaluated if item[0] != RuleStatus.SKIPPED]
             if not decided:
-                return RuleStatus.SKIPPED, _aggregate_skip_reason(evaluated)
+                return (
+                    RuleStatus.SKIPPED,
+                    _aggregate_skip_reason(evaluated),
+                    condition_audits,
+                )
             is_triggered = any(status == RuleStatus.PASS for status, _, _ in decided)
         else:  # AND
             if any(status == RuleStatus.SKIPPED for status, _, _ in evaluated):
-                return RuleStatus.SKIPPED, _aggregate_skip_reason(evaluated)
+                return (
+                    RuleStatus.SKIPPED,
+                    _aggregate_skip_reason(evaluated),
+                    condition_audits,
+                )
             is_triggered = all(status == RuleStatus.PASS for status, _, _ in evaluated)
 
         if not is_triggered:
-            return RuleStatus.FAIL, ""
+            return RuleStatus.FAIL, "", condition_audits
 
         matched_conditions = [
             self._describe_group_condition(condition, detail)
             for status, detail, condition in evaluated
             if status == RuleStatus.PASS
         ]
-        return RuleStatus.PASS, "Matched: " + "; ".join(matched_conditions)
+        return (
+            RuleStatus.PASS,
+            "Matched: " + "; ".join(matched_conditions),
+            condition_audits,
+        )
+
+    @staticmethod
+    def _group_condition_audit(
+        condition: Dict[str, Any], detail: Dict[str, Any], status: RuleStatus
+    ) -> Dict[str, Any]:
+        expected: Any
+        if condition.get("operator") == "between":
+            expected = {"min": condition.get("min"), "max": condition.get("max")}
+        elif condition.get("type") == "comparison":
+            expected = detail.get("target")
+        else:
+            expected = condition.get("value", detail.get("target"))
+        return {
+            "indicator": condition.get("indicator"),
+            "left": condition.get("left"),
+            "right": condition.get("right"),
+            "operator": condition.get("operator"),
+            "expected": expected,
+            "actual": detail.get("actual"),
+            "result": status == RuleStatus.PASS,
+            "status": status.value,
+            "reason_code": detail.get("reason"),
+        }
+
+    @staticmethod
+    def _legacy_condition_audit(
+        block: Dict[str, Any], actual: Any, *, result: Any, status: RuleStatus
+    ) -> Dict[str, Any]:
+        expected: Any = block.get("value")
+        if block.get("type") == "range":
+            expected = {"min": block.get("min", 0), "max": block.get("max", 100)}
+        return {
+            "indicator": block.get("indicator"),
+            "operator": block.get("operator"),
+            "expected": expected,
+            "actual": actual,
+            "result": result,
+            "status": status.value,
+        }
 
     @staticmethod
     def _describe_group_condition(condition: Dict[str, Any], detail: Dict[str, Any]) -> str:

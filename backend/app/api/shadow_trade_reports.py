@@ -180,6 +180,22 @@ async def build_trade_export(
     entry = detail.entry_metrics or detail.features_snapshot or {}
     exit_failed = bool((detail.features_snapshot_exit or {}).get("_capture_failed") is True)
     exit_ = detail.exit_metrics or ({} if exit_failed else detail.features_snapshot_exit or {})
+    decision_metrics = detail.decision_metrics or {}
+    l3_gate = (
+        decision_metrics.get("l3_gate_v2")
+        or (trade.config_snapshot or {}).get("l3_gate_v2")
+        or {}
+    )
+    block_rules_audit = (
+        l3_gate.get("block_rules")
+        or decision_metrics.get("block_rules_audit")
+        or {}
+    )
+    block_rules_lineage = (
+        decision_metrics.get("block_rules_lineage")
+        or (trade.rules_snapshot or {}).get("_block_rules_lineage")
+        or {}
+    )
     chart: dict[str, Any] | None = None
     chart_error: str | None = None
     if include_chart:
@@ -216,7 +232,22 @@ async def build_trade_export(
         "snapshot_id": str(trade.snapshot_id) if trade.snapshot_id else None,
         "profile_version_id": str(trade.profile_version_id) if trade.profile_version_id else None,
         "score_engine_version_id": str(trade.score_engine_version_id) if trade.score_engine_version_id else None,
-        "profile_config_hash": trade.profile_config_hash,
+        "profile_config_hash": (
+            block_rules_lineage.get("profile_config_hash")
+            or trade.profile_config_hash
+        ),
+        "profile_block_rules_hash": (
+            block_rules_lineage.get("profile_block_rules_hash")
+            or block_rules_audit.get("profile_block_rules_hash")
+        ),
+        "global_block_rules_hash": (
+            block_rules_lineage.get("global_block_rules_hash")
+            or block_rules_audit.get("global_block_rules_hash")
+        ),
+        "effective_block_rules_hash": (
+            block_rules_lineage.get("effective_block_rules_hash")
+            or block_rules_audit.get("effective_block_rules_hash")
+        ),
         "score_engine_config_hash": trade.score_engine_config_hash,
         "feature_hash": trade.feature_hash,
         "feature_schema_version": trade.feature_schema_version,
@@ -230,7 +261,7 @@ async def build_trade_export(
         {
             "export_metadata": {
                 "schema": "scalpyn.shadow_trade_export",
-                "schema_version": "2.1.0",
+                "schema_version": "2.2.0",
                 "generated_at": datetime.now(timezone.utc),
                 "report_run_id": report_run_id,
                 "completeness": {
@@ -267,6 +298,8 @@ async def build_trade_export(
             "snapshots": {
                 "config": trade.config_snapshot,
                 "profile_rules": trade.rules_snapshot,
+                "block_rules_audit": block_rules_audit or None,
+                "block_rules_lineage": block_rules_lineage or None,
                 "indicators_at_entry": trade.features_snapshot,
                 "indicators_at_exit": trade.features_snapshot_exit,
                 "exit_metrics": trade.exit_metrics_json,

@@ -723,18 +723,18 @@ class ProfileEngine:
         symbol = asset.get("symbol", "?")
 
         # ── 1. Block Rules ────────────────────────────────────────────────────
-        if self.block_rules_config.get("blocks"):
-            block_result = self.block_engine.evaluate(eval_data)
-            if block_result.get("blocked"):
-                return {
-                    "symbol": symbol,
-                    "blocked": True,
-                    "block_reasons": block_result.get("triggered_blocks", []),
-                    "passed_filter": False,
-                    "score": None,
-                    "signal": None,
-                    "entry": None,
-                }
+        block_result = self.block_engine.evaluate(eval_data)
+        if block_result.get("blocked"):
+            return {
+                "symbol": symbol,
+                "blocked": True,
+                "block_reasons": block_result.get("triggered_blocks", []),
+                "block_rules_audit": block_result,
+                "passed_filter": False,
+                "score": None,
+                "signal": None,
+                "entry": None,
+            }
 
         # ── 2. Filters ────────────────────────────────────────────────────────
         filter_conditions = self.filters_config.get("conditions", [])
@@ -748,6 +748,7 @@ class ProfileEngine:
             return {
                 "symbol": symbol,
                 "blocked": False,
+                "block_rules_audit": block_result,
                 "passed_filter": False,
                 "filter_failed": filter_result["failed"],
                 "score": None,
@@ -758,6 +759,7 @@ class ProfileEngine:
         # ── 3-5. Score → Signals → Entry Triggers ────────────────────────────
         processed = self._process_single_asset(asset, include_details=True)
         processed["blocked"] = False
+        processed["block_rules_audit"] = block_result
         processed["passed_filter"] = True
         processed["filter_matched"] = filter_result["matched"]
 

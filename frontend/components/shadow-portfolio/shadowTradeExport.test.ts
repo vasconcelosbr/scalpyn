@@ -22,6 +22,19 @@ const detail = {
   },
   entry_risk_capture_status: "VALID",
   entry_risk_captured_at: "2026-08-01T12:16:00Z",
+  decision_metrics: {
+    block_rules_audit: {
+      blocked: true,
+      matched: ["Exaustao curta por RSI"],
+    },
+    block_rules_lineage: {
+      profile_version_id: "version-1",
+      profile_config_hash: "profile-config-hash",
+      profile_block_rules_hash: "profile-rules-hash",
+      global_block_rules_hash: "global-rules-hash",
+      effective_block_rules_hash: "effective-rules-hash",
+    },
+  },
   amount_usdt: 100,
 } as unknown as ShadowTradeDetail;
 
@@ -49,7 +62,7 @@ test("keeps raw data and builds an analysis-friendly comparison", () => {
     chartError: null,
   });
 
-  assert.equal(exported.export_metadata.schema_version, "2.1.0");
+  assert.equal(exported.export_metadata.schema_version, "2.2.0");
   assert.equal(exported.export_metadata.completeness.chart_loaded, true);
   assert.equal(exported.chart?.markers.sell.outcome, "TP_HIT");
   assert.equal(exported.raw.trade_detail, detail);
@@ -58,6 +71,14 @@ test("keeps raw data and builds an analysis-friendly comparison", () => {
   assert.equal(exported.entry_risk.momentum_intensity_score, null);
   assert.equal(exported.entry_risk.exhaustion_risk_score, null);
   assert.equal(exported.entry_risk.operational_effect, false);
+  assert.equal(exported.lineage.profile_version_id, "version-1");
+  assert.equal(exported.lineage.profile_block_rules_hash, "profile-rules-hash");
+  assert.equal(exported.lineage.global_block_rules_hash, "global-rules-hash");
+  assert.equal(exported.lineage.effective_block_rules_hash, "effective-rules-hash");
+  assert.deepEqual(exported.snapshots.block_rules_audit, {
+    blocked: true,
+    matched: ["Exaustao curta por RSI"],
+  });
   assert.deepEqual(exported.indicator_analysis.comparison.find((item) => item.indicator === "adx"), {
     indicator: "adx",
     entry: 18,

@@ -183,6 +183,7 @@ def evaluate_l3_gate_v2(
     evaluated_at: datetime,
     base_eligible: bool,
     legacy_decision: str,
+    block_rules_audit: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Build one immutable point-in-time envelope and evaluate both gates."""
 
@@ -196,6 +197,26 @@ def evaluate_l3_gate_v2(
         config=profile.get("entry_triggers") or {},
         eval_data=eval_data,
     )
+    raw_block_audit = deepcopy(block_rules_audit or {})
+    block_lineage = deepcopy(profile.get("_block_rules_lineage") or {})
+    block_rules = {
+        "configured": bool((profile.get("block_rules") or {}).get("blocks")),
+        "evaluated": raw_block_audit.get("rules") or [],
+        "matched": raw_block_audit.get("matched_blocks") or [],
+        "blocked": bool(raw_block_audit.get("blocked")),
+        "blocked_by": raw_block_audit.get("blocked_by") or [],
+        "skipped": raw_block_audit.get("skipped_blocks") or [],
+        "profile_block_rules_hash": block_lineage.get("profile_block_rules_hash"),
+        "global_block_rules_hash": block_lineage.get("global_block_rules_hash"),
+        "effective_block_rules_hash": block_lineage.get("effective_block_rules_hash"),
+        "profile_id": block_lineage.get("profile_id"),
+        "profile_version_id": block_lineage.get("profile_version_id"),
+        "profile_config_hash": block_lineage.get("profile_config_hash"),
+        "profile_rules_count": block_lineage.get("profile_rules_count"),
+        "global_rules_count": block_lineage.get("global_rules_count"),
+        "effective_rules_count": block_lineage.get("effective_rules_count"),
+        "reason_codes": block_lineage.get("reason_codes") or [],
+    }
     would_authorize = bool(base_eligible and signals["gate_passed"] and entry["gate_passed"])
     shadow_decision = "ALLOW" if would_authorize else "BLOCK"
 
@@ -211,6 +232,7 @@ def evaluate_l3_gate_v2(
         "indicators": _jsonable(asset.get("indicators") or {}),
         "signals": signals,
         "entry_triggers": entry,
+        "block_rules": block_rules,
         "base_eligible": bool(base_eligible),
     }
     canonical = json.dumps(
@@ -225,6 +247,7 @@ def evaluate_l3_gate_v2(
     }
     signals["evaluation_envelope_hash"] = envelope_hash
     entry["evaluation_envelope_hash"] = envelope_hash
+    block_rules["evaluation_envelope_hash"] = envelope_hash
 
     return {
         "contract_version": CONTRACT_VERSION,
@@ -238,6 +261,7 @@ def evaluate_l3_gate_v2(
         "base_eligible": bool(base_eligible),
         "signals": signals,
         "entry_triggers": entry,
+        "block_rules": block_rules,
         "legacy_decision": legacy_decision,
         "shadow_decision": shadow_decision,
         "would_authorize": would_authorize,
@@ -245,6 +269,7 @@ def evaluate_l3_gate_v2(
         "reason_codes": (
             [] if would_authorize else
             (["BASE_GATE_FAILED"] if not base_eligible else [])
+            + (["BLOCK_RULES_MATCHED"] if block_rules["blocked"] else [])
             + (["SIGNALS_GATE_FAILED"] if not signals["gate_passed"] else [])
             + (["ENTRY_TRIGGERS_GATE_FAILED"] if not entry["gate_passed"] else [])
         ),

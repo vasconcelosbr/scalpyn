@@ -24,7 +24,12 @@ from uuid import UUID, uuid4
 
 from ..tasks.celery_app import celery_app
 from ..services.pipeline_rejections import evaluate_rejections
-from ..services.profile_runtime_config import merge_profile_runtime_block_config
+from ..services.profile_runtime_config import (
+    BlockRuleConfigConflict,
+    ProfileBlockRulesDropped,
+    canonical_hash,
+    merge_profile_runtime_block_config,
+)
 from ..utils.pipeline_profile_filters import (
     STRICT_META_FIELDS,
     effective_pipeline_level,
@@ -1599,7 +1604,7 @@ async def _evaluate_l3_decisions(
     comportamento é o original (lê só do DB).
     """
     from ..services.l3_gate_compiler_v2 import evaluate_l3_gate_v2
-    from ..services.l3_gate_v2_metrics import observe_gate_v2
+    from ..services.l3_gate_v2_metrics import observe_block_rules, observe_gate_v2
     from ..services.profile_engine import ProfileEngine
 
     engine = ProfileEngine(profile_config)
@@ -1697,6 +1702,7 @@ async def _evaluate_l3_decisions(
                     and processed.get("passed_filter", False)
                 ),
                 legacy_decision=decision,
+                block_rules_audit=processed.get("block_rules_audit"),
             )
         else:
             gate_v2 = {
@@ -1716,6 +1722,19 @@ async def _evaluate_l3_decisions(
                     "gate_passed": False, "reason_codes": ["EVALUATION_ERROR"],
                     "failed": [], "skipped": [], "conditions": [],
                 },
+                "block_rules": {
+                    "configured": bool(
+                        ((profile_config or {}).get("block_rules") or {}).get(
+                            "blocks"
+                        )
+                    ),
+                    "evaluated": [],
+                    "matched": [],
+                    "blocked": bool(processed.get("blocked")),
+                    "blocked_by": processed.get("block_reasons") or [],
+                    "skipped": [],
+                    "reason_codes": ["EVALUATION_ERROR"],
+                },
                 "legacy_decision": decision,
                 "shadow_decision": "ERROR",
                 "would_authorize": False,
@@ -1729,6 +1748,22 @@ async def _evaluate_l3_decisions(
             gate_v2=gate_v2,
         )
         observe_gate_v2(gate_v2)
+        observe_block_rules(gate_v2["block_rules"])
+        block_lineage = (profile_config or {}).get("_block_rules_lineage") or {}
+        logger.info(
+            "[L3_BLOCK_RULES] symbol=%s profile_id=%s profile_version_id=%s "
+            "profile_rules_count=%s global_rules_count=%s effective_rules_count=%s "
+            "blocked=%s blocked_by=%s effective_block_rules_hash=%s",
+            asset.get("symbol"),
+            block_lineage.get("profile_id") or profile_id,
+            block_lineage.get("profile_version_id"),
+            block_lineage.get("profile_rules_count"),
+            block_lineage.get("global_rules_count"),
+            block_lineage.get("effective_rules_count"),
+            gate_v2["block_rules"]["blocked"],
+            gate_v2["block_rules"]["blocked_by"],
+            block_lineage.get("effective_block_rules_hash"),
+        )
         reasons = _decision_reason_map(processed, has_signal_conditions)
         reasons["_sections"] = {
             "score_rules": {
@@ -1747,6 +1782,22 @@ async def _evaluate_l3_decisions(
                 "failed": gate_v2["entry_triggers"]["failed"],
                 "skipped": gate_v2["entry_triggers"]["skipped"],
             },
+            "block_rules": {
+                "configured": gate_v2["block_rules"]["configured"],
+                "matched": gate_v2["block_rules"]["matched"],
+                "blocked": gate_v2["block_rules"]["blocked"],
+                "blocked_by": gate_v2["block_rules"]["blocked_by"],
+                "skipped": gate_v2["block_rules"]["skipped"],
+                "profile_block_rules_hash": gate_v2["block_rules"].get(
+                    "profile_block_rules_hash"
+                ),
+                "global_block_rules_hash": gate_v2["block_rules"].get(
+                    "global_block_rules_hash"
+                ),
+                "effective_block_rules_hash": gate_v2["block_rules"].get(
+                    "effective_block_rules_hash"
+                ),
+            },
             "authorization": {
                 "mode": "L3_GATE_V2" if gate_v2["operational_effect"] else "LEGACY",
                 "legacy_decision": legacy_decision,
@@ -1757,6 +1808,10 @@ async def _evaluate_l3_decisions(
         }
         metrics = _decision_metrics(asset, processed)
         metrics["l3_gate_v2"] = gate_v2
+        metrics["block_rules_audit"] = gate_v2["block_rules"]
+        metrics["block_rules_lineage"] = (
+            (profile_config or {}).get("_block_rules_lineage") or {}
+        )
         logger.info(
             "[L3_GATE_V2] symbol=%s legacy=%s v2=%s final=%s drift=%s hash=%s operational=%s",
             asset.get("symbol"), legacy_decision, gate_v2["shadow_decision"], decision,
@@ -2726,7 +2781,7 @@ async def _run_pipeline_scan():
     from ..models.profile import Profile
     from ..models.config_profile import ConfigProfile
     from ..schemas.spot_engine_config import SpotEngineConfig
-    from sqlalchemy import select, text
+    from sqlalchemy import bindparam, select, text
     from ..utils.symbol_filters import filter_real_assets
 
     redis = _get_redis()
@@ -2822,9 +2877,38 @@ async def _run_pipeline_scan():
                 row.id: {
                     "name":    row.name,
                     "version": getattr(row, "profile_version", None),
+                    "version_id": None,
                 }
                 for row in profile_rows
             }
+            try:
+                version_stmt = text("""
+                    SELECT id, profile_id, config
+                      FROM profile_versions
+                     WHERE profile_id IN :profile_ids
+                       AND is_active IS TRUE
+                     ORDER BY profile_id, version_number DESC
+                """).bindparams(bindparam("profile_ids", expanding=True))
+                version_rows = (
+                    await db.execute(version_stmt, {"profile_ids": list(profile_ids)})
+                ).mappings().all()
+                current_hashes = {
+                    row.id: canonical_hash(row.config or {}) for row in profile_rows
+                }
+                for version_row in version_rows:
+                    meta = profile_meta_map.get(version_row["profile_id"])
+                    if (
+                        meta
+                        and meta["version_id"] is None
+                        and canonical_hash(version_row["config"] or {})
+                        == current_hashes.get(version_row["profile_id"])
+                    ):
+                        meta["version_id"] = version_row["id"]
+            except Exception as exc:
+                logger.warning(
+                    "[PipelineScan] exact profile_version_id lookup failed: %s",
+                    exc,
+                )
 
         watchlist_user_ids = {wl.user_id for wl in wl_snapshots}
         spot_engine_config_map: dict[Any, SpotEngineConfig] = {
@@ -3084,17 +3168,32 @@ async def _run_pipeline_scan():
 
                     # Load block_config (block_rules, entry_triggers) from config_profiles.
                     # Connects Autopilot Caminho B write path to the pipeline read path (L-02, L-03 fix).
-                    # Merges on top of profiles.config so autopilot-managed values take precedence.
+                    # Universal global rules compose with strategy-specific profile rules.
+                    _block_cfg: dict = {}
                     if profile_config:
                         try:
                             from ..services.config_service import config_service as _block_cs
                             async with db.begin_nested():
                                 _block_cfg = await _block_cs.get_config(db, "block", wl.user_id)
-                            if _block_cfg:
-                                profile_config = merge_profile_runtime_block_config(
-                                    profile_config,
-                                    _block_cfg,
-                                )
+                            _runtime_profile_meta = (
+                                profile_meta_map.get(wl.profile_id)
+                                if wl.profile_id else {}
+                            ) or {}
+                            profile_config = merge_profile_runtime_block_config(
+                                profile_config,
+                                _block_cfg or {},
+                                profile_id=wl.profile_id,
+                                profile_version_id=_runtime_profile_meta.get(
+                                    "version_id"
+                                ),
+                            )
+                        except (BlockRuleConfigConflict, ProfileBlockRulesDropped):
+                            logger.exception(
+                                "[PipelineScan] %s: unsafe block-rule assembly; "
+                                "watchlist evaluation aborted fail-closed",
+                                wl.name,
+                            )
+                            raise
                         except Exception as _bc_exc:
                             logger.warning(
                                 "[PipelineScan] %s: block config read failed (%s) — using profile.config block_rules",
@@ -4646,6 +4745,11 @@ async def _run_pipeline_scan():
                                         if isinstance(_raw_cfg, str)
                                         else (_raw_cfg or {})
                                     ) or {}
+                                    _lp_cfg = merge_profile_runtime_block_config(
+                                        _lp_cfg,
+                                        _block_cfg,
+                                        profile_id=_lp.id,
+                                    )
                                     _lp_passed, _ = evaluate_rejections(
                                         assets,
                                         profile_config=_lp_cfg,

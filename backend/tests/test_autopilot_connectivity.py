@@ -69,8 +69,8 @@ class TestBlockRulesConnected:
         pipeline_src = _read(PIPELINE_SCAN_PATH)
         merge_src = _read(RUNTIME_CONFIG_PATH)
         assert "merge_profile_runtime_block_config" in pipeline_src
-        assert 'global_block_config.get("block_rules")' in merge_src or \
-               "global_block_config.get('block_rules')" in merge_src, (
+        assert 'global_config.get("block_rules")' in merge_src or \
+               "global_config.get('block_rules')" in merge_src, (
             "block_rules from block_config must be merged into profile_config"
         )
 
@@ -86,8 +86,8 @@ class TestEntryTriggersConnected:
         pipeline_src = _read(PIPELINE_SCAN_PATH)
         merge_src = _read(RUNTIME_CONFIG_PATH)
         assert "merge_profile_runtime_block_config" in pipeline_src
-        assert 'global_block_config.get("entry_triggers")' in merge_src or \
-               "global_block_config.get('entry_triggers')" in merge_src, (
+        assert 'global_config.get("entry_triggers")' in merge_src or \
+               "global_config.get('entry_triggers')" in merge_src, (
             "entry_triggers from block_config must be merged into profile_config"
         )
 
@@ -115,8 +115,8 @@ class TestAllowlistHasNoFiltersStub:
         connected_keys = {
             "scoring_rules":  'get_config(db, "score"' in pipeline_src,
             "minimum_score":  "_autopilot_min" in pipeline_src,
-            "block_rules":    'global_block_config.get("block_rules")' in merge_src,
-            "entry_triggers": 'global_block_config.get("entry_triggers")' in merge_src,
+            "block_rules":    'global_config.get("block_rules")' in merge_src,
+            "entry_triggers": 'global_config.get("entry_triggers")' in merge_src,
         }
 
         for key in can_adjust:

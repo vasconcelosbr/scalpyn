@@ -8,6 +8,8 @@ from app.services.l3_gate_compiler_v2 import (
     compile_conditions,
     evaluate_l3_gate_v2,
 )
+from app.services.block_engine import BlockEngine
+from app.services.profile_runtime_config import merge_profile_runtime_block_config
 
 
 PROFILE = {
@@ -120,6 +122,59 @@ def test_score_gates_audit_share_one_deterministic_hash():
     assert first["score"]["evaluation_envelope_hash"] == expected
     assert first["signals"]["evaluation_envelope_hash"] == expected
     assert first["entry_triggers"]["evaluation_envelope_hash"] == expected
+
+
+def test_block_rules_audit_and_lineage_share_the_gate_envelope():
+    virtual_rule = {
+        "name": "Exaustao curta por RSI",
+        "enabled": True,
+        "logic": "AND",
+        "timeframe": "5m",
+        "conditions": [
+            {"indicator": "entry_exhaustion_score", "operator": ">=", "value": 68},
+            {"indicator": "rsi_6", "operator": ">=", "value": 75},
+        ],
+    }
+    profile = deepcopy(PROFILE)
+    profile["block_rules"] = {"blocks": [virtual_rule]}
+    effective = merge_profile_runtime_block_config(
+        profile,
+        {"block_rules": {"blocks": []}},
+        profile_id="profile-1",
+        profile_version_id="version-1",
+    )
+    indicators = {
+        "taker_ratio": 0.7,
+        "volume_delta": 10,
+        "vwap_distance_pct": 1,
+        "rsi": 62,
+        "macd_histogram": 0.2,
+        "entry_exhaustion_score": 69.1,
+        "rsi_6": 77.72,
+    }
+    audit = BlockEngine(effective["block_rules"]).evaluate(indicators)
+
+    result = evaluate_l3_gate_v2(
+        asset={"symbol": "VIRTUAL_USDT", "indicators": indicators},
+        profile_config=effective,
+        score=80,
+        score_context={},
+        evaluated_at=datetime(2026, 8, 24, tzinfo=timezone.utc),
+        base_eligible=False,
+        legacy_decision="BLOCK",
+        block_rules_audit=audit,
+    )
+
+    assert result["block_rules"]["blocked"] is True
+    assert result["block_rules"]["matched"] == ["Exaustao curta por RSI"]
+    assert result["block_rules"]["profile_id"] == "profile-1"
+    assert result["block_rules"]["profile_version_id"] == "version-1"
+    assert result["block_rules"]["effective_block_rules_hash"]
+    assert (
+        result["block_rules"]["evaluation_envelope_hash"]
+        == result["evaluation_envelope_hash"]
+    )
+    assert "BLOCK_RULES_MATCHED" in result["reason_codes"]
 
 
 def test_sections_are_mandatory_and_optional_skips_remain_observational():
