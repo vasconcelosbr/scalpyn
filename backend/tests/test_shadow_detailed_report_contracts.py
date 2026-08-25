@@ -1,13 +1,19 @@
 from datetime import datetime, timezone
 import os
 import sys
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.api.shadow_trade_reports import DetailedReportRequest, _normalized_filters, _sha
+from app.api.shadow_trade_reports import (
+    DetailedReportRequest,
+    _normalized_filters,
+    _report_completeness,
+    _sha,
+)
 from app.services.profile_optimization_service import (
     apply_json_patch,
     apply_score_matrix_patch,
@@ -44,6 +50,36 @@ def test_report_request_rejects_empty_outcomes_and_invalid_range():
             date_from=datetime(2026, 8, 1, tzinfo=timezone.utc),
             date_to=datetime(2026, 8, 1, tzinfo=timezone.utc),
         )
+
+
+def test_report_completeness_blocks_ai_when_canonical_lineage_is_missing():
+    complete = SimpleNamespace(
+        watchlist_id=uuid4(), watchlist_name="L3", watchlist_level="L3",
+        lineage_confidence="EXACT", lineage_source="pipeline_scan",
+        lineage_resolved_at=datetime.now(timezone.utc),
+        rules_snapshot={"signals": {"conditions": []}}, profile_id=uuid4(),
+        features_snapshot={"rsi": 50}, features_snapshot_exit={"rsi": 45},
+    )
+    incomplete = SimpleNamespace(**{**complete.__dict__, "watchlist_id": None,
+                                    "rules_snapshot": None})
+
+    readiness = _report_completeness([complete, incomplete])
+
+    assert readiness["missing_watchlist_id"] == 1
+    assert readiness["missing_rules_snapshot"] == 1
+    assert readiness["canonical_analysis_ready"] is False
+
+
+def test_report_completeness_allows_ai_for_complete_canonical_rows():
+    trade = SimpleNamespace(
+        watchlist_id=uuid4(), watchlist_name="L3", watchlist_level="L3",
+        lineage_confidence="EXACT", lineage_source="pipeline_scan",
+        lineage_resolved_at=datetime.now(timezone.utc),
+        rules_snapshot={"signals": {"conditions": []}}, profile_id=uuid4(),
+        features_snapshot={"rsi": 50}, features_snapshot_exit={"rsi": 45},
+    )
+
+    assert _report_completeness([trade])["canonical_analysis_ready"] is True
 
 
 def test_profile_patch_supports_all_optimization_sections_without_identity_fields():

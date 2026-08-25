@@ -172,6 +172,25 @@ def test_capture_only_status_migration_extends_single_canonical_head():
     assert "'FAILED','CANCELLED','CAPTURED'" in migration
 
 
+def test_safety_net_lineage_repair_is_exact_audited_and_reversible():
+    migration = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "201_shadow_safety_net_lineage.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'revision = "201_shadow_safety_net_lineage"' in migration
+    assert 'down_revision = "200_ai_graph_run_captured"' in migration
+    assert "shadow_canonical_lineage_repair_audit" in migration
+    assert "single_candidate_safety_net" in migration
+    assert "pv.config_hash = st.profile_config_hash" in migration
+    assert "HAVING count(*) = 1" in migration
+    assert "JOIN_PROFILE_UNIQUE" in migration
+    assert "prior_values" in migration
+    assert "def downgrade()" in migration
+
+
 def test_anthropic_canonical_shard_schema_has_no_free_form_objects():
     from app.ai_orchestration.provider_adapters import anthropic_output_config
     from app.services.systemic_langgraph_bridge import _SHADOW_SHARD_OUTPUT_SCHEMA

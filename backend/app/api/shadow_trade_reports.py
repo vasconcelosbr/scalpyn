@@ -59,6 +59,32 @@ def _sha(payload: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _report_completeness(trades: list[ShadowTrade]) -> dict[str, int | bool]:
+    """Materialize the report's provider-readiness contract before AI use."""
+    required_missing = {
+        "missing_watchlist_id": sum(1 for trade in trades if trade.watchlist_id is None),
+        "missing_watchlist_name": sum(1 for trade in trades if trade.watchlist_name is None),
+        "missing_watchlist_level": sum(1 for trade in trades if trade.watchlist_level is None),
+        "missing_lineage_confidence": sum(1 for trade in trades if trade.lineage_confidence is None),
+        "missing_lineage_source": sum(1 for trade in trades if trade.lineage_source is None),
+        "missing_lineage_resolved_at": sum(1 for trade in trades if trade.lineage_resolved_at is None),
+        "missing_rules_snapshot": sum(
+            1
+            for trade in trades
+            if not isinstance(trade.rules_snapshot, dict) or not trade.rules_snapshot
+        ),
+    }
+    return {
+        # Existing keys remain stable for current API consumers.
+        "missing_watchlist_lineage": required_missing["missing_watchlist_id"],
+        "missing_profile_lineage": sum(1 for trade in trades if trade.profile_id is None),
+        "missing_entry_snapshot": sum(1 for trade in trades if not trade.features_snapshot),
+        "missing_exit_snapshot": sum(1 for trade in trades if not trade.features_snapshot_exit),
+        **required_missing,
+        "canonical_analysis_ready": not any(required_missing.values()),
+    }
+
+
 def _normalized_filters(payload: DetailedReportRequest) -> dict[str, Any]:
     return {
         "sources": sorted(set(payload.sources)),
@@ -408,12 +434,7 @@ async def create_detailed_report_run(
         )
     ).scalars().all()
     trade_ids = [str(trade.id) for trade in trades]
-    completeness = {
-        "missing_watchlist_lineage": sum(1 for trade in trades if trade.watchlist_id is None),
-        "missing_profile_lineage": sum(1 for trade in trades if trade.profile_id is None),
-        "missing_entry_snapshot": sum(1 for trade in trades if not trade.features_snapshot),
-        "missing_exit_snapshot": sum(1 for trade in trades if not trade.features_snapshot_exit),
-    }
+    completeness = _report_completeness(trades)
     run = ShadowTradeReportRun(
         user_id=user_id,
         filters=filters,

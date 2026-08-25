@@ -1737,9 +1737,18 @@ async def _get_currently_approved(
                pwa.analysis_snapshot        AS analysis_snapshot,
                pw.id                        AS watchlist_id,
                pw.name                      AS watchlist_name,
-               pw.market_mode               AS market_mode
+               pw.level                     AS watchlist_level,
+               pw.source_watchlist_id       AS source_watchlist_id,
+               pw.profile_id                AS profile_id,
+               pw.market_mode               AS market_mode,
+               p.name                       AS profile_name,
+               COALESCE(p.profile_version, p.updated_at) AS profile_version,
+               p.config                     AS rules_snapshot
           FROM pipeline_watchlist_assets pwa
           JOIN pipeline_watchlists pw ON pw.id = pwa.watchlist_id
+          JOIN profiles p
+            ON p.id = pw.profile_id
+           AND p.user_id = pw.user_id
          WHERE pw.user_id = :uid
            AND {watchlist_predicate}
            AND LOWER(pw.market_mode) = :market_mode
@@ -1782,9 +1791,60 @@ async def _get_currently_approved(
             "approved_at": r.approved_at or r.entered_at,
             "watchlist_id": r.watchlist_id,
             "watchlist_name": r.watchlist_name,
+            "watchlist_level": r.watchlist_level,
+            "source_watchlist_id": r.source_watchlist_id,
+            "profile_id": r.profile_id,
+            "profile_name": r.profile_name,
+            "profile_version": r.profile_version,
+            "rules_snapshot": deepcopy(r.rules_snapshot),
             "indicators_snapshot": _flatten_analysis_snapshot(r.analysis_snapshot),
         })
     return out
+
+
+def _lineage_from_current_l3_snapshot(
+    snap_item: Dict[str, Any],
+):
+    """Build the immutable lineage envelope for the live-L3 safety net.
+
+    Missing watchlist, profile or rules identity is a fail-closed capture
+    error. The safety net must never persist a partially canonical L3 row.
+    """
+    from ..schemas.watchlist_lineage_context import WatchlistLineageContext
+
+    required = (
+        "watchlist_id",
+        "watchlist_name",
+        "watchlist_level",
+        "profile_id",
+        "profile_name",
+        "profile_version",
+    )
+    missing = [field for field in required if snap_item.get(field) is None]
+    rules_snapshot = snap_item.get("rules_snapshot")
+    if not isinstance(rules_snapshot, dict) or not rules_snapshot:
+        missing.append("rules_snapshot")
+    if missing:
+        raise ValueError(
+            "live_l3_canonical_lineage_incomplete:" + ",".join(sorted(missing))
+        )
+
+    return WatchlistLineageContext(
+        watchlist_id=str(snap_item["watchlist_id"]),
+        watchlist_name=str(snap_item["watchlist_name"]),
+        watchlist_level=str(snap_item["watchlist_level"]),
+        source_watchlist_id=(
+            str(snap_item["source_watchlist_id"])
+            if snap_item.get("source_watchlist_id") is not None
+            else None
+        ),
+        profile_id=str(snap_item["profile_id"]),
+        profile_name=str(snap_item["profile_name"]),
+        profile_version=snap_item["profile_version"],
+        rules_snapshot=deepcopy(rules_snapshot),
+        lineage_confidence="EXACT",
+        lineage_source="shadow_monitor_current_l3_snapshot",
+    )
 
 
 def _flatten_analysis_snapshot(
@@ -2960,6 +3020,9 @@ async def safe_backfill_watchlist_shadows(
     for symbol in eligible_symbols:
         snap_item = snapshot_by_symbol[symbol]
         try:
+            # Canonical fail-closed boundary: the safety-net capture carries
+            # the same immutable lineage contract as inline L3 creation.
+            _lineage = _lineage_from_current_l3_snapshot(snap_item)
             async with CeleryAsyncSessionLocal() as own_db:
                 async with own_db.begin():
                     decision, source = await _resolve_decision_with_fallback(
@@ -2975,6 +3038,7 @@ async def safe_backfill_watchlist_shadows(
                     new_id = await _create_from_decision(
                         own_db, decision, "NOT_TRADABLE", user_config,
                         source=SHADOW_SOURCE_L3,
+                        lineage=_lineage,
                     )
                     if new_id is not None:
                         created_count += 1

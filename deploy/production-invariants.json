@@ -103,7 +103,33 @@
           "contains_all": [
             "test_provider_payload_supplies_exact_persisted_item_hash_and_reconciles_once",
             "test_sharding_is_deterministic_and_keeps_each_trade_whole_once",
-            "test_missing_required_indicator_blocks_capture"
+            "test_missing_required_indicator_blocks_capture",
+            "test_safety_net_lineage_repair_is_exact_audited_and_reversible"
+          ]
+        },
+        {
+          "path": "backend/app/services/shadow_trade_service.py",
+          "contains_all": [
+            "_lineage_from_current_l3_snapshot",
+            "shadow_monitor_current_l3_snapshot",
+            "lineage=_lineage"
+          ]
+        },
+        {
+          "path": "backend/app/api/shadow_trade_reports.py",
+          "contains_all": [
+            "_report_completeness",
+            "canonical_analysis_ready",
+            "missing_rules_snapshot"
+          ]
+        },
+        {
+          "path": "backend/alembic/versions/201_shadow_safety_net_lineage.py",
+          "contains_all": [
+            "shadow_canonical_lineage_repair_audit",
+            "single_candidate_safety_net",
+            "JOIN_PROFILE_UNIQUE",
+            "profile_config_hash"
           ]
         },
         {
@@ -112,6 +138,14 @@
             "Dados completos",
             "Dados incompletos — contrato legado",
             "Criar nova análise com dados completos"
+          ]
+        },
+        {
+          "path": "frontend/components/shadow-portfolio/DetailedReportWorkspace.tsx",
+          "contains_all": [
+            "canonical_analysis_ready",
+            "Análise bloqueada antes do provedor",
+            "disabled={analysisBusy || !canonicalAnalysisReady}"
           ]
         }
       ]

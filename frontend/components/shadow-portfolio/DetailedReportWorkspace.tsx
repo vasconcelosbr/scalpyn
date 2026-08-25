@@ -43,7 +43,7 @@ interface ReportRun {
   filters: Record<string, unknown>;
   filters_hash: string;
   trade_ids_hash: string;
-  completeness: Record<string, number>;
+  completeness: Record<string, number | boolean>;
   created_at: string;
 }
 
@@ -267,6 +267,20 @@ export default function DetailedReportWorkspace() {
   const [externalJson, setExternalJson] = useState("");
   const [optimizationBusy, setOptimizationBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const canonicalAnalysisReady = run?.completeness.canonical_analysis_ready !== false;
+  const missingCanonicalRows = run
+    ? Math.max(
+        ...[
+          "missing_watchlist_id",
+          "missing_watchlist_name",
+          "missing_watchlist_level",
+          "missing_lineage_confidence",
+          "missing_lineage_source",
+          "missing_lineage_resolved_at",
+          "missing_rules_snapshot",
+        ].map((key) => Number(run.completeness[key] ?? 0)),
+      )
+    : 0;
 
   const facetsQuery = useMemo(() => {
     const params = new URLSearchParams();
@@ -531,17 +545,26 @@ export default function DetailedReportWorkspace() {
             <div className="flex flex-wrap items-center gap-2">
               <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 font-mono text-xs text-[#d2d8e5]">{run.total_trades} trades</span>
               <button className={buttonClass} onClick={() => fetchDownload(`/api/shadow-trade-reports/runs/${run.id}/export`, `shadow-report-${run.id}.json`)}><Download size={14} /> JSON consolidado</button>
-              <button className={`${buttonClass} border-[#4f7bf7]/40 text-[#9db2ff]`} onClick={() => analyze("REPORT", run.id)} disabled={analysisBusy}><Sparkles size={14} /> Analisar seleção</button>
-              <ModuleAIAnalysisAction
-                originModule="shadow_portfolio"
-                originView="shadow-portfolio-detailed-report"
-                entityIds={[]}
-                reportRunId={run.id}
-                label={`Análise por IA (${run.total_trades} trades)`}
-                compact
-              />
+              <button className={`${buttonClass} border-[#4f7bf7]/40 text-[#9db2ff]`} onClick={() => analyze("REPORT", run.id)} disabled={analysisBusy || !canonicalAnalysisReady} title={!canonicalAnalysisReady ? "Relatório sem todos os campos canônicos obrigatórios" : undefined}><Sparkles size={14} /> Analisar seleção</button>
+              {canonicalAnalysisReady && (
+                <ModuleAIAnalysisAction
+                  originModule="shadow_portfolio"
+                  originView="shadow-portfolio-detailed-report"
+                  entityIds={[]}
+                  reportRunId={run.id}
+                  label={`Análise por IA (${run.total_trades} trades)`}
+                  compact
+                />
+              )}
             </div>
           </div>
+
+          {!canonicalAnalysisReady && (
+            <div className="mx-5 mt-4 flex items-start gap-2 rounded-xl border border-amber-400/25 bg-amber-400/[0.07] px-4 py-3 text-xs text-amber-100">
+              <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+              Análise bloqueada antes do provedor: {missingCanonicalRows} trade(s) ainda não atendem ao contrato canônico. Gere um novo relatório após a reconciliação.
+            </div>
+          )}
 
           <div className="overflow-x-auto">
             <table className="w-full min-w-[1120px] text-left">

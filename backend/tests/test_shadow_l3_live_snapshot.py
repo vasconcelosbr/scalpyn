@@ -36,6 +36,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from app.services.shadow_trade_service import (  # noqa: E402
     _SyntheticDecision,
     _flatten_analysis_snapshot,
+    _lineage_from_current_l3_snapshot,
     _resolve_decision_with_fallback,
 )
 
@@ -101,6 +102,46 @@ def test_flatten_analysis_snapshot_returns_empty_for_non_dict():
     assert _flatten_analysis_snapshot(None) == {}
     assert _flatten_analysis_snapshot([]) == {}
     assert _flatten_analysis_snapshot({"indicators": "garbage"}) == {}
+
+
+def test_live_l3_safety_net_builds_complete_exact_lineage():
+    profile_id = uuid4()
+    watchlist_id = uuid4()
+    profile_version = datetime.now(timezone.utc)
+    rules = {"signals": {"conditions": [{"indicator": "rsi"}]}}
+
+    lineage = _lineage_from_current_l3_snapshot({
+        "watchlist_id": watchlist_id,
+        "watchlist_name": "L3 RSI",
+        "watchlist_level": "L3",
+        "source_watchlist_id": None,
+        "profile_id": profile_id,
+        "profile_name": "RSI",
+        "profile_version": profile_version,
+        "rules_snapshot": rules,
+    })
+
+    assert lineage.watchlist_id == str(watchlist_id)
+    assert lineage.profile_id == str(profile_id)
+    assert lineage.profile_version == profile_version
+    assert lineage.rules_snapshot == rules
+    assert lineage.rules_snapshot is not rules
+    assert lineage.lineage_confidence == "EXACT"
+    assert lineage.lineage_source == "shadow_monitor_current_l3_snapshot"
+    assert lineage.lineage_resolved_at is not None
+
+
+def test_live_l3_safety_net_fails_closed_without_rules():
+    with pytest.raises(ValueError, match="rules_snapshot"):
+        _lineage_from_current_l3_snapshot({
+            "watchlist_id": uuid4(),
+            "watchlist_name": "L3",
+            "watchlist_level": "L3",
+            "profile_id": uuid4(),
+            "profile_name": "Profile",
+            "profile_version": datetime.now(timezone.utc),
+            "rules_snapshot": {},
+        })
 
 
 # ── _resolve_decision_with_fallback ──────────────────────────────────────────
@@ -194,13 +235,25 @@ async def test_backfill_skips_symbols_with_pending_or_running_shadow(monkeypatch
     fake_snapshot = [
         {"symbol": "AAA_USDT", "score": 50.0, "direction": "SPOT",
          "approved_at": None, "watchlist_id": uuid4(),
-         "watchlist_name": "L3", "indicators_snapshot": {"rsi": 1.0}},
+         "watchlist_name": "L3", "watchlist_level": "L3",
+         "source_watchlist_id": None, "profile_id": uuid4(),
+         "profile_name": "A", "profile_version": datetime.now(timezone.utc),
+         "rules_snapshot": {"signals": {"conditions": []}},
+         "indicators_snapshot": {"rsi": 1.0}},
         {"symbol": "BBB_USDT", "score": 50.0, "direction": "SPOT",
          "approved_at": None, "watchlist_id": uuid4(),
-         "watchlist_name": "L3", "indicators_snapshot": {"rsi": 2.0}},
+         "watchlist_name": "L3", "watchlist_level": "L3",
+         "source_watchlist_id": None, "profile_id": uuid4(),
+         "profile_name": "B", "profile_version": datetime.now(timezone.utc),
+         "rules_snapshot": {"signals": {"conditions": []}},
+         "indicators_snapshot": {"rsi": 2.0}},
         {"symbol": "CCC_USDT", "score": 50.0, "direction": "SPOT",
          "approved_at": None, "watchlist_id": uuid4(),
-         "watchlist_name": "L3", "indicators_snapshot": {"rsi": 3.0}},
+         "watchlist_name": "L3", "watchlist_level": "L3",
+         "source_watchlist_id": None, "profile_id": uuid4(),
+         "profile_name": "C", "profile_version": datetime.now(timezone.utc),
+         "rules_snapshot": {"signals": {"conditions": []}},
+         "indicators_snapshot": {"rsi": 3.0}},
     ]
     # Estado pré-existente: AAA RUNNING, BBB PENDING. CCC livre.
     running_rows = [
