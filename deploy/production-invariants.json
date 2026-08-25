@@ -175,7 +175,7 @@
             "observe_block_rules",
             "block_rules_audit",
             "effective_block_rules_hash",
-            "unsafe block-rule assembly; watchlist evaluation aborted fail-closed"
+            "watchlist evaluation aborted fail-closed"
           ]
         },
         {
