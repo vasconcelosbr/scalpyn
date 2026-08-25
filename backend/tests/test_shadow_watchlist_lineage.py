@@ -282,7 +282,6 @@ class TestFunctionSignatures:
     def test_pipeline_scan_threads_rules_snapshot_to_all_l3_shadow_paths(self):
         source = Path("backend/app/tasks/pipeline_scan.py").read_text(encoding="utf-8")
         for call_name in (
-            "_create_bypass_shadows(",
             "create_l3_rejected_inline_shadows(",
             "create_l3_simulated_shadows(",
         ):
@@ -290,6 +289,11 @@ class TestFunctionSignatures:
             call_end = source.index("\n                            )", call_start)
             call = source[call_start:call_end]
             assert "rules_snapshot=profile_config" in call
+        assert "_create_bypass_shadows(" not in source
+        contract_source = Path(
+            "backend/app/services/l3_authorization_contract_v3.py"
+        ).read_text(encoding="utf-8")
+        assert '"rules_snapshot": deepcopy(profile_config or {})' in contract_source
 
     def test_create_l1_spectrum_accepts_lineage(self):
         from backend.app.services.shadow_trade_service import create_l1_spectrum_shadows

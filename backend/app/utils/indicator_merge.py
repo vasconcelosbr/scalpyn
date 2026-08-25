@@ -204,6 +204,10 @@ class MergedIndicators:
     def __init__(self) -> None:
         self.values: Dict[str, Any] = {}
         self.meta: Dict[str, Dict[str, Any]] = {}
+        # Additive provenance registry used by L3 contract v3.  Unlike
+        # ``values`` it retains every source/timeframe candidate, including
+        # candidates that lose the legacy latest-timestamp merge.
+        self.candidates: List[Dict[str, Any]] = []
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.values.get(key, default)
@@ -348,6 +352,85 @@ def merge_indicator_rows(
     #     equal (its faster cadence means it is at least as fresh as structural).
     result = MergedIndicators()
     observed_timeframes: Dict[str, set[str]] = {}
+
+    # Capture every row before the legacy winner selection.  This is strictly
+    # additive: ``values`` and ``meta`` keep their historical semantics.
+    for row in rows:
+        if len(row) == 4:
+            grp, ts, timeframe, ind_json = row
+        else:
+            grp, ts, ind_json = row
+            timeframe = None
+        ts_utc = _ensure_utc(ts)
+        age = (now - ts_utc).total_seconds() if ts_utc is not None else None
+        stale_limit = _GROUP_STALE.get(grp, STRUCTURAL_STALE_SECONDS)
+        is_stale = age is None or age > stale_limit
+        for key, raw in (ind_json or {}).items():
+            if isinstance(raw, dict) and "value" in raw:
+                value = raw.get("value")
+                source = raw.get("source")
+                confidence = raw.get("confidence")
+                status = raw.get("status")
+                period = raw.get("period")
+                candle_policy = raw.get("candle_policy")
+                parameters = raw.get("parameters") or {}
+            elif isinstance(raw, (int, float, bool, str)):
+                value = raw
+                source = None
+                confidence = None
+                status = None
+                period = None
+                candle_policy = None
+                parameters = {}
+            else:
+                continue
+            result.candidates.append({
+                "indicator": str(key),
+                "actual": value,
+                "group": grp,
+                "source": source,
+                "source_provider": (
+                    raw.get("source_provider") if isinstance(raw, dict) else None
+                ) or source,
+                "provider_policy_id": (
+                    raw.get("provider_policy_id") if isinstance(raw, dict) else None
+                ),
+                "confidence": confidence,
+                "indicator_status": status,
+                "timeframe": str(timeframe) if timeframe is not None else None,
+                "window_seconds": (
+                    raw.get("window_seconds") if isinstance(raw, dict) else None
+                ),
+                "snapshot": (
+                    raw.get("snapshot") if isinstance(raw, dict) else None
+                ),
+                "period": period,
+                "candle_policy": candle_policy,
+                "candle_closed": (
+                    raw.get("candle_closed") if isinstance(raw, dict) else None
+                ),
+                "parameters": parameters,
+                "reference_window": (
+                    raw.get("reference_window") if isinstance(raw, dict) else None
+                ),
+                "source_timestamp": (
+                    raw.get("source_timestamp") if isinstance(raw, dict) else None
+                ) or ts_utc,
+                "computed_at": (
+                    raw.get("computed_at") if isinstance(raw, dict) else None
+                ),
+                "available_at": (
+                    raw.get("available_at") if isinstance(raw, dict) else None
+                ),
+                "age_seconds": age,
+                "stale": bool(
+                    (raw.get("stale", False) if isinstance(raw, dict) else False)
+                    or is_stale
+                ),
+                "fallback_used": bool(
+                    raw.get("fallback_used", False) if isinstance(raw, dict) else False
+                ),
+            })
 
     for grp, ts_utc, timeframe, ind_json, age, is_stale in live:
         for k, raw in ind_json.items():

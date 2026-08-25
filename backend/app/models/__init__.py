@@ -10,7 +10,7 @@ from .custom_watchlist import CustomWatchlist
 from .pipeline_watchlist import PipelineWatchlist, PipelineWatchlistAsset, PipelineWatchlistRejection
 from .ai_provider_key import AIProviderKey
 from .ai_skill import AiSkill
-from .backoffice import DecisionLog, AssetTrace, BackofficeAlert, PipelineMetric
+from .backoffice import DecisionLog, L3AuthorizationOutbox, AssetTrace, BackofficeAlert, PipelineMetric
 from .trade_simulation import TradeSimulation
 from .indicator_snapshot import IndicatorSnapshot
 from .trade_tracking import TradeTracking
@@ -97,6 +97,7 @@ __all__ = [
     "AIProviderKey",
     "AiSkill",
     "DecisionLog",
+    "L3AuthorizationOutbox",
     "AssetTrace",
     "BackofficeAlert",
     "PipelineMetric",

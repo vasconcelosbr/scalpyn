@@ -4383,7 +4383,9 @@ async def create_dry_run(
             )
             normalized_source = _validate_profile_config(deepcopy(source_config))
             _require_canonical_profile_source(source_config, normalized_source)
-            candidate_config = _validate_profile_config(patched_config)
+            candidate_config = _validate_profile_config(
+                patched_config, require_feature_identity=True
+            )
             _assert_patch_survived_normalization(
                 normalized_source,
                 candidate_config,
@@ -4456,7 +4458,9 @@ async def create_dry_run(
         )
         normalized_before = _validate_profile_config(deepcopy(before))
         _require_canonical_profile_source(before, normalized_before)
-        candidate = _validate_profile_config(patched_candidate)
+        candidate = _validate_profile_config(
+            patched_candidate, require_feature_identity=True
+        )
         _assert_patch_survived_normalization(normalized_before, candidate, changes)
         score = (
             await db.execute(select(ConfigProfile).where(
@@ -4891,7 +4895,9 @@ async def approve_and_execute(
             row = candidate_rows.get(resource.id)
             if row is None or not isinstance(row.get("config"), dict):
                 raise ValueError("Bulk profile configuration candidate is incomplete")
-            new_config = _validate_profile_config(deepcopy(row["config"]))
+            new_config = _validate_profile_config(
+                deepcopy(row["config"]), require_feature_identity=True
+            )
             old_config = deepcopy(resource.config or {})
             if score is not None and (score.config_json or {}).get("scoring_rules") is not None:
                 _validate_profile_score_link_transition(
@@ -4929,7 +4935,9 @@ async def approve_and_execute(
         cache_type = None
     elif operation == "UPDATE_PROFILE_CONFIG":
         resource = resources[0]
-        candidate = _validate_profile_config(candidate)
+        candidate = _validate_profile_config(
+            candidate, require_feature_identity=True
+        )
         old_config = deepcopy(resource.config or {})
         score = _latest_global_policy_records(policy_records).get("score")
         if score is not None and (score.config_json or {}).get("scoring_rules") is not None:

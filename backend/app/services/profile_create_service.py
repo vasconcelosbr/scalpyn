@@ -351,6 +351,7 @@ def _build_profile_config(
     )
 
     config = {
+        "filters": raw_config.get("filters") or {"logic": "AND", "conditions": []},
         "signals": signals,
         "entry_triggers": signals,  # alias for compatibility
         "scoring": {
@@ -375,7 +376,7 @@ def _build_profile_config(
     }
 
     # Propagate any extra config keys from suggestion
-    for k in ("filters", "default_timeframe"):
+    for k in ("default_timeframe",):
         v = raw_config.get(k)
         if v:
             config[k] = v
@@ -585,6 +586,9 @@ class ProfileCreateService:
             created_rules=created_master_rules,
             mode=mode,
         )
+        from .l3_authorization_contract_v3 import assert_profile_contract
+
+        profile_config = assert_profile_contract(profile_config)
 
         # ── 9.5 Duplicate name warning (non-blocking) ─────────────────────────
         from ..models.profile import Profile as _Profile

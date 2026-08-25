@@ -53,11 +53,11 @@ class TestPipelineScanProducerWiring:
         source = self._source()
         assert '"ranking_id": str(_ranking_id) if _ranking_id else None' in source
 
-    def test_source_label_is_l3_ml_gate(self):
+    def test_source_label_is_l3_ml_advisory(self):
         source = self._source()
         idx = source.index("INSERT INTO ml_opportunity_rankings")
         snippet = source[idx: idx + 3000]
-        assert '"source": "L3_ML_GATE"' in snippet
+        assert '"source": "L3_ML_ADVISORY"' in snippet
 
 
 class TestShadowLineageRankingIdWiring:

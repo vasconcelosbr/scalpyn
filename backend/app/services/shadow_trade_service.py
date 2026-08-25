@@ -1134,6 +1134,36 @@ async def _create_from_decision(
         source if source in _VALID_SHADOW_SOURCES else SHADOW_SOURCE_L3
     )
 
+    # Contract-v3 L3 rows have exactly one authorized writer: the outbox
+    # consumer (direct or consolidation). Historical decisions without v3 keep
+    # their legacy safety-net behavior, but a new v3 decision can never bypass
+    # its committed envelope/outbox through the ordinary monitor.
+    _authorization_v3 = (
+        (getattr(decision, "metrics", None) or {}).get(
+            "l3_authorization_contract_v3"
+        )
+    )
+    if isinstance(_authorization_v3, dict) and normalized_source == SHADOW_SOURCE_L3:
+        _outbox_writer = skip_reason in {
+            "L3_AUTHORIZATION_OUTBOX_V3",
+            "L3_AUTHORIZATION_OUTBOX_V3_CONSOLIDATION",
+        }
+        _contract_allows = bool(
+            _authorization_v3.get("valid") is True
+            and _authorization_v3.get("authorization_status") == "ALLOW"
+            and _authorization_v3.get("contract_technical_decision") == "ALLOW"
+            and _authorization_v3.get("final_decision") == "ALLOW"
+            and _authorization_v3.get("final_decision")
+            == _authorization_v3.get("technical_decision")
+        )
+        if not _outbox_writer or not _contract_allows:
+            logger.warning(
+                "[L3_AUTHORIZATION_V3] shadow rejected decision_id=%s "
+                "outbox_writer=%s contract_allows=%s",
+                getattr(decision, "id", None), _outbox_writer, _contract_allows,
+            )
+            return None
+
     _consolidation_enforced = bool(
         user_config.get("l3_single_profile_per_symbol_enabled", False)
         if consolidation_enforced is None
@@ -1296,6 +1326,11 @@ async def _create_from_decision(
     _l3_gate_v2 = (decision.metrics or {}).get("l3_gate_v2")
     if isinstance(_l3_gate_v2, dict):
         config_snap["l3_gate_v2"] = deepcopy(_l3_gate_v2)
+    _l3_contract_v3 = (decision.metrics or {}).get(
+        "l3_authorization_contract_v3"
+    )
+    if isinstance(_l3_contract_v3, dict):
+        config_snap["l3_authorization_contract_v3"] = deepcopy(_l3_contract_v3)
     # Merge caller-provided metadata (e.g. l3_decision, l3_score, l3_reasons for
     # L3_REJECTED / L3_SIMULATED) into config_snapshot so outcomes can be correlated
     # with gate labels after closure.
@@ -1339,8 +1374,13 @@ async def _create_from_decision(
     lineage_complete = bool(
         _lin_profile_version_id and _lin_score_engine_version_id
     )
+    authorization_contract_valid = not (
+        isinstance(_l3_contract_v3, dict)
+        and _l3_contract_v3.get("authorization_status") == "CONTRACT_REJECT"
+    )
     lineage_status = (
-        "INVALID_FEATURES" if feature_errors
+        "INVALID_AUTHORIZATION_CONTRACT" if not authorization_contract_valid
+        else "INVALID_FEATURES" if feature_errors
         else "EXACT" if lineage_complete
         else "UNRESOLVED_VERSION"
     )
@@ -1456,7 +1496,11 @@ async def _create_from_decision(
                     "profile_config_hash": _lin_profile_config_hash or config_hash,
                     "score_engine_config_hash": _lin_score_engine_config_hash,
                     "lineage_status": lineage_status,
-                    "eligible_for_training": lineage_complete and not feature_errors,
+                    "eligible_for_training": (
+                        lineage_complete
+                        and not feature_errors
+                        and authorization_contract_valid
+                    ),
                     "entry_risk_features_json": json.dumps(
                         _entry_risk_pending, default=str
                     ),

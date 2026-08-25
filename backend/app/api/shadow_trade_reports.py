@@ -59,6 +59,40 @@ def _sha(payload: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _classify_legacy_section_hashes(gate: dict[str, Any] | None) -> dict[str, Any]:
+    """Classify old v2 envelopes without rewriting historical evidence.
+
+    The ASTER incident (decision_id 189267) has a valid overall hash shared by
+    score/signals/entry_triggers, but the complete block_rules section is
+    absent.  That is an unresolvable historical omission, not a computed hash
+    divergence.
+    """
+    gate = gate or {}
+    overall = gate.get("evaluation_envelope_hash")
+    section_hashes = {
+        section: ((gate.get(section) or {}).get("evaluation_envelope_hash"))
+        for section in ("score", "signals", "entry_triggers", "block_rules")
+    }
+    missing = [name for name, value in section_hashes.items() if not value]
+    mismatched = [
+        name for name, value in section_hashes.items()
+        if value and overall and value != overall
+    ]
+    if not overall or missing:
+        status = "LEGACY_UNRESOLVED"
+    elif mismatched:
+        status = "MISMATCH"
+    else:
+        status = "MATCH"
+    return {
+        "status": status,
+        "overall_hash": overall,
+        "section_hashes": section_hashes,
+        "missing_sections": missing,
+        "mismatched_sections": mismatched,
+    }
+
+
 def _report_completeness(trades: list[ShadowTrade]) -> dict[str, int | bool]:
     """Materialize the report's provider-readiness contract before AI use."""
     required_missing = {
@@ -222,6 +256,7 @@ async def build_trade_export(
         or (trade.rules_snapshot or {}).get("_block_rules_lineage")
         or {}
     )
+    section_hash_audit = _classify_legacy_section_hashes(l3_gate)
     chart: dict[str, Any] | None = None
     chart_error: str | None = None
     if include_chart:
@@ -319,6 +354,7 @@ async def build_trade_export(
                 "created_at": detail.decision_created_at,
                 "reasons": detail.decision_reasons,
                 "metrics": detail.decision_metrics,
+                "section_hash_audit": section_hash_audit,
             },
             "lineage": lineage,
             "snapshots": {

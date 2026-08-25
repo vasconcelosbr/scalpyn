@@ -1589,6 +1589,20 @@ async def _monitor_async() -> Dict[str, Any]:
 
     run_id = str(_uuid_mod.uuid4())
 
+    # Transactional-outbox processing runs before the ordinary monitor. It is
+    # the only writer for v3 L3 shadows and is idempotent on
+    # decision_id + authorization_contract_hash.
+    outbox_result = {"selected": 0, "processed": 0, "retried": 0, "skipped": 0}
+    try:
+        from ..services.l3_authorization_outbox_service import (
+            process_l3_authorization_outbox,
+        )
+        outbox_result = await process_l3_authorization_outbox(
+            batch_size=SHADOW_MONITOR_BATCH_SIZE
+        )
+    except Exception:
+        logger.exception("[L3_OUTBOX_V3] monitor consumer failed")
+
     # ── Fast-scan: fecha lote limitado de barreiras rompidas antes do batch ──
     # O limite impede que gravações pós-fechamento monopolizem o worker; o beat
     # continua drenando o backlog nos ticks seguintes.
@@ -1600,6 +1614,7 @@ async def _monitor_async() -> Dict[str, Any]:
         "errors": 0,
         "backfill_created": 0,
         "watchlist_spot_created": 0,
+        "l3_outbox": outbox_result,
         **fast_scan_result,
     }
     # Coletados dentro da tx principal e consumidos após o commit — FIX C3/D1.

@@ -23,7 +23,6 @@ from __future__ import annotations
 import io
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
@@ -302,7 +301,6 @@ async def backfill_orchestrator_scores(
         }
 
     weights = await _load_orchestrator_weights(db, user_id)
-    ml_gate_enabled = os.getenv("ML_GATE_ENABLED", "false").lower() == "true"
     l1_model_id = await _get_active_l1_model_id(db)
     scored_at = datetime.now(timezone.utc).isoformat()
 
@@ -351,13 +349,6 @@ async def backfill_orchestrator_scores(
                 p_l3_result = await _get_profile_catboost_score(db, profile_id_val, features)
                 if p_l3_result is None:
                     reason_codes.append("L3_MODEL_UNAVAILABLE")
-                    if ml_gate_enabled:
-                        errors += 1
-                        logger.warning(
-                            "[Orchestrator] ML gate blocks L3 fallback trade=%s source=%s",
-                            trade_id, source,
-                        )
-                        continue
                 else:
                     l3_model_id = p_l3_result.get("model_id")
 

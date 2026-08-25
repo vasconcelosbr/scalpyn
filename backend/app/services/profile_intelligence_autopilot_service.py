@@ -1904,6 +1904,9 @@ class ProfileIntelligenceAutopilotService:
 
         now = utcnow()
         candidate_id = uuid4()
+        from .l3_authorization_contract_v3 import assert_profile_contract
+
+        config = assert_profile_contract(config)
         profile = Profile(
             id=uuid4(),
             user_id=user_id,

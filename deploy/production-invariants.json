@@ -397,6 +397,91 @@
           ]
         }
       ]
+    },
+    {
+      "id": "l3-authorization-contract-v3-shadow",
+      "description": "L3 feature identity is source-aware, ML is advisory, and shadow capture is protected by a transactional outbox while v3 remains SHADOW-only",
+      "files": [
+        {
+          "path": "backend/app/services/l3_authorization_contract_v3.py",
+          "contains_all": [
+            "CONTRACT_VERSION = \"l3_authorization_contract_v3\"",
+            "CONTRACT_MODE = \"SHADOW\"",
+            "FEATURE_IDENTITY_NOT_AVAILABLE",
+            "condition_contract_hash",
+            "resolved_feature_hash",
+            "FEATURE_TTL_EXPIRED",
+            "PROVIDER_POLICY_MISMATCH",
+            "NOT_NEEDED_FOR_BOOLEAN_RESULT",
+            "ml_operational_effect"
+          ]
+        },
+        {
+          "path": "backend/app/tasks/pipeline_scan.py",
+          "contains_all": [
+            "_l3_live_order_flow_snapshot",
+            "l3_authorization_contract_v3",
+            "ML_ADVISORY_EVALUATED",
+            "L3AuthorizationOutbox"
+          ]
+        },
+        {
+          "path": "backend/app/services/l3_authorization_outbox_service.py",
+          "contains_all": [
+            "authorization_contract_hash",
+            "with_for_update(skip_locked=True)",
+            "CREATE_SHADOW_IF_ALLOWED",
+            "CONSOLIDATE_SHADOW_IF_ALLOWED",
+            "AUTHORIZATION_CONTRACT_CONTENT_HASH_MISMATCH",
+            "process_l3_authorization_outbox"
+          ]
+        },
+        {
+          "path": "backend/app/services/l3_authorization_metrics.py",
+          "contains_all": [
+            "l3_authorization_v3_evaluations_total",
+            "l3_authorization_v3_contract_reject_total",
+            "l3_ml_advisory_total",
+            "l3_authorization_outbox_total",
+            "l3_required_feature_missing_total",
+            "l3_timeframe_mismatch_total",
+            "l3_window_mismatch_total",
+            "l3_outbox_pending_total"
+          ]
+        },
+        {
+          "path": "backend/app/api/shadow_trade_reports.py",
+          "contains_all": [
+            "_classify_legacy_section_hashes",
+            "LEGACY_UNRESOLVED",
+            "section_hash_audit"
+          ]
+        },
+        {
+          "path": "backend/alembic/versions/202_l3_authorization_v3_outbox.py",
+          "contains_all": [
+            "l3_authorization_outbox",
+            "uq_l3_authorization_outbox_decision_contract",
+            "202_l3_authorization_v3_outbox"
+          ]
+        },
+        {
+          "path": "backend/tests/test_l3_authorization_contract_v3.py",
+          "contains_all": [
+            "test_same_logical_name_keeps_ohlcv_and_live_candidates_separate",
+            "test_required_wrong_live_window_contract_rejects_without_candle_fallback",
+            "test_ml_is_advisory_for_missing_and_unfavorable_models"
+          ]
+        },
+        {
+          "path": "backend/tests/test_l3_authorization_outbox_v3.py",
+          "contains_all": [
+            "test_outbox_recomputes_contract_hash_instead_of_trusting_stored_value",
+            "test_outbox_rejects_caller_and_persisted_lineage_divergence",
+            "test_outbox_idempotency_identity_is_decision_plus_contract_hash"
+          ]
+        }
+      ]
     }
   ]
 }

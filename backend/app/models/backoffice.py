@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, Column, String, Boolean, DateTime, Float, Integer, Text, ForeignKey, Index
+from sqlalchemy import BigInteger, Column, String, Boolean, DateTime, Float, Integer, Text, ForeignKey, Index, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.types import TIMESTAMP
 import uuid
@@ -62,6 +62,35 @@ class DecisionLog(Base):
     reason_codes = Column(JSONB, nullable=True)
     orchestrator_payload = Column(JSONB, nullable=True)
     ml_gate_enabled = Column(Boolean, nullable=False, default=False)
+
+
+class L3AuthorizationOutbox(Base):
+    """Transactional hand-off from an immutable L3 decision to shadow capture."""
+
+    __tablename__ = "l3_authorization_outbox"
+    __table_args__ = (
+        UniqueConstraint(
+            "decision_id", "authorization_contract_hash",
+            name="uq_l3_authorization_outbox_decision_contract",
+        ),
+        Index("ix_l3_authorization_outbox_status_created", "status", "created_at"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    decision_id = Column(
+        BigInteger,
+        ForeignKey("decisions_log.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    authorization_contract_hash = Column(String(64), nullable=False)
+    event_type = Column(String(50), nullable=False, default="CREATE_SHADOW_IF_ALLOWED")
+    status = Column(String(20), nullable=False, default="PENDING")
+    payload = Column(JSONB, nullable=False, default=dict)
+    attempt_count = Column(Integer, nullable=False, default=0)
+    last_error = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    available_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    processed_at = Column(DateTime(timezone=True), nullable=True)
 
 
 class AssetTrace(Base):

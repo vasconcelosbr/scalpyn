@@ -6,6 +6,7 @@ from sqlalchemy import select, text
 from typing import Dict, Any, List, Optional
 from uuid import UUID
 import logging
+import json
 from datetime import datetime, timezone as _tz
 
 from ..database import get_db
@@ -414,7 +415,9 @@ async def bulk_import_profiles(
                     "block_rules":    p.get("block_rules",    {"blocks": []}),
                     "entry_triggers": p.get("entry_triggers", {"logic": "AND", "conditions": []}),
                 }
-                profile.config = _validate_profile_config(next_config)
+                profile.config = _validate_profile_config(
+                    next_config, require_feature_identity=True
+                )
                 old_version = getattr(profile, "profile_version", None)
                 new_version = datetime.now(_tz.utc)
                 profile.profile_version = new_version
@@ -470,7 +473,9 @@ async def bulk_import_profiles(
                 "entry_triggers": p.get("entry_triggers", {"logic": "AND", "conditions": []}),
                 "scoring":        _normalize_import_scoring(p.get("scoring"), shared_scoring),
             }
-            validated_config = _validate_profile_config(config_input)
+            validated_config = _validate_profile_config(
+                config_input, require_feature_identity=True
+            )
 
             funnel_role: Optional[str] = p.get("funnel_role")
             profile_role    = funnel_role if funnel_role in _FUNNEL_ROLE_ORDER else None
@@ -555,7 +560,9 @@ async def create_profile(
     # Validate config structure
     config = payload.get("config", {})
     try:
-        validated_config = _validate_profile_config(config)
+        validated_config = _validate_profile_config(
+            config, require_feature_identity=True
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
@@ -611,10 +618,20 @@ async def update_profile(
     if "description" in payload:
         profile.description = payload["description"]
     if "is_active" in payload:
+        if payload["is_active"]:
+            candidate_config = payload.get("config", profile.config or {})
+            try:
+                _validate_profile_config(
+                    candidate_config, require_feature_identity=True
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc))
         profile.is_active = payload["is_active"]
     if "config" in payload:
         try:
-            profile.config = _validate_profile_config(payload["config"])
+            profile.config = _validate_profile_config(
+                payload["config"], require_feature_identity=True
+            )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
         _config_changed = True
@@ -790,7 +807,9 @@ async def test_profile_config(
     
     # Validate config
     try:
-        validated_config = _validate_profile_config(config)
+        validated_config = _validate_profile_config(
+            config, require_feature_identity=True
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     
@@ -949,7 +968,9 @@ async def toggle_watchlist_profile(
 # HELPERS
 # ============================================================================
 
-def _validate_profile_config(config: Dict[str, Any]) -> Dict[str, Any]:
+def _validate_profile_config(
+    config: Dict[str, Any], *, require_feature_identity: bool = False
+) -> Dict[str, Any]:
     """Validate and normalize profile configuration."""
     from ..services.entry_risk_features import (
         assert_no_observational_execution_fields,
@@ -1026,6 +1047,17 @@ def _validate_profile_config(config: Dict[str, Any]) -> Dict[str, Any]:
         "logic": entry_triggers.get("logic", "AND").upper(),
         "conditions": entry_triggers.get("conditions", [])
     }
+
+    if require_feature_identity:
+        from ..services.l3_authorization_contract_v3 import (
+            validate_profile_contract,
+        )
+        contract_errors = validate_profile_contract(validated)
+        if contract_errors:
+            raise ValueError(
+                "L3_FEATURE_IDENTITY_INVALID:"
+                + json.dumps(contract_errors, sort_keys=True)
+            )
 
     return validated
 
@@ -1304,7 +1336,12 @@ async def run_preset_ia(
     )
 
     # Salvar resultado no profile
-    profile.config = ia_result["config"]
+    try:
+        profile.config = _validate_profile_config(
+            ia_result["config"], require_feature_identity=True
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     profile.preset_ia_last_run = datetime.now(timezone.utc)
     profile.preset_ia_config = {
         "regime":           ia_result["regime"],

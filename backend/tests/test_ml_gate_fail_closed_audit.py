@@ -56,13 +56,13 @@ def test_pipeline_ml_predict_one_exception_is_fail_closed():
     assert '"model_approved": True' not in snippet
 
 
-def test_pipeline_persists_flat_ml_gate_reasons_contract():
+def test_pipeline_persists_flat_ml_advisory_reasons_contract():
     source = (_repo_root() / "backend" / "app" / "tasks" / "pipeline_scan.py").read_text(
         encoding="utf-8"
     )
 
     for key in (
-        '_reasons["ml_gate"]',
+        '_reasons["ml_advisory"]',
         '_reasons["model_approved"]',
         '_reasons["reason_code"]',
         '_reasons["score_status"]',
@@ -96,7 +96,7 @@ def test_pipeline_links_ml_ranking_to_decision_id_after_persist():
     assert "SET decision_id = :decision_id" in source
     assert "AND decision_id IS NULL" in source
     assert 'if _ml_gate_enabled and sym in _ml_gate_scores' in source
-    assert 'event_type = "ML_GATE_ALLOWED" if d.get("decision") == "ALLOW" else "ML_GATE_BLOCKED"' in source
+    assert 'event_type = "ML_ADVISORY_EVALUATED"' in source
 
 
 def test_pipeline_decisions_log_has_first_class_ml_gate_fields():
@@ -184,14 +184,14 @@ def test_migration_111_relaxes_ml_predictions_for_gate_blocks():
         assert f"ADD COLUMN IF NOT EXISTS {col}" in source
 
 
-def test_orchestrator_blocks_l3_l1_only_fallback_when_ml_gate_enabled():
+def test_orchestrator_keeps_missing_l3_model_advisory():
     source = (
         _repo_root() / "backend" / "app" / "services" / "decision_orchestrator.py"
     ).read_text(encoding="utf-8")
 
-    assert 'os.getenv("ML_GATE_ENABLED", "false").lower() == "true"' in source
-    assert "ML gate blocks L3 fallback" in source
-    assert "continue" in source[source.index("ML gate blocks L3 fallback") : source.index("ML gate blocks L3 fallback") + 250]
+    assert 'os.getenv("ML_GATE_ENABLED", "false").lower() == "true"' not in source
+    assert "ML gate blocks L3 fallback" not in source
+    assert 'reason_codes.append("L3_MODEL_UNAVAILABLE")' in source
 
 
 def test_catboost_bytea_loader_stamps_inference_feature_count():

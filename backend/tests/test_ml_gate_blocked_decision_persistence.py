@@ -11,13 +11,13 @@ def _pipeline_source() -> str:
     ).read_text(encoding="utf-8")
 
 
-def test_ml_gate_blocked_decision_forces_decision_log_persistence():
+def test_ml_advisory_evaluation_forces_decision_log_persistence():
     source = _pipeline_source()
     idx = source.index("if _ml_gate_enabled and sym in _ml_gate_scores")
     snippet = source[idx: idx + 500]
 
     assert "should_log = True" in snippet
-    assert 'event_type = "ML_GATE_ALLOWED" if d.get("decision") == "ALLOW" else "ML_GATE_BLOCKED"' in snippet
+    assert 'event_type = "ML_ADVISORY_EVALUATED"' in snippet
     assert "decisions_to_log.append(d)" in source
 
 

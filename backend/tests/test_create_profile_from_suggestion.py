@@ -78,14 +78,28 @@ def _make_suggestion(
     s.suggested_signals_json = signals or {
         "logic": "AND",
         "conditions": [
-            {"field": "rsi", "operator": "<", "value": 45},
+            {
+                "field": "rsi", "operator": "<", "value": 45,
+                "source": "ohlcv", "source_provider": "gate_io_candles",
+                "provider_policy_id": "test-provider-policy-v1",
+                "timeframe": "5m", "period": 14,
+                "candle_policy": "CLOSED_ONLY", "max_age_seconds": 300,
+                "required": True,
+            },
         ],
     }
     s.suggested_scoring_json = scoring or {
         "weights": {"liquidity": 25, "momentum": 25, "market_structure": 25, "signal": 25},
     }
     s.suggested_block_rules_json = block_rules or [
-        {"field": "rsi", "operator": ">", "value": 78},
+        {
+            "field": "rsi", "operator": ">", "value": 78,
+            "source": "ohlcv", "source_provider": "gate_io_candles",
+            "provider_policy_id": "test-provider-policy-v1",
+            "timeframe": "5m", "period": 14,
+            "candle_policy": "CLOSED_ONLY", "max_age_seconds": 300,
+            "required": True,
+        },
     ]
     s.required_master_scoring_rules_json = master_rules or [
         {"indicator": "rsi", "operator": "<", "value": 45, "points": 15, "category": "momentum"},

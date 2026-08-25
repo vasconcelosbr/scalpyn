@@ -404,7 +404,7 @@ def _lineage(candidate: EligibleL3Candidate) -> WatchlistLineageContext:
         gate_action=ml_score.get("gate_action"),
         reason_codes=ml_score.get("reason_codes"),
         orchestrator_payload=ml_score.get("orchestrator_payload"),
-        ml_gate_enabled=bool(ml_score),
+        ml_gate_enabled=False,
     )
 
 
@@ -578,7 +578,7 @@ async def consolidate_l3_candidates(
                     trade_id = await _create_from_decision(
                         db,
                         decision_row,
-                        "NOT_TRADABLE",
+                        "L3_AUTHORIZATION_OUTBOX_V3_CONSOLIDATION",
                         user_config,
                         source=SHADOW_SOURCE_L3,
                         extra_config={"consolidation": consolidation_metadata},

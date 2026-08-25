@@ -154,9 +154,14 @@ class TestPipelineScanMlLineageWiring:
         source = self._pipeline_scan_source()
         assert '"model_lane": "L3_PROFILE"' in source
 
-    def test_create_shadows_call_passes_ml_scores_by_symbol(self):
+    def test_outbox_payload_carries_ml_score_lineage(self):
         source = self._pipeline_scan_source()
-        assert "ml_scores_by_symbol=_ml_gate_scores" in source
+        assert '"ml_score": {' in source
+        outbox = (
+            Path(__file__).resolve().parents[2]
+            / "backend" / "app" / "services" / "l3_authorization_outbox_service.py"
+        ).read_text(encoding="utf-8")
+        assert 'ml = (event.payload or {}).get("ml_score") or {}' in outbox
 
 
 # ---------------------------------------------------------------------------

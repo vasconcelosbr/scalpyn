@@ -251,7 +251,7 @@ def test_winner_lineage_preserves_existing_ml_contract_fields():
     assert lineage.gate_action == "ALLOW"
     assert lineage.reason_codes == ["ABOVE_THRESHOLD"]
     assert lineage.orchestrator_payload == {"source": "test"}
-    assert lineage.ml_gate_enabled is True
+    assert lineage.ml_gate_enabled is False
 
 
 def test_enabled_consolidation_collects_a_stable_allow_profile():
