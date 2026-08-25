@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { AlertCircle, FileJson, Save, RefreshCw, Plus, Trash2, Upload, X } from "lucide-react";
+import { AlertCircle, Download, FileJson, Save, RefreshCw, Plus, Trash2, Upload, X } from "lucide-react";
 import { useConfig } from "@/hooks/useConfig";
 import { ModuleAIAnalysisAction } from "@/components/ai/ModuleAIAnalysisAction";
 import {
@@ -9,6 +9,7 @@ import {
   PRICE_POSITION_INDICATORS,
   PRICE_POSITION_INDICATOR_VALUES,
 } from "@/lib/indicatorCatalog";
+import { buildScoreConfigExport, scoreConfigExportFilename } from "@/lib/scoreConfigExport";
 
 const CORE_INDICATORS = [
   "price", "market_cap", "change_24h", "volume_24h",
@@ -351,6 +352,26 @@ export default function ScoreEngineSettings() {
     setSaving(false);
   };
 
+  const handleExportJson = () => {
+    const payload = buildScoreConfigExport({
+      weights,
+      thresholds,
+      autoSelectTopN: topN,
+      autoSelectMinScore: minScore,
+      scoringRules: rules,
+    });
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = scoreConfigExportFilename();
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setImportNotice(`${rules.length} regras exportadas em JSON compatível com a importação do Score Engine.`);
+  };
+
   const addRule = () => {
     setRules([...rules, {
       id: `rule_${Date.now()}`,
@@ -465,6 +486,16 @@ export default function ScoreEngineSettings() {
         <div className="card-header">
           <h3>Scoring Rules</h3>
           <div className="flex items-center gap-2">
+            <button
+              onClick={handleExportJson}
+              className="btn btn-secondary text-[12px] px-3 py-1.5"
+              disabled={rules.length === 0}
+              title={rules.length === 0 ? "Adicione ao menos uma regra para exportar" : "Exportar a configuração visível em JSON"}
+              data-testid="score-export-json-button"
+            >
+              <Download className="w-3.5 h-3.5 mr-1" />
+              Export JSON
+            </button>
             <button onClick={() => setImportOpen(true)} className="btn btn-secondary text-[12px] px-3 py-1.5">
               <FileJson className="w-3.5 h-3.5 mr-1" />
               Import JSON
