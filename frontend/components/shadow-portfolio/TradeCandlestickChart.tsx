@@ -114,6 +114,15 @@ export function TradeCandlestickChart({ data }: { data: ShadowTradeChartResponse
     const markers: SeriesMarker<UTCTimestamp>[] = [];
     const entryCandle = containingCandleTime(data.entry_timestamp, candleTimes);
     const exitCandle = containingCandleTime(data.exit_timestamp, candleTimes);
+    const isProfitableExit = data.outcome === "TP_HIT" || (
+      data.outcome === "TRAILING_STOP"
+      && data.entry_price !== null
+      && data.exit_price !== null
+      && data.exit_price >= data.entry_price
+    );
+    const exitLabel = data.outcome === "TRAILING_STOP"
+      ? "TRAILING"
+      : data.outcome === "TP_HIT" ? "TP" : "SL";
     if (entryCandle !== null && data.entry_price !== null) {
       markers.push({
         id: "entry",
@@ -127,15 +136,14 @@ export function TradeCandlestickChart({ data }: { data: ShadowTradeChartResponse
       });
     }
     if (exitCandle !== null && data.exit_price !== null) {
-      const isTp = data.outcome === "TP_HIT";
       markers.push({
         id: "exit",
         time: exitCandle,
         position: "atPriceTop",
         price: data.exit_price,
         shape: "arrowDown",
-        color: isTp ? COLORS.green : COLORS.red,
-        text: `S · ${isTp ? "TP" : "SL"} ${exactTime(data.exit_timestamp)}`,
+        color: isProfitableExit ? COLORS.green : COLORS.red,
+        text: `S · ${exitLabel} ${exactTime(data.exit_timestamp)}`,
         size: 2,
       });
     }
@@ -148,7 +156,7 @@ export function TradeCandlestickChart({ data }: { data: ShadowTradeChartResponse
       { price: data.sl_price, color: COLORS.red, title: "SL", style: 2 as const },
       {
         price: data.exit_price,
-        color: data.outcome === "TP_HIT" ? COLORS.green : COLORS.red,
+        color: isProfitableExit ? COLORS.green : COLORS.red,
         title: "FECHAMENTO",
         style: 0 as const,
       },

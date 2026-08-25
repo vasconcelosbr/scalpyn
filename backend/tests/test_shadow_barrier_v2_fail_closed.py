@@ -22,6 +22,7 @@ from app.services.shadow_trade_service import (
 _ML_V2_FULL = {
     "ml_active_barrier_contract_version": "shadow_atr_dynamic_v2",
     "shadow_barrier_mode": "ATR_DYNAMIC",
+    "shadow_atr_timeframe": "5m",
     "shadow_atr_multiplier_tp": 1.5,
     "shadow_atr_multiplier_sl": 1.5,
     "shadow_barrier_min_pct": 0.5,
@@ -114,8 +115,8 @@ async def test_create_from_decision_v2_atr_zero_raises_zero_insert():
     db.begin_nested = MagicMock()
     cfg = _apply_barrier_params(_base_user_config(), _ML_V2_FULL)
     with patch(
-        "app.services.shadow_trade_service._build_features_snapshot",
-        return_value={"atr_percent": 0.0},
+        "app.services.shadow_trade_service._load_point_in_time_atr_pct",
+        new=AsyncMock(return_value=(None, None)),
     ):
         with pytest.raises(ValueError, match="barrier_v2_atr_unavailable"):
             await _create_from_decision(db, _decision(), "NOT_TRADABLE", cfg)
@@ -140,8 +141,8 @@ async def test_create_from_decision_v2_happy_path_stamps_v2():
             new=AsyncMock(return_value=(100.0, entry_time)),
         ),
         patch(
-            "app.services.shadow_trade_service._build_features_snapshot",
-            return_value={"atr_percent": 1.0},
+            "app.services.shadow_trade_service._load_point_in_time_atr_pct",
+            new=AsyncMock(return_value=(1.0, entry_time)),
         ),
     ):
         created_id = await _create_from_decision(db, _decision(), "NOT_TRADABLE", cfg)

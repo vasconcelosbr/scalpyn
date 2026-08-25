@@ -81,6 +81,42 @@ SHADOW_LOOKBACK_MINUTES = int(os.environ.get("SHADOW_LOOKBACK_MINUTES", "10"))
 # Shadow SL may keep a dedicated safety override. TP always follows the active
 # Strategies Module configuration so simulated and strategy economics match.
 _SHADOW_SL_PCT_OVERRIDE = float(os.environ.get("SHADOW_SL_PCT", "0.0"))
+SHADOW_TRAILING_CONTRACT_VERSION = "shadow_hwm_trailing_v1"
+
+
+def _trailing_policy_from_spot_config(spot_config: Any) -> Dict[str, Any]:
+    """Freeze the GUI-backed trailing contract for a new shadow trade."""
+    trailing = spot_config.sell_flow.trailing
+    selling = spot_config.selling
+    return {
+        "enabled": bool(trailing.enabled),
+        "activation_profit_pct": float(trailing.activation_profit_pct),
+        "hwm_trail_pct": float(trailing.hwm_trail_pct),
+        "never_sell_at_loss": bool(selling.never_sell_at_loss),
+        "min_profit_pct": float(selling.min_profit_pct),
+        "safety_margin_above_entry_pct": float(
+            selling.safety_margin_above_entry_pct
+        ),
+        "contract_version": SHADOW_TRAILING_CONTRACT_VERSION,
+    }
+
+
+def _shadow_user_config_from_spot_config(spot_config: Any) -> Dict[str, Any]:
+    """Build the complete point-in-time Spot exit policy used by shadows."""
+    return {
+        "tp_pct": float(spot_config.selling.take_profit_pct),
+        "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
+            spot_config.sell_flow.kill_switch.max_drawdown_from_hwm_pct
+        ),
+        "timeout_candles": None,
+        "trailing": _trailing_policy_from_spot_config(spot_config),
+        "l3_single_profile_per_symbol_enabled": bool(
+            spot_config.scanner.l3_single_profile_per_symbol_enabled
+        ),
+        "l3_profile_consolidation_rule_version": (
+            spot_config.scanner.l3_profile_consolidation_rule_version
+        ),
+    }
 
 
 def _apply_barrier_params(user_config: dict, ml_config: dict) -> dict:
@@ -98,6 +134,7 @@ def _apply_barrier_params(user_config: dict, ml_config: dict) -> dict:
     # usa isto para exigir fail-closed as chaves do contrato v2 (P1 Fase 1.6).
     user_config["ml_active_barrier_contract_version"] = active_contract
     user_config["shadow_barrier_mode"] = ml_config.get("shadow_barrier_mode", "FIXED")
+    user_config["shadow_atr_timeframe"] = ml_config.get("shadow_atr_timeframe")
     user_config["tp_atr_multiplier"]   = ml_config.get("shadow_atr_multiplier_tp")
     if active_contract == BARRIER_CONTRACT_ATR_DYNAMIC_V2:
         # Fail-closed: sob o contrato ATR-dinâmico v2 NENHUM default silencioso é
@@ -174,6 +211,14 @@ def _require_v2_barrier_config(user_config: dict, symbol: str) -> None:
                 f"config_profiles(config_type='ml'); symbol={symbol} "
                 f"value={value!r} — linha NÃO criada"
             )
+    timeframe = user_config.get("shadow_atr_timeframe")
+    if not isinstance(timeframe, str) or not timeframe.strip():
+        raise ValueError(
+            f"barrier_v2_missing_shadow_atr_timeframe: contrato ativo "
+            f"{BARRIER_CONTRACT_ATR_DYNAMIC_V2} exige shadow_atr_timeframe "
+            f"em config_profiles(config_type='ml'); symbol={symbol} "
+            f"value={timeframe!r} — linha NÃO criada"
+        )
     mode = user_config.get("shadow_barrier_mode")
     if mode != "ATR_DYNAMIC":
         raise ValueError(
@@ -181,6 +226,88 @@ def _require_v2_barrier_config(user_config: dict, symbol: str) -> None:
             f"{BARRIER_CONTRACT_ATR_DYNAMIC_V2} exige shadow_barrier_mode="
             f"ATR_DYNAMIC, got {mode!r}; symbol={symbol} — linha NÃO criada"
         )
+
+
+async def _load_point_in_time_atr_pct(
+    db: AsyncSession,
+    *,
+    symbol: str,
+    timeframe: str,
+    as_of: datetime,
+) -> tuple[Optional[float], Optional[datetime]]:
+    """Read ATR% from the configured timeframe at or before the decision."""
+    result = await db.execute(
+        text(
+            """
+            SELECT time,
+                   COALESCE(
+                       indicators_json #>> '{atr_percent,value}',
+                       indicators_json #>> '{atr_pct,value}'
+                   ) AS atr_pct
+              FROM indicators
+             WHERE symbol = :symbol
+               AND market_type = 'spot'
+               AND timeframe = :timeframe
+               AND time <= :as_of
+             ORDER BY time DESC
+             LIMIT 1
+            """
+        ),
+        {"symbol": symbol, "timeframe": timeframe, "as_of": as_of},
+    )
+    row = result.fetchone()
+    if row is None or row.atr_pct is None:
+        return None, None
+    try:
+        atr_pct = float(row.atr_pct)
+    except (TypeError, ValueError):
+        return None, row.time
+    return (atr_pct if atr_pct > 0 else None), row.time
+
+
+async def _load_point_in_time_atr_map(
+    db: AsyncSession,
+    *,
+    symbols: List[str],
+    timeframe: str,
+    as_of: datetime,
+) -> Dict[str, tuple[float, datetime]]:
+    """Batch variant used by Strategy Lab shadow writers."""
+    if not symbols:
+        return {}
+    result = await db.execute(
+        text(
+            """
+            SELECT DISTINCT ON (symbol)
+                   symbol,
+                   time,
+                   COALESCE(
+                       indicators_json #>> '{atr_percent,value}',
+                       indicators_json #>> '{atr_pct,value}'
+                   ) AS atr_pct
+              FROM indicators
+             WHERE symbol = ANY(CAST(:symbols AS varchar[]))
+               AND market_type = 'spot'
+               AND timeframe = :timeframe
+               AND time <= :as_of
+             ORDER BY symbol, time DESC
+            """
+        ),
+        {
+            "symbols": sorted(set(symbols)),
+            "timeframe": timeframe,
+            "as_of": as_of,
+        },
+    )
+    out: Dict[str, tuple[float, datetime]] = {}
+    for row in result.fetchall():
+        try:
+            value = float(row.atr_pct)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            out[str(row.symbol)] = (value, row.time)
+    return out
 
 
 async def _load_lab_barrier_config(user_id) -> dict:
@@ -278,6 +405,9 @@ def _build_economic_config_snapshot(
     tp_atr_mult,
     barrier_contract_version,
     native_capture,
+    barrier_atr_pct_used=None,
+    barrier_atr_timeframe=None,
+    barrier_atr_source_at=None,
 ) -> dict:
     """Fase 1 B.1 — contrato econômico completo, cópia point-in-time da
     config vigente na criação (nunca referência à config viva)."""
@@ -293,6 +423,13 @@ def _build_economic_config_snapshot(
         # ML fee key: monitor reads this to compute net_return_pct at close (B1 fix)
         "ml_fee_roundtrip_pct": user_config.get("ml_fee_roundtrip_pct"),
         "barrier_mode": barrier_mode,
+        "barrier_atr_pct_used": barrier_atr_pct_used,
+        "barrier_atr_timeframe": barrier_atr_timeframe,
+        "barrier_atr_source_at": (
+            barrier_atr_source_at.isoformat()
+            if isinstance(barrier_atr_source_at, datetime)
+            else None
+        ),
         "atr_multiplier_tp": tp_atr_mult,
         "atr_multiplier_sl": user_config.get("sl_atr_multiplier"),
         "clamp_min": user_config.get("sl_min_pct"),
@@ -302,6 +439,7 @@ def _build_economic_config_snapshot(
         "label_contract_version": LABEL_CONTRACT_VERSION,
         "barrier_contract_version": barrier_contract_version,
         "capture_contract_version": native_capture.capture_contract_version,
+        "trailing": deepcopy(user_config.get("trailing")),
     }
 
 
@@ -328,8 +466,10 @@ async def _load_ml_shadow_config(user_id, user_config: dict) -> dict:
     """
     from ..database import CeleryAsyncSessionLocal
     from ..models.config_profile import ConfigProfile
+    from ..schemas.spot_engine_config import SpotEngineConfig
 
     ml_config: Dict[str, Any] = {}
+    merged = dict(user_config or {})
     try:
         async with CeleryAsyncSessionLocal() as db:
             result = await db.execute(
@@ -342,9 +482,31 @@ async def _load_ml_shadow_config(user_id, user_config: dict) -> dict:
             row = result.scalar_one_or_none()
             if row and isinstance(row.config_json, dict):
                 ml_config = row.config_json
+            if "trailing" not in merged:
+                spot_result = await db.execute(
+                    select(ConfigProfile).where(
+                        ConfigProfile.user_id == user_id,
+                        ConfigProfile.config_type == "spot_engine",
+                        ConfigProfile.is_active.is_(True),
+                    ).limit(1)
+                )
+                spot_row = spot_result.scalar_one_or_none()
+                spot_config = SpotEngineConfig.from_config_json(
+                    spot_row.config_json if spot_row is not None else {}
+                )
+                merged["trailing"] = _trailing_policy_from_spot_config(
+                    spot_config
+                )
     except Exception:
         logger.exception("[shadow] ML barrier config load failed user=%s", user_id)
-    return _merge_ml_shadow_config(user_config, ml_config)
+    if "trailing" not in merged:
+        # Persist an explicit disabled policy when config loading fails.  A
+        # missing snapshot must never be interpreted later as "use whatever is
+        # active now", because that would rewrite the trade's economics.
+        merged["trailing"] = _trailing_policy_from_spot_config(
+            SpotEngineConfig.from_config_json({})
+        )
+    return _merge_ml_shadow_config(merged, ml_config)
 
 # ── TTT Policy defaults (Zero Hardcode — override via Cloud Run env vars) ─────
 # Valores de negócio definidos em config_profiles (config_type='ttt_policy').
@@ -980,7 +1142,7 @@ _INSERT_SHADOW_SQL = text("""
         l3_consolidation_enforced,
         last_processed_time,
         ttt_enabled, ttt_tp_pct, ttt_timeout_minutes,
-        barrier_mode, tp_pct_applied, sl_pct_applied,
+        barrier_mode, tp_pct_applied, sl_pct_applied, atr_pct_at_entry,
         profile_id, profile_version, profile_name, strategy_type, rules_snapshot,
         watchlist_id, watchlist_name, watchlist_level, source_watchlist_id,
         lineage_confidence, lineage_source, lineage_resolved_at,
@@ -1007,7 +1169,7 @@ _INSERT_SHADOW_SQL = text("""
         :l3_consolidation_enforced,
         :last_processed_time,
         :ttt_enabled, :ttt_tp_pct, :ttt_timeout_minutes,
-        :barrier_mode, :tp_pct_applied, :sl_pct_applied,
+        :barrier_mode, :tp_pct_applied, :sl_pct_applied, :atr_pct_at_entry,
         :profile_id, :profile_version, :profile_name, :strategy_type,
         CAST(:rules_snapshot AS JSONB),
         CAST(:watchlist_id AS UUID), :watchlist_name, :watchlist_level,
@@ -1080,11 +1242,26 @@ async def _create_from_decision(
     # caller (safe_*_create), garantindo blast radius de uma única linha.
     _active_barrier_contract = user_config.get("ml_active_barrier_contract_version")
     _barrier_v2_active = _active_barrier_contract == BARRIER_CONTRACT_ATR_DYNAMIC_V2
+    _barrier_atr_pct_used: Optional[float] = None
+    _barrier_atr_source_at: Optional[datetime] = None
+    _barrier_atr_timeframe = user_config.get("shadow_atr_timeframe")
     if _barrier_v2_active:
         _require_v2_barrier_config(user_config, decision.symbol)
     if barrier_mode == "ATR_DYNAMIC":
-        _feats_early = _build_features_snapshot(decision)
-        _atr_pct = float(_feats_early.get("atr_percent") or 0.0)
+        if _barrier_v2_active:
+            _barrier_atr_pct_used, _barrier_atr_source_at = (
+                await _load_point_in_time_atr_pct(
+                    db,
+                    symbol=decision.symbol,
+                    timeframe=str(_barrier_atr_timeframe),
+                    as_of=decision.created_at,
+                )
+            )
+            _atr_pct = float(_barrier_atr_pct_used or 0.0)
+        else:
+            _feats_early = _build_features_snapshot(decision)
+            _atr_pct = float(_feats_early.get("atr_percent") or 0.0)
+            _barrier_atr_pct_used = _atr_pct if _atr_pct > 0.0 else None
         if _barrier_v2_active and _atr_pct <= 0.0:
             raise ValueError(
                 f"barrier_v2_atr_unavailable: contrato "
@@ -1297,6 +1474,9 @@ async def _create_from_decision(
         barrier_mode=barrier_mode,
         tp_atr_mult=_tp_atr_mult,
         barrier_contract_version=_barrier_contract_version,
+        barrier_atr_pct_used=_barrier_atr_pct_used,
+        barrier_atr_timeframe=_barrier_atr_timeframe,
+        barrier_atr_source_at=_barrier_atr_source_at,
         native_capture=native_capture,
     )
     config_snap["entry_price_source_at"] = (
@@ -1417,6 +1597,7 @@ async def _create_from_decision(
                     "barrier_mode": barrier_mode,
                     "tp_pct_applied": tp_pct or None,
                     "sl_pct_applied": sl_pct or None,
+                    "atr_pct_at_entry": _barrier_atr_pct_used,
                     # Profile attribution: lineage overrides decision attrs for canonical L3.
                     "profile_id": _lin_profile_id,
                     "profile_version": _lin_profile_version,
@@ -1579,19 +1760,7 @@ async def load_shadow_creation_config(user_id) -> Dict[str, Any]:
             user_id,
         )
 
-    user_config: Dict[str, Any] = {
-        "tp_pct": float(spot_config.selling.take_profit_pct),
-        "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
-            spot_config.sell_flow.kill_switch.max_drawdown_from_hwm_pct
-        ),
-        "timeout_candles": None,
-        "l3_single_profile_per_symbol_enabled": bool(
-            spot_config.scanner.l3_single_profile_per_symbol_enabled
-        ),
-        "l3_profile_consolidation_rule_version": (
-            spot_config.scanner.l3_profile_consolidation_rule_version
-        ),
-    }
+    user_config = _shadow_user_config_from_spot_config(spot_config)
     return await _load_ml_shadow_config(user_id, user_config)
 
 
@@ -1991,19 +2160,7 @@ async def create_shadows_for_new_decisions(
             cfg_row = cfg_res.scalar_one_or_none()
             if cfg_row:
                 se_cfg = SpotEngineConfig.from_config_json(cfg_row.config_json)
-                user_config = {
-                    "tp_pct": float(se_cfg.selling.take_profit_pct),
-                    "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
-                        se_cfg.sell_flow.kill_switch.max_drawdown_from_hwm_pct
-                    ),
-                    "timeout_candles": None,
-                    "l3_single_profile_per_symbol_enabled": bool(
-                        se_cfg.scanner.l3_single_profile_per_symbol_enabled
-                    ),
-                    "l3_profile_consolidation_rule_version": (
-                        se_cfg.scanner.l3_profile_consolidation_rule_version
-                    ),
-                }
+                user_config = _shadow_user_config_from_spot_config(se_cfg)
             # Load ML config for fee snapshot (B1 fix)
             ml_res = await cfg_db.execute(
                 select(ConfigProfile).where(
@@ -2023,19 +2180,7 @@ async def create_shadows_for_new_decisions(
 
     if not user_config:
         _se_defaults = SpotEngineConfig()
-        user_config = {
-            "tp_pct": float(_se_defaults.selling.take_profit_pct),
-            "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
-                _se_defaults.sell_flow.kill_switch.max_drawdown_from_hwm_pct
-            ),
-            "timeout_candles": None,
-            "l3_single_profile_per_symbol_enabled": bool(
-                _se_defaults.scanner.l3_single_profile_per_symbol_enabled
-            ),
-            "l3_profile_consolidation_rule_version": (
-                _se_defaults.scanner.l3_profile_consolidation_rule_version
-            ),
-        }
+        user_config = _shadow_user_config_from_spot_config(_se_defaults)
         logger.info(
             "[shadow] inline create: no spot_engine config for user=%s — using schema defaults (tp=%.1f%% sl=%.1f%%)",
             user_id, user_config["tp_pct"], user_config["sl_pct"],
@@ -2169,13 +2314,7 @@ async def create_shadows_for_rejected_decisions(user_id, decision_ids: List[int]
             cfg_row = cfg_res.scalar_one_or_none()
             if cfg_row:
                 se_cfg = SpotEngineConfig.from_config_json(cfg_row.config_json)
-                user_config = {
-                    "tp_pct": float(se_cfg.selling.take_profit_pct),
-                    "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
-                        se_cfg.sell_flow.kill_switch.max_drawdown_from_hwm_pct
-                    ),
-                    "timeout_candles": None,
-                }
+                user_config = _shadow_user_config_from_spot_config(se_cfg)
             # Load ML config for fee snapshot (B1 fix)
             ml_res = await cfg_db.execute(
                 select(ConfigProfile).where(
@@ -2195,13 +2334,7 @@ async def create_shadows_for_rejected_decisions(user_id, decision_ids: List[int]
 
     if not user_config:
         _se_defaults = SpotEngineConfig()
-        user_config = {
-            "tp_pct": float(_se_defaults.selling.take_profit_pct),
-            "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
-                _se_defaults.sell_flow.kill_switch.max_drawdown_from_hwm_pct
-            ),
-            "timeout_candles": None,
-        }
+        user_config = _shadow_user_config_from_spot_config(_se_defaults)
         logger.info(
             "[shadow] rejected create: no spot_engine config for user=%s — using schema defaults (tp=%.1f%% sl=%.1f%%)",
             user_id, user_config["tp_pct"], user_config["sl_pct"],
@@ -2314,13 +2447,7 @@ async def create_l3_rejected_inline_shadows(
             se_row = se_res.scalar_one_or_none()
             if se_row:
                 _se = SpotEngineConfig.from_config_json(se_row.config_json)
-                user_config = {
-                    "tp_pct": float(_se.selling.take_profit_pct),
-                    "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
-                        _se.sell_flow.kill_switch.max_drawdown_from_hwm_pct
-                    ),
-                    "timeout_candles": None,
-                }
+                user_config = _shadow_user_config_from_spot_config(_se)
     except Exception:
         logger.exception("[shadow-l3rej-inline] config load failed user=%s", user_id)
         return 0
@@ -2329,13 +2456,7 @@ async def create_l3_rejected_inline_shadows(
 
     if not user_config:
         _se_defaults = SpotEngineConfig()
-        user_config = {
-            "tp_pct": float(_se_defaults.selling.take_profit_pct),
-            "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
-                _se_defaults.sell_flow.kill_switch.max_drawdown_from_hwm_pct
-            ),
-            "timeout_candles": None,
-        }
+        user_config = _shadow_user_config_from_spot_config(_se_defaults)
     _apply_barrier_params(user_config, ml_config)
     user_config["ml_fee_roundtrip_pct"] = ml_config.get("ml_fee_roundtrip_pct")
 
@@ -2511,13 +2632,7 @@ async def create_l1_spectrum_shadows(
             se_row = se_res.scalar_one_or_none()
             if se_row:
                 _se = SpotEngineConfig.from_config_json(se_row.config_json)
-                user_config = {
-                    "tp_pct": float(_se.selling.take_profit_pct),
-                    "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
-                        _se.sell_flow.kill_switch.max_drawdown_from_hwm_pct
-                    ),
-                    "timeout_candles": None,
-                }
+                user_config = _shadow_user_config_from_spot_config(_se)
     except Exception:
         logger.exception("[shadow-l1] config load failed user=%s", user_id)
         return 0
@@ -2534,13 +2649,7 @@ async def create_l1_spectrum_shadows(
 
     if not user_config:
         _se_defaults = SpotEngineConfig()
-        user_config = {
-            "tp_pct": float(_se_defaults.selling.take_profit_pct),
-            "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
-                _se_defaults.sell_flow.kill_switch.max_drawdown_from_hwm_pct
-            ),
-            "timeout_candles": None,
-        }
+        user_config = _shadow_user_config_from_spot_config(_se_defaults)
     _apply_barrier_params(user_config, ml_config)
     user_config["ml_fee_roundtrip_pct"] = ml_config.get("ml_fee_roundtrip_pct")
 
@@ -2833,13 +2942,7 @@ async def create_l3_simulated_shadows(
             se_row = se_res.scalar_one_or_none()
             if se_row:
                 _se = SpotEngineConfig.from_config_json(se_row.config_json)
-                user_config = {
-                    "tp_pct": float(_se.selling.take_profit_pct),
-                    "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
-                        _se.sell_flow.kill_switch.max_drawdown_from_hwm_pct
-                    ),
-                    "timeout_candles": None,
-                }
+                user_config = _shadow_user_config_from_spot_config(_se)
     except Exception:
         logger.exception("[shadow-l3sim] config load failed user=%s", user_id)
         return 0
@@ -2851,13 +2954,7 @@ async def create_l3_simulated_shadows(
 
     if not user_config:
         _se_defaults = SpotEngineConfig()
-        user_config = {
-            "tp_pct": float(_se_defaults.selling.take_profit_pct),
-            "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
-                _se_defaults.sell_flow.kill_switch.max_drawdown_from_hwm_pct
-            ),
-            "timeout_candles": None,
-        }
+        user_config = _shadow_user_config_from_spot_config(_se_defaults)
     _apply_barrier_params(user_config, ml_config)
     user_config["ml_fee_roundtrip_pct"] = ml_config.get("ml_fee_roundtrip_pct")
 
@@ -3249,6 +3346,7 @@ async def record_as_simulation(
       * outcome 'TP_HIT' → result='WIN'
       * outcome 'SL_HIT' → result='LOSS'
       * outcome 'TIMEOUT' → result='TIMEOUT'
+      * outcome 'TRAILING_STOP' → não entra no label fixo WIN/LOSS/TIMEOUT
       * direction sempre 'SPOT' (shadow é spot-only)
       * decision_type 'ALLOW' para shadows aprovados; 'BLOCK' para L3_REJECTED
       * source = 'SHADOW'
@@ -3260,6 +3358,13 @@ async def record_as_simulation(
         result = "LOSS"
     elif outcome == "TIMEOUT":
         result = "TIMEOUT"
+    elif outcome == "TRAILING_STOP":
+        logger.info(
+            "[shadow] record_as_simulation skipped — managed trailing exit "
+            "is outside fixed-barrier label contract shadow_id=%s",
+            shadow.id,
+        )
+        return None
     else:
         logger.warning(
             "[shadow] record_as_simulation skipped — unknown outcome=%r for shadow_id=%s",
@@ -3903,6 +4008,7 @@ async def create_strategy_lab_shadows(
     # Load tp_pct / sl_pct from spot engine config
     tp_pct = 3.0
     sl_pct = 2.0
+    trailing_policy = _trailing_policy_from_spot_config(SpotEngineConfig())
     timeout_candles = SHADOW_TIMEOUT_CANDLES
     ttt_enabled = TTT_ENABLED_DEFAULT
     ttt_tp_pct = TTT_TP_PCT_DEFAULT
@@ -3925,6 +4031,7 @@ async def create_strategy_lab_shadows(
                     sl_pct = _SHADOW_SL_PCT_OVERRIDE or float(
                         _se.sell_flow.kill_switch.max_drawdown_from_hwm_pct
                     )
+                    trailing_policy = _trailing_policy_from_spot_config(_se)
                 except Exception:
                     pass
     except Exception:
@@ -3949,6 +4056,22 @@ async def create_strategy_lab_shadows(
     strategy_lab_features = await _load_strategy_lab_features_by_symbol(
         [str(d.get("symbol")) for d in allow_decisions if d.get("symbol")]
     )
+    barrier_atr_map: Dict[str, tuple[float, datetime]] = {}
+    if barrier_cfg.get("ml_active_barrier_contract_version") == BARRIER_CONTRACT_ATR_DYNAMIC_V2:
+        try:
+            async with CeleryAsyncSessionLocal() as atr_db:
+                barrier_atr_map = await _load_point_in_time_atr_map(
+                    atr_db,
+                    symbols=[str(d.get("symbol")) for d in allow_decisions if d.get("symbol")],
+                    timeframe=str(barrier_cfg["shadow_atr_timeframe"]),
+                    as_of=promotion_at,
+                )
+        except Exception:
+            logger.exception(
+                "[StrategyLab-allow] point-in-time ATR load failed — "
+                "nenhum shadow ATR_DYNAMIC_V2 criado"
+            )
+            return 0
     active_symbols: set[str] = set()
 
     if profile_id_str:
@@ -4000,6 +4123,17 @@ async def create_strategy_lab_shadows(
             features_flat = _flatten_indicator_snapshot_values(_snap)
             source_snapshot = _snap
 
+        _barrier_atr = barrier_atr_map.get(str(symbol))
+        if barrier_cfg.get("ml_active_barrier_contract_version") == BARRIER_CONTRACT_ATR_DYNAMIC_V2:
+            if _barrier_atr is None:
+                logger.info(
+                    "[StrategyLab-allow] barrier_v2_atr_unavailable symbol=%s "
+                    "timeframe=%s — linha NÃO criada",
+                    symbol, barrier_cfg.get("shadow_atr_timeframe"),
+                )
+                continue
+            features_flat["atr_percent"] = _barrier_atr[0]
+
         _resolved = _resolve_lab_barrier(
             features_flat, tp_pct, sl_pct, barrier_cfg,
             symbol=symbol, log_tag="StrategyLab-allow",
@@ -4030,6 +4164,12 @@ async def create_strategy_lab_shadows(
             "execution_id": execution_id,
             "barrier_mode": _bmode,
             "barrier_contract_version": _bversion,
+            "barrier_atr_pct_used": _barrier_atr[0] if _barrier_atr else None,
+            "barrier_atr_timeframe": barrier_cfg.get("shadow_atr_timeframe"),
+            "barrier_atr_source_at": (
+                _barrier_atr[1].isoformat() if _barrier_atr else None
+            ),
+            "trailing": deepcopy(trailing_policy),
         }
 
         try:
@@ -4083,6 +4223,9 @@ async def create_strategy_lab_shadows(
                                     "barrier_mode": _bmode,
                                     "tp_pct_applied": _tp_eff or None,
                                     "sl_pct_applied": _sl_eff or None,
+                                    "atr_pct_at_entry": (
+                                        _barrier_atr[0] if _barrier_atr else None
+                                    ),
                                     "profile_id": profile_id_str,
                                     "profile_version": profile_version,
                                     "profile_name": profile_name,
@@ -4168,6 +4311,7 @@ async def create_strategy_lab_rejected_shadows(
 
     tp_pct = 3.0
     sl_pct = 2.0
+    trailing_policy = _trailing_policy_from_spot_config(SpotEngineConfig())
     timeout_candles = SHADOW_TIMEOUT_CANDLES
     ttt_enabled = TTT_ENABLED_DEFAULT
     ttt_tp_pct = TTT_TP_PCT_DEFAULT
@@ -4190,6 +4334,7 @@ async def create_strategy_lab_rejected_shadows(
                     sl_pct = _SHADOW_SL_PCT_OVERRIDE or float(
                         _se.sell_flow.kill_switch.max_drawdown_from_hwm_pct
                     )
+                    trailing_policy = _trailing_policy_from_spot_config(_se)
                 except Exception:
                     pass
     except Exception:
@@ -4210,6 +4355,22 @@ async def create_strategy_lab_rejected_shadows(
     strategy_lab_features = await _load_strategy_lab_features_by_symbol(
         [str(d.get("symbol")) for d in block_decisions if d.get("symbol")]
     )
+    barrier_atr_map: Dict[str, tuple[float, datetime]] = {}
+    if barrier_cfg.get("ml_active_barrier_contract_version") == BARRIER_CONTRACT_ATR_DYNAMIC_V2:
+        try:
+            async with CeleryAsyncSessionLocal() as atr_db:
+                barrier_atr_map = await _load_point_in_time_atr_map(
+                    atr_db,
+                    symbols=[str(d.get("symbol")) for d in block_decisions if d.get("symbol")],
+                    timeframe=str(barrier_cfg["shadow_atr_timeframe"]),
+                    as_of=promotion_at,
+                )
+        except Exception:
+            logger.exception(
+                "[StrategyLab-block] point-in-time ATR load failed — "
+                "nenhum shadow ATR_DYNAMIC_V2 criado"
+            )
+            return 0
     active_symbols: set[str] = set()
 
     if profile_id_str:
@@ -4258,6 +4419,17 @@ async def create_strategy_lab_rejected_shadows(
             features_flat = _flatten_indicator_snapshot_values(_snap)
             source_snapshot = _snap
 
+        _barrier_atr = barrier_atr_map.get(str(symbol))
+        if barrier_cfg.get("ml_active_barrier_contract_version") == BARRIER_CONTRACT_ATR_DYNAMIC_V2:
+            if _barrier_atr is None:
+                logger.info(
+                    "[StrategyLab-block] barrier_v2_atr_unavailable symbol=%s "
+                    "timeframe=%s — linha NÃO criada",
+                    symbol, barrier_cfg.get("shadow_atr_timeframe"),
+                )
+                continue
+            features_flat["atr_percent"] = _barrier_atr[0]
+
         _resolved = _resolve_lab_barrier(
             features_flat, tp_pct, sl_pct, barrier_cfg,
             symbol=symbol, log_tag="StrategyLab-block",
@@ -4290,6 +4462,12 @@ async def create_strategy_lab_rejected_shadows(
             "l3_score": d.get("score"),
             "barrier_mode": _bmode,
             "barrier_contract_version": _bversion,
+            "barrier_atr_pct_used": _barrier_atr[0] if _barrier_atr else None,
+            "barrier_atr_timeframe": barrier_cfg.get("shadow_atr_timeframe"),
+            "barrier_atr_source_at": (
+                _barrier_atr[1].isoformat() if _barrier_atr else None
+            ),
+            "trailing": deepcopy(trailing_policy),
         }
 
         try:
@@ -4343,6 +4521,9 @@ async def create_strategy_lab_rejected_shadows(
                                     "barrier_mode": _bmode,
                                     "tp_pct_applied": _tp_eff or None,
                                     "sl_pct_applied": _sl_eff or None,
+                                    "atr_pct_at_entry": (
+                                        _barrier_atr[0] if _barrier_atr else None
+                                    ),
                                     "profile_id": profile_id_str,
                                     "profile_version": profile_version,
                                     "profile_name": profile_name,

@@ -306,6 +306,7 @@ async def _compute_atr_pct(
     entry_price: float,
     period: int = _SHADOW_ATR_PERIOD,
     timeframe: str = _SHADOW_ATR_TIMEFRAME,
+    as_of: Optional[datetime] = None,
 ) -> Optional[float]:
     """ATR% do símbolo no ponto de entrada: ATR(period, timeframe) / entry_price * 100.
 
@@ -323,11 +324,17 @@ async def _compute_atr_pct(
                   FROM ohlcv
                  WHERE symbol  = :s
                    AND timeframe = :tf
+                   AND (:as_of IS NULL OR time <= :as_of)
                  ORDER BY time DESC
                  LIMIT :n
                 """
             ),
-            {"s": symbol, "tf": timeframe, "n": period + 1},
+            {
+                "s": symbol,
+                "tf": timeframe,
+                "as_of": as_of,
+                "n": period + 1,
+            },
         )
         rows = res.fetchall()
         if len(rows) < 2:
@@ -513,6 +520,50 @@ def _compute_ttt_outcome(shadow: ShadowTrade) -> None:
         )
 
 
+def _resolve_trailing_stop_price(
+    shadow: ShadowTrade,
+    entry_price: float,
+    high_water_mark: float,
+) -> Optional[float]:
+    """Return the armed HWM stop from the immutable entry config snapshot."""
+    snapshot = getattr(shadow, "config_snapshot", None)
+    if not isinstance(snapshot, dict):
+        return None
+    trailing = snapshot.get("trailing")
+    if not isinstance(trailing, dict) or trailing.get("enabled") is not True:
+        return None
+    if (
+        trailing.get("contract_version")
+        != shadow_trade_service.SHADOW_TRAILING_CONTRACT_VERSION
+    ):
+        return None
+    try:
+        activation_pct = float(trailing["activation_profit_pct"])
+        distance_pct = float(trailing["hwm_trail_pct"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if entry_price <= 0 or activation_pct <= 0 or distance_pct <= 0:
+        return None
+    activation_price = entry_price * (1.0 + activation_pct / 100.0)
+    if high_water_mark < activation_price:
+        return None
+    stop_price = high_water_mark * (1.0 - distance_pct / 100.0)
+    if trailing.get("never_sell_at_loss") is True:
+        try:
+            min_profit_pct = float(trailing.get("min_profit_pct") or 0.0)
+            safety_pct = float(
+                trailing.get("safety_margin_above_entry_pct") or 0.0
+            )
+        except (TypeError, ValueError):
+            return None
+        protected_floor = entry_price * (
+            1.0 + max(min_profit_pct, safety_pct) / 100.0
+        )
+        if stop_price < protected_floor:
+            return None
+    return stop_price
+
+
 def _finalize_outcome(
     shadow: ShadowTrade,
     outcome: str,
@@ -520,7 +571,7 @@ def _finalize_outcome(
     exit_ts: Optional[datetime],
     entry_price: float,
 ) -> None:
-    """Aplica os campos finais do shadow ao bater outcome (TP/SL/TIMEOUT).
+    """Aplica os campos finais do shadow ao bater um outcome terminal.
 
     Refatoração 2026-05-14: extraído do bloco inline de ``_advance_shadow``
     para que o caminho live-close (introduzido nesta data) reuse a mesma
@@ -565,16 +616,25 @@ def _finalize_outcome(
             shadow.barrier_touched = "TP"
         elif outcome == "SL_HIT":
             shadow.barrier_touched = "SL"
+        elif outcome == "TRAILING_STOP":
+            shadow.barrier_touched = "TRAILING"
         else:
             shadow.barrier_touched = "NONE"
     # barrier_touched_at: fallback para exit_ts em caminhos sem loop candle.
-    if shadow.barrier_touched_at is None and outcome in ("TP_HIT", "SL_HIT"):
+    if shadow.barrier_touched_at is None and outcome in (
+        "TP_HIT", "SL_HIT", "TRAILING_STOP"
+    ):
         shadow.barrier_touched_at = exit_ts
     # intrabar_convention: sempre SL_FIRST (convenção conservadora única).
     shadow.intrabar_convention = "SL_FIRST"
     # final_return_pct: retorno com sinal no close do timeout — nulo para TP/SL.
     if outcome == "TIMEOUT" and shadow.pnl_pct is not None:
         shadow.final_return_pct = shadow.pnl_pct
+    if outcome == "TRAILING_STOP":
+        # The fixed-barrier ML label contract only understands TP/SL/TIMEOUT.
+        # Keep managed exits out of that dataset until a versioned label
+        # contract explicitly includes them.
+        shadow.eligible_for_training = False
     # net_return_pct / fee_roundtrip_pct_applied: lê do config_snapshot.
     # O valor 0.0 é válido (sem fee) — só pula se a chave não existir.
     _cs = shadow.config_snapshot
@@ -927,11 +987,26 @@ async def _advance_shadow(
         shadow.tp_pct_applied = float(shadow.tp_pct)
     if shadow.sl_pct_applied is None and shadow.sl_pct is not None:
         shadow.sl_pct_applied = float(shadow.sl_pct)
-    # atr_pct_at_entry: computado uma vez; nunca propaga exceção.
+    # atr_pct_at_entry: prefer the exact barrier input frozen at creation.
+    # Legacy rows fall back to a point-in-time OHLCV reconstruction bounded by
+    # entry_timestamp; never read future candles for an "at entry" field.
     if shadow.atr_pct_at_entry is None and shadow.entry_price is not None:
-        shadow.atr_pct_at_entry = await _compute_atr_pct(
-            db, shadow.symbol, float(shadow.entry_price)
-        )
+        _snapshot = shadow.config_snapshot or {}
+        _barrier_atr = _snapshot.get("barrier_atr_pct_used")
+        try:
+            shadow.atr_pct_at_entry = (
+                float(_barrier_atr) if _barrier_atr is not None else None
+            )
+        except (TypeError, ValueError):
+            shadow.atr_pct_at_entry = None
+        if shadow.atr_pct_at_entry is None:
+            shadow.atr_pct_at_entry = await _compute_atr_pct(
+                db,
+                shadow.symbol,
+                float(shadow.entry_price),
+                timeframe=str(_snapshot.get("barrier_atr_timeframe") or _SHADOW_ATR_TIMEFRAME),
+                as_of=shadow.entry_timestamp,
+            )
 
     # NOTA: enriquecimento de contexto ML (_enrich_market_context) foi movido
     # para FORA da tx principal — ver _enrich_one_async + _monitor_async.
@@ -952,6 +1027,15 @@ async def _advance_shadow(
     tp = float(shadow.tp_price)
     sl = float(shadow.sl_price)
     entry_price = float(shadow.entry_price)
+    prior_hwm = max(
+        entry_price,
+        float(shadow.max_price_post_entry)
+        if shadow.max_price_post_entry is not None
+        else entry_price,
+    )
+    trailing_stop = _resolve_trailing_stop_price(
+        shadow, entry_price, prior_hwm
+    )
 
     # ── Live-close path (Task #292, 2026-05-14): muitos símbolos do
     # pool não têm OHLCV 1m ingerido — só 5m/15m/30m. O scan candle-a-
@@ -1101,7 +1185,18 @@ async def _advance_shadow(
         chosen_price: Optional[float] = None
         chosen_ts: Optional[datetime] = None
         chosen_src: Optional[str] = None
-        if min_price <= sl:
+        # Once armed, the higher downside stop is the effective stop.  A
+        # previously armed trailing level above the static SL is necessarily
+        # crossed first on a continuous move down; evaluating SL first would
+        # give back protected profit and recreate the audited failure mode.
+        if (
+            trailing_stop is not None
+            and trailing_stop > sl
+            and min_price <= trailing_stop
+        ):
+            live_outcome = "TRAILING_STOP"
+            chosen_price, chosen_ts, chosen_src = min_price, min_ts, min_src
+        elif min_price <= sl:
             live_outcome = "SL_HIT"
             chosen_price, chosen_ts, chosen_src = min_price, min_ts, min_src
         elif max_price >= tp:
@@ -1110,7 +1205,12 @@ async def _advance_shadow(
 
         if live_outcome is not None:
             outcome = live_outcome
-            exit_price = sl if outcome == "SL_HIT" else tp
+            if outcome == "SL_HIT":
+                exit_price = sl
+            elif outcome == "TP_HIT":
+                exit_price = tp
+            else:
+                exit_price = trailing_stop
             # exit_ts = max(chosen_ts, entry_ts) — holding_seconds não
             # negativo. Se `chosen_ts` for NULL, usa entry_timestamp.
             if chosen_ts is None:
@@ -1251,10 +1351,14 @@ async def _advance_shadow(
     if ttt_active and shadow.ttt_tp_pct is not None and entry_price > 0:
         ttt_tp_price_inline = entry_price * (1.0 + float(shadow.ttt_tp_pct) / 100.0)
 
+    scan_hwm = prior_hwm
     for idx, c in enumerate(candles, start=1):
         last_seen_ts = c["time"]
         if c["high"] is None or c["low"] is None:
             continue
+        candle_trailing_stop = _resolve_trailing_stop_price(
+            shadow, entry_price, scan_hwm
+        )
         # ── MAE/MFE: update min/max per-candle (Fase Quant 1) ───────────
         # Usa candle.low / candle.high — nunca só o close.
         # Atualiza em TODAS as candles, inclusive antes do outcome (running).
@@ -1332,6 +1436,18 @@ async def _advance_shadow(
         # barrier_touched='BOTH_SAME_CANDLE' e resolve como SL (pior caso).
         _sl_hit = c["low"] <= sl
         _tp_hit = c["high"] >= tp
+        _trailing_hit = (
+            candle_trailing_stop is not None
+            and candle_trailing_stop > sl
+            and _cl <= candle_trailing_stop
+        )
+        if _trailing_hit:
+            shadow.barrier_touched = "TRAILING"
+            shadow.barrier_touched_at = c["time"]
+            outcome = "TRAILING_STOP"
+            exit_price = candle_trailing_stop
+            exit_ts = c["time"]
+            break
         if _sl_hit:
             if _tp_hit:
                 # Ambas barreiras tocadas no mesmo candle 1m.
@@ -1348,6 +1464,10 @@ async def _advance_shadow(
             exit_price = tp
             exit_ts = c["time"]
             break
+        # A high reached inside this candle arms/raises the HWM only for the
+        # next candle. Using it against the same candle low would invent an
+        # intrabar order that OHLC data cannot prove.
+        scan_hwm = max(scan_hwm, float(_ch))
         # Timeout (count global desde entry, NÃO só dentro do tick atual).
         if timeout_candles and (candles_seen_before + idx) >= timeout_candles:
             outcome = "TIMEOUT"
@@ -1374,7 +1494,7 @@ async def _advance_shadow(
 
 
 async def _fast_barrier_scan_async(run_id: str) -> Dict[str, Any]:
-    """Fast-scan de barreira: fecha um lote limitado de TP/SL rompidos por tick.
+    """Fast-scan de barreira: fecha um lote limitado de stops rompidos por tick.
 
     Roda ANTES do batch regular. Garante que qualquer trade com
     ``market_metadata.price <= sl_price`` ou ``>= tp_price`` seja fechado
@@ -1394,6 +1514,7 @@ async def _fast_barrier_scan_async(run_id: str) -> Dict[str, Any]:
 
     closed_tp = 0
     closed_sl = 0
+    closed_trailing = 0
     skipped_stale = 0
     errors = 0
     sim_targets: List[Any] = []
@@ -1413,7 +1534,23 @@ async def _fast_barrier_scan_async(run_id: str) -> Dict[str, Any]:
                     WHERE st.status IN ('RUNNING', 'PENDING')
                       AND st.tp_price IS NOT NULL
                       AND st.sl_price IS NOT NULL
-                      AND (mm.price <= st.sl_price OR mm.price >= st.tp_price)
+                      AND (
+                        mm.price <= st.sl_price
+                        OR mm.price >= st.tp_price
+                        OR (
+                          st.config_snapshot #>> '{trailing,enabled}' = 'true'
+                          AND st.config_snapshot #>> '{trailing,contract_version}' = :trailing_contract_version
+                          AND st.max_price_post_entry IS NOT NULL
+                          AND jsonb_typeof(st.config_snapshot #> '{trailing,activation_profit_pct}') = 'number'
+                          AND jsonb_typeof(st.config_snapshot #> '{trailing,hwm_trail_pct}') = 'number'
+                          AND st.max_price_post_entry >= st.entry_price * (
+                            1 + ((st.config_snapshot #>> '{trailing,activation_profit_pct}')::numeric / 100)
+                          )
+                          AND mm.price <= st.max_price_post_entry * (
+                            1 - ((st.config_snapshot #>> '{trailing,hwm_trail_pct}')::numeric / 100)
+                          )
+                        )
+                      )
                       AND (mm.last_updated IS NULL OR mm.last_updated >= :stale_cutoff)
                     ORDER BY st.id
                     LIMIT :fast_scan_batch_size
@@ -1421,6 +1558,9 @@ async def _fast_barrier_scan_async(run_id: str) -> Dict[str, Any]:
                 {
                     "stale_cutoff": stale_cutoff,
                     "fast_scan_batch_size": SHADOW_FAST_SCAN_BATCH_SIZE,
+                    "trailing_contract_version": (
+                        shadow_trade_service.SHADOW_TRAILING_CONTRACT_VERSION
+                    ),
                 },
             )
             breached_ids = [row[0] for row in res.fetchall()]
@@ -1436,11 +1576,32 @@ async def _fast_barrier_scan_async(run_id: str) -> Dict[str, Any]:
                         WHERE st.status IN ('RUNNING', 'PENDING')
                           AND st.tp_price IS NOT NULL
                           AND st.sl_price IS NOT NULL
-                          AND (mm.price <= st.sl_price OR mm.price >= st.tp_price)
+                          AND (
+                            mm.price <= st.sl_price
+                            OR mm.price >= st.tp_price
+                            OR (
+                              st.config_snapshot #>> '{trailing,enabled}' = 'true'
+                              AND st.config_snapshot #>> '{trailing,contract_version}' = :trailing_contract_version
+                              AND st.max_price_post_entry IS NOT NULL
+                              AND jsonb_typeof(st.config_snapshot #> '{trailing,activation_profit_pct}') = 'number'
+                              AND jsonb_typeof(st.config_snapshot #> '{trailing,hwm_trail_pct}') = 'number'
+                              AND st.max_price_post_entry >= st.entry_price * (
+                                1 + ((st.config_snapshot #>> '{trailing,activation_profit_pct}')::numeric / 100)
+                              )
+                              AND mm.price <= st.max_price_post_entry * (
+                                1 - ((st.config_snapshot #>> '{trailing,hwm_trail_pct}')::numeric / 100)
+                              )
+                            )
+                          )
                           AND mm.last_updated IS NOT NULL
                           AND mm.last_updated < :stale_cutoff
                     """),
-                    {"stale_cutoff": stale_cutoff},
+                    {
+                        "stale_cutoff": stale_cutoff,
+                        "trailing_contract_version": (
+                            shadow_trade_service.SHADOW_TRAILING_CONTRACT_VERSION
+                        ),
+                    },
                 )
                 skipped_stale = res2.scalar() or 0
         except Exception:
@@ -1455,6 +1616,7 @@ async def _fast_barrier_scan_async(run_id: str) -> Dict[str, Any]:
             return {
                 "fast_scan_closed_tp": 0,
                 "fast_scan_closed_sl": 0,
+                "fast_scan_closed_trailing": 0,
                 "fast_scan_skipped_stale": skipped_stale,
                 "fast_scan_errors": 0,
             }
@@ -1491,6 +1653,8 @@ async def _fast_barrier_scan_async(run_id: str) -> Dict[str, Any]:
                                 closed_tp += 1
                             elif outcome == "SL_HIT":
                                 closed_sl += 1
+                            elif outcome == "TRAILING_STOP":
+                                closed_trailing += 1
                             src = shadow.source or "UNKNOWN"
                             source_counts[src] = source_counts.get(src, 0) + 1
                             sim_targets.append(shadow.id)
@@ -1549,6 +1713,7 @@ async def _fast_barrier_scan_async(run_id: str) -> Dict[str, Any]:
         return {
             "fast_scan_closed_tp": closed_tp,
             "fast_scan_closed_sl": closed_sl,
+            "fast_scan_closed_trailing": closed_trailing,
             "fast_scan_skipped_stale": skipped_stale,
             "fast_scan_errors": errors + 1,
         }
@@ -1561,13 +1726,16 @@ async def _fast_barrier_scan_async(run_id: str) -> Dict[str, Any]:
         item_label="fast_scan_simulations",
     )
 
-    total_closed = closed_tp + closed_sl
+    total_closed = closed_tp + closed_sl + closed_trailing
     logger.info(
         "[shadow-closer] fast-scan run_id=%s closed_tp=%d closed_sl=%d "
+        "closed_trailing=%d total_closed=%d "
         "source_breakdown=%s skipped_stale=%d deferred_sim=%d errors=%d",
         run_id,
         closed_tp,
         closed_sl,
+        closed_trailing,
+        total_closed,
         source_counts,
         skipped_stale,
         deferred_sim,
@@ -1576,6 +1744,7 @@ async def _fast_barrier_scan_async(run_id: str) -> Dict[str, Any]:
     return {
         "fast_scan_closed_tp": closed_tp,
         "fast_scan_closed_sl": closed_sl,
+        "fast_scan_closed_trailing": closed_trailing,
         "fast_scan_skipped_stale": skipped_stale,
         "fast_scan_deferred_simulations": deferred_sim,
         "fast_scan_errors": errors,
@@ -1865,6 +2034,7 @@ def run(self) -> str:
         backfill = result.get("backfill_created", 0)
         fast_tp = result.get("fast_scan_closed_tp", 0)
         fast_sl = result.get("fast_scan_closed_sl", 0)
+        fast_trailing = result.get("fast_scan_closed_trailing", 0)
         fast_stale = result.get("fast_scan_skipped_stale", 0)
         fast_errors = result.get("fast_scan_errors", 0)
         msg = (
@@ -1872,6 +2042,7 @@ def run(self) -> str:
             f"{result['completed']} completed, {result['errors']} errors, "
             f"{backfill} backfill | "
             f"fast-scan closed_tp={fast_tp} closed_sl={fast_sl} "
+            f"closed_trailing={fast_trailing} "
             f"stale_skipped={fast_stale} errors={fast_errors}"
         )
         logger.info("[shadow-monitor] %s", msg)

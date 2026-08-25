@@ -19,6 +19,7 @@ def _v2_cfg(**overrides):
     ml = {
         "ml_active_barrier_contract_version": "shadow_atr_dynamic_v2",
         "shadow_barrier_mode": "ATR_DYNAMIC",
+        "shadow_atr_timeframe": "5m",
         "shadow_atr_multiplier_tp": 1.5,
         "shadow_atr_multiplier_sl": 1.5,
         "shadow_barrier_min_pct": 0.5,

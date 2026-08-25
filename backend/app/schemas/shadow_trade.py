@@ -26,7 +26,7 @@ class ShadowTradeRead(BaseModel):
     tp_price: Optional[float] = None
     sl_price: Optional[float] = None
     amount_usdt: float
-    outcome: Optional[str] = None  # TP_HIT | SL_HIT | TIMEOUT | None (pending)
+    outcome: Optional[str] = None  # TP_HIT | SL_HIT | TRAILING_STOP | TIMEOUT | None
     pnl_pct: Optional[float] = None
     pnl_usdt: Optional[float] = None
     status: str  # PENDING | RUNNING | COMPLETED | ERROR
@@ -174,8 +174,9 @@ class ShadowTradeSummary(BaseModel):
     completed: int  # status='COMPLETED'
     win: int  # outcome='TP_HIT'
     loss: int  # outcome='SL_HIT'
+    trailing: int  # outcome='TRAILING_STOP'
     timeout: int  # outcome='TIMEOUT'
-    win_rate: float  # win / completed × 100 (0 se completed=0)
+    win_rate: float  # TP_HIT / completed × 100 (0 se completed=0)
     total_pnl_usdt: float
     avg_pnl_pct: float
     period_start: Optional[datetime] = None

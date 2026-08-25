@@ -437,7 +437,9 @@ async def shadow_trades_summary(
 
         # Avg de pnl_pct deve considerar APENAS trades com outcome
         # finalizado (TP/SL/TIMEOUT) — pendentes não têm pnl.
-        completed_filter = ShadowTrade.outcome.in_(("TP_HIT", "SL_HIT", "TIMEOUT"))
+        completed_filter = ShadowTrade.outcome.in_(
+            ("TP_HIT", "SL_HIT", "TRAILING_STOP", "TIMEOUT")
+        )
 
         stats_q = select(
             func.count(ShadowTrade.id).label("total"),
@@ -453,6 +455,9 @@ async def shadow_trades_summary(
             func.count(ShadowTrade.id)
             .filter(ShadowTrade.outcome == "SL_HIT")
             .label("loss"),
+            func.count(ShadowTrade.id)
+            .filter(ShadowTrade.outcome == "TRAILING_STOP")
+            .label("trailing"),
             func.count(ShadowTrade.id)
             .filter(ShadowTrade.outcome == "TIMEOUT")
             .label("timeout"),
@@ -481,6 +486,7 @@ async def shadow_trades_summary(
             completed=completed,
             win=win,
             loss=int(row.loss or 0),
+            trailing=int(row.trailing or 0),
             timeout=int(row.timeout or 0),
             win_rate=win_rate,
             total_pnl_usdt=round(float(row.total_pnl_usdt or 0.0), 4),

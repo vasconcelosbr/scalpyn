@@ -86,6 +86,7 @@ function fmtValue(value: unknown): string {
 function outcomeLabel(data: ShadowTradeDetail): string {
   if (data.outcome === "TP_HIT") return "TP";
   if (data.outcome === "SL_HIT") return "SL";
+  if (data.outcome === "TRAILING_STOP") return "TRAILING";
   if (data.outcome === "TIMEOUT") return "TIMEOUT";
   return data.status;
 }
@@ -279,7 +280,7 @@ export function ShadowTradeDetailScreen({ shadowId }: { shadowId: string }) {
             <div className={styles.titleRow}>
               <h1 className={styles.title}>{data.symbol}</h1>
               <span className={styles.badge}>{data.status}</span>
-              <span className={`${styles.badge} ${data.outcome === "TP_HIT" ? styles.badgeTp : data.outcome === "SL_HIT" ? styles.badgeSl : ""}`}>{outcomeLabel(data)}</span>
+              <span className={`${styles.badge} ${data.outcome === "TP_HIT" || (data.outcome === "TRAILING_STOP" && (data.pnl_pct ?? 0) >= 0) ? styles.badgeTp : data.outcome === "SL_HIT" || data.outcome === "TRAILING_STOP" ? styles.badgeSl : ""}`}>{outcomeLabel(data)}</span>
             </div>
           </div>
           <div className={styles.heroAside}>
@@ -321,7 +322,7 @@ export function ShadowTradeDetailScreen({ shadowId }: { shadowId: string }) {
             </div>
             <div className={styles.chartLegend}>
               <span className={styles.legendItem} style={{ color: "var(--green)" }}><span className={styles.legendDot} /> B · compra em {fmtDateTime(data.entry_timestamp ?? data.created_at, true)}</span>
-              <span className={styles.legendItem} style={{ color: data.outcome === "TP_HIT" ? "var(--green)" : "var(--red)" }}><span className={styles.legendDot} /> S · fechamento {outcomeLabel(data)} em {fmtDateTime(data.exit_timestamp ?? data.completed_at, true)}</span>
+              <span className={styles.legendItem} style={{ color: data.outcome === "TP_HIT" || (data.outcome === "TRAILING_STOP" && (data.pnl_pct ?? 0) >= 0) ? "var(--green)" : "var(--red)" }}><span className={styles.legendDot} /> S · fechamento {outcomeLabel(data)} em {fmtDateTime(data.exit_timestamp ?? data.completed_at, true)}</span>
               <span>Janela: {CHART_CONTEXT_MINUTES} min antes da entrada até {CHART_CONTEXT_MINUTES} min após o fechamento.</span>
               {chart?.timeframe && chart.timeframe !== "1m" ? <span>Candles disponíveis em {chart.timeframe}; os rótulos B/S preservam o timestamp exato do trade.</span> : null}
             </div>

@@ -41,7 +41,7 @@ const C = {
 
 // ── domain types (espelham backend/app/schemas/shadow_trade.py) ──────────────
 type ShadowStatus = "PENDING" | "RUNNING" | "COMPLETED" | "ERROR";
-type ShadowOutcome = "TP_HIT" | "SL_HIT" | "TIMEOUT" | null;
+type ShadowOutcome = "TP_HIT" | "SL_HIT" | "TRAILING_STOP" | "TIMEOUT" | null;
 
 interface ShadowTradeRead {
   id: string;
@@ -78,6 +78,7 @@ interface ShadowTradeSummary {
   completed: number;
   win: number;
   loss: number;
+  trailing: number;
   timeout: number;
   win_rate: number;
   total_pnl_usdt: number;
@@ -199,7 +200,7 @@ interface ProfileIntelligenceCandidate {
 }
 
 // ── filter shape ─────────────────────────────────────────────────────────────
-type StatusFilter = "ALL" | "OPEN" | "TP_HIT" | "SL_HIT" | "TIMEOUT";
+type StatusFilter = "ALL" | "OPEN" | "TP_HIT" | "SL_HIT" | "TRAILING_STOP" | "TIMEOUT";
 
 interface FilterState {
   status: StatusFilter;
@@ -306,6 +307,8 @@ function outcomeStyle(outcome: ShadowOutcome): BadgeStyle | null {
       return { bg: `${C.green}22`, fg: C.green, border: `${C.green}55`, label: "TP" };
     case "SL_HIT":
       return { bg: `${C.red}22`, fg: C.red, border: `${C.red}55`, label: "SL" };
+    case "TRAILING_STOP":
+      return { bg: `${C.amber}22`, fg: C.amber, border: `${C.amber}55`, label: "Trailing" };
     case "TIMEOUT":
       return { bg: `${C.purple}22`, fg: C.purple, border: `${C.purple}55`, label: "Timeout" };
   }
@@ -416,6 +419,7 @@ const STATUS_TABS: { key: StatusFilter; label: string }[] = [
   { key: "OPEN", label: "Em aberto" },
   { key: "TP_HIT", label: "TP" },
   { key: "SL_HIT", label: "SL" },
+  { key: "TRAILING_STOP", label: "Trailing" },
   { key: "TIMEOUT", label: "Timeout" },
 ];
 
@@ -606,7 +610,7 @@ function SummaryCards({
         sub={
           placeholder
             ? ""
-            : `W ${data!.win} · L ${data!.loss} · TO ${data!.timeout}`
+            : `TP ${data!.win} · SL ${data!.loss} · TR ${data!.trailing} · TO ${data!.timeout}`
         }
       />
       <StatCard
@@ -2391,7 +2395,7 @@ export default function ShadowPortfolioPage() {
       return;
     }
 
-    // TP_HIT / SL_HIT / TIMEOUT: 1 fetch COMPLETED + filtro local por outcome.
+    // Terminal outcomes: one COMPLETED fetch + local outcome filter.
     const qsCompleted = buildBaseQuery(filter, {
       status: "COMPLETED",
       page: 1,

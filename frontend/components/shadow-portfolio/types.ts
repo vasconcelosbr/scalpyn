@@ -1,5 +1,5 @@
 export type ShadowStatus = "PENDING" | "RUNNING" | "COMPLETED" | "ERROR";
-export type ShadowOutcome = "TP_HIT" | "SL_HIT" | "TIMEOUT" | null;
+export type ShadowOutcome = "TP_HIT" | "SL_HIT" | "TRAILING_STOP" | "TIMEOUT" | null;
 
 export interface ShadowTradeDetail {
   id: string;
