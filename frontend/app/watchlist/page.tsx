@@ -1067,6 +1067,8 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
   const [rejectedItems, setRejectedItems] = useState<RejectedAssetItem[]>([]);
   const [approvedCols, setApprovedCols] = useState<IndicatorColumnSpec[]>([]);
   const [rejectedCols, setRejectedCols] = useState<IndicatorColumnSpec[]>([]);
+  const [expandedApprovedRow, setExpandedApprovedRow] = useState<string | null>(null);
+  const [expandedRejectedRow, setExpandedRejectedRow] = useState<string | null>(null);
   const [futuresAssets, setFuturesAssets] = useState<FuturesAsset[]>([]);
   const [hideNeutral, setHideNeutral] = useState(false);
   const [loadingAssets, setLoadingAssets] = useState(false);
@@ -1386,6 +1388,8 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
               emptyMessage="Nenhum ativo aprovado para os filtros atuais."
               indicatorCols={approvedCols}
               showScore={displayLevel !== 'L1'}
+              expandedRow={expandedApprovedRow}
+              onExpandedRowChange={setExpandedApprovedRow}
             />
           ) : rejectedError ? (
             <div className="px-4 py-5 flex items-center gap-3">
@@ -1405,6 +1409,8 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
               emptyMessage="Nenhum ativo rejeitado para os filtros atuais."
               indicatorCols={rejectedCols}
               showScore={displayLevel !== 'L1'}
+              expandedRow={expandedRejectedRow}
+              onExpandedRowChange={setExpandedRejectedRow}
             />
           )}
         </div>
