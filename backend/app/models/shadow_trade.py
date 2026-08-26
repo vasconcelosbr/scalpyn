@@ -4,7 +4,7 @@ Uma linha em ``shadow_trades`` representa uma promoção
 ``decisions_log.decision='ALLOW' AND decisions_log.direction='SPOT'``
 que ``execute_buy.py`` barrou por gate de capital/risco e que o sistema
 acompanha como trade simulado de U$1000 USDT (configurável via
-``SHADOW_TRADE_AMOUNT_USDT``) até atingir TP, SL ou timeout.
+``spot_engine.shadow.amount_usdt``) até atingir TP, SL ou timeout.
 
 Vocabulário canônico (Task #292): ``decisions_log.direction`` usa
 ``'LONG' | 'SHORT' | 'NEUTRAL' | 'SPOT'`` (uppercase). Shadow é
@@ -61,7 +61,7 @@ class ShadowTrade(Base):
     direction = Column(String(10), nullable=True)
 
     # No Python-side default — value is supplied by the writer (Fase 2:
-    # ``ShadowTradeService.create_from_skip`` reads ``SHADOW_TRADE_AMOUNT_USDT``
+    # New trades freeze ``spot_engine.shadow.amount_usdt`` at creation time.
     # env, default 1000.0). DDL has ``DEFAULT 1000.0`` only as a safety net
     # for ad-hoc INSERTs; runtime callers must always set this explicitly.
     amount_usdt = Column(Float, nullable=False)

@@ -13,7 +13,7 @@
         {
           "path": "backend/app/services/shadow_trade_service.py",
           "contains_all": [
-            "SHADOW_TRAILING_CONTRACT_VERSION",
+            "spot_config.shadow.trailing_contract_version",
             "_load_point_in_time_atr_pct",
             "barrier_atr_timeframe",
             "managed trailing exit"
@@ -42,6 +42,74 @@
           "contains_all": [
             "TRAILING_STOP",
             "data!.trailing"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "complete-strategy-settings-contract",
+      "description": "Strategies UI and aggregate API own every Spot and Shadow business value, support audited JSON round trips, and fail closed without persisted runtime settings",
+      "files": [
+        {
+          "path": "backend/app/api/strategy_settings.py",
+          "contains_all": [
+            "/api/strategy-settings",
+            "/export",
+            "/import/validate",
+            "StrategySettingsConflictError"
+          ]
+        },
+        {
+          "path": "backend/app/services/strategy_settings_service.py",
+          "contains_all": [
+            "with_for_update()",
+            "ML_SHADOW_KEYS",
+            "config_service.invalidate_cache",
+            "Post-write configuration readback"
+          ]
+        },
+        {
+          "path": "backend/app/services/shadow_trade_service.py",
+          "contains_all": [
+            "_shadow_user_config_from_persisted",
+            "shadow_config_missing",
+            "spot_config.shadow.trailing_contract_version",
+            "amount_usdt = float(user_config[\"amount_usdt\"])"
+          ]
+        },
+        {
+          "path": "backend/tests/test_strategy_settings_service.py",
+          "contains_all": [
+            "test_export_validate_round_trip_has_no_diff",
+            "test_partial_import_preserves_omitted_and_unrelated_ml_keys",
+            "test_optimistic_hash_conflict_rolls_back",
+            "test_missing_persisted_shadow_block_fails_closed"
+          ]
+        },
+        {
+          "path": "frontend/app/settings/strategies/page.tsx",
+          "contains_all": [
+            "Exportar JSON",
+            "Importar JSON",
+            "Shadow Portfolio — Barreiras e custos",
+            "ATR_DYNAMIC v2 está ativo",
+            "Fallback: removido"
+          ]
+        },
+        {
+          "path": "frontend/components/settings/StrategySettingsJsonModal.tsx",
+          "contains_all": [
+            "Etapa {item}",
+            "JSON válido",
+            "Confirmar aplicação",
+            "Estrutura esperada"
+          ]
+        },
+        {
+          "path": "frontend/lib/strategySettings.test.ts",
+          "contains_all": [
+            "parser accepts partial aggregate documents",
+            "recursive editor coverage sees every leaf"
           ]
         }
       ]

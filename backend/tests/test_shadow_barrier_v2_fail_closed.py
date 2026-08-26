@@ -33,7 +33,24 @@ _ML_V2_FULL = {
 
 
 def _base_user_config():
-    return {"tp_pct": 2.0, "sl_pct": 1.0}
+    return {
+        "tp_pct": 2.0,
+        "sl_pct": 1.0,
+        "amount_usdt": 1000.0,
+        "timeout_candles": 1440,
+        "ttt_enabled": True,
+        "ttt_tp_pct": 1.0,
+        "ttt_timeout_minutes": 180,
+        "trailing": {
+            "enabled": True,
+            "activation_profit_pct": 1.5,
+            "hwm_trail_pct": 1.0,
+            "never_sell_at_loss": True,
+            "min_profit_pct": 0.5,
+            "safety_margin_above_entry_pct": 0.3,
+            "contract_version": "shadow_hwm_trailing_v1",
+        },
+    }
 
 
 # ── _apply_barrier_params: sem defaults silenciosos sob v2 ───────────────────
@@ -51,12 +68,13 @@ def test_apply_barrier_params_v2_no_silent_defaults():
     assert merged["ml_active_barrier_contract_version"] == "shadow_atr_dynamic_v2"
 
 
-def test_apply_barrier_params_legacy_keeps_defaults():
-    # Sem contrato ativo declarado → comportamento v1/legacy inalterado.
+def test_apply_barrier_params_legacy_has_no_silent_business_defaults():
+    # Helper tolerante preserva compatibilidade de leitura, mas não inventa
+    # multiplicadores/pisos/tetos. Os caminhos operacionais validam antes.
     merged = _apply_barrier_params(_base_user_config(), {"shadow_barrier_mode": "FIXED"})
-    assert merged["sl_atr_multiplier"] == 1.5
-    assert merged["sl_min_pct"] == 0.5
-    assert merged["sl_max_pct"] == 3.0
+    assert merged["sl_atr_multiplier"] is None
+    assert merged["sl_min_pct"] is None
+    assert merged["sl_max_pct"] is None
     assert merged["ml_active_barrier_contract_version"] is None
 
 

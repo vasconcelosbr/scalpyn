@@ -29,6 +29,7 @@ from ..core.trace_context import (
 )
 from ..services.decision_audit_service import safe_record_decision
 from ..services.shadow_trade_service import (
+    _shadow_user_config_from_persisted,
     map_capital_reason,
     map_per_asset_reason,
     safe_bulk_create_from_user_skip,
@@ -240,6 +241,9 @@ async def _execute_buy_cycle_async() -> dict:
             user_id = cfg_row.user_id
             try:
                 se_cfg = SpotEngineConfig.from_config_json(cfg_row.config_json)
+                shadow_user_config = _shadow_user_config_from_persisted(
+                    cfg_row.config_json
+                )
                 threshold   = se_cfg.scanner.buy_threshold_score
                 max_opps    = se_cfg.scanner.max_opportunities_per_scan
                 cooldown_s  = se_cfg.scanner.symbol_cooldown_seconds
@@ -305,22 +309,9 @@ async def _execute_buy_cycle_async() -> dict:
                 state           = await capital_mgr.get_state(usdt_balance, db, str(user_id))
                 allowed, reason = capital_mgr.can_open_new_position(state)
 
-                # Shadow Portfolio config (env defaults; ZERO HARDCODE de
-                # valor de negócio). ``sl_pct`` proxy = kill_switch
-                # max_drawdown_from_hwm — o spot engine real NÃO tem
-                # ``stop_loss_pct`` fixo (usa multi-layer sell flow); o
-                # kill switch é o teto de risco mais próximo de um SL.
-                _shadow_user_config = {
-                    "tp_pct": float(se_cfg.selling.take_profit_pct),
-                    "sl_pct": float(se_cfg.sell_flow.kill_switch.max_drawdown_from_hwm_pct),
-                    "timeout_candles": None,  # service usa SHADOW_TIMEOUT_CANDLES
-                    "l3_single_profile_per_symbol_enabled": bool(
-                        se_cfg.scanner.l3_single_profile_per_symbol_enabled
-                    ),
-                    "l3_profile_consolidation_rule_version": (
-                        se_cfg.scanner.l3_profile_consolidation_rule_version
-                    ),
-                }
+                # Point-in-time Shadow economics come exclusively from the
+                # persisted aggregate Strategies contract.
+                _shadow_user_config = shadow_user_config
 
                 if not allowed:
                     logger.info("Buy blocked for user %s — %s", user_id, reason)

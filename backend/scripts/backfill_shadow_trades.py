@@ -96,7 +96,7 @@ async def _load_user_config(db, user_id: UUID) -> dict[str, Any]:
     from sqlalchemy import select
 
     from app.models.config_profile import ConfigProfile
-    from app.schemas.spot_engine_config import SpotEngineConfig
+    from app.services.shadow_trade_service import _shadow_user_config_from_persisted
 
     rows = await db.execute(
         select(ConfigProfile).where(
@@ -111,11 +111,7 @@ async def _load_user_config(db, user_id: UUID) -> dict[str, Any]:
             f"Usuário {user_id} não tem ConfigProfile ativo "
             f"(config_type='spot_engine'). Backfill abortado."
         )
-    se_cfg = SpotEngineConfig.from_config_json(cfg_row.config_json)
-    return {
-        "tp_pct": float(se_cfg.selling.take_profit_pct),
-        "sl_pct": float(se_cfg.sell_flow.kill_switch.max_drawdown_from_hwm_pct),
-    }
+    return _shadow_user_config_from_persisted(cfg_row.config_json)
 
 
 async def _has_ohlcv_after(db, symbol: str, after_ts: datetime) -> bool:
@@ -170,12 +166,11 @@ async def _insert_error_shadow(
     error_msg: str,
 ):
     """Cria shadow em status=ERROR quando OHLCV não cobre o símbolo."""
-    from app.services.shadow_trade_service import SHADOW_TRADE_AMOUNT_USDT
-
     sql = _build_insert_error_sql()
+    amount_usdt = float(user_config["amount_usdt"])
     config_snap = {
         **user_config,
-        "amount_usdt": SHADOW_TRADE_AMOUNT_USDT,
+        "amount_usdt": amount_usdt,
         "error": error_msg,
     }
     res = await db.execute(
@@ -185,7 +180,7 @@ async def _insert_error_shadow(
             "user_id": decision.user_id,
             "symbol": decision.symbol,
             "strategy": decision.strategy,
-            "amount_usdt": SHADOW_TRADE_AMOUNT_USDT,
+            "amount_usdt": amount_usdt,
             "skip_reason": skip_reason,
             "config_snapshot": json.dumps(config_snap, default=str),
         },

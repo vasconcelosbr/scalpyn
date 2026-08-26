@@ -14,8 +14,8 @@ garante que:
 
 Princípios:
 
-* ZERO HARDCODE: todo valor de negócio vem de env ou do ``user_config``
-  passado pelo caller (que vem do ``SpotEngineConfig`` do usuário).
+* ZERO HARDCODE: todo valor de negócio vem do ``user_config`` persistido em
+  ``config_profiles`` e congelado no snapshot do trade.
 * IDEMPOTENTE: dois calls com a mesma ``decision_id`` resultam em uma
   única row em ``shadow_trades``.
 * ADDITIVE: nada existente é alterado por este módulo.
@@ -74,13 +74,9 @@ class _SyntheticDecision:
     metrics: Dict[str, Any] = field(default_factory=dict)
 
 
-# Defaults vindos de env — ZERO HARDCODE de valor de negócio.
-SHADOW_TRADE_AMOUNT_USDT = float(os.environ.get("SHADOW_TRADE_AMOUNT_USDT", "1000.0"))
-SHADOW_TIMEOUT_CANDLES = int(os.environ.get("SHADOW_TIMEOUT_CANDLES", "1440"))  # 24h de 1m
 SHADOW_LOOKBACK_MINUTES = int(os.environ.get("SHADOW_LOOKBACK_MINUTES", "10"))
-# Shadow SL may keep a dedicated safety override. TP always follows the active
-# Strategies Module configuration so simulated and strategy economics match.
-_SHADOW_SL_PCT_OVERRIDE = float(os.environ.get("SHADOW_SL_PCT", "0.0"))
+# Technical protocol identifier, not a business threshold. The operator still
+# selects this implemented version through spot_engine.shadow.
 SHADOW_TRAILING_CONTRACT_VERSION = "shadow_hwm_trailing_v1"
 
 
@@ -97,7 +93,7 @@ def _trailing_policy_from_spot_config(spot_config: Any) -> Dict[str, Any]:
         "safety_margin_above_entry_pct": float(
             selling.safety_margin_above_entry_pct
         ),
-        "contract_version": SHADOW_TRAILING_CONTRACT_VERSION,
+        "contract_version": str(spot_config.shadow.trailing_contract_version),
     }
 
 
@@ -105,10 +101,12 @@ def _shadow_user_config_from_spot_config(spot_config: Any) -> Dict[str, Any]:
     """Build the complete point-in-time Spot exit policy used by shadows."""
     return {
         "tp_pct": float(spot_config.selling.take_profit_pct),
-        "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
-            spot_config.sell_flow.kill_switch.max_drawdown_from_hwm_pct
-        ),
-        "timeout_candles": None,
+        "sl_pct": float(spot_config.sell_flow.kill_switch.max_drawdown_from_hwm_pct),
+        "amount_usdt": float(spot_config.shadow.amount_usdt),
+        "timeout_candles": int(spot_config.shadow.timeout_candles),
+        "ttt_enabled": bool(spot_config.shadow.ttt.enabled),
+        "ttt_tp_pct": float(spot_config.shadow.ttt.tp_pct),
+        "ttt_timeout_minutes": int(spot_config.shadow.ttt.timeout_minutes),
         "trailing": _trailing_policy_from_spot_config(spot_config),
         "l3_single_profile_per_symbol_enabled": bool(
             spot_config.scanner.l3_single_profile_per_symbol_enabled
@@ -117,6 +115,41 @@ def _shadow_user_config_from_spot_config(spot_config: Any) -> Dict[str, Any]:
             spot_config.scanner.l3_profile_consolidation_rule_version
         ),
     }
+
+
+def _shadow_user_config_from_persisted(raw_config: Any) -> Dict[str, Any]:
+    """Validate the persisted Shadow block without schema-default fallback."""
+    from ..schemas.spot_engine_config import SpotEngineConfig
+
+    if not isinstance(raw_config, dict) or not isinstance(raw_config.get("shadow"), dict):
+        raise ValueError("shadow_config_missing: spot_engine.shadow is required")
+    shadow = raw_config["shadow"]
+    required = {"amount_usdt", "timeout_candles", "trailing_contract_version", "ttt"}
+    missing = sorted(required - set(shadow))
+    if missing:
+        raise ValueError(f"shadow_config_missing: spot_engine.shadow missing {missing}")
+    if not isinstance(shadow.get("ttt"), dict):
+        raise ValueError("shadow_config_missing: spot_engine.shadow.ttt is required")
+    missing_ttt = sorted({"enabled", "tp_pct", "timeout_minutes"} - set(shadow["ttt"]))
+    if missing_ttt:
+        raise ValueError(f"shadow_config_missing: spot_engine.shadow.ttt missing {missing_ttt}")
+    return _shadow_user_config_from_spot_config(
+        SpotEngineConfig.from_config_json(raw_config)
+    )
+
+
+def _require_persisted_ml_shadow_config(raw_config: Any) -> Dict[str, Any]:
+    """Require the complete persisted ML Shadow projection for new trades."""
+    from ..schemas.strategy_settings import MLShadowConfig, ML_SHADOW_KEYS
+
+    if not isinstance(raw_config, dict):
+        raise ValueError("ml_shadow_config_missing: config_type=ml is required")
+    missing = sorted(set(ML_SHADOW_KEYS) - set(raw_config))
+    if missing:
+        raise ValueError(f"ml_shadow_config_missing: ml missing {missing}")
+    projection = {key: raw_config[key] for key in ML_SHADOW_KEYS}
+    MLShadowConfig.model_validate(projection)
+    return dict(raw_config)
 
 
 def _apply_barrier_params(user_config: dict, ml_config: dict) -> dict:
@@ -133,22 +166,13 @@ def _apply_barrier_params(user_config: dict, ml_config: dict) -> dict:
     # Carimbo do contrato ativo propagado para o write path — _create_from_decision
     # usa isto para exigir fail-closed as chaves do contrato v2 (P1 Fase 1.6).
     user_config["ml_active_barrier_contract_version"] = active_contract
-    user_config["shadow_barrier_mode"] = ml_config.get("shadow_barrier_mode", "FIXED")
+    user_config["shadow_barrier_mode"] = ml_config.get("shadow_barrier_mode")
     user_config["shadow_atr_timeframe"] = ml_config.get("shadow_atr_timeframe")
-    user_config["tp_atr_multiplier"]   = ml_config.get("shadow_atr_multiplier_tp")
-    if active_contract == BARRIER_CONTRACT_ATR_DYNAMIC_V2:
-        # Fail-closed: sob o contrato ATR-dinâmico v2 NENHUM default silencioso é
-        # aplicado. Chave ausente permanece None e é validada (raise) em
-        # _create_from_decision — a linha NÃO é criada, em vez de degradar
-        # silenciosamente para uma barreira fixa (v1) carimbada como v2.
-        user_config["sl_atr_multiplier"] = ml_config.get("shadow_atr_multiplier_sl")
-        user_config["sl_min_pct"]        = ml_config.get("shadow_barrier_min_pct")
-        user_config["sl_max_pct"]        = ml_config.get("shadow_barrier_max_pct")
-    else:
-        # v1/legacy — comportamento inalterado (defaults silenciosos preservados).
-        user_config["sl_atr_multiplier"] = ml_config.get("shadow_atr_multiplier_sl", 1.5)
-        user_config["sl_min_pct"]        = ml_config.get("shadow_barrier_min_pct", 0.5)
-        user_config["sl_max_pct"]        = ml_config.get("shadow_barrier_max_pct", 3.0)
+    user_config["tp_atr_multiplier"] = ml_config.get("shadow_atr_multiplier_tp")
+    user_config["sl_atr_multiplier"] = ml_config.get("shadow_atr_multiplier_sl")
+    user_config["sl_min_pct"] = ml_config.get("shadow_barrier_min_pct")
+    user_config["sl_max_pct"] = ml_config.get("shadow_barrier_max_pct")
+    user_config["ml_fee_roundtrip_pct"] = ml_config.get("ml_fee_roundtrip_pct")
     user_config["ml_win_fast_threshold_seconds"] = ml_config.get(
         "ml_win_fast_threshold_seconds"
     )
@@ -167,9 +191,9 @@ def _resolve_atr_barriers(
     """
     if atr_pct <= 0.0:
         return tp_pct, sl_pct
-    _sl_mult = float(user_config.get("sl_atr_multiplier", 1.5))
-    _clamp_min = float(user_config.get("sl_min_pct", 0.5))
-    _clamp_max = float(user_config.get("sl_max_pct", 3.0))
+    _sl_mult = float(user_config["sl_atr_multiplier"])
+    _clamp_min = float(user_config["sl_min_pct"])
+    _clamp_max = float(user_config["sl_max_pct"])
     sl_pct = max(_clamp_min, min(_clamp_max, atr_pct * _sl_mult))
     _tp_mult = user_config.get("tp_atr_multiplier")
     if _tp_mult is not None:
@@ -313,14 +337,12 @@ async def _load_point_in_time_atr_map(
 async def _load_lab_barrier_config(user_id) -> dict:
     """Carrega config_profiles(ml) e devolve os parâmetros de barreira do lab.
 
-    Mesma fonte de verdade do L3 canônico (``_apply_barrier_params``). Falha de
-    carga degrada para legacy FIXED (carimbo v1 correto — nunca v2 mislabeled);
-    a validação fail-closed das chaves v2 é do caller (``_require_v2_barrier_config``).
+    Mesma fonte de verdade do L3 canônico (``_apply_barrier_params``). Ausência
+    ou falha de carga bloqueia a criação; nunca degrada para FIXED.
     """
     from ..database import CeleryAsyncSessionLocal
     from ..models.config_profile import ConfigProfile
 
-    ml_cfg: dict = {}
     try:
         async with CeleryAsyncSessionLocal() as cfg_db:
             res = await cfg_db.execute(
@@ -331,14 +353,15 @@ async def _load_lab_barrier_config(user_id) -> dict:
                 ).limit(1)
             )
             row = res.scalar_one_or_none()
-            if row is not None:
-                ml_cfg = row.config_json or {}
+            if row is None:
+                raise ValueError("ml_shadow_config_missing: config_type=ml is required")
+            ml_cfg = _require_persisted_ml_shadow_config(row.config_json)
     except Exception:
-        logger.warning(
-            "[StrategyLab] ml barrier config load failed user=%s — legacy FIXED",
+        logger.exception(
+            "[StrategyLab] persisted ML barrier config load failed user=%s; fail closed",
             user_id,
         )
-        ml_cfg = {}
+        raise
     return _apply_barrier_params({}, ml_cfg)
 
 
@@ -447,7 +470,6 @@ def _merge_ml_shadow_config(user_config: dict, ml_config: dict) -> dict:
     """Return a copy carrying the complete ML shadow economic contract."""
     merged = dict(user_config or {})
     _apply_barrier_params(merged, ml_config or {})
-    merged["ml_fee_roundtrip_pct"] = (ml_config or {}).get("ml_fee_roundtrip_pct")
     return merged
 
 
@@ -466,8 +488,6 @@ async def _load_ml_shadow_config(user_id, user_config: dict) -> dict:
     """
     from ..database import CeleryAsyncSessionLocal
     from ..models.config_profile import ConfigProfile
-    from ..schemas.spot_engine_config import SpotEngineConfig
-
     ml_config: Dict[str, Any] = {}
     merged = dict(user_config or {})
     try:
@@ -480,9 +500,10 @@ async def _load_ml_shadow_config(user_id, user_config: dict) -> dict:
                 ).limit(1)
             )
             row = result.scalar_one_or_none()
-            if row and isinstance(row.config_json, dict):
-                ml_config = row.config_json
-            if "trailing" not in merged:
+            if row is None:
+                raise ValueError("ml_shadow_config_missing: config_type=ml is required")
+            ml_config = _require_persisted_ml_shadow_config(row.config_json)
+            if not merged:
                 spot_result = await db.execute(
                     select(ConfigProfile).where(
                         ConfigProfile.user_id == user_id,
@@ -491,29 +512,19 @@ async def _load_ml_shadow_config(user_id, user_config: dict) -> dict:
                     ).limit(1)
                 )
                 spot_row = spot_result.scalar_one_or_none()
-                spot_config = SpotEngineConfig.from_config_json(
-                    spot_row.config_json if spot_row is not None else {}
-                )
-                merged["trailing"] = _trailing_policy_from_spot_config(
-                    spot_config
+                if spot_row is None:
+                    raise ValueError(
+                        "shadow_config_missing: config_type=spot_engine is required"
+                    )
+                merged = _shadow_user_config_from_persisted(
+                    spot_row.config_json
                 )
     except Exception:
         logger.exception("[shadow] ML barrier config load failed user=%s", user_id)
-    if "trailing" not in merged:
-        # Persist an explicit disabled policy when config loading fails.  A
-        # missing snapshot must never be interpreted later as "use whatever is
-        # active now", because that would rewrite the trade's economics.
-        merged["trailing"] = _trailing_policy_from_spot_config(
-            SpotEngineConfig.from_config_json({})
-        )
+        raise
+    if not merged:
+        raise ValueError("shadow_config_missing: persisted spot_engine config is required")
     return _merge_ml_shadow_config(merged, ml_config)
-
-# ── TTT Policy defaults (Zero Hardcode — override via Cloud Run env vars) ─────
-# Valores de negócio definidos em config_profiles (config_type='ttt_policy').
-# Env vars são usados como fallback quando DB não está disponível na criação.
-TTT_ENABLED_DEFAULT = os.environ.get("TTT_ENABLED", "true").lower() == "true"
-TTT_TP_PCT_DEFAULT = float(os.environ.get("TTT_TP_PCT", "1.0"))
-TTT_TIMEOUT_MINUTES_DEFAULT = int(os.environ.get("TTT_TIMEOUT_MINUTES", "180"))
 
 SHADOW_SOURCE_L3 = "L3"
 # Shadows de ativos rejeitados na L3 — usados exclusivamente para dados ML.
@@ -1222,11 +1233,24 @@ async def _create_from_decision(
 
     tp_pct = _resolve_shadow_tp_pct(user_config)
     sl_pct = float(user_config.get("sl_pct") or 0.0)
-    timeout_candles = int(user_config.get("timeout_candles") or SHADOW_TIMEOUT_CANDLES)
-    # TTT policy snapshot — lê do user_config (propagado do caller) ou usa defaults.
-    ttt_enabled = bool(user_config.get("ttt_enabled", TTT_ENABLED_DEFAULT))
-    ttt_tp_pct = float(user_config.get("ttt_tp_pct") or TTT_TP_PCT_DEFAULT)
-    ttt_timeout_minutes = int(user_config.get("ttt_timeout_minutes") or TTT_TIMEOUT_MINUTES_DEFAULT)
+    required_runtime = {
+        "amount_usdt",
+        "timeout_candles",
+        "ttt_enabled",
+        "ttt_tp_pct",
+        "ttt_timeout_minutes",
+        "trailing",
+    }
+    missing_runtime = sorted(required_runtime - set(user_config))
+    if missing_runtime:
+        raise ValueError(
+            f"shadow_config_missing: runtime fields missing {missing_runtime}"
+        )
+    amount_usdt = float(user_config["amount_usdt"])
+    timeout_candles = int(user_config["timeout_candles"])
+    ttt_enabled = bool(user_config["ttt_enabled"])
+    ttt_tp_pct = float(user_config["ttt_tp_pct"])
+    ttt_timeout_minutes = int(user_config["ttt_timeout_minutes"])
     # Fase 3 (migration 071) — barreira mode e pcts aplicados (snapshot na abertura).
     barrier_mode = user_config.get("shadow_barrier_mode", "FIXED")
 
@@ -1466,7 +1490,7 @@ async def _create_from_decision(
         tp_pct=tp_pct,
         sl_pct=sl_pct,
         timeout_candles=timeout_candles,
-        amount_usdt=SHADOW_TRADE_AMOUNT_USDT,
+        amount_usdt=amount_usdt,
         ttt_enabled=ttt_enabled,
         ttt_tp_pct=ttt_tp_pct,
         ttt_timeout_minutes=ttt_timeout_minutes,
@@ -1581,7 +1605,7 @@ async def _create_from_decision(
                     # registros antigos com direction=NULL no decisions_log
                     # eram todos spot — ver migration 049).
                     "direction": (getattr(decision, "direction", None) or "SPOT"),
-                    "amount_usdt": SHADOW_TRADE_AMOUNT_USDT,
+                    "amount_usdt": amount_usdt,
                     "entry_price": entry_price,
                     "entry_timestamp": entry_ts,
                     "tp_price": tp_price,
@@ -1737,9 +1761,6 @@ async def load_shadow_creation_config(user_id) -> Dict[str, Any]:
     """Load the GUI-backed Spot/ML contract used by canonical L3 writers."""
     from ..database import CeleryAsyncSessionLocal
     from ..models.config_profile import ConfigProfile
-    from ..schemas.spot_engine_config import SpotEngineConfig
-
-    spot_config = SpotEngineConfig()
     try:
         async with CeleryAsyncSessionLocal() as db:
             result = await db.execute(
@@ -1750,17 +1771,18 @@ async def load_shadow_creation_config(user_id) -> Dict[str, Any]:
                 ).limit(1)
             )
             row = result.scalar_one_or_none()
-            if row is not None:
-                spot_config = SpotEngineConfig.from_config_json(
-                    row.config_json or {}
+            if row is None:
+                raise ValueError(
+                    "shadow_config_missing: config_type=spot_engine is required"
                 )
+            user_config = _shadow_user_config_from_persisted(row.config_json)
     except Exception:
         logger.exception(
-            "[shadow] spot-engine config load failed user=%s; using schema defaults",
+            "[shadow] persisted spot-engine config load failed user=%s; fail closed",
             user_id,
         )
+        raise
 
-    user_config = _shadow_user_config_from_spot_config(spot_config)
     return await _load_ml_shadow_config(user_id, user_config)
 
 
@@ -2159,8 +2181,7 @@ async def create_shadows_for_new_decisions(
             )
             cfg_row = cfg_res.scalar_one_or_none()
             if cfg_row:
-                se_cfg = SpotEngineConfig.from_config_json(cfg_row.config_json)
-                user_config = _shadow_user_config_from_spot_config(se_cfg)
+                user_config = _shadow_user_config_from_persisted(cfg_row.config_json)
             # Load ML config for fee snapshot (B1 fix)
             ml_res = await cfg_db.execute(
                 select(ConfigProfile).where(
@@ -2179,12 +2200,20 @@ async def create_shadows_for_new_decisions(
         return 0
 
     if not user_config:
-        _se_defaults = SpotEngineConfig()
-        user_config = _shadow_user_config_from_spot_config(_se_defaults)
-        logger.info(
-            "[shadow] inline create: no spot_engine config for user=%s — using schema defaults (tp=%.1f%% sl=%.1f%%)",
-            user_id, user_config["tp_pct"], user_config["sl_pct"],
+        logger.error(
+            "[shadow] inline create blocked: persisted spot_engine.shadow missing user=%s",
+            user_id,
         )
+        return 0
+
+    try:
+        _ml_config = _require_persisted_ml_shadow_config(_ml_config)
+    except Exception:
+        logger.exception(
+            "[shadow] inline create blocked: persisted ML Shadow config missing user=%s",
+            user_id,
+        )
+        return 0
 
     _apply_barrier_params(user_config, _ml_config)
     user_config["ml_fee_roundtrip_pct"] = _ml_config.get("ml_fee_roundtrip_pct")
@@ -2313,8 +2342,7 @@ async def create_shadows_for_rejected_decisions(user_id, decision_ids: List[int]
             )
             cfg_row = cfg_res.scalar_one_or_none()
             if cfg_row:
-                se_cfg = SpotEngineConfig.from_config_json(cfg_row.config_json)
-                user_config = _shadow_user_config_from_spot_config(se_cfg)
+                user_config = _shadow_user_config_from_persisted(cfg_row.config_json)
             # Load ML config for fee snapshot (B1 fix)
             ml_res = await cfg_db.execute(
                 select(ConfigProfile).where(
@@ -2333,12 +2361,20 @@ async def create_shadows_for_rejected_decisions(user_id, decision_ids: List[int]
         return 0
 
     if not user_config:
-        _se_defaults = SpotEngineConfig()
-        user_config = _shadow_user_config_from_spot_config(_se_defaults)
-        logger.info(
-            "[shadow] rejected create: no spot_engine config for user=%s — using schema defaults (tp=%.1f%% sl=%.1f%%)",
-            user_id, user_config["tp_pct"], user_config["sl_pct"],
+        logger.error(
+            "[shadow] rejected create blocked: persisted spot_engine.shadow missing user=%s",
+            user_id,
         )
+        return 0
+
+    try:
+        _ml_config = _require_persisted_ml_shadow_config(_ml_config)
+    except Exception:
+        logger.exception(
+            "[shadow] rejected create blocked: persisted ML Shadow config missing user=%s",
+            user_id,
+        )
+        return 0
 
     _apply_barrier_params(user_config, _ml_config)
     user_config["ml_fee_roundtrip_pct"] = _ml_config.get("ml_fee_roundtrip_pct")
@@ -2446,8 +2482,7 @@ async def create_l3_rejected_inline_shadows(
             )
             se_row = se_res.scalar_one_or_none()
             if se_row:
-                _se = SpotEngineConfig.from_config_json(se_row.config_json)
-                user_config = _shadow_user_config_from_spot_config(_se)
+                user_config = _shadow_user_config_from_persisted(se_row.config_json)
     except Exception:
         logger.exception("[shadow-l3rej-inline] config load failed user=%s", user_id)
         return 0
@@ -2455,8 +2490,19 @@ async def create_l3_rejected_inline_shadows(
     max_per_hour = int(ml_config.get("shadow_capture_l3_rejected_max_per_hour", 500))
 
     if not user_config:
-        _se_defaults = SpotEngineConfig()
-        user_config = _shadow_user_config_from_spot_config(_se_defaults)
+        logger.error(
+            "[shadow-l3rej-inline] create blocked: persisted spot_engine.shadow missing user=%s",
+            user_id,
+        )
+        return 0
+    try:
+        ml_config = _require_persisted_ml_shadow_config(ml_config)
+    except Exception:
+        logger.exception(
+            "[shadow-l3rej-inline] create blocked: persisted ML Shadow config missing user=%s",
+            user_id,
+        )
+        return 0
     _apply_barrier_params(user_config, ml_config)
     user_config["ml_fee_roundtrip_pct"] = ml_config.get("ml_fee_roundtrip_pct")
 
@@ -2631,8 +2677,7 @@ async def create_l1_spectrum_shadows(
             )
             se_row = se_res.scalar_one_or_none()
             if se_row:
-                _se = SpotEngineConfig.from_config_json(se_row.config_json)
-                user_config = _shadow_user_config_from_spot_config(_se)
+                user_config = _shadow_user_config_from_persisted(se_row.config_json)
     except Exception:
         logger.exception("[shadow-l1] config load failed user=%s", user_id)
         return 0
@@ -2648,8 +2693,19 @@ async def create_l1_spectrum_shadows(
     skip_log_enabled = bool(ml_config.get("shadow_skip_log_enabled", True))
 
     if not user_config:
-        _se_defaults = SpotEngineConfig()
-        user_config = _shadow_user_config_from_spot_config(_se_defaults)
+        logger.error(
+            "[shadow-l1] create blocked: persisted spot_engine.shadow missing user=%s",
+            user_id,
+        )
+        return 0
+    try:
+        ml_config = _require_persisted_ml_shadow_config(ml_config)
+    except Exception:
+        logger.exception(
+            "[shadow-l1] create blocked: persisted ML Shadow config missing user=%s",
+            user_id,
+        )
+        return 0
     _apply_barrier_params(user_config, ml_config)
     user_config["ml_fee_roundtrip_pct"] = ml_config.get("ml_fee_roundtrip_pct")
 
@@ -2941,8 +2997,7 @@ async def create_l3_simulated_shadows(
             )
             se_row = se_res.scalar_one_or_none()
             if se_row:
-                _se = SpotEngineConfig.from_config_json(se_row.config_json)
-                user_config = _shadow_user_config_from_spot_config(_se)
+                user_config = _shadow_user_config_from_persisted(se_row.config_json)
     except Exception:
         logger.exception("[shadow-l3sim] config load failed user=%s", user_id)
         return 0
@@ -2953,8 +3008,19 @@ async def create_l3_simulated_shadows(
     max_per_hour = int(ml_config.get("shadow_capture_l3_simulated_max_per_hour", 500))
 
     if not user_config:
-        _se_defaults = SpotEngineConfig()
-        user_config = _shadow_user_config_from_spot_config(_se_defaults)
+        logger.error(
+            "[shadow-l3sim] create blocked: persisted spot_engine.shadow missing user=%s",
+            user_id,
+        )
+        return 0
+    try:
+        ml_config = _require_persisted_ml_shadow_config(ml_config)
+    except Exception:
+        logger.exception(
+            "[shadow-l3sim] create blocked: persisted ML Shadow config missing user=%s",
+            user_id,
+        )
+        return 0
     _apply_barrier_params(user_config, ml_config)
     user_config["ml_fee_roundtrip_pct"] = ml_config.get("ml_fee_roundtrip_pct")
 
@@ -4003,16 +4069,10 @@ async def create_strategy_lab_shadows(
 
     from ..database import CeleryAsyncSessionLocal
     from ..models.config_profile import ConfigProfile
-    from ..schemas.spot_engine_config import SpotEngineConfig
-
-    # Load tp_pct / sl_pct from spot engine config
-    tp_pct = 3.0
-    sl_pct = 2.0
-    trailing_policy = _trailing_policy_from_spot_config(SpotEngineConfig())
-    timeout_candles = SHADOW_TIMEOUT_CANDLES
-    ttt_enabled = TTT_ENABLED_DEFAULT
-    ttt_tp_pct = TTT_TP_PCT_DEFAULT
-    ttt_timeout_minutes = TTT_TIMEOUT_MINUTES_DEFAULT
+    tp_pct = sl_pct = amount_usdt = None
+    trailing_policy: Dict[str, Any] = {}
+    timeout_candles = ttt_tp_pct = ttt_timeout_minutes = None
+    ttt_enabled = False
 
     try:
         async with CeleryAsyncSessionLocal() as cfg_db:
@@ -4024,25 +4084,33 @@ async def create_strategy_lab_shadows(
                 ).limit(1)
             )
             se_row = se_res.scalar_one_or_none()
-            if se_row:
-                try:
-                    _se = SpotEngineConfig.from_config_json(se_row.config_json)
-                    tp_pct = float(_se.selling.take_profit_pct)
-                    sl_pct = _SHADOW_SL_PCT_OVERRIDE or float(
-                        _se.sell_flow.kill_switch.max_drawdown_from_hwm_pct
-                    )
-                    trailing_policy = _trailing_policy_from_spot_config(_se)
-                except Exception:
-                    pass
+            if se_row is None:
+                raise ValueError("shadow_config_missing: config_type=spot_engine is required")
+            _runtime = _shadow_user_config_from_persisted(se_row.config_json)
+            tp_pct = _runtime["tp_pct"]
+            sl_pct = _runtime["sl_pct"]
+            amount_usdt = _runtime["amount_usdt"]
+            timeout_candles = _runtime["timeout_candles"]
+            ttt_enabled = _runtime["ttt_enabled"]
+            ttt_tp_pct = _runtime["ttt_tp_pct"]
+            ttt_timeout_minutes = _runtime["ttt_timeout_minutes"]
+            trailing_policy = _runtime["trailing"]
     except Exception:
-        logger.debug("[StrategyLab-allow] config load failed user=%s", user_id)
+        logger.exception(
+            "[StrategyLab-allow] persisted config load failed user=%s; fail closed",
+            user_id,
+        )
+        return 0
 
     # Contrato de barreira — mesma fonte de verdade do L3 canônico (config ml).
     # Sob contrato v2, TP/SL do lab passam a ser ATR-dinâmicos (paridade
     # econômica com o dataset de treino da lane L3). Fail-closed: chave ausente
     # aborta a criação de TODOS os shadows deste ciclo (nunca degrada p/ FIXED
     # carimbado como v2).
-    barrier_cfg = await _load_lab_barrier_config(user_id)
+    try:
+        barrier_cfg = await _load_lab_barrier_config(user_id)
+    except Exception:
+        return 0
     if barrier_cfg.get("ml_active_barrier_contract_version") == BARRIER_CONTRACT_ATR_DYNAMIC_V2:
         try:
             _require_v2_barrier_config(barrier_cfg, f"L3_LAB:{profile_name}")
@@ -4155,7 +4223,7 @@ async def create_strategy_lab_shadows(
             "tp_pct": _tp_eff,
             "sl_pct": _sl_eff,
             "timeout_candles": timeout_candles,
-            "amount_usdt": SHADOW_TRADE_AMOUNT_USDT,
+            "amount_usdt": amount_usdt,
             "ttt_enabled": ttt_enabled,
             "ttt_tp_pct": ttt_tp_pct,
             "ttt_timeout_minutes": ttt_timeout_minutes,
@@ -4204,7 +4272,7 @@ async def create_strategy_lab_shadows(
                                     "symbol": symbol,
                                     "strategy": d.get("strategy"),
                                     "direction": d.get("direction", "SPOT"),
-                                    "amount_usdt": SHADOW_TRADE_AMOUNT_USDT,
+                                    "amount_usdt": amount_usdt,
                                     "entry_price": entry_price,
                                     "entry_timestamp": promotion_at,
                                     "tp_price": tp_price,
@@ -4307,15 +4375,10 @@ async def create_strategy_lab_rejected_shadows(
 
     from ..database import CeleryAsyncSessionLocal
     from ..models.config_profile import ConfigProfile
-    from ..schemas.spot_engine_config import SpotEngineConfig
-
-    tp_pct = 3.0
-    sl_pct = 2.0
-    trailing_policy = _trailing_policy_from_spot_config(SpotEngineConfig())
-    timeout_candles = SHADOW_TIMEOUT_CANDLES
-    ttt_enabled = TTT_ENABLED_DEFAULT
-    ttt_tp_pct = TTT_TP_PCT_DEFAULT
-    ttt_timeout_minutes = TTT_TIMEOUT_MINUTES_DEFAULT
+    tp_pct = sl_pct = amount_usdt = None
+    trailing_policy: Dict[str, Any] = {}
+    timeout_candles = ttt_tp_pct = ttt_timeout_minutes = None
+    ttt_enabled = False
 
     try:
         async with CeleryAsyncSessionLocal() as cfg_db:
@@ -4327,21 +4390,29 @@ async def create_strategy_lab_rejected_shadows(
                 ).limit(1)
             )
             se_row = se_res.scalar_one_or_none()
-            if se_row:
-                try:
-                    _se = SpotEngineConfig.from_config_json(se_row.config_json)
-                    tp_pct = float(_se.selling.take_profit_pct)
-                    sl_pct = _SHADOW_SL_PCT_OVERRIDE or float(
-                        _se.sell_flow.kill_switch.max_drawdown_from_hwm_pct
-                    )
-                    trailing_policy = _trailing_policy_from_spot_config(_se)
-                except Exception:
-                    pass
+            if se_row is None:
+                raise ValueError("shadow_config_missing: config_type=spot_engine is required")
+            _runtime = _shadow_user_config_from_persisted(se_row.config_json)
+            tp_pct = _runtime["tp_pct"]
+            sl_pct = _runtime["sl_pct"]
+            amount_usdt = _runtime["amount_usdt"]
+            timeout_candles = _runtime["timeout_candles"]
+            ttt_enabled = _runtime["ttt_enabled"]
+            ttt_tp_pct = _runtime["ttt_tp_pct"]
+            ttt_timeout_minutes = _runtime["ttt_timeout_minutes"]
+            trailing_policy = _runtime["trailing"]
     except Exception:
-        logger.debug("[StrategyLab-block] config load failed user=%s", user_id)
+        logger.exception(
+            "[StrategyLab-block] persisted config load failed user=%s; fail closed",
+            user_id,
+        )
+        return 0
 
     # Contrato de barreira — mesma fonte do L3 canônico (ver create_strategy_lab_shadows).
-    barrier_cfg = await _load_lab_barrier_config(user_id)
+    try:
+        barrier_cfg = await _load_lab_barrier_config(user_id)
+    except Exception:
+        return 0
     if barrier_cfg.get("ml_active_barrier_contract_version") == BARRIER_CONTRACT_ATR_DYNAMIC_V2:
         try:
             _require_v2_barrier_config(barrier_cfg, f"L3_LAB:{profile_name}")
@@ -4451,7 +4522,7 @@ async def create_strategy_lab_rejected_shadows(
             "tp_pct": _tp_eff,
             "sl_pct": _sl_eff,
             "timeout_candles": timeout_candles,
-            "amount_usdt": SHADOW_TRADE_AMOUNT_USDT,
+            "amount_usdt": amount_usdt,
             "ttt_enabled": ttt_enabled,
             "ttt_tp_pct": ttt_tp_pct,
             "ttt_timeout_minutes": ttt_timeout_minutes,
@@ -4502,7 +4573,7 @@ async def create_strategy_lab_rejected_shadows(
                                     "symbol": symbol,
                                     "strategy": d.get("strategy"),
                                     "direction": d.get("direction", "SPOT"),
-                                    "amount_usdt": SHADOW_TRADE_AMOUNT_USDT,
+                                    "amount_usdt": amount_usdt,
                                     "entry_price": entry_price,
                                     "entry_timestamp": promotion_at,
                                     "tp_price": tp_price,

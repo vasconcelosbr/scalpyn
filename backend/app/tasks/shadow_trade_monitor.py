@@ -11,7 +11,7 @@ Regras
   Quando ``low <= sl_price`` E ``high >= tp_price`` na mesma candle,
   assumimos SL_HIT — pior caso para o trader.
 * Timeout: ``timeout_candles`` vem de ``config_snapshot``
-  (``SHADOW_TIMEOUT_CANDLES`` env quando ausente).
+  (snapshot persistido ``spot_engine.shadow.timeout_candles``).
 * Batch máximo ``SHADOW_MONITOR_BATCH_SIZE`` (default 50) por execução,
   iterando IDs em ordem ``sorted()`` (deadlock-safety, gotcha #251/#273).
 * Janela máxima por shadow ``SHADOW_MONITOR_MAX_CANDLES_PER_RUN``
@@ -1913,8 +1913,10 @@ async def _backfill_shadows_for_all_users() -> int:
     """Carrega SpotEngineConfig por usuário e chama safe_backfill_watchlist_shadows."""
     from ..database import CeleryAsyncSessionLocal
     from ..models.config_profile import ConfigProfile
-    from ..schemas.spot_engine_config import SpotEngineConfig
-    from ..services.shadow_trade_service import safe_backfill_watchlist_shadows
+    from ..services.shadow_trade_service import (
+        _shadow_user_config_from_persisted,
+        safe_backfill_watchlist_shadows,
+    )
     from sqlalchemy import select
 
     try:
@@ -1930,20 +1932,9 @@ async def _backfill_shadows_for_all_users() -> int:
         total = 0
         for cfg_row in cfg_rows:
             try:
-                se_cfg = SpotEngineConfig.from_config_json(cfg_row.config_json)
-                user_config = {
-                    "tp_pct": float(se_cfg.selling.take_profit_pct),
-                    "sl_pct": float(
-                        se_cfg.sell_flow.kill_switch.max_drawdown_from_hwm_pct
-                    ),
-                    "timeout_candles": None,
-                    "l3_single_profile_per_symbol_enabled": bool(
-                        se_cfg.scanner.l3_single_profile_per_symbol_enabled
-                    ),
-                    "l3_profile_consolidation_rule_version": (
-                        se_cfg.scanner.l3_profile_consolidation_rule_version
-                    ),
-                }
+                user_config = _shadow_user_config_from_persisted(
+                    cfg_row.config_json
+                )
                 total += await safe_backfill_watchlist_shadows(cfg_row.user_id, user_config)
             except Exception:
                 logger.exception(
@@ -1966,13 +1957,9 @@ async def _create_watchlist_spot_shadows_for_all_users() -> int:
     """
     from ..database import CeleryAsyncSessionLocal
     from ..models.config_profile import ConfigProfile
-    from ..schemas.spot_engine_config import SpotEngineConfig
     from ..services.shadow_trade_service import (
+        _shadow_user_config_from_persisted,
         create_watchlist_spot_shadows,
-        TTT_ENABLED_DEFAULT,
-        TTT_TP_PCT_DEFAULT,
-        TTT_TIMEOUT_MINUTES_DEFAULT,
-        _SHADOW_SL_PCT_OVERRIDE,
     )
     from sqlalchemy import select
 
@@ -2002,17 +1989,9 @@ async def _create_watchlist_spot_shadows_for_all_users() -> int:
             if not pool_cfg.get("new_arch_capture_enabled", False):
                 continue
             try:
-                se_cfg = SpotEngineConfig.from_config_json(cfg_row.config_json)
-                user_config = {
-                    "tp_pct": float(se_cfg.selling.take_profit_pct),
-                    "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
-                        se_cfg.sell_flow.kill_switch.max_drawdown_from_hwm_pct
-                    ),
-                    "timeout_candles": None,
-                    "ttt_enabled": TTT_ENABLED_DEFAULT,
-                    "ttt_tp_pct": TTT_TP_PCT_DEFAULT,
-                    "ttt_timeout_minutes": TTT_TIMEOUT_MINUTES_DEFAULT,
-                }
+                user_config = _shadow_user_config_from_persisted(
+                    cfg_row.config_json
+                )
                 total += await create_watchlist_spot_shadows(
                     cfg_row.user_id, user_config, pool_cfg
                 )

@@ -24,6 +24,7 @@ def _v2_cfg(**overrides):
         "shadow_atr_multiplier_sl": 1.5,
         "shadow_barrier_min_pct": 0.5,
         "shadow_barrier_max_pct": 3.0,
+        "ml_fee_roundtrip_pct": 0.2,
     }
     ml.update(overrides)
     return _apply_barrier_params({}, ml)
@@ -78,7 +79,16 @@ def test_lab_barrier_v2_falls_back_to_atr_pct_key():
 def test_lab_barrier_legacy_without_v2_contract_unchanged():
     # Sem contrato v2 ativo: comportamento legado intacto (FIXED, carimbo v1),
     # inclusive quando há ATR disponível.
-    cfg = _apply_barrier_params({}, {"shadow_barrier_mode": "FIXED"})
+    cfg = _apply_barrier_params({}, {
+        "ml_active_barrier_contract_version": "shadow_fixed_v1",
+        "shadow_barrier_mode": "FIXED",
+        "shadow_atr_timeframe": "5m",
+        "shadow_atr_multiplier_tp": 1.5,
+        "shadow_atr_multiplier_sl": 1.5,
+        "shadow_barrier_min_pct": 0.5,
+        "shadow_barrier_max_pct": 3.0,
+        "ml_fee_roundtrip_pct": 0.2,
+    })
     resolved = _resolve_lab_barrier(
         {"atr_percent": 1.0}, 0.6, 1.0, cfg, symbol="BTC_USDT", log_tag="test",
     )
