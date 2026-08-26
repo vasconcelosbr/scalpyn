@@ -936,10 +936,15 @@ def _build_features_snapshot(decision: DecisionLog) -> Dict[str, Any]:
     flat: Dict[str, Any] = {}
     for key, entry in snap.items():
         if isinstance(entry, dict) and "value" in entry:
-            flat[key] = entry.get("value")
+            value = entry.get("value")
         else:
             # Defensive: se um caller futuro persistir flat direto, mantém.
-            flat[key] = entry
+            value = entry
+        # Indicator merge metadata can occasionally leak temporal values into
+        # the flat map. Datetimes are context, not ML features, and break the
+        # deterministic JSON hash used by capture_native_snapshot.
+        if value is None or isinstance(value, (bool, int, float, str)):
+            flat[key] = value
     return flat
 
 
@@ -3965,7 +3970,11 @@ async def _load_strategy_lab_features_by_symbol(
             merged = await get_merged_indicators(ind_db, unique_symbols)
             features_by_symbol: Dict[str, Dict[str, Any]] = {}
             for sym, merged_item in merged.items():
-                flat = merged_item.as_flat_dict()
+                flat = {
+                    key: value
+                    for key, value in merged_item.as_flat_dict().items()
+                    if value is None or isinstance(value, (bool, int, float, str))
+                }
                 if isinstance(flat, dict) and flat:
                     features_by_symbol[sym] = {
                         "features": flat,

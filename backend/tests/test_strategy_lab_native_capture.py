@@ -1,4 +1,5 @@
 import inspect
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -28,6 +29,7 @@ async def test_strategy_lab_merged_features_loader_preserves_source_metadata():
         "atr_pct": 1.23,
         "volume_24h_base": 456.0,
         "psar_trend": "RISING",
+        "last_candle_time": datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
     }
     merged_item.meta = {
         "atr_pct": {"timestamp": "2026-08-01T12:00:00+00:00"}
@@ -55,6 +57,25 @@ async def test_strategy_lab_merged_features_loader_preserves_source_metadata():
             "metadata": merged_item.meta,
         }
     }
+
+
+def test_shadow_feature_snapshot_drops_temporal_metadata_values():
+    from types import SimpleNamespace
+
+    from backend.app.services.shadow_trade_service import _build_features_snapshot
+
+    decision = SimpleNamespace(
+        metrics={
+            "indicators_snapshot": {
+                "atr_pct": {"value": 1.23},
+                "last_candle_time": {
+                    "value": datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
+                },
+            }
+        }
+    )
+
+    assert _build_features_snapshot(decision) == {"atr_pct": 1.23}
 
 
 def test_strategy_lab_shadow_paths_use_canonical_feature_loader():
