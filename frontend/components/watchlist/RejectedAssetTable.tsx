@@ -13,6 +13,7 @@ import type { ScoreRule } from "./PipelineAssetTable";
 import { RULE_COLORS, fmtPts, sortScoreRules } from "./PipelineAssetTable";
 import { scoreBand, scorePct, SCORE_TOOLTIP, RULES_TOOLTIP } from "@/lib/scoreBand";
 import { summarizeScoreRules, fmtConfidence } from "@/lib/scoreRulesSummary";
+import { watchlistDecisionRowKey } from "@/lib/watchlistDecisionIdentity";
 
 const DECISION_SUMMARY_INDICATOR_LIMIT = 3;
 
@@ -493,7 +494,7 @@ export function WatchlistDecisionTable({
             <tbody>
               {sortedFiltered.map((item) => {
                 const palette = itemPalette(item.status);
-                const rowKey = `${item.symbol}-${item.status}-${item.timestamp ?? "na"}`;
+                const rowKey = watchlistDecisionRowKey(item);
                 const isExpanded = expandedRow === rowKey;
                 return (
                   <Fragment key={rowKey}>
