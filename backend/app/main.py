@@ -10,6 +10,7 @@ from .init_db import init_db
 from .api import (
     auth,
     config as config_api,
+    strategy_settings,
     pools,
     exchanges,
     decisions,
@@ -371,6 +372,7 @@ app.add_middleware(_SchemaReadinessGate)
 # Auth & Config
 app.include_router(auth.router)
 app.include_router(config_api.router)
+app.include_router(strategy_settings.router)
 app.include_router(decisions.router)
 
 # Market Data & Watchlist

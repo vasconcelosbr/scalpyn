@@ -44,6 +44,25 @@ class BuyingConfig(BaseModel):
     limit_order_timeout_seconds: int = Field(120, ge=10)
 
 
+class ShadowTTTConfig(BaseModel):
+    """Time-to-target policy frozen into each new Shadow trade."""
+
+    enabled: bool = True
+    tp_pct: float = Field(1.0, gt=0, le=100)
+    timeout_minutes: int = Field(180, ge=1, le=10080)
+
+
+class ShadowRuntimeConfig(BaseModel):
+    """Operator-owned Shadow runtime values persisted in ``spot_engine``."""
+
+    amount_usdt: float = Field(1000.0, gt=0)
+    timeout_candles: int = Field(1440, ge=1, le=10080)
+    trailing_contract_version: Literal["shadow_hwm_trailing_v1"] = (
+        "shadow_hwm_trailing_v1"
+    )
+    ttt: ShadowTTTConfig = Field(default_factory=ShadowTTTConfig)
+
+
 class SellingConfig(BaseModel):
     take_profit_pct: float = Field(1.5, ge=0, le=100)
     min_profit_pct: float = Field(0.5, ge=0, le=100)
@@ -159,6 +178,7 @@ class SpotEngineConfig(BaseModel):
 
     scanner: ScannerConfig = Field(default_factory=ScannerConfig)
     buying: BuyingConfig = Field(default_factory=BuyingConfig)
+    shadow: ShadowRuntimeConfig = Field(default_factory=ShadowRuntimeConfig)
     selling: SellingConfig = Field(default_factory=SellingConfig)
     holding_underwater: HoldingUnderwaterConfig = Field(default_factory=HoldingUnderwaterConfig)
     dca: DCAConfig = Field(default_factory=DCAConfig)
