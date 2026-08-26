@@ -7,6 +7,46 @@
   },
   "required_features": [
     {
+      "id": "shadow-atr-trailing-exit-contract",
+      "description": "Shadow ATR uses the configured point-in-time timeframe and armed HWM trailing exits preempt a lower static SL without contaminating fixed-barrier ML labels",
+      "files": [
+        {
+          "path": "backend/app/services/shadow_trade_service.py",
+          "contains_all": [
+            "SHADOW_TRAILING_CONTRACT_VERSION",
+            "_load_point_in_time_atr_pct",
+            "barrier_atr_timeframe",
+            "managed trailing exit"
+          ]
+        },
+        {
+          "path": "backend/app/tasks/shadow_trade_monitor.py",
+          "contains_all": [
+            "_resolve_trailing_stop_price",
+            "trailing_stop > sl",
+            "TRAILING_STOP",
+            "fast_scan_closed_trailing"
+          ]
+        },
+        {
+          "path": "backend/tests/test_shadow_trailing_contract.py",
+          "contains_all": [
+            "test_historical_three_percent_activation_does_not_arm_at_trade_mfe",
+            "test_armed_trailing_preempts_lower_static_sl",
+            "test_trailing_exit_is_not_written_as_fixed_barrier_ml_label",
+            "test_point_in_time_atr_uses_configured_timeframe_and_cutoff"
+          ]
+        },
+        {
+          "path": "frontend/app/dashboard/shadow-portfolio/page.tsx",
+          "contains_all": [
+            "TRAILING_STOP",
+            "data!.trailing"
+          ]
+        }
+      ]
+    },
+    {
       "id": "profile-performance-dashboard",
       "description": "Read-only Performance Profiles monitor and daily L3 evolution in Shadow Portfolio",
       "files": [
