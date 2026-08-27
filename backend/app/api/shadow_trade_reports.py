@@ -11,13 +11,14 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import and_, desc, func, select
+from sqlalchemy import and_, case, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..models.backoffice import DecisionLog
 from ..models.shadow_trade import ShadowTrade
 from ..models.shadow_trade_analysis import ShadowTradeReportItem, ShadowTradeReportRun
+from ..services.shadow_trade_measurement_service import latest_measurement_by_trade_ids
 from .config import get_current_user_id
 from .shadow_trades import _to_detail, get_shadow_trade_chart
 
@@ -25,7 +26,8 @@ from .shadow_trades import _to_detail, get_shadow_trade_chart
 router = APIRouter(prefix="/api/shadow-trade-reports", tags=["Shadow Trade Reports"])
 
 ReportSource = Literal["L3", "L3_REJECTED", "L1_SPECTRUM"]
-ReportOutcome = Literal["TP_HIT", "SL_HIT"]
+ReportOutcome = Literal["TP_HIT", "SL_HIT", "TRAILING_STOP", "TIMEOUT", "OPEN"]
+ALL_REPORT_OUTCOMES = ("TP_HIT", "SL_HIT", "TRAILING_STOP", "TIMEOUT", "OPEN")
 _DECISION_UNSET = object()
 
 
@@ -34,7 +36,7 @@ class DetailedReportRequest(BaseModel):
     watchlist_ids: list[UUID] = Field(default_factory=list)
     include_legacy_watchlist: bool = False
     profile_ids: list[UUID] = Field(default_factory=list)
-    outcomes: list[ReportOutcome] = Field(default_factory=lambda: ["TP_HIT", "SL_HIT"])
+    outcomes: list[ReportOutcome] = Field(default_factory=lambda: list(ALL_REPORT_OUTCOMES))
     date_from: datetime
     date_to: datetime
     timezone: str = Field(default="UTC", min_length=1, max_length=80)
@@ -128,21 +130,45 @@ def _normalized_filters(payload: DetailedReportRequest) -> dict[str, Any]:
         "outcomes": sorted(set(payload.outcomes)),
         "date_from": _utc(payload.date_from).isoformat(),
         "date_to": _utc(payload.date_to).isoformat(),
-        "date_basis": "COALESCE(exit_timestamp,completed_at)",
+        "date_basis_by_status": {
+            "OPEN": "COALESCE(entry_timestamp,created_at)",
+            "TERMINAL": "COALESCE(exit_timestamp,completed_at)",
+        },
         "timezone": payload.timezone,
     }
 
 
-def _report_conditions(user_id: UUID, filters: dict[str, Any]) -> list[Any]:
-    closed_at = func.coalesce(ShadowTrade.exit_timestamp, ShadowTrade.completed_at)
+def _report_event_at():
+    return case(
+        (
+            ShadowTrade.status.in_(["PENDING", "RUNNING"]),
+            func.coalesce(ShadowTrade.entry_timestamp, ShadowTrade.created_at),
+        ),
+        else_=func.coalesce(ShadowTrade.exit_timestamp, ShadowTrade.completed_at),
+    )
+
+
+def _report_conditions(
+    user_id: UUID, filters: dict[str, Any], *, include_outcomes: bool = True
+) -> list[Any]:
+    event_at = _report_event_at()
     conditions: list[Any] = [
         ShadowTrade.user_id == user_id,
-        ShadowTrade.status == "COMPLETED",
-        ShadowTrade.outcome.in_(filters["outcomes"]),
         ShadowTrade.source.in_(filters["sources"]),
-        closed_at >= datetime.fromisoformat(filters["date_from"]),
-        closed_at < datetime.fromisoformat(filters["date_to"]),
+        event_at >= datetime.fromisoformat(filters["date_from"]),
+        event_at < datetime.fromisoformat(filters["date_to"]),
     ]
+    if include_outcomes:
+        requested = set(filters["outcomes"])
+        outcome_conditions = []
+        terminal = sorted(requested - {"OPEN"})
+        if terminal:
+            outcome_conditions.append(
+                and_(ShadowTrade.status == "COMPLETED", ShadowTrade.outcome.in_(terminal))
+            )
+        if "OPEN" in requested:
+            outcome_conditions.append(ShadowTrade.status.in_(["PENDING", "RUNNING"]))
+        conditions.append(or_(*outcome_conditions))
     if filters["profile_ids"]:
         conditions.append(ShadowTrade.profile_id.in_([UUID(value) for value in filters["profile_ids"]]))
     watchlist_ids = [UUID(value) for value in filters["watchlist_ids"]]
@@ -153,6 +179,38 @@ def _report_conditions(user_id: UUID, filters: dict[str, Any]) -> list[Any]:
     elif watchlist_ids:
         conditions.append(ShadowTrade.watchlist_id.in_(watchlist_ids))
     return conditions
+
+
+def _measurement_dict(measurement) -> dict[str, Any] | None:
+    if measurement is None:
+        return None
+    return jsonable_encoder(
+        {
+            "contract_version": measurement.measurement_contract_version,
+            "status": measurement.status,
+            "method": measurement.method,
+            "source": measurement.source,
+            "timeframe": measurement.timeframe,
+            "resolution_seconds": measurement.resolution_seconds,
+            "input_hash": measurement.input_hash,
+            "mae_pct": measurement.mae_pct,
+            "mfe_pct": measurement.mfe_pct,
+            "mae_at": measurement.mae_at,
+            "mfe_at": measurement.mfe_at,
+            "entry_boundary_partial": measurement.entry_boundary_partial,
+            "exit_boundary_partial": measurement.exit_boundary_partial,
+            "entry_price_reference": measurement.entry_price_reference,
+            "entry_price_observed": measurement.entry_price_observed,
+            "entry_price_realized": measurement.entry_price_realized,
+            "entry_price_lag_seconds": measurement.entry_price_lag_seconds,
+            "entry_quality": measurement.entry_quality,
+            "gross_return_pct": measurement.gross_return_pct,
+            "fee_roundtrip_pct_applied": measurement.fee_roundtrip_pct_applied,
+            "net_return_pct": measurement.net_return_pct,
+            "cost_contract_version": measurement.cost_contract_version,
+            "unavailable_reason": measurement.unavailable_reason,
+        }
+    )
 
 
 async def _owned_run(db: AsyncSession, user_id: UUID, run_id: UUID) -> ShadowTradeReportRun:
@@ -232,9 +290,13 @@ async def build_trade_export(
     report_run_id: UUID | None = None,
     include_chart: bool = True,
     decision: DecisionLog | None | object = _DECISION_UNSET,
+    measurement: Any | None = None,
 ) -> dict[str, Any]:
     if decision is _DECISION_UNSET:
         decision = await _decision_for_trade(db, user_id, trade)
+    if measurement is None:
+        measurement = (await latest_measurement_by_trade_ids(db, [trade.id])).get(trade.id)
+    measurement_json = _measurement_dict(measurement)
     detail = _to_detail(trade, decision=decision if isinstance(decision, DecisionLog) else None)
     detail_json = jsonable_encoder(detail)
     entry = detail.entry_metrics or detail.features_snapshot or {}
@@ -322,7 +384,7 @@ async def build_trade_export(
         {
             "export_metadata": {
                 "schema": "scalpyn.shadow_trade_export",
-                "schema_version": "2.2.0",
+                "schema_version": "2.3.0",
                 "generated_at": datetime.now(timezone.utc),
                 "report_run_id": report_run_id,
                 "completeness": {
@@ -342,6 +404,20 @@ async def build_trade_export(
                 "profile_id": str(trade.profile_id) if trade.profile_id else None,
             },
             "trade": detail_json,
+            "measurement": measurement_json,
+            "returns": {
+                "gross_return_pct": trade.pnl_pct,
+                "fee_roundtrip_pct_applied": trade.fee_roundtrip_pct_applied,
+                "net_return_pct": trade.net_return_pct,
+                "spread_pct_applied": None,
+                "spread_status": "NOT_APPLIED",
+                "cost_contract_version": "fee_only_v1",
+            },
+            "timeout_semantics": {
+                "operational_outcome_deadline_candles": trade.timeout_candles,
+                "analytical_ttt_label_window_minutes": trade.ttt_timeout_minutes,
+                "ttt_operational_effect": False,
+            },
             "decision_audit": {
                 "strategy": detail.decision_strategy,
                 "score": detail.decision_score,
@@ -406,8 +482,6 @@ async def detailed_report_facets(
 ):
     base = [
         ShadowTrade.user_id == user_id,
-        ShadowTrade.status == "COMPLETED",
-        ShadowTrade.outcome.in_(["TP_HIT", "SL_HIT"]),
         ShadowTrade.source.in_(sources),
     ]
     watchlists = (
@@ -461,16 +535,39 @@ async def create_detailed_report_run(
     user_id: UUID = Depends(get_current_user_id),
 ):
     filters = _normalized_filters(payload)
-    closed_at = func.coalesce(ShadowTrade.exit_timestamp, ShadowTrade.completed_at)
+    event_at = _report_event_at()
     trades = (
         await db.execute(
             select(ShadowTrade).where(and_(*_report_conditions(user_id, filters))).order_by(
-                desc(closed_at), desc(ShadowTrade.id)
+                desc(event_at), desc(ShadowTrade.id)
             )
         )
     ).scalars().all()
     trade_ids = [str(trade.id) for trade in trades]
     completeness = _report_completeness(trades)
+    logical_outcome = case(
+        (ShadowTrade.status.in_(["PENDING", "RUNNING"]), "OPEN"),
+        else_=ShadowTrade.outcome,
+    )
+    all_outcome_rows = (
+        await db.execute(
+            select(logical_outcome.label("outcome"), func.count(ShadowTrade.id))
+            .where(and_(*_report_conditions(user_id, filters, include_outcomes=False)))
+            .group_by(logical_outcome)
+        )
+    ).all()
+    selected_outcomes = set(filters["outcomes"])
+    all_outcome_counts = {
+        str(outcome): int(count)
+        for outcome, count in all_outcome_rows
+        if outcome in ALL_REPORT_OUTCOMES
+    }
+    completeness["excluded_count_by_outcome"] = {
+        outcome: (
+            0 if outcome in selected_outcomes else all_outcome_counts.get(outcome, 0)
+        )
+        for outcome in ALL_REPORT_OUTCOMES
+    }
     run = ShadowTradeReportRun(
         user_id=user_id,
         filters=filters,
@@ -523,6 +620,9 @@ async def list_detailed_report_trades(
             .limit(page_size)
         )
     ).all()
+    measurements = await latest_measurement_by_trade_ids(
+        db, [trade.id for _, trade in rows]
+    )
     items = []
     for position, trade in rows:
         items.append(
@@ -530,6 +630,12 @@ async def list_detailed_report_trades(
                 "position": position,
                 "id": str(trade.id),
                 "closed_at": trade.exit_timestamp or trade.completed_at,
+                "event_at": (
+                    trade.entry_timestamp or trade.created_at
+                    if trade.status in {"PENDING", "RUNNING"}
+                    else trade.exit_timestamp or trade.completed_at
+                ),
+                "status": trade.status,
                 "symbol": trade.symbol,
                 "source": trade.source,
                 "watchlist_id": str(trade.watchlist_id) if trade.watchlist_id else None,
@@ -538,10 +644,16 @@ async def list_detailed_report_trades(
                 "profile_name": trade.profile_name,
                 "profile_version": trade.profile_version,
                 "profile_config_hash": trade.profile_config_hash,
-                "outcome": trade.outcome,
+                "outcome": (
+                    "OPEN" if trade.status in {"PENDING", "RUNNING"} else trade.outcome
+                ),
                 "entry_price": trade.entry_price,
                 "exit_price": trade.exit_price,
                 "pnl_pct": trade.pnl_pct,
+                "gross_return_pct": trade.pnl_pct,
+                "fee_roundtrip_pct_applied": trade.fee_roundtrip_pct_applied,
+                "net_return_pct": trade.net_return_pct,
+                "cost_contract_version": "fee_only_v1",
                 "pnl_usdt": trade.pnl_usdt,
                 "mae_pct": trade.mae_pct,
                 "mfe_pct": trade.mfe_pct,
@@ -554,6 +666,10 @@ async def list_detailed_report_trades(
                     ((trade.entry_risk_features_json or {}).get("contract_status") or {}).get(
                         "entry_risk_contract_valid"
                     )
+                ),
+                "measurement": _measurement_dict(measurements.get(trade.id)),
+                "training_ineligibility_reason": (
+                    None if trade.eligible_for_training else trade.lineage_status
                 ),
             }
         )
@@ -593,6 +709,7 @@ async def export_detailed_report(
             .order_by(ShadowTradeReportItem.position)
         )
     ).scalars().all()
+    measurements = await latest_measurement_by_trade_ids(db, [trade.id for trade in rows])
     decision_ids = [trade.decision_id for trade in rows if trade.decision_id is not None]
     decisions = {}
     if decision_ids:
@@ -613,20 +730,26 @@ async def export_detailed_report(
             report_run_id=run.id,
             include_chart=include_chart,
             decision=decisions.get(trade.decision_id),
+            measurement=measurements.get(trade.id),
         )
         for trade in rows
     ]
     return {
         "export_metadata": {
             "schema": "scalpyn.shadow_trade_report_export",
-            "schema_version": "1.0.0",
+            "schema_version": "1.1.0",
             "generated_at": datetime.now(timezone.utc),
             "report_run_id": str(run.id),
             "filters_hash": run.filters_hash,
             "trade_ids_hash": run.trade_ids_hash,
         },
         "selection": run.filters,
-        "summary": {"total_trades": run.total_trades},
+        "summary": {
+            "total_trades": run.total_trades,
+            "excluded_count_by_outcome": (run.completeness or {}).get(
+                "excluded_count_by_outcome", {}
+            ),
+        },
         "completeness": run.completeness,
         "trades": trades,
     }

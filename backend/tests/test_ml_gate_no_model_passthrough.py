@@ -46,7 +46,10 @@ def test_audit_payload_passthrough_is_coherent():
     assert p["gate_action"] is None
     assert p["ml_status"] == "NOT_APPLIED"
     assert p["ml_operational_effect"] is False
-    assert p["reason_codes"] == ["NO_ELIGIBLE_MODEL_FOR_LANE"]
+    assert p["reason_codes"] == [
+        "NO_ELIGIBLE_MODEL_FOR_LANE",
+        "NO_ACTIVE_MODEL_FOR_L3_PROFILE",
+    ]
     # veredito cru do modelo preservado como telemetria
     assert p["model_approved"] is False
     assert p["score_status"] == "SKIPPED"

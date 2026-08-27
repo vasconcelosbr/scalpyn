@@ -133,6 +133,12 @@ def _ml_gate_audit_payload(
     if not applied and not reason_code:
         reason_code = "NO_ELIGIBLE_MODEL_FOR_LANE"
     reason_codes = [reason_code] if reason_code else []
+    if (
+        not applied
+        and resolved_lane == "L3_PROFILE"
+        and reason_code == "NO_ELIGIBLE_MODEL_FOR_LANE"
+    ):
+        reason_codes.append("NO_ACTIVE_MODEL_FOR_L3_PROFILE")
     return {
         "ml_status": "APPLIED" if applied else "NOT_APPLIED",
         "ml_reason_code": reason_code,
@@ -549,6 +555,8 @@ def _build_pipeline_asset(
     spread_pct=None,
     orderbook_depth_usdt=None,
     merged_indicators=None,
+    price_source_at=None,
+    score_source_at=None,
 ) -> dict:
     """Build a normalized pipeline asset dict from metadata, indicators, and scores.
 
@@ -570,6 +578,8 @@ def _build_pipeline_asset(
         "indicators": indicators,
         "_has_market_metadata": has_market_metadata,
         "_merged_indicators": merged_indicators,
+        "_price_source_at": price_source_at,
+        "_score_source_at": score_source_at,
         **{k: v for k, v in indicators.items() if isinstance(v, (int, float, bool, str))},
     }
 
@@ -819,6 +829,7 @@ async def _fetch_market_data(db, symbols: list) -> list:
                     COALESCE(m.market_cap,  pwa.market_cap)  AS market_cap,
                     COALESCE(m.volume_24h,  pwa.volume_24h)  AS volume_24h,
                     m.price,
+                    m.last_updated AS price_source_at,
                     m.price_change_24h,
                     m.spread_pct,
                     m.orderbook_depth_usdt
@@ -850,6 +861,7 @@ async def _fetch_market_data(db, symbols: list) -> list:
                     COALESCE(m.market_cap, pwa.market_cap) AS market_cap,
                     COALESCE(m.volume_24h, pwa.volume_24h) AS volume_24h,
                     m.price,
+                    m.last_updated AS price_source_at,
                     m.price_change_24h,
                     NULL AS spread_pct,
                     NULL AS orderbook_depth_usdt
@@ -880,7 +892,7 @@ async def _fetch_market_data(db, symbols: list) -> list:
         score_rows = (await db.execute(
             text("""
                 SELECT DISTINCT ON (symbol)
-                    symbol, score,
+                    symbol, time AS score_source_at, score,
                     liquidity_score, market_structure_score,
                     momentum_score, signal_score
                 FROM alpha_scores
@@ -954,6 +966,8 @@ async def _fetch_market_data(db, symbols: list) -> list:
             spread_pct=float(row.spread_pct) if row.spread_pct is not None else None,
             orderbook_depth_usdt=float(row.orderbook_depth_usdt) if row.orderbook_depth_usdt is not None else None,
             merged_indicators=_merged_by_sym.get(sym),
+            price_source_at=row.price_source_at,
+            score_source_at=score_row.score_source_at if score_row else None,
         ))
 
     for sym in sorted(missing_meta):
@@ -966,6 +980,7 @@ async def _fetch_market_data(db, symbols: list) -> list:
             score_row=score_row,
             has_market_metadata=False,
             merged_indicators=_merged_by_sym.get(sym),
+            score_source_at=score_row.score_source_at if score_row else None,
         ))
 
     return assets
@@ -1352,6 +1367,11 @@ def _decision_metrics(asset: dict, processed: dict) -> dict:
     metrics = {
         **(asset.get("indicators") or {}),
         "price": asset.get("price"),
+        "price_envelope": {
+            "value": asset.get("price"),
+            "source": "market_metadata",
+            "source_at": _jsonable(asset.get("_price_source_at")),
+        },
         "change_24h": asset.get("change_24h"),
         "volume_24h": asset.get("volume_24h"),
         "market_cap": asset.get("market_cap"),
@@ -1441,16 +1461,19 @@ def _decision_metrics(asset: dict, processed: dict) -> dict:
                 snapshot[key] = {
                     "value": component_fields.get(key),
                     "source_group": "decision_context",
+                    "ts": _jsonable(asset.get("_score_source_at")),
                 }
             elif key in asset and asset.get(key) is not None:
                 snapshot[key] = {
                     "value": asset.get(key),
                     "source_group": "decision_context",
+                    "ts": _jsonable(asset.get("_score_source_at")),
                 }
             elif key in flat_indicators and flat_indicators.get(key) is not None:
                 snapshot[key] = {
                     "value": flat_indicators.get(key),
                     "source_group": "decision_context",
+                    "ts": _jsonable(asset.get("_score_source_at")),
                 }
 
         metrics["indicators_snapshot"] = snapshot
@@ -1470,11 +1493,13 @@ def _decision_metrics(asset: dict, processed: dict) -> dict:
                 metrics["indicators_snapshot"][key] = {
                     "value": component_fields.get(key),
                     "source_group": "decision_context",
+                    "ts": _jsonable(asset.get("_score_source_at")),
                 }
             elif key in asset and asset.get(key) is not None:
                 metrics["indicators_snapshot"][key] = {
                     "value": asset.get(key),
                     "source_group": "decision_context",
+                    "ts": _jsonable(asset.get("_score_source_at")),
                 }
 
     return _jsonable(metrics)

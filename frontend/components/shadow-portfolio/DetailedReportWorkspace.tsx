@@ -22,7 +22,15 @@ import { apiGet, apiPost } from "@/lib/api";
 import { ModuleAIAnalysisAction } from "@/components/ai/ModuleAIAnalysisAction";
 
 type Source = "L3" | "L3_REJECTED" | "L1_SPECTRUM";
-type Outcome = "TP_HIT" | "SL_HIT";
+type Outcome = "TP_HIT" | "SL_HIT" | "TRAILING_STOP" | "TIMEOUT" | "OPEN";
+const ALL_OUTCOMES: Outcome[] = ["TP_HIT", "SL_HIT", "TRAILING_STOP", "TIMEOUT", "OPEN"];
+const OUTCOME_LABEL: Record<Outcome, string> = {
+  TP_HIT: "TP",
+  SL_HIT: "SL",
+  TRAILING_STOP: "Stop móvel",
+  TIMEOUT: "Prazo operacional",
+  OPEN: "Em aberto",
+};
 
 interface Facet {
   id: string | null;
@@ -43,13 +51,15 @@ interface ReportRun {
   filters: Record<string, unknown>;
   filters_hash: string;
   trade_ids_hash: string;
-  completeness: Record<string, number | boolean>;
+  completeness: Record<string, unknown>;
   created_at: string;
 }
 
 interface ReportTrade {
   id: string;
   closed_at: string | null;
+  event_at: string | null;
+  status: string;
   symbol: string;
   source: Source;
   watchlist_name: string | null;
@@ -59,6 +69,9 @@ interface ReportTrade {
   entry_price: number | null;
   exit_price: number | null;
   pnl_pct: number | null;
+  gross_return_pct: number | null;
+  fee_roundtrip_pct_applied: number | null;
+  net_return_pct: number | null;
   pnl_usdt: number | null;
   mae_pct: number | null;
   mfe_pct: number | null;
@@ -244,7 +257,7 @@ export default function DetailedReportWorkspace() {
   const router = useRouter();
   const initial = useMemo(() => initialDates(), []);
   const [sources, setSources] = useState<Source[]>(["L3"]);
-  const [outcomes, setOutcomes] = useState<Outcome[]>(["TP_HIT", "SL_HIT"]);
+  const [outcomes, setOutcomes] = useState<Outcome[]>(ALL_OUTCOMES);
   const [dateFrom, setDateFrom] = useState(initial.from);
   const [dateTo, setDateTo] = useState(initial.to);
   const [facets, setFacets] = useState<FacetsResponse | null>(null);
@@ -509,10 +522,10 @@ export default function DetailedReportWorkspace() {
             </div>
             <div>
               <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7f899f]">Resultado</div>
-              <div className="flex gap-2">
-                {(["TP_HIT", "SL_HIT"] as Outcome[]).map((outcome) => (
-                  <button key={outcome} onClick={() => setOutcomes(outcomes.includes(outcome) ? outcomes.filter((item) => item !== outcome) : [...outcomes, outcome])} className={`${buttonClass} flex-1 ${outcomes.includes(outcome) ? outcome === "TP_HIT" ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-300" : "border-rose-500/50 bg-rose-500/10 text-rose-300" : ""}`}>
-                    {outcome === "TP_HIT" ? "TP" : "SL"}
+              <div className="flex flex-wrap gap-2">
+                {ALL_OUTCOMES.map((outcome) => (
+                  <button key={outcome} onClick={() => setOutcomes(outcomes.includes(outcome) ? outcomes.filter((item) => item !== outcome) : [...outcomes, outcome])} className={`${buttonClass} ${outcomes.includes(outcome) ? "border-[#4f7bf7]/50 bg-[#4f7bf7]/10 text-[#b7c5ff]" : ""}`}>
+                    {OUTCOME_LABEL[outcome]}
                   </button>
                 ))}
               </div>
@@ -569,18 +582,18 @@ export default function DetailedReportWorkspace() {
           <div className="overflow-x-auto">
             <table className="w-full min-w-[1120px] text-left">
               <thead className="bg-[#0d1018] text-[10px] uppercase tracking-[0.11em] text-[#697388]">
-                <tr>{["Fechado", "Símbolo", "Profile / Watchlist", "Resultado", "Entrada", "Saída", "P&L", "MAE / MFE", "Snapshots", "Ações"].map((label) => <th key={label} className="px-4 py-3 font-semibold">{label}</th>)}</tr>
+                <tr>{["Evento", "Símbolo", "Profile / Watchlist", "Resultado", "Entrada", "Saída", "Líquido fee-only", "MAE / MFE", "Snapshots", "Ações"].map((label) => <th key={label} className="px-4 py-3 font-semibold">{label}</th>)}</tr>
               </thead>
               <tbody className="divide-y divide-white/[0.055]">
                 {(trades?.items ?? []).map((trade) => (
                   <tr key={trade.id} className="text-xs text-[#b9c1d1] hover:bg-white/[0.025]">
-                    <td className="whitespace-nowrap px-4 py-3 font-mono text-[11px] text-[#8993a8]">{trade.closed_at ? new Date(trade.closed_at).toLocaleString("pt-BR") : "—"}</td>
+                    <td className="whitespace-nowrap px-4 py-3 font-mono text-[11px] text-[#8993a8]">{trade.event_at ? new Date(trade.event_at).toLocaleString("pt-BR") : "—"}</td>
                     <td className="px-4 py-3 font-semibold text-[#edf0f7]">{trade.symbol}</td>
                     <td className="max-w-[230px] px-4 py-3"><div className="truncate text-[#d2d8e5]">{trade.profile_name ?? "Sem profile"}</div><div className="truncate text-[10px] text-[#687287]">{trade.watchlist_name ?? SOURCE_LABEL[trade.source]}</div></td>
-                    <td className="px-4 py-3"><span className={`rounded-md border px-2 py-1 font-semibold ${trade.outcome === "TP_HIT" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" : "border-rose-500/30 bg-rose-500/10 text-rose-300"}`}>{trade.outcome === "TP_HIT" ? "TP" : "SL"}</span></td>
+                    <td className="px-4 py-3"><span className={`rounded-md border px-2 py-1 font-semibold ${trade.outcome === "TP_HIT" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" : trade.outcome === "SL_HIT" ? "border-rose-500/30 bg-rose-500/10 text-rose-300" : "border-sky-500/30 bg-sky-500/10 text-sky-300"}`}>{OUTCOME_LABEL[trade.outcome]}</span></td>
                     <td className="px-4 py-3 font-mono">{money(trade.entry_price)}</td>
                     <td className="px-4 py-3 font-mono">{money(trade.exit_price)}</td>
-                    <td className={`px-4 py-3 font-mono font-semibold ${(trade.pnl_pct ?? 0) >= 0 ? "text-emerald-300" : "text-rose-300"}`}><div>{number(trade.pnl_pct, "%")}</div><div className="text-[10px] opacity-70">{money(trade.pnl_usdt)}</div></td>
+                    <td className={`px-4 py-3 font-mono font-semibold ${(trade.net_return_pct ?? 0) >= 0 ? "text-emerald-300" : "text-rose-300"}`}><div>{number(trade.net_return_pct, "%")}</div><div className="text-[10px] opacity-70">bruto {number(trade.gross_return_pct, "%")} · spread não aplicado</div></td>
                     <td className="px-4 py-3 font-mono text-[10px]"><div className="text-rose-300">{number(trade.mae_pct, "%")}</div><div className="text-emerald-300">{number(trade.mfe_pct, "%")}</div></td>
                     <td className="px-4 py-3"><span className={trade.entry_snapshot_present && trade.exit_snapshot_present ? "text-emerald-300" : "text-amber-300"}>{trade.entry_snapshot_present ? "E✓" : "E—"} · {trade.exit_snapshot_present ? "S✓" : "S—"}</span></td>
                     <td className="px-4 py-3"><div className="flex items-center gap-1.5"><button title="Abrir gráfico e indicadores" className={buttonClass} onClick={() => router.push(`/dashboard/shadow-portfolio/${trade.id}`)}>Abrir</button><button title="Download JSON" className={buttonClass} onClick={() => fetchDownload(`/api/shadow-trade-reports/trades/${trade.id}/export`, `shadow-trade-${trade.symbol}-${trade.id}.json`)}><FileJson size={13} /></button><button title="Analisar trade com IA" className={buttonClass} onClick={() => analyze("TRADE", trade.id)} disabled={analysisBusy}><Bot size={13} /></button></div></td>

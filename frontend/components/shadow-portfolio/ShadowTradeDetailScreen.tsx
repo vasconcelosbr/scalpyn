@@ -86,7 +86,7 @@ function fmtValue(value: unknown): string {
 function outcomeLabel(data: ShadowTradeDetail): string {
   if (data.outcome === "TP_HIT") return "TP";
   if (data.outcome === "SL_HIT") return "SL";
-  if (data.outcome === "TRAILING_STOP") return "TRAILING";
+  if (data.outcome === "TRAILING_STOP") return "STOP MÓVEL";
   if (data.outcome === "TIMEOUT") return "TIMEOUT";
   return data.status;
 }

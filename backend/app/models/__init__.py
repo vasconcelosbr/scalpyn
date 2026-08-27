@@ -17,6 +17,7 @@ from .trade_tracking import TradeTracking
 from .exchange_execution import ExchangeExecution
 from .position_lifecycle import PositionLifecycle
 from .shadow_trade import ShadowTrade
+from .shadow_trade_measurement import ShadowTradeMeasurementRevision
 from .shadow_trade_analysis import (
     ShadowTradeAnalysisJob,
     ShadowTradeReportItem,
@@ -107,6 +108,7 @@ __all__ = [
     "ExchangeExecution",
     "PositionLifecycle",
     "ShadowTrade",
+    "ShadowTradeMeasurementRevision",
     "ShadowTradeAnalysisJob",
     "ShadowTradeReportItem",
     "ShadowTradeReportRun",

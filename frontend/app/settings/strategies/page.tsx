@@ -20,11 +20,11 @@ import {
 const COPY: Record<string, { label: string; help?: string }> = {
   "spot_engine.selling.never_sell_at_loss": { label: "Nunca vender com prejuízo", help: "Proteção do Spot real. O Kill Switch pode sobrepor esta regra em emergência." },
   "spot_engine.shadow.amount_usdt": { label: "Valor por trade Shadow", help: "Valor nominal congelado no snapshot de cada novo trade." },
-  "spot_engine.shadow.timeout_candles": { label: "Timeout do Shadow", help: "Quantidade máxima de candles antes do encerramento por timeout." },
+  "spot_engine.shadow.timeout_candles": { label: "Prazo do outcome operacional (candles)", help: "Quantidade máxima de candles antes do encerramento operacional por TIMEOUT." },
   "spot_engine.shadow.trailing_contract_version": { label: "Contrato técnico do trailing" },
   "spot_engine.shadow.ttt.enabled": { label: "TTT ativo", help: "Habilita a política Time to Target para novos trades Shadow." },
   "spot_engine.shadow.ttt.tp_pct": { label: "Alvo do TTT (%)" },
-  "spot_engine.shadow.ttt.timeout_minutes": { label: "Prazo do TTT (minutos)" },
+  "spot_engine.shadow.ttt.timeout_minutes": { label: "Janela do label analítico TTT (minutos)", help: "Usada apenas no label analítico; não encerra a posição." },
   "ml_shadow.shadow_barrier_mode": { label: "Modo das barreiras" },
   "ml_shadow.shadow_atr_timeframe": { label: "Timeframe do ATR" },
   "ml_shadow.shadow_atr_multiplier_tp": { label: "Multiplicador ATR do TP" },
@@ -33,6 +33,8 @@ const COPY: Record<string, { label: string; help?: string }> = {
   "ml_shadow.shadow_barrier_max_pct": { label: "Teto da barreira (%)" },
   "ml_shadow.ml_fee_roundtrip_pct": { label: "Taxa round-trip (%)", help: "Custo total usado no retorno líquido do Shadow." },
   "ml_shadow.ml_active_barrier_contract_version": { label: "Versão do contrato de barreiras" },
+  "ml_shadow.shadow_measurement_timeframe_priority": { label: "Prioridade de timeframes da medição", help: "Ordem explícita para reconciliar MFE/MAE, por exemplo: 1m, 5m." },
+  "ml_shadow.shadow_entry_max_lag_seconds": { label: "Lag máximo da entrada (segundos)", help: "Vazio mantém a captura inelegível como UNCONFIGURED; não bloqueia a simulação." },
 };
 
 const GROUP_COPY: Record<string, { title: string; subtitle: string; effect: string }> = {
@@ -62,7 +64,12 @@ function FieldEditor({ path, value, onChange }: { path: string; value: JsonValue
   if (typeof value === "boolean") {
     return <label className="flex min-h-20 cursor-pointer items-center justify-between gap-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4"><span><span className="block text-sm font-medium text-[var(--text-primary)]">{label}</span>{copy?.help && <span className="mt-1 block text-[11px] leading-relaxed text-[var(--text-tertiary)]">{copy.help}</span>}</span><button type="button" role="switch" aria-checked={value} onClick={() => onChange(path, !value)} className={`relative h-6 w-11 shrink-0 rounded-full transition ${value ? "bg-violet-500" : "bg-[var(--border-default)]"}`}><span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition ${value ? "left-6" : "left-1"}`} /></button></label>;
   }
-  return <label className="block space-y-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4"><span className="text-xs font-medium text-[var(--text-secondary)]">{label}</span>{options ? <select className="input w-full text-sm" value={String(value)} onChange={(event) => onChange(path, event.target.value)}>{options.map((option) => <option key={option} value={option}>{option}</option>)}</select> : <input className="input w-full font-mono text-sm" type={typeof value === "number" ? "number" : "text"} step={typeof value === "number" ? "any" : undefined} value={String(value ?? "")} onChange={(event) => onChange(path, typeof value === "number" ? Number(event.target.value) : event.target.value)} />}{copy?.help && <span className="block text-[11px] leading-relaxed text-[var(--text-tertiary)]">{copy.help}</span>}</label>;
+  if (Array.isArray(value) || path === "ml_shadow.shadow_measurement_timeframe_priority") {
+    const arrayValue = Array.isArray(value) ? value : [];
+    return <label className="block space-y-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4"><span className="text-xs font-medium text-[var(--text-secondary)]">{label}</span><input className="input w-full font-mono text-sm" type="text" value={arrayValue.join(", ")} placeholder="1m, 5m" onChange={(event) => onChange(path, event.target.value.split(",").map((item) => item.trim()).filter(Boolean))} />{copy?.help && <span className="block text-[11px] leading-relaxed text-[var(--text-tertiary)]">{copy.help}</span>}</label>;
+  }
+  const nullableNumber = path === "ml_shadow.shadow_entry_max_lag_seconds";
+  return <label className="block space-y-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4"><span className="text-xs font-medium text-[var(--text-secondary)]">{label}</span>{options ? <select className="input w-full text-sm" value={String(value)} onChange={(event) => onChange(path, event.target.value)}>{options.map((option) => <option key={option} value={option}>{option}</option>)}</select> : <input className="input w-full font-mono text-sm" type={typeof value === "number" || nullableNumber ? "number" : "text"} step={typeof value === "number" || nullableNumber ? "any" : undefined} value={String(value ?? "")} onChange={(event) => onChange(path, nullableNumber ? (event.target.value === "" ? null : Number(event.target.value)) : typeof value === "number" ? Number(event.target.value) : event.target.value)} />}{copy?.help && <span className="block text-[11px] leading-relaxed text-[var(--text-tertiary)]">{copy.help}</span>}</label>;
 }
 
 function RecursiveEditor({ value, prefix, onChange }: { value: JsonObject; prefix: string; onChange: (path: string, value: JsonValue) => void }) {

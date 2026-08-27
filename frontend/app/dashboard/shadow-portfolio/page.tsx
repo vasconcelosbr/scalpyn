@@ -310,7 +310,7 @@ function outcomeStyle(outcome: ShadowOutcome): BadgeStyle | null {
     case "TRAILING_STOP":
       return { bg: `${C.amber}22`, fg: C.amber, border: `${C.amber}55`, label: "Trailing" };
     case "TIMEOUT":
-      return { bg: `${C.purple}22`, fg: C.purple, border: `${C.purple}55`, label: "Timeout" };
+      return { bg: `${C.purple}22`, fg: C.purple, border: `${C.purple}55`, label: "Prazo operacional" };
   }
 }
 
@@ -419,8 +419,8 @@ const STATUS_TABS: { key: StatusFilter; label: string }[] = [
   { key: "OPEN", label: "Em aberto" },
   { key: "TP_HIT", label: "TP" },
   { key: "SL_HIT", label: "SL" },
-  { key: "TRAILING_STOP", label: "Trailing" },
-  { key: "TIMEOUT", label: "Timeout" },
+  { key: "TRAILING_STOP", label: "Stop móvel" },
+  { key: "TIMEOUT", label: "Prazo operacional" },
 ];
 
 function FilterBar({

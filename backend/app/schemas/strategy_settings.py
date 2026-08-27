@@ -19,6 +19,10 @@ ML_SHADOW_KEYS = (
     "ml_fee_roundtrip_pct",
     "ml_active_barrier_contract_version",
 )
+ML_SHADOW_OPTIONAL_KEYS = (
+    "shadow_measurement_timeframe_priority",
+    "shadow_entry_max_lag_seconds",
+)
 
 
 class StrategyDefinition(BaseModel):
@@ -51,6 +55,13 @@ class MLShadowConfig(BaseModel):
     ml_active_barrier_contract_version: Literal[
         "shadow_fixed_v1", "shadow_atr_dynamic_v2"
     ] = "shadow_atr_dynamic_v2"
+    # Measurement-only controls.  ``None`` is intentional: legacy
+    # configurations remain runnable but their captures are UNCONFIGURED and
+    # therefore ineligible for training until an operator saves these values.
+    shadow_measurement_timeframe_priority: List[
+        Literal["1m", "5m", "15m", "1h"]
+    ] | None = None
+    shadow_entry_max_lag_seconds: int | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def validate_contract_pair(self) -> "MLShadowConfig":

@@ -22,6 +22,7 @@ from ..schemas.spot_engine_config import SpotEngineConfig
 from ..schemas.strategy_settings import (
     MLShadowConfig,
     ML_SHADOW_KEYS,
+    ML_SHADOW_OPTIONAL_KEYS,
     STRATEGY_SETTINGS_SCHEMA,
     STRATEGY_SETTINGS_SCHEMA_VERSION,
     StrategyConfig,
@@ -130,7 +131,11 @@ class StrategySettingsService:
             ).model_dump(mode="json"),
             "spot_engine": SpotEngineConfig.from_config_json(raw_spot).model_dump(mode="json"),
             "ml_shadow": MLShadowConfig.model_validate(
-                {key: raw_ml[key] for key in ML_SHADOW_KEYS if key in raw_ml}
+                {
+                    key: raw_ml[key]
+                    for key in (*ML_SHADOW_KEYS, *ML_SHADOW_OPTIONAL_KEYS)
+                    if key in raw_ml
+                }
             ).model_dump(mode="json"),
         }
 

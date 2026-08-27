@@ -507,10 +507,18 @@ def merge_indicator_rows(
         ema50_age = ema50_meta.get("age_seconds")
         ages = [a for a in (ema9_age, ema50_age) if a is not None]
         any_stale = ema9_meta.get("stale", False) or ema50_meta.get("stale", False)
+        dependency_times = {
+            "ema9": ema9_meta.get("timestamp"),
+            "ema50": ema50_meta.get("timestamp"),
+        }
+        available_times = [value for value in dependency_times.values() if value is not None]
         result.meta["ema9_gt_ema50"] = {
             "group": "structural",
             "age_seconds": max(ages) if ages else None,
-            "timestamp": None,
+            "timestamp": min(available_times) if available_times else None,
+            "oldest_source_at": min(available_times) if available_times else None,
+            "newest_source_at": max(available_times) if available_times else None,
+            "dependency_source_times": dependency_times,
             "stale": any_stale,
         }
 
@@ -531,10 +539,19 @@ def merge_indicator_rows(
             or ema50_meta.get("stale", False)
             or ema200_meta.get("stale", False)
         )
+        dependency_times = {
+            "ema9": ema9_meta.get("timestamp"),
+            "ema50": ema50_meta.get("timestamp"),
+            "ema200": ema200_meta.get("timestamp"),
+        }
+        available_times = [value for value in dependency_times.values() if value is not None]
         result.meta["ema_full_alignment"] = {
             "group": "structural",
             "age_seconds": max(ages) if ages else None,
-            "timestamp": None,
+            "timestamp": min(available_times) if available_times else None,
+            "oldest_source_at": min(available_times) if available_times else None,
+            "newest_source_at": max(available_times) if available_times else None,
+            "dependency_source_times": dependency_times,
             "stale": any_stale,
         }
 

@@ -173,6 +173,12 @@ def _apply_barrier_params(user_config: dict, ml_config: dict) -> dict:
     user_config["sl_min_pct"] = ml_config.get("shadow_barrier_min_pct")
     user_config["sl_max_pct"] = ml_config.get("shadow_barrier_max_pct")
     user_config["ml_fee_roundtrip_pct"] = ml_config.get("ml_fee_roundtrip_pct")
+    user_config["shadow_measurement_timeframe_priority"] = ml_config.get(
+        "shadow_measurement_timeframe_priority"
+    )
+    user_config["shadow_entry_max_lag_seconds"] = ml_config.get(
+        "shadow_entry_max_lag_seconds"
+    )
     user_config["ml_win_fast_threshold_seconds"] = ml_config.get(
         "ml_win_fast_threshold_seconds"
     )
@@ -463,6 +469,12 @@ def _build_economic_config_snapshot(
         "barrier_contract_version": barrier_contract_version,
         "capture_contract_version": native_capture.capture_contract_version,
         "trailing": deepcopy(user_config.get("trailing")),
+        "shadow_measurement_timeframe_priority": deepcopy(
+            user_config.get("shadow_measurement_timeframe_priority")
+        ),
+        "shadow_entry_max_lag_seconds": user_config.get(
+            "shadow_entry_max_lag_seconds"
+        ),
     }
 
 
@@ -1453,23 +1465,62 @@ async def _create_from_decision(
         )
         return None
 
-    # Entry-at-decision-time (Task 2026-05-13): preço corrente no
-    # instante da decisão ALLOW vira entry_price imediatamente.
-    # Fallback para next-1m-open mantém compat caso o pool não tenha
-    # NENHUMA candle recente do símbolo (cenário raro, e ainda assim o
-    # monitor reprocessa via _ensure_entry).
-    entry_price, entry_price_source_at = await _get_current_price_multi_tf(
-        db, decision.symbol, as_of=decision.created_at
-    )
+    # The entry reference is the immutable price envelope consumed by the
+    # decision. Looking up OHLCV after ALLOW creates a second clock and is only
+    # retained as an explicitly degraded compatibility fallback.
+    _price_envelope = (decision.metrics or {}).get("price_envelope") or {}
+    _entry_price_mode = "DECISION_ENVELOPE"
+    try:
+        entry_price = float(_price_envelope.get("value"))
+        if entry_price <= 0:
+            entry_price = None
+    except (TypeError, ValueError):
+        entry_price = None
+    _price_source_raw = _price_envelope.get("source_at")
+    if isinstance(_price_source_raw, str):
+        try:
+            entry_price_source_at = datetime.fromisoformat(
+                _price_source_raw.replace("Z", "+00:00")
+            )
+        except ValueError:
+            entry_price_source_at = None
+    else:
+        entry_price_source_at = (
+            _price_source_raw if isinstance(_price_source_raw, datetime) else None
+        )
     entry_ts = decision.created_at if entry_price is not None else None
     initial_status = "RUNNING"
     if entry_price is None:
+        _entry_price_mode = "DEGRADED_OHLCV_FALLBACK"
+        entry_price, entry_price_source_at = await _get_current_price_multi_tf(
+            db, decision.symbol, as_of=decision.created_at
+        )
+        entry_ts = decision.created_at if entry_price is not None else None
+    if entry_price is None:
+        _entry_price_mode = "DEGRADED_NEXT_OPEN_FALLBACK"
         entry_price, entry_ts = await _next_1m_open(
             db, decision.symbol, decision.created_at
         )
         entry_price_source_at = entry_ts
         if entry_price is None:
             initial_status = "PENDING"
+
+    _max_entry_lag = user_config.get("shadow_entry_max_lag_seconds")
+    _entry_lag_seconds = (
+        (decision.created_at - entry_price_source_at).total_seconds()
+        if isinstance(entry_price_source_at, datetime)
+        else None
+    )
+    if _max_entry_lag is None:
+        _entry_quality = "UNCONFIGURED"
+    elif _entry_price_mode != "DECISION_ENVELOPE":
+        _entry_quality = "DEGRADED"
+    elif _entry_lag_seconds is None:
+        _entry_quality = "UNAVAILABLE"
+    elif _entry_lag_seconds > float(_max_entry_lag):
+        _entry_quality = "DEGRADED"
+    else:
+        _entry_quality = "OK"
 
     if entry_price is not None and entry_price > 0 and tp_pct > 0 and sl_pct > 0:
         tp_price = entry_price * (1 + tp_pct / 100.0)
@@ -1513,6 +1564,13 @@ async def _create_from_decision(
         if isinstance(entry_price_source_at, datetime)
         else None
     )
+    config_snap["entry_price_reference"] = entry_price
+    config_snap["entry_price_observed"] = entry_price
+    config_snap["entry_price_realized"] = None
+    config_snap["entry_price_lag_seconds"] = _entry_lag_seconds
+    config_snap["entry_quality"] = _entry_quality
+    config_snap["entry_price_contract_version"] = "decision_price_v1"
+    config_snap["entry_price_mode"] = _entry_price_mode
     config_snap["feature_source_at"] = (
         native_capture.source_at.isoformat()
         if native_capture.source_at is not None
@@ -1587,9 +1645,20 @@ async def _create_from_decision(
         isinstance(_l3_contract_v3, dict)
         and _l3_contract_v3.get("authorization_status") == "CONTRACT_REJECT"
     )
+    _profile_contract_status = (
+        (_l3_gate_v2.get("execution_contract") or {}).get("status")
+        if isinstance(_l3_gate_v2, dict)
+        else None
+    )
+    _profile_contract_required = bool(_lin_profile_id)
+    _profile_contract_valid = (
+        not _profile_contract_required or _profile_contract_status == "MATCH"
+    )
     lineage_status = (
         "INVALID_AUTHORIZATION_CONTRACT" if not authorization_contract_valid
+        else "INVALID_PROFILE_CONTRACT" if not _profile_contract_valid
         else "INVALID_FEATURES" if feature_errors
+        else "INVALID_ENTRY_QUALITY" if _entry_quality != "OK"
         else "EXACT" if lineage_complete
         else "UNRESOLVED_VERSION"
     )
@@ -1710,6 +1779,8 @@ async def _create_from_decision(
                         lineage_complete
                         and not feature_errors
                         and authorization_contract_valid
+                        and _profile_contract_valid
+                        and _entry_quality == "OK"
                     ),
                     "entry_risk_features_json": json.dumps(
                         _entry_risk_pending, default=str

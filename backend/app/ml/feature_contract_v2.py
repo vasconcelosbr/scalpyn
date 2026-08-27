@@ -15,7 +15,7 @@ from typing import Any, Mapping
 
 FEATURE_SCHEMA_VERSION = "entry_features_v2"
 FEATURE_EXTRACTOR_VERSION = "feature-engine-v2"
-CAPTURE_CONTRACT_VERSION = "point-in-time-v2"
+CAPTURE_CONTRACT_VERSION = "point-in-time-v3"
 
 
 @dataclass(frozen=True)
@@ -60,6 +60,8 @@ REGISTRY: dict[str, FeatureSpec] = {
 _ALIASES = {alias: name for name, spec in REGISTRY.items() for alias in spec.aliases}
 _DERIVED_SOURCE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     "di_trend": ("di_plus", "di_minus"),
+    "ema9_gt_ema50": ("ema9", "ema50"),
+    "ema_full_alignment": ("ema9", "ema50", "ema200"),
 }
 
 
@@ -192,6 +194,12 @@ def _feature_source_timestamps(
         for envelope in envelopes:
             if isinstance(envelope, Mapping):
                 candidates.extend((envelope.get("ts"), envelope.get("timestamp")))
+                candidates.extend(
+                    (envelope.get("dependency_source_times") or {}).values()
+                    if isinstance(envelope.get("dependency_source_times"), Mapping)
+                    else ()
+                )
+                candidates.append(envelope.get("newest_source_at"))
         for metadata in metadata_entries:
             if isinstance(metadata, Mapping):
                 candidates.extend((metadata.get("ts"), metadata.get("timestamp")))

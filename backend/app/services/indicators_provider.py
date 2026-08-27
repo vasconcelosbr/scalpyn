@@ -246,5 +246,17 @@ def build_indicators_snapshot(
             "observed_timeframes": meta.get("observed_timeframes") or [],
             "timeframe_conflict": bool(meta.get("timeframe_conflict", False)),
             "stale": meta.get("stale", False),
+            "oldest_source_at": (
+                meta["oldest_source_at"].isoformat()
+                if meta.get("oldest_source_at") is not None else None
+            ),
+            "newest_source_at": (
+                meta["newest_source_at"].isoformat()
+                if meta.get("newest_source_at") is not None else None
+            ),
+            "dependency_source_times": {
+                dependency: value.isoformat() if value is not None else None
+                for dependency, value in (meta.get("dependency_source_times") or {}).items()
+            },
         }
     return snapshot

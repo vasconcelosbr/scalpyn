@@ -23,7 +23,7 @@ from app.services.shadow_trade_analysis_service import _chunks, _extract_json
 from app.tasks.shadow_trade_analysis import _count_usage_tokens
 
 
-def test_report_filter_normalization_is_stable_and_uses_close_time():
+def test_report_filter_normalization_is_stable_and_persists_date_basis_by_status():
     payload = DetailedReportRequest(
         sources=["L3_REJECTED", "L3", "L3"],
         watchlist_ids=[uuid4()],
@@ -38,7 +38,10 @@ def test_report_filter_normalization_is_stable_and_uses_close_time():
 
     assert filters["sources"] == ["L3", "L3_REJECTED"]
     assert filters["outcomes"] == ["SL_HIT", "TP_HIT"]
-    assert filters["date_basis"] == "COALESCE(exit_timestamp,completed_at)"
+    assert filters["date_basis_by_status"] == {
+        "OPEN": "COALESCE(entry_timestamp,created_at)",
+        "TERMINAL": "COALESCE(exit_timestamp,completed_at)",
+    }
     assert _sha(filters) == _sha(dict(reversed(list(filters.items()))))
 
 
@@ -50,6 +53,18 @@ def test_report_request_rejects_empty_outcomes_and_invalid_range():
             date_from=datetime(2026, 8, 1, tzinfo=timezone.utc),
             date_to=datetime(2026, 8, 1, tzinfo=timezone.utc),
         )
+
+
+def test_report_request_defaults_to_every_operational_outcome():
+    request = DetailedReportRequest(
+        sources=["L3"],
+        date_from=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        date_to=datetime(2026, 8, 2, tzinfo=timezone.utc),
+    )
+
+    assert set(request.outcomes) == {
+        "TP_HIT", "SL_HIT", "TRAILING_STOP", "TIMEOUT", "OPEN"
+    }
 
 
 def test_report_completeness_blocks_ai_when_canonical_lineage_is_missing():

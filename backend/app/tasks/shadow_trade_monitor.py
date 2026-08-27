@@ -961,6 +961,102 @@ async def _record_simulation_one_async(shadow_id: Any) -> None:
             exc_info=True,
         )
 
+    # ── TX3 — append-only canonical measurement revision ───────────────
+    try:
+        from ..services.shadow_trade_measurement_service import (
+            build_measurement_revision,
+            persist_measurement_revision,
+        )
+
+        async with CeleryAsyncSessionLocal() as db_measurement:
+            async with db_measurement.begin():
+                result = await db_measurement.execute(
+                    select(ShadowTrade).where(ShadowTrade.id == shadow_id)
+                )
+                measured_shadow = result.scalar_one_or_none()
+                if measured_shadow is None or measured_shadow.status != "COMPLETED":
+                    return
+                measurement_config = (
+                    measured_shadow.config_snapshot
+                    if isinstance(measured_shadow.config_snapshot, dict)
+                    else {}
+                )
+                revision = await build_measurement_revision(
+                    db_measurement,
+                    measured_shadow,
+                    timeframe_priority=measurement_config.get(
+                        "shadow_measurement_timeframe_priority"
+                    ),
+                    max_entry_lag_seconds=measurement_config.get(
+                        "shadow_entry_max_lag_seconds"
+                    ),
+                )
+                await persist_measurement_revision(db_measurement, revision)
+    except Exception:
+        logger.warning(
+            "[shadow-monitor] _record_simulation_one_async TX3 (measurement) "
+            "falhou para shadow_id=%s — revisão fica pendente para o reconciliador",
+            shadow_id,
+            exc_info=True,
+        )
+
+
+async def _reconcile_pending_measurements_async() -> dict[str, int]:
+    """Retry PENDING revisions after their exit-boundary candle can close."""
+    from ..database import CeleryAsyncSessionLocal
+    from ..models.shadow_trade_measurement import ShadowTradeMeasurementRevision
+    from ..services.shadow_trade_measurement_service import (
+        build_measurement_revision,
+        persist_measurement_revision,
+    )
+
+    result_counts = {"selected": 0, "inserted": 0, "errors": 0}
+    try:
+        async with CeleryAsyncSessionLocal() as db_select:
+            pending_ids = list(
+                (
+                    await db_select.execute(
+                        select(ShadowTradeMeasurementRevision.shadow_trade_id)
+                        .where(ShadowTradeMeasurementRevision.status == "PENDING")
+                        .distinct()
+                        .order_by(ShadowTradeMeasurementRevision.shadow_trade_id)
+                        .limit(SHADOW_MONITOR_BATCH_SIZE)
+                    )
+                ).scalars()
+            )
+        result_counts["selected"] = len(pending_ids)
+        for shadow_id in pending_ids:
+            try:
+                async with CeleryAsyncSessionLocal() as db_measurement:
+                    async with db_measurement.begin():
+                        shadow = (
+                            await db_measurement.execute(
+                                select(ShadowTrade).where(ShadowTrade.id == shadow_id)
+                            )
+                        ).scalar_one_or_none()
+                        if shadow is None or shadow.status != "COMPLETED":
+                            continue
+                        config = shadow.config_snapshot if isinstance(shadow.config_snapshot, dict) else {}
+                        revision = await build_measurement_revision(
+                            db_measurement,
+                            shadow,
+                            timeframe_priority=config.get("shadow_measurement_timeframe_priority"),
+                            max_entry_lag_seconds=config.get("shadow_entry_max_lag_seconds"),
+                        )
+                        if await persist_measurement_revision(db_measurement, revision):
+                            result_counts["inserted"] += 1
+            except Exception:
+                result_counts["errors"] += 1
+                logger.warning(
+                    "[shadow-monitor] pending measurement retry failed shadow_id=%s",
+                    shadow_id,
+                    exc_info=True,
+                )
+    except Exception:
+        result_counts["errors"] += 1
+        logger.warning("[shadow-monitor] pending measurement scan failed", exc_info=True)
+    return result_counts
+
 
 async def _advance_shadow(
     db,
@@ -1882,6 +1978,7 @@ async def _monitor_async() -> Dict[str, Any]:
     )
     summary["deferred_simulations"] = deferred_sim
     summary["deferred_enrichment"] = deferred_enrich
+    summary["measurement_reconciliation"] = await _reconcile_pending_measurements_async()
 
     # Reativa edge trigger L3_REJECTED no Redis para shadows que completaram.
     # Remove o símbolo de prior_rejected_visibility para que o próximo ciclo
