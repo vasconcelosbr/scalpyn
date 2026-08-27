@@ -603,7 +603,7 @@ function SummaryCards({
         sub="PENDING + RUNNING"
       />
       <StatCard
-        label="Win Rate"
+        label="Win Rate TP/SL"
         icon={<Target size={12} />}
         value={placeholder ? "—" : `${data!.win_rate.toFixed(1)}%`}
         accent={winRateAccent}

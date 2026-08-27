@@ -64,6 +64,12 @@ _DEFAULT_PAGE_SIZE = 50
 _MAX_PAGE_SIZE = 200
 
 
+def _tp_sl_win_rate(tp_count: int, sl_count: int) -> float:
+    """Return the direct TP-vs-SL hit rate; other terminal outcomes are excluded."""
+    decided = tp_count + sl_count
+    return round((tp_count / decided) * 100, 2) if decided else 0.0
+
+
 def _parse_iso_datetime(
     value: Optional[str], *, is_end: bool = False
 ) -> Optional[datetime]:
@@ -422,7 +428,7 @@ async def shadow_trades_summary(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ) -> ShadowTradeSummary:
-    """Agregado single-query do range filtrado."""
+    """Agregado do range filtrado; Win Rate compara somente TP_HIT e SL_HIT."""
     try:
         filters = _build_filters(
             user_id=user_id,
@@ -436,7 +442,7 @@ async def shadow_trades_summary(
         )
 
         # Avg de pnl_pct deve considerar APENAS trades com outcome
-        # finalizado (TP/SL/TIMEOUT) — pendentes não têm pnl.
+        # finalizado (TP/SL/TRAILING/TIMEOUT) — pendentes não têm pnl.
         completed_filter = ShadowTrade.outcome.in_(
             ("TP_HIT", "SL_HIT", "TRAILING_STOP", "TIMEOUT")
         )
@@ -478,14 +484,15 @@ async def shadow_trades_summary(
         total = int(row.total or 0)
         completed = int(row.completed or 0)
         win = int(row.win or 0)
-        win_rate = round((win / completed) * 100, 2) if completed else 0.0
+        loss = int(row.loss or 0)
+        win_rate = _tp_sl_win_rate(win, loss)
 
         return ShadowTradeSummary(
             total=total,
             pending=int(row.pending or 0),
             completed=completed,
             win=win,
-            loss=int(row.loss or 0),
+            loss=loss,
             trailing=int(row.trailing or 0),
             timeout=int(row.timeout or 0),
             win_rate=win_rate,
