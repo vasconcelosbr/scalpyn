@@ -63,6 +63,22 @@ def test_capture_row_preserves_governed_operational_contract():
     assert '"operational_decision":"BLOCK"' in row["payload"]
 
 
+def test_capture_row_preserves_profile_contract_deny():
+    decision = _decision(operational_effect=True)
+    decision["gate_evaluation_v2"]["promotion_status"] = "PROFILE_CONTRACT_DENY"
+
+    row = _capture_row(
+        decision,
+        user_id=None,
+        watchlist_id=None,
+        profile_id=None,
+        profile_name=None,
+    )
+
+    assert row["operational_effect"] is True
+    assert '"promotion_status":"PROFILE_CONTRACT_DENY"' in row["payload"]
+
+
 @pytest.mark.parametrize(
     ("decision", "reason"),
     [

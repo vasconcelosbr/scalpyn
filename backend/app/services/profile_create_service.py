@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.config_profile import ConfigAuditLog, ConfigProfile
 from ..models.profile import Profile
-from ..models.profile_audit_log import ProfileAuditLog
+from ..models.profile_audit_log import ProfileAuditLog  # compatibility for patched legacy tests
 from ..models.profile_intelligence import (
     AlgorithmForwardValidation,
     ProfileIntelligenceAuditLog,
@@ -654,6 +654,22 @@ class ProfileCreateService:
 
         profile_id = profile.id
 
+        from .profile_execution_contract import activate_profile_config
+
+        await activate_profile_config(
+            db,
+            profile=profile,
+            config=profile_config,
+            changed_by=user_id,
+            change_source="profile_intelligence",
+            change_description=(
+                "Profile criado a partir de sugestão do Profile Intelligence "
+                f"Engine (suggestion_id={suggestion_id})"
+            ),
+            require_feature_identity=True,
+            previous_config_override={},
+        )
+
         # ── 11. Profile Audit Log ─────────────────────────────────────────────
         forward_validation = AlgorithmForwardValidation(
             suggestion_id=suggestion.id,
@@ -671,21 +687,6 @@ class ProfileCreateService:
         db.add(forward_validation)
         await db.flush()
 
-        pal = ProfileAuditLog(
-            user_id=user_id,
-            profile_id=profile_id,
-            changed_by=user_id,
-            change_source="profile_intelligence",
-            change_description=(
-                f"Profile criado a partir de sugestão do Profile Intelligence Engine "
-                f"(suggestion_id={suggestion_id})"
-            ),
-            previous_config=None,
-            new_config=profile_config,
-            previous_profile_version=None,
-            new_profile_version=now,
-        )
-        db.add(pal)
         await db.flush()
 
         # ── 12. PI Audit Log ──────────────────────────────────────────────────

@@ -291,6 +291,39 @@ def test_operational_promotion_preserves_v2_allow(monkeypatch):
     assert gate["operational_effect"] is True
 
 
+def test_profile_contract_operational_flag_blocks_invalid_contract(monkeypatch):
+    from app.tasks import pipeline_scan
+
+    monkeypatch.delenv("L3_GATE_V2_OPERATIONAL", raising=False)
+    monkeypatch.setenv("L3_PROFILE_CONTRACT_OPERATIONAL", "true")
+    gate = _evaluate({
+        "symbol": "SAFE_USDT",
+        "indicators": {
+            "taker_ratio": 0.7,
+            "volume_delta": 1,
+            "vwap_distance_pct": 1,
+            "rsi": 62,
+            "macd_histogram": 1,
+        },
+    })
+    gate["execution_contract"] = {
+        "contract_valid": False,
+        "reason_codes": ["CONFIG_CONTRACT_MISMATCH"],
+    }
+
+    decision, l3_pass = pipeline_scan._apply_l3_gate_v2_operational_promotion(
+        legacy_decision="ALLOW",
+        legacy_l3_pass=True,
+        gate_v2=gate,
+    )
+
+    assert decision == "BLOCK"
+    assert l3_pass is False
+    assert gate["promotion_status"] == "PROFILE_CONTRACT_DENY"
+    assert gate["operational_decision"] == "BLOCK"
+    assert gate["operational_effect"] is True
+
+
 @pytest.mark.asyncio
 async def test_pipeline_dual_evaluation_keeps_legacy_authoritative(monkeypatch):
     from app.tasks import pipeline_scan

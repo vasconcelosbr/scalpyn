@@ -59,6 +59,10 @@ from typing import Any, Dict, Optional, Tuple
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..models.profile import Profile
+from .profile_execution_contract import activate_profile_config
+from .profile_runtime_config import canonical_profile_config_hash
+
 logger = logging.getLogger("scalpyn.autopilot")
 
 # ── Source configuration (AUTOPILOT_SOURCE env var) ─────────────────────────
@@ -2309,20 +2313,6 @@ async def run_autopilot_cycle(
 
     # ── Escrita real (dry_run=False) ─────────────────────────────────────────
 
-    # 7. Salvar versão atual (snapshot pré-mutação)
-    try:
-        version_id = await save_profile_version(
-            profile_id=profile_id,
-            config=current_config,
-            perf=perf,
-            regime=regime,
-            mutation_reason=reason,
-            db=db,
-        )
-    except Exception as e:
-        logger.error(f"[Autopilot] Erro ao salvar versão para {profile_id}: {e}")
-        version_id = None
-
     # 9. Montar auto_pilot_config atualizado
     updated_ap_config.update({
         "last_mutation_at":        datetime.now(timezone.utc).isoformat(),
@@ -2330,30 +2320,26 @@ async def run_autopilot_cycle(
         "ev_before_last_mutation": perf["approved_ev"],
         "ev_after_last_mutation":  None,  # será preenchido no próximo ciclo
         "mutation_reason":         reason,
-        "last_version_id":         version_id,
         "macro_risk":              result.get("macro_risk"),
         "analysis_summary":        result.get("analysis_summary"),
     })
 
-    # 10. Persistir profile + audit na mesma transação. O compare por config
-    # impede sobrescrever edição concorrente feita após o início do ciclo.
-    update_result = await db.execute(text("""
-        UPDATE profiles
-        SET config = CAST(:new_config AS jsonb),
-            auto_pilot_config = CAST(:ap_config AS jsonb),
-            updated_at = NOW()
-        WHERE id = CAST(:profile_id AS uuid)
-          AND user_id = CAST(:user_id AS uuid)
-          AND config = CAST(:expected_config AS jsonb)
-        RETURNING id
-    """), {
-        "profile_id": profile_id,
-        "user_id": user_id,
-        "new_config": json.dumps(result["config"]),
-        "ap_config": json.dumps(updated_ap_config),
-        "expected_config": json.dumps(current_config),
-    })
-    if update_result.scalar_one_or_none() is None:
+    # 10. Lock, compare and activate the immutable version in one transaction.
+    profile = (
+        await db.execute(
+            select(Profile)
+            .where(
+                Profile.id == _uuid_or_none(profile_id),
+                Profile.user_id == _uuid_or_none(user_id),
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if (
+        profile is None
+        or canonical_profile_config_hash(profile.config or {})
+        != canonical_profile_config_hash(current_config)
+    ):
         await db.rollback()
         block_reason = "profile_config_changed_during_cycle"
         await log_audit(
@@ -2378,6 +2364,20 @@ async def run_autopilot_cycle(
             "autopilot_still_active": True,
             "perf": perf,
         }
+
+    activation = await activate_profile_config(
+        db,
+        profile=profile,
+        config=result["config"],
+        changed_by=uuid.UUID(str(user_id)),
+        change_source="autopilot",
+        change_description=f"Auto-Pilot governed mutation: {reason}",
+        expected_profile_config_hash=canonical_profile_config_hash(current_config),
+        require_feature_identity=False,
+    )
+    version_id = activation["profile_version_id"]
+    updated_ap_config["last_version_id"] = version_id
+    profile.auto_pilot_config = updated_ap_config
 
     await log_audit(
         profile_id=profile_id,

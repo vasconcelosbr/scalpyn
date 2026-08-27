@@ -34,3 +34,19 @@ def test_signal_condition_without_field_or_indicator_is_rejected():
                 "conditions": [{"operator": ">=", "value": 72}],
             },
         })
+
+
+def test_validation_preserves_unrelated_profile_fields():
+    config = _validate_profile_config(
+        {
+            "reference_window": "20_candles",
+            "risk": {"stop_loss_atr_multiplier": 1.5},
+            "filters": {"logic": "AND", "conditions": []},
+            "signals": {"logic": "AND", "conditions": []},
+            "entry_triggers": {"logic": "AND", "conditions": []},
+            "block_rules": {"blocks": []},
+        }
+    )
+
+    assert config["reference_window"] == "20_candles"
+    assert config["risk"] == {"stop_loss_atr_multiplier": 1.5}

@@ -15,6 +15,10 @@ from .l3_gate_v2_metrics import observe_gate_capture
 logger = logging.getLogger(__name__)
 
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+_OPERATIONAL_PROMOTION_STATUSES = {
+    "OPERATIONAL",
+    "PROFILE_CONTRACT_DENY",
+}
 
 _UPSERT = text("""
     INSERT INTO l3_gate_v2_evaluations (
@@ -83,7 +87,7 @@ def _capture_row(
     if not isinstance(operational_effect, bool):
         raise ValueError("operational_effect_must_be_boolean")
     if operational_effect and (
-        payload.get("promotion_status") != "OPERATIONAL"
+        payload.get("promotion_status") not in _OPERATIONAL_PROMOTION_STATUSES
         or payload.get("operational_decision") not in {"ALLOW", "BLOCK"}
     ):
         raise ValueError("operational_promotion_metadata_invalid")

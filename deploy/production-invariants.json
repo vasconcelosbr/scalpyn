@@ -385,7 +385,7 @@
           "contains_all": [
             "CONTRACT_VERSION = \"l3_gate_v2\"",
             "operational_effect\": False",
-            "signals[\"gate_passed\"] and entry[\"gate_passed\"]",
+            "and global_entry[\"gate_passed\"]",
             "REQUIRED_CONDITION_SKIPPED",
             "evaluation_envelope_hash"
           ]
@@ -444,6 +444,76 @@
             "test_persistence_is_idempotent_and_reports_replay",
             "test_invalid_capture_is_visible_as_count_mismatch",
             "test_capture_row_preserves_governed_operational_contract"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "l3-profile-execution-contract",
+      "description": "Every active L3 scan freezes an immutable profile version, preserves profile and global trigger gates independently, and fails closed on identity or configuration drift",
+      "files": [
+        {
+          "path": "backend/app/services/profile_execution_contract.py",
+          "contains_all": [
+            "l3_profile_execution_contract_v1",
+            "PROFILE_VERSION_MISSING",
+            "CONFIG_CONTRACT_MISMATCH",
+            "REQUIRED_CONDITION_MISSING",
+            "load_profile_execution_snapshots",
+            "activate_profile_config"
+          ]
+        },
+        {
+          "path": "backend/app/services/profile_runtime_config.py",
+          "contains_all": [
+            "profile_plus_global_entry_triggers_v1",
+            "_global_entry_triggers",
+            "profile_entry_triggers_hash",
+            "global_entry_triggers_hash"
+          ]
+        },
+        {
+          "path": "backend/app/tasks/pipeline_scan.py",
+          "contains_all": [
+            "L3_PROFILE_CONTRACT_OPERATIONAL",
+            "EXECUTION_CONTRACT_NOT_CAPTURED",
+            "load_profile_execution_snapshots"
+          ]
+        },
+        {
+          "path": "backend/app/api/profiles.py",
+          "contains_all": [
+            "expected_profile_version_id",
+            "expected_profile_config_hash",
+            "/execution-contract/audit",
+            "round_trip_export"
+          ]
+        },
+        {
+          "path": "backend/scripts/backfill_l3_profile_execution_versions.py",
+          "contains_all": [
+            "--apply",
+            "dry-run",
+            "ensure_current_profile_version",
+            "verification"
+          ]
+        },
+        {
+          "path": "backend/tests/test_profile_execution_contract.py",
+          "contains_all": [
+            "test_adx_below_required_boundary_is_denied",
+            "test_missing_adx_is_required_skip_and_denied",
+            "test_global_entry_triggers_are_an_additional_and_gate",
+            "test_invalid_execution_contract_blocks_even_with_score_99_when_operational"
+          ]
+        },
+        {
+          "path": "frontend/components/profiles/ExecutionContractPanel.tsx",
+          "contains_all": [
+            "Integridade de execução",
+            "Persistido",
+            "Runtime",
+            "Exportar contrato"
           ]
         }
       ]

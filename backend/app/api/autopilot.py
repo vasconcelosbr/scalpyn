@@ -210,7 +210,19 @@ async def rollback_autopilot(
         raise HTTPException(status_code=404, detail=str(e))
 
     # Apply restored config to profile
-    profile.config = result["config"]
+    from ..services.profile_execution_contract import activate_profile_config
+
+    activation = await activate_profile_config(
+        db,
+        profile=profile,
+        config=result["config"],
+        changed_by=user_id,
+        change_source="autopilot_rollback",
+        change_description=(
+            f"Auto-Pilot rollback from version {version_id} via API"
+        ),
+        require_feature_identity=False,
+    )
     # Reset regression counter on manual rollback
     ap_config = dict(getattr(profile, "auto_pilot_config", None) or {})
     ap_config["consecutive_regressions"] = 0
@@ -227,6 +239,7 @@ async def rollback_autopilot(
         "version_number": result["version_number"],
         "regime":         result.get("regime"),
         "ev_at_snapshot": result.get("ev_at_snapshot"),
+        "execution_contract": activation,
         "message":        f"Config restaurada para versão {result['version_number']}. Circuit breaker resetado.",
     }
 

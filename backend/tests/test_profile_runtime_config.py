@@ -55,7 +55,7 @@ def test_empty_global_entry_triggers_cannot_erase_profile_triggers():
     ]
 
 
-def test_nonempty_global_entry_triggers_remain_an_intentional_override():
+def test_nonempty_global_entry_triggers_are_separate_and_never_replace_profile():
     global_triggers = {
         "logic": "AND",
         "conditions": [
@@ -75,7 +75,11 @@ def test_nonempty_global_entry_triggers_remain_an_intentional_override():
         {"entry_triggers": global_triggers},
     )
 
-    assert effective["entry_triggers"] == global_triggers
+    assert effective["entry_triggers"] == PROFILE_ENTRY_TRIGGERS
+    assert effective["_global_entry_triggers"] == global_triggers
+    assert effective["_entry_triggers_lineage"]["composition"] == "AND"
+    assert effective["_entry_triggers_lineage"]["profile_trigger_count"] == 2
+    assert effective["_entry_triggers_lineage"]["global_trigger_count"] == 1
 
 
 def test_uni_snapshot_is_blocked_after_safe_runtime_merge():

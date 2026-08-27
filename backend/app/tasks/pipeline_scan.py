@@ -27,9 +27,9 @@ from ..services.pipeline_rejections import evaluate_rejections
 from ..services.profile_runtime_config import (
     BlockRuleConfigConflict,
     ProfileBlockRulesDropped,
-    canonical_hash,
     merge_profile_runtime_block_config,
 )
+from ..services.profile_execution_contract import load_profile_execution_snapshots
 from ..utils.pipeline_profile_filters import (
     STRICT_META_FIELDS,
     effective_pipeline_level,
@@ -63,10 +63,30 @@ def _l3_gate_v2_operational_enabled() -> bool:
     return configured.strip().lower() in _TRUE_ENV_VALUES
 
 
+def _l3_profile_contract_operational_enabled() -> bool:
+    configured = os.environ.get("L3_PROFILE_CONTRACT_OPERATIONAL", "false")
+    return configured.strip().lower() in _TRUE_ENV_VALUES
+
+
 def _apply_l3_gate_v2_operational_promotion(
     *, legacy_decision: str, legacy_l3_pass: bool, gate_v2: dict
 ) -> tuple[str, bool]:
     """Apply the reversible operational promotion without mutating profile rules."""
+
+    execution_contract = gate_v2.get("execution_contract") or {}
+    if (
+        _l3_profile_contract_operational_enabled()
+        and execution_contract.get("contract_valid") is not True
+    ):
+        gate_v2.update(
+            {
+                "promotion_status": "PROFILE_CONTRACT_DENY",
+                "operational_effect": True,
+                "operational_decision": "BLOCK",
+                "human_approval_required": False,
+            }
+        )
+        return "BLOCK", False
 
     if not _l3_gate_v2_operational_enabled():
         return legacy_decision, legacy_l3_pass
@@ -1725,9 +1745,24 @@ async def _evaluate_l3_decisions(
 
         if v2_error is None:
             v2_score = float(v2_asset.get("_score") or 0.0)
+            gate_profile_config = deepcopy(profile_config or {})
+            execution_contract = deepcopy(
+                gate_profile_config.get("_execution_contract") or {}
+            )
+            if not execution_contract:
+                execution_contract = {
+                    "contract_version": "l3_profile_execution_contract_v1",
+                    "contract_valid": False,
+                    "status": "MISMATCH",
+                    "reason_codes": ["EXECUTION_CONTRACT_NOT_CAPTURED"],
+                }
+            execution_contract["operational_effect"] = (
+                _l3_profile_contract_operational_enabled()
+            )
+            gate_profile_config["_execution_contract"] = execution_contract
             gate_v2 = evaluate_l3_gate_v2(
                 asset=v2_asset,
-                profile_config=profile_config,
+                profile_config=gate_profile_config,
                 score=v2_score,
                 score_context=v2_asset.get("_score_components") or {},
                 evaluated_at=evaluated_at,
@@ -1739,6 +1774,12 @@ async def _evaluate_l3_decisions(
                 block_rules_audit=processed.get("block_rules_audit"),
             )
         else:
+            error_execution_contract = deepcopy(
+                (profile_config or {}).get("_execution_contract") or {}
+            )
+            error_execution_contract["operational_effect"] = (
+                _l3_profile_contract_operational_enabled()
+            )
             gate_v2 = {
                 "contract_version": "l3_gate_v2",
                 "promotion_status": "SHADOW_ONLY",
@@ -1746,6 +1787,16 @@ async def _evaluate_l3_decisions(
                 "human_approval_required": True,
                 "evaluated_at": evaluated_at.isoformat().replace("+00:00", "Z"),
                 "evaluation_envelope_hash": None,
+                "profile_id": error_execution_contract.get("profile_id"),
+                "profile_version_id": error_execution_contract.get(
+                    "profile_version_id"
+                ),
+                "profile_config_hash": error_execution_contract.get(
+                    "profile_projection_hash"
+                ),
+                "runtime_config_hash": error_execution_contract.get(
+                    "runtime_hash"
+                ),
                 "score": {"value": None, "evaluation_envelope_hash": None},
                 "base_eligible": None,
                 "signals": {
@@ -1756,6 +1807,11 @@ async def _evaluate_l3_decisions(
                     "gate_passed": False, "reason_codes": ["EVALUATION_ERROR"],
                     "failed": [], "skipped": [], "conditions": [],
                 },
+                "global_entry_triggers": {
+                    "gate_passed": False, "reason_codes": ["EVALUATION_ERROR"],
+                    "failed": [], "skipped": [], "conditions": [],
+                },
+                "execution_contract": error_execution_contract,
                 "block_rules": {
                     "configured": bool(
                         ((profile_config or {}).get("block_rules") or {}).get(
@@ -1815,6 +1871,21 @@ async def _evaluate_l3_decisions(
                 "reason_codes": gate_v2["entry_triggers"]["reason_codes"],
                 "failed": gate_v2["entry_triggers"]["failed"],
                 "skipped": gate_v2["entry_triggers"]["skipped"],
+            },
+            "global_entry_triggers": {
+                "gate_passed": gate_v2["global_entry_triggers"]["gate_passed"],
+                "reason_codes": gate_v2["global_entry_triggers"]["reason_codes"],
+                "failed": gate_v2["global_entry_triggers"]["failed"],
+                "skipped": gate_v2["global_entry_triggers"]["skipped"],
+            },
+            "execution_contract": {
+                "contract_valid": gate_v2["execution_contract"].get("contract_valid"),
+                "status": gate_v2["execution_contract"].get("status"),
+                "reason_codes": gate_v2["execution_contract"].get("reason_codes") or [],
+                "profile_version_id": gate_v2["execution_contract"].get("profile_version_id"),
+                "profile_projection_hash": gate_v2["execution_contract"].get("profile_projection_hash"),
+                "version_config_hash": gate_v2["execution_contract"].get("version_config_hash"),
+                "sections": gate_v2["execution_contract"].get("sections") or {},
             },
             "block_rules": {
                 "configured": gate_v2["block_rules"]["configured"],
@@ -2941,10 +3012,9 @@ async def _run_pipeline_scan():
     from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
     from ..models.pipeline_watchlist import PipelineWatchlist
     from ..models.pool import PoolCoin
-    from ..models.profile import Profile
     from ..models.config_profile import ConfigProfile
     from ..schemas.spot_engine_config import SpotEngineConfig
-    from sqlalchemy import bindparam, select, text
+    from sqlalchemy import select, text
     from ..utils.symbol_filters import filter_real_assets
 
     redis = _get_redis()
@@ -3031,46 +3101,13 @@ async def _run_pipeline_scan():
         profile_config_map = {}
         profile_meta_map: dict = {}
         if profile_ids:
-            profile_rows = (await db.execute(
-                select(Profile).where(Profile.id.in_(profile_ids))
-            )).scalars().all()
-            profile_config_map = {row.id: row.config for row in profile_rows}
-            profile_meta_map   = {
-                row.id: {
-                    "name":    row.name,
-                    "version": getattr(row, "profile_version", None),
-                    "version_id": None,
-                }
-                for row in profile_rows
+            profile_meta_map = await load_profile_execution_snapshots(
+                db, profile_ids
+            )
+            profile_config_map = {
+                profile_id: meta["config"]
+                for profile_id, meta in profile_meta_map.items()
             }
-            try:
-                version_stmt = text("""
-                    SELECT id, profile_id, config
-                      FROM profile_versions
-                     WHERE profile_id IN :profile_ids
-                       AND is_active IS TRUE
-                     ORDER BY profile_id, version_number DESC
-                """).bindparams(bindparam("profile_ids", expanding=True))
-                version_rows = (
-                    await db.execute(version_stmt, {"profile_ids": list(profile_ids)})
-                ).mappings().all()
-                current_hashes = {
-                    row.id: canonical_hash(row.config or {}) for row in profile_rows
-                }
-                for version_row in version_rows:
-                    meta = profile_meta_map.get(version_row["profile_id"])
-                    if (
-                        meta
-                        and meta["version_id"] is None
-                        and canonical_hash(version_row["config"] or {})
-                        == current_hashes.get(version_row["profile_id"])
-                    ):
-                        meta["version_id"] = version_row["id"]
-            except Exception as exc:
-                logger.warning(
-                    "[PipelineScan] exact profile_version_id lookup failed: %s",
-                    exc,
-                )
 
         watchlist_user_ids = {wl.user_id for wl in wl_snapshots}
         spot_engine_config_map: dict[Any, SpotEngineConfig] = {
@@ -3361,6 +3398,30 @@ async def _run_pipeline_scan():
                                 "[PipelineScan] %s: block config read failed (%s) — using profile.config block_rules",
                                 wl.name, _bc_exc,
                             )
+                        _runtime_profile_meta = (
+                            profile_meta_map.get(wl.profile_id)
+                            if wl.profile_id else {}
+                        ) or {}
+                        execution_contract = deepcopy(
+                            _runtime_profile_meta.get("contract") or {}
+                        )
+                        execution_contract["watchlist_profile_id"] = (
+                            str(wl.profile_id) if wl.profile_id else None
+                        )
+                        if execution_contract.get("profile_id") != execution_contract.get(
+                            "watchlist_profile_id"
+                        ):
+                            reasons = list(execution_contract.get("reason_codes") or [])
+                            if "PROFILE_ID_MISMATCH" not in reasons:
+                                reasons.append("PROFILE_ID_MISMATCH")
+                            execution_contract.update(
+                                {
+                                    "contract_valid": False,
+                                    "status": "MISMATCH",
+                                    "reason_codes": reasons,
+                                }
+                            )
+                        profile_config["_execution_contract"] = execution_contract
 
                     is_futures = getattr(wl, "market_mode", "spot") == "futures"
 

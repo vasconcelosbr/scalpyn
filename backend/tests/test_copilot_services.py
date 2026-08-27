@@ -220,6 +220,8 @@ async def test_approval_requires_exact_phrase():
 
 @pytest.mark.asyncio
 async def test_approved_execution_creates_shadow_candidate_without_mutating_source(monkeypatch):
+    from app.copilot import action_service
+
     user_id = uuid4()
     source = SimpleNamespace(
         id=uuid4(), user_id=user_id, name="L3 Base", config={"signals": {"min": 20}},
@@ -230,6 +232,13 @@ async def test_approved_execution_creates_shadow_candidate_without_mutating_sour
     plan = _plan(user_id, source)
     service = ActionService()
     monkeypatch.setattr(service, "_get", AsyncMock(return_value=plan))
+    activate = AsyncMock(
+        return_value={
+            "profile_version_id": str(uuid4()),
+            "profile_config_hash": "c" * 64,
+        }
+    )
+    monkeypatch.setattr(action_service, "activate_profile_config", activate)
     db = _ActionDb(source)
     result = await service.execute(db, user_id, plan.id)
     candidates = [row for row in db.added if isinstance(row, Profile)]
@@ -239,3 +248,5 @@ async def test_approved_execution_creates_shadow_candidate_without_mutating_sour
     assert candidates[0].config["signals"]["min"] == 25
     assert source.config["signals"]["min"] == 20
     assert result["execution_result"]["live_profile_changed"] is False
+    activate.assert_awaited_once()
+    assert result["execution_result"]["profile_version_id"]

@@ -25,7 +25,11 @@ interface ScoringPayload {
 }
 
 interface ImportProfile {
-  name: string;
+  profile_id?: string;
+  id?: string;
+  name?: string;
+  expected_profile_version_id?: string;
+  expected_profile_config_hash?: string;
   description?: string;
   funnel_role?: FunnelRole;
   pipeline_label?: string;
@@ -105,8 +109,17 @@ const VALID_ROLES = new Set(Object.keys(ROLE_META));
 const VALID_TF    = new Set(["1m", "3m", "5m", "15m", "1h"]);
 
 // ── Validation ────────────────────────────────────────────────────────────────
-function validateProfile(p: ImportProfile): { valid: boolean; error?: string } {
-  if (!p.name?.trim()) return { valid: false, error: "'name' é obrigatório" };
+function validateProfile(p: ImportProfile, updateIndicatorsOnly = false): { valid: boolean; error?: string } {
+  if (updateIndicatorsOnly) {
+    if (!p.profile_id && !p.id) return { valid: false, error: "'profile_id' é obrigatório" };
+    if (!p.expected_profile_version_id) return { valid: false, error: "'expected_profile_version_id' é obrigatório" };
+    if (!p.expected_profile_config_hash) return { valid: false, error: "'expected_profile_config_hash' é obrigatório" };
+    for (const section of ["filters", "signals", "entry_triggers", "block_rules"] as const) {
+      if (p[section] === undefined) return { valid: false, error: `'${section}' é obrigatório` };
+    }
+  } else if (!p.name?.trim()) {
+    return { valid: false, error: "'name' é obrigatório" };
+  }
   if (p.funnel_role && !VALID_ROLES.has(p.funnel_role))
     return { valid: false, error: `funnel_role inválido: "${p.funnel_role}"` };
   if (p.default_timeframe && !VALID_TF.has(p.default_timeframe))
@@ -315,7 +328,7 @@ export function JsonImportBuilder({ onClose }: Props) {
       }
 
       const parsedList: ParsedProfile[] = profiles.map((p) => {
-        const v = validateProfile(p);
+        const v = validateProfile(p, parsedPayload.updateIndicatorsOnly);
         return { raw: p, editedName: p.name?.trim() ?? "", valid: v.valid, validationError: v.error };
       });
 

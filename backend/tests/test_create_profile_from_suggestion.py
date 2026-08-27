@@ -28,6 +28,7 @@ from app.services.profile_create_service import (
     ensure_master_scoring_rules,
     _FORBIDDEN_FIELDS,
 )
+from app.services import profile_create_service, profile_execution_contract
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -37,6 +38,34 @@ OTHER_USER_ID = uuid.UUID("bbbbbbbb-0000-0000-0000-000000000002")
 SUGG_ID = uuid.UUID("cccccccc-0000-0000-0000-000000000003")
 COMBO_ID = uuid.UUID("dddddddd-0000-0000-0000-000000000004")
 PROFILE_ID = uuid.UUID("eeeeeeee-0000-0000-0000-000000000005")
+
+
+@pytest.fixture(autouse=True)
+def _stub_immutable_profile_activation(monkeypatch):
+    async def _activate(db, **kwargs):
+        profile = kwargs["profile"]
+        previous = kwargs.get("previous_config_override")
+        db.add(
+            profile_create_service.ProfileAuditLog(
+                user_id=profile.user_id,
+                profile_id=profile.id,
+                changed_by=kwargs["changed_by"],
+                change_source=kwargs["change_source"],
+                change_description=kwargs["change_description"],
+                previous_config=previous,
+                new_config=kwargs["config"],
+                previous_profile_version=None,
+                new_profile_version=profile.profile_version,
+            )
+        )
+        return {
+            "profile_version_id": str(uuid.uuid4()),
+            "profile_config_hash": "a" * 64,
+        }
+
+    monkeypatch.setattr(
+        profile_execution_contract, "activate_profile_config", _activate
+    )
 
 
 def _make_suggestion(
@@ -640,7 +669,7 @@ class TestCreateProfileService:
 
         assert len(pal_instances) >= 1
         assert pal_instances[0].get("change_source") == "profile_intelligence"
-        assert pal_instances[0].get("previous_config") is None
+        assert pal_instances[0].get("previous_config") == {}
 
     @pytest.mark.asyncio
     async def test_19_invalid_mode_raises(self):

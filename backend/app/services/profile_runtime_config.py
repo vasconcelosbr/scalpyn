@@ -14,6 +14,15 @@ logger = logging.getLogger(__name__)
 BLOCK_RULE_CONFIG_CONFLICT = "BLOCK_RULE_CONFIG_CONFLICT"
 PROFILE_BLOCK_RULES_DROPPED = "PROFILE_BLOCK_RULES_DROPPED"
 BLOCK_RULES_CONTRACT_VERSION = "profile_block_rules_merge_v2"
+ENTRY_TRIGGERS_CONTRACT_VERSION = "profile_plus_global_entry_triggers_v1"
+TRANSIENT_PROFILE_METADATA_KEYS = frozenset(
+    {
+        "_execution_contract",
+        "_block_rules_lineage",
+        "_entry_triggers_lineage",
+        "_global_entry_triggers",
+    }
+)
 
 
 class BlockRuleConfigConflict(ValueError):
@@ -81,6 +90,18 @@ def canonical_hash(value: Any) -> str:
     """Return the stable SHA-256 used by block-rule lineage."""
 
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def canonical_profile_config_hash(config: Mapping[str, Any] | None) -> str:
+    """Hash executable profile content, excluding only catalogued runtime keys."""
+
+    source = dict(config or {})
+    persisted = {
+        key: value
+        for key, value in source.items()
+        if key not in TRANSIENT_PROFILE_METADATA_KEYS
+    }
+    return canonical_hash(persisted)
 
 
 def _extract_blocks(value: Any) -> list[dict[str, Any]]:
@@ -210,13 +231,7 @@ def merge_profile_runtime_block_config(
     profile_id: Any = None,
     profile_version_id: Any = None,
 ) -> dict[str, Any]:
-    """Build the effective global + profile block contract.
-
-    A non-empty global ``entry_triggers`` value remains an intentional
-    Autopilot override.  An explicitly empty global value, however, is not
-    allowed to replace non-empty profile triggers: doing so silently turns the
-    positive entry gate into an allow-by-default path.
-    """
+    """Build global/profile contracts without replacing profile entry gates."""
     merged = deepcopy(dict(profile_config or {}))
     global_config = dict(global_block_config or {})
     profile_blocks = _extract_blocks(merged.get("block_rules"))
@@ -234,7 +249,7 @@ def merge_profile_runtime_block_config(
         "profile_version_id": (
             str(profile_version_id) if profile_version_id is not None else None
         ),
-        "profile_config_hash": canonical_hash(dict(profile_config or {})),
+        "profile_config_hash": canonical_profile_config_hash(profile_config),
         "profile_block_rules_hash": canonical_block_rules_hash(profile_blocks),
         "global_block_rules_hash": canonical_block_rules_hash(global_blocks),
         "effective_block_rules_hash": canonical_block_rules_hash(effective_blocks),
@@ -244,22 +259,21 @@ def merge_profile_runtime_block_config(
         "reason_codes": [],
     }
 
-    if not global_config:
-        return merged
-
-    global_entry_triggers = global_config.get("entry_triggers")
-    if global_entry_triggers is None:
-        return merged
-
-    profile_trigger_count = _entry_trigger_count(merged.get("entry_triggers"))
-    global_trigger_count = _entry_trigger_count(global_entry_triggers)
-    if profile_trigger_count > 0 and global_trigger_count == 0:
-        logger.error(
-            "[L3_CONFIG_GUARD] Ignored empty global entry_triggers override; "
-            "preserving %d profile trigger condition(s)",
-            profile_trigger_count,
-        )
-        return merged
-
-    merged["entry_triggers"] = global_entry_triggers
+    profile_entry_triggers = deepcopy(merged.get("entry_triggers") or {})
+    global_entry_triggers = deepcopy(global_config.get("entry_triggers") or {})
+    # L3_CONFIG_GUARD: profile triggers stay intact; global triggers are AND-only.
+    merged["entry_triggers"] = profile_entry_triggers
+    merged["_global_entry_triggers"] = global_entry_triggers
+    merged["_entry_triggers_lineage"] = {
+        "contract_version": ENTRY_TRIGGERS_CONTRACT_VERSION,
+        "profile_id": str(profile_id) if profile_id is not None else None,
+        "profile_version_id": (
+            str(profile_version_id) if profile_version_id is not None else None
+        ),
+        "profile_entry_triggers_hash": canonical_hash(profile_entry_triggers),
+        "global_entry_triggers_hash": canonical_hash(global_entry_triggers),
+        "profile_trigger_count": _entry_trigger_count(profile_entry_triggers),
+        "global_trigger_count": _entry_trigger_count(global_entry_triggers),
+        "composition": "AND",
+    }
     return merged

@@ -237,11 +237,24 @@ async def test_valid_scoped_mutation_is_atomic_and_audited(monkeypatch):
             }
         ),
     )
-    monkeypatch.setattr(engine, "save_profile_version", AsyncMock(return_value=version_id))
+    activation = AsyncMock(
+        return_value={
+            "profile_version_id": version_id,
+            "profile_config_hash": "b" * 64,
+        }
+    )
+    monkeypatch.setattr(engine, "activate_profile_config", activation)
     monkeypatch.setattr(engine, "log_audit", audit)
 
-    update_result = SimpleNamespace(scalar_one_or_none=lambda: profile_id)
-    db = _Db([update_result])
+    profile = SimpleNamespace(
+        id=profile_id,
+        user_id=user_id,
+        config={"minimum_score": 50},
+        auto_pilot_config={},
+        is_shadow_only=False,
+    )
+    select_result = SimpleNamespace(scalar_one_or_none=lambda: profile)
+    db = _Db([select_result])
 
     result = await engine.run_autopilot_cycle(
         profile_id=profile_id,
@@ -258,11 +271,11 @@ async def test_valid_scoped_mutation_is_atomic_and_audited(monkeypatch):
     assert result["rule_adjustment"]["reason"] == (
         "target_config_profiles_not_profile_scoped"
     )
-    update_sql = str(db.execute.await_args_list[-1].args[0])
-    update_params = db.execute.await_args_list[-1].args[1]
-    assert "UPDATE profiles" in update_sql
-    assert update_params["user_id"] == user_id
-    assert update_params["profile_id"] == profile_id
+    activation.assert_awaited_once()
+    assert activation.await_args.kwargs["profile"] is profile
+    assert activation.await_args.kwargs["config"] == {"minimum_score": 51}
+    assert activation.await_args.kwargs["expected_profile_config_hash"]
+    assert profile.auto_pilot_config["last_version_id"] == version_id
 
     mutated_call = next(
         call for call in audit.await_args_list

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from typing import Any
 from uuid import UUID, uuid4
@@ -10,10 +9,12 @@ from uuid import UUID, uuid4
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .profile_runtime_config import canonical_hash, canonical_profile_config_hash
+
 
 def content_hash(payload: Any) -> str:
-    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    """Return the numeric-normalized canonical hash used at runtime."""
+    return canonical_hash(payload)
 
 
 def candidate_idempotency_key(change_set_id: UUID, profile_hash: str, score_hash: str) -> str:
@@ -55,7 +56,7 @@ async def ensure_current_profile_version(
         text("SELECT pg_advisory_xact_lock(hashtext(:profile_id))"),
         {"profile_id": str(profile_id)},
     )
-    profile_hash = content_hash(config)
+    profile_hash = canonical_profile_config_hash(config)
     score_payload = score_payload_from_profile(config)
     score_hash = content_hash(score_payload)
     score_engine_version_id = (await db.execute(text("""
@@ -79,12 +80,18 @@ async def ensure_current_profile_version(
     status = "SHADOW" if is_shadow_only else "CHAMPION"
     idempotency_key = f"baseline-v2:{profile_id}:{profile_hash}"
     existing = (await db.execute(text("""
-        SELECT id
+        SELECT id, config, config_hash
           FROM profile_versions
          WHERE idempotency_key = :idempotency_key
          LIMIT 1
-    """), {"idempotency_key": idempotency_key})).scalar_one_or_none()
+    """), {"idempotency_key": idempotency_key})).mappings().one_or_none()
     if existing:
+        existing_hash = canonical_profile_config_hash(existing["config"] or {})
+        if existing_hash != profile_hash or existing["config_hash"] != profile_hash:
+            raise ValueError(
+                "PROFILE_VERSION_IMMUTABILITY_VIOLATION: existing version payload "
+                "does not match its idempotency key"
+            )
         await db.execute(text("""
             UPDATE profile_versions
                SET status = 'ARCHIVED', is_active = false, deactivated_at = now()
@@ -94,25 +101,20 @@ async def ensure_current_profile_version(
         """), {
             "profile_id": str(profile_id),
             "status": status,
-            "existing_id": str(existing),
+            "existing_id": str(existing["id"]),
         })
         await db.execute(text("""
             UPDATE profile_versions
-               SET config = CAST(:config AS JSONB), config_hash = :config_hash,
-                   score_engine_version_id = :score_engine_version_id,
-                   status = :status, is_active = :is_active,
+               SET status = :status, is_active = :is_active,
                    activated_at = COALESCE(activated_at, now()),
                    deactivated_at = NULL
              WHERE id = :existing_id
         """), {
-            "config": json.dumps(config),
-            "config_hash": profile_hash,
-            "score_engine_version_id": str(score_engine_version_id),
             "status": status,
             "is_active": not is_shadow_only,
-            "existing_id": str(existing),
+            "existing_id": str(existing["id"]),
         })
-        return existing, score_engine_version_id, False
+        return existing["id"], score_engine_version_id, False
 
     parent_id = await db.scalar(text("""
         SELECT id FROM profile_versions
@@ -167,11 +169,26 @@ async def create_shadow_profile_version(
 ) -> UUID:
     """Create one idempotent SHADOW version without mutating a champion."""
     idempotency_key = f"pi-calibration:{cycle_id}:{profile_id}"
-    existing = await db.scalar(text(
-        "SELECT id FROM profile_versions WHERE idempotency_key = :key"
-    ), {"key": idempotency_key})
+    existing = (
+        await db.execute(
+            text(
+                "SELECT id, config, config_hash FROM profile_versions "
+                "WHERE idempotency_key = :key"
+            ),
+            {"key": idempotency_key},
+        )
+    ).mappings().one_or_none()
     if existing:
-        return existing
+        profile_hash = canonical_profile_config_hash(config)
+        if (
+            canonical_profile_config_hash(existing["config"] or {}) != profile_hash
+            or existing["config_hash"] != profile_hash
+        ):
+            raise ValueError(
+                "PROFILE_VERSION_IMMUTABILITY_VIOLATION: shadow idempotency key "
+                "already points to different content"
+            )
+        return existing["id"]
 
     parent_id = None
     if origin_profile_id:
@@ -230,7 +247,7 @@ async def create_shadow_profile_version(
         "version_number": version_number,
         "config": json.dumps(config),
         "parent_version_id": str(parent_id) if parent_id else None,
-        "config_hash": content_hash(config),
+        "config_hash": canonical_profile_config_hash(config),
         "score_engine_version_id": str(score_engine_version_id),
         "source_cycle_id": str(cycle_id),
         "idempotency_key": idempotency_key,
@@ -250,7 +267,7 @@ async def create_candidate_profile_version(
 ) -> tuple[UUID, UUID, bool]:
     """Create an immutable CANDIDATE snapshot without mutating profile runtime state."""
     await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:profile_id))"), {"profile_id": str(profile_id)})
-    profile_hash = content_hash(config)
+    profile_hash = canonical_profile_config_hash(config)
     score_hash = content_hash(score_config)
     idempotency_key = candidate_idempotency_key(change_set_id, profile_hash, score_hash)
     existing = await db.scalar(text(

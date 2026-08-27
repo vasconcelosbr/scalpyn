@@ -22,6 +22,21 @@ from .rule_engine import RuleEngine
 CONTRACT_VERSION = "l3_gate_v2"
 CANONICALIZATION_VERSION = "canonical_json_v1"
 PROMOTION_STATUS = "SHADOW_ONLY"
+SUPPORTED_CONDITION_OPERATORS = {
+    "==",
+    "=",
+    "!=",
+    ">",
+    ">=",
+    "<",
+    "<=",
+    "between",
+    "in",
+    "not_in",
+    "contains",
+    "is_true",
+    "is_false",
+}
 
 
 def _jsonable(value: Any) -> Any:
@@ -93,9 +108,15 @@ def _evaluate_section(
     results: list[Dict[str, Any]] = []
 
     for condition in enabled:
+        operator = str(condition.get("operator", "=="))
         status, detail = engine.evaluate_condition_status(
             condition, eval_data, field_key="indicator"
         )
+        if operator not in SUPPORTED_CONDITION_OPERATORS:
+            status = RuleStatus.FAIL
+            detail["passed"] = False
+            detail["status"] = RuleStatus.FAIL.value
+            detail["reason"] = "INVALID_OPERATOR"
         results.append(
             {
                 "condition_id": condition["id"],
@@ -103,7 +124,7 @@ def _evaluate_section(
                 "indicator": condition.get("indicator"),
                 "left": condition.get("left"),
                 "right": condition.get("right"),
-                "operator": condition.get("operator", "=="),
+                "operator": operator,
                 "value": _jsonable(condition.get("value")),
                 "min": _jsonable(condition.get("min")),
                 "max": _jsonable(condition.get("max")),
@@ -197,6 +218,29 @@ def evaluate_l3_gate_v2(
         config=profile.get("entry_triggers") or {},
         eval_data=eval_data,
     )
+    global_entry_config = profile.get("_global_entry_triggers") or {}
+    if (global_entry_config.get("conditions") or []):
+        global_entry = _evaluate_section(
+            section="global_entry_triggers",
+            config=global_entry_config,
+            eval_data=eval_data,
+        )
+    else:
+        global_entry = {
+            "section": "global_entry_triggers",
+            "logic": str(global_entry_config.get("logic") or "AND").upper(),
+            "configured": False,
+            "gate_passed": True,
+            "reason_codes": ["NO_GLOBAL_ENTRY_TRIGGERS"],
+            "matched": [],
+            "failed": [],
+            "failed_required": [],
+            "skipped": [],
+            "skipped_required": [],
+            "conditions": [],
+        }
+    entry_lineage = deepcopy(profile.get("_entry_triggers_lineage") or {})
+    global_entry.update(entry_lineage)
     raw_block_audit = deepcopy(block_rules_audit or {})
     block_lineage = deepcopy(profile.get("_block_rules_lineage") or {})
     block_rules = {
@@ -217,7 +261,24 @@ def evaluate_l3_gate_v2(
         "effective_rules_count": block_lineage.get("effective_rules_count"),
         "reason_codes": block_lineage.get("reason_codes") or [],
     }
-    would_authorize = bool(base_eligible and signals["gate_passed"] and entry["gate_passed"])
+    execution_contract = deepcopy(profile.get("_execution_contract") or {})
+    effective_profile_id = (
+        execution_contract.get("profile_id")
+        or profile.get("id")
+        or profile.get("profile_id")
+    )
+    contract_valid = execution_contract.get("contract_valid", True) is True
+    contract_operational = execution_contract.get("operational_effect", False) is True
+    technical_would_authorize = bool(
+        base_eligible
+        and signals["gate_passed"]
+        and entry["gate_passed"]
+        and global_entry["gate_passed"]
+    )
+    contract_would_authorize = bool(technical_would_authorize and contract_valid)
+    would_authorize = (
+        contract_would_authorize if contract_operational else technical_would_authorize
+    )
     shadow_decision = "ALLOW" if would_authorize else "BLOCK"
 
     envelope_material = {
@@ -226,13 +287,15 @@ def evaluate_l3_gate_v2(
         "evaluated_at": _jsonable(evaluated_at),
         "symbol": asset.get("symbol"),
         "timeframe": profile.get("default_timeframe", "5m"),
-        "profile_id": profile.get("id") or profile.get("profile_id"),
+        "profile_id": effective_profile_id,
         "score": _jsonable(score),
         "score_context": _jsonable(score_context or {}),
         "indicators": _jsonable(asset.get("indicators") or {}),
         "signals": signals,
         "entry_triggers": entry,
+        "global_entry_triggers": global_entry,
         "block_rules": block_rules,
+        "execution_contract": execution_contract,
         "base_eligible": bool(base_eligible),
     }
     canonical = json.dumps(
@@ -247,7 +310,9 @@ def evaluate_l3_gate_v2(
     }
     signals["evaluation_envelope_hash"] = envelope_hash
     entry["evaluation_envelope_hash"] = envelope_hash
+    global_entry["evaluation_envelope_hash"] = envelope_hash
     block_rules["evaluation_envelope_hash"] = envelope_hash
+    execution_contract["evaluation_envelope_hash"] = envelope_hash
 
     return {
         "contract_version": CONTRACT_VERSION,
@@ -257,14 +322,25 @@ def evaluate_l3_gate_v2(
         "human_approval_required": True,
         "evaluated_at": _jsonable(evaluated_at),
         "evaluation_envelope_hash": envelope_hash,
+        "profile_id": effective_profile_id,
+        "profile_version_id": execution_contract.get("profile_version_id"),
+        "profile_config_hash": execution_contract.get("profile_projection_hash"),
+        "runtime_config_hash": execution_contract.get("runtime_hash"),
         "score": score_result,
         "base_eligible": bool(base_eligible),
         "signals": signals,
         "entry_triggers": entry,
+        "global_entry_triggers": global_entry,
         "block_rules": block_rules,
+        "execution_contract": execution_contract,
         "legacy_decision": legacy_decision,
         "shadow_decision": shadow_decision,
         "would_authorize": would_authorize,
+        "technical_would_authorize": technical_would_authorize,
+        "contract_would_authorize": contract_would_authorize,
+        "contract_shadow_decision": (
+            "ALLOW" if contract_would_authorize else "BLOCK"
+        ),
         "decision_drift": legacy_decision != shadow_decision,
         "reason_codes": (
             [] if would_authorize else
@@ -272,5 +348,12 @@ def evaluate_l3_gate_v2(
             + (["BLOCK_RULES_MATCHED"] if block_rules["blocked"] else [])
             + (["SIGNALS_GATE_FAILED"] if not signals["gate_passed"] else [])
             + (["ENTRY_TRIGGERS_GATE_FAILED"] if not entry["gate_passed"] else [])
+            + (["GLOBAL_ENTRY_TRIGGERS_GATE_FAILED"] if not global_entry["gate_passed"] else [])
+            + (
+                ["PROFILE_EXECUTION_CONTRACT_FAILED"]
+                + list(execution_contract.get("reason_codes") or [])
+                if contract_operational and not contract_valid
+                else []
+            )
         ),
     }

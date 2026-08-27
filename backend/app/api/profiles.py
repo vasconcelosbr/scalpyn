@@ -7,15 +7,22 @@ from typing import Dict, Any, List, Optional
 from uuid import UUID
 import logging
 import json
-from datetime import datetime, timezone as _tz
+from copy import deepcopy
 
 from ..database import get_db
 from ..models.profile import Profile, WatchlistProfile
-from ..models.profile_audit_log import ProfileAuditLog
 from .config import get_current_user_id
 from ..services.profile_engine import ProfileEngine
 from ..services.score_engine import hydrate_profile_scoring
 from ..services.config_service import config_service
+from ..services.profile_config_validation import validate_profile_config
+from ..services.profile_execution_contract import (
+    EXECUTION_SECTIONS,
+    ProfileContractConflict,
+    activate_profile_config,
+    load_profile_execution_snapshots,
+    lock_profiles_for_update,
+)
 from ..services.seed_service import DEFAULT_SCORE
 
 logger = logging.getLogger(__name__)
@@ -87,6 +94,65 @@ async def get_profiles(
     return {"profiles": [_profile_to_dict(p) for p in profiles]}
 
 
+@router.get("/execution-contract/audit")
+async def audit_profile_execution_contracts(
+    active_only: bool = True,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    query = select(Profile.id).where(Profile.user_id == user_id)
+    if active_only:
+        query = query.where(
+            Profile.is_active.is_(True),
+            text("""
+                EXISTS (
+                    SELECT 1
+                      FROM pipeline_watchlists pw
+                     WHERE pw.profile_id = profiles.id
+                       AND pw.auto_refresh IS TRUE
+                       AND UPPER(pw.level) = 'L3'
+                )
+            """),
+        )
+    profile_ids = list((await db.execute(query.order_by(Profile.id))).scalars().all())
+    snapshots = await load_profile_execution_snapshots(
+        db, profile_ids, user_id=user_id
+    )
+    items = []
+    for profile_id in profile_ids:
+        metadata = snapshots.get(profile_id)
+        if not metadata:
+            continue
+        contract = metadata["contract"]
+        items.append(
+            {
+                "profile_id": str(profile_id),
+                "profile_name": metadata["name"],
+                "profile_version_id": contract["profile_version_id"],
+                "status": contract["status"],
+                "contract_valid": contract["contract_valid"],
+                "reason_codes": contract["reason_codes"],
+                "profile_projection_hash": contract["profile_projection_hash"],
+                "version_config_hash": contract["version_config_hash"],
+                "sections": contract["sections"],
+                "missing_required_conditions": contract[
+                    "missing_required_conditions"
+                ],
+                "unexpected_required_conditions": contract[
+                    "unexpected_required_conditions"
+                ],
+            }
+        )
+    mismatches = sum(1 for item in items if item["status"] != "MATCH")
+    return {
+        "status": "MATCH" if mismatches == 0 else "MISMATCH",
+        "active_only": active_only,
+        "profiles_checked": len(items),
+        "mismatches": mismatches,
+        "items": items,
+    }
+
+
 @router.get("/{profile_id}")
 async def get_profile(
     profile_id: UUID,
@@ -102,6 +168,63 @@ async def get_profile(
         raise HTTPException(status_code=404, detail="Profile not found")
     
     return _profile_to_dict(profile)
+
+
+async def _latest_profile_runtime_contract(
+    db: AsyncSession, *, profile_id: UUID, user_id: UUID
+) -> Optional[Dict[str, Any]]:
+    row = (
+        await db.execute(
+            text("""
+                SELECT evaluated_at, symbol, timeframe, legacy_decision,
+                       shadow_decision, operational_effect, payload
+                  FROM l3_gate_v2_evaluations
+                 WHERE profile_id = :profile_id
+                   AND user_id = :user_id
+                 ORDER BY evaluated_at DESC
+                 LIMIT 1
+            """),
+            {"profile_id": str(profile_id), "user_id": str(user_id)},
+        )
+    ).mappings().one_or_none()
+    return dict(row) if row else None
+
+
+@router.get("/{profile_id}/execution-contract")
+async def get_profile_execution_contract(
+    profile_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    snapshots = await load_profile_execution_snapshots(
+        db, [profile_id], user_id=user_id
+    )
+    metadata = snapshots.get(profile_id)
+    if not metadata:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    contract = metadata["contract"]
+    runtime = await _latest_profile_runtime_contract(
+        db, profile_id=profile_id, user_id=user_id
+    )
+    projection = contract["profile_projection"]
+    export_profile = {
+        "profile_id": str(profile_id),
+        "name": metadata["name"],
+        "expected_profile_version_id": contract["profile_version_id"],
+        "expected_profile_config_hash": contract["profile_projection_hash"],
+        **{section: deepcopy(projection.get(section) or {}) for section in EXECUTION_SECTIONS},
+    }
+    return {
+        "status": contract["status"],
+        "profile_id": str(profile_id),
+        "profile_name": metadata["name"],
+        "contract": contract,
+        "latest_runtime": runtime,
+        "round_trip_export": {
+            "update_indicators_only": True,
+            "profiles": [export_profile],
+        },
+    }
 
 
 async def _find_duplicate_names(
@@ -149,23 +272,49 @@ def _normalize_import_scoring(
     return merged
 
 
-def _select_indicator_update_profile(matches: List[Profile], name: str) -> Profile:
-    """Select a unique match, preferring the sole active profile among duplicates."""
-    if len(matches) == 1:
-        return matches[0]
+def _prepare_indicator_update_items(
+    profiles_data: List[Any],
+) -> list[tuple[int, Dict[str, Any], UUID]]:
+    """Validate the ID/version/full-section update contract before any write."""
+    prepared: list[tuple[int, Dict[str, Any], UUID]] = []
+    seen_ids: set[UUID] = set()
+    for index, item in enumerate(profiles_data):
+        if not isinstance(item, dict):
+            raise ValueError(f"profiles[{index}] must be an object")
+        raw_profile_id = item.get("profile_id") or item.get("id")
+        if not raw_profile_id:
+            raise ValueError(f"profiles[{index}].profile_id is required")
+        try:
+            profile_id = UUID(str(raw_profile_id))
+        except ValueError as exc:
+            raise ValueError(f"profiles[{index}].profile_id is invalid") from exc
+        if profile_id in seen_ids:
+            raise ValueError(f"duplicate profile_id in update batch: {profile_id}")
+        seen_ids.add(profile_id)
+        for section in EXECUTION_SECTIONS:
+            if section not in item:
+                raise ValueError(f"profiles[{index}].{section} is required")
+        if not item.get("expected_profile_version_id"):
+            raise ValueError(
+                f"profiles[{index}].expected_profile_version_id is required"
+            )
+        if not item.get("expected_profile_config_hash"):
+            raise ValueError(
+                f"profiles[{index}].expected_profile_config_hash is required"
+            )
+        prepared.append((index, item, profile_id))
+    return prepared
 
-    active_matches = [profile for profile in matches if profile.is_active is True]
-    if len(active_matches) == 1:
-        return active_matches[0]
-    if active_matches:
-        raise ValueError(
-            f"{len(active_matches)} active profiles named '{name}' -- deactivate or rename "
-            "duplicates before using update_indicators_only"
-        )
-    raise ValueError(
-        f"{len(matches)} inactive profiles named '{name}' -- rename to disambiguate "
-        "before using update_indicators_only"
-    )
+
+def _replace_execution_sections(
+    current_config: Dict[str, Any], item: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Replace all four executable sections and preserve every other field."""
+
+    return {
+        **deepcopy(current_config or {}),
+        **{section: deepcopy(item[section]) for section in EXECUTION_SECTIONS},
+    }
 
 
 @router.post("/bulk-import")
@@ -179,11 +328,11 @@ async def bulk_import_profiles(
     every active profile when ``apply_to_active_profiles`` is true, or —
     when ``update_indicators_only`` is true — update only the indicator
     config (filters/signals/entry_triggers/block_rules) of existing profiles
-    matched by name, without creating new profiles, touching scoring, or
-    changing is_active/any other field. Items in "profiles" whose name has
-    no existing match are reported as "error" (not_found), never created. If
-    duplicate names exist, the sole active profile is selected; multiple active
-    matches remain an error.
+    targeted exclusively by profile_id, without creating new profiles,
+    touching scoring, or changing is_active/any other field. The optional
+    name is a strict assertion only. Every item must carry the expected
+    immutable version ID, expected config hash and all four sections; the
+    whole batch is validated and locked before any write.
 
     Expected payload:
     {
@@ -205,15 +354,12 @@ async def bulk_import_profiles(
             "selected_rule_ids": [...]
         },
         "apply_to_active_profiles": true,      (optional, update existing active profiles)
-        "update_indicators_only": false,       (optional, default false — when true, matches
-                                                 each "profiles" item to an existing profile by
-                                                 name (case-insensitive, any status) and updates
-                                                 only its filters/signals/entry_triggers/
-                                                 block_rules; never creates a profile or changes
-                                                 is_active/scoring/other fields; a name with no
-                                                 match is reported as "error"; duplicate names
-                                                 select the sole active profile, otherwise the
-                                                 item is reported as "error" and skipped)
+        "update_indicators_only": false,       (optional; when true every item requires
+                                                 profile_id, expected_profile_version_id,
+                                                 expected_profile_config_hash and complete
+                                                 filters/signals/entry_triggers/block_rules;
+                                                 name is only an identity assertion and the
+                                                 import succeeds or rolls back as one batch)
         "allow_duplicate_names": false,        (optional, default false — by default an
                                                  item whose name matches an existing ACTIVE
                                                  profile is rejected instead of silently
@@ -268,22 +414,26 @@ async def bulk_import_profiles(
                     **previous_config,
                     "scoring": _normalize_import_scoring(shared_scoring),
                 }
-                profile.config = _validate_profile_config(next_config)
-                old_version = getattr(profile, "profile_version", None)
-                new_version = datetime.now(_tz.utc)
-                profile.profile_version = new_version
-                db.add(ProfileAuditLog(
-                    user_id=user_id,
-                    profile_id=profile.id,
+                validated_config = _validate_profile_config(next_config)
+                activation = await activate_profile_config(
+                    db,
+                    profile=profile,
+                    config=validated_config,
                     changed_by=user_id,
                     change_source="api",
-                    change_description="scoring replaced via POST /profiles/bulk-import apply_to_active_profiles",
-                    previous_config=previous_config,
-                    new_config=profile.config,
-                    previous_profile_version=old_version,
-                    new_profile_version=new_version,
-                ))
-                results.append({"index": i, "name": profile.name, "status": "updated", "id": str(profile.id)})
+                    change_description=(
+                        "scoring replaced via POST /profiles/bulk-import "
+                        "apply_to_active_profiles"
+                    ),
+                    require_feature_identity=False,
+                )
+                results.append({
+                    "index": i,
+                    "name": profile.name,
+                    "status": "updated",
+                    "id": str(profile.id),
+                    **activation,
+                })
                 updated += 1
             except Exception as exc:
                 failed += 1
@@ -350,22 +500,25 @@ async def bulk_import_profiles(
 
             previous_config = profile.config or {}
             next_config = {**previous_config, "scoring": merged_scoring}
-            profile.config = _validate_profile_config(next_config)
-            old_version = getattr(profile, "profile_version", None)
-            new_version = datetime.now(_tz.utc)
-            profile.profile_version = new_version
-            db.add(ProfileAuditLog(
-                user_id=user_id,
-                profile_id=profile.id,
+            validated_config = _validate_profile_config(next_config)
+            activation = await activate_profile_config(
+                db,
+                profile=profile,
+                config=validated_config,
                 changed_by=user_id,
                 change_source="api",
-                change_description="scoring replaced via POST /profiles/bulk-import scoring_assignments",
-                previous_config=previous_config,
-                new_config=profile.config,
-                previous_profile_version=old_version,
-                new_profile_version=new_version,
-            ))
-            results.append({"index": i, "name": profile.name, "status": "updated", "id": str(profile.id)})
+                change_description=(
+                    "scoring replaced via POST /profiles/bulk-import scoring_assignments"
+                ),
+                require_feature_identity=False,
+            )
+            results.append({
+                "index": i,
+                "name": profile.name,
+                "status": "updated",
+                "id": str(profile.id),
+                **activation,
+            })
             updated += 1
         except Exception as exc:
             failed += 1
@@ -388,68 +541,83 @@ async def bulk_import_profiles(
     update_indicators_only = bool(payload.get("update_indicators_only"))
 
     if update_indicators_only:
-        for i, p in enumerate(profiles_data):
-            name = (p.get("name") or "").strip()
-            try:
-                if not name:
-                    raise ValueError("'name' is required")
+        try:
+            prepared = _prepare_indicator_update_items(profiles_data)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-                matches = (await db.execute(
-                    select(Profile).where(Profile.user_id == user_id, Profile.name.ilike(name))
-                )).scalars().all()
-                if not matches:
-                    raise ValueError(
-                        f"no existing profile named '{name}' -- update_indicators_only never "
-                        f"creates profiles"
-                    )
-                profile = _select_indicator_update_profile(matches, name)
-
-                # Only filters/signals/entry_triggers/block_rules change. scoring,
-                # default_timeframe, is_active, name, description and every other
-                # profile field are preserved as-is.
-                previous_config = profile.config or {}
-                next_config = {
-                    **previous_config,
-                    "filters":        p.get("filters",        {"logic": "AND", "conditions": []}),
-                    "signals":        p.get("signals",        {"logic": "AND", "conditions": []}),
-                    "block_rules":    p.get("block_rules",    {"blocks": []}),
-                    "entry_triggers": p.get("entry_triggers", {"logic": "AND", "conditions": []}),
-                }
-                profile.config = _validate_profile_config(
-                    next_config, require_feature_identity=True
+        try:
+            locked = await lock_profiles_for_update(
+                db,
+                user_id=user_id,
+                profile_ids=[profile_id for _, _, profile_id in prepared],
+            )
+            missing_ids = sorted(
+                {profile_id for _, _, profile_id in prepared} - set(locked), key=str
+            )
+            if missing_ids:
+                raise ValueError(
+                    "PROFILE_NOT_FOUND: " + ",".join(str(item) for item in missing_ids)
                 )
-                old_version = getattr(profile, "profile_version", None)
-                new_version = datetime.now(_tz.utc)
-                profile.profile_version = new_version
-                db.add(ProfileAuditLog(
-                    user_id=user_id,
-                    profile_id=profile.id,
+
+            for i, item, parsed_profile_id in prepared:
+                profile = locked[parsed_profile_id]
+                asserted_name = item.get("name")
+                if asserted_name is not None and str(asserted_name) != profile.name:
+                    raise ValueError(
+                        f"PROFILE_NAME_MISMATCH: profile_id={profile.id} "
+                        f"expected_name={profile.name!r} received_name={asserted_name!r}"
+                    )
+                try:
+                    expected_version_id = UUID(
+                        str(item["expected_profile_version_id"])
+                    )
+                except ValueError as exc:
+                    raise ValueError(
+                        f"profiles[{i}].expected_profile_version_id is invalid"
+                    ) from exc
+                next_config = _replace_execution_sections(
+                    profile.config or {}, item
+                )
+                activation = await activate_profile_config(
+                    db,
+                    profile=profile,
+                    config=next_config,
                     changed_by=user_id,
                     change_source="api",
                     change_description=(
-                        "indicators (filters/signals/entry_triggers/block_rules) replaced "
-                        "via POST /profiles/bulk-import update_indicators_only"
+                        "execution sections replaced atomically via POST "
+                        "/profiles/bulk-import update_indicators_only"
                     ),
-                    previous_config=previous_config,
-                    new_config=profile.config,
-                    previous_profile_version=old_version,
-                    new_profile_version=new_version,
-                ))
-                results.append({"index": i, "name": name, "status": "updated", "id": str(profile.id)})
-                updated += 1
-            except Exception as exc:
-                failed += 1
-                results.append({
-                    "index": i,
-                    "name": name or f"profile_{i}",
-                    "status": "error",
-                    "error": str(exc),
-                })
-
-        if updated > 0:
+                    expected_profile_version_id=expected_version_id,
+                    expected_profile_config_hash=str(
+                        item["expected_profile_config_hash"]
+                    ),
+                    require_feature_identity=False,
+                )
+                results.append(
+                    {
+                        "index": i,
+                        "name": profile.name,
+                        "status": "updated",
+                        "id": str(profile.id),
+                        **activation,
+                    }
+                )
             await db.commit()
+        except ProfileContractConflict as exc:
+            await db.rollback()
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            await db.rollback()
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-        return {"created": 0, "updated": updated, "failed": failed, "results": results}
+        return {
+            "created": 0,
+            "updated": len(results),
+            "failed": 0,
+            "results": results,
+        }
 
     for i, p in enumerate(profiles_data):
         try:
@@ -495,8 +663,24 @@ async def bulk_import_profiles(
             )
             db.add(profile)
             await db.flush()
+            activation = await activate_profile_config(
+                db,
+                profile=profile,
+                config=validated_config,
+                changed_by=user_id,
+                change_source="api",
+                change_description="profile created via POST /profiles/bulk-import",
+                require_feature_identity=True,
+                previous_config_override={},
+            )
 
-            results.append({"index": i, "name": name, "status": "created", "id": str(profile.id)})
+            results.append({
+                "index": i,
+                "name": name,
+                "status": "created",
+                "id": str(profile.id),
+                **activation,
+            })
             created += 1
 
         except Exception as exc:
@@ -576,6 +760,17 @@ async def create_profile(
     )
 
     db.add(profile)
+    await db.flush()
+    await activate_profile_config(
+        db,
+        profile=profile,
+        config=validated_config,
+        changed_by=user_id,
+        change_source="api",
+        change_description="profile created via POST /profiles",
+        require_feature_identity=True,
+        previous_config_override={},
+    )
     await db.commit()
     await db.refresh(profile)
 
@@ -600,8 +795,8 @@ async def update_profile(
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
 
-    _prev_config = profile.config
     _config_changed = False
+    _next_config: Optional[Dict[str, Any]] = None
 
     rename_warnings: List[str] = []
     if "name" in payload and payload["name"] != profile.name:
@@ -629,7 +824,7 @@ async def update_profile(
         profile.is_active = payload["is_active"]
     if "config" in payload:
         try:
-            profile.config = _validate_profile_config(
+            _next_config = _validate_profile_config(
                 payload["config"], require_feature_identity=True
             )
         except ValueError as exc:
@@ -642,22 +837,15 @@ async def update_profile(
         profile.pipeline_order = str(payload["pipeline_order"]) if payload["pipeline_order"] is not None else "99"
 
     if _config_changed:
-        from datetime import datetime, timezone as _tz
-        from ..models.profile_audit_log import ProfileAuditLog
-        _old_version = getattr(profile, 'profile_version', None)
-        _new_version = datetime.now(_tz.utc)
-        profile.profile_version = _new_version
-        db.add(ProfileAuditLog(
-            user_id=user_id,
-            profile_id=profile.id,
+        await activate_profile_config(
+            db,
+            profile=profile,
+            config=_next_config or {},
             changed_by=user_id,
             change_source="api",
             change_description="config updated via PUT /profiles/{id}",
-            previous_config=_prev_config,
-            new_config=profile.config,
-            previous_profile_version=_old_version,
-            new_profile_version=_new_version,
-        ))
+            require_feature_identity=True,
+        )
 
     await db.commit()
     await db.refresh(profile)
@@ -971,95 +1159,10 @@ async def toggle_watchlist_profile(
 def _validate_profile_config(
     config: Dict[str, Any], *, require_feature_identity: bool = False
 ) -> Dict[str, Any]:
-    """Validate and normalize profile configuration."""
-    from ..services.entry_risk_features import (
-        assert_no_observational_execution_fields,
+    """Backward-compatible API wrapper around canonical validation."""
+    return validate_profile_config(
+        config, require_feature_identity=require_feature_identity
     )
-
-    assert_no_observational_execution_fields(config)
-    validated = {
-        "default_timeframe": config.get("default_timeframe", "5m")
-    }
-
-    # Validate filters
-    filters = config.get("filters", {})
-    validated["filters"] = {
-        "logic": filters.get("logic", "AND").upper(),
-        "conditions": filters.get("conditions", [])
-    }
-
-    for cond in validated["filters"]["conditions"]:
-        field = cond.get("field") or cond.get("indicator")
-        if not field:
-            raise ValueError("Filter condition missing 'field'")
-        cond["field"] = field
-        cond.pop("indicator", None)
-        if "operator" not in cond:
-            cond["operator"] = "=="
-
-    # Validate scoring weights
-    scoring = config.get("scoring", {})
-    weights = scoring.get("weights", {})
-    validated["scoring"] = {
-        "enabled": scoring.get("enabled", True),
-        "weights": {
-            "liquidity": weights.get("liquidity", 25),
-            "market_structure": weights.get("market_structure", 25),
-            "momentum": weights.get("momentum", 25),
-            "signal": weights.get("signal", 25)
-        },
-        "rules": scoring.get("rules", []),
-        # New: explicit list of global scoring rule IDs activated for this profile
-        # (set via the Scoring tab, decoupled from filter conditions)
-        "selected_rule_ids": scoring.get("selected_rule_ids", []),
-        "thresholds": scoring.get("thresholds", {
-            "strong_buy": 80,
-            "buy": 65,
-            "neutral": 40
-        })
-    }
-
-    # Validate signals (L3 entry conditions)
-    signals = config.get("signals", {})
-    validated["signals"] = {
-        "logic": signals.get("logic", "AND").upper(),
-        "conditions": signals.get("conditions", [])
-    }
-
-    for cond in validated["signals"]["conditions"]:
-        field = cond.get("field") or cond.get("indicator")
-        if not field:
-            raise ValueError("Signal condition missing 'field'")
-        cond["field"] = field
-        cond.pop("indicator", None)
-        if "operator" not in cond:
-            cond["operator"] = "=="
-
-    # Preserve block_rules (blocking conditions that prevent a buy)
-    block_rules = config.get("block_rules", {})
-    validated["block_rules"] = {
-        "blocks": block_rules.get("blocks", [])
-    }
-
-    # Preserve entry_triggers (explicit entry conditions)
-    entry_triggers = config.get("entry_triggers", {})
-    validated["entry_triggers"] = {
-        "logic": entry_triggers.get("logic", "AND").upper(),
-        "conditions": entry_triggers.get("conditions", [])
-    }
-
-    if require_feature_identity:
-        from ..services.l3_authorization_contract_v3 import (
-            validate_profile_contract,
-        )
-        contract_errors = validate_profile_contract(validated)
-        if contract_errors:
-            raise ValueError(
-                "L3_FEATURE_IDENTITY_INVALID:"
-                + json.dumps(contract_errors, sort_keys=True)
-            )
-
-    return validated
 
 
 async def _get_watchlist_assets(db: AsyncSession) -> List[Dict[str, Any]]:
@@ -1337,7 +1440,7 @@ async def run_preset_ia(
 
     # Salvar resultado no profile
     try:
-        profile.config = _validate_profile_config(
+        preset_config = _validate_profile_config(
             ia_result["config"], require_feature_identity=True
         )
     except ValueError as exc:
@@ -1350,6 +1453,15 @@ async def run_preset_ia(
         "executed_at":      ia_result["executed_at"],
     }
     profile.updated_at = datetime.now(timezone.utc)
+    activation = await activate_profile_config(
+        db,
+        profile=profile,
+        config=preset_config,
+        changed_by=user_id,
+        change_source="preset_ia",
+        change_description="config updated via POST /profiles/{id}/preset-ia",
+        require_feature_identity=True,
+    )
     await db.commit()
     await db.refresh(profile)
 
@@ -1360,6 +1472,7 @@ async def run_preset_ia(
         "analysis_summary": ia_result["analysis_summary"],
         "config":           ia_result["config"],
         "profile":          _profile_to_dict(profile),
+        "execution_contract": activation,
         "executed_at":      ia_result["executed_at"],
     }
 

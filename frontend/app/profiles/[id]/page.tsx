@@ -2,9 +2,10 @@
 
 import { useState, useEffect } from 'react'
 import { useParams, useSearchParams, useRouter } from 'next/navigation'
-import { ArrowLeft, Save, Play, Settings, Brain, Zap, Filter, Target } from 'lucide-react'
+import { ArrowLeft, Save, Settings, Brain, ShieldCheck } from 'lucide-react'
 import { apiGet, apiPut } from '@/lib/api'
 import { ProfileBuilder } from '@/components/profiles/ProfileBuilder'
+import { ExecutionContractPanel } from '@/components/profiles/ExecutionContractPanel'
 
 interface Profile {
   id: string
@@ -100,6 +101,7 @@ export default function ProfileEditPage() {
   const tabs = [
     { id: 'config', label: 'Configuração', icon: Settings },
     { id: 'auto_pilot', label: 'Auto-Pilot IA', icon: Brain },
+    { id: 'execution_contract', label: 'Integridade de execução', icon: ShieldCheck },
   ]
 
   return (
@@ -381,6 +383,10 @@ export default function ProfileEditPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {activeTab === 'execution_contract' && (
+        <ExecutionContractPanel profileId={profileId} />
       )}
     </div>
   )

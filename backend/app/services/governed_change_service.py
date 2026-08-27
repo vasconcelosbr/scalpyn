@@ -19,10 +19,10 @@ from sqlalchemy import and_, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..api.profiles import _validate_profile_config
+from .profile_execution_contract import activate_profile_config
 from ..models.config_profile import ConfigAuditLog, ConfigProfile
 from ..models.copilot import CopilotActionPlan, CopilotAuditLog
 from ..models.profile import Profile
-from ..models.profile_audit_log import ProfileAuditLog
 from ..models.social_intelligence import SocialAssetObservation
 from ..schemas.analysis_chat import AnalysisChatRuntimeConfig
 from ..schemas.futures_engine_config import FuturesEngineConfig
@@ -4905,21 +4905,18 @@ async def approve_and_execute(
                     new_config,
                     score.config_json or {},
                 )
-            old_version = resource.profile_version
-            resource.config = new_config
-            resource.profile_version = now
             resource.updated_at = now
-            db.add(ProfileAuditLog(
-                user_id=user_id,
-                profile_id=resource.id,
+            await activate_profile_config(
+                db,
+                profile=resource,
+                config=new_config,
                 changed_by=user_id,
                 change_source="analysis_chat_human_confirmed_bulk",
-                change_description=f"Governed Analysis Chat proposal {plan.id}: {plan.objective}",
-                previous_config=old_config,
-                new_config=new_config,
-                previous_profile_version=old_version,
-                new_profile_version=now,
-            ))
+                change_description=(
+                    f"Governed Analysis Chat proposal {plan.id}: {plan.objective}"
+                ),
+                require_feature_identity=True,
+            )
         result = {
             "status": "EXECUTED",
             "resource_type": "PROFILE_SET",
@@ -4946,21 +4943,18 @@ async def approve_and_execute(
                 candidate,
                 score.config_json or {},
             )
-        old_version = resource.profile_version
-        resource.config = candidate
-        resource.profile_version = now
         resource.updated_at = now
-        db.add(ProfileAuditLog(
-            user_id=user_id,
-            profile_id=resource.id,
+        await activate_profile_config(
+            db,
+            profile=resource,
+            config=candidate,
             changed_by=user_id,
             change_source="analysis_chat_human_confirmed",
-            change_description=f"Governed Analysis Chat proposal {plan.id}: {plan.objective}",
-            previous_config=old_config,
-            new_config=candidate,
-            previous_profile_version=old_version,
-            new_profile_version=now,
-        ))
+            change_description=(
+                f"Governed Analysis Chat proposal {plan.id}: {plan.objective}"
+            ),
+            require_feature_identity=True,
+        )
         result = {
             "status": "EXECUTED",
             "resource_type": "PROFILE",
@@ -5579,22 +5573,18 @@ async def rollback(
             if row is None or not isinstance(row.get("config"), dict):
                 raise ValueError("Bulk profile configuration rollback snapshot is incomplete")
             restored = _validate_profile_config(deepcopy(row["config"]))
-            previous = deepcopy(resource.config or {})
-            previous_version = resource.profile_version
-            resource.config = restored
-            resource.profile_version = now
             resource.updated_at = now
-            db.add(ProfileAuditLog(
-                user_id=user_id,
-                profile_id=resource.id,
+            await activate_profile_config(
+                db,
+                profile=resource,
+                config=restored,
                 changed_by=user_id,
                 change_source="analysis_chat_human_confirmed_bulk_rollback",
-                change_description=f"Rollback governed Analysis Chat proposal {plan.id}",
-                previous_config=previous,
-                new_config=restored,
-                previous_profile_version=previous_version,
-                new_profile_version=now,
-            ))
+                change_description=(
+                    f"Rollback governed Analysis Chat proposal {plan.id}"
+                ),
+                require_feature_identity=False,
+            )
     elif payload.get("operation_type") == "UPDATE_PROFILE_CONFIG":
         resource = (
             await db.execute(select(Profile).where(
@@ -5606,22 +5596,17 @@ async def rollback(
             raise LookupError("Profile not found")
         if document_hash(resource.config or {}) != candidate_hash:
             raise ValueError("Profile changed after execution; rollback would overwrite newer work")
-        previous = deepcopy(resource.config or {})
-        previous_version = resource.profile_version
-        resource.config = _validate_profile_config(source)
-        resource.profile_version = now
+        restored = _validate_profile_config(source)
         resource.updated_at = now
-        db.add(ProfileAuditLog(
-            user_id=user_id,
-            profile_id=resource.id,
+        await activate_profile_config(
+            db,
+            profile=resource,
+            config=restored,
             changed_by=user_id,
             change_source="analysis_chat_human_confirmed_rollback",
             change_description=f"Rollback governed Analysis Chat proposal {plan.id}",
-            previous_config=previous,
-            new_config=source,
-            previous_profile_version=previous_version,
-            new_profile_version=now,
-        ))
+            require_feature_identity=False,
+        )
     elif payload.get("operation_type") == "UPDATE_CONFIG_PROFILE":
         resource = (
             await db.execute(select(ConfigProfile).where(

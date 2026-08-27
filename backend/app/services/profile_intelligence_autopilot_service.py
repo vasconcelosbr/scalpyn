@@ -24,7 +24,6 @@ from ..models.config_profile import ConfigProfile
 from ..models.exchange_connection import ExchangeConnection
 from ..models.pipeline_watchlist import PipelineWatchlist
 from ..models.profile import Profile
-from ..models.profile_audit_log import ProfileAuditLog
 from ..models.profile_intelligence import (
     ProfileIndicatorMutationLink,
     ProfileIndicatorStats,
@@ -47,7 +46,7 @@ from .profile_create_service import (
     ensure_master_scoring_rules,
 )
 from .profile_intelligence_audit_service import log_pi_event
-from .profile_versioning_v2 import create_shadow_profile_version
+from .profile_execution_contract import activate_profile_config
 
 
 logger = logging.getLogger("scalpyn.services.profile_intelligence_autopilot")
@@ -1925,13 +1924,19 @@ class ProfileIntelligenceAutopilotService:
         )
         db.add(profile)
         await db.flush()
-        profile_version_id = await create_shadow_profile_version(
+        activation = await activate_profile_config(
             db,
-            profile_id=profile.id,
+            profile=profile,
             config=config,
-            cycle_id=cycle.id,
+            changed_by=user_id,
+            change_source="profile_intelligence_autopilot",
+            change_description="Profile Intelligence immutable shadow candidate",
+            require_feature_identity=True,
+            previous_config_override={},
+            shadow_cycle_id=cycle.id,
             origin_profile_id=origin_profile_id,
         )
+        profile_version_id = UUID(activation["profile_version_id"])
         watchlist = PipelineWatchlist(
             id=uuid4(),
             user_id=user_id,
@@ -1983,18 +1988,6 @@ class ProfileIntelligenceAutopilotService:
             review_after=now + timedelta(hours=float(settings["review_after_hours"])),
         )
         db.add(candidate)
-        db.add(ProfileAuditLog(
-            id=uuid4(),
-            user_id=user_id,
-            profile_id=profile.id,
-            changed_by=user_id,
-            change_source="profile_intelligence_autopilot",
-            change_description="Clone/candidato versionado criado em Shadow; incumbent preservado.",
-            previous_config=None,
-            new_config=config,
-            previous_profile_version=None,
-            new_profile_version=now,
-        ))
         await db.flush()
         await self._audit(
             db, user_id=user_id, cycle_id=cycle.id, candidate_id=candidate.id,

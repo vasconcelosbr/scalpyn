@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.copilot import CopilotActionPlan, CopilotAuditLog
 from ..models.profile import Profile
-from ..models.profile_audit_log import ProfileAuditLog
+from ..services.profile_execution_contract import activate_profile_config
 
 
 APPROVAL_TEXTS = {"CONFIRMO EXECUTAR", "APROVADO, EXECUTAR"}
@@ -180,17 +180,22 @@ class ActionService:
             )
             db.add(candidate)
             await db.flush()
-            db.add(ProfileAuditLog(
-                user_id=user_id, profile_id=candidate.id, changed_by=user_id,
+            activation = await activate_profile_config(
+                db,
+                profile=candidate,
+                config=candidate.config,
+                changed_by=user_id,
                 change_source="profile_intelligence_copilot",
                 change_description=f"Action plan {plan.id}: {plan.objective}",
-                previous_config=deepcopy(source.config or {}), new_config=deepcopy(candidate.config),
-                previous_profile_version=source.profile_version, new_profile_version=now,
-            ))
+                require_feature_identity=True,
+                previous_config_override={},
+            )
             result = {
                 "status": "EXECUTED", "candidate_profile_id": str(candidate.id),
                 "source_profile_id": str(source.id), "candidate_state": "SHADOW_ONLY",
                 "live_profile_changed": False, "shadow_validation_required": True,
+                "profile_version_id": activation["profile_version_id"],
+                "profile_config_hash": activation["profile_config_hash"],
             }
             plan.status = "EXECUTED"
             plan.executed_at = now
