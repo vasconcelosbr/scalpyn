@@ -119,7 +119,7 @@ elegibilidade; `shadow_trade_monitor.py` somente para revisões observacionais.
 
 - regressão focada: `258 passed` `[query]`;
 - frontend Next/TypeScript: build concluído `[query]`;
-- Alembic: um head, `203_shadow_trade_measurement_revisions` `[query]`;
+- Alembic: um head, `203_shadow_measurement_rev` `[query]`;
 - grafo: atualizado por `graphify update .` `[query]`;
 - três falhas em `test_shadow_profile_attribution.py` também ocorrem sem este
   diff no `origin/main` (`3 failed`, `4 passed`) `[query: baseline]`.
@@ -151,5 +151,5 @@ mas uma execução futura deve ser paginada/orquestrada no ambiente apropriado.
 | zeros TP MAE | `[query: dry-run]` | `legacy:14; corrected:4` |
 | zeros SL MFE | `[query: dry-run]` | `legacy:11; corrected:2` |
 | histórico concluído | `[query: count-only]` | `selected:307895` |
-| head Alembic | `[query: alembic heads]` | `203_shadow_trade_measurement_revisions (head)` |
+| head Alembic | `[query: alembic heads]` | `203_shadow_measurement_rev (head)` |
 | baseline conhecido | `[query: pytest origin/main]` | `3 failed, 4 passed` |

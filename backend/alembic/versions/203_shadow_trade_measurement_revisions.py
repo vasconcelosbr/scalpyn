@@ -1,6 +1,6 @@
 """Add immutable Shadow Portfolio measurement revisions.
 
-Revision ID: 203_shadow_trade_measurement_revisions
+Revision ID: 203_shadow_measurement_rev
 Revises: 202_l3_authorization_v3_outbox
 """
 
@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 
-revision = "203_shadow_trade_measurement_revisions"
+revision = "203_shadow_measurement_rev"
 down_revision = "202_l3_authorization_v3_outbox"
 branch_labels = None
 depends_on = None
