@@ -1,8 +1,13 @@
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 
-from app.services.shadow_trade_measurement_service import calculate_measurement
+from app.services.shadow_trade_measurement_service import (
+    build_measurement_revision,
+    calculate_measurement,
+)
 
 
 BASE = datetime(2026, 8, 27, 12, 0, tzinfo=timezone.utc)
@@ -124,3 +129,36 @@ def test_input_hash_is_deterministic_and_changes_with_candles() -> None:
 
     assert first.input_hash == again.input_hash
     assert first.input_hash != changed.input_hash
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_measurement_hash_accepts_shadow_uuid() -> None:
+    shadow_id = UUID("10700fd2-8d31-45f4-be98-b23cea5be7ed")
+    shadow = SimpleNamespace(
+        id=shadow_id,
+        config_snapshot={},
+        entry_timestamp=BASE,
+        entry_price=100.0,
+        exit_price=99.0,
+        exit_timestamp=BASE + timedelta(minutes=1),
+        mae_pct=None,
+        mfe_pct=None,
+        mae_at=None,
+        mfe_at=None,
+        pnl_pct=-1.0,
+        fee_roundtrip_pct_applied=0.2,
+        net_return_pct=-1.2,
+    )
+
+    revision = await build_measurement_revision(
+        None,
+        shadow,
+        timeframe_priority=None,
+        max_entry_lag_seconds=None,
+        observed_at=BASE + timedelta(minutes=2),
+    )
+
+    assert revision["shadow_trade_id"] == shadow_id
+    assert revision["status"] == "UNAVAILABLE"
+    assert revision["unavailable_reason"] == "MEASUREMENT_TIMEFRAME_UNCONFIGURED"
+    assert len(revision["input_hash"]) == 64

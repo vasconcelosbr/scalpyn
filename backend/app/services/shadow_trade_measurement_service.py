@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Iterable, Mapping, Sequence
+from uuid import UUID
 
 from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert
@@ -53,6 +54,8 @@ def _utc(value: datetime) -> datetime:
 def _json_value(value: Any) -> Any:
     if isinstance(value, datetime):
         return _utc(value).isoformat()
+    if isinstance(value, UUID):
+        return str(value)
     if isinstance(value, Decimal):
         return str(value.normalize())
     if isinstance(value, Mapping):
