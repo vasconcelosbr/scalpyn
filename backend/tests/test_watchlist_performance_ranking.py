@@ -101,6 +101,16 @@ def test_delta_vs_baseline_computed():
     assert round((win_rate or 0) - baseline, 6) == 0.10
 
 
+def test_explicit_win_rate_base_does_not_change_completed_sample_size():
+    values = metrics(completed=72, wins=33, tp4h=20)
+    values.update(win_rate_wins=33, win_rate_denominator=64)
+
+    scored = score_metrics(values, CONFIG)
+
+    assert scored["win_rate"] == round(33 / 64, 6)
+    assert scored["stat_confidence"] == "LOW"
+
+
 def test_watchlist_l3_uses_same_performance_order():
     source = Path("backend/app/api/watchlists.py").read_text(encoding="utf-8")
     assert "get_performance_rankings(db, user_id, level=\"L3\")" in source

@@ -29,8 +29,8 @@ from .watchlist_performance_ranking_service import (
 )
 
 
-CONTRACT_VERSION = "profile-performance-v1"
-DAILY_CONTRACT_VERSION = "profile-performance-daily-v1"
+CONTRACT_VERSION = "profile-performance-v2"
+DAILY_CONTRACT_VERSION = "profile-performance-daily-v2"
 DISPLAY_TIMEZONE = "UTC"
 ALLOWED_RANGE_DAYS = {7, 14, 30}
 DAILY_RANGE_DAYS: Dict[ProfileDailyRange, int | None] = {
@@ -186,6 +186,7 @@ PROFILE_DAILY_PERFORMANCE_QUERY = text("""
     WITH eligible_trades AS (
         SELECT
             COALESCE(st.exit_timestamp, st.completed_at, st.updated_at, st.created_at) AS close_at,
+            st.outcome,
             st.pnl_pct,
             st.pnl_usdt
         FROM shadow_trades AS st
@@ -218,7 +219,8 @@ PROFILE_DAILY_PERFORMANCE_QUERY = text("""
     SELECT
         d.metric_date,
         COUNT(t.close_at) FILTER (WHERE t.pnl_pct IS NOT NULL)::integer AS daily_closed_trades,
-        COUNT(t.close_at) FILTER (WHERE t.pnl_pct > 0)::integer AS daily_wins,
+        COUNT(t.close_at) FILTER (WHERE t.outcome = 'TP_HIT')::integer AS daily_tp,
+        COUNT(t.close_at) FILTER (WHERE t.outcome = 'SL_HIT')::integer AS daily_sl,
         COALESCE(SUM(t.pnl_usdt), 0)::double precision AS daily_pnl_usdt
     FROM days AS d
     LEFT JOIN eligible_trades AS t
@@ -251,12 +253,14 @@ def build_profile_daily_performance_response(
     points = []
     for row in rows:
         closed_trades = _int(row, "daily_closed_trades")
-        wins = _int(row, "daily_wins")
+        tp_count = _int(row, "daily_tp")
+        sl_count = _int(row, "daily_sl")
+        decided_trades = tp_count + sl_count
         points.append(ProfileDailyPerformancePoint(
             date=_as_date(row["metric_date"]),
             closed_trades=closed_trades,
-            wins=wins,
-            win_rate=round(wins / closed_trades, 6) if closed_trades else None,
+            wins=tp_count,
+            win_rate=round(tp_count / decided_trades, 6) if decided_trades else None,
             pnl_usdt=round(_float(row, "daily_pnl_usdt"), 4),
         ))
     return ProfileDailyPerformanceResponse(
@@ -266,7 +270,7 @@ def build_profile_daily_performance_response(
         timezone=DISPLAY_TIMEZONE,
         points=points,
         metric_definitions={
-            "win_rate": "Daily completed L3 trades with pnl_pct > 0 divided by daily completed L3 trades with pnl_pct.",
+            "win_rate": "Daily TP_HIT divided by TP_HIT + SL_HIT; TRAILING_STOP and TIMEOUT are excluded.",
             "pnl_day": "Sum of pnl_usdt for L3 trades assigned to the UTC day in which each trade closed.",
         },
     )
@@ -427,9 +431,13 @@ def build_profile_performance_response(
     grouped: Dict[str, list[Dict[str, Any]]] = {}
 
     for raw in rows:
+        tp_count = _int(raw, "tp_count")
+        sl_count = _int(raw, "sl_count")
         metrics = {
             "completed_trades": _int(raw, "completed_trades"),
             "wins": _int(raw, "wins"),
+            "win_rate_wins": tp_count,
+            "win_rate_denominator": tp_count + sl_count,
             "avg_pnl_pct": _optional_float(raw, "avg_pnl_pct"),
             "pnl_total_usdt": _float(raw, "pnl_total_usdt"),
             "tp_4h_wins": _int(raw, "tp_4h_wins"),
@@ -444,10 +452,9 @@ def build_profile_performance_response(
             "total_trades": _int(raw, "total_trades"),
             "open_trades": _int(raw, "open_trades"),
             "completed_trades": metrics["completed_trades"],
-            "wins": metrics["wins"],
             "tp_4h_wins": metrics["tp_4h_wins"],
-            "tp": _int(raw, "tp_count"),
-            "sl": _int(raw, "sl_count"),
+            "tp": tp_count,
+            "sl": sl_count,
             "timeout": _int(raw, "timeout_count"),
             "avg_pnl_pct": metrics["avg_pnl_pct"],
             "pnl_total_usdt": metrics["pnl_total_usdt"],
@@ -520,9 +527,8 @@ def build_profile_performance_response(
             "tp": current["tp"],
             "sl": current["sl"],
             "timeout": current["timeout"],
-            "wins": current["wins"],
-            "previous_wins": previous["wins"] if previous else 0,
-            "previous_closed_trades": previous["completed_trades"] if previous else 0,
+            "previous_tp": previous["tp"] if previous else 0,
+            "previous_sl": previous["sl"] if previous else 0,
             "ev_score": current["ev_score"],
             "ev_delta": ev_delta,
             "period_ev_change": period_ev_change,
@@ -580,12 +586,14 @@ def build_profile_performance_response(
     ]
 
     active = [item for item in ranked if item["trades_period"] > 0 or item["closed_trades_period"] > 0]
-    total_wins = sum(item["wins"] for item in active)
-    total_closed = sum(item["closed_trades"] for item in active)
-    previous_wins = sum(item["previous_wins"] for item in active)
-    previous_closed = sum(item["previous_closed_trades"] for item in active)
-    win_rate = total_wins / total_closed if total_closed else None
-    previous_win_rate = previous_wins / previous_closed if previous_closed else None
+    total_tp = sum(item["tp"] for item in active)
+    total_sl = sum(item["sl"] for item in active)
+    previous_tp = sum(item["previous_tp"] for item in active)
+    previous_sl = sum(item["previous_sl"] for item in active)
+    total_decided = total_tp + total_sl
+    previous_decided = previous_tp + previous_sl
+    win_rate = total_tp / total_decided if total_decided else None
+    previous_win_rate = previous_tp / previous_decided if previous_decided else None
     trusted = [item for item in ranked if item["sample_status"] not in {"LOW_N", "EMPTY"}]
     period_change_pool = [item for item in trusted if item["period_ev_change"] is not None]
     improvement_pool = [item for item in period_change_pool if item["period_ev_change"] > 0]
@@ -626,7 +634,7 @@ def build_profile_performance_response(
         profiles=profiles,
         metric_definitions={
             "ev_score": "Canonical DB-backed ranking score accumulated through the selected UTC day.",
-            "win_rate": "Completed trades with pnl_pct > 0 divided by completed trades with pnl_pct.",
+            "win_rate": "TP_HIT divided by TP_HIT + SL_HIT; TRAILING_STOP and TIMEOUT are excluded.",
             "pnl_day": "Sum of pnl_usdt assigned to the UTC day in which each trade closed.",
             "pnl_period": "Sum of daily pnl_usdt across the selected 7, 14 or 30 day window.",
             "holding": "Average holding time of completed trades with positive pnl_pct, matching the ranking scorer.",

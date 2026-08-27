@@ -42,8 +42,8 @@ class ProfilePerformanceHistoryPoint(BaseModel):
 class ProfileDailyPerformancePoint(BaseModel):
     date: date
     closed_trades: int
-    wins: int
-    win_rate: Optional[float] = None
+    wins: int  # TP_HIT count
+    win_rate: Optional[float] = None  # TP_HIT / (TP_HIT + SL_HIT)
     pnl_usdt: float
 
 

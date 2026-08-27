@@ -142,6 +142,31 @@ def test_build_response_keeps_canonical_sample_gate_and_daily_deltas():
     assert response.available_to == as_of
 
 
+def test_profile_and_summary_win_rate_use_only_tp_and_sl():
+    as_of = date(2026, 8, 27)
+    row = raw_row(
+        profile_id=uuid4(),
+        profile_name="L3_TP_SL",
+        metric_date=as_of,
+        closed=72,
+        wins=33,
+        avg_pnl=0.1,
+        pnl_total=10,
+        daily_trades=72,
+        daily_closed=72,
+        daily_pnl=10,
+    )
+    row.update(tp_count=33, sl_count=31, timeout_count=8)
+
+    response = build_profile_performance_response([row], CONFIG, as_of=as_of, range_days=7)
+
+    expected = round(33 / (33 + 31), 6)
+    assert response.profiles[0].closed_trades == 72
+    assert response.profiles[0].win_rate == expected
+    assert response.summary.win_rate == expected
+    assert "TRAILING_STOP and TIMEOUT are excluded" in response.metric_definitions["win_rate"]
+
+
 def test_highlights_do_not_label_a_positive_delta_as_deterioration():
     as_of = date(2026, 8, 21)
     profile_id = uuid4()
@@ -185,14 +210,16 @@ def test_daily_l3_performance_uses_daily_closed_trades_and_preserves_empty_days(
         [
             {
                 "metric_date": as_of - timedelta(days=1),
-                "daily_closed_trades": 4,
-                "daily_wins": 3,
+                "daily_closed_trades": 72,
+                "daily_tp": 33,
+                "daily_sl": 31,
                 "daily_pnl_usdt": 12.5,
             },
             {
                 "metric_date": as_of,
-                "daily_closed_trades": 0,
-                "daily_wins": 0,
+                "daily_closed_trades": 8,
+                "daily_tp": 0,
+                "daily_sl": 0,
                 "daily_pnl_usdt": 0,
             },
         ],
@@ -201,10 +228,13 @@ def test_daily_l3_performance_uses_daily_closed_trades_and_preserves_empty_days(
     )
 
     assert response.range == "15d"
-    assert response.points[0].win_rate == 0.75
+    assert response.points[0].closed_trades == 72
+    assert response.points[0].wins == 33
+    assert response.points[0].win_rate == round(33 / (33 + 31), 6)
     assert response.points[0].pnl_usdt == 12.5
     assert response.points[1].win_rate is None
     assert response.points[1].pnl_usdt == 0
+    assert "TRAILING_STOP and TIMEOUT are excluded" in response.metric_definitions["win_rate"]
 
 
 def test_daily_contract_is_read_only_and_supports_total_range():

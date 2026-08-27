@@ -179,9 +179,11 @@ def score_metrics(metrics: Mapping[str, Any], config: Mapping[str, Any]) -> Dict
     cfg = validate_ranking_config(config)
     completed = int(metrics.get("completed_trades") or 0)
     wins = int(metrics.get("wins") or 0)
+    win_rate_wins = int(metrics.get("win_rate_wins", wins) or 0)
+    win_rate_denominator = int(metrics.get("win_rate_denominator", completed) or 0)
     avg_pnl = float(metrics.get("avg_pnl_pct") or 0.0)
     pnl_total = float(metrics.get("pnl_total_usdt") or 0.0)
-    win_rate = wins / completed if completed else 0.0
+    win_rate = win_rate_wins / win_rate_denominator if win_rate_denominator else 0.0
     tp4h_rate = float(metrics.get("tp_4h_wins") or 0) / wins if wins else 0.0
     avg_holding = metrics.get("avg_holding_win_seconds")
     avg_holding_value = float(avg_holding) if avg_holding is not None else None
@@ -259,7 +261,7 @@ def score_metrics(metrics: Mapping[str, Any], config: Mapping[str, Any]) -> Dict
         )
 
     return {
-        "win_rate": round(win_rate, 6) if completed else None,
+        "win_rate": round(win_rate, 6) if win_rate_denominator else None,
         "tp_4h_rate": round(tp4h_rate, 6) if wins else None,
         "ev_score": ev_score,
         "stat_confidence": stat_confidence,

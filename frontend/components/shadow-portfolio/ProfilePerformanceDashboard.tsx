@@ -82,7 +82,7 @@ const STATUS_COLOR: Record<ProfileMonitorStatus, string> = {
 
 const METRIC_LABEL: Record<ProfilePerformanceMetric, string> = {
   ev_score: "EV Score",
-  win_rate: "Win Rate",
+  win_rate: "Win Rate TP/SL",
   pnl_usdt: "P&L",
   trades: "Trades",
   holding_seconds: "Holding",
@@ -299,7 +299,7 @@ function L3DailyEvolution({ asOf }: { asOf: string }) {
       <div className="flex flex-wrap items-start justify-between gap-3 border-b px-4 py-4" style={{ borderColor: C.border }}>
         <div>
           <h2 className="m-0 text-sm font-semibold" style={{ color: C.text }}>Evolução diária L3</h2>
-          <p className="mt-1 text-[10.5px]" style={{ color: C.muted }}>Win Rate dos trades finalizados e P&amp;L Total realizado em cada dia UTC.</p>
+          <p className="mt-1 text-[10.5px]" style={{ color: C.muted }}>Win Rate TP/SL; stop móvel e prazo operacional ficam fora da base. P&amp;L Total realizado em cada dia UTC.</p>
         </div>
         <div className="flex gap-1" aria-label="Período da evolução diária L3">
           {ranges.map((option) => (
@@ -336,19 +336,19 @@ function L3DailyEvolution({ asOf }: { asOf: string }) {
                   <YAxis yAxisId="rate" domain={[0, 1]} tickFormatter={(value) => `${Math.round(Number(value) * 100)}%`} tick={{ fill: C.dim, fontSize: 9 }} axisLine={false} tickLine={false} width={38} />
                   <YAxis yAxisId="pnl" orientation="right" tickFormatter={(value) => `$${Number(value).toFixed(0)}`} tick={{ fill: C.dim, fontSize: 9 }} axisLine={false} tickLine={false} width={48} />
                   <Tooltip
-                    formatter={(value, name) => [name === "Win Rate L3" ? formatRate(Number(value)) : formatUsd(Number(value)), name]}
+                    formatter={(value, name) => [name === "Win Rate TP/SL" ? formatRate(Number(value)) : formatUsd(Number(value)), name]}
                     labelFormatter={(value) => displayDate(String(value))}
                     contentStyle={{ background: C.elevated, border: `1px solid ${C.borderStrong}`, borderRadius: 8, fontSize: 10 }}
                   />
                   <Bar yAxisId="pnl" dataKey="pnl_usdt" name="P&L Total do dia" barSize={10} radius={[3, 3, 0, 0]}>
                     {points.map((point) => <Cell key={point.date} fill={point.pnl_usdt >= 0 ? C.green : C.red} fillOpacity={0.52} />)}
                   </Bar>
-                  <Line yAxisId="rate" type="monotone" dataKey="win_rate" name="Win Rate L3" stroke={C.blue} strokeWidth={2.2} dot={{ r: 2.2, fill: C.blue }} activeDot={{ r: 4 }} isAnimationActive={false} />
+                  <Line yAxisId="rate" type="monotone" dataKey="win_rate" name="Win Rate TP/SL" stroke={C.blue} strokeWidth={2.2} dot={{ r: 2.2, fill: C.blue }} activeDot={{ r: 4 }} isAnimationActive={false} />
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-4 text-[10px]" style={{ color: C.muted }}>
-              <span className="inline-flex items-center gap-2"><span className="h-0.5 w-5 bg-[#4f7bf7]" /> Win Rate L3</span>
+              <span className="inline-flex items-center gap-2"><span className="h-0.5 w-5 bg-[#4f7bf7]" /> Win Rate TP/SL</span>
               <span className="inline-flex items-center gap-2"><span className="h-2.5 w-3 rounded-sm bg-[#22b97a]/60" /> P&amp;L positivo</span>
               <span className="inline-flex items-center gap-2"><span className="h-2.5 w-3 rounded-sm bg-[#e5484d]/60" /> P&amp;L negativo</span>
             </div>
@@ -360,7 +360,7 @@ function L3DailyEvolution({ asOf }: { asOf: string }) {
                 <tr>
                   <th className="px-3 py-3 text-left">Data</th>
                   <th className="px-3 py-3 text-right">Finalizados</th>
-                  <th className="px-3 py-3 text-right">Win Rate L3</th>
+                  <th className="px-3 py-3 text-right">Win Rate TP/SL</th>
                   <th className="px-3 py-3 text-right">P&amp;L Total do dia</th>
                 </tr>
               </thead>
@@ -368,7 +368,7 @@ function L3DailyEvolution({ asOf }: { asOf: string }) {
                 {tablePoints.map((point) => (
                   <tr key={point.date}>
                     <td className="whitespace-nowrap px-3 py-2.5" style={{ color: C.text }}>{displayDate(point.date)}</td>
-                    <td className="px-3 py-2.5 text-right font-mono" style={{ color: C.muted }} title={`${point.wins} trades positivos`}>{point.closed_trades.toLocaleString("pt-BR")}</td>
+                    <td className="px-3 py-2.5 text-right font-mono" style={{ color: C.muted }} title={`${point.wins} TP · Win Rate exclui stop móvel e prazo operacional`}>{point.closed_trades.toLocaleString("pt-BR")}</td>
                     <td className="px-3 py-2.5 text-right font-mono font-semibold" style={{ color: point.win_rate == null ? C.dim : C.blue }}>{formatRate(point.win_rate)}</td>
                     <td className="px-3 py-2.5 text-right font-mono font-semibold" style={{ color: deltaColor(point.pnl_usdt) }}>{formatUsd(point.pnl_usdt)}</td>
                   </tr>
@@ -433,10 +433,10 @@ function ProfileMonitorTable({
           <tr>
             <th className="w-12 px-3 py-3 text-right">Rank</th>
             <th className="sticky left-0 z-30 min-w-[260px] bg-[#0d0f16] px-3 py-3">Profile</th>
-            <SortHeader label="Trades" column="trades" active={sortKey} direction={sortDirection} onSort={onSort} title="Amostra acumulada que sustenta EV e Win Rate." />
+            <SortHeader label="Trades" column="trades" active={sortKey} direction={sortDirection} onSort={onSort} title="Amostra acumulada de trades; o Win Rate usa apenas TP e SL." />
             <SortHeader label="EV Score" column="ev_score" active={sortKey} direction={sortDirection} onSort={onSort} />
             <SortHeader label="Δ EV" column="ev_delta" active={sortKey} direction={sortDirection} onSort={onSort} title="Variação do EV acumulado em relação a D-1." />
-            <SortHeader label="Win Rate" column="win_rate" active={sortKey} direction={sortDirection} onSort={onSort} />
+            <SortHeader label="Win Rate TP/SL" column="win_rate" active={sortKey} direction={sortDirection} onSort={onSort} />
             <SortHeader label="Δ WR" column="win_rate_delta_pp" active={sortKey} direction={sortDirection} onSort={onSort} title="Variação em pontos percentuais contra D-1." />
             <SortHeader label="P&L Dia" column="pnl_day_usdt" active={sortKey} direction={sortDirection} onSort={onSort} />
             <SortHeader label={`P&L ${rangeDays}d`} column="pnl_period_usdt" active={sortKey} direction={sortDirection} onSort={onSort} />
@@ -497,7 +497,7 @@ function heatmapTooltip(row: ProfilePerformanceRow, point: ProfilePerformanceRow
     row.profile_name,
     displayDate(point.date),
     `EV Score: ${point.ev_score.toFixed(1)}`,
-    `Win Rate: ${formatRate(point.win_rate)}`,
+    `Win Rate TP/SL: ${formatRate(point.win_rate)}`,
     `Trades: ${point.trades} (${point.closed_trades} finalizados)`,
     `P&L: ${formatUsd(point.pnl_usdt)}`,
   ].join("\n");
@@ -635,7 +635,7 @@ function ProfileDrawer({
         <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
           {[
             ["EV Score", row.ev_score.toFixed(1)],
-            ["Win Rate", formatRate(row.win_rate)],
+            ["Win Rate TP/SL", formatRate(row.win_rate)],
             ["Trades", row.trades.toLocaleString("pt-BR")],
             ["Holding", formatHolding(row.holding_seconds)],
             ["TP", row.tp.toLocaleString("pt-BR")],
@@ -660,7 +660,7 @@ function ProfileDrawer({
         </div>
         <div className="mt-3 space-y-3">
           <DetailLineChart row={row} dataKey="ev_score" label="EV Score" color={C.blue} formatter={(value) => value == null ? "—" : value.toFixed(1)} />
-          <DetailLineChart row={row} dataKey="win_rate" label="Win Rate" color={C.green} formatter={formatRate} />
+          <DetailLineChart row={row} dataKey="win_rate" label="Win Rate TP/SL" color={C.green} formatter={formatRate} />
           <DetailLineChart row={row} dataKey="pnl_usdt" label="P&L diário" color={C.purple} formatter={formatUsd} />
         </div>
 
@@ -768,7 +768,7 @@ export default function ProfilePerformanceDashboard() {
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <SummaryCard label="Profiles ativos" value={String(summary.active_profiles)} sub={`Com trades nos últimos ${rangeDays}d`} icon={<Target size={17} />} />
         <SummaryCard label="EV Score médio" value={summary.ev_score_mean?.toFixed(1) ?? "—"} sub={`${formatSigned(summary.ev_score_delta)} vs D-1`} accent={deltaColor(summary.ev_score_delta)} icon={<Activity size={17} />} />
-        <SummaryCard label="Win Rate" value={formatRate(summary.win_rate)} sub={`${formatSigned(summary.win_rate_delta_pp, " pp")} vs D-1`} accent={deltaColor(summary.win_rate_delta_pp)} icon={<ShieldCheck size={17} />} />
+        <SummaryCard label="Win Rate TP/SL" value={formatRate(summary.win_rate)} sub={`${formatSigned(summary.win_rate_delta_pp, " pp")} vs D-1`} accent={deltaColor(summary.win_rate_delta_pp)} icon={<ShieldCheck size={17} />} />
         <SummaryCard label="P&L Dia" value={formatUsd(summary.pnl_day_usdt)} sub={`${formatUsd(summary.pnl_period_usdt)} nos últimos ${rangeDays}d`} accent={deltaColor(summary.pnl_day_usdt)} icon={summary.pnl_day_usdt >= 0 ? <TrendingUp size={17} /> : <TrendingDown size={17} />} />
         <SummaryCard label="Trades" value={summary.trades_period.toLocaleString("pt-BR")} sub={`${summary.closed_trades_period.toLocaleString("pt-BR")} finalizados no período`} icon={<BarChart3 size={17} />} />
         <SummaryCard label="Profiles em alerta" value={String(summary.alerts)} sub="Atenção ou deteriorando" accent={summary.alerts ? C.amber : C.green} icon={<AlertTriangle size={17} />} />
