@@ -20,9 +20,7 @@ import {
   X,
 } from "lucide-react";
 import {
-  Bar,
   CartesianGrid,
-  Cell,
   ComposedChart,
   Line,
   LineChart,
@@ -102,8 +100,16 @@ function shiftIsoDay(value: string, amount: number): string {
   return date.toISOString().slice(0, 10);
 }
 
-function displayDate(value: string): string {
-  return new Date(`${value}T12:00:00Z`).toLocaleDateString("pt-BR", {
+function utcCalendarDate(value: string): Date | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const parsed = new Date(`${value}T12:00:00Z`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+export function displayDate(value: string): string {
+  const parsed = utcCalendarDate(value);
+  if (!parsed) return "DATA INDISPONÍVEL";
+  return parsed.toLocaleDateString("pt-BR", {
     day: "2-digit",
     month: "short",
     year: "numeric",
@@ -111,8 +117,10 @@ function displayDate(value: string): string {
   }).toUpperCase();
 }
 
-function compactDate(value: string): string {
-  return new Date(`${value}T12:00:00Z`).toLocaleDateString("pt-BR", {
+export function compactDate(value: string): string {
+  const parsed = utcCalendarDate(value);
+  if (!parsed) return "—";
+  return parsed.toLocaleDateString("pt-BR", {
     day: "2-digit",
     month: "2-digit",
     timeZone: "UTC",
@@ -205,6 +213,7 @@ function TrendSparkline({ row }: { row: ProfilePerformanceRow }) {
     <div className="h-9 w-[94px]" title={title}>
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={row.history} margin={{ top: 4, right: 2, bottom: 4, left: 2 }}>
+          <XAxis dataKey="date" hide />
           <Tooltip
             formatter={(value) => [Number(value).toFixed(2), "EV"]}
             labelFormatter={(label) => displayDate(String(label))}
@@ -285,6 +294,11 @@ function L3DailyEvolution({ asOf }: { asOf: string }) {
 
   const currentData = data?.range === range && data.as_of === asOf ? data : null;
   const points = useMemo(() => currentData?.points ?? [], [currentData]);
+  const chartPoints = useMemo(() => points.map((point) => ({
+    ...point,
+    pnl_positive_usdt: point.pnl_usdt >= 0 ? point.pnl_usdt : null,
+    pnl_negative_usdt: point.pnl_usdt < 0 ? point.pnl_usdt : null,
+  })), [points]);
   const tablePoints = useMemo(() => [...points].reverse(), [points]);
   const ranges: { value: ProfileDailyRange; label: string }[] = [
     { value: "7d", label: "7d" },
@@ -330,7 +344,7 @@ function L3DailyEvolution({ asOf }: { asOf: string }) {
           <div className="min-w-0 border-b p-4 xl:border-b-0 xl:border-r" style={{ borderColor: C.border }}>
             <div className="h-[320px] w-full">
               <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={points} margin={{ top: 10, right: 8, bottom: 4, left: 0 }}>
+                <ComposedChart data={chartPoints} margin={{ top: 10, right: 8, bottom: 4, left: 0 }}>
                   <CartesianGrid stroke="rgba(255,255,255,0.05)" vertical={false} />
                   <XAxis dataKey="date" tickFormatter={compactDate} minTickGap={26} tick={{ fill: C.dim, fontSize: 9 }} axisLine={false} tickLine={false} />
                   <YAxis yAxisId="rate" domain={[0, 1]} tickFormatter={(value) => `${Math.round(Number(value) * 100)}%`} tick={{ fill: C.dim, fontSize: 9 }} axisLine={false} tickLine={false} width={38} />
@@ -340,17 +354,16 @@ function L3DailyEvolution({ asOf }: { asOf: string }) {
                     labelFormatter={(value) => displayDate(String(value))}
                     contentStyle={{ background: C.elevated, border: `1px solid ${C.borderStrong}`, borderRadius: 8, fontSize: 10 }}
                   />
-                  <Bar yAxisId="pnl" dataKey="pnl_usdt" name="P&L Total do dia" barSize={10} radius={[3, 3, 0, 0]}>
-                    {points.map((point) => <Cell key={point.date} fill={point.pnl_usdt >= 0 ? C.green : C.red} fillOpacity={0.52} />)}
-                  </Bar>
+                  <Line yAxisId="pnl" type="monotone" dataKey="pnl_positive_usdt" name="P&L positivo" stroke={C.green} strokeWidth={2.2} dot={{ r: 2.2, fill: C.green }} activeDot={{ r: 4 }} connectNulls={false} isAnimationActive={false} />
+                  <Line yAxisId="pnl" type="monotone" dataKey="pnl_negative_usdt" name="P&L negativo" stroke={C.red} strokeWidth={2.2} dot={{ r: 2.2, fill: C.red }} activeDot={{ r: 4 }} connectNulls={false} isAnimationActive={false} />
                   <Line yAxisId="rate" type="monotone" dataKey="win_rate" name="Win Rate TP/SL" stroke={C.blue} strokeWidth={2.2} dot={{ r: 2.2, fill: C.blue }} activeDot={{ r: 4 }} isAnimationActive={false} />
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-4 text-[10px]" style={{ color: C.muted }}>
               <span className="inline-flex items-center gap-2"><span className="h-0.5 w-5 bg-[#4f7bf7]" /> Win Rate TP/SL</span>
-              <span className="inline-flex items-center gap-2"><span className="h-2.5 w-3 rounded-sm bg-[#22b97a]/60" /> P&amp;L positivo</span>
-              <span className="inline-flex items-center gap-2"><span className="h-2.5 w-3 rounded-sm bg-[#e5484d]/60" /> P&amp;L negativo</span>
+              <span className="inline-flex items-center gap-2"><span className="h-0.5 w-5 bg-[#22b97a]" /> P&amp;L positivo</span>
+              <span className="inline-flex items-center gap-2"><span className="h-0.5 w-5 bg-[#e5484d]" /> P&amp;L negativo</span>
             </div>
           </div>
 
