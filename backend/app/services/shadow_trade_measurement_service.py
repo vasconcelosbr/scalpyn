@@ -23,8 +23,9 @@ from ..models.shadow_trade import ShadowTrade
 from ..models.shadow_trade_measurement import ShadowTradeMeasurementRevision
 
 
-MEASUREMENT_CONTRACT_VERSION = "shadow_measurement_v1"
+MEASUREMENT_CONTRACT_VERSION = "shadow_measurement_v2"
 COST_CONTRACT_VERSION = "fee_only_v1"
+MFE_MAE_METHOD_VERSION = "full_life_overlapping_closed_ohlcv_v1"
 _TIMEFRAME_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}
 
 
@@ -79,6 +80,9 @@ def calculate_measurement(
     timeframe: str,
     candles: Iterable[Mapping[str, Any]],
     observed_at: datetime | None = None,
+    exit_price_nominal: float | None = None,
+    exit_price_observed: float | None = None,
+    exit_price_semantics: str | None = None,
 ) -> MeasurementResult:
     """Calculate full-life excursions from every overlapping closed candle."""
     resolution = _TIMEFRAME_SECONDS.get(timeframe)
@@ -106,6 +110,9 @@ def calculate_measurement(
         "entry_price": entry_price,
         "entry_at": entry_at,
         "exit_price": exit_price,
+        "exit_price_nominal": exit_price_nominal,
+        "exit_price_observed": exit_price_observed,
+        "exit_price_semantics": exit_price_semantics,
         "exit_at": exit_at,
         "source": source,
         "resolution_seconds": resolution,
@@ -126,7 +133,7 @@ def calculate_measurement(
         input_hash = _hash(hash_snapshot)
         return MeasurementResult(
             status="UNAVAILABLE",
-            method="full_life_overlapping_closed_ohlcv",
+            method=MFE_MAE_METHOD_VERSION,
             source="unavailable",
             timeframe=timeframe,
             resolution_seconds=resolution,
@@ -149,7 +156,7 @@ def calculate_measurement(
     if exit_bucket > observed_at:
         return MeasurementResult(
             status="PENDING",
-            method="full_life_overlapping_closed_ohlcv",
+            method=MFE_MAE_METHOD_VERSION,
             source=source,
             timeframe=timeframe,
             resolution_seconds=resolution,
@@ -176,7 +183,7 @@ def calculate_measurement(
     reason = None if status == "READY" else "EXTREMA_INVARIANT_VIOLATION"
     return MeasurementResult(
         status=status,
-        method="full_life_overlapping_closed_ohlcv",
+        method=MFE_MAE_METHOD_VERSION,
         source=source,
         timeframe=timeframe,
         resolution_seconds=resolution,
@@ -251,6 +258,7 @@ async def build_measurement_revision(
     observed_at: datetime | None = None,
 ) -> dict[str, Any]:
     """Build a revision dictionary without writing it."""
+    recomputed_at = _utc(observed_at or datetime.now(timezone.utc))
     config = shadow.config_snapshot if isinstance(shadow.config_snapshot, dict) else {}
     source_raw = config.get("entry_price_source_at")
     source_at = datetime.fromisoformat(source_raw.replace("Z", "+00:00")) if isinstance(source_raw, str) else source_raw
@@ -259,6 +267,10 @@ async def build_measurement_revision(
         decision_at=shadow.entry_timestamp,
         max_lag_seconds=max_entry_lag_seconds,
     )
+    exit_price_nominal = getattr(shadow, "exit_price_nominal", None)
+    exit_price_observed = getattr(shadow, "exit_price_observed", None)
+    exit_price_semantics = getattr(shadow, "exit_price_semantics", None)
+    barrier_overshoot_pct = getattr(shadow, "barrier_overshoot_pct", None)
     base = {
         "shadow_trade_id": shadow.id,
         "measurement_contract_version": MEASUREMENT_CONTRACT_VERSION,
@@ -273,6 +285,13 @@ async def build_measurement_revision(
         "legacy_mfe_pct": shadow.mfe_pct,
         "legacy_mae_at": shadow.mae_at,
         "legacy_mfe_at": shadow.mfe_at,
+        "exit_price_nominal": exit_price_nominal,
+        "exit_price_observed": exit_price_observed,
+        "exit_price_semantics": exit_price_semantics,
+        "barrier_overshoot_pct": barrier_overshoot_pct,
+        "mfe_mae_source": "unavailable",
+        "mfe_mae_recomputed_at": recomputed_at,
+        "mfe_mae_method_version": MFE_MAE_METHOD_VERSION,
         "gross_return_pct": shadow.pnl_pct,
         "fee_roundtrip_pct_applied": shadow.fee_roundtrip_pct_applied,
         "net_return_pct": shadow.net_return_pct,
@@ -281,12 +300,22 @@ async def build_measurement_revision(
     if not timeframe_priority:
         unavailable = {
             "status": "UNAVAILABLE",
-            "method": "full_life_overlapping_closed_ohlcv",
+            "method": MFE_MAE_METHOD_VERSION,
             "source": "unavailable",
             "timeframe": None,
             "resolution_seconds": None,
-            "input_hash": _hash({"shadow_trade_id": shadow.id, "reason": "MEASUREMENT_TIMEFRAME_UNCONFIGURED"}),
-            "input_snapshot": {"reason": "MEASUREMENT_TIMEFRAME_UNCONFIGURED"},
+            "input_hash": _hash({
+                "contract_version": MEASUREMENT_CONTRACT_VERSION,
+                "shadow_trade_id": shadow.id,
+                "reason": "MEASUREMENT_TIMEFRAME_UNCONFIGURED",
+                "exit_price_nominal": exit_price_nominal,
+                "exit_price_observed": exit_price_observed,
+                "exit_price_semantics": exit_price_semantics,
+            }),
+            "input_snapshot": {
+                "reason": "MEASUREMENT_TIMEFRAME_UNCONFIGURED",
+                "exit_price_semantics": exit_price_semantics,
+            },
             "mae_pct": None,
             "mfe_pct": None,
             "mae_at": None,
@@ -299,11 +328,15 @@ async def build_measurement_revision(
     if not all((shadow.entry_price, shadow.entry_timestamp, shadow.exit_price, shadow.exit_timestamp)):
         unavailable = {
             "status": "UNAVAILABLE",
-            "method": "full_life_overlapping_closed_ohlcv",
+            "method": MFE_MAE_METHOD_VERSION,
             "source": "unavailable",
             "timeframe": None,
             "resolution_seconds": None,
-            "input_hash": _hash({"shadow_trade_id": shadow.id, "reason": "TERMINAL_FIELDS_MISSING"}),
+            "input_hash": _hash({
+                "contract_version": MEASUREMENT_CONTRACT_VERSION,
+                "shadow_trade_id": shadow.id,
+                "reason": "TERMINAL_FIELDS_MISSING",
+            }),
             "input_snapshot": {"reason": "TERMINAL_FIELDS_MISSING"},
             "mae_pct": None,
             "mfe_pct": None,
@@ -329,7 +362,10 @@ async def build_measurement_revision(
             exit_at=shadow.exit_timestamp,
             timeframe=timeframe_priority[0],
             candles=[],
-            observed_at=observed_at,
+            observed_at=recomputed_at,
+            exit_price_nominal=exit_price_nominal,
+            exit_price_observed=exit_price_observed,
+            exit_price_semantics=exit_price_semantics,
         )
     else:
         result = calculate_measurement(
@@ -339,9 +375,12 @@ async def build_measurement_revision(
             exit_at=shadow.exit_timestamp,
             timeframe=timeframe,
             candles=candles,
-            observed_at=observed_at,
+            observed_at=recomputed_at,
+            exit_price_nominal=exit_price_nominal,
+            exit_price_observed=exit_price_observed,
+            exit_price_semantics=exit_price_semantics,
         )
-    return {**base, **asdict(result)}
+    return {**base, **asdict(result), "mfe_mae_source": result.source}
 
 
 async def persist_measurement_revision(db: AsyncSession, values: Mapping[str, Any]) -> bool:

@@ -43,6 +43,7 @@ from ..services.profile_intelligence_contract import (
     LABEL_VERSION,
     official_params,
     official_where,
+    latest_measurement_join,
 )
 
 logger = logging.getLogger(__name__)
@@ -466,10 +467,11 @@ async def get_profile_ranking(
             COUNT(*) FILTER (WHERE outcome = 'SL_HIT') as losses,
             COUNT(*) FILTER (WHERE outcome = 'TIMEOUT') as timeouts,
             ROUND(AVG(pnl_pct) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT','TIMEOUT'))::numeric, 4) as avg_pnl_pct,
-            ROUND(AVG(mae_pct)::numeric, 4) as avg_mae_pct,
+            ROUND(AVG(smr.mae_pct)::numeric, 4) as avg_mae_pct,
             COUNT(*) FILTER (WHERE outcome='TP_HIT' AND holding_seconds <= 1800) as tp_30m,
             COUNT(*) as total_trades
         FROM shadow_trades
+        {latest_measurement_join('shadow_trades', 'smr')}
         WHERE user_id = :uid
           AND created_at >= NOW() - INTERVAL '{lookback_days} days'
           AND profile_id IS NOT NULL

@@ -199,6 +199,13 @@ def _measurement_dict(measurement) -> dict[str, Any] | None:
             "mfe_at": measurement.mfe_at,
             "entry_boundary_partial": measurement.entry_boundary_partial,
             "exit_boundary_partial": measurement.exit_boundary_partial,
+            "exit_price_nominal": measurement.exit_price_nominal,
+            "exit_price_observed": measurement.exit_price_observed,
+            "exit_price_semantics": measurement.exit_price_semantics,
+            "barrier_overshoot_pct": measurement.barrier_overshoot_pct,
+            "mfe_mae_source": measurement.mfe_mae_source,
+            "mfe_mae_recomputed_at": measurement.mfe_mae_recomputed_at,
+            "mfe_mae_method_version": measurement.mfe_mae_method_version,
             "entry_price_reference": measurement.entry_price_reference,
             "entry_price_observed": measurement.entry_price_observed,
             "entry_price_realized": measurement.entry_price_realized,
@@ -297,7 +304,11 @@ async def build_trade_export(
     if measurement is None:
         measurement = (await latest_measurement_by_trade_ids(db, [trade.id])).get(trade.id)
     measurement_json = _measurement_dict(measurement)
-    detail = _to_detail(trade, decision=decision if isinstance(decision, DecisionLog) else None)
+    detail = _to_detail(
+        trade,
+        decision=decision if isinstance(decision, DecisionLog) else None,
+        measurement=measurement,
+    )
     detail_json = jsonable_encoder(detail)
     entry = detail.entry_metrics or detail.features_snapshot or {}
     exit_failed = bool((detail.features_snapshot_exit or {}).get("_capture_failed") is True)
@@ -625,6 +636,8 @@ async def list_detailed_report_trades(
     )
     items = []
     for position, trade in rows:
+        measurement = measurements.get(trade.id)
+        measurement_ready = measurement is not None and measurement.status == "READY"
         items.append(
             {
                 "position": position,
@@ -655,8 +668,8 @@ async def list_detailed_report_trades(
                 "net_return_pct": trade.net_return_pct,
                 "cost_contract_version": "fee_only_v1",
                 "pnl_usdt": trade.pnl_usdt,
-                "mae_pct": trade.mae_pct,
-                "mfe_pct": trade.mfe_pct,
+                "mae_pct": measurement.mae_pct if measurement_ready else None,
+                "mfe_pct": measurement.mfe_pct if measurement_ready else None,
                 "holding_seconds": trade.holding_seconds,
                 "lineage_confidence": trade.lineage_confidence,
                 "entry_snapshot_present": bool(trade.features_snapshot),
@@ -667,7 +680,7 @@ async def list_detailed_report_trades(
                         "entry_risk_contract_valid"
                     )
                 ),
-                "measurement": _measurement_dict(measurements.get(trade.id)),
+                "measurement": _measurement_dict(measurement),
                 "training_ineligibility_reason": (
                     None if trade.eligible_for_training else trade.lineage_status
                 ),

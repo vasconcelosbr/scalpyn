@@ -660,6 +660,47 @@
           ]
         }
       ]
+    },
+    {
+      "id": "shadow-measurement-v2-primary-source",
+      "description": "Shadow exits preserve nominal and observable trigger prices while canonical MAE/MFE consumers fail closed on the newest immutable measurement revision",
+      "files": [
+        {
+          "path": "backend/app/services/shadow_trade_measurement_service.py",
+          "contains_all": [
+            "shadow_measurement_v2",
+            "full_life_overlapping_closed_ohlcv_v1",
+            "mfe_mae_source",
+            "barrier_overshoot_pct"
+          ]
+        },
+        {
+          "path": "backend/app/tasks/shadow_trade_monitor.py",
+          "contains_all": [
+            "OBSERVED_SAMPLE_TRIGGER",
+            "INTRABAR_TOUCH_NOMINAL",
+            "exit_price_nominal",
+            "exit_price_observed"
+          ]
+        },
+        {
+          "path": "backend/app/services/profile_intelligence_contract.py",
+          "contains_all": [
+            "shadow_trade_measurement_revisions",
+            "status = 'READY'",
+            "entry_quality = 'OK'",
+            "latest_measurement_join"
+          ]
+        },
+        {
+          "path": "backend/tests/test_shadow_exit_measurement_contract.py",
+          "contains_all": [
+            "test_sl_observed_sample_preserves_nominal_and_signed_overshoot",
+            "test_tp_observed_sample_preserves_positive_overshoot",
+            "test_intrabar_touch_does_not_invent_unobservable_overshoot"
+          ]
+        }
+      ]
     }
   ]
 }

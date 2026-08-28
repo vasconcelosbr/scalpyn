@@ -17,6 +17,8 @@ import json
 import os
 import statistics
 import sys
+import time
+from datetime import datetime, timezone
 from typing import Any
 from types import SimpleNamespace
 from uuid import UUID
@@ -75,6 +77,14 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                 ).where(ShadowTradeReportItem.report_run_id == UUID(args.report_run_id))
             elif args.trade_id:
                 count_query = count_query.where(ShadowTrade.id == UUID(args.trade_id))
+            if args.created_from:
+                count_query = count_query.where(
+                    ShadowTrade.created_at >= _parse_datetime(args.created_from)
+                )
+            if args.created_to:
+                count_query = count_query.where(
+                    ShadowTrade.created_at < _parse_datetime(args.created_to)
+                )
             return {
                 "mode": "DRY_RUN_COUNT",
                 "selected": int((await db.execute(count_query)).scalar_one()),
@@ -108,39 +118,67 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                 ShadowTradeReportItem,
                 ShadowTradeReportItem.shadow_trade_id == ShadowTrade.id,
             ).where(ShadowTradeReportItem.report_run_id == UUID(args.report_run_id))
-        query = query.order_by(ShadowTrade.created_at, ShadowTrade.id)
-        if args.limit is not None:
-            query = query.limit(args.limit)
-        trades = [SimpleNamespace(**dict(row)) for row in (await db.execute(query)).mappings().all()]
+        if args.created_from:
+            query = query.where(ShadowTrade.created_at >= _parse_datetime(args.created_from))
+        if args.created_to:
+            query = query.where(ShadowTrade.created_at < _parse_datetime(args.created_to))
+        after_created_at = _parse_datetime(args.after_created_at) if args.after_created_at else None
+        after_id = UUID(args.after_id) if args.after_id else None
+        if (after_created_at is None) != (after_id is None):
+            raise ValueError("after-created-at and after-id must be supplied together")
 
         counts: dict[str, int] = {}
         inserted = 0
         rows: list[dict[str, Any]] = []
-        for trade in trades:
-            config = trade.config_snapshot if isinstance(trade.config_snapshot, dict) else {}
-            revision = await build_measurement_revision(
-                db,
-                trade,
-                timeframe_priority=(
-                    args.timeframes
-                    if args.timeframes is not None
-                    else config.get("shadow_measurement_timeframe_priority")
-                ),
-                max_entry_lag_seconds=(
-                    args.max_entry_lag_seconds
-                    if args.max_entry_lag_seconds is not None
-                    else config.get("shadow_entry_max_lag_seconds")
-                ),
-            )
-            status = str(revision["status"])
-            counts[status] = counts.get(status, 0) + 1
-            rows.append(
-                {
+        selected = 0
+        batches = 0
+        started = time.monotonic()
+        last_created_at = after_created_at
+        last_id = after_id
+        while args.max_batches is None or batches < args.max_batches:
+            page_query = query
+            if last_created_at is not None and last_id is not None:
+                page_query = page_query.where(
+                    (ShadowTrade.created_at > last_created_at)
+                    | ((ShadowTrade.created_at == last_created_at) & (ShadowTrade.id > last_id))
+                )
+            remaining = None if args.limit is None else args.limit - selected
+            if remaining is not None and remaining <= 0:
+                break
+            page_size = min(args.batch_size, remaining) if remaining is not None else args.batch_size
+            page_query = page_query.order_by(ShadowTrade.created_at, ShadowTrade.id).limit(page_size)
+            trades = [
+                SimpleNamespace(**dict(row))
+                for row in (await db.execute(page_query)).mappings().all()
+            ]
+            if not trades:
+                break
+            batches += 1
+            for trade in trades:
+                config = trade.config_snapshot if isinstance(trade.config_snapshot, dict) else {}
+                revision = await build_measurement_revision(
+                    db,
+                    trade,
+                    timeframe_priority=(
+                        args.timeframes
+                        if args.timeframes is not None
+                        else config.get("shadow_measurement_timeframe_priority")
+                    ),
+                    max_entry_lag_seconds=(
+                        args.max_entry_lag_seconds
+                        if args.max_entry_lag_seconds is not None
+                        else config.get("shadow_entry_max_lag_seconds")
+                    ),
+                )
+                status = str(revision["status"])
+                counts[status] = counts.get(status, 0) + 1
+                row_summary = {
                     "shadow_trade_id": str(trade.id),
                     "symbol": trade.symbol,
                     "outcome": trade.outcome,
                     "tp_pct": trade.tp_pct,
                     "sl_pct": trade.sl_pct,
+                    "pnl_pct": trade.pnl_pct,
                     "status": status,
                     "source": revision["source"],
                     "timeframe": revision["timeframe"],
@@ -153,14 +191,18 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                     "mfe_at": revision["mfe_at"],
                     "unavailable_reason": revision["unavailable_reason"],
                 }
-            )
-            if args.apply and await persist_measurement_revision(db, revision):
-                inserted += 1
-
-        if args.apply:
-            await db.commit()
-        else:
-            await db.rollback()
+                rows.append(row_summary)
+                if args.apply and await persist_measurement_revision(db, revision):
+                    inserted += 1
+            selected += len(trades)
+            last_created_at = trades[-1].created_at
+            last_id = trades[-1].id
+            if args.apply:
+                await db.commit()
+            else:
+                await db.rollback()
+            if len(trades) < page_size:
+                break
         tp_rows = [row for row in rows if row["outcome"] == "TP_HIT"]
         sl_rows = [row for row in rows if row["outcome"] == "SL_HIT"]
         legacy_mae_ratio = [
@@ -185,8 +227,15 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         ]
         summary = {
             "mode": "APPLY" if args.apply else "DRY_RUN",
-            "selected": len(trades),
+            "selected": selected,
             "inserted": inserted,
+            "batches": batches,
+            "elapsed_seconds": round(time.monotonic() - started, 3),
+            "resume_after": (
+                {"created_at": last_created_at, "id": str(last_id)}
+                if last_created_at is not None and last_id is not None
+                else None
+            ),
             "status_counts": counts,
             "outcome_counts": {
                 outcome: sum(1 for row in rows if str(row["outcome"]) == outcome)
@@ -204,10 +253,54 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                 "mfe_over_tp_legacy": _quantiles(legacy_mfe_ratio),
                 "mfe_over_tp_corrected": _quantiles(corrected_mfe_ratio),
             },
+            "entry_exit_classification": _entry_exit_classification(rows),
         }
         if not args.summary_only:
             summary["rows"] = rows
-        return summary
+    return summary
+
+
+def _parse_datetime(raw: str) -> datetime:
+    value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
+def _entry_exit_classification(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    buckets: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if row["status"] != "READY" or row["mfe_pct"] is None:
+            continue
+        if float(row["mfe_pct"]) < 0.1:
+            label = "NEVER_PROFITABLE_ENTRY"
+        elif (
+            row["outcome"] == "SL_HIT"
+            and row["tp_pct"]
+            and float(row["mfe_pct"]) >= 0.5 * float(row["tp_pct"])
+        ):
+            label = "PROFITABLE_THEN_REVERSED_EXIT"
+        else:
+            label = "INTERMEDIATE"
+        r_value = (
+            float(row["pnl_pct"]) / float(row["sl_pct"])
+            if row["pnl_pct"] is not None and row["sl_pct"]
+            else None
+        )
+        bucket = buckets.setdefault(label, {"n": 0, "r_values": []})
+        bucket["n"] += 1
+        if r_value is not None:
+            bucket["r_values"].append(r_value)
+    return {
+        label: {
+            "n": bucket["n"],
+            "n_with_r": len(bucket["r_values"]),
+            "avg_r": (
+                sum(bucket["r_values"]) / len(bucket["r_values"])
+                if bucket["r_values"]
+                else None
+            ),
+        }
+        for label, bucket in sorted(buckets.items())
+    }
 
 
 def parse_args() -> argparse.Namespace:
@@ -217,6 +310,12 @@ def parse_args() -> argparse.Namespace:
     target.add_argument("--report-run-id")
     target.add_argument("--all", action="store_true")
     parser.add_argument("--limit", type=int)
+    parser.add_argument("--batch-size", type=int, default=500)
+    parser.add_argument("--max-batches", type=int)
+    parser.add_argument("--created-from")
+    parser.add_argument("--created-to")
+    parser.add_argument("--after-created-at")
+    parser.add_argument("--after-id")
     parser.add_argument(
         "--timeframes",
         nargs="+",
@@ -227,7 +326,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--summary-only", action="store_true")
     parser.add_argument("--count-only", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.batch_size < 1 or args.batch_size > 5000:
+        parser.error("--batch-size must be between 1 and 5000")
+    return args
 
 
 if __name__ == "__main__":

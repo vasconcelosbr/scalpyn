@@ -16,15 +16,24 @@ class PatternService:
             sql = """
                 SELECT profile_id, profile_name, source, COUNT(*) AS sample_size,
                        AVG(CASE WHEN outcome IN ('TP', 'TP_HIT') THEN 1.0 ELSE 0.0 END) AS win_rate,
-                       AVG(pnl_pct) AS avg_pnl_pct, AVG(mae_pct) AS avg_mae_pct, AVG(mfe_pct) AS avg_mfe_pct,
+                       AVG(st.pnl_pct) AS avg_pnl_pct,
+                       AVG(CASE WHEN smr.status = 'READY' THEN smr.mae_pct END) AS avg_mae_pct,
+                       AVG(CASE WHEN smr.status = 'READY' THEN smr.mfe_pct END) AS avg_mfe_pct,
                        COUNT(*) FILTER (WHERE outcome IN ('TP', 'TP_HIT')) AS tp_count,
                        COUNT(*) FILTER (WHERE outcome IN ('SL', 'SL_HIT')) AS sl_count,
                        COUNT(*) FILTER (WHERE outcome = 'TIMEOUT') AS timeout_count
-                FROM shadow_trades
-                WHERE user_id = CAST(:user_id AS uuid) AND completed_at IS NOT NULL
-                  AND created_at >= NOW() - make_interval(days => :lookback_days)
-                  AND profile_id IS NOT NULL
-                GROUP BY profile_id, profile_name, source
+                FROM shadow_trades st
+                LEFT JOIN LATERAL (
+                    SELECT status, mae_pct, mfe_pct
+                      FROM shadow_trade_measurement_revisions
+                     WHERE shadow_trade_id = st.id
+                     ORDER BY created_at DESC, id DESC
+                     LIMIT 1
+                ) smr ON TRUE
+                WHERE st.user_id = CAST(:user_id AS uuid) AND st.completed_at IS NOT NULL
+                  AND st.created_at >= NOW() - make_interval(days => :lookback_days)
+                  AND st.profile_id IS NOT NULL
+                GROUP BY st.profile_id, st.profile_name, st.source
                 HAVING COUNT(*) >= :min_sample
                 ORDER BY win_rate DESC, sample_size DESC
             """

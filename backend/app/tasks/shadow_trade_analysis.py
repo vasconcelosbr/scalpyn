@@ -17,6 +17,7 @@ from ..models.shadow_trade_analysis import (
 from ..models.ai_provider_key import AIProviderKey
 from ..services.ai_keys_service import get_decrypted_api_key
 from ..services.shadow_trade_analysis_service import analyze_trade_documents
+from ..services.shadow_trade_measurement_service import latest_measurement_by_trade_ids
 from ..services.systemic_langgraph_bridge import SystemicLangGraphBridge
 
 
@@ -56,7 +57,8 @@ async def _load_job_input(db, job_id: UUID):
         ).scalar_one_or_none()
         if trade is None:
             raise LookupError("Shadow trade not found")
-        documents = [_compact_trade(trade)]
+        measurement = (await latest_measurement_by_trade_ids(db, [trade.id])).get(trade.id)
+        documents = [_compact_trade(trade, measurement)]
         selection = {"scope": "TRADE", "trade_id": str(trade.id)}
     else:
         run = (
@@ -77,7 +79,8 @@ async def _load_job_input(db, job_id: UUID):
                 .order_by(ShadowTradeReportItem.position)
             )
         ).scalars().all()
-        documents = [_compact_trade(trade) for trade in trades]
+        measurements = await latest_measurement_by_trade_ids(db, [trade.id for trade in trades])
+        documents = [_compact_trade(trade, measurements.get(trade.id)) for trade in trades]
         selection = {
             "scope": "REPORT",
             "report_run_id": str(run.id),
@@ -122,7 +125,8 @@ async def _load_job_input(db, job_id: UUID):
     }
 
 
-def _compact_trade(trade: ShadowTrade) -> dict:
+def _compact_trade(trade: ShadowTrade, measurement=None) -> dict:
+    measurement_ready = measurement is not None and measurement.status == "READY"
     return {
         "trade_id": str(trade.id),
         "symbol": trade.symbol,
@@ -141,8 +145,10 @@ def _compact_trade(trade: ShadowTrade) -> dict:
         "sl_price": trade.sl_price,
         "pnl_pct": trade.pnl_pct,
         "pnl_usdt": trade.pnl_usdt,
-        "mae_pct": trade.mae_pct,
-        "mfe_pct": trade.mfe_pct,
+        "mae_pct": measurement.mae_pct if measurement_ready else None,
+        "mfe_pct": measurement.mfe_pct if measurement_ready else None,
+        "measurement_status": measurement.status if measurement is not None else None,
+        "measurement_source": measurement.mfe_mae_source if measurement is not None else None,
         "holding_seconds": trade.holding_seconds,
         "config_snapshot": trade.config_snapshot,
         "rules_snapshot": trade.rules_snapshot,

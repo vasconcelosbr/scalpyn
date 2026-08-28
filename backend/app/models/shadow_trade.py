@@ -75,6 +75,13 @@ class ShadowTrade(Base):
     timeout_candles = Column(Integer, nullable=True)
 
     exit_price = Column(Float, nullable=True)
+    # Exit measurement provenance.  ``exit_price`` is the observed trigger
+    # sample when one exists; the nominal barrier remains independently
+    # auditable.  Intrabar OHLCV touches cannot reveal an executable fill.
+    exit_price_nominal = Column(Float, nullable=True)
+    exit_price_observed = Column(Float, nullable=True)
+    exit_price_semantics = Column(String(40), nullable=True)
+    barrier_overshoot_pct = Column(Float, nullable=True)
     exit_timestamp = Column(DateTime(timezone=True), nullable=True)
     outcome = Column(String(20), nullable=True)
     pnl_pct = Column(Float, nullable=True)

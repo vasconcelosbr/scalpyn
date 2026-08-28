@@ -320,9 +320,16 @@ async def list_adjustments(
               / NULLIF(COUNT(*), 0), 4
             ) AS win_rate,
             ROUND(AVG(pnl_pct)::numeric, 4) AS avg_pnl_pct,
-            ROUND(AVG(mae_pct)::numeric, 4) AS avg_mae_pct,
-            ROUND(AVG(mfe_pct)::numeric, 4) AS avg_mfe_pct
+            ROUND(AVG(CASE WHEN smr.status = 'READY' THEN smr.mae_pct END)::numeric, 4) AS avg_mae_pct,
+            ROUND(AVG(CASE WHEN smr.status = 'READY' THEN smr.mfe_pct END)::numeric, 4) AS avg_mfe_pct
           FROM shadow_trades st
+          LEFT JOIN LATERAL (
+            SELECT status, mae_pct, mfe_pct
+              FROM shadow_trade_measurement_revisions
+             WHERE shadow_trade_id = st.id
+             ORDER BY created_at DESC, id DESC
+             LIMIT 1
+          ) smr ON true
           WHERE st.profile_id = s.profile_id
             AND st.status = 'COMPLETED'
             AND st.created_at >= now() - interval '30 days'
@@ -517,15 +524,22 @@ async def profile_calibration_view(
           COUNT(*) FILTER (WHERE outcome = 'TP_HIT') AS wins,
           ROUND(COUNT(*) FILTER (WHERE outcome = 'TP_HIT')::numeric / NULLIF(COUNT(*), 0), 4) AS win_rate,
           ROUND(AVG(pnl_pct)::numeric, 4) AS avg_pnl_pct,
-          ROUND(AVG(mae_pct)::numeric, 4) AS avg_mae_pct,
-          ROUND(AVG(mfe_pct)::numeric, 4) AS avg_mfe_pct,
+          ROUND(AVG(CASE WHEN smr.status = 'READY' THEN smr.mae_pct END)::numeric, 4) AS avg_mae_pct,
+          ROUND(AVG(CASE WHEN smr.status = 'READY' THEN smr.mfe_pct END)::numeric, 4) AS avg_mfe_pct,
           ROUND(AVG(holding_seconds)::numeric, 0) AS avg_holding_seconds,
           MIN(created_at) AS first_trade_at,
           MAX(created_at) AS last_trade_at
-        FROM shadow_trades
-        WHERE profile_id = :pid
-          AND status = 'COMPLETED'
-          AND created_at >= now() - (:days * interval '1 day')
+        FROM shadow_trades st
+        LEFT JOIN LATERAL (
+          SELECT status, mae_pct, mfe_pct
+            FROM shadow_trade_measurement_revisions
+           WHERE shadow_trade_id = st.id
+           ORDER BY created_at DESC, id DESC
+           LIMIT 1
+        ) smr ON true
+        WHERE st.profile_id = :pid
+          AND st.status = 'COMPLETED'
+          AND st.created_at >= now() - (:days * interval '1 day')
     """), {"pid": profile_id, "days": lookback_days})
     m = metrics_row.fetchone()
 

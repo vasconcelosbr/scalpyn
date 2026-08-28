@@ -30,6 +30,7 @@ from .profile_intelligence_contract import (
     DATASET_VERSION,
     LABEL_VERSION,
     load_pi_settings,
+    latest_measurement_join,
     official_params,
     official_where,
     validation_policy,
@@ -80,12 +81,13 @@ class ProfilePerformanceAnalyzer:
                 SUM(pnl_pct) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT','TIMEOUT')) AS pnl_total_pct,
                 AVG(holding_seconds) AS avg_holding_seconds,
                 AVG(holding_seconds) FILTER (WHERE outcome = 'TP_HIT') AS avg_winner_holding_seconds,
-                AVG(mae_pct) AS avg_mae_pct,
-                AVG(mfe_pct) AS avg_mfe_pct,
+                AVG(smr.mae_pct) AS avg_mae_pct,
+                AVG(smr.mfe_pct) AS avg_mfe_pct,
                 COUNT(*) FILTER (WHERE outcome = 'TP_HIT' AND holding_seconds <= 900) AS tp_15m,
                 COUNT(*) FILTER (WHERE outcome = 'TP_HIT' AND holding_seconds <= 1800) AS tp_30m,
                 COUNT(*) FILTER (WHERE outcome = 'TP_HIT' AND holding_seconds <= 3600) AS tp_60m
             FROM shadow_trades
+            {latest_measurement_join('shadow_trades', 'smr')}
             WHERE user_id = :uid
               AND created_at >= NOW() - INTERVAL '{lookback_days} days'
               AND profile_id IS NOT NULL
@@ -303,10 +305,11 @@ class RuleContributionAnalyzer:
                     profile_id,
                     outcome,
                     pnl_pct,
-                    mae_pct,
-                    mfe_pct,
+                    smr.mae_pct AS mae_pct,
+                    smr.mfe_pct AS mfe_pct,
                     rules_snapshot
                 FROM shadow_trades
+                {latest_measurement_join('shadow_trades', 'smr')}
                 WHERE user_id = :uid
                   AND created_at >= NOW() - INTERVAL '{lookback_days} days'
                   AND profile_id IS NOT NULL
@@ -339,8 +342,8 @@ class RuleContributionAnalyzer:
                     "is_win": (row.outcome or "") == "TP_HIT",
                     "is_loss": (row.outcome or "") == "SL_HIT",
                     "pnl_pct": float(row.pnl_pct or 0.0),
-                    "mae_pct": float(row.mae_pct or 0.0),
-                    "mfe_pct": float(row.mfe_pct or 0.0),
+                    "mae_pct": float(row.mae_pct) if row.mae_pct is not None else None,
+                    "mfe_pct": float(row.mfe_pct) if row.mfe_pct is not None else None,
                     "rules_snapshot": rules_snapshot,
                 })
             if len(batch) < batch_size:

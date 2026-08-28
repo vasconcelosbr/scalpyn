@@ -131,14 +131,24 @@ async def _evaluate_approved(db, snap: Dict[str, Any]) -> Optional[Dict[str, Any
 
     res = await db.execute(
         text(f"""
-            SELECT outcome, pnl_pct, mae_pct, mfe_pct, holding_seconds
-              FROM shadow_trades
-             WHERE user_id = :uid
-               AND symbol = :sym
-               AND created_at >= :t0
-               AND created_at <= :t1
+            SELECT st.outcome, st.pnl_pct,
+                   CASE WHEN smr.status = 'READY' THEN smr.mae_pct END AS mae_pct,
+                   CASE WHEN smr.status = 'READY' THEN smr.mfe_pct END AS mfe_pct,
+                   st.holding_seconds
+              FROM shadow_trades st
+              LEFT JOIN LATERAL (
+                  SELECT status, mae_pct, mfe_pct
+                    FROM shadow_trade_measurement_revisions
+                   WHERE shadow_trade_id = st.id
+                   ORDER BY created_at DESC, id DESC
+                   LIMIT 1
+              ) smr ON TRUE
+             WHERE st.user_id = :uid
+               AND st.symbol = :sym
+               AND st.created_at >= :t0
+               AND st.created_at <= :t1
                {profile_filter}
-             ORDER BY created_at ASC
+             ORDER BY st.created_at ASC
              LIMIT 1
         """),
         params,

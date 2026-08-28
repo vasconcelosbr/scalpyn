@@ -1058,6 +1058,13 @@ class MLChallengerService:
               AND feature_hash IS NOT NULL
               AND lineage_status = 'EXACT'
               AND eligible_for_training IS TRUE
+              AND COALESCE((
+                    SELECT smr.status = 'READY' AND smr.entry_quality = 'OK'
+                      FROM shadow_trade_measurement_revisions smr
+                     WHERE smr.shadow_trade_id = shadow_trades.id
+                     ORDER BY smr.created_at DESC, smr.id DESC
+                     LIMIT 1
+                  ), FALSE)
               AND created_at >= :cutoff
               {valid_from_clause}
               {profile_clause}
@@ -1283,6 +1290,13 @@ class MLChallengerService:
               AND st.feature_hash IS NOT NULL
               AND st.lineage_status = 'EXACT'
               AND st.eligible_for_training IS TRUE
+              AND COALESCE((
+                    SELECT smr.status = 'READY' AND smr.entry_quality = 'OK'
+                      FROM shadow_trade_measurement_revisions smr
+                     WHERE smr.shadow_trade_id = st.id
+                     ORDER BY smr.created_at DESC, smr.id DESC
+                     LIMIT 1
+                  ), FALSE)
               AND dl.created_at >= :window_start
               AND dl.created_at >= :dataset_valid_from
               AND dl.created_at <= :dataset_query_cutoff

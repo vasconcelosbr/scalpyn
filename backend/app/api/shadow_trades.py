@@ -24,14 +24,16 @@ from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, case, desc, func, or_, select, text
+from sqlalchemy import and_, case, desc, func, or_, select, text, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
 from ..database import get_db
 from ..models.backoffice import DecisionLog
 from ..models.shadow_trade import ShadowTrade
+from ..models.shadow_trade_measurement import ShadowTradeMeasurementRevision
 from ..services.exit_metrics import flatten_entry_snapshot
+from ..services.shadow_trade_measurement_service import latest_measurement_by_trade_ids
 from ..services.watchlist_performance_ranking_service import (
     RankingConfigError,
     get_performance_rankings,
@@ -207,8 +209,9 @@ async def _fetch_latest_prices(
 
 
 def _to_read(
-    row: ShadowTrade, *, current_price: Optional[float] = None
+    row: ShadowTrade, *, current_price: Optional[float] = None, measurement: Any = None
 ) -> ShadowTradeRead:
+    measurement_ready = measurement is not None and measurement.status == "READY"
     return ShadowTradeRead(
         id=row.id,
         symbol=row.symbol,
@@ -236,8 +239,10 @@ def _to_read(
         funding_rate_at_entry=float(row.funding_rate_at_entry)
         if row.funding_rate_at_entry is not None else None,
         n_concurrent_signals=row.n_concurrent_signals,
-        mae_pct=float(row.mae_pct) if row.mae_pct is not None else None,
-        mfe_pct=float(row.mfe_pct) if row.mfe_pct is not None else None,
+        mae_pct=float(measurement.mae_pct) if measurement_ready and measurement.mae_pct is not None else None,
+        mfe_pct=float(measurement.mfe_pct) if measurement_ready and measurement.mfe_pct is not None else None,
+        measurement_status=measurement.status if measurement is not None else None,
+        measurement_source=measurement.mfe_mae_source if measurement is not None else None,
         max_drawdown_pct=float(row.max_drawdown_pct)
         if row.max_drawdown_pct is not None else None,
         max_profit_pct=float(row.max_profit_pct)
@@ -246,7 +251,7 @@ def _to_read(
 
 
 def _to_detail(
-    row: ShadowTrade, *, decision: Optional[DecisionLog] = None
+    row: ShadowTrade, *, decision: Optional[DecisionLog] = None, measurement: Any = None
 ) -> ShadowTradeDetail:
     # Task #316 — pair entry/exit para o painel lado-a-lado.
     # ``features_snapshot`` já é flat (gotcha #290). Fallback para o
@@ -265,6 +270,7 @@ def _to_detail(
         ):
             exit_metrics = dict(row.features_snapshot_exit)
 
+    measurement_ready = measurement is not None and measurement.status == "READY"
     return ShadowTradeDetail(
         id=row.id,
         symbol=row.symbol,
@@ -284,6 +290,10 @@ def _to_detail(
         strategy=row.strategy,
         entry_timestamp=row.entry_timestamp,
         exit_price=float(row.exit_price) if row.exit_price is not None else None,
+        exit_price_nominal=float(row.exit_price_nominal) if row.exit_price_nominal is not None else None,
+        exit_price_observed=float(row.exit_price_observed) if row.exit_price_observed is not None else None,
+        exit_price_semantics=row.exit_price_semantics,
+        barrier_overshoot_pct=float(row.barrier_overshoot_pct) if row.barrier_overshoot_pct is not None else None,
         exit_timestamp=row.exit_timestamp,
         tp_pct=float(row.tp_pct) if row.tp_pct is not None else None,
         sl_pct=float(row.sl_pct) if row.sl_pct is not None else None,
@@ -331,8 +341,10 @@ def _to_detail(
         n_concurrent_signals=row.n_concurrent_signals,
         entry_metrics=entry_metrics,
         exit_metrics=exit_metrics,
-        mae_pct=float(row.mae_pct) if row.mae_pct is not None else None,
-        mfe_pct=float(row.mfe_pct) if row.mfe_pct is not None else None,
+        mae_pct=float(measurement.mae_pct) if measurement_ready and measurement.mae_pct is not None else None,
+        mfe_pct=float(measurement.mfe_pct) if measurement_ready and measurement.mfe_pct is not None else None,
+        measurement_status=measurement.status if measurement is not None else None,
+        measurement_source=measurement.mfe_mae_source if measurement is not None else None,
         max_drawdown_pct=float(row.max_drawdown_pct)
         if row.max_drawdown_pct is not None else None,
         max_profit_pct=float(row.max_profit_pct)
@@ -400,9 +412,17 @@ async def list_shadow_trades(
         rows = (await db.execute(page_q)).scalars().all()
 
         prices = await _fetch_latest_prices(db, [r.symbol for r in rows])
+        measurements = await latest_measurement_by_trade_ids(db, [r.id for r in rows])
 
         return ShadowTradeListResponse(
-            items=[_to_read(r, current_price=prices.get(r.symbol)) for r in rows],
+            items=[
+                _to_read(
+                    r,
+                    current_price=prices.get(r.symbol),
+                    measurement=measurements.get(r.id),
+                )
+                for r in rows
+            ],
             total=total,
             page=page,
             page_size=page_size,
@@ -595,21 +615,33 @@ async def shadow_trades_analytics(
                 AVG(holding_seconds) FILTER (WHERE outcome = 'SL_HIT')  AS sl_avg_hold,
                 AVG(holding_seconds) FILTER (WHERE outcome = 'TIMEOUT') AS to_avg_hold,
                 -- MAE/MFE por grupo (nullable: None antes da migration 062)
-                AVG(mae_pct) FILTER (WHERE outcome = 'TP_HIT')   AS tp_avg_mae,
-                AVG(mfe_pct) FILTER (WHERE outcome = 'TP_HIT')   AS tp_avg_mfe,
-                AVG(mae_pct) FILTER (WHERE outcome = 'SL_HIT')   AS sl_avg_mae,
-                AVG(mfe_pct) FILTER (WHERE outcome = 'SL_HIT')   AS sl_avg_mfe,
+                AVG(measured_mae_pct) FILTER (WHERE outcome = 'TP_HIT')   AS tp_avg_mae,
+                AVG(measured_mfe_pct) FILTER (WHERE outcome = 'TP_HIT')   AS tp_avg_mfe,
+                AVG(measured_mae_pct) FILTER (WHERE outcome = 'SL_HIT')   AS sl_avg_mae,
+                AVG(measured_mfe_pct) FILTER (WHERE outcome = 'SL_HIT')   AS sl_avg_mfe,
                 -- Recovery: TP_HIT com mae < -2% (quase perdeu mas venceu)
-                COUNT(*) FILTER (WHERE outcome = 'TP_HIT' AND mae_pct < -2.0)  AS near_sl_winners,
+                COUNT(*) FILTER (WHERE outcome = 'TP_HIT' AND measured_mae_pct < -2.0)  AS near_sl_winners,
                 -- SL após forte MFE: SL_HIT com mfe > 1%
-                COUNT(*) FILTER (WHERE outcome = 'SL_HIT' AND mfe_pct > 1.0)   AS sl_after_mfe,
+                COUNT(*) FILTER (WHERE outcome = 'SL_HIT' AND measured_mfe_pct > 1.0)   AS sl_after_mfe,
                 -- avg recovery spread em TP_HIT (mfe - mae = spread de excursão)
-                AVG(mfe_pct - mae_pct) FILTER (
-                    WHERE outcome = 'TP_HIT' AND mae_pct IS NOT NULL AND mfe_pct IS NOT NULL
+                AVG(measured_mfe_pct - measured_mae_pct) FILTER (
+                    WHERE outcome = 'TP_HIT' AND measured_mae_pct IS NOT NULL AND measured_mfe_pct IS NOT NULL
                 ) AS avg_recovery,
                 MIN(created_at) AS period_start,
                 MAX(created_at) AS period_end
-            FROM shadow_trades
+            FROM (
+                SELECT st.*,
+                       CASE WHEN smr.status = 'READY' THEN smr.mae_pct END AS measured_mae_pct,
+                       CASE WHEN smr.status = 'READY' THEN smr.mfe_pct END AS measured_mfe_pct
+                  FROM shadow_trades st
+                  LEFT JOIN LATERAL (
+                      SELECT status, mae_pct, mfe_pct
+                        FROM shadow_trade_measurement_revisions
+                       WHERE shadow_trade_id = st.id
+                       ORDER BY created_at DESC, id DESC
+                       LIMIT 1
+                  ) smr ON TRUE
+            ) shadow_trades
             WHERE {where_clause}
         """)
 
@@ -827,6 +859,20 @@ async def shadow_trades_timeout_analysis(
 
         # ── Fase 2: Holding Time Validation ──────────────────────────────
         completed_filter = base_filters + [ShadowTrade.status == "COMPLETED"]
+        latest_measurement = (
+            select(
+                ShadowTradeMeasurementRevision.status.label("measurement_status"),
+                ShadowTradeMeasurementRevision.mae_pct.label("measured_mae_pct"),
+                ShadowTradeMeasurementRevision.mfe_pct.label("measured_mfe_pct"),
+            )
+            .where(ShadowTradeMeasurementRevision.shadow_trade_id == ShadowTrade.id)
+            .order_by(
+                ShadowTradeMeasurementRevision.created_at.desc(),
+                ShadowTradeMeasurementRevision.id.desc(),
+            )
+            .limit(1)
+            .lateral("latest_measurement")
+        )
 
         ht_row = await db.execute(
             select(
@@ -857,7 +903,8 @@ async def shadow_trades_timeout_analysis(
                         (
                             and_(
                                 ShadowTrade.outcome == "TP_HIT",
-                                ShadowTrade.mae_pct < -2.0,
+                                latest_measurement.c.measurement_status == "READY",
+                                latest_measurement.c.measured_mae_pct < -2.0,
                             ),
                             1,
                         )
@@ -870,9 +917,10 @@ async def shadow_trades_timeout_analysis(
                         (
                             and_(
                                 ShadowTrade.outcome == "TP_HIT",
-                                ShadowTrade.mfe_pct > 1.0,
-                                ShadowTrade.mae_pct.is_not(None),
-                                ShadowTrade.mae_pct > -0.5,
+                                latest_measurement.c.measurement_status == "READY",
+                                latest_measurement.c.measured_mfe_pct > 1.0,
+                                latest_measurement.c.measured_mae_pct.is_not(None),
+                                latest_measurement.c.measured_mae_pct > -0.5,
                             ),
                             1,
                         )
@@ -884,14 +932,18 @@ async def shadow_trades_timeout_analysis(
                         (
                             and_(
                                 ShadowTrade.outcome == "SL_HIT",
-                                ShadowTrade.mfe_pct > 1.0,
+                                latest_measurement.c.measurement_status == "READY",
+                                latest_measurement.c.measured_mfe_pct > 1.0,
                             ),
                             1,
                         )
                     )
                 ).label("fake_momentum"),
                 func.count(case((ShadowTrade.outcome == "SL_HIT", 1))).label("sl_count"),
-            ).where(and_(*completed_filter))
+            )
+            .select_from(ShadowTrade)
+            .join(latest_measurement, true(), isouter=True)
+            .where(and_(*completed_filter))
         )
         ht = ht_row.fetchone()
 
@@ -1198,7 +1250,8 @@ async def get_shadow_trade(
                 )
             )
             decision = (await db.execute(dq)).scalar_one_or_none()
-        return _to_detail(row, decision=decision)
+        measurement = (await latest_measurement_by_trade_ids(db, [row.id])).get(row.id)
+        return _to_detail(row, decision=decision, measurement=measurement)
     except HTTPException:
         raise
     except Exception as exc:

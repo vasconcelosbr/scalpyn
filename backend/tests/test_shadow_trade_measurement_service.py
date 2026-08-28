@@ -162,3 +162,7 @@ async def test_unconfigured_measurement_hash_accepts_shadow_uuid() -> None:
     assert revision["status"] == "UNAVAILABLE"
     assert revision["unavailable_reason"] == "MEASUREMENT_TIMEFRAME_UNCONFIGURED"
     assert len(revision["input_hash"]) == 64
+    assert revision["measurement_contract_version"] == "shadow_measurement_v2"
+    assert revision["mfe_mae_source"] == "unavailable"
+    assert revision["mfe_mae_recomputed_at"] == BASE + timedelta(minutes=2)
+    assert revision["mfe_mae_method_version"] == "full_life_overlapping_closed_ohlcv_v1"

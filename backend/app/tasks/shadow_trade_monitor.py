@@ -570,6 +570,10 @@ def _finalize_outcome(
     exit_price: Optional[float],
     exit_ts: Optional[datetime],
     entry_price: float,
+    *,
+    exit_price_nominal: Optional[float] = None,
+    exit_price_observed: Optional[float] = None,
+    exit_price_semantics: Optional[str] = None,
 ) -> None:
     """Aplica os campos finais do shadow ao bater um outcome terminal.
 
@@ -584,6 +588,16 @@ def _finalize_outcome(
     """
     shadow.outcome = outcome
     shadow.exit_price = exit_price
+    shadow.exit_price_nominal = exit_price_nominal
+    shadow.exit_price_observed = exit_price_observed
+    shadow.exit_price_semantics = exit_price_semantics
+    shadow.barrier_overshoot_pct = (
+        ((exit_price_observed / exit_price_nominal) - 1.0) * 100.0
+        if exit_price_observed is not None
+        and exit_price_nominal is not None
+        and exit_price_nominal > 0
+        else None
+    )
     shadow.exit_timestamp = exit_ts
     shadow.label_resolved_at = exit_ts
     if entry_price > 0 and exit_price is not None:
@@ -1016,11 +1030,21 @@ async def _reconcile_pending_measurements_async() -> dict[str, int]:
             pending_ids = list(
                 (
                     await db_select.execute(
-                        select(ShadowTradeMeasurementRevision.shadow_trade_id)
-                        .where(ShadowTradeMeasurementRevision.status == "PENDING")
-                        .distinct()
-                        .order_by(ShadowTradeMeasurementRevision.shadow_trade_id)
-                        .limit(SHADOW_MONITOR_BATCH_SIZE)
+                        text(
+                            """
+                            SELECT shadow_trade_id
+                              FROM (
+                                SELECT DISTINCT ON (shadow_trade_id)
+                                       shadow_trade_id, status
+                                  FROM shadow_trade_measurement_revisions
+                                 ORDER BY shadow_trade_id, created_at DESC, id DESC
+                              ) latest
+                             WHERE status = 'PENDING'
+                             ORDER BY shadow_trade_id
+                             LIMIT :batch_size
+                            """
+                        ),
+                        {"batch_size": SHADOW_MONITOR_BATCH_SIZE},
                     )
                 ).scalars()
             )
@@ -1302,11 +1326,14 @@ async def _advance_shadow(
         if live_outcome is not None:
             outcome = live_outcome
             if outcome == "SL_HIT":
-                exit_price = sl
+                exit_price_nominal = sl
             elif outcome == "TP_HIT":
-                exit_price = tp
+                exit_price_nominal = tp
             else:
-                exit_price = trailing_stop
+                exit_price_nominal = trailing_stop
+            # This is an observed detector sample, not an exchange fill.  It
+            # is the only path where overshoot is directly observable.
+            exit_price = chosen_price
             # exit_ts = max(chosen_ts, entry_ts) — holding_seconds não
             # negativo. Se `chosen_ts` for NULL, usa entry_timestamp.
             if chosen_ts is None:
@@ -1323,7 +1350,16 @@ async def _advance_shadow(
                 entry_price, chosen_price, tp, sl,
                 mm_price, mm_ts, ohlcv_price, ohlcv_ts,
             )
-            _finalize_outcome(shadow, outcome, exit_price, exit_ts, entry_price)
+            _finalize_outcome(
+                shadow,
+                outcome,
+                exit_price,
+                exit_ts,
+                entry_price,
+                exit_price_nominal=exit_price_nominal,
+                exit_price_observed=chosen_price,
+                exit_price_semantics="OBSERVED_SAMPLE_TRIGGER",
+            )
             # FIX D1 (2026-05-15): _capture_exit_features + record_as_simulation
             # movidos para _record_simulation_one_async (sessão isolada, pós-
             # commit). Qualquer SQL error lá não aborta esta tx principal.
@@ -1436,6 +1472,9 @@ async def _advance_shadow(
 
     outcome: Optional[str] = None
     exit_price: Optional[float] = None
+    exit_price_nominal: Optional[float] = None
+    exit_price_observed: Optional[float] = None
+    exit_price_semantics: Optional[str] = None
     exit_ts: Optional[datetime] = None
     last_seen_ts: Optional[datetime] = None
 
@@ -1542,6 +1581,8 @@ async def _advance_shadow(
             shadow.barrier_touched_at = c["time"]
             outcome = "TRAILING_STOP"
             exit_price = candle_trailing_stop
+            exit_price_nominal = candle_trailing_stop
+            exit_price_semantics = "INTRABAR_TOUCH_NOMINAL"
             exit_ts = c["time"]
             break
         if _sl_hit:
@@ -1551,6 +1592,8 @@ async def _advance_shadow(
             shadow.barrier_touched_at = c["time"]
             outcome = "SL_HIT"
             exit_price = sl
+            exit_price_nominal = sl
+            exit_price_semantics = "INTRABAR_TOUCH_NOMINAL"
             exit_ts = c["time"]
             break
         if _tp_hit:
@@ -1558,6 +1601,8 @@ async def _advance_shadow(
             shadow.barrier_touched_at = c["time"]
             outcome = "TP_HIT"
             exit_price = tp
+            exit_price_nominal = tp
+            exit_price_semantics = "INTRABAR_TOUCH_NOMINAL"
             exit_ts = c["time"]
             break
         # A high reached inside this candle arms/raises the HWM only for the
@@ -1568,6 +1613,8 @@ async def _advance_shadow(
         if timeout_candles and (candles_seen_before + idx) >= timeout_candles:
             outcome = "TIMEOUT"
             exit_price = c["close"] if c["close"] is not None else c["open"]
+            exit_price_observed = exit_price
+            exit_price_semantics = "TIMEOUT_CANDLE_CLOSE"
             exit_ts = c["time"]
             break
 
@@ -1582,7 +1629,16 @@ async def _advance_shadow(
 
     # Outcome atingido (caminho candle-a-candle 1m) — usa os mesmos
     # helpers do live-close.
-    _finalize_outcome(shadow, outcome, exit_price, exit_ts, entry_price)
+    _finalize_outcome(
+        shadow,
+        outcome,
+        exit_price,
+        exit_ts,
+        entry_price,
+        exit_price_nominal=exit_price_nominal,
+        exit_price_observed=exit_price_observed,
+        exit_price_semantics=exit_price_semantics,
+    )
     # FIX D1 (2026-05-15): _capture_exit_features + record_as_simulation
     # movidos para _record_simulation_one_async (sessão isolada, pós-
     # commit). Qualquer SQL error lá não aborta esta tx principal.

@@ -55,6 +55,8 @@ class ShadowTradeRead(BaseModel):
     # ou criados antes desta migration. Observacional — não afeta inferência.
     mae_pct: Optional[float] = None
     mfe_pct: Optional[float] = None
+    measurement_status: Optional[str] = None
+    measurement_source: Optional[str] = None
     max_drawdown_pct: Optional[float] = None
     max_profit_pct: Optional[float] = None
 
@@ -65,6 +67,10 @@ class ShadowTradeDetail(ShadowTradeRead):
     strategy: Optional[str] = None
     entry_timestamp: Optional[datetime] = None
     exit_price: Optional[float] = None
+    exit_price_nominal: Optional[float] = None
+    exit_price_observed: Optional[float] = None
+    exit_price_semantics: Optional[str] = None
+    barrier_overshoot_pct: Optional[float] = None
     exit_timestamp: Optional[datetime] = None
     tp_pct: Optional[float] = None
     sl_pct: Optional[float] = None

@@ -62,6 +62,16 @@ class ShadowTradeMeasurementRevision(Base):
     entry_boundary_partial = Column(Boolean, nullable=False)
     exit_boundary_partial = Column(Boolean, nullable=False)
 
+    exit_price_nominal = Column(Numeric(24, 12), nullable=True)
+    exit_price_observed = Column(Numeric(24, 12), nullable=True)
+    exit_price_semantics = Column(String(40), nullable=True)
+    barrier_overshoot_pct = Column(Numeric(18, 9), nullable=True)
+    # Nullable at the schema boundary so append-only historical v1 revisions
+    # remain untouched; every v2 writer supplies all three fields.
+    mfe_mae_source = Column(String(40), nullable=True)
+    mfe_mae_recomputed_at = Column(DateTime(timezone=True), nullable=True)
+    mfe_mae_method_version = Column(String(80), nullable=True)
+
     gross_return_pct = Column(Numeric(18, 9), nullable=True)
     fee_roundtrip_pct_applied = Column(Numeric(18, 9), nullable=True)
     net_return_pct = Column(Numeric(18, 9), nullable=True)

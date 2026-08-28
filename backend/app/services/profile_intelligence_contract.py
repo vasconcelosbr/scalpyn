@@ -66,6 +66,29 @@ def official_where(alias: str = "st") -> str:
         AND {alias}.score_engine_version_id IS NOT NULL
         AND {alias}.lineage_status = 'EXACT'
         AND {alias}.eligible_for_training IS TRUE
+        AND COALESCE((
+            SELECT smr_contract.status = 'READY'
+                   AND smr_contract.entry_quality = 'OK'
+              FROM shadow_trade_measurement_revisions smr_contract
+             WHERE smr_contract.shadow_trade_id = {alias}.id
+             ORDER BY smr_contract.created_at DESC, smr_contract.id DESC
+             LIMIT 1
+        ), FALSE)
+    """
+
+
+def latest_measurement_join(
+    trade_alias: str = "shadow_trades", measurement_alias: str = "smr"
+) -> str:
+    """SQL lateral join for the newest immutable measurement, without fallback."""
+    return f"""
+        LEFT JOIN LATERAL (
+            SELECT status, mae_pct, mfe_pct
+              FROM shadow_trade_measurement_revisions
+             WHERE shadow_trade_id = {trade_alias}.id
+             ORDER BY created_at DESC, id DESC
+             LIMIT 1
+        ) {measurement_alias} ON TRUE
     """
 
 

@@ -27,6 +27,7 @@ from .profile_intelligence_contract import (
     filter_hash_valid_rows,
     official_params,
     official_where,
+    latest_measurement_join,
 )
 
 logger = logging.getLogger(__name__)
@@ -313,12 +314,13 @@ async def _load_trades_for_window(
                     created_at,
                     outcome,
                     pnl_pct,
-                    mae_pct,
-                    mfe_pct,
+                    smr.mae_pct AS mae_pct,
+                    smr.mfe_pct AS mfe_pct,
                     holding_seconds,
                     features_snapshot,
                     {OFFICIAL_CAPTURE_COLUMNS.format(alias='shadow_trades')}
                 FROM shadow_trades
+                {latest_measurement_join('shadow_trades', 'smr')}
                 WHERE user_id = :uid
                   AND created_at >= :start
                   AND created_at < :end
@@ -363,8 +365,8 @@ async def _load_trades_for_window(
             "is_loss": outcome == "SL_HIT",
             "is_timeout": outcome == "TIMEOUT",
             "pnl_pct": row.pnl_pct if row.pnl_pct is not None else 0.0,
-            "mae_pct": row.mae_pct if row.mae_pct is not None else 0.0,
-            "mfe_pct": row.mfe_pct if row.mfe_pct is not None else 0.0,
+            "mae_pct": row.mae_pct,
+            "mfe_pct": row.mfe_pct,
             "holding_seconds": row.holding_seconds if row.holding_seconds is not None else 0,
             "features": features,
         })
