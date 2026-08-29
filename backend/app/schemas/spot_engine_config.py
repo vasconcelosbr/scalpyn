@@ -29,6 +29,14 @@ class ScannerConfig(BaseModel):
     l3_profile_consolidation_rule_version: Literal[
         "single_profile_per_symbol_v1"
     ] = "single_profile_per_symbol_v1"
+    # P1 L3 gate controls.  They are read from ConfigProfile on every scan,
+    # so changing them in the GUI takes effect without a worker restart.
+    l3_v3_contract_preserve: bool = True
+    l3_condition_status_capture: bool = True
+    l3_metrics_provenance: bool = True
+    l3_zero_is_value: bool = True
+    l3_block_and_skipped_policy: Literal["legacy", "not_satisfied"] = "legacy"
+    l3_missing_indicator_policy: Literal["warn", "disable_rule"] = "warn"
 
 
 class BuyingConfig(BaseModel):

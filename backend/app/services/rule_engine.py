@@ -54,8 +54,15 @@ class RuleEngine:
         result = engine.evaluate(conditions, data, logic="AND")
     """
     
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        zero_is_value: bool = False,
+        missing_indicator_policy: str = "warn",
+    ):
         self.last_evaluation_details = []
+        self.zero_is_value = bool(zero_is_value)
+        self.missing_indicator_policy = missing_indicator_policy
     
     def evaluate(
         self,
@@ -217,11 +224,17 @@ class RuleEngine:
                 "passed": False,
                 "status": RuleStatus.FAIL.value,
             }
-            left_ok, left_reason = is_valid(actual_value, left_field)
+            left_ok, left_reason = is_valid(
+                actual_value, left_field, zero_is_value=self.zero_is_value
+            )
             right_ok, right_reason = (
                 (True, None)
                 if operator_str == "between"
-                else is_valid(target_value, right_field)
+                else is_valid(
+                    target_value,
+                    right_field,
+                    zero_is_value=self.zero_is_value,
+                )
             )
             if not left_ok or not right_ok:
                 reason = left_reason if not left_ok else right_reason
@@ -249,7 +262,11 @@ class RuleEngine:
                 detail["reference_window"] = condition.get("reference_window")
                 detail["resolved_indicator"] = lookup_field or None
 
-            valid, reason = is_valid(actual_value, lookup_field or field)
+            valid, reason = is_valid(
+                actual_value,
+                lookup_field or field,
+                zero_is_value=self.zero_is_value,
+            )
             if not valid:
                 detail["reason"] = (reason or SkipReason.INDICATOR_NOT_AVAILABLE).value
                 detail["status"] = RuleStatus.SKIPPED.value

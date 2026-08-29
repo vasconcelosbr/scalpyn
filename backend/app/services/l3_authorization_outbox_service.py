@@ -104,6 +104,15 @@ def _lineage(event: L3AuthorizationOutbox, contract: dict):
         except ValueError:
             profile_version = None
     ml = (event.payload or {}).get("ml_score") or {}
+    lineage_reason_codes: list[str] = []
+    for code in [
+        *(contract.get("reason_codes") or []),
+        *(ml.get("reason_codes") or []),
+    ]:
+        if code not in lineage_reason_codes:
+            lineage_reason_codes.append(code)
+    if contract.get("authorization_status") == "ALLOW" and not lineage_reason_codes:
+        lineage_reason_codes.append("L3_AUTHORIZATION_ALLOW")
     return WatchlistLineageContext(
         watchlist_id=watchlist.get("watchlist_id"),
         watchlist_name=watchlist.get("watchlist_name"),
@@ -125,7 +134,7 @@ def _lineage(event: L3AuthorizationOutbox, contract: dict):
         threshold_used=ml.get("threshold"),
         score_status=ml.get("score_status"),
         gate_action=ml.get("gate_action"),
-        reason_codes=ml.get("reason_codes") or [],
+        reason_codes=lineage_reason_codes,
         ml_gate_enabled=False,
     )
 

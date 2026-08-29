@@ -174,6 +174,9 @@ class ProfileEngine:
         self.signals_config = _et if _et.get("conditions") else (_sig or {})
         self.block_rules_config = self.profile.get("block_rules", {})
         self.entry_triggers_config = self.profile.get("entry_triggers", {})
+        from .l3_gate_runtime_policy import policy_from_profile
+
+        self.l3_gate_runtime_policy = policy_from_profile(self.profile)
 
         # Pre-compute timeframe grouping for all conditions
         self._tf_groups = _collect_required_timeframes(self.profile)
@@ -214,11 +217,23 @@ class ProfileEngine:
         self.signal_engine = SignalEngine(signal_config)
 
         # Block engine
-        self.block_engine = BlockEngine({
-            **self.block_rules_config,
-            "entry_triggers": self.entry_triggers_config.get("conditions", []),
-            "entry_logic": self.entry_triggers_config.get("logic", "AND"),
-        })
+        self.block_engine = BlockEngine(
+            {
+                **self.block_rules_config,
+                "entry_triggers": self.entry_triggers_config.get("conditions", []),
+                "entry_logic": self.entry_triggers_config.get("logic", "AND"),
+            },
+            condition_status_capture=self.l3_gate_runtime_policy[
+                "l3_condition_status_capture"
+            ],
+            zero_is_value=self.l3_gate_runtime_policy["l3_zero_is_value"],
+            and_skipped_policy=self.l3_gate_runtime_policy[
+                "l3_block_and_skipped_policy"
+            ],
+            missing_indicator_policy=self.l3_gate_runtime_policy[
+                "l3_missing_indicator_policy"
+            ],
+        )
 
     def _convert_signal_conditions(self, conditions: List[Dict]) -> List[Dict]:
         """Convert profile signal conditions to SignalEngine format."""

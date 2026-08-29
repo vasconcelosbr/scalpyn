@@ -662,6 +662,58 @@
       ]
     },
     {
+      "id": "l3-gate-p1-runtime-contract",
+      "description": "L3 preserves authorization v3 across Social Score rewrites, persists evaluated metrics provenance and exposes condition status under six GUI-backed runtime controls",
+      "files": [
+        {
+          "path": "backend/app/services/l3_gate_runtime_policy.py",
+          "contains_all": [
+            "l3_gate_runtime_policy_v1",
+            "l3_gate_evaluation_envelope_v3",
+            "l3_v3_contract_preserve",
+            "l3_condition_status_capture",
+            "l3_metrics_provenance",
+            "l3_zero_is_value",
+            "l3_block_and_skipped_policy",
+            "l3_missing_indicator_policy"
+          ]
+        },
+        {
+          "path": "backend/app/tasks/pipeline_scan.py",
+          "contains_all": [
+            "_rewrite_l3_decision_metrics_after_social",
+            "ALLOW_WITHOUT_VALID_V3",
+            "metrics_evaluated",
+            "metrics_raw",
+            "state_transition"
+          ]
+        },
+        {
+          "path": "backend/app/services/block_engine.py",
+          "contains_all": [
+            "condition_status_capture",
+            "and_skipped_policy",
+            "indicator_not_implemented"
+          ]
+        },
+        {
+          "path": "backend/tests/test_l3_gate_compiler_v2.py",
+          "contains_all": [
+            "test_metrics_persist_gate_evaluated_values_and_keep_raw_separate",
+            "test_social_metrics_rewrite_preserves_v3_contract_non_destructively"
+          ]
+        },
+        {
+          "path": "backend/tests/test_block_engine_skipped.py",
+          "contains_all": [
+            "test_zero_capable_indicator_is_a_value_when_policy_is_enabled",
+            "test_and_skipped_not_satisfied_policy_keeps_condition_audit",
+            "test_known_unimplemented_indicator_has_explicit_reason"
+          ]
+        }
+      ]
+    },
+    {
       "id": "shadow-measurement-v2-primary-source",
       "description": "Shadow exits preserve nominal and observable trigger prices while canonical MAE/MFE consumers fail closed on the newest immutable measurement revision",
       "files": [

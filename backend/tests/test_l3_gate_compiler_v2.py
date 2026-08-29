@@ -122,6 +122,8 @@ def test_score_gates_audit_share_one_deterministic_hash():
     assert first["score"]["evaluation_envelope_hash"] == expected
     assert first["signals"]["evaluation_envelope_hash"] == expected
     assert first["entry_triggers"]["evaluation_envelope_hash"] == expected
+    assert first["envelope_contract_version"] == "l3_gate_evaluation_envelope_v3"
+    assert len(first["runtime_policy_config_hash"]) == 64
 
 
 def test_block_rules_audit_and_lineage_share_the_gate_envelope():
@@ -584,6 +586,94 @@ def test_shadow_writer_copies_exact_gate_contract_outside_ml_features():
     source = inspect.getsource(shadow_trade_service._create_from_decision)
     assert 'config_snap["l3_gate_v2"] = deepcopy(_l3_gate_v2)' in source
     assert 'features_snap["l3_gate_v2"]' not in source
+
+
+def test_metrics_persist_gate_evaluated_values_and_keep_raw_separate():
+    from app.services.l3_gate_runtime_policy import build_policy_snapshot
+    from app.tasks.pipeline_scan import _build_l3_persisted_metrics
+
+    policy = build_policy_snapshot({
+        "l3_v3_contract_preserve": True,
+        "l3_condition_status_capture": True,
+        "l3_metrics_provenance": True,
+        "l3_zero_is_value": True,
+        "l3_block_and_skipped_policy": "legacy",
+        "l3_missing_indicator_policy": "warn",
+    })
+    raw = {
+        "_score": 70,
+        "indicators": {"liquidity_score": 70, "momentum_score": 20},
+    }
+    evaluated = {
+        "_score": 80,
+        "_score_components": {
+            "component_fields": {"liquidity_score": 40, "momentum_score": 55}
+        },
+        "indicators": {"liquidity_score": 40, "momentum_score": 55},
+    }
+    metrics = _build_l3_persisted_metrics(
+        raw_asset=raw,
+        evaluated_asset=evaluated,
+        processed={},
+        runtime_policy=policy,
+    )
+
+    assert metrics["score"] == 80
+    assert metrics["liquidity_score"] == 40
+    assert metrics["momentum_score"] == 55
+    assert metrics["score_components"] == {
+        "liquidity_score": 40,
+        "momentum_score": 55,
+    }
+    assert metrics["metrics_evaluated"] == {
+        "score": 80,
+        "liquidity_score": 40,
+        "momentum_score": 55,
+        "signal_score": None,
+        "market_structure_score": None,
+    }
+    assert metrics["metrics_raw"]["score"] == 70
+    assert metrics["metrics_raw"]["liquidity_score"] == 70
+
+
+def test_social_metrics_rewrite_preserves_v3_contract_non_destructively():
+    from app.services.l3_gate_runtime_policy import build_policy_snapshot
+    from app.tasks.pipeline_scan import _rewrite_l3_decision_metrics_after_social
+
+    policy = build_policy_snapshot({
+        "l3_v3_contract_preserve": True,
+        "l3_condition_status_capture": True,
+        "l3_metrics_provenance": True,
+        "l3_zero_is_value": True,
+        "l3_block_and_skipped_policy": "legacy",
+        "l3_missing_indicator_policy": "warn",
+    })
+    contract = {
+        "valid": True,
+        "authorization_status": "ALLOW",
+        "authorization_contract_hash": "a" * 64,
+    }
+    gate = {"evaluation_envelope_hash": "b" * 64}
+    decision = {
+        "metrics": {
+            "l3_authorization_contract_v3": contract,
+            "l3_gate_v2": gate,
+            "future_audit_extension": {"must_survive": True},
+        },
+        "gate_evaluation_v2": gate,
+        "_asset": {"_score": 72, "_social_score": {"applied": True}, "indicators": {}},
+        "_asset_evaluated": {"_score": 81, "indicators": {}},
+        "_processed": {},
+        "_l3_gate_runtime_policy": policy,
+    }
+
+    _rewrite_l3_decision_metrics_after_social(decision)
+
+    assert decision["metrics"]["l3_authorization_contract_v3"] == contract
+    assert decision["metrics"]["l3_gate_v2"] == gate
+    assert decision["metrics"]["future_audit_extension"] == {"must_survive": True}
+    assert decision["metrics"]["score"] == 81
+    assert decision["metrics"]["final_score"] == 72
 
 
 def test_gate_v2_has_no_executor_or_ml_feature_consumer():

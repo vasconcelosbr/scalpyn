@@ -37,6 +37,9 @@ class SkipReason(str, Enum):
 
     INDICATOR_NOT_AVAILABLE = "indicator_not_available"
     INDICATOR_INVALID_VALUE = "indicator_invalid_value"
+    ZERO_NOT_ALLOWED = "zero_not_allowed"
+    INDICATOR_NOT_IMPLEMENTED = "indicator_not_implemented"
+    RULE_DISABLED_MISSING_INDICATOR = "rule_disabled_missing_indicator"
 
 
 # Indicators where additional plausibility constraints apply. Values that
@@ -73,6 +76,8 @@ _PLAUSIBILITY_RULES = {
     # negative; only NaN/None should disqualify it. No extra rule.
 }
 
+_ZERO_CAPABLE_INDICATORS = frozenset({"volume_spike"})
+
 
 def _is_nan(value: Any) -> bool:
     return isinstance(value, float) and math.isnan(value)
@@ -100,7 +105,12 @@ def unwrap_envelope_value(value: Any) -> Any:
     return value
 
 
-def is_valid(value: Any, indicator_name: Optional[str] = None) -> Tuple[bool, Optional[SkipReason]]:
+def is_valid(
+    value: Any,
+    indicator_name: Optional[str] = None,
+    *,
+    zero_is_value: bool = False,
+) -> Tuple[bool, Optional[SkipReason]]:
     """Return (valid, skip_reason) for an indicator value.
 
     Args:
@@ -124,10 +134,19 @@ def is_valid(value: Any, indicator_name: Optional[str] = None) -> Tuple[bool, Op
         return False, SkipReason.INDICATOR_NOT_AVAILABLE
 
     key = (indicator_name or "").strip().lower()
+    if (
+        zero_is_value
+        and key in _ZERO_CAPABLE_INDICATORS
+        and isinstance(value, (int, float))
+        and float(value) == 0.0
+    ):
+        return True, None
     rule = _PLAUSIBILITY_RULES.get(key)
     if rule is not None:
         try:
             if not rule(float(value)):
+                if float(value) == 0.0:
+                    return False, SkipReason.ZERO_NOT_ALLOWED
                 return False, SkipReason.INDICATOR_INVALID_VALUE
         except (TypeError, ValueError):
             return False, SkipReason.INDICATOR_INVALID_VALUE

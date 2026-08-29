@@ -15,6 +15,7 @@ import operator as _op
 from typing import Dict, Any, List, Optional
 
 from .indicator_validity import RuleStatus, SkipReason, is_valid, log_skipped, unwrap_envelope_value
+from .l3_gate_runtime_policy import KNOWN_UNIMPLEMENTED_INDICATORS
 from .rule_engine import RuleEngine
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,12 @@ def _aggregate_skip_reason(evaluated: List[tuple]) -> str:
         reason = detail.get("reason") if isinstance(detail, dict) else None
         if reason:
             seen.append(reason)
+    if SkipReason.RULE_DISABLED_MISSING_INDICATOR.value in seen:
+        return SkipReason.RULE_DISABLED_MISSING_INDICATOR.value
+    if SkipReason.INDICATOR_NOT_IMPLEMENTED.value in seen:
+        return SkipReason.INDICATOR_NOT_IMPLEMENTED.value
+    if SkipReason.ZERO_NOT_ALLOWED.value in seen:
+        return SkipReason.ZERO_NOT_ALLOWED.value
     if SkipReason.INDICATOR_INVALID_VALUE.value in seen:
         return SkipReason.INDICATOR_INVALID_VALUE.value
     if seen:
@@ -64,10 +71,25 @@ class BlockEngine:
     can surface them in traces and logs.
     """
 
-    def __init__(self, block_config: Dict[str, Any]):
+    def __init__(
+        self,
+        block_config: Dict[str, Any],
+        *,
+        condition_status_capture: bool = True,
+        zero_is_value: bool = False,
+        and_skipped_policy: str = "legacy",
+        missing_indicator_policy: str = "warn",
+    ):
         self.config = block_config
         self.blocks = block_config.get("blocks", [])
-        self.rule_engine = RuleEngine()
+        self.condition_status_capture = bool(condition_status_capture)
+        self.zero_is_value = bool(zero_is_value)
+        self.and_skipped_policy = and_skipped_policy
+        self.missing_indicator_policy = missing_indicator_policy
+        self.rule_engine = RuleEngine(
+            zero_is_value=self.zero_is_value,
+            missing_indicator_policy=missing_indicator_policy,
+        )
 
     def evaluate(self, indicators: Dict[str, Any]) -> Dict[str, Any]:
         """Check all block conditions.
@@ -121,7 +143,13 @@ class BlockEngine:
                     {
                         "evaluated": status != RuleStatus.SKIPPED,
                         "matched": status == RuleStatus.PASS,
-                        "status": status.value,
+                        "status": (
+                            "DISABLED"
+                            if reason
+                            == SkipReason.RULE_DISABLED_MISSING_INDICATOR.value
+                            else status.value
+                        ),
+                        "reason_code": reason or None,
                         "conditions": condition_audits,
                     }
                 )
@@ -175,7 +203,19 @@ class BlockEngine:
 
             actual = unwrap_envelope_value(indicators.get(indicator))
 
-            valid, skip_reason = is_valid(actual, indicator)
+            valid, skip_reason = is_valid(
+                actual, indicator, zero_is_value=self.zero_is_value
+            )
+            if (
+                not valid
+                and skip_reason == SkipReason.INDICATOR_NOT_AVAILABLE
+                and indicator in KNOWN_UNIMPLEMENTED_INDICATORS
+            ):
+                skip_reason = (
+                    SkipReason.RULE_DISABLED_MISSING_INDICATOR
+                    if self.missing_indicator_policy == "disable_rule"
+                    else SkipReason.INDICATOR_NOT_IMPLEMENTED
+                )
             if not valid:
                 reason_value = (skip_reason or SkipReason.INDICATOR_NOT_AVAILABLE).value
                 skipped.append(block_name)
@@ -183,10 +223,19 @@ class BlockEngine:
                 log_skipped(indicator, actual, skip_reason or SkipReason.INDICATOR_NOT_AVAILABLE)
                 rule_audit.update(
                     {
-                        "status": RuleStatus.SKIPPED.value,
+                        "status": (
+                            "DISABLED"
+                            if reason_value
+                            == SkipReason.RULE_DISABLED_MISSING_INDICATOR.value
+                            else RuleStatus.SKIPPED.value
+                        ),
                         "conditions": [
                             self._legacy_condition_audit(
-                                block, actual, result=None, status=RuleStatus.SKIPPED
+                                block,
+                                actual,
+                                result=None,
+                                status=RuleStatus.SKIPPED,
+                                reason_code=reason_value,
                             )
                         ],
                     }
@@ -207,7 +256,11 @@ class BlockEngine:
                         "status": RuleStatus.SKIPPED.value,
                         "conditions": [
                             self._legacy_condition_audit(
-                                block, actual, result=None, status=RuleStatus.SKIPPED
+                                block,
+                                actual,
+                                result=None,
+                                status=RuleStatus.SKIPPED,
+                                reason_code=SkipReason.INDICATOR_INVALID_VALUE.value,
                             )
                         ],
                     }
@@ -283,7 +336,10 @@ class BlockEngine:
             ],
             "matched_blocks": triggered,
             "blocked_by": triggered,
-            "rules": rule_audits,
+            "rules": rule_audits if self.condition_status_capture else [],
+            "condition_status_capture": self.condition_status_capture,
+            "and_skipped_policy": self.and_skipped_policy,
+            "missing_indicator_policy": self.missing_indicator_policy,
         }
 
     def _evaluate_block_group(
@@ -311,6 +367,29 @@ class BlockEngine:
             status, detail = self.rule_engine.evaluate_condition_status(
                 condition, indicators, field_key="indicator"
             )
+            indicator = str(
+                condition.get("indicator")
+                or condition.get("field")
+                or condition.get("left")
+                or ""
+            )
+            if (
+                status == RuleStatus.SKIPPED
+                and detail.get("reason")
+                == SkipReason.INDICATOR_NOT_AVAILABLE.value
+                and indicator in KNOWN_UNIMPLEMENTED_INDICATORS
+            ):
+                detail["reason"] = (
+                    SkipReason.RULE_DISABLED_MISSING_INDICATOR.value
+                    if self.missing_indicator_policy == "disable_rule"
+                    else SkipReason.INDICATOR_NOT_IMPLEMENTED.value
+                )
+                if self.missing_indicator_policy == "warn":
+                    logger.warning(
+                        "[L3_BLOCK_RULE] indicator_not_implemented indicator=%s rule_id=%s",
+                        indicator,
+                        block.get("id"),
+                    )
             evaluated.append((status, detail, condition))
 
         condition_audits = [
@@ -332,6 +411,8 @@ class BlockEngine:
             is_triggered = any(status == RuleStatus.PASS for status, _, _ in decided)
         else:  # AND
             if any(status == RuleStatus.SKIPPED for status, _, _ in evaluated):
+                if self.and_skipped_policy == "not_satisfied":
+                    return RuleStatus.FAIL, "", condition_audits
                 return (
                     RuleStatus.SKIPPED,
                     _aggregate_skip_reason(evaluated),
@@ -378,7 +459,12 @@ class BlockEngine:
 
     @staticmethod
     def _legacy_condition_audit(
-        block: Dict[str, Any], actual: Any, *, result: Any, status: RuleStatus
+        block: Dict[str, Any],
+        actual: Any,
+        *,
+        result: Any,
+        status: RuleStatus,
+        reason_code: Optional[str] = None,
     ) -> Dict[str, Any]:
         expected: Any = block.get("value")
         if block.get("type") == "range":
@@ -390,6 +476,7 @@ class BlockEngine:
             "actual": actual,
             "result": result,
             "status": status.value,
+            "reason_code": reason_code,
         }
 
     @staticmethod

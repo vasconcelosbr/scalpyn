@@ -1366,6 +1366,7 @@ def _decision_metrics(asset: dict, processed: dict) -> dict:
     )
     metrics = {
         **(asset.get("indicators") or {}),
+        "score": asset.get("_score", asset.get("alpha_score")),
         "price": asset.get("price"),
         "price_envelope": {
             "value": asset.get("price"),
@@ -1384,6 +1385,15 @@ def _decision_metrics(asset: dict, processed: dict) -> dict:
         "final_score": asset.get("_score"),
         "social_score": dict(asset.get("_social_score") or {}),
     }
+    for component_name in (
+        "liquidity_score",
+        "momentum_score",
+        "signal_score",
+        "market_structure_score",
+    ):
+        component_value = component_fields.get(component_name)
+        if component_value is not None:
+            metrics[component_name] = component_value
 
     # Task #215 / P0-empty-metrics fix:
     #
@@ -1503,6 +1513,97 @@ def _decision_metrics(asset: dict, processed: dict) -> dict:
                 }
 
     return _jsonable(metrics)
+
+
+_L3_PROVENANCE_FIELDS = (
+    "score",
+    "liquidity_score",
+    "momentum_score",
+    "signal_score",
+    "market_structure_score",
+)
+
+
+def _l3_metric_projection(metrics: dict) -> dict:
+    return {field: metrics.get(field) for field in _L3_PROVENANCE_FIELDS}
+
+
+def _build_l3_persisted_metrics(
+    *,
+    raw_asset: dict,
+    evaluated_asset: dict,
+    processed: dict,
+    runtime_policy: dict,
+) -> dict:
+    """Serialize the gate-evaluated object while retaining raw audit context."""
+
+    provenance_enabled = bool(runtime_policy.get("l3_metrics_provenance"))
+    source_asset = evaluated_asset if provenance_enabled else raw_asset
+    persisted = _decision_metrics(source_asset, processed)
+    if not provenance_enabled:
+        return persisted
+
+    evaluated_components = (
+        (evaluated_asset.get("_score_components") or {}).get("component_fields")
+        or {}
+    )
+    if evaluated_components:
+        persisted["score_components"] = _jsonable(evaluated_components)
+
+    raw_metrics = _decision_metrics(raw_asset, processed)
+    raw_components = (
+        (raw_asset.get("_score_components") or {}).get("component_fields") or {}
+    )
+    if raw_components:
+        raw_metrics["score_components"] = _jsonable(raw_components)
+    evaluated_projection = _l3_metric_projection(persisted)
+    raw_projection = _l3_metric_projection(raw_metrics)
+    persisted["metrics_evaluated"] = evaluated_projection
+    persisted["metrics_raw"] = raw_projection
+    persisted["provenance"] = {
+        "contract_version": "l3_metrics_provenance_v1",
+        "top_level_source": "v2_asset_evaluated",
+        "metrics_evaluated_source": "v2_asset_evaluated",
+        "metrics_raw_source": "pipeline_asset_before_gate_rescore",
+        "field_sources": {
+            field: "v2_asset_evaluated" for field in _L3_PROVENANCE_FIELDS
+        },
+        "runtime_policy_config_version": runtime_policy.get("contract_version"),
+        "runtime_policy_config_hash": runtime_policy.get("config_hash"),
+    }
+    return persisted
+
+
+def _rewrite_l3_decision_metrics_after_social(decision: dict) -> None:
+    """Refresh mutable presentation metrics without dropping audit contracts."""
+
+    policy = decision.get("_l3_gate_runtime_policy") or {}
+    raw_asset = decision.get("_asset") or {}
+    evaluated_asset = decision.get("_asset_evaluated") or raw_asset
+    replacement = _build_l3_persisted_metrics(
+        raw_asset=raw_asset,
+        evaluated_asset=evaluated_asset,
+        processed=decision.get("_processed") or {},
+        runtime_policy=policy,
+    )
+    # Social scoring belongs to the legacy operational object.  Keep its
+    # context explicit without replacing the gate-evaluated score fields.
+    replacement["social_score"] = dict(raw_asset.get("_social_score") or {})
+    replacement["technical_score"] = raw_asset.get(
+        "_technical_score", raw_asset.get("_score")
+    )
+    replacement["final_score"] = raw_asset.get("_score")
+
+    previous = decision.get("metrics") or {}
+    if policy.get("l3_v3_contract_preserve"):
+        merged = deepcopy(previous)
+        merged.update(replacement)
+        decision["metrics"] = merged
+    else:
+        decision["metrics"] = replacement
+        gate_v2 = decision.get("gate_evaluation_v2")
+        if isinstance(gate_v2, dict):
+            decision["metrics"]["l3_gate_v2"] = gate_v2
 
 
 async def _inject_live_order_flow(
@@ -1681,8 +1782,10 @@ async def _evaluate_l3_decisions(
     from ..services.l3_gate_compiler_v2 import evaluate_l3_gate_v2
     from ..services.l3_gate_v2_metrics import observe_block_rules, observe_gate_v2
     from ..services.l3_authorization_contract_v3 import build_authorization_contract
+    from ..services.l3_gate_runtime_policy import policy_from_profile
     from ..services.profile_engine import ProfileEngine
 
+    runtime_policy = policy_from_profile(profile_config)
     engine = ProfileEngine(profile_config)
     engine.score_engine = _RobustScoreShim(
         thresholds=(score_config or {}).get("thresholds")
@@ -1807,6 +1910,12 @@ async def _evaluate_l3_decisions(
             )
             gate_v2 = {
                 "contract_version": "l3_gate_v2",
+                "envelope_contract_version": "l3_gate_evaluation_envelope_v3",
+                "runtime_policy": runtime_policy,
+                "runtime_policy_config_version": runtime_policy.get(
+                    "contract_version"
+                ),
+                "runtime_policy_config_hash": runtime_policy.get("config_hash"),
                 "promotion_status": "SHADOW_ONLY",
                 "operational_effect": False,
                 "human_approval_required": True,
@@ -1936,7 +2045,12 @@ async def _evaluate_l3_decisions(
                 "operational_effect": gate_v2["operational_effect"],
             },
         }
-        metrics = _decision_metrics(asset, processed)
+        metrics = _build_l3_persisted_metrics(
+            raw_asset=asset,
+            evaluated_asset=v2_asset if v2_error is None else asset,
+            processed=processed,
+            runtime_policy=runtime_policy,
+        )
         metrics["l3_gate_v2"] = gate_v2
         metrics["block_rules_audit"] = gate_v2["block_rules"]
         metrics["block_rules_lineage"] = (
@@ -2009,6 +2123,8 @@ async def _evaluate_l3_decisions(
             "created_at": datetime.now(timezone.utc),
             "_processed": processed,
             "_asset": asset,
+            "_asset_evaluated": v2_asset if v2_error is None else asset,
+            "_l3_gate_runtime_policy": runtime_policy,
         })
 
     # Durable capture is deliberately placed here, before the caller applies
@@ -2170,6 +2286,23 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
                 observe_authorization_contract,
             )
             observe_authorization_contract(contract_v3)
+        if decision.get("decision") == "ALLOW" and not (
+            isinstance(contract_v3, dict)
+            and contract_v3.get("authorization_contract_hash")
+            and contract_v3.get("valid") is True
+            and contract_v3.get("authorization_status") == "ALLOW"
+        ):
+            logger.error(
+                "[L3_AUTHORIZATION_INVARIANT] status=ERROR "
+                "reason=ALLOW_WITHOUT_VALID_V3 symbol=%s profile_id=%s "
+                "contract_present=%s contract_status=%s",
+                decision.get("symbol"),
+                decision.get("_profile_id"),
+                isinstance(contract_v3, dict),
+                contract_v3.get("authorization_status")
+                if isinstance(contract_v3, dict)
+                else None,
+            )
         if not m or not m.get("indicators_snapshot"):
             logger.warning(
                 "[Decision] METRICS_EMPTY symbol=%s decision=%s — "
@@ -2177,6 +2310,13 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
                 "Check _decision_metrics / _inject_live_order_flow path.",
                 decision.get("symbol"), decision.get("decision"),
             )
+        persisted_reason_codes = list(decision.get("reason_codes") or [])
+        if isinstance(contract_v3, dict):
+            for code in contract_v3.get("reason_codes") or []:
+                if code not in persisted_reason_codes:
+                    persisted_reason_codes.append(code)
+        if decision.get("decision") == "ALLOW" and not persisted_reason_codes:
+            persisted_reason_codes.append("L3_AUTHORIZATION_ALLOW")
         rows.append(DecisionLog(
             symbol=decision["symbol"],
             strategy=decision["strategy"],
@@ -2204,7 +2344,7 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
             threshold_used=decision.get("threshold_used"),
             score_status=decision.get("score_status"),
             gate_action=decision.get("gate_action"),
-            reason_codes=decision.get("reason_codes"),
+            reason_codes=persisted_reason_codes,
             orchestrator_payload=decision.get("orchestrator_payload"),
             ml_gate_enabled=bool(decision.get("ml_gate_enabled", False)),
         ))
@@ -3196,7 +3336,27 @@ async def _run_pipeline_scan():
                 try:
                     stats["watchlists"] += 1
                     level = (wl.level or "L1").upper()
-                    profile_config = profile_config_map.get(wl.profile_id) if wl.profile_id else None
+                    _profile_template = (
+                        profile_config_map.get(wl.profile_id)
+                        if wl.profile_id
+                        else None
+                    )
+                    profile_config = (
+                        deepcopy(_profile_template)
+                        if isinstance(_profile_template, dict)
+                        else None
+                    )
+                    _current_spot_cfg = spot_engine_config_map.get(
+                        wl.user_id, SpotEngineConfig()
+                    )
+                    if profile_config is not None:
+                        from ..services.l3_gate_runtime_policy import (
+                            build_policy_snapshot,
+                        )
+
+                        profile_config["_l3_gate_runtime_policy"] = (
+                            build_policy_snapshot(_current_spot_cfg.scanner)
+                        )
                     effective_level = effective_pipeline_level(
                         level,
                         source_pool_id=wl.source_pool_id,
@@ -3875,17 +4035,7 @@ async def _run_pipeline_scan():
                                 technical_threshold=_social_threshold,
                             )
                             _decision["score"] = float(_asset.get("_score") or _decision.get("score") or 0)
-                            _decision["metrics"] = _decision_metrics(
-                                _asset,
-                                _decision.get("_processed") or {},
-                            )
-                            # Preserve the exact point-in-time envelope hash
-                            # captured before decision-log filtering. Social
-                            # scoring is legacy-only in this shadow phase and
-                            # must not replace the observational audit payload.
-                            _gate_v2 = _decision.get("gate_evaluation_v2")
-                            if isinstance(_gate_v2, dict):
-                                _decision["metrics"]["l3_gate_v2"] = _gate_v2
+                            _rewrite_l3_decision_metrics_after_social(_decision)
                             _decision.setdefault("reasons", {})["social_score"] = {
                                 "applied": bool(_context.get("applied")),
                                 "fallback_reason": _context.get("fallback_reason"),
@@ -4448,9 +4598,7 @@ async def _run_pipeline_scan():
 
                     prior_states = _prior_decision_states(redis, wl_id)
                     prior_visibility = _prior_l3_visibility(redis, wl_id)
-                    _wl_spot_cfg = spot_engine_config_map.get(
-                        wl.user_id, SpotEngineConfig()
-                    )
+                    _wl_spot_cfg = _current_spot_cfg
                     _wl_consolidation_enabled = bool(
                         _wl_spot_cfg.scanner.l3_single_profile_per_symbol_enabled
                     )
@@ -4565,6 +4713,16 @@ async def _run_pipeline_scan():
                         }
                         if should_log:
                             d["event_type"] = event_type
+                            if event_type == "SIGNAL_LOST":
+                                _sections = d.setdefault("reasons", {}).setdefault(
+                                    "_sections", {}
+                                )
+                                _sections["state_transition"] = {
+                                    "status": "BLOCK",
+                                    "reason_codes": ["SIGNAL_LOST"],
+                                    "previous_state": "ALLOW",
+                                    "current_state": "BLOCK",
+                                }
                             d["_profile_id"]      = wl.profile_id
                             d["_profile_name"]    = _wl_profile_name
                             d["_profile_version"] = _wl_profile_version

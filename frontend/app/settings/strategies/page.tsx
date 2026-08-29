@@ -18,6 +18,12 @@ import {
 } from "@/lib/strategySettings";
 
 const COPY: Record<string, { label: string; help?: string }> = {
+  "spot_engine.scanner.l3_v3_contract_preserve": { label: "Preservar contrato v3 do L3", help: "Mantém o contrato de autorização ao atualizar métricas após o Social Score. Desligar atua como kill switch imediato." },
+  "spot_engine.scanner.l3_condition_status_capture": { label: "Capturar status por condição L3", help: "Persiste PASS, FAIL ou SKIPPED, valor observado e motivo em cada condição de block rule." },
+  "spot_engine.scanner.l3_metrics_provenance": { label: "Proveniência das métricas L3", help: "Usa no topo o objeto realmente avaliado pelo gate e mantém a projeção bruta separada para auditoria." },
+  "spot_engine.scanner.l3_zero_is_value": { label: "Zero legítimo é valor", help: "Trata zero de indicadores compatíveis, como volume_spike, como valor observado em vez de ausência." },
+  "spot_engine.scanner.l3_block_and_skipped_policy": { label: "Política AND + SKIPPED", help: "legacy mantém o comportamento atual; not_satisfied registra a condição pulada como não satisfeita sem fazê-la bloquear." },
+  "spot_engine.scanner.l3_missing_indicator_policy": { label: "Política de indicador inexistente", help: "warn mantém a regra visível como SKIPPED; disable_rule a desativa explicitamente. breakout_distance_pct e psar_trend ainda não têm produtor canônico." },
   "spot_engine.selling.never_sell_at_loss": { label: "Nunca vender com prejuízo", help: "Proteção do Spot real. O Kill Switch pode sobrepor esta regra em emergência." },
   "spot_engine.shadow.amount_usdt": { label: "Valor por trade Shadow", help: "Valor nominal congelado no snapshot de cada novo trade." },
   "spot_engine.shadow.timeout_candles": { label: "Prazo do outcome operacional (candles)", help: "Quantidade máxima de candles antes do encerramento operacional por TIMEOUT." },

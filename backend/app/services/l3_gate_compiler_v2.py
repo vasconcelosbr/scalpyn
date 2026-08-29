@@ -15,7 +15,12 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, Iterable
 
-from .indicator_validity import RuleStatus
+from .indicator_validity import RuleStatus, SkipReason
+from .l3_gate_runtime_policy import (
+    ENVELOPE_CONTRACT_VERSION,
+    KNOWN_UNIMPLEMENTED_INDICATORS,
+    policy_from_profile,
+)
 from .rule_engine import RuleEngine
 
 
@@ -99,12 +104,21 @@ def compile_conditions(
 
 
 def _evaluate_section(
-    *, section: str, config: Dict[str, Any], eval_data: Dict[str, Any]
+    *,
+    section: str,
+    config: Dict[str, Any],
+    eval_data: Dict[str, Any],
+    runtime_policy: Dict[str, Any],
 ) -> Dict[str, Any]:
     logic = str((config or {}).get("logic") or "AND").upper()
     compiled = compile_conditions((config or {}).get("conditions") or [], section=section)
     enabled = [condition for condition in compiled if condition.get("enabled", True)]
-    engine = RuleEngine()
+    engine = RuleEngine(
+        zero_is_value=bool(runtime_policy.get("l3_zero_is_value")),
+        missing_indicator_policy=str(
+            runtime_policy.get("l3_missing_indicator_policy") or "warn"
+        ),
+    )
     results: list[Dict[str, Any]] = []
 
     for condition in enabled:
@@ -112,6 +126,23 @@ def _evaluate_section(
         status, detail = engine.evaluate_condition_status(
             condition, eval_data, field_key="indicator"
         )
+        indicator = str(
+            condition.get("indicator")
+            or condition.get("left")
+            or ""
+        )
+        if (
+            status == RuleStatus.SKIPPED
+            and detail.get("reason")
+            == SkipReason.INDICATOR_NOT_AVAILABLE.value
+            and indicator in KNOWN_UNIMPLEMENTED_INDICATORS
+        ):
+            detail["reason"] = (
+                SkipReason.RULE_DISABLED_MISSING_INDICATOR.value
+                if runtime_policy.get("l3_missing_indicator_policy")
+                == "disable_rule"
+                else SkipReason.INDICATOR_NOT_IMPLEMENTED.value
+            )
         if operator not in SUPPORTED_CONDITION_OPERATORS:
             status = RuleStatus.FAIL
             detail["passed"] = False
@@ -209,14 +240,19 @@ def evaluate_l3_gate_v2(
     """Build one immutable point-in-time envelope and evaluate both gates."""
 
     profile = profile_config or {}
+    runtime_policy = policy_from_profile(profile)
     eval_data = {**asset, **(asset.get("indicators") or {}), "alpha_score": score}
     signals = _evaluate_section(
-        section="signals", config=profile.get("signals") or {}, eval_data=eval_data
+        section="signals",
+        config=profile.get("signals") or {},
+        eval_data=eval_data,
+        runtime_policy=runtime_policy,
     )
     entry = _evaluate_section(
         section="entry_triggers",
         config=profile.get("entry_triggers") or {},
         eval_data=eval_data,
+        runtime_policy=runtime_policy,
     )
     global_entry_config = profile.get("_global_entry_triggers") or {}
     if (global_entry_config.get("conditions") or []):
@@ -224,6 +260,7 @@ def evaluate_l3_gate_v2(
             section="global_entry_triggers",
             config=global_entry_config,
             eval_data=eval_data,
+            runtime_policy=runtime_policy,
         )
     else:
         global_entry = {
@@ -260,6 +297,16 @@ def evaluate_l3_gate_v2(
         "global_rules_count": block_lineage.get("global_rules_count"),
         "effective_rules_count": block_lineage.get("effective_rules_count"),
         "reason_codes": block_lineage.get("reason_codes") or [],
+        "condition_status_capture": bool(
+            raw_block_audit.get(
+                "condition_status_capture",
+                runtime_policy.get("l3_condition_status_capture"),
+            )
+        ),
+        "and_skipped_policy": runtime_policy.get("l3_block_and_skipped_policy"),
+        "missing_indicator_policy": runtime_policy.get(
+            "l3_missing_indicator_policy"
+        ),
     }
     execution_contract = deepcopy(profile.get("_execution_contract") or {})
     effective_profile_id = (
@@ -283,7 +330,9 @@ def evaluate_l3_gate_v2(
 
     envelope_material = {
         "contract_version": CONTRACT_VERSION,
+        "envelope_contract_version": ENVELOPE_CONTRACT_VERSION,
         "canonicalization_version": CANONICALIZATION_VERSION,
+        "runtime_policy": runtime_policy,
         "evaluated_at": _jsonable(evaluated_at),
         "symbol": asset.get("symbol"),
         "timeframe": profile.get("default_timeframe", "5m"),
@@ -316,7 +365,11 @@ def evaluate_l3_gate_v2(
 
     return {
         "contract_version": CONTRACT_VERSION,
+        "envelope_contract_version": ENVELOPE_CONTRACT_VERSION,
         "canonicalization_version": CANONICALIZATION_VERSION,
+        "runtime_policy": runtime_policy,
+        "runtime_policy_config_version": runtime_policy.get("contract_version"),
+        "runtime_policy_config_hash": runtime_policy.get("config_hash"),
         "promotion_status": PROMOTION_STATUS,
         "operational_effect": False,
         "human_approval_required": True,

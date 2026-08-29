@@ -45,6 +45,8 @@ export const EDITABLE_ROOTS = ["strategy", "spot_engine", "ml_shadow"] as const;
 export const ENUM_OPTIONS: Record<string, string[]> = {
   "spot_engine.scanner.universe_source": ["dynamic", "watchlist", "custom"],
   "spot_engine.scanner.l3_profile_consolidation_rule_version": ["single_profile_per_symbol_v1"],
+  "spot_engine.scanner.l3_block_and_skipped_policy": ["legacy", "not_satisfied"],
+  "spot_engine.scanner.l3_missing_indicator_policy": ["warn", "disable_rule"],
   "spot_engine.buying.order_type": ["market", "limit"],
   "spot_engine.shadow.trailing_contract_version": ["shadow_hwm_trailing_v1"],
   "ml_shadow.shadow_barrier_mode": ["FIXED", "ATR_DYNAMIC"],

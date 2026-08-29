@@ -156,6 +156,7 @@ def test_block_engine_handles_four_validity_scenarios(indicator, block, good, ba
     assert result["skipped_details"][block["id"]] in {
         "indicator_invalid_value",
         "indicator_not_available",
+        "zero_not_allowed",
     }
 
 
@@ -184,6 +185,80 @@ def test_block_group_and_with_missing_data_is_skipped():
     assert result["blocked"] is False
     assert "Combo" in result["skipped_blocks"]
     assert "Combo" not in result["triggered_blocks"]
+    audit = result["rules"][0]
+    assert audit["status"] == "SKIPPED"
+    assert [item["status"] for item in audit["conditions"]] == ["PASS", "SKIPPED"]
+    assert audit["conditions"][1]["reason_code"] == "indicator_not_available"
+
+
+def test_zero_capable_indicator_is_a_value_when_policy_is_enabled():
+    valid, reason = is_valid(0, "volume_spike", zero_is_value=True)
+    assert (valid, reason) == (True, None)
+
+    engine = BlockEngine(
+        {
+            "blocks": [{
+                "id": "vs",
+                "name": "Volume floor",
+                "indicator": "volume_spike",
+                "type": "threshold",
+                "operator": ">=",
+                "value": 1.5,
+            }]
+        },
+        zero_is_value=True,
+    )
+    result = engine.evaluate({"volume_spike": 0})
+    assert result["blocked"] is True
+    assert result["skipped_blocks"] == []
+    assert result["rules"][0]["conditions"][0]["actual"] == 0
+
+
+def test_and_skipped_not_satisfied_policy_keeps_condition_audit():
+    engine = BlockEngine(
+        {
+            "blocks": [{
+                "id": "combo",
+                "name": "Combo",
+                "logic": "AND",
+                "conditions": [
+                    {"indicator": "rsi", "operator": ">", "value": 70},
+                    {"indicator": "adx", "operator": ">", "value": 20},
+                ],
+            }]
+        },
+        and_skipped_policy="not_satisfied",
+    )
+    result = engine.evaluate({"rsi": 80})
+    assert result["blocked"] is False
+    assert result["skipped_blocks"] == []
+    assert result["rules"][0]["status"] == "FAIL"
+    assert result["rules"][0]["conditions"][1]["status"] == "SKIPPED"
+
+
+def test_known_unimplemented_indicator_has_explicit_reason():
+    engine = BlockEngine(
+        {
+            "blocks": [{
+                "id": "psar",
+                "name": "PSAR",
+                "logic": "AND",
+                "conditions": [
+                    {"indicator": "psar_trend", "operator": "==", "value": "down"},
+                ],
+            }]
+        },
+        missing_indicator_policy="warn",
+    )
+    result = engine.evaluate({})
+    assert result["rules"][0]["conditions"][0]["reason_code"] == "indicator_not_implemented"
+
+    disabled = BlockEngine(
+        engine.config,
+        missing_indicator_policy="disable_rule",
+    ).evaluate({})
+    assert disabled["rules"][0]["status"] == "DISABLED"
+    assert disabled["rules"][0]["reason_code"] == "rule_disabled_missing_indicator"
 
 
 def test_block_group_or_with_partial_missing_data_decides_on_remaining():

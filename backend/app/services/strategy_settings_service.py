@@ -28,6 +28,11 @@ from ..schemas.strategy_settings import (
     StrategyConfig,
 )
 from .config_service import config_service
+from .l3_gate_runtime_policy import (
+    DEFAULT_POLICY as L3_GATE_DEFAULT_POLICY,
+    POLICY_FIELDS as L3_GATE_POLICY_FIELDS,
+    build_policy_snapshot,
+)
 
 
 CONFIG_TYPES = ("strategy", "spot_engine", "ml")
@@ -374,6 +379,74 @@ class StrategySettingsService:
             "status": "success",
             "changed_config_types": changed_types,
             **readback,
+        }
+
+    async def materialize_l3_gate_policy(
+        self,
+        db: AsyncSession,
+        user_id: UUID,
+        *,
+        apply: bool = False,
+    ) -> Dict[str, Any]:
+        """Idempotently persist only the six P1 controls for one operator."""
+
+        profiles = await self._profiles(db, user_id, lock=apply)
+        profile = profiles.get("spot_engine")
+        before_json = dict(profile.config_json or {}) if profile else {}
+        candidate = deepcopy(before_json)
+        scanner = dict(candidate.get("scanner") or {})
+        for field in L3_GATE_POLICY_FIELDS:
+            scanner.setdefault(field, deepcopy(L3_GATE_DEFAULT_POLICY[field]))
+        candidate["scanner"] = scanner
+        # Validate the full runtime document, but retain its original shape so
+        # this backfill cannot materialize unrelated defaults.
+        SpotEngineConfig.from_config_json(candidate)
+        changed = candidate != before_json
+        policy = build_policy_snapshot(scanner)
+
+        if not apply or not changed:
+            if apply:
+                await db.rollback()
+            return {
+                "user_id": str(user_id),
+                "changed": changed,
+                "applied": False,
+                "runtime_policy": policy,
+            }
+
+        if profile is None:
+            profile = ConfigProfile(
+                user_id=user_id,
+                pool_id=None,
+                config_type="spot_engine",
+                config_json=candidate,
+                is_active=True,
+            )
+            db.add(profile)
+            await db.flush()
+        else:
+            profile.config_json = candidate
+        db.add(
+            ConfigAuditLog(
+                config_id=profile.id,
+                changed_by=user_id,
+                previous_json=before_json or None,
+                new_json=candidate,
+                change_description="[P1_L3_GATE] materialize six runtime controls",
+            )
+        )
+        await db.commit()
+        await config_service.invalidate_cache("spot_engine", user_id, None, strict=True)
+        readback = await self.get_config(db, user_id)
+        readback_scanner = readback["config"]["spot_engine"]["scanner"]
+        readback_policy = build_policy_snapshot(readback_scanner)
+        if readback_policy["config_hash"] != policy["config_hash"]:
+            raise RuntimeError("L3 gate policy readback hash mismatch")
+        return {
+            "user_id": str(user_id),
+            "changed": True,
+            "applied": True,
+            "runtime_policy": readback_policy,
         }
 
 

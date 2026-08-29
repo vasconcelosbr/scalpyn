@@ -213,3 +213,48 @@ def test_shadow_runtime_has_no_removed_business_environment_fallbacks():
         "TTT_TIMEOUT_MINUTES_DEFAULT",
     ):
         assert removed not in source
+
+
+@pytest.mark.asyncio
+async def test_l3_policy_materialization_is_scoped_idempotent_and_read_back(aggregate, monkeypatch):
+    user_id, db = aggregate
+    service = StrategySettingsService()
+    spot_profile = next(p for p in db.profiles if p.config_type == "spot_engine")
+    for field in (
+        "l3_v3_contract_preserve",
+        "l3_condition_status_capture",
+        "l3_metrics_provenance",
+        "l3_zero_is_value",
+        "l3_block_and_skipped_policy",
+        "l3_missing_indicator_policy",
+    ):
+        spot_profile.config_json["scanner"].pop(field, None)
+    before_non_scanner = deepcopy({
+        key: value for key, value in spot_profile.config_json.items() if key != "scanner"
+    })
+    invalidate = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        "app.services.strategy_settings_service.config_service.invalidate_cache",
+        invalidate,
+    )
+
+    dry = await service.materialize_l3_gate_policy(db, user_id, apply=False)
+    assert dry["changed"] is True
+    assert dry["applied"] is False
+    assert db.commits == 0
+
+    applied = await service.materialize_l3_gate_policy(db, user_id, apply=True)
+    assert applied["changed"] is True
+    assert applied["applied"] is True
+    assert applied["runtime_policy"]["l3_v3_contract_preserve"] is True
+    assert applied["runtime_policy"]["l3_block_and_skipped_policy"] == "legacy"
+    assert applied["runtime_policy"]["l3_missing_indicator_policy"] == "warn"
+    assert len(applied["runtime_policy"]["config_hash"]) == 64
+    assert {
+        key: value for key, value in spot_profile.config_json.items() if key != "scanner"
+    } == before_non_scanner
+    invalidate.assert_awaited_once_with("spot_engine", user_id, None, strict=True)
+
+    second = await service.materialize_l3_gate_policy(db, user_id, apply=True)
+    assert second["changed"] is False
+    assert second["applied"] is False
