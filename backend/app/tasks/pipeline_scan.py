@@ -2318,7 +2318,7 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
         ):
             logger.warning(
                 "[L3_AUTHORIZATION_INVARIANT] status=OBSERVATIONAL "
-                "reason=INVALID_V3_PRESERVED_IN_SHADOW_MODE symbol=%s "
+                "reason=ALLOW_WITHOUT_VALID_V3_OBSERVATIONAL symbol=%s "
                 "profile_id=%s contract_status=%s",
                 decision.get("symbol"),
                 decision.get("_profile_id"),
