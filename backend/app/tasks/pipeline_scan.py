@@ -2166,7 +2166,10 @@ async def _evaluate_l3_decisions(
 
 async def _persist_decision_logs(db, user_id, decisions: list[dict]):
     from ..models.backoffice import DecisionLog, L3AuthorizationOutbox
-    from ..services.l3_authorization_contract_v3 import canonical_hash
+    from ..services.l3_authorization_contract_v3 import (
+        canonical_hash,
+        contract_authorizes_shadow_capture,
+    )
     from sqlalchemy import or_, and_, select
 
     if not decisions:
@@ -2292,15 +2295,14 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
                 observe_authorization_contract,
             )
             observe_authorization_contract(contract_v3)
-        if decision.get("decision") == "ALLOW" and not (
-            isinstance(contract_v3, dict)
-            and contract_v3.get("authorization_contract_hash")
-            and contract_v3.get("valid") is True
-            and contract_v3.get("authorization_status") == "ALLOW"
-        ):
+        capture_authorized = contract_authorizes_shadow_capture(
+            contract_v3,
+            legacy_decision=decision.get("decision"),
+        )
+        if decision.get("decision") == "ALLOW" and not capture_authorized:
             logger.error(
                 "[L3_AUTHORIZATION_INVARIANT] status=ERROR "
-                "reason=ALLOW_WITHOUT_VALID_V3 symbol=%s profile_id=%s "
+                "reason=ALLOW_WITHOUT_CAPTURE_AUTHORITY symbol=%s profile_id=%s "
                 "contract_present=%s contract_status=%s",
                 decision.get("symbol"),
                 decision.get("_profile_id"),
@@ -2308,6 +2310,19 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
                 contract_v3.get("authorization_status")
                 if isinstance(contract_v3, dict)
                 else None,
+            )
+        elif (
+            decision.get("decision") == "ALLOW"
+            and isinstance(contract_v3, dict)
+            and contract_v3.get("valid") is not True
+        ):
+            logger.warning(
+                "[L3_AUTHORIZATION_INVARIANT] status=OBSERVATIONAL "
+                "reason=INVALID_V3_PRESERVED_IN_SHADOW_MODE symbol=%s "
+                "profile_id=%s contract_status=%s",
+                decision.get("symbol"),
+                decision.get("_profile_id"),
+                contract_v3.get("authorization_status"),
             )
         if not m or not m.get("indicators_snapshot"):
             logger.warning(
