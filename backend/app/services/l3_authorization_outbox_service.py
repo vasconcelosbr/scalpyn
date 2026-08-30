@@ -9,7 +9,10 @@ from typing import Any
 from sqlalchemy import func, select
 
 from ..models.backoffice import DecisionLog, L3AuthorizationOutbox
-from .l3_authorization_contract_v3 import canonical_hash
+from .l3_authorization_contract_v3 import (
+    canonical_hash,
+    contract_authorizes_shadow_capture,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,19 +79,10 @@ def _validate_lineage(
 
 
 def _authorized_for_shadow(decision: DecisionLog, contract: dict) -> bool:
-    if contract.get("valid") is not True:
-        return False
-    if contract.get("authorization_status") != "ALLOW":
-        return False
-    if contract.get("contract_technical_decision") != "ALLOW":
-        return False
-    if contract.get("final_decision") != "ALLOW":
-        return False
-    # SHADOW never changes the current deterministic decision; it only permits
-    # a shadow when both authorities independently agree on ALLOW.
-    if contract.get("mode") == "SHADOW" and decision.decision != "ALLOW":
-        return False
-    return True
+    return contract_authorizes_shadow_capture(
+        contract,
+        legacy_decision=decision.decision,
+    )
 
 
 def _not_created_result(contract: dict, *, required: bool) -> str:

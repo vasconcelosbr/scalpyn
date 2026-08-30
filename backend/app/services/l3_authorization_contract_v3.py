@@ -20,6 +20,7 @@ CONTRACT_VERSION = "l3_authorization_contract_v3"
 CONTRACT_MODE = "SHADOW"
 CANONICALIZATION_VERSION = "feature_identity_v1"
 PROVENANCE_RESOLVER_VERSION = "l3_v3_provenance_resolver_v1"
+CONDITION_NORMALIZATION_POLICY_VERSION = "l3_condition_normalization_v2"
 _TRANSIENT_PROFILE_KEYS = frozenset({
     "_execution_contract",
     "_block_rules_lineage",
@@ -41,6 +42,65 @@ _SUPPORTED_OPERATORS = {
     "=", "==", "!=", ">", ">=", "<", "<=", "between",
     "is_true", "is_false", "in", "not_in",
 }
+
+
+def contract_authorizes_shadow_capture(
+    contract: Mapping[str, Any] | None,
+    *,
+    legacy_decision: Any,
+) -> bool:
+    """Return the authority that applies to a Shadow capture.
+
+    ``mode=SHADOW`` is explicitly observational.  It must preserve the
+    deterministic L3 decision while retaining an invalid v3 envelope as
+    evidence and keeping the resulting row ineligible for training.  Only an
+    ``ENFORCE`` contract may make v3 validity operational.
+    """
+
+    if not isinstance(contract, Mapping):
+        return False
+    if not contract.get("authorization_contract_hash"):
+        return False
+    legacy = str(legacy_decision or "").upper()
+    technical = str(contract.get("technical_decision") or "").upper()
+    final = str(contract.get("final_decision") or "").upper()
+    if legacy != "ALLOW" or technical != legacy or final != legacy:
+        return False
+    mode = str(contract.get("mode") or "").upper()
+    if mode == "SHADOW":
+        return contract.get("operational_effect") is False
+    if mode == "ENFORCE":
+        return bool(
+            contract.get("operational_effect") is True
+            and contract.get("valid") is True
+            and contract.get("authorization_status") == "ALLOW"
+            and contract.get("contract_technical_decision") == "ALLOW"
+        )
+    return False
+
+
+def _normalize_legacy_inline_block_conditions(profile_config: dict) -> dict:
+    """Materialize BlockEngine defaults without changing persisted rules.
+
+    The legacy BlockEngine treats an inline block with no explicit ``type`` as
+    a threshold and applies ``operator='>'`` plus ``value=0``.  Contract v3
+    previously validated the raw JSON instead and reported the absent operator
+    as unsupported, even though gate v2 had evaluated the condition normally.
+    """
+
+    normalized = deepcopy(profile_config)
+    blocks = ((normalized.get("block_rules") or {}).get("blocks") or [])
+    for block in blocks:
+        if not isinstance(block, dict) or block.get("conditions"):
+            continue
+        block_type = str(block.get("type") or "threshold").lower()
+        if block_type != "threshold":
+            continue
+        block.pop("conditions", None)
+        block.setdefault("type", "threshold")
+        block.setdefault("operator", ">")
+        block.setdefault("value", 0)
+    return normalized
 
 
 def _iso(value: Any) -> Optional[str]:
@@ -634,6 +694,9 @@ def materialize_runtime_profile_contract(
 ) -> tuple[dict, dict]:
     """Resolve a separate executable snapshot without mutating the profile."""
 
+    normalized_profile_config = _normalize_legacy_inline_block_conditions(
+        profile_config
+    )
     resolver = deepcopy(
         ((runtime_policy or {}).get("l3_v3_provenance_resolver") or {})
     )
@@ -651,16 +714,16 @@ def materialize_runtime_profile_contract(
         "errors": [],
     }
     if not report["enabled"]:
-        return deepcopy(profile_config), report
+        return normalized_profile_config, report
     if not report["profile_allowlisted"]:
         report["status"] = "PROFILE_NOT_ALLOWLISTED"
-        return deepcopy(profile_config), report
+        return normalized_profile_config, report
     if resolver.get("policy_version") != PROVENANCE_RESOLVER_VERSION:
         report["status"] = "POLICY_INVALID"
         report["errors"] = ["PROVENANCE_POLICY_VERSION_INVALID"]
-        return deepcopy(profile_config), report
+        return normalized_profile_config, report
 
-    materialized = deepcopy(profile_config)
+    materialized = normalized_profile_config
     trace_index = _gate_trace_index(gate_evaluation)
     source_policies = resolver.get("source_policies") or {}
     default_timeframe = profile_config.get("default_timeframe")
@@ -1602,6 +1665,9 @@ def build_authorization_contract(
     body = {
         "contract_version": CONTRACT_VERSION,
         "canonicalization_version": CANONICALIZATION_VERSION,
+        "condition_normalization_policy_version": (
+            CONDITION_NORMALIZATION_POLICY_VERSION
+        ),
         "mode": CONTRACT_MODE,
         "valid": not contract_reject,
         "operational_effect": False,

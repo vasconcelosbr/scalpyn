@@ -1362,17 +1362,17 @@ async def _create_from_decision(
         )
     )
     if isinstance(_authorization_v3, dict) and normalized_source == SHADOW_SOURCE_L3:
+        from .l3_authorization_contract_v3 import (
+            contract_authorizes_shadow_capture,
+        )
+
         _outbox_writer = skip_reason in {
             "L3_AUTHORIZATION_OUTBOX_V3",
             "L3_AUTHORIZATION_OUTBOX_V3_CONSOLIDATION",
         }
-        _contract_allows = bool(
-            _authorization_v3.get("valid") is True
-            and _authorization_v3.get("authorization_status") == "ALLOW"
-            and _authorization_v3.get("contract_technical_decision") == "ALLOW"
-            and _authorization_v3.get("final_decision") == "ALLOW"
-            and _authorization_v3.get("final_decision")
-            == _authorization_v3.get("technical_decision")
+        _contract_allows = contract_authorizes_shadow_capture(
+            _authorization_v3,
+            legacy_decision=getattr(decision, "decision", None),
         )
         if not _outbox_writer or not _contract_allows:
             logger.warning(

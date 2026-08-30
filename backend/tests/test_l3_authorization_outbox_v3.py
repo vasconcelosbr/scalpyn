@@ -16,6 +16,7 @@ def _objects():
     body = {
         "contract_version": "l3_authorization_contract_v3",
         "mode": "SHADOW",
+        "operational_effect": False,
         "valid": True,
         "authorization_status": "ALLOW",
         "contract_technical_decision": "ALLOW",
@@ -64,13 +65,24 @@ def test_outbox_rejects_caller_and_persisted_lineage_divergence():
         _validate_lineage(decision, event, contract)
 
 
-def test_shadow_requires_valid_contract_and_both_technical_authorities_allow():
+def test_shadow_mode_preserves_legacy_allow_while_contract_remains_observational():
     decision, _event, contract = _objects()
     assert _authorized_for_shadow(decision, contract) is True
     contract["valid"] = False
-    assert _authorized_for_shadow(decision, contract) is False
-    contract["valid"] = True
+    contract["authorization_status"] = "CONTRACT_REJECT"
     contract["contract_technical_decision"] = "BLOCK"
+    assert _authorized_for_shadow(decision, contract) is True
+
+    contract["mode"] = "ENFORCE"
+    contract["operational_effect"] = True
+    assert _authorized_for_shadow(decision, contract) is False
+
+
+def test_shadow_mode_never_overrides_a_legacy_block():
+    decision, _event, contract = _objects()
+    decision.decision = "BLOCK"
+    contract["technical_decision"] = "BLOCK"
+    contract["final_decision"] = "BLOCK"
     assert _authorized_for_shadow(decision, contract) is False
 
 

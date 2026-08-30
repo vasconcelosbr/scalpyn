@@ -3187,6 +3187,9 @@ async def _run_pipeline_scan():
     from ..schemas.spot_engine_config import SpotEngineConfig
     from sqlalchemy import select, text
     from ..utils.symbol_filters import filter_real_assets
+    from ..services.l3_authorization_contract_v3 import (
+        contract_authorizes_shadow_capture,
+    )
 
     redis = _get_redis()
     execution_id = str(uuid4())
@@ -4670,15 +4673,9 @@ async def _run_pipeline_scan():
                         _contract_v3 = (d.get("metrics") or {}).get(
                             "l3_authorization_contract_v3"
                         )
-                        _contract_shadow_eligible = bool(
-                            isinstance(_contract_v3, dict)
-                            and _contract_v3.get("authorization_contract_hash")
-                            and _contract_v3.get("valid") is True
-                            and _contract_v3.get("authorization_status") == "ALLOW"
-                            and _contract_v3.get("contract_technical_decision") == "ALLOW"
-                            and _contract_v3.get("final_decision")
-                            == _contract_v3.get("technical_decision")
-                            and d.get("decision") == "ALLOW"
+                        _contract_shadow_eligible = contract_authorizes_shadow_capture(
+                            _contract_v3,
+                            legacy_decision=d.get("decision"),
                         )
                         d["_shadow_creation_required"] = bool(
                             should_log
@@ -4873,12 +4870,9 @@ async def _run_pipeline_scan():
                                         _bc = _bm.get(
                                             "l3_authorization_contract_v3"
                                         ) or {}
-                                        _bypass_contract_allows = bool(
-                                            _bc.get("authorization_contract_hash")
-                                            and _bc.get("valid") is True
-                                            and _bc.get("authorization_status") == "ALLOW"
-                                            and _bc.get("contract_technical_decision") == "ALLOW"
-                                            and _bc.get("final_decision") == "ALLOW"
+                                        _bypass_contract_allows = contract_authorizes_shadow_capture(
+                                            _bc,
+                                            legacy_decision=_bd.get("decision"),
                                         )
                                         _bd["_shadow_creation_required"] = bool(
                                             _bypass_contract_allows

@@ -1088,3 +1088,48 @@ def test_historical_replay_reclassifies_exact_gate_trade_provider():
     assert resolved["feature_identity"]["source"] == "live_trade_flow"
     assert result["provenance_resolution"]["status"] == "RESOLVED"
     assert result["authorization_status"] == "ALLOW"
+
+
+def test_legacy_inline_threshold_defaults_match_block_engine_without_profile_mutation():
+    profile = {
+        "default_timeframe": "5m",
+        "filters": {"logic": "AND", "conditions": []},
+        "signals": {"logic": "AND", "conditions": []},
+        "entry_triggers": {"logic": "AND", "conditions": []},
+        "block_rules": {"blocks": [{
+            "id": "legacy-rsi",
+            "conditions": [],
+            "indicator": "rsi",
+            "min": 20,
+            "max": 80,
+            "source": "ohlcv",
+            "source_provider": "gate_io_candles",
+            "provider_policy_id": "provider-policy-v1",
+            "timeframe": "5m",
+            "period": 14,
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 30,
+        }]},
+    }
+    original = canonical_hash(profile)
+    result = build_authorization_contract(
+        asset=_asset(),
+        profile_config=profile,
+        legacy_decision="ALLOW",
+        evaluated_at=NOW,
+        profile_id="profile-1",
+        profile_name="Profile 1",
+        profile_version=NOW,
+    )
+    condition = result["sections"]["block_rules"]["blocks"][0][
+        "conditions"
+    ][0]
+    assert (
+        result["condition_normalization_policy_version"]
+        == "l3_condition_normalization_v2"
+    )
+    assert condition["operator"] == ">"
+    assert condition["expected"] == {"value": 0, "min": 20, "max": 80}
+    assert "OPERATOR_UNSUPPORTED" not in result["reason_codes"]
+    assert result["valid"] is True
+    assert canonical_hash(profile) == original
