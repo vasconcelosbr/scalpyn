@@ -1933,6 +1933,10 @@ async def _evaluate_l3_decisions(
                 ),
                 "score": {"value": None, "evaluation_envelope_hash": None},
                 "base_eligible": None,
+                "filters": {
+                    "gate_passed": False, "reason_codes": ["EVALUATION_ERROR"],
+                    "failed": [], "skipped": [], "conditions": [],
+                },
                 "signals": {
                     "gate_passed": False, "reason_codes": ["EVALUATION_ERROR"],
                     "failed": [], "skipped": [], "conditions": [],
@@ -2061,7 +2065,7 @@ async def _evaluate_l3_decisions(
         # can never change ``decision`` or ``l3_pass`` while mode=SHADOW.
         try:
             metrics["l3_authorization_contract_v3"] = build_authorization_contract(
-                asset=asset,
+                asset=v2_asset if v2_error is None else asset,
                 profile_config=profile_config or {},
                 legacy_decision=decision,
                 evaluated_at=evaluated_at,
@@ -2073,6 +2077,8 @@ async def _evaluate_l3_decisions(
                 watchlist_level=watchlist_level,
                 source_watchlist_id=source_watchlist_id,
                 market_type="futures" if asset.get("is_futures") else "spot",
+                gate_evaluation=gate_v2,
+                runtime_policy=runtime_policy,
             )
         except Exception as exc:
             logger.exception(

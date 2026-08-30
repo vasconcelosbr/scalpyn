@@ -293,7 +293,8 @@ class TestFunctionSignatures:
         contract_source = Path(
             "backend/app/services/l3_authorization_contract_v3.py"
         ).read_text(encoding="utf-8")
-        assert '"rules_snapshot": deepcopy(profile_config or {})' in contract_source
+        assert "persisted_profile_snapshot = _persisted_profile_snapshot(profile_config or {})" in contract_source
+        assert '"rules_snapshot": persisted_profile_snapshot' in contract_source
 
     def test_create_l1_spectrum_accepts_lineage(self):
         from backend.app.services.shadow_trade_service import create_l1_spectrum_shadows

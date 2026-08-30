@@ -24,6 +24,10 @@ const COPY: Record<string, { label: string; help?: string }> = {
   "spot_engine.scanner.l3_zero_is_value": { label: "Zero legítimo é valor", help: "Trata zero de indicadores compatíveis, como volume_spike, como valor observado em vez de ausência." },
   "spot_engine.scanner.l3_block_and_skipped_policy": { label: "Política AND + SKIPPED", help: "legacy mantém o comportamento atual; not_satisfied registra a condição pulada como não satisfeita sem fazê-la bloquear." },
   "spot_engine.scanner.l3_missing_indicator_policy": { label: "Política de indicador inexistente", help: "warn mantém a regra visível como SKIPPED; disable_rule a desativa explicitamente. breakout_distance_pct e psar_trend ainda não têm produtor canônico." },
+  "spot_engine.scanner.l3_v3_provenance_resolver.enabled": { label: "Resolvedor de proveniência L3 v3", help: "Ativa a resolução determinística somente para os profiles presentes na lista de canário." },
+  "spot_engine.scanner.l3_v3_provenance_resolver.profile_allowlist": { label: "Profiles autorizados no canário", help: "IDs exatos dos profiles que podem usar o resolvedor. Lista vazia mantém todos desativados." },
+  "spot_engine.scanner.l3_v3_provenance_resolver.policy_version": { label: "Versão da política de proveniência", help: "Identifica de forma imutável o contrato usado para resolver as features congeladas na decisão." },
+  "spot_engine.scanner.l3_v3_provenance_resolver.source_policies": { label: "Políticas por fonte", help: "Configuração auditável para OHLCV, fluxo de trades, livro de ofertas e contexto da decisão." },
   "spot_engine.selling.never_sell_at_loss": { label: "Nunca vender com prejuízo", help: "Proteção do Spot real. O Kill Switch pode sobrepor esta regra em emergência." },
   "spot_engine.shadow.amount_usdt": { label: "Valor por trade Shadow", help: "Valor nominal congelado no snapshot de cada novo trade." },
   "spot_engine.shadow.timeout_candles": { label: "Prazo do outcome operacional (candles)", help: "Quantidade máxima de candles antes do encerramento operacional por TIMEOUT." },
@@ -55,7 +59,20 @@ const GROUP_COPY: Record<string, { title: string; subtitle: string; effect: stri
 };
 
 function humanise(value: string) {
-  return value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+  const labels: Record<string, string> = {
+    allowed_source_providers: "Provedores permitidos",
+    provider_policy_id: "ID da política do provedor",
+    max_age_seconds: "Frescor máximo (segundos)",
+    timeframe: "Timeframe",
+    window_seconds: "Janela (segundos)",
+    snapshot: "Snapshot pontual",
+    candle_policy: "Política de candle",
+    ohlcv: "OHLCV",
+    live_trade_flow: "Fluxo de trades",
+    live_order_book: "Livro de ofertas",
+    decision_context: "Contexto da decisão",
+  };
+  return labels[value] ?? value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function EffectBadge({ children, tone = "violet" }: { children: React.ReactNode; tone?: "violet" | "green" | "amber" | "blue" }) {

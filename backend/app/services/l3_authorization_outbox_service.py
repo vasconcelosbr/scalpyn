@@ -91,6 +91,37 @@ def _authorized_for_shadow(decision: DecisionLog, contract: dict) -> bool:
     return True
 
 
+def _not_created_result(contract: dict, *, required: bool) -> str:
+    if contract.get("valid") is not True or contract.get("authorization_status") == "CONTRACT_REJECT":
+        return "CONTRACT_REJECT"
+    return "NO_SHADOW_REQUIRED"
+
+
+def _direct_processing_result(
+    contract: dict,
+    *,
+    required: bool,
+    trade_id: Any = None,
+    active_exists: bool = False,
+) -> str:
+    if trade_id is not None:
+        return "CREATED_OR_RECONCILED"
+    if active_exists:
+        return "SUPPRESSED/ACTIVE_TRADE_ALREADY_EXISTS"
+    return _not_created_result(contract, required=required)
+
+
+def _consolidation_processing_result(result: Any, candidate: Any) -> str:
+    if result.decision == "SUPPRESSED":
+        return f"SUPPRESSED/{result.reason_code}"
+    if (
+        result.decision == "CREATED"
+        and str(candidate.profile_id or "") == str(result.winner_profile_id or "")
+    ):
+        return "CREATED_OR_RECONCILED"
+    return "SUPPRESSED/SAME_SYMBOL_LOWER_PRIORITY"
+
+
 def _lineage(event: L3AuthorizationOutbox, contract: dict):
     from ..schemas.watchlist_lineage_context import WatchlistLineageContext
 
@@ -206,22 +237,37 @@ async def _process_direct(event_id: Any) -> str:
                 raise ValueError("DECISION_NOT_FOUND")
             contract = _contract(decision, event)
             required = bool((event.payload or {}).get("shadow_creation_required", False))
-            created = False
+            processing_result = _direct_processing_result(
+                contract, required=required
+            )
             if required and _authorized_for_shadow(decision, contract):
                 _validate_lineage(decision, event, contract)
                 config = await load_shadow_creation_config(decision.user_id)
-                await _create_from_decision(
+                trade_id = await _create_from_decision(
                     db,
                     decision,
                     "L3_AUTHORIZATION_OUTBOX_V3",
                     config,
                     lineage=_lineage(event, contract),
                 )
-                created = True
+                if trade_id is not None:
+                    processing_result = "CREATED_OR_RECONCILED"
+                else:
+                    from .l3_trade_consolidation import find_active_l3_shadow
+
+                    active = await find_active_l3_shadow(
+                        db,
+                        user_id=decision.user_id,
+                        symbol=decision.symbol,
+                        direction=(decision.direction or "SPOT").upper(),
+                    )
+                    processing_result = _direct_processing_result(
+                        contract,
+                        required=required,
+                        active_exists=active is not None,
+                    )
             payload = dict(event.payload or {})
-            payload["processing_result"] = (
-                "CREATED_OR_RECONCILED" if created else "NO_SHADOW_REQUIRED"
-            )
+            payload["processing_result"] = processing_result
             event.payload = payload
             event.status = "PROCESSED"
             event.processed_at = datetime.now(timezone.utc)
@@ -255,16 +301,21 @@ async def _process_consolidation(scan_run_id: str) -> tuple[int, str]:
     rows = await _consolidation_rows(scan_run_id)
     if not rows:
         return 0, "SKIPPED"
-    event_ids = [event.id for event, _decision in rows]
     candidates_by_policy: dict[tuple[str, str], list[Any]] = {}
+    candidate_events: dict[str, list[tuple[Any, Any]]] = {}
+    immediate_results: dict[Any, str] = {}
     for event, decision in rows:
         contract = _contract(decision, event)
-        _validate_lineage(decision, event, contract)
         payload = event.payload or {}
         if not payload.get("consolidation_required"):
+            immediate_results[event.id] = "NO_SHADOW_REQUIRED"
             continue
         if not _authorized_for_shadow(decision, contract):
+            immediate_results[event.id] = _not_created_result(
+                contract, required=True
+            )
             continue
+        _validate_lineage(decision, event, contract)
         lineage = _lineage(event, contract)
         candidate = candidate_from_decision(
             user_id=decision.user_id,
@@ -293,7 +344,9 @@ async def _process_consolidation(scan_run_id: str) -> tuple[int, str]:
         candidates_by_policy.setdefault(
             (str(decision.user_id), rule_version), []
         ).append(candidate)
+        candidate_events.setdefault(candidate.event_id, []).append((event.id, candidate))
     result_count = 0
+    result_by_event: dict[str, Any] = {}
     for (_user_id, rule_version), candidates in sorted(candidates_by_policy.items()):
         results = await consolidate_l3_candidates(
             candidates,
@@ -301,11 +354,20 @@ async def _process_consolidation(scan_run_id: str) -> tuple[int, str]:
             rule_version=rule_version,
         )
         result_count += len(results)
-    await _mark_processed(
-        event_ids,
-        "CONSOLIDATED_OR_RECONCILED" if candidates_by_policy else "NO_SHADOW_REQUIRED",
-    )
-    return len(event_ids), f"CONSOLIDATED:{result_count}"
+        for result in results:
+            result_by_event[result.event_id] = result
+    for event_id, result in immediate_results.items():
+        await _mark_processed([event_id], result)
+    for consolidation_event_id, event_candidates in candidate_events.items():
+        result = result_by_event.get(consolidation_event_id)
+        if result is None or result.decision == "ERROR":
+            raise RuntimeError(
+                f"L3_CONSOLIDATION_RESULT_INVALID:{consolidation_event_id}"
+            )
+        for event_id, candidate in event_candidates:
+            processing_result = _consolidation_processing_result(result, candidate)
+            await _mark_processed([event_id], processing_result)
+    return len(rows), f"CONSOLIDATED:{result_count}"
 
 
 async def process_l3_authorization_outbox(

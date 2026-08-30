@@ -590,6 +590,9 @@
             "resolved_feature_hash",
             "FEATURE_TTL_EXPIRED",
             "PROVIDER_POLICY_MISMATCH",
+            "PROVENANCE_RESOLVER_VERSION",
+            "FEATURE_PROVENANCE_AMBIGUOUS",
+            "resolved_operands",
             "NOT_NEEDED_FOR_BOOLEAN_RESULT",
             "ml_operational_effect"
           ]
@@ -611,6 +614,8 @@
             "CREATE_SHADOW_IF_ALLOWED",
             "CONSOLIDATE_SHADOW_IF_ALLOWED",
             "AUTHORIZATION_CONTRACT_CONTENT_HASH_MISMATCH",
+            "CONTRACT_REJECT",
+            "SUPPRESSED/ACTIVE_TRADE_ALREADY_EXISTS",
             "process_l3_authorization_outbox"
           ]
         },
@@ -648,6 +653,8 @@
           "contains_all": [
             "test_same_logical_name_keeps_ohlcv_and_live_candidates_separate",
             "test_required_wrong_live_window_contract_rejects_without_candle_fallback",
+            "test_comparison_resolves_left_and_right_independently_without_false_indicator_error",
+            "test_resolver_rejects_ambiguous_exact_feature_identity",
             "test_ml_is_advisory_for_missing_and_unfavorable_models"
           ]
         },
@@ -656,6 +663,7 @@
           "contains_all": [
             "test_outbox_recomputes_contract_hash_instead_of_trusting_stored_value",
             "test_outbox_rejects_caller_and_persisted_lineage_divergence",
+            "test_outbox_reports_contract_reject_and_active_trade_suppression_explicitly",
             "test_outbox_idempotency_identity_is_decision_plus_contract_hash"
           ]
         }
@@ -663,7 +671,7 @@
     },
     {
       "id": "l3-gate-p1-runtime-contract",
-      "description": "L3 preserves authorization v3 across Social Score rewrites, persists evaluated metrics provenance and exposes condition status under six GUI-backed runtime controls",
+      "description": "L3 preserves authorization v3 across Social Score rewrites, persists evaluated metrics provenance and exposes condition status under governed GUI-backed runtime controls",
       "files": [
         {
           "path": "backend/app/services/l3_gate_runtime_policy.py",
@@ -675,7 +683,8 @@
             "l3_metrics_provenance",
             "l3_zero_is_value",
             "l3_block_and_skipped_policy",
-            "l3_missing_indicator_policy"
+            "l3_missing_indicator_policy",
+            "l3_v3_provenance_resolver"
           ]
         },
         {

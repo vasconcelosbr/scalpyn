@@ -6,6 +6,7 @@ import pytest
 from app.services.l3_authorization_contract_v3 import (
     build_authorization_contract,
     build_feature_registry,
+    canonical_hash,
     validate_profile_contract,
 )
 from app.api.shadow_trade_reports import _classify_legacy_section_hashes
@@ -532,4 +533,504 @@ def test_aster_profile_without_block_rules_section_contract_rejects():
     blocks = result["sections"]["block_rules"]
     assert blocks["contract_reject"] is True
     assert blocks["reason_codes"] == ["BLOCK_RULES_SECTION_MISSING"]
+    assert result["authorization_status"] == "CONTRACT_REJECT"
+
+
+def _resolver_policy(*, profile_id="profile-canary", enabled=True):
+    return {
+        "l3_v3_provenance_resolver": {
+            "enabled": enabled,
+            "profile_allowlist": [profile_id],
+            "policy_version": "l3_v3_provenance_resolver_v1",
+            "source_policies": {
+                "ohlcv": {
+                    "allowed_source_providers": ["gate_io_candles"],
+                    "provider_policy_id": "ohlcv-policy-v1",
+                    "max_age_seconds": 30,
+                    "timeframe": "5m",
+                    "candle_policy": "CLOSED_ONLY",
+                },
+                "live_trade_flow": {
+                    "allowed_source_providers": ["gate_io_trades_ws"],
+                    "provider_policy_id": "trade-flow-policy-v1",
+                    "max_age_seconds": 30,
+                    "window_seconds": 300,
+                },
+                "live_order_book": {
+                    "allowed_source_providers": ["gate_io_orderbook_ws"],
+                    "provider_policy_id": "order-book-policy-v1",
+                    "max_age_seconds": 30,
+                    "snapshot": True,
+                },
+                "decision_context": {
+                    "allowed_source_providers": ["market_metadata", "robust_score"],
+                    "provider_policy_id": "decision-context-policy-v1",
+                    "max_age_seconds": 30,
+                },
+            },
+        },
+    }
+
+
+def _legacy_profile(condition):
+    return {
+        "default_timeframe": "5m",
+        "filters": {"logic": "AND", "conditions": []},
+        "signals": {"logic": "AND", "conditions": [condition]},
+        "entry_triggers": {"logic": "AND", "conditions": []},
+        "block_rules": {"blocks": []},
+    }
+
+
+def _gate_trace(condition_id, *, actual, target=None, status="PASS"):
+    return {
+        "filters": {"conditions": []},
+        "signals": {"conditions": [{
+            "condition_id": condition_id,
+            "actual": actual,
+            "target": target,
+            "status": status,
+        }]},
+        "entry_triggers": {"conditions": []},
+        "block_rules": {"evaluated": []},
+    }
+
+
+def _build_resolved(profile, asset, gate, *, legacy_decision="ALLOW"):
+    return build_authorization_contract(
+        asset=asset,
+        profile_config=profile,
+        legacy_decision=legacy_decision,
+        evaluated_at=NOW,
+        profile_id="profile-canary",
+        profile_name="Canary",
+        profile_version=NOW,
+        gate_evaluation=gate,
+        runtime_policy=_resolver_policy(),
+    )
+
+
+def test_resolver_materializes_legacy_threshold_without_mutating_profile_hash():
+    condition = {
+        "id": "legacy-rsi",
+        "indicator": "rsi",
+        "operator": ">",
+        "value": 50,
+        "period": 14,
+        "required": True,
+    }
+    profile = _legacy_profile(condition)
+    before = canonical_hash(profile)
+    result = _build_resolved(
+        profile,
+        _asset(),
+        _gate_trace("legacy-rsi", actual=58.7, target=50),
+    )
+    evaluated = result["sections"]["signals"]["conditions"][0]
+    assert canonical_hash(profile) == before
+    assert result["profile_lineage"]["profile_config_hash"] == before
+    assert result["provenance_resolution"]["status"] == "RESOLVED"
+    assert result["provenance_resolution"]["resolved_condition_count"] == 1
+    assert evaluated["status"] == "PASS"
+    assert evaluated["feature_identity"]["source"] == "ohlcv"
+    assert evaluated["provider_policy_id"] == "ohlcv-policy-v1"
+    assert result["authorization_status"] == "ALLOW"
+
+
+def test_comparison_resolves_left_and_right_independently_without_false_indicator_error():
+    asset = _asset()
+    asset.update({"price": 100.0, "_price_source_at": NOW})
+    condition = {
+        "id": "price-over-rsi",
+        "type": "comparison",
+        "left": "price",
+        "right": "rsi",
+        "operator": ">",
+        "required": True,
+    }
+    profile = _legacy_profile(condition)
+    result = _build_resolved(
+        profile,
+        asset,
+        _gate_trace("price-over-rsi", actual=100.0, target=58.7),
+    )
+    evaluated = result["sections"]["signals"]["conditions"][0]
+    assert evaluated["status"] == "PASS"
+    assert evaluated["actual"] == 100.0
+    assert evaluated["target"] == 58.7
+    assert list(evaluated["resolved_operands"]) == ["left", "right"]
+    assert evaluated["feature_identities"]["left"]["source"] == "decision_context"
+    assert evaluated["feature_identities"]["right"]["source"] == "ohlcv"
+    assert "INDICATOR_REQUIRED" not in result["reason_codes"]
+    assert result["authorization_status"] == "ALLOW"
+
+
+def test_raw_comparison_contract_reports_operand_provenance_not_indicator_required():
+    errors = validate_profile_contract({
+        "signals": {"conditions": [{
+            "type": "comparison",
+            "left": "price",
+            "right": "rsi",
+            "operator": ">",
+            "required": True,
+        }]},
+    })
+    codes = [item["code"] for item in errors]
+    assert codes == ["LEFT:SOURCE_REQUIRED", "RIGHT:SOURCE_REQUIRED"]
+    assert "INDICATOR_REQUIRED" not in codes
+
+
+def test_resolver_rejects_ambiguous_exact_feature_identity():
+    asset = _asset()
+    duplicate = dict(asset["_merged_indicators"].candidates[1])
+    asset["_merged_indicators"].candidates.append(duplicate)
+    condition = {
+        "id": "ambiguous-rsi",
+        "indicator": "rsi",
+        "operator": ">",
+        "value": 50,
+        "required": True,
+    }
+    result = _build_resolved(
+        _legacy_profile(condition),
+        asset,
+        _gate_trace("ambiguous-rsi", actual=58.7, target=50),
+    )
+    evaluated = result["sections"]["signals"]["conditions"][0]
+    assert evaluated["status"] == "CONTRACT_REJECT"
+    assert evaluated["reason_codes"] == [
+        "FEATURE_PROVENANCE_AMBIGUOUS",
+        "SOURCE_REQUIRED",
+    ]
+    assert result["provenance_resolution"]["status"] == "CONTRACT_REJECT"
+    assert result["authorization_status"] == "CONTRACT_REJECT"
+
+
+def test_resolver_rejects_unconfigured_source_policy_without_fallback():
+    policy = _resolver_policy()
+    policy["l3_v3_provenance_resolver"]["source_policies"].pop("ohlcv")
+    condition = {
+        "id": "unconfigured-rsi",
+        "indicator": "rsi",
+        "operator": ">",
+        "value": 50,
+        "required": True,
+    }
+    result = build_authorization_contract(
+        asset=_asset(),
+        profile_config=_legacy_profile(condition),
+        legacy_decision="ALLOW",
+        evaluated_at=NOW,
+        profile_id="profile-canary",
+        profile_name="Canary",
+        profile_version=NOW,
+        gate_evaluation=_gate_trace("unconfigured-rsi", actual=58.7, target=50),
+        runtime_policy=policy,
+    )
+    assert result["provenance_resolution"]["errors"] == [{
+        "path": "signals.conditions[0]",
+        "code": "PROVENANCE_POLICY_UNCONFIGURED:ohlcv",
+    }]
+    assert result["authorization_status"] == "CONTRACT_REJECT"
+
+
+def test_resolver_uses_frozen_score_context_with_real_decision_timestamp():
+    asset = _asset()
+    asset["_score"] = 72.5
+    asset["_score_components"] = {
+        "component_fields": {"momentum_score": 61.0},
+    }
+    condition = {
+        "id": "score-threshold",
+        "indicator": "score",
+        "operator": ">=",
+        "value": 70,
+        "required": True,
+    }
+    result = _build_resolved(
+        _legacy_profile(condition),
+        asset,
+        _gate_trace("score-threshold", actual=72.5, target=70),
+    )
+    evaluated = result["sections"]["signals"]["conditions"][0]
+    assert evaluated["status"] == "PASS"
+    assert evaluated["indicator"] == "alpha_score"
+    assert evaluated["feature_identity"]["source"] == "decision_context"
+    assert evaluated["resolved_feature"]["source_timestamp"] == "2026-08-25T04:44:44Z"
+
+
+def test_resolver_materializes_trade_flow_and_order_book_without_cross_source_fallback():
+    trade_condition = {
+        "id": "live-taker",
+        "indicator": "taker_ratio",
+        "operator": ">",
+        "value": 0.5,
+        "required": True,
+    }
+    trade = _build_resolved(
+        _legacy_profile(trade_condition),
+        _asset(),
+        _gate_trace("live-taker", actual=0.576241, target=0.5),
+    )
+    trade_eval = trade["sections"]["signals"]["conditions"][0]
+    assert trade_eval["status"] == "PASS"
+    assert trade_eval["feature_identity"]["source"] == "live_trade_flow"
+
+    order_asset = _asset()
+    order_asset["_l3_live_order_book_snapshot"] = {
+        "values": {"orderbook_pressure": 0.8},
+        "meta": {
+            "source_provider": "gate_io_orderbook_ws",
+            "snapshot": True,
+            "source_timestamp": "2026-08-25T04:44:40Z",
+            "age_seconds": 4,
+        },
+    }
+    order_condition = {
+        "id": "book-pressure",
+        "indicator": "orderbook_pressure",
+        "operator": ">",
+        "value": 0.5,
+        "required": True,
+    }
+    order = _build_resolved(
+        _legacy_profile(order_condition),
+        order_asset,
+        _gate_trace("book-pressure", actual=0.8, target=0.5),
+    )
+    order_eval = order["sections"]["signals"]["conditions"][0]
+    assert order_eval["status"] == "PASS"
+    assert order_eval["feature_identity"]["source"] == "live_order_book"
+
+
+def test_current_allowed_policy_does_not_require_candle_closed_state():
+    asset = _asset()
+    candidate = asset["_merged_indicators"].candidates[1]
+    candidate.pop("candle_closed", None)
+    candidate.pop("candle_policy", None)
+    policy = _resolver_policy()
+    policy["l3_v3_provenance_resolver"]["source_policies"]["ohlcv"][
+        "candle_policy"
+    ] = "CURRENT_ALLOWED"
+    condition = {
+        "id": "current-rsi",
+        "indicator": "rsi",
+        "operator": ">",
+        "value": 50,
+        "required": True,
+    }
+    result = build_authorization_contract(
+        asset=asset,
+        profile_config=_legacy_profile(condition),
+        legacy_decision="ALLOW",
+        evaluated_at=NOW,
+        profile_id="profile-canary",
+        profile_name="Canary",
+        profile_version=NOW,
+        gate_evaluation=_gate_trace("current-rsi", actual=58.7, target=50),
+        runtime_policy=policy,
+    )
+    evaluated = result["sections"]["signals"]["conditions"][0]
+    assert evaluated["status"] == "PASS"
+    assert evaluated["feature_identity"]["candle_policy"] == "CURRENT_ALLOWED"
+
+
+def test_resolved_feature_without_timestamp_is_fail_closed():
+    asset = _asset()
+    asset.update({"price": 100.0, "_price_source_at": None})
+    condition = {
+        "id": "price-present-but-undated",
+        "indicator": "price",
+        "operator": ">",
+        "value": 50,
+        "required": True,
+    }
+    result = _build_resolved(
+        _legacy_profile(condition),
+        asset,
+        _gate_trace("price-present-but-undated", actual=100.0, target=50),
+    )
+    evaluated = result["sections"]["signals"]["conditions"][0]
+    assert evaluated["status"] == "CONTRACT_REJECT"
+    assert evaluated["reason_codes"] == [
+        "SOURCE_TIMESTAMP_MISSING",
+        "FEATURE_AGE_UNKNOWN",
+    ]
+    assert result["authorization_status"] == "CONTRACT_REJECT"
+
+
+def test_global_entry_trigger_is_resolved_as_an_additional_and_gate():
+    asset = _asset()
+    profile = _legacy_profile({
+        "id": "signal-rsi",
+        "indicator": "rsi",
+        "operator": ">",
+        "value": 50,
+        "required": True,
+    })
+    profile["_global_entry_triggers"] = {
+        "logic": "AND",
+        "conditions": [{
+            "id": "global-taker",
+            "indicator": "taker_ratio",
+            "operator": ">",
+            "value": 0.5,
+            "required": True,
+        }],
+    }
+    gate = _gate_trace("signal-rsi", actual=58.7, target=50)
+    gate["global_entry_triggers"] = {"conditions": [{
+        "condition_id": "global-taker",
+        "actual": 0.576241,
+        "target": 0.5,
+        "status": "PASS",
+    }]}
+    result = _build_resolved(profile, asset, gate)
+    global_gate = result["sections"]["global_entry_triggers"]
+    assert global_gate["passed"] is True
+    assert global_gate["conditions"][0]["status"] == "PASS"
+    assert global_gate["conditions"][0]["feature_identity"]["source"] == (
+        "live_trade_flow"
+    )
+    assert result["authorization_status"] == "ALLOW"
+
+
+def test_persisted_profile_hash_excludes_runtime_metadata_and_keeps_execution_contract():
+    condition = {
+        "id": "legacy-rsi",
+        "indicator": "rsi",
+        "operator": ">",
+        "value": 50,
+        "period": 14,
+        "required": True,
+    }
+    persisted = _legacy_profile(condition)
+    persisted_hash = canonical_hash(persisted)
+    runtime = {
+        **persisted,
+        "_l3_gate_runtime_policy": _resolver_policy(),
+        "_block_rules_lineage": {"effective_block_rules_hash": "runtime-only"},
+        "_execution_contract": {
+            "contract_valid": True,
+            "status": "MATCH",
+            "profile_id": "profile-canary",
+            "profile_version_id": "version-immutable-1",
+            "profile_projection_hash": persisted_hash,
+            "profile_projection": persisted,
+        },
+    }
+    result = _build_resolved(
+        runtime,
+        _asset(),
+        _gate_trace("legacy-rsi", actual=58.7, target=50),
+    )
+    assert result["profile_lineage"]["profile_config_hash"] == persisted_hash
+    assert result["profile_lineage"]["rules_snapshot"] == persisted
+    assert result["profile_lineage"]["profile_version_id"] == (
+        "version-immutable-1"
+    )
+    assert result["profile_execution_contract"]["status"] == "MATCH"
+    assert result["authorization_status"] == "ALLOW"
+
+
+def test_multiple_conditions_can_resolve_the_same_evidence_without_registry_mutation():
+    profile = {
+        "default_timeframe": "5m",
+        "filters": {"logic": "AND", "conditions": []},
+        "signals": {"logic": "AND", "conditions": [
+            {
+                "id": "rsi-floor",
+                "indicator": "rsi",
+                "operator": ">",
+                "value": 50,
+                "period": 14,
+                "required": True,
+            },
+            {
+                "id": "rsi-ceiling",
+                "indicator": "rsi",
+                "operator": "<",
+                "value": 70,
+                "period": 14,
+                "required": True,
+            },
+        ]},
+        "entry_triggers": {"logic": "AND", "conditions": []},
+        "block_rules": {"blocks": []},
+    }
+    gate = _gate_trace("rsi-floor", actual=58.7, target=50)
+    gate["signals"]["conditions"].append({
+        "condition_id": "rsi-ceiling",
+        "actual": 58.7,
+        "target": 70,
+        "status": "PASS",
+    })
+    result = _build_resolved(profile, _asset(), gate)
+    conditions = result["sections"]["signals"]["conditions"]
+    assert [condition["status"] for condition in conditions] == ["PASS", "PASS"]
+    assert conditions[0]["resolved_feature_hash"] == conditions[1][
+        "resolved_feature_hash"
+    ]
+
+
+def test_block_rule_trace_resolves_by_rule_and_condition_identity():
+    profile = {
+        "default_timeframe": "5m",
+        "filters": {"logic": "AND", "conditions": []},
+        "signals": {"logic": "AND", "conditions": []},
+        "entry_triggers": {"logic": "AND", "conditions": []},
+        "block_rules": {"blocks": [{
+            "id": "rsi-exhaustion",
+            "logic": "AND",
+            "conditions": [{
+                "indicator": "rsi",
+                "operator": ">",
+                "value": 90,
+                "period": 14,
+            }],
+        }]},
+    }
+    gate = {
+        "filters": {"conditions": []},
+        "signals": {"conditions": []},
+        "entry_triggers": {"conditions": []},
+        "block_rules": {"evaluated": [{
+            "id": "rsi-exhaustion",
+            "conditions": [{
+                "indicator": "rsi",
+                "operator": ">",
+                "expected": 90,
+                "actual": 58.7,
+                "status": "FAIL",
+            }],
+        }]},
+    }
+    result = _build_resolved(profile, _asset(), gate)
+    block = result["sections"]["block_rules"]["blocks"][0]
+    assert block["status"] == "NOT_MATCHED"
+    assert block["conditions"][0]["status"] == "FAIL"
+    assert block["conditions"][0]["actual"] == 58.7
+    assert result["authorization_status"] == "ALLOW"
+
+
+def test_configured_period_must_be_present_in_producer_evidence():
+    asset = _asset()
+    asset["_merged_indicators"].candidates[1]["period"] = None
+    condition = {
+        "id": "rsi-period",
+        "indicator": "rsi",
+        "operator": ">",
+        "value": 50,
+        "period": 14,
+        "required": True,
+    }
+    result = _build_resolved(
+        _legacy_profile(condition),
+        asset,
+        _gate_trace("rsi-period", actual=58.7, target=50),
+    )
+    assert result["provenance_resolution"]["errors"] == [{
+        "path": "signals.conditions[0]",
+        "code": "FEATURE_IDENTITY_NOT_AVAILABLE",
+    }]
     assert result["authorization_status"] == "CONTRACT_REJECT"

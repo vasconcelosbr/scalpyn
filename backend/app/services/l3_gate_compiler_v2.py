@@ -242,6 +242,12 @@ def evaluate_l3_gate_v2(
     profile = profile_config or {}
     runtime_policy = policy_from_profile(profile)
     eval_data = {**asset, **(asset.get("indicators") or {}), "alpha_score": score}
+    filters = _evaluate_section(
+        section="filters",
+        config=profile.get("filters") or {},
+        eval_data=eval_data,
+        runtime_policy=runtime_policy,
+    )
     signals = _evaluate_section(
         section="signals",
         config=profile.get("signals") or {},
@@ -340,6 +346,7 @@ def evaluate_l3_gate_v2(
         "score": _jsonable(score),
         "score_context": _jsonable(score_context or {}),
         "indicators": _jsonable(asset.get("indicators") or {}),
+        "filters": filters,
         "signals": signals,
         "entry_triggers": entry,
         "global_entry_triggers": global_entry,
@@ -357,6 +364,7 @@ def evaluate_l3_gate_v2(
         "context": _jsonable(score_context or {}),
         "evaluation_envelope_hash": envelope_hash,
     }
+    filters["evaluation_envelope_hash"] = envelope_hash
     signals["evaluation_envelope_hash"] = envelope_hash
     entry["evaluation_envelope_hash"] = envelope_hash
     global_entry["evaluation_envelope_hash"] = envelope_hash
@@ -381,6 +389,7 @@ def evaluate_l3_gate_v2(
         "runtime_config_hash": execution_contract.get("runtime_hash"),
         "score": score_result,
         "base_eligible": bool(base_eligible),
+        "filters": filters,
         "signals": signals,
         "entry_triggers": entry,
         "global_entry_triggers": global_entry,

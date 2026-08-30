@@ -31,6 +31,19 @@ def _integrity_error(constraint):
     return IntegrityError(f"INSERT INTO shadow_trades ... {constraint}", {}, orig)
 
 
+def _complete_shadow_runtime_config():
+    return {
+        "tp_pct": 2.0,
+        "sl_pct": 1.0,
+        "amount_usdt": 10.0,
+        "timeout_candles": 12,
+        "ttt_enabled": False,
+        "ttt_tp_pct": 0.0,
+        "ttt_timeout_minutes": 0,
+        "trailing": {},
+    }
+
+
 def test_shadow_trade_list_item_exposes_profile_attribution():
     profile_id = uuid4()
     row = SimpleNamespace(
@@ -114,7 +127,7 @@ async def test_create_from_decision_copies_profile_attribution():
             db,
             decision,
             "NOT_TRADABLE",
-            {"tp_pct": 2.0, "sl_pct": 1.0},
+            _complete_shadow_runtime_config(),
         )
 
     assert created_id is not None
@@ -166,7 +179,7 @@ async def test_create_from_legacy_decision_keeps_profile_fields_null():
             db,
             decision,
             "NOT_TRADABLE",
-            {"tp_pct": 2.0, "sl_pct": 1.0},
+            _complete_shadow_runtime_config(),
         )
 
     params = db.execute.await_args.args[1]
@@ -216,7 +229,7 @@ async def test_create_from_decision_idempotent_on_l1_duplicate():
         ),
     ):
         result = await _create_from_decision(
-            db, decision, "NOT_TRADABLE", {"tp_pct": 2.0, "sl_pct": 1.0},
+            db, decision, "NOT_TRADABLE", _complete_shadow_runtime_config(),
         )
 
     assert result is None

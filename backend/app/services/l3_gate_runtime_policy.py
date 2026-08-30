@@ -23,7 +23,28 @@ POLICY_FIELDS = (
     "l3_zero_is_value",
     "l3_block_and_skipped_policy",
     "l3_missing_indicator_policy",
+    "l3_v3_provenance_resolver",
 )
+
+DEFAULT_PROVENANCE_RESOLVER = {
+    "enabled": False,
+    "profile_allowlist": [],
+    "policy_version": "l3_v3_provenance_resolver_v1",
+    "source_policies": {
+        source: {
+            "allowed_source_providers": [],
+            "provider_policy_id": None,
+            "max_age_seconds": None,
+            "timeframe": None,
+            "window_seconds": None,
+            "snapshot": None,
+            "candle_policy": None,
+        }
+        for source in (
+            "ohlcv", "live_trade_flow", "live_order_book", "decision_context"
+        )
+    },
+}
 
 DEFAULT_POLICY = {
     "l3_v3_contract_preserve": True,
@@ -32,6 +53,7 @@ DEFAULT_POLICY = {
     "l3_zero_is_value": True,
     "l3_block_and_skipped_policy": "legacy",
     "l3_missing_indicator_policy": "warn",
+    "l3_v3_provenance_resolver": DEFAULT_PROVENANCE_RESOLVER,
 }
 
 SUPPORTED_AND_SKIPPED_POLICIES = frozenset({"legacy", "not_satisfied"})
@@ -52,12 +74,37 @@ def _canonical_hash(value: Mapping[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _normalize_provenance_resolver(value: Any) -> dict[str, Any]:
+    raw = deepcopy(dict(value)) if isinstance(value, Mapping) else {}
+    normalized = deepcopy(DEFAULT_PROVENANCE_RESOLVER)
+    normalized.update(raw)
+    if normalized.get("policy_version") != "l3_v3_provenance_resolver_v1":
+        raise ValueError("l3_v3_provenance_policy_version_invalid")
+    allowlist = normalized.get("profile_allowlist")
+    if not isinstance(allowlist, list):
+        raise ValueError("l3_v3_provenance_profile_allowlist_invalid")
+    normalized["profile_allowlist"] = [str(item) for item in allowlist]
+    policies = normalized.get("source_policies")
+    if not isinstance(policies, Mapping):
+        raise ValueError("l3_v3_provenance_source_policies_invalid")
+    unsupported = sorted(
+        set(policies) - {"ohlcv", "live_trade_flow", "live_order_book", "decision_context"}
+    )
+    if unsupported:
+        raise ValueError(
+            "l3_v3_provenance_source_policy_unsupported:" + ",".join(unsupported)
+        )
+    normalized["source_policies"] = deepcopy(dict(policies))
+    normalized["enabled"] = bool(normalized.get("enabled"))
+    return normalized
+
+
 def build_policy_snapshot(
     source: Mapping[str, Any] | Any,
     *,
     source_name: str = "spot_engine.scanner",
 ) -> dict[str, Any]:
-    """Validate and freeze the six L3 controls from a scanner config."""
+    """Validate and freeze the governed L3 controls from a scanner config."""
 
     if hasattr(source, "model_dump"):
         values = source.model_dump()
@@ -71,6 +118,9 @@ def build_policy_snapshot(
         field: deepcopy(values.get(field, DEFAULT_POLICY[field]))
         for field in POLICY_FIELDS
     }
+    controls["l3_v3_provenance_resolver"] = _normalize_provenance_resolver(
+        controls.get("l3_v3_provenance_resolver")
+    )
     if controls["l3_block_and_skipped_policy"] not in SUPPORTED_AND_SKIPPED_POLICIES:
         raise ValueError("l3_block_and_skipped_policy_invalid")
     if controls["l3_missing_indicator_policy"] not in SUPPORTED_MISSING_INDICATOR_POLICIES:

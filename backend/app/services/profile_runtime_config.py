@@ -21,6 +21,7 @@ TRANSIENT_PROFILE_METADATA_KEYS = frozenset(
         "_block_rules_lineage",
         "_entry_triggers_lineage",
         "_global_entry_triggers",
+        "_l3_gate_runtime_policy",
     }
 )
 

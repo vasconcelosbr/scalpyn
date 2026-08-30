@@ -5,7 +5,9 @@ import pytest
 from app.services.l3_authorization_contract_v3 import canonical_hash
 from app.services.l3_authorization_outbox_service import (
     _authorized_for_shadow,
+    _consolidation_processing_result,
     _contract,
+    _direct_processing_result,
     _validate_lineage,
 )
 
@@ -80,3 +82,47 @@ def test_outbox_idempotency_identity_is_decision_plus_contract_hash():
         for constraint in L3AuthorizationOutbox.__table__.constraints
     }
     assert "uq_l3_authorization_outbox_decision_contract" in constraints
+
+
+def test_outbox_reports_contract_reject_and_active_trade_suppression_explicitly():
+    _decision, _event, contract = _objects()
+    contract["valid"] = False
+    contract["authorization_status"] = "CONTRACT_REJECT"
+    assert _direct_processing_result(contract, required=True) == "CONTRACT_REJECT"
+
+    contract["valid"] = True
+    contract["authorization_status"] = "ALLOW"
+    assert _direct_processing_result(
+        contract, required=True, active_exists=True
+    ) == "SUPPRESSED/ACTIVE_TRADE_ALREADY_EXISTS"
+    assert _direct_processing_result(
+        contract, required=True, trade_id="trade-1"
+    ) == "CREATED_OR_RECONCILED"
+
+
+def test_consolidation_result_distinguishes_winner_active_and_lower_priority():
+    candidate = SimpleNamespace(profile_id="profile-winner")
+    created = SimpleNamespace(
+        decision="CREATED",
+        reason_code="CREATED",
+        winner_profile_id="profile-winner",
+    )
+    suppressed = SimpleNamespace(
+        decision="SUPPRESSED",
+        reason_code="ACTIVE_TRADE_ALREADY_EXISTS",
+        winner_profile_id=None,
+    )
+    other_winner = SimpleNamespace(
+        decision="CREATED",
+        reason_code="CREATED",
+        winner_profile_id="profile-other",
+    )
+    assert _consolidation_processing_result(
+        created, candidate
+    ) == "CREATED_OR_RECONCILED"
+    assert _consolidation_processing_result(
+        suppressed, candidate
+    ) == "SUPPRESSED/ACTIVE_TRADE_ALREADY_EXISTS"
+    assert _consolidation_processing_result(
+        other_winner, candidate
+    ) == "SUPPRESSED/SAME_SYMBOL_LOWER_PRIORITY"

@@ -388,7 +388,7 @@ class StrategySettingsService:
         *,
         apply: bool = False,
     ) -> Dict[str, Any]:
-        """Idempotently persist only the six P1 controls for one operator."""
+        """Idempotently persist only the governed L3 runtime controls."""
 
         profiles = await self._profiles(db, user_id, lock=apply)
         profile = profiles.get("spot_engine")
@@ -432,7 +432,7 @@ class StrategySettingsService:
                 changed_by=user_id,
                 previous_json=before_json or None,
                 new_json=candidate,
-                change_description="[P1_L3_GATE] materialize six runtime controls",
+                change_description="[P1_L3_GATE] materialize governed runtime controls",
             )
         )
         await db.commit()

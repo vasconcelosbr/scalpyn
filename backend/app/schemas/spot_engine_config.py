@@ -12,7 +12,49 @@ Sell Pipeline (5 layers):
 """
 
 from pydantic import BaseModel, Field
-from typing import Literal, Optional
+from typing import List, Literal, Optional
+
+
+class L3ProvenanceSourcePolicyConfig(BaseModel):
+    """Operator-owned identity/freshness policy for one runtime source."""
+
+    allowed_source_providers: List[str] = Field(default_factory=list)
+    provider_policy_id: Optional[str] = None
+    max_age_seconds: Optional[float] = Field(None, gt=0)
+    timeframe: Optional[str] = None
+    window_seconds: Optional[int] = Field(None, gt=0)
+    snapshot: Optional[bool] = None
+    candle_policy: Optional[Literal["CLOSED_ONLY", "CURRENT_ALLOWED"]] = None
+
+
+class L3ProvenanceSourcePoliciesConfig(BaseModel):
+    """Fixed GUI surface; empty fields mean UNCONFIGURED, never fallback."""
+
+    ohlcv: L3ProvenanceSourcePolicyConfig = Field(
+        default_factory=L3ProvenanceSourcePolicyConfig
+    )
+    live_trade_flow: L3ProvenanceSourcePolicyConfig = Field(
+        default_factory=L3ProvenanceSourcePolicyConfig
+    )
+    live_order_book: L3ProvenanceSourcePolicyConfig = Field(
+        default_factory=L3ProvenanceSourcePolicyConfig
+    )
+    decision_context: L3ProvenanceSourcePolicyConfig = Field(
+        default_factory=L3ProvenanceSourcePolicyConfig
+    )
+
+
+class L3ProvenanceResolverConfig(BaseModel):
+    """Canary control for resolving legacy L3 conditions at decision time."""
+
+    enabled: bool = False
+    profile_allowlist: List[str] = Field(default_factory=list)
+    policy_version: Literal["l3_v3_provenance_resolver_v1"] = (
+        "l3_v3_provenance_resolver_v1"
+    )
+    source_policies: L3ProvenanceSourcePoliciesConfig = Field(
+        default_factory=L3ProvenanceSourcePoliciesConfig
+    )
 
 
 class ScannerConfig(BaseModel):
@@ -37,6 +79,11 @@ class ScannerConfig(BaseModel):
     l3_zero_is_value: bool = True
     l3_block_and_skipped_policy: Literal["legacy", "not_satisfied"] = "legacy"
     l3_missing_indicator_policy: Literal["warn", "disable_rule"] = "warn"
+    # Disabled and unconfigured by default.  Production activation requires an
+    # explicit profile allowlist plus source policies persisted through the GUI.
+    l3_v3_provenance_resolver: L3ProvenanceResolverConfig = Field(
+        default_factory=L3ProvenanceResolverConfig
+    )
 
 
 class BuyingConfig(BaseModel):

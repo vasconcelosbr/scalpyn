@@ -227,6 +227,7 @@ async def test_l3_policy_materialization_is_scoped_idempotent_and_read_back(aggr
         "l3_zero_is_value",
         "l3_block_and_skipped_policy",
         "l3_missing_indicator_policy",
+        "l3_v3_provenance_resolver",
     ):
         spot_profile.config_json["scanner"].pop(field, None)
     before_non_scanner = deepcopy({
@@ -249,6 +250,17 @@ async def test_l3_policy_materialization_is_scoped_idempotent_and_read_back(aggr
     assert applied["runtime_policy"]["l3_v3_contract_preserve"] is True
     assert applied["runtime_policy"]["l3_block_and_skipped_policy"] == "legacy"
     assert applied["runtime_policy"]["l3_missing_indicator_policy"] == "warn"
+    resolver = applied["runtime_policy"]["l3_v3_provenance_resolver"]
+    assert resolver["enabled"] is False
+    assert resolver["profile_allowlist"] == []
+    assert resolver["policy_version"] == "l3_v3_provenance_resolver_v1"
+    assert set(resolver["source_policies"]) == {
+        "ohlcv", "live_trade_flow", "live_order_book", "decision_context",
+    }
+    assert all(
+        policy["max_age_seconds"] is None
+        for policy in resolver["source_policies"].values()
+    )
     assert len(applied["runtime_policy"]["config_hash"]) == 64
     assert {
         key: value for key, value in spot_profile.config_json.items() if key != "scanner"

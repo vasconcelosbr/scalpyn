@@ -418,10 +418,10 @@ def merge_indicator_rows(
                 ) or ts_utc,
                 "computed_at": (
                     raw.get("computed_at") if isinstance(raw, dict) else None
-                ),
+                ) or ts_utc,
                 "available_at": (
                     raw.get("available_at") if isinstance(raw, dict) else None
-                ),
+                ) or ts_utc,
                 "age_seconds": age,
                 "stale": bool(
                     (raw.get("stale", False) if isinstance(raw, dict) else False)
