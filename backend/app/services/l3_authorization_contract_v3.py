@@ -117,7 +117,8 @@ def _normalize_source(value: Any) -> Optional[str]:
     raw = str(value or "").strip().lower()
     if raw in {
         "live_order_flow", "live_trade_flow", "gate_io_trades_ws",
-        "gate_trades", "binance_trades",
+        "gate_trades", "gate_trades_ws_spot", "gate_trades_ws_futures",
+        "gate_io_trades", "binance_trades",
     }:
         return "live_trade_flow"
     if raw in {
@@ -127,7 +128,7 @@ def _normalize_source(value: Any) -> Optional[str]:
         return "live_order_book"
     if raw in {
         "ohlcv", "gate_candles", "binance_candles", "candle_computed",
-        "candle_fallback",
+        "candle_fallback", "gate_io_candles",
     }:
         return "ohlcv"
     return raw or None
@@ -141,7 +142,14 @@ def _normalize_candle_policy(value: Any) -> Optional[str]:
 
 def _source_for_db_candidate(candidate: dict) -> str:
     normalized = _normalize_source(candidate.get("source"))
-    return normalized or "unconfigured"
+    provider_source = _normalize_source(candidate.get("source_provider"))
+    # Historical v3 envelopes sometimes serialized Gate trade/order-book
+    # producers with the generic source="ohlcv".  The exact provider is the
+    # stronger identity signal and lets read-only replay recover the producer
+    # without any partial-name or flattened-key fallback.
+    if provider_source in {"live_trade_flow", "live_order_book"}:
+        return provider_source
+    return normalized or provider_source or "unconfigured"
 
 
 def _condition_parameters(condition: dict) -> dict:
@@ -1479,7 +1487,15 @@ def build_authorization_contract(
     scoped_asset = dict(asset)
     scoped_asset["_l3_market_scope"] = market_scope
     registry = (
-        deepcopy(feature_registry)
+        [
+            _registry_candidate(
+                deepcopy(dict(candidate)),
+                market_scope=market_scope,
+                evaluated_at=evaluated_at,
+            )
+            for candidate in feature_registry
+            if isinstance(candidate, Mapping)
+        ]
         if feature_registry is not None
         else build_feature_registry(scoped_asset, evaluated_at=evaluated_at)
     )

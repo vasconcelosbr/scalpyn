@@ -1034,3 +1034,57 @@ def test_configured_period_must_be_present_in_producer_evidence():
         "code": "FEATURE_IDENTITY_NOT_AVAILABLE",
     }]
     assert result["authorization_status"] == "CONTRACT_REJECT"
+
+
+def test_historical_replay_reclassifies_exact_gate_trade_provider():
+    condition = {
+        "id": "legacy-taker",
+        "indicator": "taker_ratio",
+        "operator": ">=",
+        "value": 0.5,
+        "required": True,
+    }
+    policy = _resolver_policy()
+    policy["l3_v3_provenance_resolver"]["source_policies"][
+        "live_trade_flow"
+    ] = {
+        "allowed_source_providers": ["gate_trades_ws_spot"],
+        "provider_policy_id": "trade-flow-policy-v1",
+        "max_age_seconds": 30,
+        "window_seconds": 60,
+    }
+    result = build_authorization_contract(
+        asset={"symbol": "ZEC_USDT"},
+        profile_config=_legacy_profile(condition),
+        legacy_decision="ALLOW",
+        evaluated_at=NOW,
+        profile_id="profile-canary",
+        profile_name="Canary",
+        profile_version=NOW,
+        gate_evaluation=_gate_trace(
+            "legacy-taker", actual=0.576241, target=0.5
+        ),
+        runtime_policy=policy,
+        feature_registry=[{
+            "market_scope": {
+                "exchange": "gate_io",
+                "market_type": "spot",
+                "normalized_symbol": "ZEC_USDT",
+            },
+            "indicator": "taker_ratio",
+            "actual": 0.576241,
+            # Historical serializer defect: the exact Gate trade producer was
+            # retained, but the generic source was incorrectly labelled OHLCV.
+            "source": "ohlcv",
+            "source_provider": "gate_trades_ws_spot",
+            "window_seconds": 60,
+            "source_timestamp": NOW,
+            "age_seconds": 1,
+            "stale": False,
+        }],
+    )
+    resolved = result["sections"]["signals"]["conditions"][0]
+    assert resolved["status"] == "PASS"
+    assert resolved["feature_identity"]["source"] == "live_trade_flow"
+    assert result["provenance_resolution"]["status"] == "RESOLVED"
+    assert result["authorization_status"] == "ALLOW"
