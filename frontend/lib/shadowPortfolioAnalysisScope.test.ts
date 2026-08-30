@@ -23,3 +23,12 @@ test("detailed report AI actions fail closed on incomplete canonical data", () =
   assert.match(detailedReport, /\{canonicalAnalysisReady && \(/);
   assert.match(detailedReport, /Análise bloqueada antes do provedor/);
 });
+
+test("detailed report outcome controls expose selected state and stale-result guidance", () => {
+  assert.match(detailedReport, /aria-pressed=\{selected\}/);
+  assert.match(detailedReport, /data-state=\{selected \? "selected" : "unselected"\}/);
+  assert.match(detailedReport, /selected \? OUTCOME_ACTIVE_CLASS\[outcome\] : outcomeButtonInactive/);
+  assert.match(detailedReport, /toggleShadowReportOutcome\(current, outcome\)/);
+  assert.match(detailedReport, /Aplicar filtros e executar relatório/);
+  assert.match(detailedReport, /Os resultados abaixo ainda pertencem à execução anterior/);
+});

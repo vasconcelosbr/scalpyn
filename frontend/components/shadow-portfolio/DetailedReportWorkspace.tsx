@@ -20,17 +20,32 @@ import {
 } from "lucide-react";
 import { apiGet, apiPost } from "@/lib/api";
 import { ModuleAIAnalysisAction } from "@/components/ai/ModuleAIAnalysisAction";
+import {
+  SHADOW_REPORT_OUTCOMES,
+  shadowReportSelectionKey,
+  toggleShadowReportOutcome,
+  type ShadowReportOutcome,
+} from "@/lib/shadowReportOutcomeFilters";
 
 type Source = "L3" | "L3_REJECTED" | "L1_SPECTRUM";
-type Outcome = "TP_HIT" | "SL_HIT" | "TRAILING_STOP" | "TIMEOUT" | "OPEN";
-const ALL_OUTCOMES: Outcome[] = ["TP_HIT", "SL_HIT", "TRAILING_STOP", "TIMEOUT", "OPEN"];
-const OUTCOME_LABEL: Record<Outcome, string> = {
+const OUTCOME_LABEL: Record<ShadowReportOutcome, string> = {
   TP_HIT: "TP",
   SL_HIT: "SL",
   TRAILING_STOP: "Stop móvel",
   TIMEOUT: "Prazo operacional",
   OPEN: "Em aberto",
 };
+const OUTCOME_ACTIVE_CLASS: Record<ShadowReportOutcome, string> = {
+  TP_HIT: "border-emerald-400/60 bg-emerald-400/15 text-emerald-200 shadow-[0_0_0_1px_rgba(52,211,153,0.12),0_0_18px_rgba(52,211,153,0.08)]",
+  SL_HIT: "border-rose-400/60 bg-rose-400/15 text-rose-200 shadow-[0_0_0_1px_rgba(251,113,133,0.12),0_0_18px_rgba(251,113,133,0.08)]",
+  TRAILING_STOP: "border-sky-400/60 bg-sky-400/15 text-sky-200 shadow-[0_0_0_1px_rgba(56,189,248,0.12),0_0_18px_rgba(56,189,248,0.08)]",
+  TIMEOUT: "border-amber-400/60 bg-amber-400/15 text-amber-100 shadow-[0_0_0_1px_rgba(251,191,36,0.12),0_0_18px_rgba(251,191,36,0.08)]",
+  OPEN: "border-cyan-400/60 bg-cyan-400/15 text-cyan-100 shadow-[0_0_0_1px_rgba(34,211,238,0.12),0_0_18px_rgba(34,211,238,0.08)]",
+};
+const outcomeButtonBase =
+  "inline-flex h-9 items-center justify-center gap-2 rounded-lg border px-3 text-xs font-semibold transition duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#6f91ff]/70";
+const outcomeButtonInactive =
+  "border-white/10 bg-[#0d1018] text-[#768198] hover:border-white/20 hover:bg-[#151925] hover:text-[#b8c0d0]";
 
 interface Facet {
   id: string | null;
@@ -65,7 +80,7 @@ interface ReportTrade {
   watchlist_name: string | null;
   profile_id: string | null;
   profile_name: string | null;
-  outcome: Outcome;
+  outcome: ShadowReportOutcome;
   entry_price: number | null;
   exit_price: number | null;
   pnl_pct: number | null;
@@ -257,7 +272,7 @@ export default function DetailedReportWorkspace() {
   const router = useRouter();
   const initial = useMemo(() => initialDates(), []);
   const [sources, setSources] = useState<Source[]>(["L3"]);
-  const [outcomes, setOutcomes] = useState<Outcome[]>(ALL_OUTCOMES);
+  const [outcomes, setOutcomes] = useState<ShadowReportOutcome[]>([...SHADOW_REPORT_OUTCOMES]);
   const [dateFrom, setDateFrom] = useState(initial.from);
   const [dateTo, setDateTo] = useState(initial.to);
   const [facets, setFacets] = useState<FacetsResponse | null>(null);
@@ -279,6 +294,7 @@ export default function DetailedReportWorkspace() {
   const [confirmation, setConfirmation] = useState("");
   const [externalJson, setExternalJson] = useState("");
   const [optimizationBusy, setOptimizationBusy] = useState(false);
+  const [appliedSelectionKey, setAppliedSelectionKey] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const canonicalAnalysisReady = run?.completeness.canonical_analysis_ready !== false;
   const missingCanonicalRows = run
@@ -294,6 +310,22 @@ export default function DetailedReportWorkspace() {
         ].map((key) => Number(run.completeness[key] ?? 0)),
       )
     : 0;
+
+  const currentSelectionKey = useMemo(
+    () => shadowReportSelectionKey({
+      sources,
+      outcomes,
+      dateFrom,
+      dateTo,
+      watchlistIds,
+      profileIds,
+      includeLegacy,
+    }),
+    [dateFrom, dateTo, includeLegacy, outcomes, profileIds, sources, watchlistIds],
+  );
+  const resultsNeedRefresh = Boolean(
+    run && appliedSelectionKey && appliedSelectionKey !== currentSelectionKey,
+  );
 
   const facetsQuery = useMemo(() => {
     const params = new URLSearchParams();
@@ -353,6 +385,7 @@ export default function DetailedReportWorkspace() {
     setError(null);
     setAnalysis(null);
     setPlan(null);
+    const executedSelectionKey = currentSelectionKey;
     try {
       const created = await apiPost<ReportRun>("/api/shadow-trade-reports/runs", {
         sources,
@@ -365,6 +398,7 @@ export default function DetailedReportWorkspace() {
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
       });
       setRun(created);
+      setAppliedSelectionKey(executedSelectionKey);
       setPage(1);
       await loadTrades(created.id, 1);
     } catch (caught) {
@@ -523,11 +557,27 @@ export default function DetailedReportWorkspace() {
             <div>
               <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7f899f]">Resultado</div>
               <div className="flex flex-wrap gap-2">
-                {ALL_OUTCOMES.map((outcome) => (
-                  <button key={outcome} onClick={() => setOutcomes(outcomes.includes(outcome) ? outcomes.filter((item) => item !== outcome) : [...outcomes, outcome])} className={`${buttonClass} ${outcomes.includes(outcome) ? "border-[#4f7bf7]/50 bg-[#4f7bf7]/10 text-[#b7c5ff]" : ""}`}>
-                    {OUTCOME_LABEL[outcome]}
-                  </button>
-                ))}
+                {SHADOW_REPORT_OUTCOMES.map((outcome) => {
+                  const selected = outcomes.includes(outcome);
+                  return (
+                    <button
+                      key={outcome}
+                      type="button"
+                      aria-pressed={selected}
+                      data-state={selected ? "selected" : "unselected"}
+                      onClick={() => setOutcomes((current) => toggleShadowReportOutcome(current, outcome))}
+                      className={`${outcomeButtonBase} ${selected ? OUTCOME_ACTIVE_CLASS[outcome] : outcomeButtonInactive}`}
+                    >
+                      <span className={`h-1.5 w-1.5 rounded-full bg-current transition-opacity ${selected ? "opacity-100" : "opacity-25"}`} />
+                      {OUTCOME_LABEL[outcome]}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="mt-2 text-[10px] font-medium text-[#687287]">
+                {outcomes.length === SHADOW_REPORT_OUTCOMES.length
+                  ? "Todos os resultados selecionados"
+                  : `${outcomes.length} de ${SHADOW_REPORT_OUTCOMES.length} resultados selecionados`}
               </div>
             </div>
           </div>
@@ -540,11 +590,18 @@ export default function DetailedReportWorkspace() {
               Incluir trades legados sem vínculo de watchlist
             </label>
             <button className="flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-[#4f7bf7] text-sm font-semibold text-white shadow-[0_8px_30px_rgba(79,123,247,0.25)] transition hover:bg-[#6088f8] disabled:opacity-50" onClick={executeReport} disabled={busy}>
-              {busy ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />} Executar relatório
+              {busy ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />} Aplicar filtros e executar relatório
             </button>
           </div>
         </div>
       </section>
+
+      {resultsNeedRefresh && (
+        <div className="flex items-start gap-2 rounded-xl border border-amber-400/25 bg-amber-400/[0.07] px-4 py-3 text-xs text-amber-100">
+          <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+          <span><strong>Filtros alterados.</strong> Os resultados abaixo ainda pertencem à execução anterior. Clique em “Aplicar filtros e executar relatório” para materializar a nova seleção.</span>
+        </div>
+      )}
 
       {error && <div className="flex items-start gap-2 rounded-xl border border-rose-500/25 bg-rose-500/[0.08] px-4 py-3 text-xs text-rose-200"><AlertTriangle size={15} className="mt-0.5 shrink-0" />{error}</div>}
 
