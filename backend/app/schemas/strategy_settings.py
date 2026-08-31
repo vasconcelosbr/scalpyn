@@ -26,6 +26,7 @@ ML_SHADOW_OPTIONAL_KEYS = (
     "shadow_canonical_barrier_enabled",
     "shadow_canonical_barrier_profile_allowlist",
     "shadow_canonical_barrier_policy_version",
+    "canary_minimum_outcomes",
 )
 
 
@@ -71,6 +72,9 @@ class MLShadowConfig(BaseModel):
     shadow_canonical_barrier_policy_version: Literal[
         "shadow_closed_ohlcv_first_touch_v1"
     ] = "shadow_closed_ohlcv_first_touch_v1"
+    # Governance-only observation threshold. It does not participate in TP/SL,
+    # scoring, authorization, or outcome calculation.
+    canary_minimum_outcomes: int | None = Field(default=None, ge=1, le=10000)
     # Measurement-only controls.  ``None`` is intentional: legacy
     # configurations remain runnable but their captures are UNCONFIGURED and
     # therefore ineligible for training until an operator saves these values.

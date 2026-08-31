@@ -108,6 +108,44 @@ async def test_aggregate_partial_import_preserves_omitted_and_unrelated_ml(
 
 
 @pytest.mark.asyncio
+async def test_canary_minimum_outcomes_is_governance_only_and_round_trips(
+    aggregate, monkeypatch
+):
+    user_id, db = aggregate
+    service = StrategySettingsService()
+    current = await service.get_config(db, user_id)
+    before = deepcopy(current["config"])
+    invalidate = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        "app.services.strategy_settings_service.config_service.invalidate_cache",
+        invalidate,
+    )
+
+    result = await service.apply(
+        db,
+        user_id,
+        payload={"ml_shadow": {"canary_minimum_outcomes": 25}},
+        source_hash=current["config"]["source_hash"],
+        change_description="governed observation threshold",
+        source="FORM",
+    )
+
+    assert result["config"]["ml_shadow"]["canary_minimum_outcomes"] == 25
+    assert result["config"]["strategy"] == before["strategy"]
+    assert result["config"]["spot_engine"] == before["spot_engine"]
+    ml = next(profile for profile in db.profiles if profile.config_type == "ml")
+    assert ml.config_json["canary_minimum_outcomes"] == 25
+    assert ml.config_json["unrelated_training_key"] == {"keep": True}
+    invalidate.assert_awaited_once_with("ml", user_id, None, strict=True)
+
+
+def test_missing_canary_threshold_preserves_legacy_source_hash_shape():
+    service = StrategySettingsService()
+    parts = service._normalise_parts({"ml": {}})
+    assert "canary_minimum_outcomes" not in parts["ml_shadow"]
+
+
+@pytest.mark.asyncio
 async def test_aggregate_stale_hash_conflicts(aggregate):
     user_id, db = aggregate
     with pytest.raises(StrategySettingsConflictError):

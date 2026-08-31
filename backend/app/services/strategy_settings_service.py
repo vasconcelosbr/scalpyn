@@ -75,6 +75,13 @@ def _deep_merge(current: Any, patch: Any) -> Any:
     return deepcopy(patch)
 
 
+def _ml_shadow_dump(model: MLShadowConfig) -> Dict[str, Any]:
+    payload = model.model_dump(mode="json")
+    if payload.get("canary_minimum_outcomes") is None:
+        payload.pop("canary_minimum_outcomes", None)
+    return payload
+
+
 def _reject_unknown_keys(
     payload: Dict[str, Any],
     template: Dict[str, Any],
@@ -135,13 +142,15 @@ class StrategySettingsService:
                 raw_strategy or StrategyConfig().model_dump()
             ).model_dump(mode="json"),
             "spot_engine": SpotEngineConfig.from_config_json(raw_spot).model_dump(mode="json"),
-            "ml_shadow": MLShadowConfig.model_validate(
-                {
-                    key: raw_ml[key]
-                    for key in (*ML_SHADOW_KEYS, *ML_SHADOW_OPTIONAL_KEYS)
-                    if key in raw_ml
-                }
-            ).model_dump(mode="json"),
+            "ml_shadow": _ml_shadow_dump(
+                MLShadowConfig.model_validate(
+                    {
+                        key: raw_ml[key]
+                        for key in (*ML_SHADOW_KEYS, *ML_SHADOW_OPTIONAL_KEYS)
+                        if key in raw_ml
+                    }
+                )
+            ),
         }
 
     @staticmethod
@@ -273,8 +282,8 @@ class StrategySettingsService:
             spot_engine = SpotEngineConfig.model_validate(merged["spot_engine"]).model_dump(
                 mode="json"
             )
-            ml_shadow = MLShadowConfig.model_validate(merged["ml_shadow"]).model_dump(
-                mode="json"
+            ml_shadow = _ml_shadow_dump(
+                MLShadowConfig.model_validate(merged["ml_shadow"])
             )
         except ValidationError as exc:
             raise StrategySettingsValidationError(str(exc)) from exc

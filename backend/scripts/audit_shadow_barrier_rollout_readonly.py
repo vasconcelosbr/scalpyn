@@ -758,8 +758,19 @@ def collect(connection: Any) -> dict[str, Any]:
                 "m1_measurement_available": bool(complete),
                 "m2_measurement_available": m2_total["rsi_valid_numeric"] > 0,
                 "m3_canary_profile_available": bool(viable),
-                "canary_minimum_outcomes_configured": False,
-                "canary_minimum_outcomes": None,
+                "canary_minimum_outcomes_configured": all(
+                    isinstance((configs.get(f"{row['user_id']}:ml") or {}).get("canary_minimum_outcomes"), int)
+                    and (configs.get(f"{row['user_id']}:ml") or {}).get("canary_minimum_outcomes") > 0
+                    for row in active_profiles
+                ),
+                "canary_minimum_outcomes": next(
+                    (
+                        (configs.get(f"{row['user_id']}:ml") or {}).get("canary_minimum_outcomes")
+                        for row in active_profiles
+                        if (configs.get(f"{row['user_id']}:ml") or {}).get("canary_minimum_outcomes") is not None
+                    ),
+                    None,
+                ),
             },
         }
         connection.rollback()

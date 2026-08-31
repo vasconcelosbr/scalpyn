@@ -52,6 +52,7 @@ const COPY: Record<string, { label: string; help?: string }> = {
   "ml_shadow.shadow_canonical_barrier_enabled": { label: "Avaliador canônico por OHLCV fechada", help: "Ativa a detecção somente para IDs presentes na lista de canário." },
   "ml_shadow.shadow_canonical_barrier_profile_allowlist": { label: "Profiles do canário da barreira", help: "Lista de IDs exatos. Vazio significa nenhum profile ativo." },
   "ml_shadow.shadow_canonical_barrier_policy_version": { label: "Versão do avaliador canônico" },
+  "ml_shadow.canary_minimum_outcomes": { label: "Mínimo de outcomes para avaliação", help: "Governança: impede conclusões antes deste número de Shadows terminais; não altera TP, SL ou autorização." },
 };
 
 const GROUP_COPY: Record<string, { title: string; subtitle: string; effect: string }> = {
@@ -98,7 +99,7 @@ function FieldEditor({ path, value, onChange }: { path: string; value: JsonValue
     const arrayValue = Array.isArray(value) ? value : [];
     return <label className="block space-y-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4"><span className="text-xs font-medium text-[var(--text-secondary)]">{label}</span><input className="input w-full font-mono text-sm" type="text" value={arrayValue.join(", ")} placeholder="1m, 5m" onChange={(event) => onChange(path, event.target.value.split(",").map((item) => item.trim()).filter(Boolean))} />{copy?.help && <span className="block text-[11px] leading-relaxed text-[var(--text-tertiary)]">{copy.help}</span>}</label>;
   }
-  const nullableNumber = path === "ml_shadow.shadow_entry_max_lag_seconds";
+  const nullableNumber = path === "ml_shadow.shadow_entry_max_lag_seconds" || path === "ml_shadow.canary_minimum_outcomes";
   return <label className="block space-y-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4"><span className="text-xs font-medium text-[var(--text-secondary)]">{label}</span>{options ? <select className="input w-full text-sm" value={String(value)} onChange={(event) => onChange(path, event.target.value)}>{options.map((option) => <option key={option} value={option}>{option}</option>)}</select> : <input className="input w-full font-mono text-sm" type={typeof value === "number" || nullableNumber ? "number" : "text"} step={typeof value === "number" || nullableNumber ? "any" : undefined} value={String(value ?? "")} onChange={(event) => onChange(path, nullableNumber ? (event.target.value === "" ? null : Number(event.target.value)) : typeof value === "number" ? Number(event.target.value) : event.target.value)} />}{copy?.help && <span className="block text-[11px] leading-relaxed text-[var(--text-tertiary)]">{copy.help}</span>}</label>;
 }
 

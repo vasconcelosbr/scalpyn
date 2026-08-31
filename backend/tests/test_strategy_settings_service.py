@@ -168,6 +168,7 @@ async def test_optimistic_hash_conflict_rolls_back(aggregate):
             "less than or equal",
         ),
         ({"spot_engine": {"shadow": {"amount_usdt": -1}}}, "greater than 0"),
+        ({"ml_shadow": {"canary_minimum_outcomes": 0}}, "greater than or equal to 1"),
     ],
 )
 def test_invalid_imports_are_rejected(payload, expected):
