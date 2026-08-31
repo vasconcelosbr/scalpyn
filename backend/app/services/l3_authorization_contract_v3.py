@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Iterable, Mapping, Optional
 
+from .block_rule_compiler import compile_block_rule
+
 
 CONTRACT_VERSION = "l3_authorization_contract_v3"
 CONTRACT_MODE = "SHADOW"
@@ -42,6 +44,7 @@ _SUPPORTED_OPERATORS = {
     "=", "==", "!=", ">", ">=", "<", "<=", "between",
     "is_true", "is_false", "in", "not_in",
 }
+_FEATURE_ALIASES = {"orderbook_pressure": "bid_ask_imbalance"}
 
 
 def contract_authorizes_shadow_capture(
@@ -79,7 +82,9 @@ def contract_authorizes_shadow_capture(
     return False
 
 
-def _normalize_legacy_inline_block_conditions(profile_config: dict) -> dict:
+def _normalize_legacy_inline_block_conditions(
+    profile_config: dict, *, legacy_range_enabled: bool = False
+) -> dict:
     """Materialize BlockEngine defaults without changing persisted rules.
 
     The legacy BlockEngine treats an inline block with no explicit ``type`` as
@@ -92,6 +97,22 @@ def _normalize_legacy_inline_block_conditions(profile_config: dict) -> dict:
     blocks = ((normalized.get("block_rules") or {}).get("blocks") or [])
     for block in blocks:
         if not isinstance(block, dict) or block.get("conditions"):
+            continue
+        compilation = compile_block_rule(
+            block, legacy_range_enabled=legacy_range_enabled
+        )
+        if compilation["normalization"] == "FLAT_MIN_MAX_TO_OUTSIDE_RANGE":
+            block.clear()
+            block.update(compilation["compiled"])
+            block["_block_rule_compilation"] = {
+                key: compilation[key]
+                for key in (
+                    "contract_version",
+                    "normalization_version",
+                    "normalization",
+                    "operational_effect",
+                )
+            }
             continue
         block_type = str(block.get("type") or "threshold").lower()
         if block_type != "threshold":
@@ -257,9 +278,14 @@ def _registry_candidate(raw: dict, *, market_scope: dict, evaluated_at: datetime
         source_at = _as_utc(source_timestamp)
         if source_at is not None:
             age = max(0.0, (evaluated_at - source_at).total_seconds())
+    indicator = str(raw.get("indicator") or "")
+    alias_of = _FEATURE_ALIASES.get(indicator)
     return {
         "market_scope": deepcopy(raw.get("market_scope") or market_scope),
-        "indicator": str(raw.get("indicator") or ""),
+        "indicator": indicator,
+        "alias_of": alias_of,
+        "independent": alias_of is None,
+        "alias_warning": "DUPLICATE_FEATURE_ALIAS" if alias_of else None,
         "actual": raw.get("actual"),
         "source": source,
         "source_provider": raw.get("source_provider") or raw.get("source"),
@@ -568,6 +594,9 @@ def _reference_resolution(
         "period": candidate.get("period"),
         "parameters": _candidate_parameters(candidate),
         "candle_policy": None,
+        "alias_of": candidate.get("alias_of"),
+        "independent": candidate.get("independent", True),
+        "alias_warning": candidate.get("alias_warning"),
     }
     if source == "ohlcv":
         expected_timeframe = (
@@ -694,8 +723,15 @@ def materialize_runtime_profile_contract(
 ) -> tuple[dict, dict]:
     """Resolve a separate executable snapshot without mutating the profile."""
 
+    range_policy = deepcopy(
+        ((runtime_policy or {}).get("l3_global_block_range_compiler") or {})
+    )
+    range_allowlisted = str(profile_id) in {
+        str(item) for item in range_policy.get("profile_allowlist") or []
+    }
+    range_enabled = bool(range_policy.get("enabled") and range_allowlisted)
     normalized_profile_config = _normalize_legacy_inline_block_conditions(
-        profile_config
+        profile_config, legacy_range_enabled=range_enabled
     )
     resolver = deepcopy(
         ((runtime_policy or {}).get("l3_v3_provenance_resolver") or {})
@@ -1577,6 +1613,30 @@ def build_authorization_contract(
         gate_evaluation=gate_evaluation,
         registry=registry,
     )
+    collapsed_alias_rules: list[dict[str, Any]] = []
+    for block in (((effective_profile_config or {}).get("block_rules") or {}).get("blocks") or []):
+        if not isinstance(block, Mapping) or str(block.get("logic") or "AND").upper() != "AND":
+            continue
+        groups: dict[str, list[str]] = {}
+        for condition in block.get("conditions") or []:
+            if not isinstance(condition, Mapping):
+                continue
+            indicator = str(condition.get("indicator") or condition.get("field") or "")
+            canonical = _FEATURE_ALIASES.get(indicator, indicator)
+            groups.setdefault(canonical, []).append(indicator)
+        duplicates = {
+            canonical: values for canonical, values in groups.items() if len(values) > 1
+        }
+        if duplicates:
+            collapsed_alias_rules.append(
+                {
+                    "profile_id": str(profile_id) if profile_id else None,
+                    "rule_id": block.get("id"),
+                    "rule_name": block.get("name"),
+                    "collapsed_features": duplicates,
+                    "reason_code": "DUPLICATE_FEATURE_ALIAS",
+                }
+            )
     sections: dict[str, dict] = {}
     for name in ("filters", "signals", "entry_triggers"):
         config = (effective_profile_config or {}).get(name)
@@ -1719,6 +1779,12 @@ def build_authorization_contract(
         },
         "evaluated_at": _iso(evaluated_at),
         "feature_registry": registry,
+        "feature_alias_audit": {
+            "contract_version": "feature_alias_audit_v1",
+            "aliases": deepcopy(_FEATURE_ALIASES),
+            "collapsed_and_rules": collapsed_alias_rules,
+            "operational_effect": False,
+        },
         "feature_evaluations": [
             condition
             for section in sections.values()

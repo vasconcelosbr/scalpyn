@@ -52,6 +52,14 @@ class L3ProvenanceResolverConfig(BaseModel):
     policy_version: Literal["l3_v3_provenance_resolver_v1"] = (
         "l3_v3_provenance_resolver_v1"
     )
+
+
+class L3GlobalBlockRangeCompilerConfig(BaseModel):
+    enabled: bool = False
+    profile_allowlist: List[str] = Field(default_factory=list)
+    policy_version: Literal["l3_global_block_range_compiler_v1"] = (
+        "l3_global_block_range_compiler_v1"
+    )
     source_policies: L3ProvenanceSourcePoliciesConfig = Field(
         default_factory=L3ProvenanceSourcePoliciesConfig
     )
@@ -83,6 +91,9 @@ class ScannerConfig(BaseModel):
     # explicit profile allowlist plus source policies persisted through the GUI.
     l3_v3_provenance_resolver: L3ProvenanceResolverConfig = Field(
         default_factory=L3ProvenanceResolverConfig
+    )
+    l3_global_block_range_compiler: L3GlobalBlockRangeCompilerConfig = Field(
+        default_factory=L3GlobalBlockRangeCompilerConfig
     )
 
 

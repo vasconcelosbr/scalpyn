@@ -217,6 +217,18 @@ class ProfileEngine:
         self.signal_engine = SignalEngine(signal_config)
 
         # Block engine
+        _range_policy = self.l3_gate_runtime_policy.get(
+            "l3_global_block_range_compiler"
+        ) or {}
+        _range_profile_id = self.l3_gate_runtime_policy.get("profile_id")
+        _range_allowlist = {
+            str(item) for item in (_range_policy.get("profile_allowlist") or [])
+        }
+        _range_enabled = bool(
+            _range_policy.get("enabled")
+            and _range_profile_id
+            and str(_range_profile_id) in _range_allowlist
+        )
         self.block_engine = BlockEngine(
             {
                 **self.block_rules_config,
@@ -233,6 +245,7 @@ class ProfileEngine:
             missing_indicator_policy=self.l3_gate_runtime_policy[
                 "l3_missing_indicator_policy"
             ],
+            legacy_range_compiler_enabled=_range_enabled,
         )
 
     def _convert_signal_conditions(self, conditions: List[Dict]) -> List[Dict]:

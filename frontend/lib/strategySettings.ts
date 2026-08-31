@@ -47,11 +47,14 @@ export const ENUM_OPTIONS: Record<string, string[]> = {
   "spot_engine.scanner.l3_profile_consolidation_rule_version": ["single_profile_per_symbol_v1"],
   "spot_engine.scanner.l3_block_and_skipped_policy": ["legacy", "not_satisfied"],
   "spot_engine.scanner.l3_missing_indicator_policy": ["warn", "disable_rule"],
+  "spot_engine.scanner.l3_global_block_range_compiler.policy_version": ["l3_global_block_range_compiler_v1"],
   "spot_engine.buying.order_type": ["market", "limit"],
   "spot_engine.shadow.trailing_contract_version": ["shadow_hwm_trailing_v1"],
   "ml_shadow.shadow_barrier_mode": ["FIXED", "ATR_DYNAMIC"],
   "ml_shadow.shadow_atr_timeframe": ["1m", "5m", "15m", "1h"],
-  "ml_shadow.ml_active_barrier_contract_version": ["shadow_fixed_v1", "shadow_atr_dynamic_v2"],
+  "ml_shadow.ml_active_barrier_contract_version": ["shadow_fixed_v1", "shadow_atr_dynamic_v2", "shadow_atr_dynamic_v3"],
+  "ml_shadow.shadow_barrier_geometry_policy": ["LEGACY_INDEPENDENT_CLAMP", "SL_ANCHORED_RATIO", "ATR_CLAMPED_BEFORE_MULTIPLY"],
+  "ml_shadow.shadow_canonical_barrier_policy_version": ["shadow_closed_ohlcv_first_touch_v1"],
 };
 
 export function parseStrategySettingsJson(text: string): JsonObject {

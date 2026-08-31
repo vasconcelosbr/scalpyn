@@ -3379,7 +3379,10 @@ async def _run_pipeline_scan():
                         )
 
                         profile_config["_l3_gate_runtime_policy"] = (
-                            build_policy_snapshot(_current_spot_cfg.scanner)
+                            build_policy_snapshot(
+                                _current_spot_cfg.scanner,
+                                profile_id=str(wl.profile_id) if wl.profile_id else None,
+                            )
                         )
                     effective_level = effective_pipeline_level(
                         level,

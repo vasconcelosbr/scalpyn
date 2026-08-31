@@ -71,8 +71,13 @@ def _classify_legacy_section_hashes(gate: dict[str, Any] | None) -> dict[str, An
     """
     gate = gate or {}
     overall = gate.get("evaluation_envelope_hash")
+    explicit = gate.get("section_hashes") or {}
     section_hashes = {
-        section: ((gate.get(section) or {}).get("evaluation_envelope_hash"))
+        section: (
+            explicit.get(section)
+            or (gate.get(section) or {}).get("section_hash")
+            or (gate.get(section) or {}).get("evaluation_envelope_hash")
+        )
         for section in ("score", "signals", "entry_triggers", "block_rules")
     }
     missing = [name for name, value in section_hashes.items() if not value]
@@ -80,7 +85,14 @@ def _classify_legacy_section_hashes(gate: dict[str, Any] | None) -> dict[str, An
         name for name, value in section_hashes.items()
         if value and overall and value != overall
     ]
-    if not overall or missing:
+    copied_global = bool(overall) and all(
+        value == overall for value in section_hashes.values() if value
+    )
+    if gate.get("section_hash_contract_version") == "l3_gate_section_hashes_v1":
+        status = "MISMATCH" if missing else "MATCH"
+    elif copied_global and not missing:
+        status = "LEGACY_ENVELOPE_HASH_ONLY"
+    elif not overall or missing:
         status = "LEGACY_UNRESOLVED"
     elif mismatched:
         status = "MISMATCH"
@@ -92,6 +104,7 @@ def _classify_legacy_section_hashes(gate: dict[str, Any] | None) -> dict[str, An
         "section_hashes": section_hashes,
         "missing_sections": missing,
         "mismatched_sections": mismatched,
+        "hash_contract_version": gate.get("section_hash_contract_version"),
     }
 
 
@@ -416,6 +429,47 @@ async def build_trade_export(
             },
             "trade": detail_json,
             "measurement": measurement_json,
+            "barrier_evidence": {
+                "contract_version": trade.barrier_contract_version,
+                "geometry_policy": (trade.config_snapshot or {}).get(
+                    "barrier_geometry_policy"
+                ),
+                "configured_ratio": (trade.config_snapshot or {}).get(
+                    "barrier_configured_ratio"
+                ),
+                "effective_ratio": (trade.config_snapshot or {}).get(
+                    "barrier_effective_ratio"
+                ),
+                "source": (
+                    "ohlcv"
+                    if trade.exit_price_semantics
+                    == "CLOSED_OHLCV_1M_FIRST_TOUCH_NOMINAL"
+                    else None
+                ),
+                "timeframe": (
+                    "1m"
+                    if trade.exit_price_semantics
+                    == "CLOSED_OHLCV_1M_FIRST_TOUCH_NOMINAL"
+                    else None
+                ),
+                "candle_policy": (
+                    "CLOSED_ONLY"
+                    if trade.exit_price_semantics
+                    == "CLOSED_OHLCV_1M_FIRST_TOUCH_NOMINAL"
+                    else None
+                ),
+                "intrabar_convention": trade.intrabar_convention,
+                "barrier_touched": trade.barrier_touched,
+                "barrier_touched_at": trade.barrier_touched_at,
+                "exit_price_nominal": trade.exit_price_nominal,
+                "exit_price_observed": trade.exit_price_observed,
+                "exit_price_semantics": trade.exit_price_semantics,
+                "outcome_contract_valid": (
+                    trade.exit_price_semantics
+                    == "CLOSED_OHLCV_1M_FIRST_TOUCH_NOMINAL"
+                    and trade.barrier_touched != "BARRIER_PATH_UNRESOLVED"
+                ),
+            },
             "returns": {
                 "gross_return_pct": trade.pnl_pct,
                 "fee_roundtrip_pct_applied": trade.fee_roundtrip_pct_applied,

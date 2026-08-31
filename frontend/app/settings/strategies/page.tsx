@@ -28,6 +28,9 @@ const COPY: Record<string, { label: string; help?: string }> = {
   "spot_engine.scanner.l3_v3_provenance_resolver.profile_allowlist": { label: "Profiles autorizados no canário", help: "IDs exatos dos profiles que podem usar o resolvedor. Lista vazia mantém todos desativados." },
   "spot_engine.scanner.l3_v3_provenance_resolver.policy_version": { label: "Versão da política de proveniência", help: "Identifica de forma imutável o contrato usado para resolver as features congeladas na decisão." },
   "spot_engine.scanner.l3_v3_provenance_resolver.source_policies": { label: "Políticas por fonte", help: "Configuração auditável para OHLCV, fluxo de trades, livro de ofertas e contexto da decisão." },
+  "spot_engine.scanner.l3_global_block_range_compiler.enabled": { label: "Compilador de faixa global", help: "Quando ativo, regras planas com mínimo e máximo bloqueiam somente fora da faixa, apenas nos profiles autorizados." },
+  "spot_engine.scanner.l3_global_block_range_compiler.profile_allowlist": { label: "Profiles autorizados para regras de faixa", help: "IDs exatos do canário. Lista vazia mantém o compilador sem efeito operacional." },
+  "spot_engine.scanner.l3_global_block_range_compiler.policy_version": { label: "Versão do compilador de faixa" },
   "spot_engine.selling.never_sell_at_loss": { label: "Nunca vender com prejuízo", help: "Proteção do Spot real. O Kill Switch pode sobrepor esta regra em emergência." },
   "spot_engine.shadow.amount_usdt": { label: "Valor por trade Shadow", help: "Valor nominal congelado no snapshot de cada novo trade." },
   "spot_engine.shadow.timeout_candles": { label: "Prazo do outcome operacional (candles)", help: "Quantidade máxima de candles antes do encerramento operacional por TIMEOUT." },
@@ -39,12 +42,16 @@ const COPY: Record<string, { label: string; help?: string }> = {
   "ml_shadow.shadow_atr_timeframe": { label: "Timeframe do ATR" },
   "ml_shadow.shadow_atr_multiplier_tp": { label: "Multiplicador ATR do TP" },
   "ml_shadow.shadow_atr_multiplier_sl": { label: "Multiplicador ATR do SL" },
-  "ml_shadow.shadow_barrier_min_pct": { label: "Piso da barreira (%)" },
-  "ml_shadow.shadow_barrier_max_pct": { label: "Teto da barreira (%)" },
+  "ml_shadow.shadow_barrier_min_pct": { label: "Piso do SL dinâmico (%)" },
+  "ml_shadow.shadow_barrier_max_pct": { label: "Teto do SL dinâmico (%)" },
   "ml_shadow.ml_fee_roundtrip_pct": { label: "Taxa round-trip (%)", help: "Custo total usado no retorno líquido do Shadow." },
   "ml_shadow.ml_active_barrier_contract_version": { label: "Versão do contrato de barreiras" },
   "ml_shadow.shadow_measurement_timeframe_priority": { label: "Prioridade de timeframes da medição", help: "Ordem explícita para reconciliar MFE/MAE, por exemplo: 1m, 5m." },
   "ml_shadow.shadow_entry_max_lag_seconds": { label: "Lag máximo da entrada (segundos)", help: "Vazio mantém a captura inelegível como UNCONFIGURED; não bloqueia a simulação." },
+  "ml_shadow.shadow_barrier_geometry_policy": { label: "Política geométrica", help: "LEGACY mantém o contrato atual. As outras políticas só afetam novos trades quando o contrato v3 for escolhido." },
+  "ml_shadow.shadow_canonical_barrier_enabled": { label: "Avaliador canônico por OHLCV fechada", help: "Ativa a detecção somente para IDs presentes na lista de canário." },
+  "ml_shadow.shadow_canonical_barrier_profile_allowlist": { label: "Profiles do canário da barreira", help: "Lista de IDs exatos. Vazio significa nenhum profile ativo." },
+  "ml_shadow.shadow_canonical_barrier_policy_version": { label: "Versão do avaliador canônico" },
 };
 
 const GROUP_COPY: Record<string, { title: string; subtitle: string; effect: string }> = {

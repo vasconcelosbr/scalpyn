@@ -17,6 +17,7 @@ from typing import Dict, Any, List, Optional
 from .indicator_validity import RuleStatus, SkipReason, is_valid, log_skipped, unwrap_envelope_value
 from .l3_gate_runtime_policy import KNOWN_UNIMPLEMENTED_INDICATORS
 from .rule_engine import RuleEngine
+from .block_rule_compiler import compile_block_rule
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,7 @@ class BlockEngine:
         zero_is_value: bool = False,
         and_skipped_policy: str = "legacy",
         missing_indicator_policy: str = "warn",
+        legacy_range_compiler_enabled: bool = False,
     ):
         self.config = block_config
         self.blocks = block_config.get("blocks", [])
@@ -86,6 +88,7 @@ class BlockEngine:
         self.zero_is_value = bool(zero_is_value)
         self.and_skipped_policy = and_skipped_policy
         self.missing_indicator_policy = missing_indicator_policy
+        self.legacy_range_compiler_enabled = bool(legacy_range_compiler_enabled)
         self.rule_engine = RuleEngine(
             zero_is_value=self.zero_is_value,
             missing_indicator_policy=missing_indicator_policy,
@@ -117,7 +120,12 @@ class BlockEngine:
         skipped_details: Dict[str, str] = {}
         rule_audits: List[Dict[str, Any]] = []
 
-        for block in self.blocks:
+        for configured_block in self.blocks:
+            compilation = compile_block_rule(
+                configured_block,
+                legacy_range_enabled=self.legacy_range_compiler_enabled,
+            )
+            block = compilation["compiled"]
             block_id = block.get("id", "?")
             block_name = block.get("name", block_id)
             rule_audit: Dict[str, Any] = {
@@ -130,6 +138,12 @@ class BlockEngine:
                 "matched": False,
                 "status": "DISABLED",
                 "conditions": [],
+                "audit_contract_version": compilation["contract_version"],
+                "normalization_version": compilation["normalization_version"],
+                "normalization": compilation["normalization"],
+                "configured_rule": compilation["configured"],
+                "compiled_rule": compilation["compiled"],
+                "operational_effect": compilation["operational_effect"],
             }
             if not block.get("enabled", True):
                 rule_audits.append(rule_audit)
@@ -324,6 +338,16 @@ class BlockEngine:
             )
             rule_audits.append(rule_audit)
 
+        triggered_names = set(triggered)
+        for audit in rule_audits:
+            status = audit.get("status")
+            condition_matched = (
+                None if status in {RuleStatus.SKIPPED.value, "DISABLED"}
+                else bool(audit.get("matched"))
+            )
+            audit["condition_matched"] = condition_matched
+            audit["rule_matched"] = condition_matched
+            audit["blocked"] = audit.get("name") in triggered_names
         return {
             "blocked": len(triggered) > 0,
             "triggered_blocks": triggered,
@@ -340,6 +364,8 @@ class BlockEngine:
             "condition_status_capture": self.condition_status_capture,
             "and_skipped_policy": self.and_skipped_policy,
             "missing_indicator_policy": self.missing_indicator_policy,
+            "block_rule_audit_contract_version": "block_rule_audit_v2",
+            "legacy_range_compiler_enabled": self.legacy_range_compiler_enabled,
         }
 
     def _evaluate_block_group(

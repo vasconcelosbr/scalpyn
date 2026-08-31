@@ -24,6 +24,7 @@ POLICY_FIELDS = (
     "l3_block_and_skipped_policy",
     "l3_missing_indicator_policy",
     "l3_v3_provenance_resolver",
+    "l3_global_block_range_compiler",
 )
 
 DEFAULT_PROVENANCE_RESOLVER = {
@@ -54,6 +55,11 @@ DEFAULT_POLICY = {
     "l3_block_and_skipped_policy": "legacy",
     "l3_missing_indicator_policy": "warn",
     "l3_v3_provenance_resolver": DEFAULT_PROVENANCE_RESOLVER,
+    "l3_global_block_range_compiler": {
+        "enabled": False,
+        "profile_allowlist": [],
+        "policy_version": "l3_global_block_range_compiler_v1",
+    },
 }
 
 SUPPORTED_AND_SKIPPED_POLICIES = frozenset({"legacy", "not_satisfied"})
@@ -103,6 +109,7 @@ def build_policy_snapshot(
     source: Mapping[str, Any] | Any,
     *,
     source_name: str = "spot_engine.scanner",
+    profile_id: str | None = None,
 ) -> dict[str, Any]:
     """Validate and freeze the governed L3 controls from a scanner config."""
 
@@ -121,6 +128,19 @@ def build_policy_snapshot(
     controls["l3_v3_provenance_resolver"] = _normalize_provenance_resolver(
         controls.get("l3_v3_provenance_resolver")
     )
+    range_compiler = controls.get("l3_global_block_range_compiler")
+    if not isinstance(range_compiler, Mapping):
+        raise ValueError("l3_global_block_range_compiler_invalid")
+    range_compiler = deepcopy(dict(range_compiler))
+    if range_compiler.get("policy_version") != "l3_global_block_range_compiler_v1":
+        raise ValueError("l3_global_block_range_compiler_policy_version_invalid")
+    if not isinstance(range_compiler.get("profile_allowlist"), list):
+        raise ValueError("l3_global_block_range_compiler_allowlist_invalid")
+    range_compiler["enabled"] = bool(range_compiler.get("enabled"))
+    range_compiler["profile_allowlist"] = [
+        str(item) for item in range_compiler.get("profile_allowlist") or []
+    ]
+    controls["l3_global_block_range_compiler"] = range_compiler
     if controls["l3_block_and_skipped_policy"] not in SUPPORTED_AND_SKIPPED_POLICIES:
         raise ValueError("l3_block_and_skipped_policy_invalid")
     if controls["l3_missing_indicator_policy"] not in SUPPORTED_MISSING_INDICATOR_POLICIES:
@@ -129,6 +149,7 @@ def build_policy_snapshot(
     hash_material = {
         "contract_version": POLICY_CONTRACT_VERSION,
         **controls,
+        "profile_id": profile_id,
     }
     return {
         **hash_material,
@@ -143,7 +164,11 @@ def policy_from_profile(profile_config: Mapping[str, Any] | None) -> dict[str, A
 
     raw = (profile_config or {}).get("_l3_gate_runtime_policy")
     if isinstance(raw, Mapping):
-        return build_policy_snapshot(raw, source_name=str(raw.get("source") or "injected"))
+        return build_policy_snapshot(
+            raw,
+            source_name=str(raw.get("source") or "injected"),
+            profile_id=str(raw.get("profile_id")) if raw.get("profile_id") else None,
+        )
     snapshot = build_policy_snapshot({}, source_name="schema_default_compatibility")
     snapshot["configured"] = False
     return snapshot

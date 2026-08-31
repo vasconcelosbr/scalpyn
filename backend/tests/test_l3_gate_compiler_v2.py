@@ -53,6 +53,27 @@ def test_compiler_preserves_between_bounds_and_maps_score_alias():
     assert compiled[-1]["max"] == 10
 
 
+def test_gate_emits_independent_section_hashes():
+    result = _evaluate(
+        {
+            "symbol": "BTC_USDT",
+            "indicators": {
+                "taker_ratio": 0.60,
+                "volume_delta": 1.0,
+                "vwap_distance_pct": 0.5,
+                "rsi": 60.0,
+                "macd_histogram": 0.2,
+            },
+        }
+    )
+    hashes = result["section_hashes"]
+    assert result["section_hash_contract_version"] == "l3_gate_section_hashes_v1"
+    assert hashes["score"] == result["score"]["section_hash"]
+    assert hashes["signals"] == result["signals"]["section_hash"]
+    assert hashes["entry_triggers"] == result["entry_triggers"]["section_hash"]
+    assert len(set(hashes.values())) > 1
+
+
 def test_lit_incident_is_shadow_blocked_by_independent_signals():
     result = _evaluate({
         "symbol": "LIT_USDT",

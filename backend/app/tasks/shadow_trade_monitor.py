@@ -44,6 +44,7 @@ from .celery_app import celery_app
 from ..config import settings
 from ..models.shadow_trade import ShadowTrade
 from ..services import exit_metrics, indicators_provider, shadow_trade_service
+from ..services.shadow_barrier_evaluator import evaluate_closed_candles
 
 logger = logging.getLogger(__name__)
 
@@ -298,6 +299,166 @@ async def _fetch_candles(
         }
         for r in res.fetchall()
     ]
+
+
+async def _fetch_closed_candles(
+    db,
+    symbol: str,
+    after_ts: datetime,
+    limit: int,
+    *,
+    inclusive: bool = False,
+) -> List[Dict[str, Any]]:
+    """Return only fully closed 1m candles for the canonical evaluator."""
+    res = await db.execute(
+        text(
+            """
+            SELECT time, open, high, low, close
+              FROM ohlcv
+             WHERE symbol = :s
+               AND timeframe = '1m'
+               AND ((:inclusive IS TRUE AND time >= :t)
+                    OR (:inclusive IS FALSE AND time > :t))
+               AND time < date_trunc('minute', NOW())
+             ORDER BY time ASC
+             LIMIT :lim
+            """
+        ),
+        {"s": symbol, "t": after_ts, "lim": limit, "inclusive": inclusive},
+    )
+    return [
+        {
+            "time": row.time,
+            "open": float(row.open) if row.open is not None else None,
+            "high": float(row.high) if row.high is not None else None,
+            "low": float(row.low) if row.low is not None else None,
+            "close": float(row.close) if row.close is not None else None,
+        }
+        for row in res.fetchall()
+    ]
+
+
+def _canonical_barrier_enabled(shadow: ShadowTrade) -> bool:
+    raw_snapshot = getattr(shadow, "config_snapshot", None)
+    snapshot = raw_snapshot if isinstance(raw_snapshot, dict) else {}
+    policy = snapshot.get("canonical_barrier_evaluator")
+    if not isinstance(policy, dict) or policy.get("enabled") is not True:
+        return False
+    if policy.get("policy_version") != "shadow_closed_ohlcv_first_touch_v1":
+        return False
+    allowlist = {str(item) for item in (policy.get("profile_allowlist") or [])}
+    return bool(shadow.profile_id) and str(shadow.profile_id) in allowlist
+
+
+async def _advance_shadow_canonical(
+    db,
+    shadow: ShadowTrade,
+    *,
+    entry_price: float,
+    tp: float,
+    sl: float,
+    prior_hwm: float,
+) -> str:
+    """Advance one allowlisted Shadow using closed 1m OHLCV only."""
+    entry_at = shadow.entry_timestamp
+    if entry_at is None:
+        return "pending"
+    entry_bucket = entry_at.replace(second=0, microsecond=0)
+    first_scan = (
+        shadow.last_processed_time is None
+        or shadow.last_processed_time <= entry_at
+    )
+    cursor_at = entry_bucket if first_scan else shadow.last_processed_time
+    candles = await _fetch_closed_candles(
+        db,
+        shadow.symbol,
+        cursor_at,
+        SHADOW_MONITOR_MAX_CANDLES_PER_RUN,
+        inclusive=first_scan,
+    )
+    timeout_candles = int(shadow.timeout_candles or 0) or None
+    candles_seen_before = 0
+    if timeout_candles and not first_scan and shadow.last_processed_time:
+        candles_seen_before = max(
+            int((shadow.last_processed_time - entry_at).total_seconds() // 60), 0
+        )
+    trailing = (
+        (shadow.config_snapshot or {}).get("trailing")
+        if isinstance(shadow.config_snapshot, dict)
+        else {}
+    ) or {}
+    protected_profit = max(
+        float(trailing.get("min_profit_pct") or 0.0),
+        float(trailing.get("safety_margin_above_entry_pct") or 0.0),
+    )
+    result = evaluate_closed_candles(
+        candles,
+        entry_price=entry_price,
+        entry_timestamp=entry_at,
+        tp_price=tp,
+        sl_price=sl,
+        timeout_candles=timeout_candles,
+        candles_seen_before=candles_seen_before,
+        prior_high_water_mark=prior_hwm,
+        trailing_activation_profit_pct=(
+            float(trailing["activation_profit_pct"])
+            if trailing.get("enabled") is True
+            and trailing.get("contract_version")
+            == shadow_trade_service.SHADOW_TRAILING_CONTRACT_VERSION
+            and trailing.get("activation_profit_pct") is not None
+            else None
+        ),
+        trailing_hwm_pct=(
+            float(trailing["hwm_trail_pct"])
+            if trailing.get("enabled") is True
+            and trailing.get("contract_version")
+            == shadow_trade_service.SHADOW_TRAILING_CONTRACT_VERSION
+            and trailing.get("hwm_trail_pct") is not None
+            else None
+        ),
+        trailing_never_sell_at_loss=bool(trailing.get("never_sell_at_loss")),
+        trailing_protected_profit_pct=protected_profit,
+    )
+    if result.get("min_price") is not None and (
+        shadow.min_price_post_entry is None
+        or result["min_price"] < shadow.min_price_post_entry
+    ):
+        shadow.min_price_post_entry = result["min_price"]
+        shadow.mae_at = result.get("min_price_at")
+    if result.get("max_price") is not None and (
+        shadow.max_price_post_entry is None
+        or result["max_price"] > shadow.max_price_post_entry
+    ):
+        shadow.max_price_post_entry = result["max_price"]
+        shadow.mfe_at = result.get("max_price_at")
+
+    if result["status"] == "UNRESOLVED":
+        shadow.barrier_touched = "BARRIER_PATH_UNRESOLVED"
+        shadow.barrier_touched_at = result.get("barrier_touched_at")
+        return "pending" if shadow.status == "PENDING" else "running"
+    if result["status"] != "OUTCOME":
+        if result.get("last_candle_at") is not None:
+            shadow.last_processed_time = result["last_candle_at"]
+            if shadow.status == "PENDING":
+                shadow.status = "RUNNING"
+        return "pending" if shadow.status == "PENDING" else "running"
+
+    shadow.barrier_touched = result.get("barrier_touched")
+    shadow.barrier_touched_at = result.get("barrier_touched_at")
+    nominal = result.get("exit_price_nominal")
+    observed = result.get("exit_price_observed")
+    exit_price = nominal if nominal is not None else observed
+    _finalize_outcome(
+        shadow,
+        result["outcome"],
+        exit_price,
+        result.get("barrier_touched_at") or result.get("last_candle_at"),
+        entry_price,
+        exit_price_nominal=nominal,
+        exit_price_observed=observed,
+        exit_price_semantics=result.get("exit_price_semantics"),
+    )
+    return "completed"
 
 
 async def _compute_atr_pct(
@@ -1156,6 +1317,19 @@ async def _advance_shadow(
     trailing_stop = _resolve_trailing_stop_price(
         shadow, entry_price, prior_hwm
     )
+
+    # Governed canary path.  The immutable snapshot must opt in and the exact
+    # profile id must be allowlisted.  Existing/open legacy Shadows therefore
+    # keep their original detector semantics.
+    if _canonical_barrier_enabled(shadow):
+        return await _advance_shadow_canonical(
+            db,
+            shadow,
+            entry_price=entry_price,
+            tp=tp,
+            sl=sl,
+            prior_hwm=prior_hwm,
+        )
 
     # ── Live-close path (Task #292, 2026-05-14): muitos símbolos do
     # pool não têm OHLCV 1m ingerido — só 5m/15m/30m. O scan candle-a-

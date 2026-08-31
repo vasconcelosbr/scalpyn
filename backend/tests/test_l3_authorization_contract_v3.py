@@ -518,6 +518,51 @@ def test_aster_legacy_missing_block_section_is_unresolved_not_hash_divergence():
     assert audit["mismatched_sections"] == []
 
 
+def test_legacy_copied_envelope_hash_is_not_reported_as_section_match():
+    overall = "a" * 64
+    gate = {
+        "evaluation_envelope_hash": overall,
+        **{
+            section: {"evaluation_envelope_hash": overall}
+            for section in ("score", "signals", "entry_triggers", "block_rules")
+        },
+    }
+    audit = _classify_legacy_section_hashes(gate)
+    assert audit["status"] == "LEGACY_ENVELOPE_HASH_ONLY"
+
+
+def test_alias_audit_reports_collapsed_order_book_and_rule_without_mutation():
+    profile = {
+        "filters": {"logic": "AND", "conditions": []},
+        "signals": {"logic": "AND", "conditions": []},
+        "entry_triggers": {"logic": "AND", "conditions": []},
+        "block_rules": {
+            "blocks": [
+                {
+                    "id": "book",
+                    "name": "Book vendedor extremo",
+                    "logic": "AND",
+                    "conditions": [
+                        {"indicator": "orderbook_pressure", "operator": "<", "value": -0.7},
+                        {"indicator": "bid_ask_imbalance", "operator": "<", "value": -0.7},
+                    ],
+                }
+            ]
+        },
+    }
+    result = build_authorization_contract(
+        asset=_asset(symbol="BTC_USDT"),
+        profile_config=profile,
+        legacy_decision="BLOCK",
+        evaluated_at=NOW,
+        profile_id="profile-book",
+    )
+    collapsed = result["feature_alias_audit"]["collapsed_and_rules"]
+    assert collapsed[0]["rule_name"] == "Book vendedor extremo"
+    assert collapsed[0]["reason_code"] == "DUPLICATE_FEATURE_ALIAS"
+    assert profile["block_rules"]["blocks"][0]["conditions"][0]["indicator"] == "orderbook_pressure"
+
+
 def test_aster_profile_without_block_rules_section_contract_rejects():
     profile = {
         "default_timeframe": "5m",

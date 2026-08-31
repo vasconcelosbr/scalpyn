@@ -168,6 +168,12 @@ class StrategySettingsService:
                 "shadow_barrier_contract_versions": [
                     "shadow_fixed_v1",
                     "shadow_atr_dynamic_v2",
+                    "shadow_atr_dynamic_v3",
+                ],
+                "shadow_barrier_geometry_policies": [
+                    "LEGACY_INDEPENDENT_CLAMP",
+                    "SL_ANCHORED_RATIO",
+                    "ATR_CLAMPED_BEFORE_MULTIPLY",
                 ],
                 "trailing_contract_versions": ["shadow_hwm_trailing_v1"],
                 "atr_timeframes": list(ATR_TIMEFRAMES),

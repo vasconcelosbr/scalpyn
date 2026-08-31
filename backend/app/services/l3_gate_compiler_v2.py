@@ -42,6 +42,7 @@ SUPPORTED_CONDITION_OPERATORS = {
     "is_true",
     "is_false",
 }
+SECTION_HASH_CONTRACT_VERSION = "l3_gate_section_hashes_v1"
 
 
 def _jsonable(value: Any) -> Any:
@@ -60,6 +61,13 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return str(value)
+
+
+def _canonical_hash(value: Any) -> str:
+    encoded = json.dumps(
+        _jsonable(value), sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _condition_id(condition: Dict[str, Any], index: int) -> str:
@@ -364,11 +372,29 @@ def evaluate_l3_gate_v2(
         "context": _jsonable(score_context or {}),
         "evaluation_envelope_hash": envelope_hash,
     }
+    section_material = {
+        "score": {"value": _jsonable(score), "context": _jsonable(score_context or {})},
+        "filters": filters,
+        "signals": signals,
+        "entry_triggers": entry,
+        "global_entry_triggers": global_entry,
+        "block_rules": block_rules,
+    }
+    section_hashes = {
+        name: _canonical_hash(material)
+        for name, material in section_material.items()
+    }
+    score_result["section_hash"] = section_hashes["score"]
     filters["evaluation_envelope_hash"] = envelope_hash
+    filters["section_hash"] = section_hashes["filters"]
     signals["evaluation_envelope_hash"] = envelope_hash
+    signals["section_hash"] = section_hashes["signals"]
     entry["evaluation_envelope_hash"] = envelope_hash
+    entry["section_hash"] = section_hashes["entry_triggers"]
     global_entry["evaluation_envelope_hash"] = envelope_hash
+    global_entry["section_hash"] = section_hashes["global_entry_triggers"]
     block_rules["evaluation_envelope_hash"] = envelope_hash
+    block_rules["section_hash"] = section_hashes["block_rules"]
     execution_contract["evaluation_envelope_hash"] = envelope_hash
 
     return {
@@ -383,6 +409,8 @@ def evaluate_l3_gate_v2(
         "human_approval_required": True,
         "evaluated_at": _jsonable(evaluated_at),
         "evaluation_envelope_hash": envelope_hash,
+        "section_hash_contract_version": SECTION_HASH_CONTRACT_VERSION,
+        "section_hashes": section_hashes,
         "profile_id": effective_profile_id,
         "profile_version_id": execution_contract.get("profile_version_id"),
         "profile_config_hash": execution_contract.get("profile_projection_hash"),

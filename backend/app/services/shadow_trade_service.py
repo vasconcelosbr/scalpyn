@@ -179,6 +179,19 @@ def _apply_barrier_params(user_config: dict, ml_config: dict) -> dict:
     user_config["shadow_entry_max_lag_seconds"] = ml_config.get(
         "shadow_entry_max_lag_seconds"
     )
+    user_config["shadow_barrier_geometry_policy"] = ml_config.get(
+        "shadow_barrier_geometry_policy", "LEGACY_INDEPENDENT_CLAMP"
+    )
+    user_config["shadow_canonical_barrier_enabled"] = bool(
+        ml_config.get("shadow_canonical_barrier_enabled", False)
+    )
+    user_config["shadow_canonical_barrier_profile_allowlist"] = deepcopy(
+        ml_config.get("shadow_canonical_barrier_profile_allowlist") or []
+    )
+    user_config["shadow_canonical_barrier_policy_version"] = ml_config.get(
+        "shadow_canonical_barrier_policy_version",
+        "shadow_closed_ohlcv_first_touch_v1",
+    )
     user_config["ml_win_fast_threshold_seconds"] = ml_config.get(
         "ml_win_fast_threshold_seconds"
     )
@@ -200,20 +213,39 @@ def _resolve_atr_barriers(
     _sl_mult = float(user_config["sl_atr_multiplier"])
     _clamp_min = float(user_config["sl_min_pct"])
     _clamp_max = float(user_config["sl_max_pct"])
-    sl_pct = max(_clamp_min, min(_clamp_max, atr_pct * _sl_mult))
+    geometry_policy = user_config.get(
+        "shadow_barrier_geometry_policy", "LEGACY_INDEPENDENT_CLAMP"
+    )
     _tp_mult = user_config.get("tp_atr_multiplier")
-    if _tp_mult is not None:
-        tp_pct = max(_clamp_min, min(_clamp_max, atr_pct * float(_tp_mult)))
+    if geometry_policy == "LEGACY_INDEPENDENT_CLAMP":
+        sl_pct = max(_clamp_min, min(_clamp_max, atr_pct * _sl_mult))
+        if _tp_mult is not None:
+            tp_pct = max(_clamp_min, min(_clamp_max, atr_pct * float(_tp_mult)))
+    elif geometry_policy == "SL_ANCHORED_RATIO":
+        sl_pct = max(_clamp_min, min(_clamp_max, atr_pct * _sl_mult))
+        if _tp_mult is not None:
+            tp_pct = sl_pct * (float(_tp_mult) / _sl_mult)
+    elif geometry_policy == "ATR_CLAMPED_BEFORE_MULTIPLY":
+        atr_base = max(_clamp_min, min(_clamp_max, atr_pct))
+        sl_pct = atr_base * _sl_mult
+        if _tp_mult is not None:
+            tp_pct = atr_base * float(_tp_mult)
+    else:
+        raise ValueError(f"shadow_barrier_geometry_policy_invalid: {geometry_policy!r}")
     return tp_pct, sl_pct
 
 
-def _resolve_barrier_contract_version(barrier_mode: str, tp_atr_mult) -> str:
+def _resolve_barrier_contract_version(
+    barrier_mode: str, tp_atr_mult, active_contract: str | None = None
+) -> str:
     """Carimbo do contrato de barreira gravado no INSERT (imutável depois).
 
     v2 exige ATR_DYNAMIC com multiplicador de TP configurado; qualquer outra
     combinação mantém o carimbo v1 do modo vigente.
     """
     if barrier_mode == "ATR_DYNAMIC" and tp_atr_mult is not None:
+        if active_contract == BARRIER_CONTRACT_ATR_DYNAMIC_V3:
+            return BARRIER_CONTRACT_ATR_DYNAMIC_V3
         return BARRIER_CONTRACT_ATR_DYNAMIC_V2
     return f"shadow_{str(barrier_mode).lower()}_v1"
 
@@ -391,7 +423,10 @@ def _resolve_lab_barrier(
     ``_require_v2_barrier_config`` (uma vez, antes do loop de símbolos).
     """
     active = barrier_cfg.get("ml_active_barrier_contract_version")
-    if active != BARRIER_CONTRACT_ATR_DYNAMIC_V2:
+    if active not in {
+        BARRIER_CONTRACT_ATR_DYNAMIC_V2,
+        BARRIER_CONTRACT_ATR_DYNAMIC_V3,
+    }:
         return "FIXED", tp_pct, sl_pct, "shadow_fixed_v1"
     _atr_raw = features_flat.get("atr_percent")
     if _atr_raw is None:
@@ -409,9 +444,9 @@ def _resolve_lab_barrier(
     tp_eff, sl_eff = _resolve_atr_barriers(_atr, tp_pct, sl_pct, barrier_cfg)
     mode = barrier_cfg.get("shadow_barrier_mode")
     version = _resolve_barrier_contract_version(
-        mode, barrier_cfg.get("tp_atr_multiplier")
+        mode, barrier_cfg.get("tp_atr_multiplier"), active
     )
-    if version != BARRIER_CONTRACT_ATR_DYNAMIC_V2:
+    if version != active:
         # Defensivo: após _require_v2_barrier_config isto não deve ocorrer.
         raise ValueError(
             f"barrier_contract_degraded: active={active} produced={version} "
@@ -467,6 +502,30 @@ def _build_economic_config_snapshot(
         "feature_schema_version": native_capture.feature_schema_version,
         "label_contract_version": LABEL_CONTRACT_VERSION,
         "barrier_contract_version": barrier_contract_version,
+        "barrier_geometry_policy": user_config.get(
+            "shadow_barrier_geometry_policy", "LEGACY_INDEPENDENT_CLAMP"
+        ),
+        "barrier_configured_ratio": (
+            float(tp_atr_mult) / float(user_config.get("sl_atr_multiplier"))
+            if tp_atr_mult is not None and user_config.get("sl_atr_multiplier")
+            else None
+        ),
+        "barrier_effective_ratio": (
+            float(tp_pct) / float(sl_pct) if sl_pct else None
+        ),
+        "canonical_barrier_evaluator": {
+            "enabled": bool(user_config.get("shadow_canonical_barrier_enabled")),
+            "profile_allowlist": deepcopy(
+                user_config.get("shadow_canonical_barrier_profile_allowlist") or []
+            ),
+            "policy_version": user_config.get(
+                "shadow_canonical_barrier_policy_version"
+            ),
+            "source": "ohlcv",
+            "timeframe": "1m",
+            "candle_policy": "CLOSED_ONLY",
+            "intrabar_convention": "SL_FIRST",
+        },
         "capture_contract_version": native_capture.capture_contract_version,
         "trailing": deepcopy(user_config.get("trailing")),
         "shadow_measurement_timeframe_priority": deepcopy(
@@ -574,11 +633,13 @@ _VALID_SHADOW_SOURCES = (
 try:
     from ..ml.dataset_config import (
         BARRIER_CONTRACT_ATR_DYNAMIC_V2,
+        BARRIER_CONTRACT_ATR_DYNAMIC_V3,
         LABEL_CONTRACT_VERSION,
     )
 except ImportError:  # pragma: no cover
     from backend.app.ml.dataset_config import (
         BARRIER_CONTRACT_ATR_DYNAMIC_V2,
+        BARRIER_CONTRACT_ATR_DYNAMIC_V3,
         LABEL_CONTRACT_VERSION,
     )
 
@@ -1282,7 +1343,10 @@ async def _create_from_decision(
     # degradar de contrato). O raise vive aqui, dentro da cobertura try/except do
     # caller (safe_*_create), garantindo blast radius de uma única linha.
     _active_barrier_contract = user_config.get("ml_active_barrier_contract_version")
-    _barrier_v2_active = _active_barrier_contract == BARRIER_CONTRACT_ATR_DYNAMIC_V2
+    _barrier_v2_active = _active_barrier_contract in {
+        BARRIER_CONTRACT_ATR_DYNAMIC_V2,
+        BARRIER_CONTRACT_ATR_DYNAMIC_V3,
+    }
     _barrier_atr_pct_used: Optional[float] = None
     _barrier_atr_source_at: Optional[datetime] = None
     _barrier_atr_timeframe = user_config.get("shadow_atr_timeframe")
@@ -1312,9 +1376,9 @@ async def _create_from_decision(
             )
         tp_pct, sl_pct = _resolve_atr_barriers(_atr_pct, tp_pct, sl_pct, user_config)
     _barrier_contract_version = _resolve_barrier_contract_version(
-        barrier_mode, _tp_atr_mult
+        barrier_mode, _tp_atr_mult, _active_barrier_contract
     )
-    if _barrier_v2_active and _barrier_contract_version != BARRIER_CONTRACT_ATR_DYNAMIC_V2:
+    if _barrier_v2_active and _barrier_contract_version != _active_barrier_contract:
         # Defensivo: após a validação acima isto não deve ocorrer. Se ocorrer, o
         # contrato produzido divergiu do ativo — aborta antes de persistir.
         raise ValueError(

@@ -16,6 +16,7 @@ LABEL_CONTRACT_VERSION = "positive_net_return_v1"
 # BARRIER v2 (D1=A): TP and SL both ATR-scaled with independent multipliers
 # under a shared clamp [shadow_barrier_min_pct, shadow_barrier_max_pct].
 BARRIER_CONTRACT_ATR_DYNAMIC_V2 = "shadow_atr_dynamic_v2"
+BARRIER_CONTRACT_ATR_DYNAMIC_V3 = "shadow_atr_dynamic_v3"
 
 
 def parse_required_ml_dataset_valid_from(config: Mapping[str, Any]) -> datetime:

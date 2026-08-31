@@ -22,6 +22,10 @@ ML_SHADOW_KEYS = (
 ML_SHADOW_OPTIONAL_KEYS = (
     "shadow_measurement_timeframe_priority",
     "shadow_entry_max_lag_seconds",
+    "shadow_barrier_geometry_policy",
+    "shadow_canonical_barrier_enabled",
+    "shadow_canonical_barrier_profile_allowlist",
+    "shadow_canonical_barrier_policy_version",
 )
 
 
@@ -53,8 +57,20 @@ class MLShadowConfig(BaseModel):
     shadow_barrier_max_pct: float = Field(3.0, gt=0, le=100)
     ml_fee_roundtrip_pct: float = Field(0.2, ge=0, le=100)
     ml_active_barrier_contract_version: Literal[
-        "shadow_fixed_v1", "shadow_atr_dynamic_v2"
+        "shadow_fixed_v1", "shadow_atr_dynamic_v2", "shadow_atr_dynamic_v3"
     ] = "shadow_atr_dynamic_v2"
+    shadow_barrier_geometry_policy: Literal[
+        "LEGACY_INDEPENDENT_CLAMP",
+        "SL_ANCHORED_RATIO",
+        "ATR_CLAMPED_BEFORE_MULTIPLY",
+    ] = "LEGACY_INDEPENDENT_CLAMP"
+    shadow_canonical_barrier_enabled: bool = False
+    shadow_canonical_barrier_profile_allowlist: List[str] = Field(
+        default_factory=list
+    )
+    shadow_canonical_barrier_policy_version: Literal[
+        "shadow_closed_ohlcv_first_touch_v1"
+    ] = "shadow_closed_ohlcv_first_touch_v1"
     # Measurement-only controls.  ``None`` is intentional: legacy
     # configurations remain runnable but their captures are UNCONFIGURED and
     # therefore ineligible for training until an operator saves these values.
@@ -65,15 +81,22 @@ class MLShadowConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_contract_pair(self) -> "MLShadowConfig":
-        expected = (
-            "shadow_atr_dynamic_v2"
+        allowed = (
+            {"shadow_atr_dynamic_v2", "shadow_atr_dynamic_v3"}
             if self.shadow_barrier_mode == "ATR_DYNAMIC"
-            else "shadow_fixed_v1"
+            else {"shadow_fixed_v1"}
         )
-        if self.ml_active_barrier_contract_version != expected:
+        if self.ml_active_barrier_contract_version not in allowed:
             raise ValueError(
                 "ml_active_barrier_contract_version is incompatible with "
-                f"shadow_barrier_mode; expected {expected}"
+                f"shadow_barrier_mode; expected one of {sorted(allowed)}"
+            )
+        if (
+            self.ml_active_barrier_contract_version == "shadow_atr_dynamic_v2"
+            and self.shadow_barrier_geometry_policy != "LEGACY_INDEPENDENT_CLAMP"
+        ):
+            raise ValueError(
+                "shadow_atr_dynamic_v2 requires LEGACY_INDEPENDENT_CLAMP"
             )
         if self.shadow_barrier_min_pct > self.shadow_barrier_max_pct:
             raise ValueError(
