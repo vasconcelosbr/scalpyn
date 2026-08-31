@@ -20,7 +20,7 @@ from ..models.shadow_trade import ShadowTrade
 from ..models.shadow_trade_analysis import ShadowTradeReportItem, ShadowTradeReportRun
 from ..services.shadow_trade_measurement_service import latest_measurement_by_trade_ids
 from .config import get_current_user_id
-from .shadow_trades import _to_detail, get_shadow_trade_chart
+from .shadow_trades import _consolidation_payload, _to_detail, get_shadow_trade_chart
 
 
 router = APIRouter(prefix="/api/shadow-trade-reports", tags=["Shadow Trade Reports"])
@@ -427,6 +427,7 @@ async def build_trade_export(
                 "watchlist_id": lineage["watchlist_id"],
                 "profile_id": str(trade.profile_id) if trade.profile_id else None,
             },
+            "consolidation": _consolidation_payload(trade),
             "trade": detail_json,
             "measurement": measurement_json,
             "barrier_evidence": {
@@ -711,6 +712,7 @@ async def list_detailed_report_trades(
                 "profile_name": trade.profile_name,
                 "profile_version": trade.profile_version,
                 "profile_config_hash": trade.profile_config_hash,
+                "consolidation": _consolidation_payload(trade),
                 "outcome": (
                     "OPEN" if trade.status in {"PENDING", "RUNNING"} else trade.outcome
                 ),

@@ -20,6 +20,7 @@ ML_SHADOW_KEYS = (
     "ml_active_barrier_contract_version",
 )
 ML_SHADOW_OPTIONAL_KEYS = (
+    "shadow_capture_l3_rejected_max_per_hour",
     "shadow_measurement_timeframe_priority",
     "shadow_entry_max_lag_seconds",
     "shadow_barrier_geometry_policy",
@@ -75,6 +76,9 @@ class MLShadowConfig(BaseModel):
     # Governance-only observation threshold. It does not participate in TP/SL,
     # scoring, authorization, or outcome calculation.
     canary_minimum_outcomes: int | None = Field(default=None, ge=1, le=10000)
+    # Diagnostic capture budget.  The consolidator reads only the persisted
+    # value and applies it after ranking canonical winners.
+    shadow_capture_l3_rejected_max_per_hour: int = Field(500, ge=0, le=100000)
     # Measurement-only controls.  ``None`` is intentional: legacy
     # configurations remain runnable but their captures are UNCONFIGURED and
     # therefore ineligible for training until an operator saves these values.

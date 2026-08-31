@@ -359,6 +359,34 @@ export function ShadowTradeDetailScreen({ shadowId }: { shadowId: string }) {
             </div>
           </section>
 
+          {data.consolidation ? (
+            <section className={styles.card}>
+              <div className={styles.cardHeader}>
+                <h2 className={styles.cardTitle}><Database size={15} /> Consolidação de profiles</h2>
+                <div className={styles.cardMeta}>
+                  <span>{data.consolidation.rule_version}</span>
+                  <span>{data.consolidation.candidate_count} candidatos</span>
+                  <span>{data.consolidation.associated_count} associados</span>
+                </div>
+              </div>
+              <div className={styles.section}>
+                <div className={styles.auditGrid}>
+                  {data.consolidation.candidates.map((candidate) => (
+                    <div className={styles.subcard} key={`${candidate.rank}-${candidate.profile_id ?? candidate.profile_name}`}>
+                      <div className={styles.subcardTitle}>
+                        #{candidate.rank} · {candidate.rank === 1 ? "Profile principal" : "Profile associado"}
+                      </div>
+                      <div className={styles.metricRow}><span className={styles.metricName}>Profile</span><span className={styles.metricValue}>{candidate.profile_name ?? candidate.profile_id ?? "—"}</span></div>
+                      <div className={styles.metricRow}><span className={styles.metricName}>Watchlist</span><span className={styles.metricValue}>{candidate.watchlist_name ?? candidate.watchlist_id ?? "—"}</span></div>
+                      <div className={styles.metricRow}><span className={styles.metricName}>Origem da rejeição</span><span className={styles.metricValue}>{candidate.rejection_stage ?? "—"}</span></div>
+                      <div className={styles.metricRow}><span className={styles.metricName}>Motivos</span><span className={styles.metricValue}>{candidate.rejection_reasons ? JSON.stringify(candidate.rejection_reasons) : "—"}</span></div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </section>
+          ) : null}
+
           <DecisionAudit data={data} />
 
           <section className={styles.card}>

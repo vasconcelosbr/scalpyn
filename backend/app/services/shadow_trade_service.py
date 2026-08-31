@@ -111,6 +111,9 @@ def _shadow_user_config_from_spot_config(spot_config: Any) -> Dict[str, Any]:
         "l3_single_profile_per_symbol_enabled": bool(
             spot_config.scanner.l3_single_profile_per_symbol_enabled
         ),
+        "l3_rejected_single_profile_per_symbol_enabled": bool(
+            spot_config.scanner.l3_rejected_single_profile_per_symbol_enabled
+        ),
         "l3_profile_consolidation_rule_version": (
             spot_config.scanner.l3_profile_consolidation_rule_version
         ),
@@ -1446,31 +1449,37 @@ async def _create_from_decision(
             )
             return None
 
-    _consolidation_enforced = bool(
-        user_config.get("l3_single_profile_per_symbol_enabled", False)
-        if consolidation_enforced is None
-        else consolidation_enforced
-    ) and normalized_source == SHADOW_SOURCE_L3
+    if consolidation_enforced is None:
+        _consolidation_enforced = bool(
+            user_config.get("l3_single_profile_per_symbol_enabled", False)
+        ) and normalized_source == SHADOW_SOURCE_L3
+    else:
+        _consolidation_enforced = bool(consolidation_enforced) and (
+            normalized_source in {SHADOW_SOURCE_L3, SHADOW_SOURCE_L3_REJECTED}
+        )
     if _consolidation_enforced:
         from .l3_trade_consolidation import (
             acquire_consolidation_lock,
             build_consolidation_event_id,
             candle_open_for_timeframe,
-            find_active_l3_shadow,
+            find_active_shadow_for_source,
         )
 
         _direction = (getattr(decision, "direction", None) or "SPOT").upper()
+        _consolidation_lane = normalized_source
         await acquire_consolidation_lock(
             db,
             user_id=decision.user_id,
             symbol=decision.symbol,
             direction=_direction,
+            lane=_consolidation_lane,
         )
-        _active_l3 = await find_active_l3_shadow(
+        _active_l3 = await find_active_shadow_for_source(
             db,
             user_id=decision.user_id,
             symbol=decision.symbol,
             direction=_direction,
+            source=_consolidation_lane,
         )
         if _active_l3 is not None:
             logger.info(
@@ -1503,6 +1512,7 @@ async def _create_from_decision(
                     direction=_direction,
                     timeframe=_timeframe,
                     candle_open_timestamp=_candle_open,
+                    lane=_consolidation_lane,
                 ),
                 "candidate_count": 1,
                 "primary_profile_id": str(_lin_profile_id) if _lin_profile_id else None,

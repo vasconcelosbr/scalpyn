@@ -76,6 +76,9 @@ class ScannerConfig(BaseModel):
     # Opt-in preserves the existing behaviour until the operator enables the
     # deterministic L3 profile consolidation in the GUI-backed DB config.
     l3_single_profile_per_symbol_enabled: bool = False
+    # Independent opt-in for diagnostic BLOCK captures.  Rejected Shadows
+    # never authorize execution and retain a separate rollback switch.
+    l3_rejected_single_profile_per_symbol_enabled: bool = False
     l3_profile_consolidation_rule_version: Literal[
         "single_profile_per_symbol_v1"
     ] = "single_profile_per_symbol_v1"

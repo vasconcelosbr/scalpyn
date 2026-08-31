@@ -18,6 +18,9 @@ import {
 } from "@/lib/strategySettings";
 
 const COPY: Record<string, { label: string; help?: string }> = {
+  "spot_engine.scanner.l3_single_profile_per_symbol_enabled": { label: "Consolidar Shadows aprovados por ativo", help: "Cria um único Shadow aprovado por símbolo e direção. Esta ativação é independente da consolidação dos rejeitados." },
+  "spot_engine.scanner.l3_rejected_single_profile_per_symbol_enabled": { label: "Consolidar Shadows rejeitados por ativo", help: "Cria um único L3_REJECTED por símbolo e direção, mantém o profile prioritário como principal e registra os demais como associados. Não autoriza trades e não altera a consolidação dos aprovados." },
+  "ml_shadow.shadow_capture_l3_rejected_max_per_hour": { label: "Limite horário de rejeitados consolidados", help: "Aplicado somente depois da consolidação; conta vencedores canônicos, não a quantidade bruta de profiles. O valor precisa estar persistido antes da ativação." },
   "spot_engine.scanner.l3_v3_contract_preserve": { label: "Preservar contrato v3 do L3", help: "Mantém o contrato de autorização ao atualizar métricas após o Social Score. Desligar atua como kill switch imediato." },
   "spot_engine.scanner.l3_condition_status_capture": { label: "Capturar status por condição L3", help: "Persiste PASS, FAIL ou SKIPPED, valor observado e motivo em cada condição de block rule." },
   "spot_engine.scanner.l3_metrics_provenance": { label: "Proveniência das métricas L3", help: "Usa no topo o objeto realmente avaliado pelo gate e mantém a projeção bruta separada para auditoria." },

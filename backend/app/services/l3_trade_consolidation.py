@@ -71,10 +71,11 @@ def build_consolidation_event_id(
     direction: str,
     timeframe: str,
     candle_open_timestamp: datetime,
+    lane: str = "L3",
 ) -> str:
     canonical = "|".join(
         (
-            "L3",
+            lane.upper(),
             symbol.upper(),
             direction.upper(),
             timeframe.lower(),
@@ -84,9 +85,11 @@ def build_consolidation_event_id(
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def build_advisory_lock_key(user_id: Any, symbol: str, direction: str) -> int:
+def build_advisory_lock_key(
+    user_id: Any, symbol: str, direction: str, *, lane: str = "L3"
+) -> int:
     """Return a stable signed bigint accepted by ``pg_advisory_xact_lock``."""
-    raw = f"{user_id}|L3|{symbol.upper()}|{direction.upper()}".encode("utf-8")
+    raw = f"{user_id}|{lane.upper()}|{symbol.upper()}|{direction.upper()}".encode("utf-8")
     unsigned = int.from_bytes(hashlib.sha256(raw).digest()[:8], "big")
     return unsigned - (1 << 64) if unsigned >= (1 << 63) else unsigned
 
@@ -242,11 +245,40 @@ async def acquire_consolidation_lock(
     user_id: Any,
     symbol: str,
     direction: str,
+    lane: str = "L3",
 ) -> None:
     await db.execute(
         text("SELECT pg_advisory_xact_lock(:lock_key)"),
-        {"lock_key": build_advisory_lock_key(user_id, symbol, direction)},
+        {
+            "lock_key": build_advisory_lock_key(
+                user_id, symbol, direction, lane=lane
+            )
+        },
     )
+
+
+async def find_active_shadow_for_source(
+    db,
+    *,
+    user_id: Any,
+    symbol: str,
+    direction: str,
+    source: str,
+) -> Optional[ShadowTrade]:
+    result = await db.execute(
+        select(ShadowTrade)
+        .where(
+            ShadowTrade.user_id == user_id,
+            ShadowTrade.symbol == symbol,
+            ShadowTrade.direction == direction,
+            ShadowTrade.source == source,
+            ShadowTrade.status.in_(ACTIVE_SHADOW_STATUSES),
+        )
+        .order_by(ShadowTrade.created_at.asc(), ShadowTrade.id.asc())
+        .limit(1)
+        .with_for_update()
+    )
+    return result.scalar_one_or_none()
 
 
 async def find_active_l3_shadow(
@@ -256,20 +288,14 @@ async def find_active_l3_shadow(
     symbol: str,
     direction: str,
 ) -> Optional[ShadowTrade]:
-    result = await db.execute(
-        select(ShadowTrade)
-        .where(
-            ShadowTrade.user_id == user_id,
-            ShadowTrade.symbol == symbol,
-            ShadowTrade.direction == direction,
-            ShadowTrade.source == "L3",
-            ShadowTrade.status.in_(ACTIVE_SHADOW_STATUSES),
-        )
-        .order_by(ShadowTrade.created_at.asc(), ShadowTrade.id.asc())
-        .limit(1)
-        .with_for_update()
+    """Backward-compatible canonical-approved owner lookup."""
+    return await find_active_shadow_for_source(
+        db,
+        user_id=user_id,
+        symbol=symbol,
+        direction=direction,
+        source="L3",
     )
-    return result.scalar_one_or_none()
 
 
 def _candidate_profile_id(candidate: EligibleL3Candidate) -> Optional[str]:

@@ -3208,6 +3208,7 @@ async def _run_pipeline_scan():
 
     redis = _get_redis()
     execution_id = str(uuid4())
+    scan_started_at = datetime.now(timezone.utc)
     stats = {"watchlists": 0, "new_signals": 0, "errors": 0, "funnels": [], "execution_id": execution_id}
 
     async with AsyncSessionLocal() as db:
@@ -3350,6 +3351,10 @@ async def _run_pipeline_scan():
             stage_buckets.setdefault(_eff, []).append(_wl)
             if _eff == "POOL" and _wl.source_pool_id:
                 pool_gate_watchlist_map[(str(_wl.user_id), str(_wl.source_pool_id))] = str(_wl.id)
+
+        # Rejected candidates must cross the same global watchlist boundary as
+        # approved candidates before a winner can be selected.
+        l3_rejected_consolidation_candidates: list = []
 
         for stage in (*_PIPELINE_EXECUTION_ORDER, "custom"):
             for wl in stage_buckets.get(stage, []):
@@ -4622,6 +4627,7 @@ async def _run_pipeline_scan():
                     _wl_prof_meta = profile_meta_map.get(wl.profile_id) if wl.profile_id else {}
                     _wl_profile_name    = (_wl_prof_meta or {}).get("name")
                     _wl_profile_version = (_wl_prof_meta or {}).get("version")
+                    _wl_profile_version_id = (_wl_prof_meta or {}).get("version_id")
 
                     prior_states = _prior_decision_states(redis, wl_id)
                     prior_visibility = _prior_l3_visibility(redis, wl_id)
@@ -4629,9 +4635,15 @@ async def _run_pipeline_scan():
                     _wl_consolidation_enabled = bool(
                         _wl_spot_cfg.scanner.l3_single_profile_per_symbol_enabled
                     )
+                    _wl_rejected_consolidation_enabled = bool(
+                        _wl_spot_cfg.scanner.l3_rejected_single_profile_per_symbol_enabled
+                    )
                     _wl_buy_threshold = None
                     _wl_strong_buy_threshold = None
-                    if _wl_consolidation_enabled:
+                    if (
+                        _wl_consolidation_enabled
+                        or _wl_rejected_consolidation_enabled
+                    ):
                         from ..services.l3_trade_consolidation import selection_thresholds
 
                         _wl_buy_threshold, _wl_strong_buy_threshold = selection_thresholds(
@@ -5065,23 +5077,58 @@ async def _run_pipeline_scan():
                     _all_block_candidates = _all_block_decisions + _filter_rejected_block
                     if _all_block_candidates:
                         try:
-                            from ..services.shadow_trade_service import (
-                                create_l3_rejected_inline_shadows,
-                            )
-                            await create_l3_rejected_inline_shadows(
-                                user_id=wl.user_id,
-                                decisions=_all_block_candidates,
-                                execution_id=str(execution_id),
-                                promotion_at=datetime.now(timezone.utc),
-                                watchlist_id=str(wl.id),
-                                watchlist_name=wl.name,
-                                watchlist_level=wl.level,
-                                source_watchlist_id=str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
-                                profile_id=str(wl.profile_id) if wl.profile_id else None,
-                                profile_name=_wl_profile_name,
-                                profile_version=_wl_profile_version,
-                                rules_snapshot=profile_config,
-                            )
+                            if _wl_rejected_consolidation_enabled:
+                                from ..services.l3_rejected_trade_consolidation import (
+                                    rejected_candidate_from_decision,
+                                )
+
+                                for _rejected_decision in _all_block_candidates:
+                                    l3_rejected_consolidation_candidates.append(
+                                        rejected_candidate_from_decision(
+                                            user_id=wl.user_id,
+                                            decision=_rejected_decision,
+                                            observed_at=scan_started_at,
+                                            buy_threshold=float(_wl_buy_threshold),
+                                            strong_buy_threshold=float(
+                                                _wl_strong_buy_threshold
+                                            ),
+                                            watchlist_id=str(wl.id),
+                                            watchlist_name=wl.name,
+                                            watchlist_level=wl.level,
+                                            source_watchlist_id=(
+                                                str(wl.source_watchlist_id)
+                                                if wl.source_watchlist_id
+                                                else None
+                                            ),
+                                            profile_id=wl.profile_id,
+                                            profile_name=_wl_profile_name,
+                                            profile_version=_wl_profile_version,
+                                            profile_version_id=_wl_profile_version_id,
+                                            rules_snapshot=profile_config,
+                                            rule_version=(
+                                                _wl_spot_cfg.scanner.
+                                                l3_profile_consolidation_rule_version
+                                            ),
+                                        )
+                                    )
+                            else:
+                                from ..services.shadow_trade_service import (
+                                    create_l3_rejected_inline_shadows,
+                                )
+                                await create_l3_rejected_inline_shadows(
+                                    user_id=wl.user_id,
+                                    decisions=_all_block_candidates,
+                                    execution_id=str(execution_id),
+                                    promotion_at=datetime.now(timezone.utc),
+                                    watchlist_id=str(wl.id),
+                                    watchlist_name=wl.name,
+                                    watchlist_level=wl.level,
+                                    source_watchlist_id=str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
+                                    profile_id=str(wl.profile_id) if wl.profile_id else None,
+                                    profile_name=_wl_profile_name,
+                                    profile_version=_wl_profile_version,
+                                    rules_snapshot=profile_config,
+                                )
                         except Exception as _l3rej_exc:
                             logger.warning(
                                 "[PipelineScan] L3_REJECTED capture failed (%s)"
@@ -5250,6 +5297,38 @@ async def _run_pipeline_scan():
                             wl.name, type(_rb_exc).__name__, _rb_exc,
                         )
                     continue
+
+        if l3_rejected_consolidation_candidates:
+            try:
+                from ..services.l3_rejected_trade_consolidation import (
+                    consolidate_l3_rejected_candidates,
+                )
+
+                _rejected_results = await consolidate_l3_rejected_candidates(
+                    l3_rejected_consolidation_candidates,
+                    scan_run_id=execution_id,
+                )
+                stats["l3_rejected_consolidation"] = [
+                    {
+                        "event_id": result.event_id,
+                        "symbol": result.symbol,
+                        "direction": result.direction,
+                        "decision": result.decision,
+                        "reason_code": result.reason_code,
+                        "winner_profile_id": result.winner_profile_id,
+                        "trade_id": result.trade_id,
+                        "candidate_count": result.candidate_count,
+                        "suppressed_count": result.suppressed_count,
+                    }
+                    for result in _rejected_results
+                ]
+            except Exception:
+                logger.exception(
+                    "[L3_REJECTED_CONSOLIDATION] post-watchlist processing failed "
+                    "scan_run_id=%s; rejected lane only",
+                    execution_id,
+                )
+                stats["errors"] += 1
 
         # The explicit scan_run_id means every watchlist candidate for this
         # run has already reached the committed outbox before consolidation.

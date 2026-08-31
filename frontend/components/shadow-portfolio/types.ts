@@ -1,6 +1,35 @@
 export type ShadowStatus = "PENDING" | "RUNNING" | "COMPLETED" | "ERROR";
 export type ShadowOutcome = "TP_HIT" | "SL_HIT" | "TRAILING_STOP" | "TIMEOUT" | null;
 
+export interface ShadowConsolidationProfile {
+  rank: number;
+  profile_id: string | null;
+  profile_name: string | null;
+  profile_version: string | null;
+  profile_version_id: string | null;
+  watchlist_id: string | null;
+  watchlist_name: string | null;
+  rejection_stage: string | null;
+  rejection_reasons: unknown;
+  selection_metrics: Record<string, number>;
+}
+
+export interface ShadowConsolidation {
+  enforcement: boolean;
+  event_id: string;
+  rule_version: string;
+  lane: string | null;
+  timeframe: string | null;
+  candle_open: string | null;
+  primary_profile: ShadowConsolidationProfile;
+  candidate_count: number;
+  associated_count: number;
+  candidates: ShadowConsolidationProfile[];
+  associated_profiles: ShadowConsolidationProfile[];
+  selection_rule: string[];
+  selection_metrics: Record<string, number>;
+}
+
 export interface ShadowTradeDetail {
   id: string;
   symbol: string;
@@ -30,6 +59,7 @@ export interface ShadowTradeDetail {
   updated_at: string | null;
   profile_id: string | null;
   profile_name: string | null;
+  consolidation?: ShadowConsolidation | null;
   config_snapshot: Record<string, unknown> | null;
   features_snapshot: Record<string, unknown> | null;
   features_snapshot_exit: Record<string, unknown> | null;

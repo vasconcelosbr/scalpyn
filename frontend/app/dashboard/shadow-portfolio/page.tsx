@@ -43,6 +43,35 @@ const C = {
 type ShadowStatus = "PENDING" | "RUNNING" | "COMPLETED" | "ERROR";
 type ShadowOutcome = "TP_HIT" | "SL_HIT" | "TRAILING_STOP" | "TIMEOUT" | null;
 
+interface ShadowConsolidationProfile {
+  rank: number;
+  profile_id: string | null;
+  profile_name: string | null;
+  profile_version: string | null;
+  profile_version_id: string | null;
+  watchlist_id: string | null;
+  watchlist_name: string | null;
+  rejection_stage: string | null;
+  rejection_reasons: unknown;
+  selection_metrics: Record<string, number>;
+}
+
+interface ShadowConsolidation {
+  enforcement: boolean;
+  event_id: string;
+  rule_version: string;
+  lane: string | null;
+  timeframe: string | null;
+  candle_open: string | null;
+  primary_profile: ShadowConsolidationProfile;
+  candidate_count: number;
+  associated_count: number;
+  candidates: ShadowConsolidationProfile[];
+  associated_profiles: ShadowConsolidationProfile[];
+  selection_rule: string[];
+  selection_metrics: Record<string, number>;
+}
+
 interface ShadowTradeRead {
   id: string;
   symbol: string;
@@ -63,6 +92,23 @@ interface ShadowTradeRead {
   entry_timestamp: string | null;
   profile_id: string | null;
   profile_name: string | null;
+  consolidation?: ShadowConsolidation | null;
+}
+
+function consolidationTooltip(item: ShadowTradeRead): string | undefined {
+  if (!item.consolidation) return item.profile_name ?? undefined;
+  return item.consolidation.candidates
+    .map((candidate) => {
+      const reasons = Array.isArray(candidate.rejection_reasons)
+        ? candidate.rejection_reasons
+            .map((reason) => typeof reason === "string" ? reason : JSON.stringify(reason))
+            .join("; ")
+        : candidate.rejection_reasons
+        ? JSON.stringify(candidate.rejection_reasons)
+        : "sem motivo registrado";
+      return `#${candidate.rank} ${candidate.profile_name ?? candidate.profile_id ?? "Profile"}: ${reasons}`;
+    })
+    .join("\n");
 }
 
 interface ShadowTradeListResponse {
@@ -958,10 +1004,19 @@ function TradeTable({
                   {fmtDateTime(it.created_at)}
                 </td>
                 <td
-                  style={{ padding: "10px 12px", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                  title={it.profile_name ?? undefined}
+                  style={{ padding: "10px 12px", maxWidth: 220 }}
+                  title={consolidationTooltip(it)}
                 >
-                  {it.profile_name ?? "—"}
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {it.consolidation?.primary_profile.profile_name ?? it.profile_name ?? "—"}
+                    </span>
+                    {it.consolidation && it.consolidation.associated_count > 0 && (
+                      <span style={{ flexShrink: 0, border: `1px solid ${C.purple}55`, borderRadius: 999, padding: "1px 6px", color: C.purple, fontSize: 9, fontWeight: 700 }}>
+                        +{it.consolidation.associated_count} associados
+                      </span>
+                    )}
+                  </div>
                 </td>
                 <td
                   style={{
@@ -1959,6 +2014,27 @@ function DetailModal({
                       label="Profile Version"
                       value={fmtDateTime(data.profile_version)}
                     />
+                  )}
+                  {data.consolidation != null && (
+                    <div style={{ marginTop: 12, border: `1px solid ${C.purple}44`, borderRadius: 10, padding: 10, background: `${C.purple}0D` }}>
+                      <div style={{ color: C.purple, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                        Consolidação de profiles · {data.consolidation.rule_version}
+                      </div>
+                      <div style={{ marginTop: 7, display: "grid", gap: 6 }}>
+                        {data.consolidation.candidates.map((candidate) => (
+                          <div key={`${candidate.rank}-${candidate.profile_id ?? candidate.profile_name}`} style={{ fontSize: 11, color: candidate.rank === 1 ? C.text : C.muted }}>
+                            <strong>#{candidate.rank} {candidate.profile_name ?? candidate.profile_id ?? "Profile"}</strong>
+                            {candidate.rank === 1 ? " · principal" : " · associado"}
+                            {candidate.rejection_stage ? ` · ${candidate.rejection_stage}` : ""}
+                            {candidate.rejection_reasons ? (
+                              <div style={{ marginTop: 2, color: C.dim, overflowWrap: "anywhere" }}>
+                                {JSON.stringify(candidate.rejection_reasons)}
+                              </div>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   )}
                 </div>
 

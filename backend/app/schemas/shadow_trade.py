@@ -12,7 +12,36 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class ShadowConsolidationProfile(BaseModel):
+    rank: int
+    profile_id: Optional[UUID] = None
+    profile_name: Optional[str] = None
+    profile_version: Optional[str] = None
+    profile_version_id: Optional[UUID] = None
+    watchlist_id: Optional[UUID] = None
+    watchlist_name: Optional[str] = None
+    rejection_stage: Optional[str] = None
+    rejection_reasons: Any = None
+    selection_metrics: Dict[str, float] = Field(default_factory=dict)
+
+
+class ShadowConsolidation(BaseModel):
+    enforcement: bool
+    event_id: str
+    rule_version: str
+    lane: Optional[str] = None
+    timeframe: Optional[str] = None
+    candle_open: Optional[str] = None
+    primary_profile: ShadowConsolidationProfile
+    candidate_count: int
+    associated_count: int
+    candidates: List[ShadowConsolidationProfile]
+    associated_profiles: List[ShadowConsolidationProfile]
+    selection_rule: List[str]
+    selection_metrics: Dict[str, float]
 
 
 class ShadowTradeRead(BaseModel):
@@ -43,6 +72,7 @@ class ShadowTradeRead(BaseModel):
     # canônico (EV Score) exibido no Shadow Portfolio.
     profile_id: Optional[UUID] = None
     profile_name: Optional[str] = None
+    consolidation: Optional[ShadowConsolidation] = None
 
     # Market-context (migration 052). Preenchidos pelo monitor após
     # resolver a entrada; ficam None em shadows legados sem backfill.

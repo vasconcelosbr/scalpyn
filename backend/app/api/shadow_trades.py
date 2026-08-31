@@ -208,10 +208,118 @@ async def _fetch_latest_prices(
     return out
 
 
+def _consolidation_payload(row: ShadowTrade) -> Optional[Dict[str, Any]]:
+    """Project only persisted consolidation evidence; legacy rows stay null."""
+    raw_snapshot = getattr(row, "config_snapshot", None)
+    snapshot = raw_snapshot if isinstance(raw_snapshot, dict) else {}
+    raw = snapshot.get("consolidation")
+    if not isinstance(raw, dict):
+        return None
+    event_id = raw.get("event_id")
+    rule_version = raw.get("rule_version")
+    if not event_id or not rule_version:
+        return None
+
+    def profile_item(value: Dict[str, Any], rank: int) -> Dict[str, Any]:
+        metrics = value.get("selection_metrics")
+        return {
+            "rank": int(value.get("rank") or rank),
+            "profile_id": value.get("profile_id"),
+            "profile_name": value.get("profile_name"),
+            "profile_version": value.get("profile_version"),
+            "profile_version_id": value.get("profile_version_id"),
+            "watchlist_id": value.get("watchlist_id"),
+            "watchlist_name": value.get("watchlist_name"),
+            "rejection_stage": value.get("rejection_stage"),
+            "rejection_reasons": value.get("rejection_reasons"),
+            "selection_metrics": {
+                key: float(metric_value)
+                for key, metric_value in (metrics or {}).items()
+                if isinstance(metric_value, (int, float))
+            },
+        }
+
+    persisted_candidates = raw.get("candidates")
+    candidates: list[Dict[str, Any]] = []
+    if isinstance(persisted_candidates, list):
+        candidates = [
+            profile_item(item, rank)
+            for rank, item in enumerate(persisted_candidates, start=1)
+            if isinstance(item, dict)
+        ]
+    else:
+        profile_ids = raw.get("candidate_profile_ids") or []
+        profile_names = raw.get("candidate_profile_names") or []
+        for index in range(max(len(profile_ids), len(profile_names))):
+            candidates.append(
+                profile_item(
+                    {
+                        "profile_id": profile_ids[index]
+                        if index < len(profile_ids)
+                        else None,
+                        "profile_name": profile_names[index]
+                        if index < len(profile_names)
+                        else None,
+                    },
+                    index + 1,
+                )
+            )
+
+    raw_primary = raw.get("primary_profile")
+    if isinstance(raw_primary, dict):
+        primary = profile_item(raw_primary, 1)
+    elif candidates:
+        primary = candidates[0]
+    else:
+        primary = profile_item(
+            {
+                "profile_id": raw.get("primary_profile_id"),
+                "profile_name": raw.get("primary_profile_name"),
+            },
+            1,
+        )
+
+    raw_associated = raw.get("associated_profiles")
+    if isinstance(raw_associated, list):
+        associated = [
+            profile_item(item, rank)
+            for rank, item in enumerate(raw_associated, start=2)
+            if isinstance(item, dict)
+        ]
+    else:
+        associated = candidates[1:]
+
+    selection_metrics = {
+        key: float(value)
+        for key, value in (raw.get("selection_metrics") or {}).items()
+        if isinstance(value, (int, float))
+    }
+    return {
+        "enforcement": bool(getattr(row, "l3_consolidation_enforced", False)),
+        "event_id": str(event_id),
+        "rule_version": str(rule_version),
+        "lane": raw.get("lane"),
+        "timeframe": raw.get("timeframe"),
+        "candle_open": raw.get("candle_open"),
+        "primary_profile": primary,
+        "candidate_count": int(raw.get("candidate_count") or len(candidates) or 1),
+        "associated_count": int(
+            raw.get("associated_profile_count")
+            if raw.get("associated_profile_count") is not None
+            else len(associated)
+        ),
+        "candidates": candidates or [primary],
+        "associated_profiles": associated,
+        "selection_rule": list(raw.get("selection_rule") or []),
+        "selection_metrics": selection_metrics,
+    }
+
+
 def _to_read(
     row: ShadowTrade, *, current_price: Optional[float] = None, measurement: Any = None
 ) -> ShadowTradeRead:
     measurement_ready = measurement is not None and measurement.status == "READY"
+    consolidation = _consolidation_payload(row)
     return ShadowTradeRead(
         id=row.id,
         symbol=row.symbol,
@@ -232,6 +340,7 @@ def _to_read(
         entry_timestamp=row.entry_timestamp,
         profile_id=row.profile_id,
         profile_name=row.profile_name,
+        consolidation=consolidation,
         btc_price_at_entry=float(row.btc_price_at_entry)
         if row.btc_price_at_entry is not None else None,
         btc_change_1h_pct=float(row.btc_change_1h_pct)
@@ -271,6 +380,7 @@ def _to_detail(
             exit_metrics = dict(row.features_snapshot_exit)
 
     measurement_ready = measurement is not None and measurement.status == "READY"
+    consolidation = _consolidation_payload(row)
     return ShadowTradeDetail(
         id=row.id,
         symbol=row.symbol,
@@ -369,6 +479,7 @@ def _to_detail(
         ml_model_id=row.ml_model_id if hasattr(row, "ml_model_id") else None,
         final_priority_score=float(row.final_priority_score)
         if hasattr(row, "final_priority_score") and row.final_priority_score is not None else None,
+        consolidation=consolidation,
     )
 
 

@@ -762,6 +762,62 @@
           ]
         }
       ]
+    },
+    {
+      "id": "l3-rejected-single-profile-consolidation",
+      "description": "Diagnostic L3 rejections are globally consolidated per market event with one active owner, deterministic primary-profile ranking and immutable associated-profile evidence",
+      "files": [
+        {
+          "path": "backend/app/services/l3_rejected_trade_consolidation.py",
+          "contains_all": [
+            "SAME_SYMBOL_LOWER_PRIORITY",
+            "ACTIVE_REJECTED_SHADOW_ALREADY_EXISTS",
+            "CONCURRENT_REJECTED_SHADOW_CREATED",
+            "REJECTED_CAPTURE_RATE_LIMIT",
+            "associated_profiles"
+          ]
+        },
+        {
+          "path": "backend/app/tasks/pipeline_scan.py",
+          "contains_all": [
+            "l3_rejected_consolidation_candidates",
+            "rejected_candidate_from_decision",
+            "consolidate_l3_rejected_candidates"
+          ]
+        },
+        {
+          "path": "backend/alembic/versions/205_l3_rejected_profile_consolidation.py",
+          "contains_all": [
+            "ux_shadow_l3_rejected_consolidated_active",
+            "source = 'L3_REJECTED'",
+            "l3_consolidation_enforced = TRUE"
+          ]
+        },
+        {
+          "path": "backend/tests/test_l3_rejected_trade_consolidation.py",
+          "contains_all": [
+            "test_multiple_rejected_profiles_create_one_owner_and_associations",
+            "test_legacy_active_rejected_blocks_new_owner_without_mutation",
+            "test_concurrent_workers_create_only_one_rejected_owner",
+            "test_rejected_flag_round_trips_through_persisted_spot_config"
+          ]
+        },
+        {
+          "path": "frontend/app/dashboard/shadow-portfolio/page.tsx",
+          "contains_all": [
+            "associated_count",
+            "associados",
+            "consolidationTooltip"
+          ]
+        },
+        {
+          "path": "frontend/app/settings/strategies/page.tsx",
+          "contains_all": [
+            "Consolidar Shadows aprovados por ativo",
+            "Consolidar Shadows rejeitados por ativo"
+          ]
+        }
+      ]
     }
   ]
 }
