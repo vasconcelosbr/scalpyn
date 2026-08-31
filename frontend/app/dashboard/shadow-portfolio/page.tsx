@@ -58,6 +58,7 @@ interface ShadowConsolidationProfile {
 
 interface ShadowConsolidation {
   enforcement: boolean;
+  projection: "PERSISTED" | "LEGACY_ACTIVE_READ";
   event_id: string;
   rule_version: string;
   lane: string | null;
@@ -2311,8 +2312,10 @@ function buildBaseQuery(
   if (filter.symbol.trim()) params.set("symbol", filter.symbol.trim());
   if (filter.minDate) params.set("min_date", filter.minDate);
   if (filter.maxDate) params.set("max_date", filter.maxDate);
-  // When profile_id is set, it is the authoritative filter across all sources.
-  if (!profileId && source) params.set("source", source);
+  // A aba continua sendo a autoridade da lane mesmo quando um profile é
+  // selecionado. Isso permite ao backend localizar o profile também entre os
+  // associados de uma consolidação sem misturar fontes.
+  if (source) params.set("source", source);
   if (profileId) params.set("profile_id", profileId);
   params.set("page", String(overrides.page ?? filter.page));
   params.set("page_size", String(overrides.page_size ?? filter.pageSize));
@@ -2324,8 +2327,7 @@ function buildSummaryQuery(filter: FilterState, source?: SourceTab, profileId?: 
   if (filter.symbol.trim()) params.set("symbol", filter.symbol.trim());
   if (filter.minDate) params.set("min_date", filter.minDate);
   if (filter.maxDate) params.set("max_date", filter.maxDate);
-  // See buildBaseQuery: profile attribution spans more than one shadow source.
-  if (!profileId && source) params.set("source", source);
+  if (source) params.set("source", source);
   if (profileId) params.set("profile_id", profileId);
   return params.toString();
 }
@@ -2437,35 +2439,15 @@ export default function ShadowPortfolioPage() {
     }
 
     if (filter.status === "OPEN") {
-      // 2 fetches paralelos (PENDING + RUNNING) e merge — backend não
-      // suporta `IN (...)` em status.
-      const qsPending = buildBaseQuery(filter, {
-        status: "PENDING",
+      // OPEN é resolvido no backend antes da paginação. Isso é essencial para
+      // que PENDING/RUNNING do mesmo ativo não reapareçam como duas linhas.
+      const qsOpen = buildBaseQuery(filter, {
+        status: "OPEN",
         page: 1,
         page_size: MAX_LOCAL_FETCH,
       }, sourceTab, selectedProfileId);
-      const qsRunning = buildBaseQuery(filter, {
-        status: "RUNNING",
-        page: 1,
-        page_size: MAX_LOCAL_FETCH,
-      }, sourceTab, selectedProfileId);
-      Promise.all([
-        apiGet<ShadowTradeListResponse>(`/api/shadow-trades?${qsPending}`),
-        apiGet<ShadowTradeListResponse>(`/api/shadow-trades?${qsRunning}`),
-      ])
-        .then(([pending, running]) => {
-          const merged = [...pending.items, ...running.items].sort((a, b) => {
-            const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
-            const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
-            return tb - ta;
-          });
-          setList({
-            items: merged,
-            total: pending.total + running.total,
-            page: 1,
-            page_size: merged.length,
-          });
-        })
+      apiGet<ShadowTradeListResponse>(`/api/shadow-trades?${qsOpen}`)
+        .then(setList)
         .catch(handleError)
         .finally(() => setLoadingList(false));
       return;
@@ -2567,7 +2549,7 @@ export default function ShadowPortfolioPage() {
   const fetchedAtCap =
     isClientPaginated && list
       ? (filter.status === "OPEN"
-          ? list.total >= MAX_LOCAL_FETCH * 2
+          ? list.total >= MAX_LOCAL_FETCH
           : (list.total ?? 0) >= MAX_LOCAL_FETCH)
       : false;
 

@@ -18,14 +18,30 @@ user`` — multi-tenancy é hard-required, igual aos outros routers
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, case, desc, func, or_, select, text, true
+from sqlalchemy import (
+    Float,
+    String,
+    and_,
+    case,
+    cast,
+    desc,
+    exists,
+    func,
+    or_,
+    select,
+    text,
+    true,
+    union_all,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from ..config import settings
 from ..database import get_db
@@ -33,6 +49,7 @@ from ..models.backoffice import DecisionLog
 from ..models.shadow_trade import ShadowTrade
 from ..models.shadow_trade_measurement import ShadowTradeMeasurementRevision
 from ..services.exit_metrics import flatten_entry_snapshot
+from ..services.l3_rejected_trade_consolidation import SELECTION_RULE
 from ..services.shadow_trade_measurement_service import latest_measurement_by_trade_ids
 from ..services.watchlist_performance_ranking_service import (
     RankingConfigError,
@@ -59,7 +76,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/shadow-trades", tags=["Shadow Trades"])
 
-_VALID_STATUSES = {"PENDING", "RUNNING", "COMPLETED", "ERROR"}
+_ACTIVE_STATUSES = ("PENDING", "RUNNING")
+_VALID_STATUSES = {"PENDING", "RUNNING", "OPEN", "COMPLETED", "ERROR"}
 # Filtro de origem da promoção. ``None`` = todos (default).
 _VALID_SOURCES = {"L3", "L3_REJECTED", "L3_SIMULATED", "L1_SPECTRUM", "L3_LAB"}
 _DEFAULT_PAGE_SIZE = 50
@@ -149,7 +167,9 @@ def _build_filters(
     sanitized_source = _sanitize_source(source)
     start_dt = _parse_iso_datetime(min_date)
     end_dt = _parse_iso_datetime(max_date, is_end=True)
-    if sanitized_status:
+    if sanitized_status == "OPEN":
+        conditions.append(ShadowTrade.status.in_(_ACTIVE_STATUSES))
+    elif sanitized_status:
         conditions.append(ShadowTrade.status == sanitized_status)
     if sanitized_symbol:
         conditions.append(ShadowTrade.symbol == sanitized_symbol)
@@ -296,6 +316,7 @@ def _consolidation_payload(row: ShadowTrade) -> Optional[Dict[str, Any]]:
     }
     return {
         "enforcement": bool(getattr(row, "l3_consolidation_enforced", False)),
+        "projection": "PERSISTED",
         "event_id": str(event_id),
         "rule_version": str(rule_version),
         "lane": raw.get("lane"),
@@ -315,11 +336,366 @@ def _consolidation_payload(row: ShadowTrade) -> Optional[Dict[str, Any]]:
     }
 
 
+def _decision_score(decision: Optional[DecisionLog], row: ShadowTrade) -> float:
+    value = getattr(decision, "score", None) if decision is not None else None
+    if value is None:
+        value = getattr(row, "final_priority_score", None)
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _decision_component(decision: Optional[DecisionLog], key: str) -> float:
+    metrics = getattr(decision, "metrics", None) if decision is not None else None
+    components = (metrics or {}).get("score_components") if isinstance(metrics, dict) else None
+    value = (components or {}).get(key) if isinstance(components, dict) else None
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _legacy_active_rank_key(
+    row: ShadowTrade, decisions: Dict[int, DecisionLog]
+) -> tuple[Any, ...]:
+    decision = decisions.get(row.decision_id) if row.decision_id is not None else None
+    persisted = _consolidation_payload(row)
+    normalized_margin = (
+        float((persisted or {}).get("selection_metrics", {}).get("normalized_score_margin") or 0.0)
+    )
+    return (
+        -int(bool(getattr(row, "l3_consolidation_enforced", False))),
+        -normalized_margin,
+        -_decision_score(decision, row),
+        -_decision_component(decision, "market_structure_score"),
+        -_decision_component(decision, "momentum_score"),
+        -_decision_component(decision, "liquidity_score"),
+        -_decision_component(decision, "signal_score"),
+        (row.profile_name or "").casefold(),
+        str(row.profile_id or ""),
+        str(row.id),
+    )
+
+
+def _legacy_profile_item(
+    row: ShadowTrade,
+    decision: Optional[DecisionLog],
+    rank: int,
+) -> Dict[str, Any]:
+    metrics = (
+        decision.metrics
+        if decision is not None and isinstance(decision.metrics, dict)
+        else {}
+    )
+    source = metrics.get("source")
+    rejection_stage = (
+        "PROFILE_FILTER" if source == "l3_filter_rejected" else "ENTRY_TRIGGER"
+        if source
+        else None
+    )
+    reasons: Any = getattr(row, "reason_codes", None)
+    if not reasons and decision is not None:
+        reasons = decision.reasons
+    return {
+        "rank": rank,
+        "profile_id": str(row.profile_id) if row.profile_id else None,
+        "profile_name": row.profile_name,
+        "profile_version": row.profile_version.isoformat()
+        if isinstance(row.profile_version, datetime)
+        else None,
+        "profile_version_id": str(row.profile_version_id)
+        if row.profile_version_id
+        else None,
+        "watchlist_id": str(row.watchlist_id) if row.watchlist_id else None,
+        "watchlist_name": row.watchlist_name,
+        "rejection_stage": rejection_stage,
+        "rejection_reasons": reasons,
+        "selection_metrics": {
+            "decision_score": _decision_score(decision, row),
+            "market_structure_score": _decision_component(
+                decision, "market_structure_score"
+            ),
+            "momentum_score": _decision_component(decision, "momentum_score"),
+            "liquidity_score": _decision_component(decision, "liquidity_score"),
+            "signal_score": _decision_component(decision, "signal_score"),
+        },
+    }
+
+
+def _active_read_projection(
+    primary: ShadowTrade,
+    members: List[ShadowTrade],
+    decisions: Dict[int, DecisionLog],
+) -> Dict[str, Any]:
+    """Build an auditable, non-persisted consolidation for active legacy rows."""
+    ranked = sorted(members, key=lambda row: _legacy_active_rank_key(row, decisions))
+    if ranked and ranked[0].id != primary.id:
+        ranked = [primary, *[row for row in ranked if row.id != primary.id]]
+
+    persisted = _consolidation_payload(primary)
+    candidates: List[Dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def append_candidate(item: Dict[str, Any]) -> None:
+        identity = (
+            str(item.get("profile_id") or ""),
+            str(item.get("profile_name") or "").casefold(),
+        )
+        if identity in seen:
+            return
+        seen.add(identity)
+        candidates.append({**item, "rank": len(candidates) + 1})
+
+    if persisted:
+        for item in persisted.get("candidates") or []:
+            if isinstance(item, dict):
+                append_candidate(item)
+    for row in ranked:
+        decision = decisions.get(row.decision_id) if row.decision_id is not None else None
+        append_candidate(_legacy_profile_item(row, decision, len(candidates) + 1))
+
+    if not candidates:
+        candidates.append(_legacy_profile_item(primary, None, 1))
+
+    raw_identity = "|".join(
+        (str(primary.user_id), primary.symbol, primary.direction or "SPOT")
+    )
+    return {
+        "enforcement": bool(primary.l3_consolidation_enforced),
+        "projection": (
+            "PERSISTED"
+            if persisted and len(members) == 1
+            else "LEGACY_ACTIVE_READ"
+        ),
+        "event_id": (persisted or {}).get("event_id")
+        or f"legacy-active-{hashlib.sha256(raw_identity.encode('utf-8')).hexdigest()}",
+        "rule_version": (persisted or {}).get("rule_version")
+        or "single_profile_per_symbol_v1",
+        "lane": "L3_REJECTED",
+        "timeframe": (persisted or {}).get("timeframe") or primary.timeframe,
+        "candle_open": (persisted or {}).get("candle_open"),
+        "primary_profile": candidates[0],
+        "candidate_count": len(candidates),
+        "associated_count": max(len(candidates) - 1, 0),
+        "candidates": candidates,
+        "associated_profiles": candidates[1:],
+        "selection_rule": list(SELECTION_RULE),
+        "selection_metrics": candidates[0].get("selection_metrics") or {},
+    }
+
+
+def _json_float(column: Any, *path: str) -> Any:
+    value = column
+    for part in path:
+        value = value[part]
+    return cast(value.astext, Float)
+
+
+def _rejected_active_order() -> list[Any]:
+    return [
+        desc(ShadowTrade.l3_consolidation_enforced),
+        desc(
+            func.coalesce(
+                _json_float(
+                    ShadowTrade.config_snapshot,
+                    "consolidation",
+                    "selection_metrics",
+                    "normalized_score_margin",
+                ),
+                0.0,
+            )
+        ),
+        desc(
+            func.coalesce(
+                DecisionLog.score, ShadowTrade.final_priority_score, 0.0
+            )
+        ),
+        desc(
+            func.coalesce(
+                _json_float(
+                    DecisionLog.metrics,
+                    "score_components",
+                    "market_structure_score",
+                ),
+                0.0,
+            )
+        ),
+        desc(
+            func.coalesce(
+                _json_float(DecisionLog.metrics, "score_components", "momentum_score"),
+                0.0,
+            )
+        ),
+        desc(
+            func.coalesce(
+                _json_float(DecisionLog.metrics, "score_components", "liquidity_score"),
+                0.0,
+            )
+        ),
+        desc(
+            func.coalesce(
+                _json_float(DecisionLog.metrics, "score_components", "signal_score"),
+                0.0,
+            )
+        ),
+        func.lower(func.coalesce(ShadowTrade.profile_name, "")),
+        cast(ShadowTrade.profile_id, String),
+        cast(ShadowTrade.id, String),
+    ]
+
+
+def _rejected_projected_ids_query(
+    *,
+    user_id: UUID,
+    status: Optional[str],
+    symbol: Optional[str],
+    min_date: Optional[str],
+    max_date: Optional[str],
+    profile_id: Optional[UUID],
+    profile_version: Optional[datetime],
+) -> Any:
+    sanitized_status = _sanitize_status(status)
+    base = _build_filters(
+        user_id=user_id,
+        status=None,
+        symbol=symbol,
+        min_date=min_date,
+        max_date=max_date,
+        source="L3_REJECTED",
+        profile_id=None,
+        profile_version=None,
+    )
+    if sanitized_status in {"PENDING", "RUNNING"}:
+        active_status = ShadowTrade.status == sanitized_status
+        include_terminal = False
+    else:
+        active_status = ShadowTrade.status.in_(_ACTIVE_STATUSES)
+        include_terminal = sanitized_status not in {"OPEN"}
+
+    member_filter = None
+    if profile_id is not None or profile_version is not None:
+        member = aliased(ShadowTrade)
+        member_conditions = [
+            member.user_id == ShadowTrade.user_id,
+            member.source == "L3_REJECTED",
+            member.status.in_(_ACTIVE_STATUSES),
+            member.symbol == ShadowTrade.symbol,
+            func.coalesce(member.direction, "SPOT")
+            == func.coalesce(ShadowTrade.direction, "SPOT"),
+        ]
+        if profile_id is not None:
+            member_conditions.append(member.profile_id == profile_id)
+        if profile_version is not None:
+            member_conditions.append(member.profile_version == profile_version)
+        member_filter = exists(select(1).where(and_(*member_conditions)))
+
+    active_conditions = [*base, active_status]
+    if member_filter is not None:
+        active_conditions.append(member_filter)
+    direction_group = func.coalesce(ShadowTrade.direction, "SPOT")
+    active_ranked = (
+        select(ShadowTrade.id.label("id"))
+        .outerjoin(DecisionLog, DecisionLog.id == ShadowTrade.decision_id)
+        .where(and_(*active_conditions))
+        .distinct(
+            ShadowTrade.user_id,
+            ShadowTrade.symbol,
+            direction_group,
+        )
+        .order_by(
+            ShadowTrade.user_id,
+            ShadowTrade.symbol,
+            direction_group,
+            *_rejected_active_order(),
+        )
+        .subquery("rejected_active_ranked")
+    )
+    active_ids = select(active_ranked.c.id)
+    if not include_terminal:
+        return active_ids
+
+    terminal_filters = _build_filters(
+        user_id=user_id,
+        status=status,
+        symbol=symbol,
+        min_date=min_date,
+        max_date=max_date,
+        source="L3_REJECTED",
+        profile_id=profile_id,
+        profile_version=profile_version,
+    )
+    terminal_filters.append(~ShadowTrade.status.in_(_ACTIVE_STATUSES))
+    terminal_ids = select(ShadowTrade.id.label("id")).where(and_(*terminal_filters))
+    return union_all(terminal_ids, active_ids)
+
+
+async def _active_projection_overrides(
+    db: AsyncSession, rows: List[ShadowTrade]
+) -> Dict[UUID, Dict[str, Any]]:
+    active = [
+        row
+        for row in rows
+        if row.source == "L3_REJECTED" and row.status in _ACTIVE_STATUSES
+    ]
+    if not active:
+        return {}
+    group_conditions = [
+        and_(
+            ShadowTrade.user_id == row.user_id,
+            ShadowTrade.symbol == row.symbol,
+            func.coalesce(ShadowTrade.direction, "SPOT")
+            == (row.direction or "SPOT"),
+        )
+        for row in active
+    ]
+    member_q = select(ShadowTrade).where(
+        ShadowTrade.source == "L3_REJECTED",
+        ShadowTrade.status.in_(_ACTIVE_STATUSES),
+        or_(*group_conditions),
+    )
+    members = (await db.execute(member_q)).scalars().all()
+    decision_ids = sorted(
+        {row.decision_id for row in members if row.decision_id is not None}
+    )
+    decisions: Dict[int, DecisionLog] = {}
+    if decision_ids:
+        decision_rows = (
+            await db.execute(select(DecisionLog).where(DecisionLog.id.in_(decision_ids)))
+        ).scalars().all()
+        decisions = {row.id: row for row in decision_rows}
+
+    grouped: Dict[tuple[str, str, str], List[ShadowTrade]] = {}
+    for member in members:
+        key = (str(member.user_id), member.symbol, member.direction or "SPOT")
+        grouped.setdefault(key, []).append(member)
+
+    overrides: Dict[UUID, Dict[str, Any]] = {}
+    for requested_row in active:
+        key = (
+            str(requested_row.user_id),
+            requested_row.symbol,
+            requested_row.direction or "SPOT",
+        )
+        group = grouped.get(key, [requested_row])
+        primary = sorted(
+            group, key=lambda row: _legacy_active_rank_key(row, decisions)
+        )[0]
+        overrides[requested_row.id] = _active_read_projection(
+            primary, group, decisions
+        )
+    return overrides
+
+
 def _to_read(
-    row: ShadowTrade, *, current_price: Optional[float] = None, measurement: Any = None
+    row: ShadowTrade,
+    *,
+    current_price: Optional[float] = None,
+    measurement: Any = None,
+    consolidation_override: Optional[Dict[str, Any]] = None,
 ) -> ShadowTradeRead:
     measurement_ready = measurement is not None and measurement.status == "READY"
-    consolidation = _consolidation_payload(row)
+    consolidation = consolidation_override or _consolidation_payload(row)
     return ShadowTradeRead(
         id=row.id,
         symbol=row.symbol,
@@ -360,7 +736,11 @@ def _to_read(
 
 
 def _to_detail(
-    row: ShadowTrade, *, decision: Optional[DecisionLog] = None, measurement: Any = None
+    row: ShadowTrade,
+    *,
+    decision: Optional[DecisionLog] = None,
+    measurement: Any = None,
+    consolidation_override: Optional[Dict[str, Any]] = None,
 ) -> ShadowTradeDetail:
     # Task #316 — pair entry/exit para o painel lado-a-lado.
     # ``features_snapshot`` já é flat (gotcha #290). Fallback para o
@@ -380,7 +760,7 @@ def _to_detail(
             exit_metrics = dict(row.features_snapshot_exit)
 
     measurement_ready = measurement is not None and measurement.status == "READY"
-    consolidation = _consolidation_payload(row)
+    consolidation = consolidation_override or _consolidation_payload(row)
     return ShadowTradeDetail(
         id=row.id,
         symbol=row.symbol,
@@ -499,31 +879,57 @@ async def list_shadow_trades(
 ) -> ShadowTradeListResponse:
     """Lista paginada de shadow trades do usuário autenticado."""
     try:
-        filters = _build_filters(
-            user_id=user_id,
-            status=status,
-            symbol=symbol,
-            min_date=min_date,
-            max_date=max_date,
-            source=source,
-            profile_id=profile_id,
-            profile_version=profile_version,
-        )
-        total_q = select(func.count(ShadowTrade.id)).where(and_(*filters))
-        total = int((await db.execute(total_q)).scalar_one() or 0)
-
         offset = (page - 1) * page_size
-        page_q = (
-            select(ShadowTrade)
-            .where(and_(*filters))
-            .order_by(desc(ShadowTrade.created_at), desc(ShadowTrade.id))
-            .offset(offset)
-            .limit(page_size)
+        sanitized_source = _sanitize_source(source)
+        sanitized_status = _sanitize_status(status)
+        project_rejected_active = sanitized_source == "L3_REJECTED" and (
+            sanitized_status is None
+            or sanitized_status in {"OPEN", "PENDING", "RUNNING"}
         )
+        if project_rejected_active:
+            projected_ids = _rejected_projected_ids_query(
+                user_id=user_id,
+                status=status,
+                symbol=symbol,
+                min_date=min_date,
+                max_date=max_date,
+                profile_id=profile_id,
+                profile_version=profile_version,
+            ).subquery("rejected_projected_ids")
+            total_q = select(func.count()).select_from(projected_ids)
+            total = int((await db.execute(total_q)).scalar_one() or 0)
+            page_q = (
+                select(ShadowTrade)
+                .join(projected_ids, projected_ids.c.id == ShadowTrade.id)
+                .order_by(desc(ShadowTrade.created_at), desc(ShadowTrade.id))
+                .offset(offset)
+                .limit(page_size)
+            )
+        else:
+            filters = _build_filters(
+                user_id=user_id,
+                status=status,
+                symbol=symbol,
+                min_date=min_date,
+                max_date=max_date,
+                source=source,
+                profile_id=profile_id,
+                profile_version=profile_version,
+            )
+            total_q = select(func.count(ShadowTrade.id)).where(and_(*filters))
+            total = int((await db.execute(total_q)).scalar_one() or 0)
+            page_q = (
+                select(ShadowTrade)
+                .where(and_(*filters))
+                .order_by(desc(ShadowTrade.created_at), desc(ShadowTrade.id))
+                .offset(offset)
+                .limit(page_size)
+            )
         rows = (await db.execute(page_q)).scalars().all()
 
         prices = await _fetch_latest_prices(db, [r.symbol for r in rows])
         measurements = await latest_measurement_by_trade_ids(db, [r.id for r in rows])
+        consolidation_overrides = await _active_projection_overrides(db, rows)
 
         return ShadowTradeListResponse(
             items=[
@@ -531,6 +937,7 @@ async def list_shadow_trades(
                     r,
                     current_price=prices.get(r.symbol),
                     measurement=measurements.get(r.id),
+                    consolidation_override=consolidation_overrides.get(r.id),
                 )
                 for r in rows
             ],
@@ -613,6 +1020,46 @@ async def shadow_trades_summary(
 
         row = (await db.execute(stats_q)).one()
         total = int(row.total or 0)
+        pending = int(row.pending or 0)
+        if _sanitize_source(source) == "L3_REJECTED":
+            active_filters = [
+                *filters,
+                ShadowTrade.status.in_(_ACTIVE_STATUSES),
+            ]
+            active_raw = int(
+                (
+                    await db.execute(
+                        select(func.count(ShadowTrade.id)).where(
+                            and_(*active_filters)
+                        )
+                    )
+                ).scalar_one()
+                or 0
+            )
+            active_groups = (
+                select(
+                    ShadowTrade.user_id,
+                    ShadowTrade.symbol,
+                    func.coalesce(ShadowTrade.direction, "SPOT").label("direction"),
+                )
+                .where(and_(*active_filters))
+                .group_by(
+                    ShadowTrade.user_id,
+                    ShadowTrade.symbol,
+                    func.coalesce(ShadowTrade.direction, "SPOT"),
+                )
+                .subquery("rejected_active_summary_groups")
+            )
+            projected_pending = int(
+                (
+                    await db.execute(
+                        select(func.count()).select_from(active_groups)
+                    )
+                ).scalar_one()
+                or 0
+            )
+            total = total - active_raw + projected_pending
+            pending = projected_pending
         completed = int(row.completed or 0)
         win = int(row.win or 0)
         loss = int(row.loss or 0)
@@ -620,7 +1067,7 @@ async def shadow_trades_summary(
 
         return ShadowTradeSummary(
             total=total,
-            pending=int(row.pending or 0),
+            pending=pending,
             completed=completed,
             win=win,
             loss=loss,
@@ -1362,7 +1809,15 @@ async def get_shadow_trade(
             )
             decision = (await db.execute(dq)).scalar_one_or_none()
         measurement = (await latest_measurement_by_trade_ids(db, [row.id])).get(row.id)
-        return _to_detail(row, decision=decision, measurement=measurement)
+        consolidation_override = (
+            await _active_projection_overrides(db, [row])
+        ).get(row.id)
+        return _to_detail(
+            row,
+            decision=decision,
+            measurement=measurement,
+            consolidation_override=consolidation_override,
+        )
     except HTTPException:
         raise
     except Exception as exc:

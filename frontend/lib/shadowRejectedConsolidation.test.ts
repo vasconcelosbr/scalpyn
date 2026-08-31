@@ -16,6 +16,17 @@ test("rejected list renders the primary profile and associated count", () => {
 });
 
 
+test("active rejected rows are consolidated by the backend before pagination", () => {
+  const page = readFileSync(
+    resolve(process.cwd(), "app/dashboard/shadow-portfolio/page.tsx"),
+    "utf8",
+  );
+  assert.match(page, /status: "OPEN"/);
+  assert.doesNotMatch(page, /Promise\.all\(\[\s*apiGet<ShadowTradeListResponse>/);
+  assert.match(page, /if \(source\) params\.set\("source", source\)/);
+});
+
+
 test("detail surface lists every persisted candidate and reason", () => {
   const detail = readFileSync(
     resolve(process.cwd(), "components/shadow-portfolio/ShadowTradeDetailScreen.tsx"),

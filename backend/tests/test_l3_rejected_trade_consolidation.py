@@ -9,8 +9,14 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.dialects import postgresql
 
-from app.api.shadow_trades import _consolidation_payload
+from app.api.shadow_trades import (
+    _active_read_projection,
+    _consolidation_payload,
+    _rejected_projected_ids_query,
+    _sanitize_status,
+)
 from app.models.backoffice import DecisionLog
 from app.models.config_profile import ConfigProfile
 from app.models.shadow_trade import ShadowTrade
@@ -390,6 +396,121 @@ def test_api_projects_consolidation_and_keeps_legacy_null():
         config_snapshot={"l3_decision": "BLOCK"},
     )
     assert _consolidation_payload(legacy) is None
+
+
+def _legacy_active_row(*, profile_name: str, score: float, profile_id=None):
+    row_id = uuid4()
+    decision_id = abs(hash((profile_name, str(row_id))))
+    row = SimpleNamespace(
+        id=row_id,
+        decision_id=decision_id,
+        user_id=uuid4(),
+        symbol="LIT_USDT",
+        direction="SPOT",
+        source="L3_REJECTED",
+        status="RUNNING",
+        l3_consolidation_enforced=False,
+        config_snapshot={},
+        final_priority_score=None,
+        profile_id=profile_id or uuid4(),
+        profile_name=profile_name,
+        profile_version=NOW,
+        profile_version_id=uuid4(),
+        watchlist_id=uuid4(),
+        watchlist_name=f"WL_{profile_name}",
+        reason_codes=["BLOCK"],
+        timeframe="5m",
+    )
+    decision = SimpleNamespace(
+        id=decision_id,
+        score=score,
+        reasons={"profile": profile_name},
+        metrics={
+            "source": "l3_filter_rejected",
+            "score_components": {
+                "market_structure_score": score,
+                "momentum_score": score - 1,
+                "liquidity_score": score - 2,
+                "signal_score": score - 3,
+            },
+        },
+    )
+    return row, decision
+
+
+def test_active_legacy_read_projection_exposes_one_primary_and_associations():
+    low, low_decision = _legacy_active_row(profile_name="LOW", score=35)
+    winner, winner_decision = _legacy_active_row(profile_name="WINNER", score=49)
+    middle, middle_decision = _legacy_active_row(profile_name="MIDDLE", score=42)
+    for row in (low, winner, middle):
+        row.user_id = winner.user_id
+    decisions = {
+        low_decision.id: low_decision,
+        winner_decision.id: winner_decision,
+        middle_decision.id: middle_decision,
+    }
+
+    projection = _active_read_projection(
+        winner, [low, winner, middle], decisions
+    )
+
+    assert projection["projection"] == "LEGACY_ACTIVE_READ"
+    assert projection["primary_profile"]["profile_name"] == "WINNER"
+    assert projection["candidate_count"] == 3
+    assert projection["associated_count"] == 2
+    assert [row["profile_name"] for row in projection["candidates"]] == [
+        "WINNER",
+        "MIDDLE",
+        "LOW",
+    ]
+
+
+def test_active_legacy_projection_deduplicates_the_same_profile_identity():
+    profile_id = uuid4()
+    winner, winner_decision = _legacy_active_row(
+        profile_name="SAME", score=49, profile_id=profile_id
+    )
+    duplicate, duplicate_decision = _legacy_active_row(
+        profile_name="SAME", score=40, profile_id=profile_id
+    )
+    duplicate.user_id = winner.user_id
+    projection = _active_read_projection(
+        winner,
+        [winner, duplicate],
+        {
+            winner_decision.id: winner_decision,
+            duplicate_decision.id: duplicate_decision,
+        },
+    )
+    assert projection["candidate_count"] == 1
+    assert projection["associated_count"] == 0
+
+
+def test_rejected_active_projection_query_groups_before_profile_filter():
+    profile_id = uuid4()
+    query = _rejected_projected_ids_query(
+        user_id=uuid4(),
+        status="OPEN",
+        symbol=None,
+        min_date=None,
+        max_date=None,
+        profile_id=profile_id,
+        profile_version=None,
+    )
+    sql = str(
+        query.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+    assert "DISTINCT" in sql
+    assert "EXISTS" in sql
+    assert "L3_REJECTED" in sql
+    assert "shadow_trades_1.profile_id" in sql
+
+
+def test_open_status_is_a_canonical_active_status_filter():
+    assert _sanitize_status("open") == "OPEN"
 
 
 def test_migration_is_scoped_to_new_rejected_canonical_rows():

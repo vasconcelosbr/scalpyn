@@ -30,6 +30,7 @@ class ShadowConsolidationProfile(BaseModel):
 
 class ShadowConsolidation(BaseModel):
     enforcement: bool
+    projection: str = "PERSISTED"
     event_id: str
     rule_version: str
     lane: Optional[str] = None
