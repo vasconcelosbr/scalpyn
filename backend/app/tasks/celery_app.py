@@ -17,9 +17,12 @@ Queue topology (Task #216, operator spec parts 4-6):
                           starve the 5m chain.
     structural_compute  — Dedicated compute worker for heavy TA + scoring:
                           compute_30m, compute_structural_5m, compute_scores,
-                          ohlcv_backfill. Isolated so a slow indicator pass
+                          Isolated so a slow indicator pass
                           cannot delay lighter structural ops (pipeline_scan,
                           reconciliation, alerts) and vice-versa.
+    research_ohlcv      — Exchange-native 15m/1h collection, historical
+                          backfill, retention, and readiness snapshots only.
+                          No indicator/score/signal/trading task is routed here.
     execution           — Latency-sensitive trading critical path:
                           evaluate → execute_buy_cycle, plus anti_liq_monitor.
                           Workers for this queue MUST be deployed isolated
@@ -66,15 +69,17 @@ QUEUE_STRUCTURAL = "structural"
 QUEUE_STRUCTURAL_COMPUTE = "structural_compute"
 QUEUE_EXECUTION = "execution"
 QUEUE_AI_ORCHESTRATION = "ai_orchestration"
+QUEUE_RESEARCH_OHLCV = "research_ohlcv"
 
 ALL_QUEUES = (
     QUEUE_MICROSTRUCTURE, QUEUE_STRUCTURAL, QUEUE_STRUCTURAL_COMPUTE,
-    QUEUE_EXECUTION, QUEUE_AI_ORCHESTRATION,
+    QUEUE_EXECUTION, QUEUE_AI_ORCHESTRATION, QUEUE_RESEARCH_OHLCV,
 )
 
 _ALL_TASK_MODULES = (
         "app.tasks.collect_market_data",
         "app.tasks.collect_structural_30m",
+        "app.tasks.collect_research_ohlcv",
         "app.tasks.compute_indicators",
         "app.tasks.compute_scores",
         "app.tasks.evaluate_signals",
@@ -119,6 +124,11 @@ def _configured_task_modules() -> tuple[str, ...]:
         return (
             "app.tasks.ai_orchestration",
             "app.tasks.governed_cache_reconciliation",
+        )
+    if queues == (QUEUE_RESEARCH_OHLCV,):
+        return (
+            "app.tasks.collect_research_ohlcv",
+            "app.tasks.ohlcv_backfill",
         )
     return _ALL_TASK_MODULES
 
@@ -170,9 +180,15 @@ TASK_ROUTES = {
     "app.tasks.simulation.get_simulation_stats":         {"queue": QUEUE_STRUCTURAL},
     "app.tasks.robust_alerts.evaluate":                  {"queue": QUEUE_STRUCTURAL},
     "app.tasks.daily_summary.send":                      {"queue": QUEUE_STRUCTURAL},
-    # ohlcv_backfill: heavy 1800s budget → compute worker; status query is
-    # lightweight so it stays on structural to avoid blocking the compute queue.
-    "app.tasks.ohlcv_backfill.backfill":                 {"queue": QUEUE_STRUCTURAL_COMPUTE},
+    # Research OHLCV is physically isolated from the microstructure worker.
+    "app.tasks.collect_research_ohlcv.collect_15m":      {"queue": QUEUE_RESEARCH_OHLCV},
+    "app.tasks.collect_research_ohlcv.collect_1h":       {"queue": QUEUE_RESEARCH_OHLCV},
+    "app.tasks.collect_research_ohlcv.enforce_retention": {"queue": QUEUE_RESEARCH_OHLCV},
+    "app.tasks.collect_research_ohlcv.capture_readiness": {"queue": QUEUE_RESEARCH_OHLCV},
+    # Historical backfill shares only the research queue; status remains a
+    # lightweight structural read.
+    "app.tasks.ohlcv_backfill.backfill":                 {"queue": QUEUE_RESEARCH_OHLCV},
+    "app.tasks.ohlcv_backfill.backfill_research":        {"queue": QUEUE_RESEARCH_OHLCV},
     "app.tasks.ohlcv_backfill.get_status":               {"queue": QUEUE_STRUCTURAL},
 
     # Decision Log Enricher (Module 1)
@@ -317,6 +333,12 @@ _EXECUTION_GUARDS = {
     "rate_limit": "4/m",
     "max_retries": 3,
 }
+_RESEARCH_OHLCV_GUARDS = {
+    "time_limit": 900,
+    "soft_time_limit": 840,
+    "rate_limit": "8/h",
+    "max_retries": 1,
+}
 
 # Task #245 — opt-out from the global ``task_acks_late=True`` for tasks that
 # are (a) driven by beat on a fixed cadence and (b) idempotent across runs.
@@ -372,7 +394,12 @@ TASK_ANNOTATIONS = {
     "app.tasks.robust_alerts.evaluate":                  {"time_limit": 60, "soft_time_limit": 50, "rate_limit": "1/m", "max_retries": 3},
     "app.tasks.daily_summary.send":                      {**_STRUCTURAL_GUARDS, "rate_limit": "1/h"},
     "app.tasks.ohlcv_backfill.backfill":                 {"time_limit": 1800, "soft_time_limit": 1700, "rate_limit": "2/h", "max_retries": 3},
+    "app.tasks.ohlcv_backfill.backfill_research":        {"time_limit": 3600, "soft_time_limit": 3500, "rate_limit": "1/h", "max_retries": 0},
     "app.tasks.ohlcv_backfill.get_status":               {"time_limit": 60, "soft_time_limit": 50, "rate_limit": "6/m", "max_retries": 3},
+    "app.tasks.collect_research_ohlcv.collect_15m":      {**_RESEARCH_OHLCV_GUARDS, "rate_limit": "8/h", **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.collect_research_ohlcv.collect_1h":       {**_RESEARCH_OHLCV_GUARDS, "rate_limit": "2/h", **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.collect_research_ohlcv.enforce_retention": {**_RESEARCH_OHLCV_GUARDS, "rate_limit": "1/h", **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.collect_research_ohlcv.capture_readiness": {**_RESEARCH_OHLCV_GUARDS, "rate_limit": "8/h", **_NO_REQUEUE_ON_WORKER_LOSS},
 
     # Decision Log Enricher (Module 1)
     "app.tasks.decision_log_enricher.enrich":            {**_STRUCTURAL_GUARDS, "rate_limit": "6/m"},
@@ -676,6 +703,29 @@ celery_app.conf.beat_schedule = {
     "collect_structural_30m_candle_close": {
         "task": "app.tasks.collect_structural_30m.run",
         "schedule": crontab(minute="0,30"),
+    },
+    # Research-only native Gate candles. The delay after each UTC boundary
+    # lets Gate mark the just-finished window closed. No compute/score/signal
+    # task is chained from either collector.
+    "collect_research_15m_after_close": {
+        "task": "app.tasks.collect_research_ohlcv.collect_15m",
+        "schedule": crontab(minute="2,17,32,47"),
+        "options": {"queue": QUEUE_RESEARCH_OHLCV},
+    },
+    "collect_research_1h_after_close": {
+        "task": "app.tasks.collect_research_ohlcv.collect_1h",
+        "schedule": crontab(minute=4),
+        "options": {"queue": QUEUE_RESEARCH_OHLCV},
+    },
+    "capture_research_ohlcv_readiness": {
+        "task": "app.tasks.collect_research_ohlcv.capture_readiness",
+        "schedule": crontab(minute="7,22,37,52"),
+        "options": {"queue": QUEUE_RESEARCH_OHLCV},
+    },
+    "enforce_research_ohlcv_retention": {
+        "task": "app.tasks.collect_research_ohlcv.enforce_retention",
+        "schedule": crontab(hour=4, minute=15),
+        "options": {"queue": QUEUE_RESEARCH_OHLCV},
     },
     # Structural coverage health-check — detects per-symbol indicator
     # gaps that the pool-wide ``ingestion_stale`` probe cannot see (root

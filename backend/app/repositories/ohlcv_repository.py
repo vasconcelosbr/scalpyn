@@ -30,7 +30,8 @@ class OHLCVRepository:
             batch_size: Number of records per insert batch
 
         Returns:
-            Total number of records processed
+            Total number of rows actually inserted. Conflicting rows are
+            ignored by the unique OHLCV key and are not counted.
         """
         if not records:
             return 0
@@ -66,8 +67,8 @@ class OHLCVRepository:
                 ON CONFLICT (time, symbol, exchange, timeframe) DO NOTHING
             """)
 
-            await self.session.execute(query, params)
-            total += len(batch)
+            result = await self.session.execute(query, params)
+            total += max(int(result.rowcount or 0), 0)
 
         await self.session.commit()
         return total

@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import os
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -317,3 +319,177 @@ def get_status(
     except Exception as e:
         logger.error(f"[OHLCV_BACKFILL] Status check failed: {e}", exc_info=True)
         return json.dumps({"status": "error", "error": str(e)})
+
+
+async def _median_active_1m_close_lag_seconds(db) -> float | None:
+    from sqlalchemy import text
+
+    result = await db.execute(
+        text(
+            """
+            WITH active AS (
+                SELECT DISTINCT symbol
+                  FROM pool_coins
+                 WHERE market_type = 'spot'
+                   AND is_active IS TRUE
+            ), latest AS (
+                SELECT a.symbol, max(o.time) AS latest_open
+                  FROM active a
+                  LEFT JOIN ohlcv o
+                    ON o.symbol = a.symbol
+                   AND o.exchange = 'gate.io'
+                   AND o.market_type = 'spot'
+                   AND o.timeframe = '1m'
+                 GROUP BY a.symbol
+            )
+            SELECT percentile_cont(0.5) WITHIN GROUP (
+                       ORDER BY extract(epoch FROM (
+                           clock_timestamp()
+                           - (latest_open + interval '1 minute')
+                       ))
+                   ) FILTER (WHERE latest_open IS NOT NULL) AS median_lag
+              FROM latest
+            """
+        )
+    )
+    value = result.scalar_one_or_none()
+    return float(value) if value is not None else None
+
+
+async def _backfill_research_async(
+    symbols: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Backfill the governed 15m/1h targets with a live 1m safety stop."""
+    from ..database import CeleryAsyncSessionLocal
+    from ..services.ohlcv_backfill_service import OHLCVBackfillService
+    from ..services.pool_service import get_active_pool_symbols
+    from ..services.research_ohlcv_service import target_candles
+
+    reference_lag = float(
+        os.getenv("OHLCV_BACKFILL_1M_REFERENCE_LAG_SECONDS", "374")
+    )
+    max_increase = float(
+        os.getenv("OHLCV_BACKFILL_1M_MAX_INCREASE_SECONDS", "120")
+    )
+    required_breaches = int(
+        os.getenv("OHLCV_BACKFILL_1M_CONSECUTIVE_BREACHES", "3")
+    )
+    sample_interval = float(
+        os.getenv("OHLCV_BACKFILL_1M_SAMPLE_INTERVAL_SECONDS", "20")
+    )
+    if reference_lag < 0 or max_increase <= 0:
+        raise ValueError("invalid 1m safety lag configuration")
+    if required_breaches < 2 or sample_interval <= 0:
+        raise ValueError("1m safety stop must require repeated timed samples")
+
+    started_at = datetime.now(timezone.utc)
+    output: dict[str, Any] = {
+        "status": "running",
+        "started_at": started_at.isoformat(),
+        "timeframes": {},
+        "safety_samples": [],
+    }
+
+    async with CeleryAsyncSessionLocal() as db:
+        selected_symbols = sorted(
+            set(symbols or await get_active_pool_symbols(db, "spot"))
+        )
+        if db.in_transaction():
+            await db.rollback()
+        live_baseline = await _median_active_1m_close_lag_seconds(db)
+        if db.in_transaction():
+            await db.rollback()
+        if live_baseline is None:
+            raise RuntimeError("1m safety baseline unavailable")
+
+        abort_threshold = reference_lag + max_increase
+        output["symbols"] = selected_symbols
+        output["symbol_count"] = len(selected_symbols)
+        output["live_baseline_lag_seconds"] = live_baseline
+        output["reference_lag_seconds"] = reference_lag
+        output["abort_threshold_lag_seconds"] = abort_threshold
+
+        service = OHLCVBackfillService(
+            session=db,
+            exchange="gate.io",
+            max_concurrent=1,
+            rate_limit_delay=0.25,
+        )
+        breaches = 0
+        last_sample_at = 0.0
+        aborted = False
+
+        for timeframe in ("15m", "1h"):
+            details = []
+            target = target_candles(timeframe)
+            for symbol in selected_symbols:
+                now_monotonic = time.monotonic()
+                if (
+                    last_sample_at == 0.0
+                    or now_monotonic - last_sample_at >= sample_interval
+                ):
+                    lag = await _median_active_1m_close_lag_seconds(db)
+                    if db.in_transaction():
+                        await db.rollback()
+                    last_sample_at = now_monotonic
+                    breached = lag is None or lag > abort_threshold
+                    breaches = breaches + 1 if breached else 0
+                    output["safety_samples"].append(
+                        {
+                            "sampled_at": datetime.now(timezone.utc).isoformat(),
+                            "median_1m_close_lag_seconds": lag,
+                            "threshold_seconds": abort_threshold,
+                            "breached": breached,
+                            "consecutive_breaches": breaches,
+                        }
+                    )
+                    if breaches >= required_breaches:
+                        aborted = True
+                        output["status"] = "aborted_1m_lag_safety_stop"
+                        output["abort_timeframe"] = timeframe
+                        output["abort_symbol"] = symbol
+                        break
+
+                detail = await service.backfill_research_symbol(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    target_candles=target,
+                )
+                details.append(detail)
+
+            output["timeframes"][timeframe] = {
+                "target_candles": target,
+                "symbols_completed": len(details),
+                "total_fetched": sum(d.get("fetched", 0) for d in details),
+                "total_inserted": sum(d.get("inserted", 0) for d in details),
+                "total_errors": sum(d.get("errors", 0) for d in details),
+                "target_reached_symbols": sum(
+                    bool(d.get("target_reached") or d.get("skipped"))
+                    for d in details
+                ),
+                "details": details,
+            }
+            if aborted:
+                break
+
+    if output["status"] == "running":
+        output["status"] = "success"
+    output["finished_at"] = datetime.now(timezone.utc).isoformat()
+    output["duration_seconds"] = (
+        datetime.now(timezone.utc) - started_at
+    ).total_seconds()
+    logger.info(
+        "[OHLCV_BACKFILL_RESEARCH] %s",
+        __import__("json").dumps(output, default=str, sort_keys=True),
+    )
+    return output
+
+
+@celery_app.task(name="app.tasks.ohlcv_backfill.backfill_research")
+def backfill_research(symbols: Optional[List[str]] = None) -> str:
+    import json
+
+    return json.dumps(
+        _run_async(_backfill_research_async(symbols=symbols)),
+        default=str,
+    )

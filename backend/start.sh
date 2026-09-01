@@ -276,6 +276,7 @@ CELERY_LOGLEVEL="${CELERY_LOGLEVEL:-info}"
 #   - "microstructure"                       (Cloud Run scalpyn-worker-micro)
 #   - "structural"                           (Cloud Run scalpyn-worker-structural)
 #   - "execution"                            (Cloud Run scalpyn-worker-execution)
+#   - "research_ohlcv"                       (isolated 15m/1h collector/backfill)
 #   - "" (empty)                             (Cloud Run scalpyn API or scalpyn-beat
 #                                             — NO Celery worker is started here)
 #
@@ -324,6 +325,10 @@ if [ -z "${CELERY_CONCURRENCY+x}" ]; then
         scalpyn-worker-micro)
             CELERY_CONCURRENCY=1
             echo "==> [concurrency] K_SERVICE=scalpyn-worker-micro — defaulting CELERY_CONCURRENCY=1"
+            ;;
+        scalpyn-worker-research-ohlcv)
+            CELERY_CONCURRENCY=1
+            echo "==> [concurrency] K_SERVICE=scalpyn-worker-research-ohlcv — defaulting CELERY_CONCURRENCY=1"
             ;;
         *)
             # Keep existing default of 2 for other services and local dev

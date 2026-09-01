@@ -9,6 +9,11 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..repositories.ohlcv_repository import OHLCVRepository
+from .research_ohlcv_service import (
+    fetch_gate_closed_candles,
+    paced_request_delay,
+    validate_timeframe,
+)
 from ..utils.gate_market_data import parse_gate_spot_candle
 
 logger = logging.getLogger(__name__)
@@ -245,6 +250,111 @@ class OHLCVBackfillService:
         )
 
         return processed
+
+    async def backfill_research_symbol(
+        self,
+        symbol: str,
+        timeframe: str,
+        target_candles: int,
+        chunk_size: int = 1000,
+    ) -> Dict[str, Any]:
+        """Backfill a native Gate 15m/1h series to an exact row target.
+
+        Only candles explicitly marked closed by Gate are eligible. Historical
+        windows use ``from`` + ``to`` (without ``limit``), matching Gate's API
+        contract. The repository unique key makes reruns idempotent.
+        """
+        validate_timeframe(timeframe)
+        if target_candles <= 0:
+            raise ValueError("target_candles must be positive")
+        if not 1 <= chunk_size <= 1000:
+            raise ValueError("chunk_size must be between 1 and 1000")
+
+        started_at = datetime.now(timezone.utc)
+        existing_count = await self.repository.count_records(
+            symbol, self.exchange, timeframe
+        )
+        if existing_count >= target_candles:
+            return {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "target_candles": target_candles,
+                "existing_before": existing_count,
+                "fetched": 0,
+                "inserted": 0,
+                "skipped": True,
+                "errors": 0,
+            }
+
+        records_by_time: dict[datetime, dict[str, Any]] = {}
+        current_to: int | None = None
+        fetch_errors = 0
+        rejected_open = 0
+        timeout = httpx.Timeout(30.0, connect=10.0)
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            while len(records_by_time) < target_candles and fetch_errors < 3:
+                remaining = target_candles - len(records_by_time)
+                points = min(chunk_size, max(remaining + 1, 2))
+                last_error: Exception | None = None
+                batch = None
+                for attempt in range(3):
+                    try:
+                        batch = await fetch_gate_closed_candles(
+                            client,
+                            symbol=symbol,
+                            timeframe=timeframe,
+                            points=points,
+                            to_timestamp=current_to,
+                        )
+                        break
+                    except Exception as exc:
+                        last_error = exc
+                        await asyncio.sleep(2 ** attempt)
+                if batch is None:
+                    fetch_errors += 1
+                    logger.error(
+                        "[BACKFILL-RESEARCH] fetch failed symbol=%s "
+                        "timeframe=%s error=%s",
+                        symbol,
+                        timeframe,
+                        last_error,
+                    )
+                    continue
+                if not batch.records:
+                    break
+
+                rejected_open += batch.rejected_open_candles
+                for record in batch.records:
+                    records_by_time[record["time"]] = record
+                oldest = min(record["time"] for record in batch.records)
+                current_to = int(oldest.timestamp()) - 1
+                await paced_request_delay()
+
+        ordered = [records_by_time[key] for key in sorted(records_by_time)]
+        if len(ordered) > target_candles:
+            ordered = ordered[-target_candles:]
+        inserted = await self.repository.bulk_insert_ohlcv(
+            ordered,
+            batch_size=1000,
+        )
+        final_count = await self.repository.count_records(
+            symbol, self.exchange, timeframe
+        )
+        duration = (datetime.now(timezone.utc) - started_at).total_seconds()
+        return {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "target_candles": target_candles,
+            "existing_before": existing_count,
+            "fetched": len(ordered),
+            "inserted": inserted,
+            "rows_after": final_count,
+            "rejected_open_candles": rejected_open,
+            "errors": fetch_errors,
+            "target_reached": final_count >= target_candles,
+            "duration_seconds": duration,
+        }
 
     async def _fetch_candles_with_retry(
         self,
