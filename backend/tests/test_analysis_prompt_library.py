@@ -13,9 +13,10 @@ import pytest
 from app.api.ai_modules import CreateProfileAnalysisRequest, _compose_profile_question
 from app.api.analysis_prompts import (
     PromptVersionPayload,
+    can_manage_prompt_library,
     content_hash,
     delete_analysis_prompt,
-    require_admin,
+    require_prompt_manager,
 )
 from app.ai_orchestration.initial_prompts import initial_prompt_registry
 
@@ -180,17 +181,18 @@ def test_saved_prompt_composition_is_deterministic_and_bounded():
 
 
 @pytest.mark.asyncio
-async def test_prompt_management_is_admin_only():
+async def test_prompt_management_allows_operational_roles_and_denies_viewers():
     user_id = uuid4()
-    db = SimpleNamespace(get=AsyncMock(return_value=SimpleNamespace(is_active=True, role="trader")))
+    db = SimpleNamespace(get=AsyncMock(return_value=SimpleNamespace(is_active=True, role="viewer")))
     with pytest.raises(HTTPException) as caught:
-        await require_admin(db, user_id)
+        await require_prompt_manager(db, user_id)
     assert caught.value.status_code == 403
-    assert caught.value.detail == {"code": "ADMIN_ACCESS_REQUIRED"}
+    assert caught.value.detail == {"code": "PROMPT_MANAGEMENT_ACCESS_REQUIRED"}
 
-    db.get = AsyncMock(return_value=SimpleNamespace(is_active=True, role="admin"))
-    user = await require_admin(db, user_id)
-    assert user.role == "admin"
+    for role in ("admin", "operator", "trader", "TRADER"):
+        db.get = AsyncMock(return_value=SimpleNamespace(is_active=True, role=role))
+        user = await require_prompt_manager(db, user_id)
+        assert can_manage_prompt_library(user)
 
 
 @pytest.mark.asyncio

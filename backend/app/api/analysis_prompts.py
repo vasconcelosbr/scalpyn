@@ -25,6 +25,7 @@ router = APIRouter(prefix="/api/ai/modules/analysis-prompts", tags=["AI Analysis
 
 MAX_PROMPT_CHARACTERS = 100_000
 MAX_PROMPT_FILE_BYTES = 256 * 1024
+PROMPT_MANAGER_ROLES = frozenset({"admin", "operator", "trader"})
 
 
 def normalize_markdown(value: str) -> str:
@@ -93,10 +94,14 @@ async def current_user(db: AsyncSession, user_id: UUID) -> User:
     return user
 
 
-async def require_admin(db: AsyncSession, user_id: UUID) -> User:
+def can_manage_prompt_library(user: User) -> bool:
+    return (user.role or "").strip().lower() in PROMPT_MANAGER_ROLES
+
+
+async def require_prompt_manager(db: AsyncSession, user_id: UUID) -> User:
     user = await current_user(db, user_id)
-    if user.role != "admin":
-        raise HTTPException(status_code=403, detail={"code": "ADMIN_ACCESS_REQUIRED"})
+    if not can_manage_prompt_library(user):
+        raise HTTPException(status_code=403, detail={"code": "PROMPT_MANAGEMENT_ACCESS_REQUIRED"})
     return user
 
 
@@ -175,8 +180,8 @@ async def list_analysis_prompts(
     user_id: UUID = Depends(get_current_user_id),
 ):
     user = await current_user(db, user_id)
-    if include_archived and user.role != "admin":
-        raise HTTPException(status_code=403, detail={"code": "ADMIN_ACCESS_REQUIRED"})
+    if include_archived and not can_manage_prompt_library(user):
+        raise HTTPException(status_code=403, detail={"code": "PROMPT_MANAGEMENT_ACCESS_REQUIRED"})
     statement = select(AIAnalysisPromptRecord)
     if not include_archived:
         statement = statement.where(AIAnalysisPromptRecord.status == "ACTIVE")
@@ -194,7 +199,7 @@ async def list_analysis_prompts(
             await prompt_response(db, prompt, include_content=False, include_versions=False)
             for prompt in prompts
         ],
-        "can_manage": user.role == "admin",
+        "can_manage": can_manage_prompt_library(user),
     }
 
 
@@ -206,7 +211,7 @@ async def get_analysis_prompt(
 ):
     user = await current_user(db, user_id)
     prompt = await db.get(AIAnalysisPromptRecord, prompt_id)
-    if prompt is None or (prompt.status != "ACTIVE" and user.role != "admin"):
+    if prompt is None or (prompt.status != "ACTIVE" and not can_manage_prompt_library(user)):
         raise HTTPException(status_code=404, detail={"code": "ANALYSIS_PROMPT_NOT_FOUND"})
     return await prompt_response(db, prompt, include_content=True, include_versions=True)
 
@@ -217,7 +222,7 @@ async def create_analysis_prompt(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ):
-    await require_admin(db, user_id)
+    await require_prompt_manager(db, user_id)
     now = datetime.now(timezone.utc)
     prompt = AIAnalysisPromptRecord(
         id=uuid4(),
@@ -263,7 +268,7 @@ async def create_analysis_prompt_version(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ):
-    await require_admin(db, user_id)
+    await require_prompt_manager(db, user_id)
     prompt = (await db.execute(
         select(AIAnalysisPromptRecord)
         .where(AIAnalysisPromptRecord.id == prompt_id)
@@ -329,7 +334,7 @@ async def change_analysis_prompt_status(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ):
-    await require_admin(db, user_id)
+    await require_prompt_manager(db, user_id)
     prompt = await db.get(AIAnalysisPromptRecord, prompt_id)
     if prompt is None:
         raise HTTPException(status_code=404, detail={"code": "ANALYSIS_PROMPT_NOT_FOUND"})
@@ -350,7 +355,7 @@ async def delete_analysis_prompt(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ):
-    await require_admin(db, user_id)
+    await require_prompt_manager(db, user_id)
     prompt = (await db.execute(
         select(AIAnalysisPromptRecord)
         .where(AIAnalysisPromptRecord.id == prompt_id)
