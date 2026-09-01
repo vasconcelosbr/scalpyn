@@ -630,6 +630,28 @@ def _rejected_projected_ids_query(
     return union_all(terminal_ids, active_ids)
 
 
+def _rejected_active_summary_groups_query(filters: List[Any]):
+    """Group active rejected Shadows without duplicate bind parameters.
+
+    PostgreSQL requires the grouped expression to be structurally identical to
+    the selected expression. Grouping by the stored column preserves the same
+    NULL bucket while avoiding two separately-bound COALESCE fallback values.
+    """
+    return (
+        select(
+            ShadowTrade.user_id,
+            ShadowTrade.symbol,
+            func.coalesce(ShadowTrade.direction, "SPOT").label("direction"),
+        )
+        .where(and_(*filters))
+        .group_by(
+            ShadowTrade.user_id,
+            ShadowTrade.symbol,
+            ShadowTrade.direction,
+        )
+    )
+
+
 async def _active_projection_overrides(
     db: AsyncSession, rows: List[ShadowTrade]
 ) -> Dict[UUID, Dict[str, Any]]:
@@ -1036,20 +1058,9 @@ async def shadow_trades_summary(
                 ).scalar_one()
                 or 0
             )
-            active_groups = (
-                select(
-                    ShadowTrade.user_id,
-                    ShadowTrade.symbol,
-                    func.coalesce(ShadowTrade.direction, "SPOT").label("direction"),
-                )
-                .where(and_(*active_filters))
-                .group_by(
-                    ShadowTrade.user_id,
-                    ShadowTrade.symbol,
-                    func.coalesce(ShadowTrade.direction, "SPOT"),
-                )
-                .subquery("rejected_active_summary_groups")
-            )
+            active_groups = _rejected_active_summary_groups_query(
+                active_filters
+            ).subquery("rejected_active_summary_groups")
             projected_pending = int(
                 (
                     await db.execute(

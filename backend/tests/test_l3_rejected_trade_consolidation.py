@@ -14,6 +14,7 @@ from sqlalchemy.dialects import postgresql
 from app.api.shadow_trades import (
     _active_read_projection,
     _consolidation_payload,
+    _rejected_active_summary_groups_query,
     _rejected_projected_ids_query,
     _sanitize_status,
 )
@@ -511,6 +512,28 @@ def test_rejected_active_projection_query_groups_before_profile_filter():
 
 def test_open_status_is_a_canonical_active_status_filter():
     assert _sanitize_status("open") == "OPEN"
+
+
+def test_rejected_active_summary_groups_compile_for_postgresql():
+    query = _rejected_active_summary_groups_query(
+        [
+            ShadowTrade.user_id == uuid4(),
+            ShadowTrade.source == "L3_REJECTED",
+            ShadowTrade.status.in_(("PENDING", "RUNNING")),
+        ]
+    )
+    compiled = str(
+        query.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+
+    assert (
+        "GROUP BY shadow_trades.user_id, shadow_trades.symbol, shadow_trades.direction"
+        in compiled
+    )
+    assert "GROUP BY shadow_trades.user_id, shadow_trades.symbol, coalesce" not in compiled
 
 
 def test_migration_is_scoped_to_new_rejected_canonical_rows():
