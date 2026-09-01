@@ -5,14 +5,18 @@ import hashlib
 from typing import Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field, field_validator, model_validator
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
-from ..models.systemic_ai import AIAnalysisPromptRecord, AIAnalysisPromptVersionRecord
+from ..models.systemic_ai import (
+    AIAnalysisPromptRecord,
+    AIAnalysisPromptVersionRecord,
+    AIRequestRecord,
+)
 from ..models.user import User
 from .config import get_current_user_id
 
@@ -338,3 +342,48 @@ async def change_analysis_prompt_status(
     await db.commit()
     await db.refresh(prompt)
     return await prompt_response(db, prompt, include_content=True, include_versions=True)
+
+
+@router.delete("/{prompt_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_analysis_prompt(
+    prompt_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    await require_admin(db, user_id)
+    prompt = (await db.execute(
+        select(AIAnalysisPromptRecord)
+        .where(AIAnalysisPromptRecord.id == prompt_id)
+        .with_for_update()
+    )).scalar_one_or_none()
+    if prompt is None:
+        raise HTTPException(status_code=404, detail={"code": "ANALYSIS_PROMPT_NOT_FOUND"})
+
+    referenced_version = (await db.execute(
+        select(AIRequestRecord.analysis_prompt_version_id)
+        .join(
+            AIAnalysisPromptVersionRecord,
+            AIAnalysisPromptVersionRecord.id == AIRequestRecord.analysis_prompt_version_id,
+        )
+        .where(AIAnalysisPromptVersionRecord.prompt_id == prompt_id)
+        .limit(1)
+    )).scalar_one_or_none()
+    if referenced_version is not None:
+        raise HTTPException(status_code=409, detail={"code": "ANALYSIS_PROMPT_IN_USE"})
+
+    try:
+        # Break the current-version cycle before removing the unused immutable versions.
+        prompt.current_version_id = None
+        await db.flush()
+        await db.execute(
+            delete(AIAnalysisPromptVersionRecord).where(
+                AIAnalysisPromptVersionRecord.prompt_id == prompt_id
+            )
+        )
+        await db.delete(prompt)
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail={"code": "ANALYSIS_PROMPT_IN_USE"}) from exc
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

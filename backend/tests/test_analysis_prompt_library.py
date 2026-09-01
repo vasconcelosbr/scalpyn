@@ -11,7 +11,12 @@ from pydantic import ValidationError
 import pytest
 
 from app.api.ai_modules import CreateProfileAnalysisRequest, _compose_profile_question
-from app.api.analysis_prompts import PromptVersionPayload, content_hash, require_admin
+from app.api.analysis_prompts import (
+    PromptVersionPayload,
+    content_hash,
+    delete_analysis_prompt,
+    require_admin,
+)
 from app.ai_orchestration.initial_prompts import initial_prompt_registry
 
 
@@ -186,6 +191,57 @@ async def test_prompt_management_is_admin_only():
     db.get = AsyncMock(return_value=SimpleNamespace(is_active=True, role="admin"))
     user = await require_admin(db, user_id)
     assert user.role == "admin"
+
+
+@pytest.mark.asyncio
+async def test_unused_prompt_can_be_deleted_without_touching_run_history():
+    user_id = uuid4()
+    prompt = SimpleNamespace(id=uuid4(), current_version_id=uuid4())
+    prompt_result = SimpleNamespace(scalar_one_or_none=lambda: prompt)
+    unused_result = SimpleNamespace(scalar_one_or_none=lambda: None)
+    delete_result = SimpleNamespace()
+    db = SimpleNamespace(
+        get=AsyncMock(return_value=SimpleNamespace(is_active=True, role="admin")),
+        execute=AsyncMock(side_effect=[prompt_result, unused_result, delete_result]),
+        flush=AsyncMock(),
+        delete=AsyncMock(),
+        commit=AsyncMock(),
+        rollback=AsyncMock(),
+    )
+
+    response = await delete_analysis_prompt(prompt.id, db, user_id)
+
+    assert response.status_code == 204
+    assert prompt.current_version_id is None
+    db.flush.assert_awaited_once()
+    db.delete.assert_awaited_once_with(prompt)
+    db.commit.assert_awaited_once()
+    db.rollback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_prompt_used_by_a_run_cannot_be_deleted():
+    user_id = uuid4()
+    prompt = SimpleNamespace(id=uuid4(), current_version_id=uuid4())
+    prompt_result = SimpleNamespace(scalar_one_or_none=lambda: prompt)
+    used_result = SimpleNamespace(scalar_one_or_none=lambda: uuid4())
+    db = SimpleNamespace(
+        get=AsyncMock(return_value=SimpleNamespace(is_active=True, role="admin")),
+        execute=AsyncMock(side_effect=[prompt_result, used_result]),
+        flush=AsyncMock(),
+        delete=AsyncMock(),
+        commit=AsyncMock(),
+        rollback=AsyncMock(),
+    )
+
+    with pytest.raises(HTTPException) as caught:
+        await delete_analysis_prompt(prompt.id, db, user_id)
+
+    assert caught.value.status_code == 409
+    assert caught.value.detail == {"code": "ANALYSIS_PROMPT_IN_USE"}
+    db.flush.assert_not_awaited()
+    db.delete.assert_not_awaited()
+    db.commit.assert_not_awaited()
 
 
 def test_request_and_context_persist_prompt_lineage_separately():

@@ -2,12 +2,12 @@
 
 import {
   AlertTriangle, Archive, BookOpen, FileText, History, Loader2, Plus,
-  RotateCcw, Save, Search, Upload, X,
+  Pencil, RotateCcw, Save, Search, Trash2, Upload, X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 
-import { apiGet, apiPatch, apiPost } from "@/lib/api";
+import { ApiError, apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import {
   MAX_ANALYSIS_PROMPT_CHARACTERS,
   MAX_ANALYSIS_PROMPT_FILE_BYTES,
@@ -48,6 +48,7 @@ export function AnalysisPromptLibrary() {
   const [detail, setDetail] = useState<AnalysisPrompt | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [editorMode, setEditorMode] = useState<EditorMode | null>(null);
+  const [deleteCandidate, setDeleteCandidate] = useState<AnalysisPrompt | null>(null);
   const [form, setForm] = useState<PromptForm>(EMPTY_FORM);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -180,6 +181,30 @@ export function AnalysisPromptLibrary() {
     }
   }
 
+  async function deletePrompt() {
+    if (!deleteCandidate) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await apiDelete(`/ai/modules/analysis-prompts/${deleteCandidate.id}`);
+      setDeleteCandidate(null);
+      setSelectedId(null);
+      setDetail(null);
+      await mutate();
+    } catch (caught) {
+      setDeleteCandidate(null);
+      setError(
+        caught instanceof ApiError && caught.detail === "ANALYSIS_PROMPT_IN_USE"
+          ? "Este prompt já foi usado por uma Intelligence Run e não pode ser excluído. Arquive-o para removê-lo da seleção sem quebrar o histórico."
+          : caught instanceof Error
+            ? caught.message
+            : "Não foi possível excluir o prompt.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <section id="prompts" className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)]/90 p-5 backdrop-blur">
@@ -226,7 +251,7 @@ export function AnalysisPromptLibrary() {
             <div>
               <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[var(--border-subtle)] p-5">
                 <div><p className="text-lg font-semibold">{detail.current_version.name}</p><p className="mt-1 text-xs text-[var(--text-muted)]">{detail.current_version.description || "Sem descrição"}</p></div>
-                {canManage && <div className="flex gap-2">{detail.status === "ACTIVE" && <button type="button" onClick={openVersion} className="inline-flex items-center gap-2 rounded-lg border border-cyan-400/25 px-3 py-2 text-xs text-cyan-200"><Plus size={13} /> Nova versão</button>}<button type="button" disabled={busy} onClick={() => void changeStatus(detail)} className="inline-flex items-center gap-2 rounded-lg border border-[var(--border-subtle)] px-3 py-2 text-xs text-[var(--text-muted)]">{detail.status === "ACTIVE" ? <><Archive size={13} /> Arquivar</> : <><RotateCcw size={13} /> Reativar</>}</button></div>}
+                {canManage && <div className="flex flex-wrap gap-2">{detail.status === "ACTIVE" && <button type="button" onClick={openVersion} className="inline-flex items-center gap-2 rounded-lg border border-cyan-400/25 px-3 py-2 text-xs text-cyan-200 transition hover:bg-cyan-400/[.08]"><Pencil size={13} /> Editar prompt</button>}<button type="button" disabled={busy} onClick={() => void changeStatus(detail)} className="inline-flex items-center gap-2 rounded-lg border border-[var(--border-subtle)] px-3 py-2 text-xs text-[var(--text-muted)] transition hover:bg-white/[.03] disabled:opacity-40">{detail.status === "ACTIVE" ? <><Archive size={13} /> Arquivar</> : <><RotateCcw size={13} /> Reativar</>}</button><button type="button" disabled={busy} onClick={() => setDeleteCandidate(detail)} className="inline-flex items-center gap-2 rounded-lg border border-rose-400/25 px-3 py-2 text-xs text-rose-300 transition hover:bg-rose-400/[.08] disabled:opacity-40"><Trash2 size={13} /> Excluir</button></div>}
               </div>
               <div className="space-y-5 p-5">
                 <div className="grid gap-3 sm:grid-cols-3">
@@ -244,9 +269,9 @@ export function AnalysisPromptLibrary() {
       </div>
 
       {editorMode && (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label={editorMode === "create" ? "Novo prompt" : "Nova versão do prompt"}>
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label={editorMode === "create" ? "Novo prompt" : "Editar prompt"}>
           <div className="flex max-h-[calc(100vh-2rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-cyan-400/20 bg-[#0A0E16] shadow-2xl">
-            <div className="flex items-center justify-between border-b border-white/10 px-5 py-4"><div><p className="font-semibold">{editorMode === "create" ? "Novo prompt" : "Nova versão imutável"}</p><p className="mt-1 text-xs text-slate-400">Cole Markdown ou carregue um arquivo .md UTF-8.</p></div><button type="button" onClick={() => setEditorMode(null)} className="p-2 text-slate-500 hover:text-slate-200"><X size={17} /></button></div>
+            <div className="flex items-center justify-between border-b border-white/10 px-5 py-4"><div><p className="font-semibold">{editorMode === "create" ? "Novo prompt" : "Editar prompt"}</p><p className="mt-1 text-xs text-slate-400">{editorMode === "create" ? "Cole Markdown ou carregue um arquivo .md UTF-8." : "Ao salvar, uma nova versão imutável será criada e o histórico anterior será preservado."}</p></div><button type="button" onClick={() => setEditorMode(null)} className="p-2 text-slate-500 hover:text-slate-200" aria-label="Fechar editor"><X size={17} /></button></div>
             <div className="space-y-4 overflow-y-auto p-5">
               <label className="block text-xs text-slate-300">Nome<input value={form.name} maxLength={160} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} className="mt-2 w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2.5 text-sm outline-none focus:border-cyan-400/40" /></label>
               <label className="block text-xs text-slate-300">Descrição<textarea value={form.description} maxLength={1_000} rows={2} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} className="mt-2 w-full resize-y rounded-lg border border-white/10 bg-black/20 px-3 py-2.5 text-sm outline-none focus:border-cyan-400/40" /></label>
@@ -255,6 +280,22 @@ export function AnalysisPromptLibrary() {
               {error && <p className="rounded-lg border border-rose-400/20 bg-rose-400/10 px-3 py-2 text-xs text-rose-200">{error}</p>}
             </div>
             <div className="flex justify-end gap-2 border-t border-white/10 px-5 py-4"><button type="button" onClick={() => setEditorMode(null)} className="px-3 py-2 text-sm text-slate-400">Cancelar</button><button type="button" disabled={busy} onClick={() => void save()} className="inline-flex items-center gap-2 rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-cyan-950 disabled:opacity-40">{busy ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />} Salvar</button></div>
+          </div>
+        </div>
+      )}
+
+      {deleteCandidate && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm" role="alertdialog" aria-modal="true" aria-labelledby="delete-prompt-title" aria-describedby="delete-prompt-description">
+          <div className="w-full max-w-md overflow-hidden rounded-2xl border border-rose-400/25 bg-[#0A0E16] shadow-[0_24px_80px_rgba(0,0,0,.55)]">
+            <div className="border-b border-rose-400/15 bg-rose-400/[.05] px-5 py-4">
+              <div className="mb-3 flex h-9 w-9 items-center justify-center rounded-full border border-rose-400/25 bg-rose-400/10 text-rose-300"><Trash2 size={16} /></div>
+              <h2 id="delete-prompt-title" className="font-semibold text-slate-100">Excluir prompt?</h2>
+              <p id="delete-prompt-description" className="mt-2 text-xs leading-5 text-slate-400">Você está prestes a excluir <span className="font-medium text-slate-200">{deleteCandidate.name}</span>. A exclusão é permanente e só será concluída se nenhuma Intelligence Run tiver usado qualquer versão deste prompt.</p>
+            </div>
+            <div className="flex flex-col-reverse gap-2 px-5 py-4 sm:flex-row sm:justify-end">
+              <button type="button" disabled={busy} onClick={() => setDeleteCandidate(null)} className="rounded-lg px-4 py-2.5 text-sm text-slate-400 transition hover:bg-white/[.04] hover:text-slate-200 disabled:opacity-40">Cancelar</button>
+              <button type="button" disabled={busy} onClick={() => void deletePrompt()} className="inline-flex items-center justify-center gap-2 rounded-lg bg-rose-400 px-4 py-2.5 text-sm font-semibold text-rose-950 transition hover:bg-rose-300 disabled:opacity-40">{busy ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />} Excluir definitivamente</button>
+            </div>
           </div>
         </div>
       )}
