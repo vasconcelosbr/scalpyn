@@ -2138,42 +2138,12 @@ async def _monitor_async() -> Dict[str, Any]:
             # ORDER BY, mas sorted() reforça invariante deadlock-safety.
             shadows.sort(key=lambda s: (s.created_at, s.id))
 
-            for shadow in shadows:
-                summary["processed"] += 1
-                try:
-                    transition = await _advance_shadow(db, shadow, force_close_policy)
-                    if transition == "completed":
-                        summary["completed"] += 1
-                        # FIX D1: coleta ID antes do commit para gravação
-                        # de simulação em sessão isolada pós-commit.
-                        sim_targets.append(shadow.id)
-                except Exception:
-                    summary["errors"] += 1
-                    logger.exception(
-                        "[shadow-monitor] advance failed for shadow_id=%s",
-                        shadow.id,
-                    )
-
-            # Snapshot de dados escalares ANTES do commit — ORM objects
-            # ficam detached após o fechamento da sessão. Filtro por
-            # entry_timestamp não-NULL replica o guard de _enrich_market_context
-            # (só enriquece shadows com entrada confirmada).
-            enrich_targets = [
-                {
-                    "shadow_id": s.id,
-                    "symbol": s.symbol,
-                    "entry_timestamp": s.entry_timestamp,
-                    "decision_id": s.decision_id,
-                    "needs_fill": (
-                        s.btc_price_at_entry is None
-                        or s.btc_change_1h_pct is None
-                        or s.funding_rate_at_entry is None
-                        or s.n_concurrent_signals is None
-                    ),
-                }
-                for s in shadows
-                if s.entry_timestamp is not None
-            ]
+            sim_targets, enrich_targets = await _advance_shadow_batch_isolated(
+                db,
+                shadows,
+                force_close_policy,
+                summary,
+            )
     # ── Pós-commit: operações best-effort em sessões isoladas ─────────────────
     # A tx principal já commitou todos os shadow.status='COMPLETED'. A partir
     # daqui, qualquer falha SQL não desfaz os fechamentos (FIX C3/D1).
@@ -2232,6 +2202,80 @@ async def _monitor_async() -> Dict[str, Any]:
     summary["pnl_backfill"] = await backfill_decisions_log_pnl_from_shadows(limit=500)
 
     return summary
+
+
+def _snapshot_shadow_enrichment_target(shadow: ShadowTrade) -> Optional[Dict[str, Any]]:
+    """Copy post-advance scalars while the ORM row is still attached."""
+    if shadow.entry_timestamp is None:
+        return None
+    return {
+        "shadow_id": shadow.id,
+        "symbol": shadow.symbol,
+        "entry_timestamp": shadow.entry_timestamp,
+        "decision_id": shadow.decision_id,
+        "needs_fill": (
+            shadow.btc_price_at_entry is None
+            or shadow.btc_change_1h_pct is None
+            or shadow.funding_rate_at_entry is None
+            or shadow.n_concurrent_signals is None
+        ),
+    }
+
+
+async def _advance_shadow_in_savepoint(
+    db,
+    shadow: ShadowTrade,
+    force_close_policy: Optional[Dict[str, Any]],
+) -> tuple[str, Optional[Dict[str, Any]]]:
+    """Advance and flush one Shadow inside its own database savepoint.
+
+    The explicit flush is part of the isolation contract: PostgreSQL length,
+    constraint and type errors must surface before the savepoint is released,
+    otherwise they would abort the parent batch during its final commit.
+    """
+    async with db.begin_nested():
+        transition = await _advance_shadow(db, shadow, force_close_policy)
+        await db.flush()
+        enrich_target = _snapshot_shadow_enrichment_target(shadow)
+    return transition, enrich_target
+
+
+async def _advance_shadow_batch_isolated(
+    db,
+    shadows: List[ShadowTrade],
+    force_close_policy: Optional[Dict[str, Any]],
+    summary: Dict[str, Any],
+) -> tuple[List[Any], List[Dict[str, Any]]]:
+    """Process a locked batch without allowing one invalid row to roll it back."""
+    sim_targets: List[Any] = []
+    enrich_targets: List[Dict[str, Any]] = []
+    for shadow in shadows:
+        # Preserve the identifier before entering the savepoint. SQLAlchemy may
+        # expire attributes on the failed row after a nested rollback.
+        shadow_id = shadow.id
+        summary["processed"] += 1
+        try:
+            transition, enrich_target = await _advance_shadow_in_savepoint(
+                db,
+                shadow,
+                force_close_policy,
+            )
+        except Exception:
+            summary["errors"] += 1
+            logger.exception(
+                "[shadow-monitor] isolated advance failed for shadow_id=%s",
+                shadow_id,
+            )
+            continue
+
+        if transition == "completed":
+            summary["completed"] += 1
+            # Collected only after the savepoint succeeded. A failed row must
+            # not leak into post-commit simulation/capture work.
+            sim_targets.append(shadow_id)
+        if enrich_target is not None:
+            enrich_targets.append(enrich_target)
+    return sim_targets, enrich_targets
 
 
 
