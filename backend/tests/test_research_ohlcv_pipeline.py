@@ -11,16 +11,19 @@ from app.services import ohlcv_backfill_service as backfill_module
 from app.services.ohlcv_backfill_service import OHLCVBackfillService
 from app.services.research_ohlcv_service import (
     GateClosedCandleBatch,
+    SETTLEMENT_LATENCY_DELAYS_SECONDS,
     SHADOW_STATE_TIMEFRAMES,
     STATE_CAPTURE_CONTRACT_VERSION,
     _closed_records,
     _normalize_state_db_record,
     _partition_records,
+    due_settlement_latency_targets,
     fetch_gate_closed_candles,
     persist_gate_state_batch,
     validate_retention_contract,
 )
 from app.tasks import collect_research_ohlcv
+from app.tasks import sample_ohlcv_settlement_latency
 from app.tasks.celery_app import (
     QUEUE_RESEARCH_OHLCV,
     TASK_ROUTES,
@@ -166,6 +169,7 @@ def test_research_tasks_are_isolated_and_have_no_decision_dispatch() -> None:
         "app.tasks.collect_research_ohlcv.enforce_retention",
         "app.tasks.collect_research_ohlcv.capture_readiness",
         "app.tasks.ohlcv_backfill.backfill_research",
+        "app.tasks.sample_ohlcv_settlement_latency.sample_settlement_latency",
     }
     assert all(
         TASK_ROUTES[name]["queue"] == QUEUE_RESEARCH_OHLCV
@@ -182,6 +186,12 @@ def test_research_tasks_are_isolated_and_have_no_decision_dispatch() -> None:
     assert "timeframe = '5m'" not in inspect.getsource(
         collect_research_ohlcv._retention_async
     )
+
+    latency_source = inspect.getsource(sample_ohlcv_settlement_latency)
+    assert "task_dispatch" not in latency_source
+    assert "compute_indicators" not in latency_source
+    assert "compute_scores" not in latency_source
+    assert "evaluate_signals" not in latency_source
 
 
 def test_readiness_sql_uses_portable_bind_cast() -> None:
@@ -201,12 +211,45 @@ def test_research_beat_entries_explicitly_target_isolated_queue() -> None:
         "collect_research_1h_after_close",
         "capture_research_ohlcv_readiness",
         "enforce_research_ohlcv_retention",
+        "sample_ohlcv_settlement_latency_every_10s",
     ):
         assert schedule[name]["options"]["queue"] == QUEUE_RESEARCH_OHLCV
 
     assert schedule["collect_state_1m_every_30s"]["schedule"] == 30.0
     assert schedule["collect_state_5m_every_60s"]["schedule"] == 60.0
     assert schedule["collect_state_30m_every_120s"]["schedule"] == 120.0
+    assert schedule["sample_ohlcv_settlement_latency_every_10s"]["schedule"] == 10.0
+
+
+def test_settlement_latency_targets_pick_correct_candle_per_delay() -> None:
+    close_1m = datetime(2026, 9, 2, 12, 0, 0, tzinfo=timezone.utc)
+    for delay in SETTLEMENT_LATENCY_DELAYS_SECONDS:
+        now = close_1m + timedelta(seconds=delay)
+        due = due_settlement_latency_targets(timeframe="1m", now=now)
+        matches = [item for item in due if item[1] == delay]
+        assert len(matches) == 1
+        open_time, delay_target, delay_actual = matches[0]
+        assert open_time == close_1m - timedelta(seconds=60)
+        assert delay_target == delay
+        assert delay_actual == pytest.approx(float(delay))
+
+
+def test_settlement_latency_targets_resolve_multi_interval_delays_on_5m() -> None:
+    # A 300s delay on a 5m series must name the candle that closed 5
+    # minutes ago, not the just-elapsed one at the same wall-clock offset.
+    close_5m = datetime(2026, 9, 2, 12, 0, 0, tzinfo=timezone.utc)
+    now = close_5m + timedelta(seconds=300)
+    due = due_settlement_latency_targets(timeframe="5m", now=now)
+    matches = [item for item in due if item[1] == 300]
+    assert len(matches) == 1
+    open_time, _, _ = matches[0]
+    assert open_time == close_5m - timedelta(seconds=300)
+
+
+def test_settlement_latency_sampler_has_no_default_symbol_overlap_bug() -> None:
+    symbols = sample_ohlcv_settlement_latency.sample_symbols()
+    assert len(symbols) == len(set(symbols))
+    assert len(symbols) >= 4
 
 
 @pytest.mark.asyncio

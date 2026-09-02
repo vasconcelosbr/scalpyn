@@ -266,6 +266,142 @@ async def fetch_gate_closed_candles(
     )
 
 
+SETTLEMENT_LATENCY_DELAYS_SECONDS: tuple[int, ...] = (10, 30, 60, 120, 300)
+_SETTLEMENT_LATENCY_TOLERANCE_SECONDS = 6
+
+
+async def fetch_gate_raw_candle(
+    client: httpx.AsyncClient,
+    *,
+    symbol: str,
+    timeframe: str,
+    target_open_time: datetime,
+) -> dict[str, Any] | None:
+    """Fetch one candle's current raw values, regardless of closed state.
+
+    Used only by the R1.B settlement-latency sampler, which must observe a
+    candle's value trajectory across delays -- including before Gate's own
+    ``is_closed`` flag flips and after, since the finding under test is that
+    Gate revises candles it has already marked closed.
+    """
+    validate_timeframe(timeframe)
+    interval_seconds = SUPPORTED_TIMEFRAMES[timeframe]
+    target_ts = int(target_open_time.timestamp())
+    params: dict[str, Any] = {
+        "currency_pair": symbol,
+        "interval": timeframe,
+        "from": target_ts - interval_seconds,
+        "to": target_ts + interval_seconds,
+    }
+    response = await client.get(GATE_SPOT_CANDLES_URL, params=params)
+    if response.status_code == 429:
+        retry_after = max(float(response.headers.get("Retry-After", "5")), 0.0)
+        raise RuntimeError(f"GATE_RATE_LIMITED retry_after={retry_after}")
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, list):
+        raise RuntimeError(
+            f"unexpected Gate candlestick payload for {symbol}/{timeframe}"
+        )
+    for raw in payload:
+        parsed = parse_gate_spot_candle(raw)
+        if parsed["time"] == target_open_time:
+            return parsed
+    return None
+
+
+def due_settlement_latency_targets(
+    *,
+    timeframe: str,
+    now: datetime,
+) -> tuple[tuple[datetime, int, float], ...]:
+    """Return (candle_open_time, delay_target, delay_actual) currently due.
+
+    For each of the fixed delay targets, find the specific closed candle that
+    is presently sitting at approximately that delay past its own close --
+    independent of the timeframe's interval length, so a 120s/300s target on
+    a 1m series correctly names a candle several intervals back, not the
+    latest one.
+    """
+    validate_timeframe(timeframe)
+    interval_seconds = SUPPORTED_TIMEFRAMES[timeframe]
+    now_ts = now.timestamp()
+    due: list[tuple[datetime, int, float]] = []
+    for delay in SETTLEMENT_LATENCY_DELAYS_SECONDS:
+        candidate_close_ts = (
+            int((now_ts - delay) // interval_seconds) * interval_seconds
+        )
+        elapsed = now_ts - candidate_close_ts
+        if abs(elapsed - delay) <= _SETTLEMENT_LATENCY_TOLERANCE_SECONDS:
+            candidate_open_ts = candidate_close_ts - interval_seconds
+            due.append((
+                datetime.fromtimestamp(candidate_open_ts, tz=timezone.utc),
+                delay,
+                elapsed,
+            ))
+    return tuple(due)
+
+
+async def persist_settlement_latency_sample(
+    session: AsyncSession,
+    *,
+    symbol: str,
+    timeframe: str,
+    candle_open_time: datetime,
+    delay_target_seconds: int,
+    delay_actual_seconds: float,
+    observed_at: datetime,
+    candle: Mapping[str, Any] | None,
+) -> None:
+    interval_seconds = SUPPORTED_TIMEFRAMES[timeframe]
+    candle_close_time = candle_open_time + timedelta(seconds=interval_seconds)
+    found = candle is not None
+    values: dict[str, Any] = {
+        "open": None,
+        "high": None,
+        "low": None,
+        "close": None,
+        "volume": None,
+        "quote_volume": None,
+        "is_closed": None,
+    }
+    if candle is not None:
+        for field in ("open", "high", "low", "close", "volume", "quote_volume"):
+            values[field] = Decimal(str(candle[field]))
+        values["is_closed"] = candle["is_closed"]
+
+    await session.execute(
+        text(
+            """
+            INSERT INTO ohlcv_settlement_latency_samples
+                (symbol, timeframe, candle_open_time, candle_close_time,
+                 delay_target_seconds, delay_actual_seconds, observed_at,
+                 found, open, high, low, close, volume, quote_volume,
+                 is_closed)
+            VALUES
+                (:symbol, :timeframe, :candle_open_time, :candle_close_time,
+                 :delay_target_seconds, :delay_actual_seconds, :observed_at,
+                 :found, :open, :high, :low, :close, :volume, :quote_volume,
+                 :is_closed)
+            ON CONFLICT (symbol, timeframe, candle_open_time,
+                         delay_target_seconds) DO NOTHING
+            """
+        ),
+        {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "candle_open_time": candle_open_time,
+            "candle_close_time": candle_close_time,
+            "delay_target_seconds": delay_target_seconds,
+            "delay_actual_seconds": delay_actual_seconds,
+            "observed_at": observed_at,
+            "found": found,
+            **values,
+        },
+    )
+    await session.commit()
+
+
 async def record_ingestion_observation(
     session: AsyncSession,
     *,

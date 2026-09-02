@@ -80,6 +80,7 @@ _ALL_TASK_MODULES = (
         "app.tasks.collect_market_data",
         "app.tasks.collect_structural_30m",
         "app.tasks.collect_research_ohlcv",
+        "app.tasks.sample_ohlcv_settlement_latency",
         "app.tasks.compute_indicators",
         "app.tasks.compute_scores",
         "app.tasks.evaluate_signals",
@@ -128,6 +129,7 @@ def _configured_task_modules() -> tuple[str, ...]:
     if queues == (QUEUE_RESEARCH_OHLCV,):
         return (
             "app.tasks.collect_research_ohlcv",
+            "app.tasks.sample_ohlcv_settlement_latency",
             "app.tasks.ohlcv_backfill",
         )
     return _ALL_TASK_MODULES
@@ -189,6 +191,9 @@ TASK_ROUTES = {
     "app.tasks.collect_research_ohlcv.capture_state_comparison": {"queue": QUEUE_RESEARCH_OHLCV},
     "app.tasks.collect_research_ohlcv.enforce_retention": {"queue": QUEUE_RESEARCH_OHLCV},
     "app.tasks.collect_research_ohlcv.capture_readiness": {"queue": QUEUE_RESEARCH_OHLCV},
+    # R1.B: Gate settlement-latency sampler, same isolation as the state
+    # dual run above -- writes only ohlcv_settlement_latency_samples.
+    "app.tasks.sample_ohlcv_settlement_latency.sample_settlement_latency": {"queue": QUEUE_RESEARCH_OHLCV},
     # Historical backfill shares only the research queue; status remains a
     # lightweight structural read.
     "app.tasks.ohlcv_backfill.backfill":                 {"queue": QUEUE_RESEARCH_OHLCV},
@@ -408,6 +413,7 @@ TASK_ANNOTATIONS = {
     "app.tasks.collect_research_ohlcv.capture_state_comparison": {**_RESEARCH_OHLCV_GUARDS, "rate_limit": "18/h", **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.collect_research_ohlcv.enforce_retention": {**_RESEARCH_OHLCV_GUARDS, "rate_limit": "1/h", **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.collect_research_ohlcv.capture_readiness": {**_RESEARCH_OHLCV_GUARDS, "rate_limit": "8/h", **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.sample_ohlcv_settlement_latency.sample_settlement_latency": {**_RESEARCH_OHLCV_GUARDS, "time_limit": 60, "soft_time_limit": 45, "rate_limit": "400/h", **_NO_REQUEUE_ON_WORKER_LOSS},
 
     # Decision Log Enricher (Module 1)
     "app.tasks.decision_log_enricher.enrich":            {**_STRUCTURAL_GUARDS, "rate_limit": "6/m"},
@@ -732,6 +738,14 @@ celery_app.conf.beat_schedule = {
     "capture_state_ohlcv_comparison_every_5min": {
         "task": "app.tasks.collect_research_ohlcv.capture_state_comparison",
         "schedule": 300.0,
+        "options": {"queue": QUEUE_RESEARCH_OHLCV},
+    },
+    # R1.B: settlement-latency sampler. 10s tick matches the tightest delay
+    # bucket (10s); due_settlement_latency_targets() self-selects which of
+    # the 5 buckets (10/30/60/120/300s) is due each tick, per symbol/tf.
+    "sample_ohlcv_settlement_latency_every_10s": {
+        "task": "app.tasks.sample_ohlcv_settlement_latency.sample_settlement_latency",
+        "schedule": 10.0,
         "options": {"queue": QUEUE_RESEARCH_OHLCV},
     },
     # Research-only native Gate candles. The delay after each UTC boundary
