@@ -43,7 +43,7 @@ DEFAULT_TARGET_CANDLES: Mapping[str, int] = {
     "1h": 1_000,
 }
 DEFAULT_RETENTION_DAYS: Mapping[str, int] = {"15m": 180, "1h": 730}
-STATE_CAPTURE_CONTRACT_VERSION = "gate_ohlcv_state_v2"
+STATE_CAPTURE_CONTRACT_VERSION = "gate_ohlcv_state_v3"
 _STATE_PRICE_QUANTUM = Decimal("0.00000001")
 _STATE_VOLUME_QUANTUM = Decimal("0.0001")
 
@@ -165,6 +165,7 @@ def _partition_records(
     symbol: str,
     timeframe: str,
     observed_at: datetime,
+    finalization_delay_seconds: int = 0,
 ) -> tuple[
     tuple[dict[str, Any], ...],
     tuple[dict[str, Any], ...],
@@ -193,7 +194,8 @@ def _partition_records(
             "volume": parsed["volume"],
             "quote_volume": parsed["quote_volume"],
         }
-        if parsed.get("is_closed") is not True or close_time > observed_at:
+        finalized_at = close_time + timedelta(seconds=finalization_delay_seconds)
+        if parsed.get("is_closed") is not True or finalized_at > observed_at:
             rejected_open += 1
             live_by_time[opened_at] = record
             continue
@@ -212,6 +214,7 @@ async def fetch_gate_closed_candles(
     symbol: str,
     timeframe: str,
     points: int,
+    finalization_delay_seconds: int = 0,
     to_timestamp: int | None = None,
 ) -> GateClosedCandleBatch:
     """Fetch one Gate window, using API-compatible recent/range parameters."""
@@ -247,6 +250,7 @@ async def fetch_gate_closed_candles(
         symbol=symbol,
         timeframe=timeframe,
         observed_at=observed_at,
+        finalization_delay_seconds=finalization_delay_seconds,
     )
     return GateClosedCandleBatch(
         symbol=symbol,

@@ -203,6 +203,22 @@ async def _collect_state_shadow_async(timeframe: str) -> dict[str, Any]:
     started_at = datetime.now(timezone.utc)
     async with CeleryAsyncSessionLocal() as db:
         symbols = sorted(await get_active_pool_symbols(db, "spot"))
+        finalization_delay_seconds = int(
+            (
+                await db.execute(
+                    text(
+                        """
+                        SELECT finalization_delay_seconds
+                          FROM ohlcv_capture_contracts
+                         WHERE capture_contract_version = :version
+                           AND mode = 'SHADOW'
+                           AND canonical_read_enabled IS FALSE
+                        """
+                    ),
+                    {"version": STATE_CAPTURE_CONTRACT_VERSION},
+                )
+            ).scalar_one()
+        )
         if db.in_transaction():
             await db.rollback()
 
@@ -218,6 +234,7 @@ async def _collect_state_shadow_async(timeframe: str) -> dict[str, Any]:
                         symbol=symbol,
                         timeframe=timeframe,
                         points=_state_points(timeframe),
+                        finalization_delay_seconds=finalization_delay_seconds,
                     )
                     await paced_request_delay()
                     return symbol, batch, None
@@ -298,6 +315,7 @@ async def _collect_state_shadow_async(timeframe: str) -> dict[str, Any]:
         "mode": "SHADOW",
         "capture_contract_version": STATE_CAPTURE_CONTRACT_VERSION,
         "canonical_read_enabled": False,
+        "finalization_delay_seconds": finalization_delay_seconds,
         "timeframe": timeframe,
         "target_symbols": len(symbols),
         "successful_symbols": successes,

@@ -80,6 +80,20 @@ def test_state_partition_keeps_open_candle_out_of_closed_population() -> None:
     assert closed[0]["time"] != live[0]["time"]
 
 
+def test_state_partition_keeps_recently_closed_candle_mutable_during_grace() -> None:
+    observed_at = datetime.fromtimestamp(1_700_000_075, tz=timezone.utc)
+    closed, live, rejected = _partition_records(
+        [_raw_candle(1_700_000_000, "true")],
+        symbol="BTC_USDT",
+        timeframe="1m",
+        observed_at=observed_at,
+        finalization_delay_seconds=60,
+    )
+    assert closed == ()
+    assert len(live) == 1
+    assert rejected == 1
+
+
 def test_state_persistence_rounds_decimal_half_up_before_driver_conversion() -> None:
     record = {
         "open": 0.5525,
@@ -244,7 +258,7 @@ async def test_dual_run_persists_closed_and_live_states_without_canonical_write(
     assert "INSERT INTO ohlcv_state_ingestion_observations" in sql
     assert "INSERT INTO ohlcv (" not in sql
     assert "is_closed, capture_contract_version" in sql
-    assert STATE_CAPTURE_CONTRACT_VERSION == "gate_ohlcv_state_v2"
+    assert STATE_CAPTURE_CONTRACT_VERSION == "gate_ohlcv_state_v3"
     assert SHADOW_STATE_TIMEFRAMES == ("1m", "5m", "30m")
 
 
@@ -271,6 +285,17 @@ def test_dual_run_migration_enforces_state_and_valid_from_contracts() -> None:
     assert len("208_ohlcv_decimal_norm") <= 32
     assert "gate_ohlcv_state_v2" in normalization_migration
     assert "INTERVAL '5 minutes'" in normalization_migration
+
+    grace_migration = (
+        __import__("pathlib").Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "209_ohlcv_settle_grace.py"
+    ).read_text(encoding="utf-8")
+    assert 'revision = "209_ohlcv_settle_grace"' in grace_migration
+    assert len("209_ohlcv_settle_grace") <= 32
+    assert "finalization_delay_seconds" in grace_migration
+    assert "gate_ohlcv_state_v3" in grace_migration
 
 
 def test_comparison_contract_compares_all_ohlcv_fields() -> None:
