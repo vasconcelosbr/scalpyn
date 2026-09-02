@@ -10,8 +10,12 @@ from app.services import ohlcv_backfill_service as backfill_module
 from app.services.ohlcv_backfill_service import OHLCVBackfillService
 from app.services.research_ohlcv_service import (
     GateClosedCandleBatch,
+    SHADOW_STATE_TIMEFRAMES,
+    STATE_CAPTURE_CONTRACT_VERSION,
     _closed_records,
+    _partition_records,
     fetch_gate_closed_candles,
+    persist_gate_state_batch,
     validate_retention_contract,
 )
 from app.tasks import collect_research_ohlcv
@@ -55,6 +59,23 @@ def test_research_filter_fails_closed_for_open_or_future_candles() -> None:
     )
     assert len(records) == 1
     assert rejected == 2
+
+
+def test_state_partition_keeps_open_candle_out_of_closed_population() -> None:
+    observed_at = datetime.fromtimestamp(1_700_002_000, tz=timezone.utc)
+    closed, live, rejected = _partition_records(
+        [
+            _raw_candle(1_700_000_000, "true"),
+            _raw_candle(1_700_001_980, "false"),
+        ],
+        symbol="BTC_USDT",
+        timeframe="1m",
+        observed_at=observed_at,
+    )
+    assert len(closed) == 1
+    assert len(live) == 1
+    assert rejected == 1
+    assert closed[0]["time"] != live[0]["time"]
 
 
 @pytest.mark.asyncio
@@ -106,8 +127,12 @@ def test_retention_values_are_distinct_and_exceed_targets(monkeypatch) -> None:
 
 def test_research_tasks_are_isolated_and_have_no_decision_dispatch() -> None:
     names = {
+        "app.tasks.collect_research_ohlcv.collect_1m_shadow",
+        "app.tasks.collect_research_ohlcv.collect_5m_shadow",
+        "app.tasks.collect_research_ohlcv.collect_30m_shadow",
         "app.tasks.collect_research_ohlcv.collect_15m",
         "app.tasks.collect_research_ohlcv.collect_1h",
+        "app.tasks.collect_research_ohlcv.capture_state_comparison",
         "app.tasks.collect_research_ohlcv.enforce_retention",
         "app.tasks.collect_research_ohlcv.capture_readiness",
         "app.tasks.ohlcv_backfill.backfill_research",
@@ -138,12 +163,95 @@ def test_readiness_sql_uses_portable_bind_cast() -> None:
 def test_research_beat_entries_explicitly_target_isolated_queue() -> None:
     schedule = celery_app.conf.beat_schedule
     for name in (
+        "collect_state_1m_every_30s",
+        "collect_state_5m_every_60s",
+        "collect_state_30m_every_120s",
+        "capture_state_ohlcv_comparison_every_5min",
         "collect_research_15m_after_close",
         "collect_research_1h_after_close",
         "capture_research_ohlcv_readiness",
         "enforce_research_ohlcv_retention",
     ):
         assert schedule[name]["options"]["queue"] == QUEUE_RESEARCH_OHLCV
+
+    assert schedule["collect_state_1m_every_30s"]["schedule"] == 30.0
+    assert schedule["collect_state_5m_every_60s"]["schedule"] == 60.0
+    assert schedule["collect_state_30m_every_120s"]["schedule"] == 120.0
+
+
+@pytest.mark.asyncio
+async def test_dual_run_persists_closed_and_live_states_without_canonical_write() -> None:
+    statements: list[str] = []
+    commits = 0
+
+    class Result:
+        rowcount = 1
+
+    class Session:
+        async def execute(self, statement, _params=None):
+            statements.append(str(statement))
+            return Result()
+
+        async def commit(self):
+            nonlocal commits
+            commits += 1
+
+    observed_at = datetime.fromtimestamp(1_700_002_000, tz=timezone.utc)
+    closed, live, rejected = _partition_records(
+        [
+            _raw_candle(1_700_000_000, "true"),
+            _raw_candle(1_700_001_980, "false"),
+        ],
+        symbol="BTC_USDT",
+        timeframe="1m",
+        observed_at=observed_at,
+    )
+    batch = GateClosedCandleBatch(
+        symbol="BTC_USDT",
+        timeframe="1m",
+        observed_at=observed_at,
+        records=closed,
+        rejected_open_candles=rejected,
+        rate_limit="200",
+        rate_limit_remaining="199",
+        live_records=live,
+    )
+
+    inserted, upserted = await persist_gate_state_batch(Session(), batch)
+
+    sql = "\n".join(statements)
+    assert inserted == 1
+    assert upserted == 1
+    assert commits == 1
+    assert "INSERT INTO ohlcv_shadow" in sql
+    assert "INSERT INTO ohlcv_live" in sql
+    assert "INSERT INTO ohlcv_state_ingestion_observations" in sql
+    assert "INSERT INTO ohlcv (" not in sql
+    assert "is_closed, capture_contract_version" in sql
+    assert STATE_CAPTURE_CONTRACT_VERSION == "gate_ohlcv_state_v1"
+    assert SHADOW_STATE_TIMEFRAMES == ("1m", "5m", "30m")
+
+
+def test_dual_run_migration_enforces_state_and_valid_from_contracts() -> None:
+    migration = (
+        __import__("pathlib").Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "207_ohlcv_state_dual_run.py"
+    ).read_text(encoding="utf-8")
+    assert "CHECK (is_closed IS TRUE)" in migration
+    assert "CHECK (is_closed IS FALSE)" in migration
+    assert "valid_from TIMESTAMPTZ NOT NULL" in migration
+    assert "canonical_read_enabled BOOLEAN NOT NULL DEFAULT FALSE" in migration
+    assert "gate_ohlcv_state_v1" in migration
+
+
+def test_comparison_contract_compares_all_ohlcv_fields() -> None:
+    sql = str(collect_research_ohlcv._STATE_COMPARISON_SQL)
+    for field in ("open", "high", "low", "close", "volume", "quote_volume"):
+        assert f"o.{field} IS NOT DISTINCT FROM s.{field}" in sql
+    assert "missing_canonical_rows" in sql
+    assert "canonical_read_enabled IS FALSE" in sql
 
 
 @pytest.mark.asyncio
@@ -219,3 +327,12 @@ async def test_research_backfill_is_idempotent_at_target(monkeypatch) -> None:
     assert first["inserted"] == 2_000
     assert second["skipped"] is True
     assert second["inserted"] == 0
+
+
+@pytest.mark.asyncio
+async def test_canonical_backfill_rejects_shadow_state_timeframes() -> None:
+    service = OHLCVBackfillService(session=object())
+    with pytest.raises(ValueError, match="shadow-state only"):
+        await service.backfill_research_symbol(
+            "BTC_USDT", "1m", target_candles=1_000
+        )

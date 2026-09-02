@@ -818,6 +818,49 @@
           ]
         }
       ]
+    },
+    {
+      "id": "ohlcv-state-separated-dual-run",
+      "description": "Gate 1m/5m/30m capture separates immutable closed candles from mutable live candles in shadow-only tables with a versioned valid_from contract",
+      "files": [
+        {
+          "path": "backend/app/services/research_ohlcv_service.py",
+          "contains_all": [
+            "gate_ohlcv_state_v1",
+            "ohlcv_shadow",
+            "ohlcv_live",
+            "persist_gate_state_batch",
+            "state capture is unsupported"
+          ]
+        },
+        {
+          "path": "backend/app/tasks/collect_research_ohlcv.py",
+          "contains_all": [
+            "collect_1m_shadow",
+            "canonical_read_enabled\": False",
+            "capture_state_comparison",
+            "decision_dispatches\": 0"
+          ]
+        },
+        {
+          "path": "backend/alembic/versions/207_ohlcv_state_dual_run.py",
+          "contains_all": [
+            "CHECK (is_closed IS TRUE)",
+            "CHECK (is_closed IS FALSE)",
+            "valid_from TIMESTAMPTZ NOT NULL",
+            "canonical_read_enabled BOOLEAN NOT NULL DEFAULT FALSE"
+          ]
+        },
+        {
+          "path": "backend/tests/test_research_ohlcv_pipeline.py",
+          "contains_all": [
+            "test_state_partition_keeps_open_candle_out_of_closed_population",
+            "test_dual_run_persists_closed_and_live_states_without_canonical_write",
+            "test_dual_run_migration_enforces_state_and_valid_from_contracts",
+            "test_comparison_contract_compares_all_ohlcv_fields"
+          ]
+        }
+      ]
     }
   ]
 }

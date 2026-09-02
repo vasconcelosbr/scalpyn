@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..repositories.ohlcv_repository import OHLCVRepository
 from .research_ohlcv_service import (
+    CANONICAL_RESEARCH_TIMEFRAMES,
     fetch_gate_closed_candles,
     paced_request_delay,
     validate_timeframe,
@@ -265,6 +266,11 @@ class OHLCVBackfillService:
         contract. The repository unique key makes reruns idempotent.
         """
         validate_timeframe(timeframe)
+        if timeframe not in CANONICAL_RESEARCH_TIMEFRAMES:
+            raise ValueError(
+                f"canonical research backfill is disabled for {timeframe!r}; "
+                "1m/5m/30m are shadow-state only"
+            )
         if target_candles <= 0:
             raise ValueError("target_candles must be positive")
         if not 1 <= chunk_size <= 1000:

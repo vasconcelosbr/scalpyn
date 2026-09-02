@@ -180,9 +180,13 @@ TASK_ROUTES = {
     "app.tasks.simulation.get_simulation_stats":         {"queue": QUEUE_STRUCTURAL},
     "app.tasks.robust_alerts.evaluate":                  {"queue": QUEUE_STRUCTURAL},
     "app.tasks.daily_summary.send":                      {"queue": QUEUE_STRUCTURAL},
-    # Research OHLCV is physically isolated from the microstructure worker.
+    # Research/state OHLCV is physically isolated from decision workers.
+    "app.tasks.collect_research_ohlcv.collect_1m_shadow": {"queue": QUEUE_RESEARCH_OHLCV},
+    "app.tasks.collect_research_ohlcv.collect_5m_shadow": {"queue": QUEUE_RESEARCH_OHLCV},
+    "app.tasks.collect_research_ohlcv.collect_30m_shadow": {"queue": QUEUE_RESEARCH_OHLCV},
     "app.tasks.collect_research_ohlcv.collect_15m":      {"queue": QUEUE_RESEARCH_OHLCV},
     "app.tasks.collect_research_ohlcv.collect_1h":       {"queue": QUEUE_RESEARCH_OHLCV},
+    "app.tasks.collect_research_ohlcv.capture_state_comparison": {"queue": QUEUE_RESEARCH_OHLCV},
     "app.tasks.collect_research_ohlcv.enforce_retention": {"queue": QUEUE_RESEARCH_OHLCV},
     "app.tasks.collect_research_ohlcv.capture_readiness": {"queue": QUEUE_RESEARCH_OHLCV},
     # Historical backfill shares only the research queue; status remains a
@@ -396,8 +400,12 @@ TASK_ANNOTATIONS = {
     "app.tasks.ohlcv_backfill.backfill":                 {"time_limit": 1800, "soft_time_limit": 1700, "rate_limit": "2/h", "max_retries": 3},
     "app.tasks.ohlcv_backfill.backfill_research":        {"time_limit": 3600, "soft_time_limit": 3500, "rate_limit": "1/h", "max_retries": 0},
     "app.tasks.ohlcv_backfill.get_status":               {"time_limit": 60, "soft_time_limit": 50, "rate_limit": "6/m", "max_retries": 3},
+    "app.tasks.collect_research_ohlcv.collect_1m_shadow": {**_RESEARCH_OHLCV_GUARDS, "rate_limit": "180/h", **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.collect_research_ohlcv.collect_5m_shadow": {**_RESEARCH_OHLCV_GUARDS, "rate_limit": "90/h", **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.collect_research_ohlcv.collect_30m_shadow": {**_RESEARCH_OHLCV_GUARDS, "rate_limit": "45/h", **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.collect_research_ohlcv.collect_15m":      {**_RESEARCH_OHLCV_GUARDS, "rate_limit": "8/h", **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.collect_research_ohlcv.collect_1h":       {**_RESEARCH_OHLCV_GUARDS, "rate_limit": "2/h", **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.collect_research_ohlcv.capture_state_comparison": {**_RESEARCH_OHLCV_GUARDS, "rate_limit": "18/h", **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.collect_research_ohlcv.enforce_retention": {**_RESEARCH_OHLCV_GUARDS, "rate_limit": "1/h", **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.collect_research_ohlcv.capture_readiness": {**_RESEARCH_OHLCV_GUARDS, "rate_limit": "8/h", **_NO_REQUEUE_ON_WORKER_LOSS},
 
@@ -703,6 +711,28 @@ celery_app.conf.beat_schedule = {
     "collect_structural_30m_candle_close": {
         "task": "app.tasks.collect_structural_30m.run",
         "schedule": crontab(minute="0,30"),
+    },
+    # State-separated dual run. These tasks only write ohlcv_shadow/ohlcv_live;
+    # no compute, score, signal, barrier, or simulation consumes them in v1.
+    "collect_state_1m_every_30s": {
+        "task": "app.tasks.collect_research_ohlcv.collect_1m_shadow",
+        "schedule": 30.0,
+        "options": {"queue": QUEUE_RESEARCH_OHLCV},
+    },
+    "collect_state_5m_every_60s": {
+        "task": "app.tasks.collect_research_ohlcv.collect_5m_shadow",
+        "schedule": 60.0,
+        "options": {"queue": QUEUE_RESEARCH_OHLCV},
+    },
+    "collect_state_30m_every_120s": {
+        "task": "app.tasks.collect_research_ohlcv.collect_30m_shadow",
+        "schedule": 120.0,
+        "options": {"queue": QUEUE_RESEARCH_OHLCV},
+    },
+    "capture_state_ohlcv_comparison_every_5min": {
+        "task": "app.tasks.collect_research_ohlcv.capture_state_comparison",
+        "schedule": 300.0,
+        "options": {"queue": QUEUE_RESEARCH_OHLCV},
     },
     # Research-only native Gate candles. The delay after each UTC boundary
     # lets Gate mark the just-finished window closed. No compute/score/signal

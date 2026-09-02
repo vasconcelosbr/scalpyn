@@ -1,8 +1,9 @@
-"""Exchange-native OHLCV collection for the research-only 15m/1h layer.
+"""Exchange-native OHLCV collection with explicit candle-state separation.
 
 This module deliberately has no indicator, score, signal, profile, or trading
-imports.  Its only write targets are ``ohlcv`` for the explicitly supported
-timeframes and the additive ingestion-observation table.
+imports. The established 15m/1h path writes closed candles to ``ohlcv``. The
+1m/5m/30m dual-run writes closed candles to ``ohlcv_shadow`` and the current
+mutable candle to ``ohlcv_live``; neither table is a decision input in v1.
 """
 
 from __future__ import annotations
@@ -24,9 +25,24 @@ from ..utils.gate_market_data import parse_gate_spot_candle
 logger = logging.getLogger(__name__)
 
 GATE_SPOT_CANDLES_URL = "https://api.gateio.ws/api/v4/spot/candlesticks"
-SUPPORTED_TIMEFRAMES: Mapping[str, int] = {"15m": 15 * 60, "1h": 60 * 60}
-DEFAULT_TARGET_CANDLES: Mapping[str, int] = {"15m": 2_000, "1h": 1_000}
+SUPPORTED_TIMEFRAMES: Mapping[str, int] = {
+    "1m": 60,
+    "5m": 5 * 60,
+    "15m": 15 * 60,
+    "30m": 30 * 60,
+    "1h": 60 * 60,
+}
+CANONICAL_RESEARCH_TIMEFRAMES = ("15m", "1h")
+SHADOW_STATE_TIMEFRAMES = ("1m", "5m", "30m")
+DEFAULT_TARGET_CANDLES: Mapping[str, int] = {
+    "1m": 1_000,
+    "5m": 1_000,
+    "15m": 2_000,
+    "30m": 1_000,
+    "1h": 1_000,
+}
 DEFAULT_RETENTION_DAYS: Mapping[str, int] = {"15m": 180, "1h": 730}
+STATE_CAPTURE_CONTRACT_VERSION = "gate_ohlcv_state_v1"
 
 
 def _positive_env_int(name: str, default: int) -> int:
@@ -52,7 +68,10 @@ def target_candles(timeframe: str) -> int:
 
 
 def retention_days(timeframe: str) -> int:
-    validate_timeframe(timeframe)
+    if timeframe not in CANONICAL_RESEARCH_TIMEFRAMES:
+        raise ValueError(
+            f"retention is not defined for shadow-state timeframe {timeframe!r}"
+        )
     return _positive_env_int(
         f"OHLCV_RESEARCH_RETENTION_{timeframe.upper()}_DAYS",
         DEFAULT_RETENTION_DAYS[timeframe],
@@ -72,7 +91,7 @@ def validate_timeframe(timeframe: str) -> None:
 
 
 def validate_retention_contract() -> dict[str, int]:
-    values = {tf: retention_days(tf) for tf in SUPPORTED_TIMEFRAMES}
+    values = {tf: retention_days(tf) for tf in CANONICAL_RESEARCH_TIMEFRAMES}
     if values["15m"] == values["1h"]:
         raise ValueError("15m and 1h retention values must remain distinct")
     for timeframe, days in values.items():
@@ -96,6 +115,7 @@ class GateClosedCandleBatch:
     rejected_open_candles: int
     rate_limit: str | None
     rate_limit_remaining: str | None
+    live_records: tuple[dict[str, Any], ...] = ()
 
     @property
     def latest_open_time(self) -> datetime | None:
@@ -127,22 +147,42 @@ def _closed_records(
     observed_at: datetime,
 ) -> tuple[tuple[dict[str, Any], ...], int]:
     """Normalize and fail closed unless Gate marks each candle complete."""
+    closed, _live, rejected = _partition_records(
+        raw_candles,
+        symbol=symbol,
+        timeframe=timeframe,
+        observed_at=observed_at,
+    )
+    return closed, rejected
+
+
+def _partition_records(
+    raw_candles: Iterable[Sequence[Any]],
+    *,
+    symbol: str,
+    timeframe: str,
+    observed_at: datetime,
+) -> tuple[
+    tuple[dict[str, Any], ...],
+    tuple[dict[str, Any], ...],
+    int,
+]:
+    """Partition Gate candles into immutable closed and mutable live states."""
     interval_seconds = SUPPORTED_TIMEFRAMES[timeframe]
-    by_time: dict[datetime, dict[str, Any]] = {}
+    closed_by_time: dict[datetime, dict[str, Any]] = {}
+    live_by_time: dict[datetime, dict[str, Any]] = {}
     rejected_open = 0
 
     for raw in raw_candles:
         parsed = parse_gate_spot_candle(raw)
         opened_at = parsed["time"]
         close_time = opened_at + timedelta(seconds=interval_seconds)
-        if parsed.get("is_closed") is not True or close_time > observed_at:
-            rejected_open += 1
-            continue
-        by_time[opened_at] = {
+        record = {
             "time": opened_at,
             "symbol": symbol,
             "exchange": "gate.io",
             "timeframe": timeframe,
+            "market_type": "spot",
             "open": parsed["open"],
             "high": parsed["high"],
             "low": parsed["low"],
@@ -150,8 +190,17 @@ def _closed_records(
             "volume": parsed["volume"],
             "quote_volume": parsed["quote_volume"],
         }
+        if parsed.get("is_closed") is not True or close_time > observed_at:
+            rejected_open += 1
+            live_by_time[opened_at] = record
+            continue
+        closed_by_time[opened_at] = record
 
-    return tuple(by_time[key] for key in sorted(by_time)), rejected_open
+    return (
+        tuple(closed_by_time[key] for key in sorted(closed_by_time)),
+        tuple(live_by_time[key] for key in sorted(live_by_time)),
+        rejected_open,
+    )
 
 
 async def fetch_gate_closed_candles(
@@ -190,7 +239,7 @@ async def fetch_gate_closed_candles(
         )
 
     observed_at = datetime.now(timezone.utc)
-    records, rejected_open = _closed_records(
+    records, live_records, rejected_open = _partition_records(
         payload,
         symbol=symbol,
         timeframe=timeframe,
@@ -206,6 +255,7 @@ async def fetch_gate_closed_candles(
         rate_limit_remaining=response.headers.get(
             "X-Gate-RateLimit-Requests-Remain"
         ),
+        live_records=live_records,
     )
 
 
@@ -263,6 +313,161 @@ async def persist_gate_closed_batch(
         status="ok" if batch.records else "empty",
     )
     return inserted
+
+
+async def persist_gate_state_batch(
+    session: AsyncSession,
+    batch: GateClosedCandleBatch,
+    *,
+    capture_contract_version: str = STATE_CAPTURE_CONTRACT_VERSION,
+) -> tuple[int, int]:
+    """Persist one dual-run batch without mutating canonical ``ohlcv``."""
+    if batch.timeframe not in SHADOW_STATE_TIMEFRAMES:
+        raise ValueError(
+            f"state capture is unsupported for timeframe {batch.timeframe!r}"
+        )
+
+    inserted_closed = 0
+    for record in batch.records:
+        result = await session.execute(
+            text(
+                """
+                INSERT INTO ohlcv_shadow
+                    (time, symbol, exchange, timeframe, market_type,
+                     open, high, low, close, volume, quote_volume,
+                     is_closed, capture_contract_version)
+                VALUES
+                    (:time, :symbol, :exchange, :timeframe, :market_type,
+                     :open, :high, :low, :close, :volume, :quote_volume,
+                     TRUE, :capture_contract_version)
+                ON CONFLICT (time, symbol, exchange, timeframe) DO NOTHING
+                """
+            ),
+            {**record, "capture_contract_version": capture_contract_version},
+        )
+        inserted_closed += max(int(result.rowcount or 0), 0)
+
+    latest_closed_open = batch.latest_open_time
+    if latest_closed_open is not None:
+        await session.execute(
+            text(
+                """
+                DELETE FROM ohlcv_live
+                 WHERE symbol = :symbol
+                   AND exchange = 'gate.io'
+                   AND timeframe = :timeframe
+                   AND time <= :latest_closed_open
+                """
+            ),
+            {
+                "symbol": batch.symbol,
+                "timeframe": batch.timeframe,
+                "latest_closed_open": latest_closed_open,
+            },
+        )
+
+    upserted_live = 0
+    for record in batch.live_records:
+        result = await session.execute(
+            text(
+                """
+                INSERT INTO ohlcv_live
+                    (time, symbol, exchange, timeframe, market_type,
+                     open, high, low, close, volume, quote_volume,
+                     is_closed, capture_contract_version)
+                VALUES
+                    (:time, :symbol, :exchange, :timeframe, :market_type,
+                     :open, :high, :low, :close, :volume, :quote_volume,
+                     FALSE, :capture_contract_version)
+                ON CONFLICT (time, symbol, exchange, timeframe) DO UPDATE SET
+                    open = EXCLUDED.open,
+                    high = EXCLUDED.high,
+                    low = EXCLUDED.low,
+                    close = EXCLUDED.close,
+                    volume = EXCLUDED.volume,
+                    quote_volume = EXCLUDED.quote_volume,
+                    is_closed = FALSE,
+                    ingested_at = clock_timestamp(),
+                    capture_contract_version = EXCLUDED.capture_contract_version
+                """
+            ),
+            {**record, "capture_contract_version": capture_contract_version},
+        )
+        upserted_live += max(int(result.rowcount or 0), 0)
+
+    await session.execute(
+        text(
+            """
+            INSERT INTO ohlcv_state_ingestion_observations
+                (observed_at, symbol, timeframe, source,
+                 capture_contract_version, latest_closed_open_time,
+                 latest_closed_close_time, availability_lag_seconds,
+                 received_rows, inserted_closed_rows, upserted_live_rows,
+                 rejected_from_closed_rows, status, error_code)
+            VALUES
+                (:observed_at, :symbol, :timeframe, 'gate.io',
+                 :capture_contract_version, :latest_closed_open_time,
+                 :latest_closed_close_time, :availability_lag_seconds,
+                 :received_rows, :inserted_closed_rows, :upserted_live_rows,
+                 :rejected_from_closed_rows, :status, NULL)
+            ON CONFLICT
+                (observed_at, symbol, timeframe, capture_contract_version)
+            DO NOTHING
+            """
+        ),
+        {
+            "observed_at": batch.observed_at,
+            "symbol": batch.symbol,
+            "timeframe": batch.timeframe,
+            "capture_contract_version": capture_contract_version,
+            "latest_closed_open_time": batch.latest_open_time,
+            "latest_closed_close_time": batch.latest_close_time,
+            "availability_lag_seconds": batch.availability_lag_seconds,
+            "received_rows": len(batch.records) + len(batch.live_records),
+            "inserted_closed_rows": inserted_closed,
+            "upserted_live_rows": upserted_live,
+            "rejected_from_closed_rows": batch.rejected_open_candles,
+            "status": "ok" if batch.records else "empty",
+        },
+    )
+    await session.commit()
+    return inserted_closed, upserted_live
+
+
+async def record_gate_state_error(
+    session: AsyncSession,
+    *,
+    symbol: str,
+    timeframe: str,
+    observed_at: datetime,
+    error_code: str,
+    capture_contract_version: str = STATE_CAPTURE_CONTRACT_VERSION,
+) -> None:
+    await session.execute(
+        text(
+            """
+            INSERT INTO ohlcv_state_ingestion_observations
+                (observed_at, symbol, timeframe, source,
+                 capture_contract_version, received_rows,
+                 inserted_closed_rows, upserted_live_rows,
+                 rejected_from_closed_rows, status, error_code)
+            VALUES
+                (:observed_at, :symbol, :timeframe, 'gate.io',
+                 :capture_contract_version, 0, 0, 0, 0, 'error', :error_code)
+            ON CONFLICT
+                (observed_at, symbol, timeframe, capture_contract_version)
+            DO NOTHING
+            """
+        ),
+        {
+            "observed_at": observed_at,
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "capture_contract_version": capture_contract_version,
+            "error_code": error_code[:100],
+        },
+    )
+    await session.commit()
 
 
 async def paced_request_delay() -> None:
