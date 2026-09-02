@@ -13,6 +13,7 @@ import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Iterable, Mapping, Sequence
 
 import httpx
@@ -42,7 +43,9 @@ DEFAULT_TARGET_CANDLES: Mapping[str, int] = {
     "1h": 1_000,
 }
 DEFAULT_RETENTION_DAYS: Mapping[str, int] = {"15m": 180, "1h": 730}
-STATE_CAPTURE_CONTRACT_VERSION = "gate_ohlcv_state_v1"
+STATE_CAPTURE_CONTRACT_VERSION = "gate_ohlcv_state_v2"
+_STATE_PRICE_QUANTUM = Decimal("0.00000001")
+_STATE_VOLUME_QUANTUM = Decimal("0.0001")
 
 
 def _positive_env_int(name: str, default: int) -> int:
@@ -343,7 +346,10 @@ async def persist_gate_state_batch(
                 ON CONFLICT (time, symbol, exchange, timeframe) DO NOTHING
                 """
             ),
-            {**record, "capture_contract_version": capture_contract_version},
+            {
+                **_normalize_state_db_record(record),
+                "capture_contract_version": capture_contract_version,
+            },
         )
         inserted_closed += max(int(result.rowcount or 0), 0)
 
@@ -391,7 +397,10 @@ async def persist_gate_state_batch(
                     capture_contract_version = EXCLUDED.capture_contract_version
                 """
             ),
-            {**record, "capture_contract_version": capture_contract_version},
+            {
+                **_normalize_state_db_record(record),
+                "capture_contract_version": capture_contract_version,
+            },
         )
         upserted_live += max(int(result.rowcount or 0), 0)
 
@@ -432,6 +441,22 @@ async def persist_gate_state_batch(
     )
     await session.commit()
     return inserted_closed, upserted_live
+
+
+def _normalize_state_db_record(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Round exactly to the database scale before the async driver sees floats."""
+    normalized = dict(record)
+    for field in ("open", "high", "low", "close"):
+        normalized[field] = Decimal(str(record[field])).quantize(
+            _STATE_PRICE_QUANTUM,
+            rounding=ROUND_HALF_UP,
+        )
+    for field in ("volume", "quote_volume"):
+        normalized[field] = Decimal(str(record[field])).quantize(
+            _STATE_VOLUME_QUANTUM,
+            rounding=ROUND_HALF_UP,
+        )
+    return normalized
 
 
 async def record_gate_state_error(

@@ -826,7 +826,7 @@
         {
           "path": "backend/app/services/research_ohlcv_service.py",
           "contains_all": [
-            "gate_ohlcv_state_v1",
+            "gate_ohlcv_state_v2",
             "ohlcv_shadow",
             "ohlcv_live",
             "persist_gate_state_batch",
@@ -852,11 +852,19 @@
           ]
         },
         {
+          "path": "backend/alembic/versions/208_ohlcv_state_decimal_normalization.py",
+          "contains_all": [
+            "gate_ohlcv_state_v2",
+            "INTERVAL '5 minutes'"
+          ]
+        },
+        {
           "path": "backend/tests/test_research_ohlcv_pipeline.py",
           "contains_all": [
             "test_state_partition_keeps_open_candle_out_of_closed_population",
             "test_dual_run_persists_closed_and_live_states_without_canonical_write",
             "test_dual_run_migration_enforces_state_and_valid_from_contracts",
+            "test_state_persistence_rounds_decimal_half_up_before_driver_conversion",
             "test_comparison_contract_compares_all_ohlcv_fields"
           ]
         }

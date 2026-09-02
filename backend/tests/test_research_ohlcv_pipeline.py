@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 import httpx
 import pytest
@@ -13,6 +14,7 @@ from app.services.research_ohlcv_service import (
     SHADOW_STATE_TIMEFRAMES,
     STATE_CAPTURE_CONTRACT_VERSION,
     _closed_records,
+    _normalize_state_db_record,
     _partition_records,
     fetch_gate_closed_candles,
     persist_gate_state_batch,
@@ -76,6 +78,20 @@ def test_state_partition_keeps_open_candle_out_of_closed_population() -> None:
     assert len(live) == 1
     assert rejected == 1
     assert closed[0]["time"] != live[0]["time"]
+
+
+def test_state_persistence_rounds_decimal_half_up_before_driver_conversion() -> None:
+    record = {
+        "open": 0.5525,
+        "high": 0.5525,
+        "low": 0.5525,
+        "close": 0.5525,
+        "volume": 5.98,
+        "quote_volume": 3.30395,
+    }
+    normalized = _normalize_state_db_record(record)
+    assert normalized["open"] == Decimal("0.55250000")
+    assert normalized["quote_volume"] == Decimal("3.3040")
 
 
 @pytest.mark.asyncio
@@ -228,7 +244,7 @@ async def test_dual_run_persists_closed_and_live_states_without_canonical_write(
     assert "INSERT INTO ohlcv_state_ingestion_observations" in sql
     assert "INSERT INTO ohlcv (" not in sql
     assert "is_closed, capture_contract_version" in sql
-    assert STATE_CAPTURE_CONTRACT_VERSION == "gate_ohlcv_state_v1"
+    assert STATE_CAPTURE_CONTRACT_VERSION == "gate_ohlcv_state_v2"
     assert SHADOW_STATE_TIMEFRAMES == ("1m", "5m", "30m")
 
 
@@ -244,6 +260,15 @@ def test_dual_run_migration_enforces_state_and_valid_from_contracts() -> None:
     assert "valid_from TIMESTAMPTZ NOT NULL" in migration
     assert "canonical_read_enabled BOOLEAN NOT NULL DEFAULT FALSE" in migration
     assert "gate_ohlcv_state_v1" in migration
+
+    normalization_migration = (
+        __import__("pathlib").Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "208_ohlcv_state_decimal_normalization.py"
+    ).read_text(encoding="utf-8")
+    assert "gate_ohlcv_state_v2" in normalization_migration
+    assert "INTERVAL '5 minutes'" in normalization_migration
 
 
 def test_comparison_contract_compares_all_ohlcv_fields() -> None:
