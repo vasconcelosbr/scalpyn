@@ -3,7 +3,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.api.shadow_trades import _tp_sl_win_rate, shadow_trades_summary
+from app.api.shadow_trades import _finalized_positive_win_rate, shadow_trades_summary
 
 
 class _SummaryResult:
@@ -22,26 +22,28 @@ class _SummaryDb:
         return _SummaryResult(self._row)
 
 
-def test_win_rate_uses_only_tp_and_sl_outcomes() -> None:
-    assert _tp_sl_win_rate(tp_count=33, sl_count=31) == 51.56
+def test_win_rate_counts_every_finalized_positive_result() -> None:
+    assert _finalized_positive_win_rate(positive_count=3, measured_count=4) == 75.0
 
 
-def test_win_rate_is_zero_without_tp_or_sl_outcomes() -> None:
-    assert _tp_sl_win_rate(tp_count=0, sl_count=0) == 0.0
+def test_win_rate_is_zero_without_measured_finalized_results() -> None:
+    assert _finalized_positive_win_rate(positive_count=0, measured_count=0) == 0.0
 
 
 @pytest.mark.asyncio
-async def test_summary_excludes_trailing_and_timeout_from_win_rate() -> None:
+async def test_summary_includes_positive_trailing_in_win_rate() -> None:
     row = SimpleNamespace(
-        total=79,
-        pending=7,
-        completed=72,
-        win=33,
-        loss=31,
-        trailing=8,
+        total=8,
+        pending=4,
+        completed=4,
+        win=1,
+        loss=1,
+        trailing=2,
         timeout=0,
-        total_pnl_usdt=0,
-        avg_pnl_pct=0,
+        positive=3,
+        measured=4,
+        total_pnl_usdt=16.55,
+        avg_pnl_pct=0.4125,
         period_start=None,
         period_end=None,
     )
@@ -58,7 +60,7 @@ async def test_summary_excludes_trailing_and_timeout_from_win_rate() -> None:
         user_id=uuid4(),
     )
 
-    assert summary.completed == 72
-    assert summary.trailing == 8
+    assert summary.completed == 4
+    assert summary.trailing == 2
     assert summary.timeout == 0
-    assert summary.win_rate == 51.56
+    assert summary.win_rate == 75.0

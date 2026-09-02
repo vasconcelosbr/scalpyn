@@ -127,6 +127,8 @@ interface ShadowTradeSummary {
   loss: number;
   trailing: number;
   timeout: number;
+  positive: number;
+  measured: number;
   win_rate: number;
   total_pnl_usdt: number;
   avg_pnl_pct: number;
@@ -650,14 +652,14 @@ function SummaryCards({
         sub="PENDING + RUNNING"
       />
       <StatCard
-        label="Win Rate TP/SL"
+        label="Win Rate"
         icon={<Target size={12} />}
         value={placeholder ? "—" : `${data!.win_rate.toFixed(1)}%`}
         accent={winRateAccent}
         sub={
           placeholder
             ? ""
-            : `TP ${data!.win} · SL ${data!.loss} · TR ${data!.trailing} · TO ${data!.timeout}`
+            : `${data!.positive}/${data!.measured} positivos · TP ${data!.win} · SL ${data!.loss} · TR ${data!.trailing} · TO ${data!.timeout}`
         }
       />
       <StatCard

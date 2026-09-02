@@ -84,10 +84,9 @@ _DEFAULT_PAGE_SIZE = 50
 _MAX_PAGE_SIZE = 200
 
 
-def _tp_sl_win_rate(tp_count: int, sl_count: int) -> float:
-    """Return the direct TP-vs-SL hit rate; other terminal outcomes are excluded."""
-    decided = tp_count + sl_count
-    return round((tp_count / decided) * 100, 2) if decided else 0.0
+def _finalized_positive_win_rate(positive_count: int, measured_count: int) -> float:
+    """Return positive finalized trades as a percentage of measured finalizations."""
+    return round((positive_count / measured_count) * 100, 2) if measured_count else 0.0
 
 
 def _parse_iso_datetime(
@@ -988,7 +987,7 @@ async def shadow_trades_summary(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ) -> ShadowTradeSummary:
-    """Agregado do range filtrado; Win Rate compara somente TP_HIT e SL_HIT."""
+    """Agregado do range filtrado; Win Rate mede P&L positivo nos finalizados."""
     try:
         filters = _build_filters(
             user_id=user_id,
@@ -1005,6 +1004,12 @@ async def shadow_trades_summary(
         # finalizado (TP/SL/TRAILING/TIMEOUT) — pendentes não têm pnl.
         completed_filter = ShadowTrade.outcome.in_(
             ("TP_HIT", "SL_HIT", "TRAILING_STOP", "TIMEOUT")
+        )
+        # O retorno líquido é canônico quando foi persistido. Trades legados sem
+        # custo calculado continuam mensuráveis pelo pnl_pct bruto já persistido.
+        realized_return_pct = func.coalesce(
+            ShadowTrade.net_return_pct,
+            ShadowTrade.pnl_pct,
         )
 
         stats_q = select(
@@ -1027,6 +1032,12 @@ async def shadow_trades_summary(
             func.count(ShadowTrade.id)
             .filter(ShadowTrade.outcome == "TIMEOUT")
             .label("timeout"),
+            func.count(ShadowTrade.id)
+            .filter(completed_filter, realized_return_pct > 0)
+            .label("positive"),
+            func.count(ShadowTrade.id)
+            .filter(completed_filter, realized_return_pct.isnot(None))
+            .label("measured"),
             func.coalesce(
                 func.sum(
                     case((ShadowTrade.pnl_usdt.isnot(None), ShadowTrade.pnl_usdt), else_=0.0)
@@ -1074,7 +1085,9 @@ async def shadow_trades_summary(
         completed = int(row.completed or 0)
         win = int(row.win or 0)
         loss = int(row.loss or 0)
-        win_rate = _tp_sl_win_rate(win, loss)
+        positive = int(row.positive or 0)
+        measured = int(row.measured or 0)
+        win_rate = _finalized_positive_win_rate(positive, measured)
 
         return ShadowTradeSummary(
             total=total,
@@ -1084,6 +1097,8 @@ async def shadow_trades_summary(
             loss=loss,
             trailing=int(row.trailing or 0),
             timeout=int(row.timeout or 0),
+            positive=positive,
+            measured=measured,
             win_rate=win_rate,
             total_pnl_usdt=round(float(row.total_pnl_usdt or 0.0), 4),
             avg_pnl_pct=round(float(row.avg_pnl_pct or 0.0), 4),

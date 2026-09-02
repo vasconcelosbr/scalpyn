@@ -47,6 +47,36 @@
       ]
     },
     {
+      "id": "shadow-summary-positive-win-rate",
+      "description": "Shadow Portfolio summary defines win rate by positive realized return across every measurable terminal outcome, including trailing and timeout",
+      "files": [
+        {
+          "path": "backend/app/api/shadow_trades.py",
+          "contains_all": [
+            "_finalized_positive_win_rate",
+            "ShadowTrade.net_return_pct",
+            ".label(\"positive\")",
+            ".label(\"measured\")"
+          ]
+        },
+        {
+          "path": "backend/tests/test_shadow_win_rate.py",
+          "contains_all": [
+            "test_win_rate_counts_every_finalized_positive_result",
+            "test_summary_includes_positive_trailing_in_win_rate"
+          ]
+        },
+        {
+          "path": "frontend/app/dashboard/shadow-portfolio/page.tsx",
+          "contains_all": [
+            "label=\"Win Rate\"",
+            "positivos",
+            "finalizados"
+          ]
+        }
+      ]
+    },
+    {
       "id": "complete-strategy-settings-contract",
       "description": "Strategies UI and aggregate API own every Spot and Shadow business value, support audited JSON round trips, and fail closed without persisted runtime settings",
       "files": [

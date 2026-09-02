@@ -213,7 +213,9 @@ class ShadowTradeSummary(BaseModel):
     loss: int  # outcome='SL_HIT'
     trailing: int  # outcome='TRAILING_STOP'
     timeout: int  # outcome='TIMEOUT'
-    win_rate: float  # TP_HIT / (TP_HIT + SL_HIT) × 100; TR/TO excluídos
+    positive: int  # finalizados com COALESCE(net_return_pct, pnl_pct) > 0
+    measured: int  # finalizados com retorno persistido disponível
+    win_rate: float  # positive / measured × 100
     total_pnl_usdt: float
     avg_pnl_pct: float
     period_start: Optional[datetime] = None
