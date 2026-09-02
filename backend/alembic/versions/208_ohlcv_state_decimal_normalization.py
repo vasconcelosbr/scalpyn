@@ -1,6 +1,6 @@
 """Version the exact-decimal OHLCV shadow capture contract.
 
-Revision ID: 208_ohlcv_state_decimal_normalization
+Revision ID: 208_ohlcv_decimal_norm
 Revises: 207_ohlcv_state_dual_run
 """
 
@@ -8,7 +8,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "208_ohlcv_state_decimal_normalization"
+revision = "208_ohlcv_decimal_norm"
 down_revision = "207_ohlcv_state_dual_run"
 branch_labels = None
 depends_on = None

@@ -267,6 +267,8 @@ def test_dual_run_migration_enforces_state_and_valid_from_contracts() -> None:
         / "versions"
         / "208_ohlcv_state_decimal_normalization.py"
     ).read_text(encoding="utf-8")
+    assert 'revision = "208_ohlcv_decimal_norm"' in normalization_migration
+    assert len("208_ohlcv_decimal_norm") <= 32
     assert "gate_ohlcv_state_v2" in normalization_migration
     assert "INTERVAL '5 minutes'" in normalization_migration
 
