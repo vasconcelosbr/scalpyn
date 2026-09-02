@@ -129,6 +129,12 @@ def test_research_tasks_are_isolated_and_have_no_decision_dispatch() -> None:
     )
 
 
+def test_readiness_sql_uses_portable_bind_cast() -> None:
+    sql = str(collect_research_ohlcv._READINESS_SQL)
+    assert "CAST(:target_candles AS integer)" in sql
+    assert ":target_candles::integer" not in sql
+
+
 def test_research_beat_entries_explicitly_target_isolated_queue() -> None:
     schedule = celery_app.conf.beat_schedule
     for name in (

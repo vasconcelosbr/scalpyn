@@ -277,7 +277,7 @@ _READINESS_SQL = text(
     )
     SELECT clock_timestamp() AS observed_at,
            :timeframe AS timeframe,
-           :target_candles::integer AS target_candles,
+           CAST(:target_candles AS integer) AS target_candles,
            count(*)::integer AS target_symbols,
            count(*) FILTER (WHERE rows > 0)::integer AS present_symbols,
            count(*) FILTER (WHERE rows >= :target_candles)::integer
