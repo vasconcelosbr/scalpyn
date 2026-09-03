@@ -39,6 +39,7 @@ def test_sl_observed_sample_preserves_nominal_and_signed_overshoot() -> None:
         exit_price_nominal=99.0,
         exit_price_observed=98.703,
         exit_price_semantics="OBSERVED_SAMPLE_TRIGGER",
+        closure_path="regular_batch",
     )
 
     assert shadow.exit_price == pytest.approx(98.703)
@@ -58,6 +59,7 @@ def test_tp_observed_sample_preserves_positive_overshoot() -> None:
         exit_price_nominal=101.0,
         exit_price_observed=101.303,
         exit_price_semantics="OBSERVED_SAMPLE_TRIGGER",
+        closure_path="regular_batch",
     )
 
     assert shadow.exit_price == pytest.approx(101.303)
@@ -75,6 +77,7 @@ def test_intrabar_touch_does_not_invent_unobservable_overshoot() -> None:
         exit_price_nominal=99.0,
         exit_price_observed=None,
         exit_price_semantics="INTRABAR_TOUCH_NOMINAL",
+        closure_path="regular_batch",
     )
 
     assert shadow.exit_price == pytest.approx(99.0)

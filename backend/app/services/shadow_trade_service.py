@@ -193,14 +193,32 @@ def _apply_barrier_params(user_config: dict, ml_config: dict) -> dict:
     )
     user_config["shadow_canonical_barrier_policy_version"] = ml_config.get(
         "shadow_canonical_barrier_policy_version",
-        "shadow_closed_ohlcv_first_touch_v1",
+        "shadow_closed_ohlcv_first_touch_v2",
     )
     user_config["ml_win_fast_threshold_seconds"] = ml_config.get(
         "ml_win_fast_threshold_seconds"
     )
+    # Bloco A.3: per-source monitoring mode map, resolved to the concrete
+    # mode for this Shadow's own source by the caller (which knows it) at
+    # snapshot-build time -- see _resolve_shadow_monitor_mode.
+    user_config["shadow_monitor_mode_by_source"] = deepcopy(
+        ml_config.get("shadow_monitor_mode_by_source") or {}
+    )
     user_config.pop("shadow_tp_pct", None)
     _apply_shadow_trailing_policy(user_config, ml_config)
     return user_config
+
+
+def _resolve_shadow_monitor_mode(user_config: dict, source: str) -> str:
+    """Bloco A.3: resolve the per-source monitoring mode frozen for a new
+    Shadow. An unmapped source defaults to CONTINUOUS -- fail-open on
+    cadence, never silently drops a Shadow into OFF because of a missing
+    map entry."""
+    modes = user_config.get("shadow_monitor_mode_by_source") or {}
+    mode = str(modes.get(source) or "CONTINUOUS")
+    if mode not in ("CONTINUOUS", "BATCH", "OFF"):
+        return "CONTINUOUS"
+    return mode
 
 
 def _apply_shadow_trailing_policy(user_config: dict, ml_config: dict) -> None:
@@ -1375,6 +1393,19 @@ async def _create_from_decision(
         raise ValueError(
             f"shadow_config_missing: runtime fields missing {missing_runtime}"
         )
+    # Bloco A.3: OFF stops new Shadows of this source from being created at
+    # all -- never touches an already-open Shadow (this check only runs at
+    # creation), and never affects live-spot execution (this function only
+    # ever writes shadow_trades).
+    shadow_monitor_mode = _resolve_shadow_monitor_mode(user_config, source)
+    if shadow_monitor_mode == "OFF":
+        logger.info(
+            "[shadow] creation skipped: shadow_monitor_mode=OFF source=%s "
+            "symbol=%s decision_id=%s",
+            source, decision.symbol, getattr(decision, "id", None),
+        )
+        return None
+
     amount_usdt = float(user_config["amount_usdt"])
     timeout_candles = int(user_config["timeout_candles"])
     ttt_enabled = bool(user_config["ttt_enabled"])
@@ -1681,6 +1712,9 @@ async def _create_from_decision(
         barrier_atr_source_at=_barrier_atr_source_at,
         native_capture=native_capture,
     )
+    # Bloco A.3: freeze the mode this Shadow was born under -- a later
+    # config change never reprocesses or re-tags an already-open Shadow.
+    config_snap["shadow_monitor_mode"] = shadow_monitor_mode
     config_snap["entry_price_source_at"] = (
         entry_price_source_at.isoformat()
         if isinstance(entry_price_source_at, datetime)

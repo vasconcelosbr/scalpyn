@@ -231,6 +231,7 @@ TASK_ROUTES = {
     # Shadow labels are analytical/OHLCV work; isolate them on structural_compute
     # so neither live execution nor pipeline scans can starve label closure.
     "app.tasks.shadow_trade_monitor.run":           {"queue": QUEUE_STRUCTURAL_COMPUTE},
+    "app.tasks.shadow_trade_monitor.run_batch_sweep": {"queue": QUEUE_STRUCTURAL_COMPUTE},
     "app.tasks.entry_risk_capture.reconcile":       {"queue": QUEUE_STRUCTURAL_COMPUTE},
 
     # Shadow Timeout Analyzer (Fase Quant) — análise passiva pós-timeout.
@@ -459,6 +460,17 @@ TASK_ANNOTATIONS = {
         "time_limit": 300,
         "soft_time_limit": 270,
         "rate_limit": "12/h",
+        **_NO_REQUEUE_ON_WORKER_LOSS,
+    },
+    # Bloco A.3 — hourly sweep for shadow_monitor_mode='BATCH' Shadows.
+    # Larger batch (up to SHADOW_BATCH_SWEEP_SIZE, default 500) than the
+    # CONTINUOUS loop above, but only once/hour -- never competes with it
+    # for the tight 5-min cadence.
+    "app.tasks.shadow_trade_monitor.run_batch_sweep": {
+        **_EXECUTION_GUARDS,
+        "time_limit": 900,
+        "soft_time_limit": 840,
+        "rate_limit": "2/h",
         **_NO_REQUEUE_ON_WORKER_LOSS,
     },
     "app.tasks.entry_risk_capture.reconcile":       {
@@ -789,6 +801,15 @@ celery_app.conf.beat_schedule = {
     "shadow_trade_monitor": {
         "task": "app.tasks.shadow_trade_monitor.run",
         "schedule": float(os.environ.get("SHADOW_MONITOR_INTERVAL_S", 300)),
+        "options": {"queue": QUEUE_STRUCTURAL_COMPUTE},
+    },
+    # Bloco A.3 (2026-09-03) — hourly sweep for shadow_monitor_mode='BATCH'
+    # Shadows (research sources by default). Independent of the CONTINUOUS
+    # cadence above; only Shadows explicitly frozen under BATCH are picked
+    # up here.
+    "shadow_trade_batch_sweep": {
+        "task": "app.tasks.shadow_trade_monitor.run_batch_sweep",
+        "schedule": float(os.environ.get("SHADOW_BATCH_SWEEP_INTERVAL_S", 3600)),
         "options": {"queue": QUEUE_STRUCTURAL_COMPUTE},
     },
     "entry_risk_capture_reconcile": {

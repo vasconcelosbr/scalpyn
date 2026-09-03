@@ -99,7 +99,7 @@ def test_both_same_candle_resolves_as_sl():
     shadow.barrier_touched = "BOTH_SAME_CANDLE"
     shadow.barrier_touched_at = _EXIT_TS
 
-    _finalize_outcome(shadow, "SL_HIT", shadow.sl_price, _EXIT_TS, shadow.entry_price)
+    _finalize_outcome(shadow, "SL_HIT", shadow.sl_price, _EXIT_TS, shadow.entry_price, closure_path="regular_batch")
 
     assert shadow.status == "COMPLETED"
     assert shadow.barrier_touched == "BOTH_SAME_CANDLE"
@@ -115,7 +115,7 @@ def test_both_same_candle_pnl_is_sl_price():
     shadow.barrier_touched = "BOTH_SAME_CANDLE"
     exit_price = shadow.sl_price
 
-    _finalize_outcome(shadow, "SL_HIT", exit_price, _EXIT_TS, entry)
+    _finalize_outcome(shadow, "SL_HIT", exit_price, _EXIT_TS, entry, closure_path="regular_batch")
 
     assert abs(shadow.pnl_pct - (-sl_pct)) < 1e-9
 
@@ -127,7 +127,7 @@ def test_tp_only_sets_barrier_tp():
     shadow.barrier_touched = "TP"
     shadow.barrier_touched_at = _EXIT_TS
 
-    _finalize_outcome(shadow, "TP_HIT", shadow.tp_price, _EXIT_TS, shadow.entry_price)
+    _finalize_outcome(shadow, "TP_HIT", shadow.tp_price, _EXIT_TS, shadow.entry_price, closure_path="regular_batch")
 
     assert shadow.barrier_touched == "TP"
     assert shadow.intrabar_convention == "SL_FIRST"
@@ -141,7 +141,7 @@ def test_sl_only_sets_barrier_sl_via_finalize():
     shadow = _make_shadow()
     # barrier_touched = None (não setado no loop)
 
-    _finalize_outcome(shadow, "SL_HIT", shadow.sl_price, _EXIT_TS, shadow.entry_price)
+    _finalize_outcome(shadow, "SL_HIT", shadow.sl_price, _EXIT_TS, shadow.entry_price, closure_path="regular_batch")
 
     assert shadow.barrier_touched == "SL"
     assert shadow.barrier_touched_at == _EXIT_TS
@@ -155,7 +155,7 @@ def test_timeout_sets_barrier_none_and_final_return():
     close_price = 100.5  # +0.5%
     shadow = _make_shadow(entry_price=entry)
 
-    _finalize_outcome(shadow, "TIMEOUT", close_price, _EXIT_TS, entry)
+    _finalize_outcome(shadow, "TIMEOUT", close_price, _EXIT_TS, entry, closure_path="regular_batch")
 
     assert shadow.barrier_touched == "NONE"
     assert shadow.barrier_touched_at is None
@@ -171,7 +171,7 @@ def test_net_return_pct_computed_from_config():
     config = {"ml_fee_roundtrip_pct": 0.2}
     shadow = _make_shadow(config_snapshot=config)
 
-    _finalize_outcome(shadow, "TP_HIT", shadow.tp_price, _EXIT_TS, shadow.entry_price)
+    _finalize_outcome(shadow, "TP_HIT", shadow.tp_price, _EXIT_TS, shadow.entry_price, closure_path="regular_batch")
 
     assert shadow.fee_roundtrip_pct_applied == pytest.approx(0.2)
     assert shadow.net_return_pct == pytest.approx(shadow.pnl_pct - 0.2)
@@ -181,7 +181,7 @@ def test_net_return_pct_null_when_no_config():
     """Sem ml_fee_roundtrip_pct no config → net_return_pct permanece NULL."""
     shadow = _make_shadow(config_snapshot={})
 
-    _finalize_outcome(shadow, "TP_HIT", shadow.tp_price, _EXIT_TS, shadow.entry_price)
+    _finalize_outcome(shadow, "TP_HIT", shadow.tp_price, _EXIT_TS, shadow.entry_price, closure_path="regular_batch")
 
     assert shadow.net_return_pct is None
     assert shadow.fee_roundtrip_pct_applied is None
@@ -198,7 +198,7 @@ def test_intrabar_convention_always_sl_first(outcome, exit_price_attr):
     shadow = _make_shadow()
     exit_price = getattr(shadow, exit_price_attr)
 
-    _finalize_outcome(shadow, outcome, exit_price, _EXIT_TS, shadow.entry_price)
+    _finalize_outcome(shadow, outcome, exit_price, _EXIT_TS, shadow.entry_price, closure_path="regular_batch")
 
     assert shadow.intrabar_convention == "SL_FIRST"
 
@@ -210,7 +210,7 @@ def test_mae_clamped_to_zero_when_min_above_entry():
     entry = 100.0
     shadow = _make_shadow(entry_price=entry, min_price_post_entry=101.0)
 
-    _finalize_outcome(shadow, "TP_HIT", shadow.tp_price, _EXIT_TS, entry)
+    _finalize_outcome(shadow, "TP_HIT", shadow.tp_price, _EXIT_TS, entry, closure_path="regular_batch")
 
     assert shadow.mae_pct == pytest.approx(0.0), "MAE must be clamped to 0 when min > entry"
     assert shadow.max_drawdown_pct == pytest.approx(0.0)
@@ -221,7 +221,7 @@ def test_mfe_clamped_to_zero_when_max_below_entry():
     entry = 100.0
     shadow = _make_shadow(entry_price=entry, max_price_post_entry=99.0)
 
-    _finalize_outcome(shadow, "SL_HIT", shadow.sl_price, _EXIT_TS, entry)
+    _finalize_outcome(shadow, "SL_HIT", shadow.sl_price, _EXIT_TS, entry, closure_path="regular_batch")
 
     assert shadow.mfe_pct == pytest.approx(0.0), "MFE must be clamped to 0 when max < entry"
     assert shadow.max_profit_pct == pytest.approx(0.0)
@@ -232,7 +232,7 @@ def test_mae_negative_when_min_below_entry():
     entry = 100.0
     shadow = _make_shadow(entry_price=entry, min_price_post_entry=98.0)
 
-    _finalize_outcome(shadow, "SL_HIT", shadow.sl_price, _EXIT_TS, entry)
+    _finalize_outcome(shadow, "SL_HIT", shadow.sl_price, _EXIT_TS, entry, closure_path="regular_batch")
 
     assert shadow.mae_pct == pytest.approx(-2.0)
     assert shadow.max_drawdown_pct == pytest.approx(-2.0)
@@ -243,7 +243,7 @@ def test_mfe_positive_when_max_above_entry():
     entry = 100.0
     shadow = _make_shadow(entry_price=entry, max_price_post_entry=103.0)
 
-    _finalize_outcome(shadow, "TP_HIT", shadow.tp_price, _EXIT_TS, entry)
+    _finalize_outcome(shadow, "TP_HIT", shadow.tp_price, _EXIT_TS, entry, closure_path="regular_batch")
 
     assert shadow.mfe_pct == pytest.approx(3.0)
     assert shadow.max_profit_pct == pytest.approx(3.0)
@@ -253,7 +253,7 @@ def test_mae_mfe_none_when_no_min_max_price():
     """Quando min/max_price não coletados → mae_pct/mfe_pct permanecem None."""
     shadow = _make_shadow()  # min/max_price_post_entry = None by default
 
-    _finalize_outcome(shadow, "TP_HIT", shadow.tp_price, _EXIT_TS, shadow.entry_price)
+    _finalize_outcome(shadow, "TP_HIT", shadow.tp_price, _EXIT_TS, shadow.entry_price, closure_path="regular_batch")
 
     assert shadow.mae_pct is None
     assert shadow.mfe_pct is None

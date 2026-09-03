@@ -130,7 +130,7 @@ async def test_invalid_shadow_does_not_stop_later_rows(monkeypatch):
         (ShadowTrade.__table__.c.outcome, ("TP_HIT", "SL_HIT", "TRAILING_STOP", "TIMEOUT")),
         (
             ShadowTrade.__table__.c.barrier_touched,
-            ("TP", "SL", "TRAILING", "NONE", "BOTH_SAME_CANDLE"),
+            ("TP", "SL", "TRAILING", "NONE", "BOTH_SAME_CANDLE", "BARRIER_PATH_UNRESOLVED"),
         ),
         (ShadowTrade.__table__.c.intrabar_convention, ("SL_FIRST",)),
         (
@@ -156,7 +156,12 @@ def test_persisted_shadow_codes_fit_declared_orm_width(column, codes):
     assert all(len(code) <= column.type.length for code in codes)
 
 
-def test_unresolved_reason_code_is_exact_and_known_not_persistable_under_c1_schema():
+def test_unresolved_reason_code_is_exact_and_now_persistable_after_c1_fix():
+    """Bloco A, C1 (2026-09-03): barrier_touched was VARCHAR(20), the
+    literal 'BARRIER_PATH_UNRESOLVED' is 23 chars, so every write of it
+    raised StringDataRightTruncationError, aborting the whole savepoint.
+    Migration 212 widened it to VARCHAR(32) -- this now must fit, not
+    overflow."""
     entry_at = datetime(2026, 9, 1, 5, 41, 47, tzinfo=timezone.utc)
     result = evaluate_closed_candles(
         [
@@ -178,5 +183,5 @@ def test_unresolved_reason_code_is_exact_and_known_not_persistable_under_c1_sche
     width = ShadowTrade.__table__.c.barrier_touched.type.length
     assert code == "BARRIER_PATH_UNRESOLVED"
     assert len(code) == 23
-    assert width == 20
-    assert len(code) > width
+    assert width == 32
+    assert len(code) <= width

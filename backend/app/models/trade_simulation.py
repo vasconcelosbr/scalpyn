@@ -53,7 +53,7 @@ class TradeSimulation(Base):
     # ── Shadow Instrumentation mirror (migration 071, Fases 1/2/3) ───────
     mae_at = Column(DateTime(timezone=True), nullable=True)
     mfe_at = Column(DateTime(timezone=True), nullable=True)
-    barrier_touched = Column(String(20), nullable=True)
+    barrier_touched = Column(String(32), nullable=True)
     barrier_touched_at = Column(DateTime(timezone=True), nullable=True)
     intrabar_convention = Column(String(20), nullable=True)
     final_return_pct = Column(Float, nullable=True)

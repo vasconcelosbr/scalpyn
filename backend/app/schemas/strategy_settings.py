@@ -36,6 +36,19 @@ ML_SHADOW_OPTIONAL_KEYS = (
     "shadow_trailing_stepped_base_activation_profit_pct",
     "shadow_trailing_stepped_base_hwm_trail_pct",
     "shadow_trailing_proportional_k",
+    "shadow_fast_scan_priority",
+    "shadow_fast_scan_batch_size",
+    "shadow_l3_batch_quota_pct",
+    "shadow_monitor_mode_by_source",
+)
+
+SHADOW_SOURCES = (
+    "L3",
+    "L3_REJECTED",
+    "L3_SIMULATED",
+    "L3_LAB",
+    "L1_SPECTRUM",
+    "WATCHLIST_SPOT",
 )
 
 
@@ -55,6 +68,16 @@ class ShadowTrailingStep(BaseModel):
                 "floor_profit_pct must be less than peak_profit_pct for each step"
             )
         return self
+
+
+_DEFAULT_MONITOR_MODE_BY_SOURCE: Dict[str, str] = {
+    "L3": "CONTINUOUS",
+    "L3_REJECTED": "BATCH",
+    "L3_SIMULATED": "BATCH",
+    "L3_LAB": "BATCH",
+    "L1_SPECTRUM": "BATCH",
+    "WATCHLIST_SPOT": "BATCH",
+}
 
 
 class StrategyDefinition(BaseModel):
@@ -96,9 +119,15 @@ class MLShadowConfig(BaseModel):
     shadow_canonical_barrier_profile_allowlist: List[str] = Field(
         default_factory=list
     )
+    # v2 (Bloco A, C2) succeeds v1: v1 freezes a Shadow forever the first
+    # time its own entry-boundary-partial candle also contains a barrier
+    # touch (intrabar order unresolvable); v2 records the ambiguity once
+    # and keeps walking later, unambiguous candles instead. v1 stays valid
+    # here purely so an already-open Shadow's frozen snapshot keeps
+    # validating -- new Shadows should be created under v2.
     shadow_canonical_barrier_policy_version: Literal[
-        "shadow_closed_ohlcv_first_touch_v1"
-    ] = "shadow_closed_ohlcv_first_touch_v1"
+        "shadow_closed_ohlcv_first_touch_v1", "shadow_closed_ohlcv_first_touch_v2"
+    ] = "shadow_closed_ohlcv_first_touch_v2"
     # Governance-only observation threshold. It does not participate in TP/SL,
     # scoring, authorization, or outcome calculation.
     canary_minimum_outcomes: int | None = Field(default=None, ge=1, le=10000)
@@ -159,6 +188,44 @@ class MLShadowConfig(BaseModel):
                     "shadow_trailing_stepped_base_hwm_trail_pct must be both "
                     "set or both null"
                 )
+        return self
+
+    # ── Bloco A: monitor throughput/fairness (2026-09-03) ──────────────────
+    # A.2 -- fast-scan priority ordering. Replaces the previous hardcoded
+    # ORDER BY st.id (an arbitrary UUID order under which some currently-
+    # breached rows never rise into the LIMIT-20 window -- confirmed live
+    # on XRP_USDT/ARB_USDT). AGE favors the oldest open Shadow first;
+    # MAGNITUDE favors the largest current breach distance past its own
+    # barrier; AGE_THEN_MAGNITUDE breaks AGE ties by MAGNITUDE.
+    shadow_fast_scan_priority: Literal[
+        "AGE", "MAGNITUDE", "AGE_THEN_MAGNITUDE"
+    ] = "AGE_THEN_MAGNITUDE"
+    shadow_fast_scan_batch_size: int = Field(20, ge=1, le=500)
+    # A.4 -- minimum share of the regular SHADOW_MONITOR_BATCH_SIZE lot
+    # reserved for source='L3' (the operational book), so research sources
+    # (L3_LAB/L3_SIMULATED/...) cannot starve it while BATCH mode (A.3) is
+    # not yet active for all of them.
+    shadow_l3_batch_quota_pct: float = Field(20.0, ge=0, le=100)
+    # A.3 -- per-source monitoring mode. CONTINUOUS keeps the current tight
+    # candle-a-candle/fast-scan cadence; BATCH resolves the outcome with the
+    # same canonical evaluator and conventions, only less often (hourly
+    # sweep); OFF stops new Shadows of that source from being created at
+    # all (never touches an already-open Shadow, and eliminates the
+    # L3_REJECTED counterfactual control group when selected for it -- the
+    # settings screen must warn about that explicitly before saving OFF for
+    # L3_REJECTED).
+    shadow_monitor_mode_by_source: Dict[
+        Literal["L3", "L3_REJECTED", "L3_SIMULATED", "L3_LAB", "L1_SPECTRUM", "WATCHLIST_SPOT"],
+        Literal["CONTINUOUS", "BATCH", "OFF"],
+    ] = Field(default_factory=lambda: dict(_DEFAULT_MONITOR_MODE_BY_SOURCE))
+
+    @model_validator(mode="after")
+    def validate_monitor_mode_by_source(self) -> "MLShadowConfig":
+        missing = sorted(set(SHADOW_SOURCES) - set(self.shadow_monitor_mode_by_source))
+        if missing:
+            raise ValueError(
+                f"shadow_monitor_mode_by_source is missing source(s): {missing}"
+            )
         return self
 
     @model_validator(mode="after")

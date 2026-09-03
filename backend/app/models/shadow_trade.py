@@ -217,9 +217,19 @@ class ShadowTrade(Base):
     # Fase 1 — MAE/MFE timestamps e barreira intrabar.
     mae_at = Column(DateTime(timezone=True), nullable=True)
     mfe_at = Column(DateTime(timezone=True), nullable=True)
-    # 'TP' | 'SL' | 'BOTH_SAME_CANDLE' | 'NONE' (timeout)
-    barrier_touched = Column(String(20), nullable=True)
+    # 'TP' | 'SL' | 'TRAILING' | 'BOTH_SAME_CANDLE' | 'NONE' (timeout) |
+    # 'BARRIER_PATH_UNRESOLVED' (v1 legacy only, 23 chars -- migration 212
+    # widened this from VARCHAR(20), which used to raise
+    # StringDataRightTruncationError on every write of that literal).
+    barrier_touched = Column(String(32), nullable=True)
     barrier_touched_at = Column(DateTime(timezone=True), nullable=True)
+    # Bloco A, C2 (migration 212): timestamp of the entry-boundary-partial
+    # candle whose touch order could not be resolved, if any -- set once,
+    # never overwritten. NULL for the common case (no ambiguity).
+    entry_boundary_ambiguous_at = Column(DateTime(timezone=True), nullable=True)
+    # Bloco A.6 (migration 212): which code path produced the terminal
+    # outcome -- 'fast_scan' | 'regular_batch' | 'canonical_walk'.
+    closure_path = Column(String(20), nullable=True)
     # Convenção aplicada quando TP e SL tocam no mesmo candle.
     intrabar_convention = Column(String(20), nullable=True)
     # Retorno no close do candle de timeout (com sinal); NULL para TP/SL.

@@ -33,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import time
 from datetime import datetime, timedelta, timezone
@@ -139,6 +140,48 @@ async def _load_shadow_force_close_policy(db) -> Dict[str, Any]:
         "max_age_hours": max_age_hours,
         "policy": policy,
         "enabled": max_age_hours > 0 and policy == "TIMEOUT_LAST_KNOWN_PRICE",
+    }
+
+
+async def _load_shadow_monitor_ops_config(db) -> Dict[str, Any]:
+    """Bloco A.2/A.4 tuning knobs, read the same way as
+    ``_load_shadow_force_close_policy`` (single active ``config_type='ml'``
+    row, no user_id filter -- single-operator system). Falls back to the
+    ``MLShadowConfig`` schema defaults when the persisted row predates these
+    keys, so a stale config can never crash the monitor loop -- same
+    graceful-degradation contract already used for the force-close policy
+    above; these are pacing/ordering knobs, never a trading decision.
+    """
+    row = (await db.execute(text("""
+        SELECT config_json
+        FROM config_profiles
+        WHERE config_type = 'ml' AND is_active = true
+        LIMIT 1
+    """))).fetchone()
+    cfg = {}
+    if row and row[0]:
+        cfg = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+
+    priority = str(cfg.get("shadow_fast_scan_priority") or "").strip()
+    if priority not in ("AGE", "MAGNITUDE", "AGE_THEN_MAGNITUDE"):
+        priority = "AGE_THEN_MAGNITUDE"
+    try:
+        fast_scan_batch_size = int(cfg.get("shadow_fast_scan_batch_size") or 0)
+    except (TypeError, ValueError):
+        fast_scan_batch_size = 0
+    if not 1 <= fast_scan_batch_size <= 500:
+        fast_scan_batch_size = SHADOW_FAST_SCAN_BATCH_SIZE
+    try:
+        l3_quota_pct = float(cfg.get("shadow_l3_batch_quota_pct"))
+    except (TypeError, ValueError):
+        l3_quota_pct = 20.0
+    if not 0 <= l3_quota_pct <= 100:
+        l3_quota_pct = 20.0
+
+    return {
+        "fast_scan_priority": priority,
+        "fast_scan_batch_size": fast_scan_batch_size,
+        "l3_quota_pct": l3_quota_pct,
     }
 
 
@@ -347,7 +390,10 @@ def _canonical_barrier_enabled(shadow: ShadowTrade) -> bool:
     policy = snapshot.get("canonical_barrier_evaluator")
     if not isinstance(policy, dict) or policy.get("enabled") is not True:
         return False
-    if policy.get("policy_version") != "shadow_closed_ohlcv_first_touch_v1":
+    if policy.get("policy_version") not in (
+        "shadow_closed_ohlcv_first_touch_v1",
+        "shadow_closed_ohlcv_first_touch_v2",
+    ):
         return False
     allowlist = {str(item) for item in (policy.get("profile_allowlist") or [])}
     return bool(shadow.profile_id) and str(shadow.profile_id) in allowlist
@@ -394,53 +440,55 @@ async def _advance_shadow_canonical(
         float(trailing.get("min_profit_pct") or 0.0),
         float(trailing.get("safety_margin_above_entry_pct") or 0.0),
     )
+    # Bloco A, C2: the canonical path always evaluates through the fixed
+    # barrier contract (shadow_closed_ohlcv_first_touch_v2) now -- it never
+    # freezes on an ambiguous entry-boundary candle, it records the
+    # ambiguity once and keeps walking later candles. evaluate_closed_candles
+    # (v1) stays untouched, byte-for-byte, for anyone reproducing a result
+    # computed before this fix shipped; the live monitor no longer calls it.
+    # Trailing family is orthogonal: legacy shadow_hwm_trailing_v1 snapshots
+    # (FIXED-only) are translated into the same generic trailing_policy dict
+    # that shadow_trailing_policy_v2 snapshots already carry, so both run
+    # through one evaluator with identical FIXED-family math (verified
+    # 0/559 divergence against evaluate_closed_candles this session).
     if (
         trailing.get("enabled") is True
         and trailing.get("contract_version") == "shadow_trailing_policy_v2"
         and isinstance(trailing.get("policy"), dict)
     ):
-        result = evaluate_closed_candles_policy_v2(
-            candles,
-            entry_price=entry_price,
-            entry_timestamp=entry_at,
-            tp_price=tp,
-            sl_price=sl,
-            timeout_candles=timeout_candles,
-            candles_seen_before=candles_seen_before,
-            prior_high_water_mark=prior_hwm,
-            trailing_policy=trailing["policy"],
-            trailing_never_sell_at_loss=bool(trailing.get("never_sell_at_loss")),
-            trailing_protected_profit_pct=protected_profit,
-        )
+        trailing_policy = trailing["policy"]
+    elif (
+        trailing.get("enabled") is True
+        and trailing.get("contract_version")
+        == shadow_trade_service.SHADOW_TRAILING_CONTRACT_VERSION
+        and trailing.get("activation_profit_pct") is not None
+        and trailing.get("hwm_trail_pct") is not None
+    ):
+        trailing_policy = {
+            "policy_family": "FIXED",
+            "activation_profit_pct": float(trailing["activation_profit_pct"]),
+            "hwm_trail_pct": float(trailing["hwm_trail_pct"]),
+        }
     else:
-        result = evaluate_closed_candles(
-            candles,
-            entry_price=entry_price,
-            entry_timestamp=entry_at,
-            tp_price=tp,
-            sl_price=sl,
-            timeout_candles=timeout_candles,
-            candles_seen_before=candles_seen_before,
-            prior_high_water_mark=prior_hwm,
-            trailing_activation_profit_pct=(
-                float(trailing["activation_profit_pct"])
-                if trailing.get("enabled") is True
-                and trailing.get("contract_version")
-                == shadow_trade_service.SHADOW_TRAILING_CONTRACT_VERSION
-                and trailing.get("activation_profit_pct") is not None
-                else None
-            ),
-            trailing_hwm_pct=(
-                float(trailing["hwm_trail_pct"])
-                if trailing.get("enabled") is True
-                and trailing.get("contract_version")
-                == shadow_trade_service.SHADOW_TRAILING_CONTRACT_VERSION
-                and trailing.get("hwm_trail_pct") is not None
-                else None
-            ),
-            trailing_never_sell_at_loss=bool(trailing.get("never_sell_at_loss")),
-            trailing_protected_profit_pct=protected_profit,
-        )
+        trailing_policy = None
+    result = evaluate_closed_candles_policy_v2(
+        candles,
+        entry_price=entry_price,
+        entry_timestamp=entry_at,
+        tp_price=tp,
+        sl_price=sl,
+        timeout_candles=timeout_candles,
+        candles_seen_before=candles_seen_before,
+        prior_high_water_mark=prior_hwm,
+        trailing_policy=trailing_policy,
+        trailing_never_sell_at_loss=bool(trailing.get("never_sell_at_loss")),
+        trailing_protected_profit_pct=protected_profit,
+    )
+    if (
+        shadow.entry_boundary_ambiguous_at is None
+        and result.get("entry_boundary_ambiguous_at") is not None
+    ):
+        shadow.entry_boundary_ambiguous_at = result["entry_boundary_ambiguous_at"]
     if result.get("min_price") is not None and (
         shadow.min_price_post_entry is None
         or result["min_price"] < shadow.min_price_post_entry
@@ -476,6 +524,7 @@ async def _advance_shadow_canonical(
         exit_price,
         result.get("barrier_touched_at") or result.get("last_candle_at"),
         entry_price,
+        closure_path="canonical_walk",
         exit_price_nominal=nominal,
         exit_price_observed=observed,
         exit_price_semantics=result.get("exit_price_semantics"),
@@ -754,6 +803,7 @@ def _finalize_outcome(
     exit_ts: Optional[datetime],
     entry_price: float,
     *,
+    closure_path: str,
     exit_price_nominal: Optional[float] = None,
     exit_price_observed: Optional[float] = None,
     exit_price_semantics: Optional[str] = None,
@@ -770,6 +820,7 @@ def _finalize_outcome(
     Não altera TP/SL/timeout — puramente observacional.
     """
     shadow.outcome = outcome
+    shadow.closure_path = closure_path
     shadow.exit_price = exit_price
     shadow.exit_price_nominal = exit_price_nominal
     shadow.exit_price_observed = exit_price_observed
@@ -955,6 +1006,12 @@ async def _capture_exit_features(db, shadow: ShadowTrade) -> None:
     # Mantemos a UX da Task #312 (marcador estruturado quando NULL não
     # serve) mapeando ``{}`` → ``_capture_failed=indicators_unavailable_at_close``.
     snapshot = await exit_metrics.build_exit_snapshot(db, shadow.symbol)
+    # Bloco A.7: always stamp the real capture instant, regardless of which
+    # branch below runs -- previously feature_source_at stayed NULL in the
+    # overwhelming majority of rows (216/225 TRAILING_STOP in the frozen
+    # 559 cohort), making it impossible to know how stale the exit
+    # indicators were relative to the real exit (barrier_touched_at).
+    shadow.feature_source_at = datetime.now(timezone.utc)
 
     if snapshot.get("_capture_error") is not None:
         logger.warning(
@@ -1269,11 +1326,20 @@ async def _advance_shadow(
     db,
     shadow: ShadowTrade,
     force_close_policy: Optional[Dict[str, Any]] = None,
+    *,
+    closure_path_hint: str = "regular_batch",
 ) -> str:
     """Avança um único shadow trade até outcome ou esgotar candles do tick.
 
     Retorna um label de transição: ``"completed"``, ``"running"`` ou
     ``"pending"``.
+
+    ``closure_path_hint`` (Bloco A.6) names which scheduling entry point
+    called this: the fast-scan pre-check (``"fast_scan"``) or the regular
+    batch (``"regular_batch"``, the default). It is used verbatim for this
+    function's own live-close finalizations; a canonical-evaluator
+    finalization always records ``"canonical_walk"`` instead, regardless of
+    which entry point reached it, since that is the more specific signal.
     """
     if not await _ensure_entry(db, shadow):
         # Sem candle 1m disponível ainda — deixa em PENDING, próximo tick.
@@ -1494,7 +1560,10 @@ async def _advance_shadow(
                 "para trade vencido)",
                 shadow.id, shadow.symbol, shadow.timeout_candles, _expired_exit,
             )
-            _finalize_outcome(shadow, "TIMEOUT", _expired_exit, _now_utc_r3, entry_price)
+            _finalize_outcome(
+                shadow, "TIMEOUT", _expired_exit, _now_utc_r3, entry_price,
+                closure_path=closure_path_hint,
+            )
             return "completed"
 
         live_outcome: Optional[str] = None
@@ -1552,6 +1621,7 @@ async def _advance_shadow(
                 exit_price,
                 exit_ts,
                 entry_price,
+                closure_path=closure_path_hint,
                 exit_price_nominal=exit_price_nominal,
                 exit_price_observed=chosen_price,
                 exit_price_semantics="OBSERVED_SAMPLE_TRIGGER",
@@ -1597,7 +1667,8 @@ async def _advance_shadow(
                 force_close_policy.get("policy"), exit_price_force, price_source,
             )
             _finalize_outcome(
-                shadow, "TIMEOUT", exit_price_force, now_utc, entry_price
+                shadow, "TIMEOUT", exit_price_force, now_utc, entry_price,
+                closure_path=closure_path_hint,
             )
             return "completed"
 
@@ -1650,7 +1721,8 @@ async def _advance_shadow(
                     timeout_candles_m, exit_price_to, entry_price,
                 )
                 _finalize_outcome(
-                    shadow, "TIMEOUT", exit_price_to, now_utc, entry_price
+                    shadow, "TIMEOUT", exit_price_to, now_utc, entry_price,
+                    closure_path=closure_path_hint,
                 )
                 # FIX D1 (2026-05-15): _capture_exit_features + record_as_simulation
                 # movidos para _record_simulation_one_async (sessão isolada, pós-
@@ -1831,6 +1903,7 @@ async def _advance_shadow(
         exit_price,
         exit_ts,
         entry_price,
+        closure_path=closure_path_hint,
         exit_price_nominal=exit_price_nominal,
         exit_price_observed=exit_price_observed,
         exit_price_semantics=exit_price_semantics,
@@ -1874,8 +1947,31 @@ async def _fast_barrier_scan_async(run_id: str) -> Dict[str, Any]:
             stale_cutoff = datetime.now(timezone.utc) - timedelta(
                 seconds=SHADOW_BARRIER_STALE_SECONDS
             )
+            ops_config = await _load_shadow_monitor_ops_config(db_scan)
+            # Bloco A.2: ORDER BY st.id was a deterministic-but-arbitrary
+            # UUID order -- with 17-20 eligible candidates against a LIMIT
+            # of ~20 most ticks, some legitimately-breached rows never rose
+            # into the window and stayed RUNNING indefinitely (confirmed
+            # live on XRP_USDT/ARB_USDT, both with fresh ticker prices past
+            # their own barrier). AGE favors the oldest open Shadow;
+            # MAGNITUDE favors the largest current breach (0 for rows only
+            # eligible via the trailing branch, which this fix does not
+            # touch); AGE_THEN_MAGNITUDE (default) breaks age ties by
+            # magnitude. The TP/SL-vs-HWM detection logic itself (the big
+            # OR clause below) is unchanged.
+            priority = ops_config["fast_scan_priority"]
+            magnitude_expr = (
+                "GREATEST(0.0, (st.sl_price - mm.price) / NULLIF(st.sl_price, 0), "
+                "(mm.price - st.tp_price) / NULLIF(st.tp_price, 0))"
+            )
+            if priority == "AGE":
+                order_by_sql = "st.created_at ASC, st.id ASC"
+            elif priority == "MAGNITUDE":
+                order_by_sql = f"{magnitude_expr} DESC, st.created_at ASC, st.id ASC"
+            else:  # AGE_THEN_MAGNITUDE
+                order_by_sql = f"st.created_at ASC, {magnitude_expr} DESC, st.id ASC"
             res = await db_scan.execute(
-                text("""
+                text(f"""
                     SELECT st.id
                     FROM shadow_trades st
                     JOIN market_metadata mm ON mm.symbol = st.symbol
@@ -1886,26 +1982,28 @@ async def _fast_barrier_scan_async(run_id: str) -> Dict[str, Any]:
                         mm.price <= st.sl_price
                         OR mm.price >= st.tp_price
                         OR (
-                          st.config_snapshot #>> '{trailing,enabled}' = 'true'
-                          AND st.config_snapshot #>> '{trailing,contract_version}' = :trailing_contract_version
+                          st.config_snapshot #>> '{{trailing,enabled}}' = 'true'
+                          AND st.config_snapshot #>> '{{trailing,contract_version}}' = :trailing_contract_version
                           AND st.max_price_post_entry IS NOT NULL
-                          AND jsonb_typeof(st.config_snapshot #> '{trailing,activation_profit_pct}') = 'number'
-                          AND jsonb_typeof(st.config_snapshot #> '{trailing,hwm_trail_pct}') = 'number'
+                          AND jsonb_typeof(st.config_snapshot #> '{{trailing,activation_profit_pct}}') = 'number'
+                          AND jsonb_typeof(st.config_snapshot #> '{{trailing,hwm_trail_pct}}') = 'number'
                           AND st.max_price_post_entry >= st.entry_price * (
-                            1 + ((st.config_snapshot #>> '{trailing,activation_profit_pct}')::numeric / 100)
+                            1 + ((st.config_snapshot #>> '{{trailing,activation_profit_pct}}')::numeric / 100)
                           )
                           AND mm.price <= st.max_price_post_entry * (
-                            1 - ((st.config_snapshot #>> '{trailing,hwm_trail_pct}')::numeric / 100)
+                            1 - ((st.config_snapshot #>> '{{trailing,hwm_trail_pct}}')::numeric / 100)
                           )
                         )
                       )
                       AND (mm.last_updated IS NULL OR mm.last_updated >= :stale_cutoff)
-                    ORDER BY st.id
+                      AND (st.config_snapshot ->> 'shadow_monitor_mode') IS DISTINCT FROM 'BATCH'
+                      AND (st.config_snapshot ->> 'shadow_monitor_mode') IS DISTINCT FROM 'OFF'
+                    ORDER BY {order_by_sql}
                     LIMIT :fast_scan_batch_size
                 """),
                 {
                     "stale_cutoff": stale_cutoff,
-                    "fast_scan_batch_size": SHADOW_FAST_SCAN_BATCH_SIZE,
+                    "fast_scan_batch_size": ops_config["fast_scan_batch_size"],
                     "trailing_contract_version": (
                         shadow_trade_service.SHADOW_TRAILING_CONTRACT_VERSION
                     ),
@@ -1994,7 +2092,9 @@ async def _fast_barrier_scan_async(run_id: str) -> Dict[str, Any]:
                 for shadow in shadows:
                     try:
                         prev_status = shadow.status
-                        transition = await _advance_shadow(db, shadow)
+                        transition = await _advance_shadow(
+                            db, shadow, closure_path_hint="fast_scan"
+                        )
                         if transition == "completed":
                             outcome = shadow.outcome or "UNKNOWN"
                             if outcome == "TP_HIT":
@@ -2143,19 +2243,66 @@ async def _monitor_async() -> Dict[str, Any]:
     async with CeleryAsyncSessionLocal() as db:
         async with db.begin():
             force_close_policy = await _load_shadow_force_close_policy(db)
-            # Carrega batch determinístico (sorted by id) — gotcha #251/#273.
-            # FOR UPDATE SKIP LOCKED garante que duas execuções
-            # concorrentes do monitor (ad-hoc dispatch + beat tick
+            ops_config = await _load_shadow_monitor_ops_config(db)
+            # Bloco A.4: reserve a minimum share of the lot for source='L3'
+            # (the operational book) so research sources (L3_LAB/
+            # L3_SIMULATED/L3_REJECTED/L1_SPECTRUM), which outnumber it by
+            # >20x in the open book, cannot starve it while BATCH mode
+            # (A.3) is not yet active for all of them.
+            l3_slots = max(0, min(
+                SHADOW_MONITOR_BATCH_SIZE,
+                math.ceil(SHADOW_MONITOR_BATCH_SIZE * ops_config["l3_quota_pct"] / 100),
+            ))
+            # Bloco A.3: the tight loop only ever picks up shadow_monitor_mode
+            # CONTINUOUS (frozen at birth) or NULL (any Shadow created before
+            # A.3 shipped -- treated as CONTINUOUS, its own prior behaviour,
+            # never reprocessed under a new mode). BATCH-mode Shadows are
+            # swept separately, see run_batch_sweep below.
+            _continuous_only = text(
+                "(shadow_trades.config_snapshot ->> 'shadow_monitor_mode') "
+                "IS DISTINCT FROM 'BATCH' "
+                "AND (shadow_trades.config_snapshot ->> 'shadow_monitor_mode') "
+                "IS DISTINCT FROM 'OFF'"
+            )
+            l3_shadows: List[ShadowTrade] = []
+            if l3_slots > 0:
+                res_l3 = await db.execute(
+                    select(ShadowTrade)
+                    .where(
+                        ShadowTrade.status.in_(("PENDING", "RUNNING")),
+                        ShadowTrade.source == "L3",
+                    )
+                    .where(_continuous_only)
+                    .order_by(ShadowTrade.created_at.asc(), ShadowTrade.id.asc())
+                    .with_for_update(skip_locked=True)
+                    .limit(l3_slots)
+                )
+                l3_shadows = list(res_l3.scalars().all())
+            remaining_slots = SHADOW_MONITOR_BATCH_SIZE - len(l3_shadows)
+            # Carrega o restante do lote determinístico (sorted by id) —
+            # gotcha #251/#273. FOR UPDATE SKIP LOCKED garante que duas
+            # execuções concorrentes do monitor (ad-hoc dispatch + beat tick
             # sobreposto, ou múltiplos workers da execution queue) NÃO
             # processem o mesmo shadow_trade no mesmo tick.
-            res = await db.execute(
-                select(ShadowTrade)
-                .where(ShadowTrade.status.in_(("PENDING", "RUNNING")))
-                .order_by(ShadowTrade.created_at.asc(), ShadowTrade.id.asc())
-                .with_for_update(skip_locked=True)
-                .limit(SHADOW_MONITOR_BATCH_SIZE)
-            )
-            shadows = list(res.scalars().all())
+            rest_shadows: List[ShadowTrade] = []
+            if remaining_slots > 0:
+                exclude_ids = [s.id for s in l3_shadows]
+                query = (
+                    select(ShadowTrade)
+                    .where(ShadowTrade.status.in_(("PENDING", "RUNNING")))
+                    .where(_continuous_only)
+                    .order_by(ShadowTrade.created_at.asc(), ShadowTrade.id.asc())
+                    .with_for_update(skip_locked=True)
+                    .limit(remaining_slots)
+                )
+                if exclude_ids:
+                    query = query.where(ShadowTrade.id.notin_(exclude_ids))
+                res_rest = await db.execute(query)
+                rest_shadows = list(res_rest.scalars().all())
+            shadows = l3_shadows + rest_shadows
+            l3_in_batch = len(l3_shadows)
+            summary["l3_batch_slots_reserved"] = l3_slots
+            summary["l3_batch_slots_filled"] = l3_in_batch
             # Re-sort defensivamente — ORM já devolve em ordem por
             # ORDER BY, mas sorted() reforça invariante deadlock-safety.
             shadows.sort(key=lambda s: (s.created_at, s.id))
@@ -2396,6 +2543,85 @@ async def _create_watchlist_spot_shadows_for_all_users() -> int:
     except Exception:
         logger.exception("[shadow-monitor] _create_watchlist_spot_shadows_for_all_users failed")
         return 0
+
+
+SHADOW_BATCH_SWEEP_SIZE = _env_int("SHADOW_BATCH_SWEEP_SIZE", 500)
+
+
+async def _batch_sweep_async() -> Dict[str, Any]:
+    """Bloco A.3: hourly sweep for ``shadow_monitor_mode='BATCH'`` Shadows
+    (research sources by default -- L3_LAB/L3_SIMULATED/L3_REJECTED/
+    L1_SPECTRUM). Same canonical evaluator and conventions as CONTINUOUS
+    (``_advance_shadow`` / ``_advance_shadow_canonical`` are reused
+    unmodified) -- only the cadence differs, since this runs once/hour
+    instead of every ``SHADOW_MONITOR_INTERVAL_S``. Never touches a Shadow
+    whose frozen mode is CONTINUOUS, NULL (pre-A.3), or OFF.
+    """
+    from ..database import CeleryAsyncSessionLocal
+
+    summary: Dict[str, Any] = {
+        "processed": 0, "completed": 0, "errors": 0,
+        "backfill_created": 0, "watchlist_spot_created": 0,
+    }
+    sim_targets: List[Any] = []
+    enrich_targets: List[Dict[str, Any]] = []
+
+    async with CeleryAsyncSessionLocal() as db:
+        async with db.begin():
+            force_close_policy = await _load_shadow_force_close_policy(db)
+            res = await db.execute(
+                select(ShadowTrade)
+                .where(ShadowTrade.status.in_(("PENDING", "RUNNING")))
+                .where(text(
+                    "(shadow_trades.config_snapshot ->> 'shadow_monitor_mode') = 'BATCH'"
+                ))
+                .order_by(ShadowTrade.created_at.asc(), ShadowTrade.id.asc())
+                .with_for_update(skip_locked=True)
+                .limit(SHADOW_BATCH_SWEEP_SIZE)
+            )
+            shadows = list(res.scalars().all())
+            shadows.sort(key=lambda s: (s.created_at, s.id))
+
+            sim_targets, enrich_targets = await _advance_shadow_batch_isolated(
+                db, shadows, force_close_policy, summary,
+            )
+
+    post_commit_deadline = _new_post_commit_deadline()
+    _, deferred_sim = await _run_best_effort_budgeted(
+        sim_targets, _record_simulation_one_async,
+        deadline=post_commit_deadline, item_label="shadow_simulations",
+    )
+    enrich_work = [t for t in enrich_targets if t["needs_fill"]]
+
+    async def _run_enrich_target(target: Dict[str, Any]) -> None:
+        await _enrich_one_async(
+            target["shadow_id"], target["symbol"],
+            target["entry_timestamp"], target["decision_id"],
+        )
+
+    _, deferred_enrich = await _run_best_effort_budgeted(
+        enrich_work, _run_enrich_target,
+        deadline=post_commit_deadline, item_label="shadow_enrichment",
+    )
+    summary["deferred_simulations"] = deferred_sim
+    summary["deferred_enrichment"] = deferred_enrich
+    return summary
+
+
+@celery_app.task(name="app.tasks.shadow_trade_monitor.run_batch_sweep", bind=True)
+def run_batch_sweep(self) -> str:
+    """Beat-driven BATCH-mode sweep (Bloco A.3) — default hourly."""
+    try:
+        result = _run_async(_batch_sweep_async())
+        msg = (
+            f"Shadow batch sweep: {result['processed']} processed, "
+            f"{result['completed']} completed, {result['errors']} errors"
+        )
+        logger.info("[shadow-batch-sweep] %s", msg)
+        return msg
+    except Exception as exc:
+        logger.error("[shadow-batch-sweep] task failed: %s", exc, exc_info=True)
+        raise
 
 
 @celery_app.task(name="app.tasks.shadow_trade_monitor.run", bind=True)

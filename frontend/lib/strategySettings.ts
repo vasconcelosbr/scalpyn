@@ -54,7 +54,8 @@ export const ENUM_OPTIONS: Record<string, string[]> = {
   "ml_shadow.shadow_atr_timeframe": ["1m", "5m", "15m", "1h"],
   "ml_shadow.ml_active_barrier_contract_version": ["shadow_fixed_v1", "shadow_atr_dynamic_v2", "shadow_atr_dynamic_v3"],
   "ml_shadow.shadow_barrier_geometry_policy": ["LEGACY_INDEPENDENT_CLAMP", "SL_ANCHORED_RATIO", "ATR_CLAMPED_BEFORE_MULTIPLY"],
-  "ml_shadow.shadow_canonical_barrier_policy_version": ["shadow_closed_ohlcv_first_touch_v1"],
+  "ml_shadow.shadow_canonical_barrier_policy_version": ["shadow_closed_ohlcv_first_touch_v1", "shadow_closed_ohlcv_first_touch_v2"],
+  "ml_shadow.shadow_fast_scan_priority": ["AGE", "MAGNITUDE", "AGE_THEN_MAGNITUDE"],
   "ml_shadow.shadow_trailing_contract_version": ["shadow_hwm_trailing_v1", "shadow_trailing_policy_v2"],
   "ml_shadow.shadow_trailing_policy_family": ["FIXED", "STEPPED", "PROPORTIONAL"],
 };

@@ -40,7 +40,7 @@ class TestExpiredTimeoutPrecedence:
         mm_price = 102.0  # acima do TP (101.5)
         exit_price = _resolve_expired_timeout(shadow, mm_price, None, 100.0, NOW)
         assert exit_price is not None, "trade vencido deve resolver como expirado"
-        _finalize_outcome(shadow, "TIMEOUT", exit_price, NOW, 100.0)
+        _finalize_outcome(shadow, "TIMEOUT", exit_price, NOW, 100.0, closure_path="regular_batch")
         assert shadow.outcome == "TIMEOUT"
         assert shadow.exit_price == 102.0  # preço corrente, não tp_price
 
@@ -49,7 +49,7 @@ class TestExpiredTimeoutPrecedence:
         shadow = _make_shadow(age_minutes=30 * 60)
         exit_price = _resolve_expired_timeout(shadow, 97.0, None, 100.0, NOW)
         assert exit_price is not None
-        _finalize_outcome(shadow, "TIMEOUT", exit_price, NOW, 100.0)
+        _finalize_outcome(shadow, "TIMEOUT", exit_price, NOW, 100.0, closure_path="regular_batch")
         assert shadow.outcome == "TIMEOUT"
 
     def test_non_expired_trade_returns_none_live_close_preserved(self):

@@ -25,6 +25,17 @@ INTRABAR_CONVENTION = "SL_FIRST"
 TRAILING_POLICY_CONTRACT_VERSION = "shadow_trailing_policy_v2"
 TRAILING_POLICY_FAMILIES = ("FIXED", "STEPPED", "PROPORTIONAL")
 
+# Barrier/ambiguity contract used by evaluate_closed_candles_policy_v2
+# (Bloco A, C2). v1 (evaluate_closed_candles, above) freezes a Shadow
+# forever the first time its entry-boundary-partial candle also contains a
+# touch, since the intrabar order cannot be resolved and the function
+# breaks without advancing. v2 records the ambiguity once and continues
+# evaluating later, unambiguous candles instead -- CLOSED_ONLY/SL_FIRST is
+# unchanged, and no intrabar order is ever guessed for the ambiguous candle
+# itself. evaluate_closed_candles keeps v1 semantics byte-for-byte for
+# reproducibility of anything computed before this fix shipped.
+BARRIER_CONTRACT_VERSION_V2 = "shadow_closed_ohlcv_first_touch_v2"
+
 
 def _iso(value: Any) -> Any:
     return value.isoformat() if isinstance(value, datetime) else value
@@ -353,6 +364,8 @@ def evaluate_closed_candles_policy_v2(
         "timeframe": TIMEFRAME,
         "candle_policy": CANDLE_POLICY,
         "contract_version": TRAILING_POLICY_CONTRACT_VERSION,
+        "barrier_contract_version": BARRIER_CONTRACT_VERSION_V2,
+        "entry_boundary_ambiguous_at": None,
     }
 
     if trailing_policy is None:
@@ -387,16 +400,15 @@ def evaluate_closed_candles_policy_v2(
         )
         entry_candle = candle_at == entry_bucket
         if entry_boundary_partial and entry_candle and (trailing_hit or sl_hit or tp_hit):
-            result.update(
-                {
-                    "status": "UNRESOLVED",
-                    "reason_code": "BARRIER_PATH_UNRESOLVED",
-                    "barrier_touched": "BARRIER_PATH_UNRESOLVED",
-                    "barrier_touched_at": candle_at,
-                    "exit_price_semantics": "ENTRY_PARTIAL_CANDLE_UNRESOLVED",
-                }
-            )
-            break
+            # Intrabar order within the entry's own partial candle cannot be
+            # resolved -- record the ambiguity once (audit trail) and move
+            # on to the next, unambiguous candle instead of freezing (C2,
+            # Bloco A). hwm already folded in this candle's high above; no
+            # barrier is declared touched here for this specific candle.
+            if result["entry_boundary_ambiguous_at"] is None:
+                result["entry_boundary_ambiguous_at"] = candle_at
+            hwm = max(hwm, high)
+            continue
         if trailing_hit:
             result.update(
                 {
