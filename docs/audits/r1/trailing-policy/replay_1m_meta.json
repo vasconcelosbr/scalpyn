@@ -1,0 +1,279 @@
+{
+  "replay_contract_version": "shadow_trailing_replay_gate_final_v1",
+  "cohort_manifest_sha256": "b8c4e875521e2ddda06be79630f3b4d8cd7c5b6bae7f990db08b900cce9f6667",
+  "fetched_at": "2026-09-03T03:31:59.652950+00:00",
+  "timeout_horizon_minutes": 1440,
+  "symbols": {
+    "AAVE_USDT": {
+      "window_start": "2026-08-31T21:41:00+00:00",
+      "window_end": "2026-09-02T14:01:00+00:00",
+      "expected_points": 2421,
+      "received_points": 2421,
+      "missing_points": 0,
+      "calls": 3,
+      "errors": [],
+      "n_trades": 16
+    },
+    "ADA_USDT": {
+      "window_start": "2026-08-31T21:52:00+00:00",
+      "window_end": "2026-09-02T17:44:00+00:00",
+      "expected_points": 2633,
+      "received_points": 2633,
+      "missing_points": 0,
+      "calls": 3,
+      "errors": [],
+      "n_trades": 11
+    },
+    "ARB_USDT": {
+      "window_start": "2026-08-31T22:35:00+00:00",
+      "window_end": "2026-09-02T19:01:00+00:00",
+      "expected_points": 2667,
+      "received_points": 2667,
+      "missing_points": 0,
+      "calls": 3,
+      "errors": [],
+      "n_trades": 31
+    },
+    "ASTER_USDT": {
+      "window_start": "2026-09-01T15:25:00+00:00",
+      "window_end": "2026-09-02T15:25:00+00:00",
+      "expected_points": 1441,
+      "received_points": 1441,
+      "missing_points": 0,
+      "calls": 2,
+      "errors": [],
+      "n_trades": 1
+    },
+    "BEAT_USDT": {
+      "window_start": "2026-08-31T19:41:00+00:00",
+      "window_end": "2026-09-02T19:01:00+00:00",
+      "expected_points": 2841,
+      "received_points": 2841,
+      "missing_points": 0,
+      "calls": 3,
+      "errors": [],
+      "n_trades": 38
+    },
+    "BNB_USDT": {
+      "window_start": "2026-08-31T19:36:00+00:00",
+      "window_end": "2026-09-02T00:46:00+00:00",
+      "expected_points": 1751,
+      "received_points": 1751,
+      "missing_points": 0,
+      "calls": 2,
+      "errors": [],
+      "n_trades": 17
+    },
+    "BTC_USDT": {
+      "window_start": "2026-08-31T22:12:00+00:00",
+      "window_end": "2026-09-02T06:15:00+00:00",
+      "expected_points": 1924,
+      "received_points": 1924,
+      "missing_points": 0,
+      "calls": 2,
+      "errors": [],
+      "n_trades": 3
+    },
+    "DASH_USDT": {
+      "window_start": "2026-08-31T19:16:00+00:00",
+      "window_end": "2026-09-02T17:32:00+00:00",
+      "expected_points": 2777,
+      "received_points": 2777,
+      "missing_points": 0,
+      "calls": 3,
+      "errors": [],
+      "n_trades": 50
+    },
+    "ENA_USDT": {
+      "window_start": "2026-08-31T20:41:00+00:00",
+      "window_end": "2026-09-02T19:17:00+00:00",
+      "expected_points": 2797,
+      "received_points": 2797,
+      "missing_points": 0,
+      "calls": 3,
+      "errors": [],
+      "n_trades": 61
+    },
+    "ETH_USDT": {
+      "window_start": "2026-08-31T19:17:00+00:00",
+      "window_end": "2026-09-02T18:46:00+00:00",
+      "expected_points": 2850,
+      "received_points": 2850,
+      "missing_points": 0,
+      "calls": 3,
+      "errors": [],
+      "n_trades": 8
+    },
+    "FIL_USDT": {
+      "window_start": "2026-09-01T18:34:00+00:00",
+      "window_end": "2026-09-02T19:01:00+00:00",
+      "expected_points": 1468,
+      "received_points": 1468,
+      "missing_points": 0,
+      "calls": 2,
+      "errors": [],
+      "n_trades": 2
+    },
+    "FLR_USDT": {
+      "window_start": "2026-09-01T13:59:00+00:00",
+      "window_end": "2026-09-02T13:59:00+00:00",
+      "expected_points": 1441,
+      "received_points": 1441,
+      "missing_points": 0,
+      "calls": 2,
+      "errors": [],
+      "n_trades": 1
+    },
+    "HYPE_USDT": {
+      "window_start": "2026-08-31T21:37:00+00:00",
+      "window_end": "2026-09-02T19:16:00+00:00",
+      "expected_points": 2740,
+      "received_points": 2740,
+      "missing_points": 0,
+      "calls": 3,
+      "errors": [],
+      "n_trades": 23
+    },
+    "INJ_USDT": {
+      "window_start": "2026-08-31T22:21:00+00:00",
+      "window_end": "2026-09-02T19:32:00+00:00",
+      "expected_points": 2712,
+      "received_points": 2712,
+      "missing_points": 0,
+      "calls": 3,
+      "errors": [],
+      "n_trades": 11
+    },
+    "LINK_USDT": {
+      "window_start": "2026-09-01T01:06:00+00:00",
+      "window_end": "2026-09-02T18:16:00+00:00",
+      "expected_points": 2471,
+      "received_points": 2471,
+      "missing_points": 0,
+      "calls": 3,
+      "errors": [],
+      "n_trades": 8
+    },
+    "LIT_USDT": {
+      "window_start": "2026-08-31T20:56:00+00:00",
+      "window_end": "2026-09-02T19:34:00+00:00",
+      "expected_points": 2799,
+      "received_points": 2799,
+      "missing_points": 0,
+      "calls": 3,
+      "errors": [],
+      "n_trades": 73
+    },
+    "LTC_USDT": {
+      "window_start": "2026-08-31T19:18:00+00:00",
+      "window_end": "2026-09-02T18:02:00+00:00",
+      "expected_points": 2805,
+      "received_points": 2805,
+      "missing_points": 0,
+      "calls": 3,
+      "errors": [],
+      "n_trades": 10
+    },
+    "NEAR_USDT": {
+      "window_start": "2026-08-31T21:36:00+00:00",
+      "window_end": "2026-09-02T18:34:00+00:00",
+      "expected_points": 2699,
+      "received_points": 2699,
+      "missing_points": 0,
+      "calls": 3,
+      "errors": [],
+      "n_trades": 49
+    },
+    "ONDO_USDT": {
+      "window_start": "2026-09-01T13:01:00+00:00",
+      "window_end": "2026-09-02T18:21:00+00:00",
+      "expected_points": 1761,
+      "received_points": 1761,
+      "missing_points": 0,
+      "calls": 2,
+      "errors": [],
+      "n_trades": 2
+    },
+    "SOL_USDT": {
+      "window_start": "2026-08-31T19:46:00+00:00",
+      "window_end": "2026-09-02T18:16:00+00:00",
+      "expected_points": 2791,
+      "received_points": 2791,
+      "missing_points": 0,
+      "calls": 3,
+      "errors": [],
+      "n_trades": 16
+    },
+    "SUI_USDT": {
+      "window_start": "2026-09-01T00:34:00+00:00",
+      "window_end": "2026-09-02T18:31:00+00:00",
+      "expected_points": 2518,
+      "received_points": 2518,
+      "missing_points": 0,
+      "calls": 3,
+      "errors": [],
+      "n_trades": 17
+    },
+    "TAO_USDT": {
+      "window_start": "2026-09-01T18:46:00+00:00",
+      "window_end": "2026-09-02T18:46:00+00:00",
+      "expected_points": 1441,
+      "received_points": 1441,
+      "missing_points": 0,
+      "calls": 2,
+      "errors": [],
+      "n_trades": 1
+    },
+    "TRX_USDT": {
+      "window_start": "2026-09-01T07:51:00+00:00",
+      "window_end": "2026-09-02T07:51:00+00:00",
+      "expected_points": 1441,
+      "received_points": 1441,
+      "missing_points": 0,
+      "calls": 2,
+      "errors": [],
+      "n_trades": 1
+    },
+    "UNI_USDT": {
+      "window_start": "2026-08-31T21:51:00+00:00",
+      "window_end": "2026-09-02T17:46:00+00:00",
+      "expected_points": 2636,
+      "received_points": 2636,
+      "missing_points": 0,
+      "calls": 3,
+      "errors": [],
+      "n_trades": 33
+    },
+    "WLD_USDT": {
+      "window_start": "2026-08-31T20:26:00+00:00",
+      "window_end": "2026-09-02T19:01:00+00:00",
+      "expected_points": 2796,
+      "received_points": 2796,
+      "missing_points": 0,
+      "calls": 3,
+      "errors": [],
+      "n_trades": 22
+    },
+    "XRP_USDT": {
+      "window_start": "2026-09-01T00:34:00+00:00",
+      "window_end": "2026-09-02T18:31:00+00:00",
+      "expected_points": 2518,
+      "received_points": 2518,
+      "missing_points": 0,
+      "calls": 3,
+      "errors": [],
+      "n_trades": 11
+    },
+    "ZEC_USDT": {
+      "window_start": "2026-08-31T19:26:00+00:00",
+      "window_end": "2026-09-02T18:21:00+00:00",
+      "expected_points": 2816,
+      "received_points": 2816,
+      "missing_points": 0,
+      "calls": 3,
+      "errors": [],
+      "n_trades": 43
+    }
+  },
+  "total_calls": 73
+}

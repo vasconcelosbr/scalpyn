@@ -1,0 +1,5102 @@
+{
+  "n": 559,
+  "matched": 555,
+  "mismatched_count": 4,
+  "outcome_recorded": {
+    "SL_HIT": 246,
+    "TRAILING_STOP": 225,
+    "TP_HIT": 88
+  },
+  "outcome_reparado": {
+    "SL_HIT": 248,
+    "TRAILING_STOP": 225,
+    "TP_HIT": 86
+  },
+  "mismatched": [
+    {
+      "id": "c857241c-3932-454e-b592-842ee02b52a3",
+      "symbol": "BEAT_USDT",
+      "entry_timestamp": "2026-08-31 22:21:11.202874+00:00",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "SL_HIT",
+      "recorded_exit": 0.125449385,
+      "reparado_exit_nominal": 0.1227113,
+      "reparado_exit_observed": 0.1226,
+      "recorded_barrier_touched_at": "2026-09-01 02:51:00+00:00",
+      "reparado_barrier_touched_at": "2026-09-01T01:26:00+00:00",
+      "reason_code": "SL_FIRST_TOUCH"
+    },
+    {
+      "id": "684b4d67-86f1-4e5a-bcc8-f22830dd296b",
+      "symbol": "BEAT_USDT",
+      "entry_timestamp": "2026-08-31 22:21:38.228412+00:00",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "SL_HIT",
+      "recorded_exit": 0.125449385,
+      "reparado_exit_nominal": 0.1227113,
+      "reparado_exit_observed": 0.1226,
+      "recorded_barrier_touched_at": "2026-09-01 02:51:00+00:00",
+      "reparado_barrier_touched_at": "2026-09-01T01:26:00+00:00",
+      "reason_code": "SL_FIRST_TOUCH"
+    },
+    {
+      "id": "77cc3e44-a1c0-4746-833b-176778c5883a",
+      "symbol": "NEAR_USDT",
+      "entry_timestamp": "2026-09-01 13:59:44.391027+00:00",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TRAILING_STOP",
+      "recorded_exit": 2.04664431,
+      "reparado_exit_nominal": 2.0238915000000004,
+      "reparado_exit_observed": 2.022,
+      "recorded_barrier_touched_at": "2026-09-01 14:25:00+00:00",
+      "reparado_barrier_touched_at": "2026-09-01T14:10:00+00:00",
+      "reason_code": "TRAILING_FIRST_TOUCH"
+    },
+    {
+      "id": "7908f964-e510-4e49-91f6-6c7b9013576b",
+      "symbol": "NEAR_USDT",
+      "entry_timestamp": "2026-09-01 14:00:06.189111+00:00",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TRAILING_STOP",
+      "recorded_exit": 2.04664431,
+      "reparado_exit_nominal": 2.0238915000000004,
+      "reparado_exit_observed": 2.022,
+      "recorded_barrier_touched_at": "2026-09-01 14:25:00+00:00",
+      "reparado_barrier_touched_at": "2026-09-01T14:10:00+00:00",
+      "reason_code": "TRAILING_FIRST_TOUCH"
+    }
+  ],
+  "all_results": [
+    {
+      "id": "47826eaf-cc0c-47b5-b6b4-7eefa91b2ca7",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000024,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "6bdd3ff3-bbb6-4ba5-bfad-121e797ab3ee",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000035,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "556bf899-104f-4e35-a191-12d60c031ec6",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000088,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "477615f0-099e-4fb9-b508-27533f4b170e",
+      "symbol": "BNB_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000064,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "5ab50eb4-0851-45cd-bcfc-810fe8630999",
+      "symbol": "BNB_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000064,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "130867ee-86e6-4573-8bb1-b80bfe46dd10",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000008,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "04ad9efc-1282-41fb-be01-15da7eac297d",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5416646820671684,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "aa037110-7a04-4149-89c8-4fd45c397911",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000008,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "6fb498fa-ec8f-4eb8-ba79-cf19f49b5016",
+      "symbol": "SOL_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000048,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "4e9dfffc-6670-4517-8e18-b3fb66c35b6c",
+      "symbol": "SOL_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999993,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "355cb6f1-fcd2-4e0c-8996-8f72c6512036",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000048,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "2ff8a0f3-a1a6-4b84-a107-0de7d4f1927b",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.501715039577846,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "56af0960-7792-4c49-9a65-3dba46077ee0",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.501715039577846,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "22ad82fd-ecac-4751-9504-47fb33ebcdb2",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000017,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "1d616771-9a55-4267-93dd-9f140d8a9d1c",
+      "symbol": "HYPE_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999933,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "9b1c474f-d0ce-4d3c-9789-f104eb9de866",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999984,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "0b0f9530-daba-43b6-a030-e386a586434a",
+      "symbol": "HYPE_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999957,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "6025a19b-f5e5-4674-8802-59934d36c124",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999962,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "193a24a2-c819-4db6-88c5-ad4d6c04a187",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999997,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "2f70ab87-f0ee-4269-b95a-cfd3f11580ef",
+      "symbol": "HYPE_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999957,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "a40449cf-e489-49f6-9ae3-65a9866118f1",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999812,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "78f7fbb0-3c8d-4288-a9f6-1e3658fc854e",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999983,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "8aed4e3c-d0e4-4a47-aea9-2d73dda47123",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8710338680926903,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "83b35d59-ad59-446c-96b0-8c865d8ba017",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8710338680926903,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "e0c3e467-2056-4554-a5b1-b28cf72d3074",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8710338680926903,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "1af6fa8f-c2d9-4305-8b09-bd10d0fae8f6",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.700000000000004,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "74b13644-378e-42f9-b23c-9f0d1f083c56",
+      "symbol": "WLD_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000044,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "8cfd388e-7a06-4185-92c3-e5a551b4a374",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000028,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "2aefd989-dd37-485d-93e5-400a17418270",
+      "symbol": "SUI_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.700000000000002,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "07ef3504-130a-4976-a7b7-5a30b054d3d8",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000044,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "5ee1661a-dea1-4aa4-84aa-8c3f096fc39a",
+      "symbol": "WLD_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999852,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "4b611f42-05ff-42ca-a828-edf32a9b9d78",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999942,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "c0b3f584-8620-44a6-9162-d795c659ccc5",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000026,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "b5eaedaf-cb2b-4c92-b832-f976683e7f5e",
+      "symbol": "BNB_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000064,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "19949864-6ac6-4d69-ac0b-2fb3836ef36f",
+      "symbol": "WLD_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999852,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "4622de05-4add-49b3-9b19-8a7f7b49c4f6",
+      "symbol": "WLD_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999852,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "5fd2eb7d-1598-42d4-8753-72ca101452d4",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999907,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "d3886bad-5d17-44c0-a309-4eb05f031d96",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999907,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "93a4e6f8-dfed-4516-8935-41ad9ef50e70",
+      "symbol": "SOL_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000048,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "fc0f544e-9d4a-4029-8900-964d29a98ec1",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999907,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "f40ef396-e3b0-4d99-b167-cc1e74df0ab9",
+      "symbol": "SOL_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999993,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "a3767a9d-c852-4780-9067-b0d24d4990ca",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999984,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "1f19b090-371d-45df-b0f8-36fa4b8cd702",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999948,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "59aafb9a-aebb-4978-bb1e-94ccd58997e9",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999948,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "e8729bb0-c456-4bfa-ab98-c1d56fc075b4",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999948,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "f4372d9f-609a-46be-9cb0-1543c2c61083",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999948,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "f6e46a7d-5c75-48dc-8edd-f26690590b4f",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999948,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "dabb9388-fdc7-4f01-84c9-94a474855740",
+      "symbol": "WLD_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7551023192360282,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "c01566a3-1934-490a-a72f-d8e50abf6864",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000044,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "abd98701-9d7e-4b18-9a34-5aed33e88400",
+      "symbol": "LTC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5540418547394315,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "5ee15824-33fd-4592-a481-32dc9cc4034e",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000008,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "7d598fd4-0eda-43fe-a167-bb8bb8038bf5",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000008,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "875838d1-7dce-4d21-a7f8-214f685fe051",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000008,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "de718a2a-5eca-4b5d-946f-a21ea39b422d",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000008,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "fc669283-8254-4fcc-8911-eba0a04c1f29",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000008,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "3f7f3737-4e2b-4935-95ba-ec300c1559e2",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000048,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "b45e30cc-0a7e-46fb-b4a0-4427070f10bb",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.501715039577846,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "704aa590-14b0-4b9f-82b5-e241d0ba1eb5",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.501715039577846,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "6c03a606-76b9-450c-8fa9-19a3dae050a1",
+      "symbol": "AAVE_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.6155904502483747,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "35580d44-a008-43fd-9471-03e88f8a6292",
+      "symbol": "WLD_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.6725327153762326,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "382bc79f-1a4c-4525-8d11-1c38bb2be287",
+      "symbol": "AAVE_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.583293288483113,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "cb833278-c429-4d37-a2b2-6fe06a22fa84",
+      "symbol": "AAVE_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.583293288483113,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "47b07747-d860-44be-9923-bcd54df08b9b",
+      "symbol": "AAVE_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.583293288483113,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "4ab27a01-dab5-4491-8d89-c603f997bb4d",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999907,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "001f015b-4859-4fb9-b5a6-4419889157f0",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000017,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "0131de5d-1cae-44d7-b27f-1b4bb019b066",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999972,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "0654a619-1b09-48ad-8afe-8a1622e99440",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999972,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "2787587d-21d6-492d-abe4-362c9a14352e",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000017,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "63fb9dc6-413d-4138-a9c6-4f4997f7213f",
+      "symbol": "HYPE_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999933,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "30f94390-b8f2-45aa-ae42-3f2a368873b7",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999972,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "002bd59a-3ad0-4f0b-8a12-5967be385b83",
+      "symbol": "HYPE_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999933,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "11ec6aef-996f-49f3-8b78-95cf5dd037da",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999962,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "9fff056b-c709-495b-a647-85c928ec691c",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999907,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "a54ab589-ea31-4b56-8ba8-41a3aaa1b649",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999907,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "623444de-c45d-40da-b851-c898c7c41638",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999983,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "d44bfbd9-dff0-45df-940a-1ecd3b1c5762",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999983,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "e36b8eb1-b28f-4de0-99c8-4066c9c97bf4",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999972,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "ec84bdda-d559-4685-999b-4fee7ff24309",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999907,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "ed72709d-affe-4c53-8c9b-1eff3db17e04",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999907,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "4e47f4b6-e7ea-4dfd-b75a-ab4f816f4670",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999983,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "1f41fc0b-d758-4236-a1ef-983ef2671c34",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000024,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "2ded9d21-aa35-4e09-b8cd-70ab12bb37dd",
+      "symbol": "AAVE_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7287937119024763,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "2b19f8f6-ef69-472d-8c69-d1cfc3f76b2d",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999942,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "2b89c45b-c218-4571-bf45-49c4c26b4d92",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000024,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "e7ce497e-9552-4861-8e83-e7c1adc1407c",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999812,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "4484e012-c811-427a-8e82-f1014cadccd5",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999942,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "4e0cc9a9-76ff-4f3b-b9ff-77e494d8a629",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000024,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "732b1c9a-2e63-4779-b5be-6cab44d219f2",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000024,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "9c94eaf5-85ea-4411-88ca-14b3e16f822f",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000024,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "a4be9d3d-c2e4-4edd-8d9d-9bf7b0d93f12",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000024,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "d6dd9fa9-3c7d-4ace-906d-3e748ba1519b",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000024,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "aa3bd303-689e-4aaf-9ce6-d122e95e5821",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5604376308502725,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "9584fcf2-1d17-406c-adc3-0fd97f011cea",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7105569905291811,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "0188a573-9d38-4e81-a9f2-8979d56956b6",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7431276483050979,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "90578eb3-cb10-498e-b025-22ac58e0e923",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999984,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "18f5ab54-8e44-40bc-bc1f-fdd223301133",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000026,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "3bf05c08-b1f6-4e66-8e63-5941373a9a48",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999984,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "53f7f7e4-25a7-47bb-8e2d-1380d70e2214",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000026,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "0955f651-48b5-4011-9ede-b2e5f2e732e2",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999907,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "1dfb1ad2-9840-4ef4-8330-19fc1453a0a9",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999972,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "2ff262d8-b12f-4236-9feb-8df5272a4943",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999972,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "3b897266-a467-4d79-878b-e882ffde768a",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999907,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "45d264b7-12df-4315-9586-5aec70711bce",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999907,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "4a147452-46d0-4e01-876d-1ae3587be0d1",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999952,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "53bfb793-c47d-44b1-94b2-a81d584368ca",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.29999999999999,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "62c7c3f7-20fb-45b9-a6e9-52f170226b6c",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999907,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "6c5f2823-ee9b-48b9-88b8-4ef5d38d15db",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999907,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "7c1a660a-f345-4e1e-9f57-381f950c37bb",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999907,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "8258b65b-c9b7-4b86-9313-fe151f36af1d",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.29999999999999,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "982a24ca-6930-4abc-8b3e-54390d1cd858",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999952,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "990aadc6-b7bf-4605-bbe8-3024d002a3db",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999907,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "9dbe3448-0b30-40a0-9b59-7ebfb5214268",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999952,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "a1966046-a23d-4f70-8bdf-5824751da643",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999952,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "a4388ed3-e234-4512-8847-72bf4f9e8731",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5604376308502725,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "d2168d02-a4ae-45c2-9e6e-06280e0915d5",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999972,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "99ce4304-dd7e-452d-bf1f-f8eeb0d8a20a",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999984,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "c1fa98b3-5e7e-4546-abd0-f33315c03b03",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000026,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "7549dd76-166e-46c8-a975-7ff11cfb2ded",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.9062384909580286,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "940e73b0-9cb4-4076-81cc-4f95fc09977e",
+      "symbol": "INJ_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.9085891441349951,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "7d2649ab-24ce-4e72-8e0f-384585429b48",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999957,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "13ba005d-4d81-40a5-a0f1-f1bca9a73073",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999957,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "be7e3f54-97fd-4403-b234-5ee8eba644da",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999916,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "584795cf-a7e5-45d2-ba4c-79d9e734d81c",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999916,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "f77ecb4a-2ee4-46af-9121-eb04ee7807e6",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999916,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "76ab235c-8ddc-4295-9a8e-b41005e8d4d2",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8710338680926903,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "bfeec778-a902-420e-a855-c3cbcad38d27",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8710338680926903,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "0707d80f-4565-410f-b3e6-af9cd4eba8e5",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999942,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "1763ec91-6529-45b8-be37-a3ea99f8df19",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999942,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "857fc66c-7673-4a14-9569-0187bf135ce6",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999942,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "5ec4aeea-3248-4580-96dc-9ca8a28b3efe",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999962,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "67564dbc-19f4-4acc-b165-d31057aa063e",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999942,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "885d92f2-01ec-4911-a008-90b980f87d01",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999962,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "0ca056d0-7e5b-486b-b847-3582ff19d1f1",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999984,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "0cefac7f-ec44-4a65-a37a-8cabda371751",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999997,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "104ff803-67a0-4937-bfb2-2bb7fdb42617",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999997,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "02f4f1a4-5d00-4a33-bf65-a672808e3622",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999997,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "28b53edc-1e61-4d27-84be-9f131db8b0be",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999997,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "39553a88-aeff-4f49-a65c-1d52a9cde12a",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999997,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "3e0f2a28-46d4-44c6-b0da-8bdf00f943fb",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999997,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "521a1d80-c76d-4f07-81db-e8c8038e14cf",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999997,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "5df4fef9-4fb9-4159-bc9b-83b694a35390",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999984,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "65f1ec35-f7f4-47f7-a6f4-78c347a67268",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999997,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "6f71a0cc-ae0d-415b-a942-6e944e752684",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999997,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "a441e40c-a90d-42c6-9143-169b9a746591",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999984,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "19bea0c9-4ec3-4b27-a4aa-29e8b03fecc4",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000017,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "37d58c0d-2d47-4794-9c70-2c2fd8c5e03c",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5416646820671684,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "40933a29-e915-4f7f-b0b4-33919b89da5b",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000017,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "83991f5e-bace-43cd-abf0-7c027c888fcd",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000017,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "aa03423b-d11b-4420-98e4-e4b29ecd0dcf",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000017,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "bee52aba-76fa-423c-963f-b198801b6e73",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5416646820671684,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "bff877b9-df07-4bd3-9e59-e317c01b057d",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5416646820671684,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "d1b3d0fa-2592-4bfd-9b33-14b57e4115c7",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.6518615626638735,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "e695f4fe-ba4d-4df3-be72-7446afdb0689",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5416646820671684,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "45332739-ffcc-44d6-91dd-cef6bca41acc",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.501715039577846,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "5e6ce175-9527-4802-88bc-b95c1b091f2a",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.501715039577846,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "8f8bc226-b62b-4e61-b1ed-4920386c5408",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.501715039577846,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "e5def4c3-83ad-43ee-916d-856aca5684ff",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.501715039577846,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "b2fee0bd-e1e9-4ff2-bf79-7c16412ef89b",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5876751427088844,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "54e98795-93ad-49cd-8bb7-bdac1119dc7c",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5416646820671684,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "72fc7ef0-8be2-49a3-a11c-5bba1a533ef1",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5416646820671684,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "79357c2a-0946-4d03-9ef6-42a2aa98fc43",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5416646820671684,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "7d3b1a2a-244f-418e-886e-679e8ef5a21d",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5416646820671684,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "7ecb965e-8346-4fa5-a37b-23ea43d3b8e5",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5416646820671684,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "82b599e9-20da-40f3-9108-274bddceacbf",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5416646820671684,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "98c36c92-84ba-4c79-ade2-7b7809cd2e62",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5416646820671684,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "9c2bb9e9-c079-477f-812c-7a448796aed3",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5416646820671684,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "aa5de560-c7d6-498f-8345-2a6b637f038d",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.29999999999999,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "abfe808f-3357-4a7f-972b-84908f8d07c4",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5416646820671684,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "d27157f6-4561-4a9b-93d2-26d2ced173c7",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.299999999999992,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "dea61ff4-7650-4016-a739-d2072ee02d54",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5416646820671684,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "dfde72b3-32c1-44f1-ad27-0315a38fe766",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.501715039577846,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "135859a2-cc69-4f81-960e-58ae1853261f",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8710338680926903,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "09356796-caf4-4a67-af56-71258f10a1ae",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.6518615626638735,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "0b2727f4-8062-4731-b599-f25165885e2a",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999916,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "697b1f3f-267a-4fdf-9107-1c71dd240bd4",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999983,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "1ca1da73-6fc0-4a01-94f1-8fc670f9e482",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.644684960703338,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "857dbeac-310a-41aa-9c98-bc8fde261c4f",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999916,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "9e72e926-a265-4f72-b9ec-f73632953ff3",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999916,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "be210168-d450-44b3-9cdb-c75fd44220a3",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8710338680926903,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "4c460ab3-8a37-4916-89ca-c84da1caba9e",
+      "symbol": "SUI_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.700000000000002,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "c4cd8774-8b50-4dd1-a0a0-c46b2c2aeac2",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8710338680926903,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "c7f73056-84d4-44af-92a1-2c19f3bf2392",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999916,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "d287931c-8f4b-4ffb-ab98-b86cd31e821a",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000026,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "fcddcbe8-8371-4fd4-a739-14932a6da109",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8710338680926903,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "f39a4b95-d78c-4ffc-9c1a-1ab599ed793d",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5972004186289921,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "ffe1bbc3-ee68-49e1-ae89-4815ad1cc51e",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.4918191322530077,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "03f58e54-3d8f-482b-ae23-a17f13d7b0ac",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.3521999999999994,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "5e5423b3-7cea-42b1-b0d8-3559b9928801",
+      "symbol": "XRP_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999937,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "ef7a45f6-8e52-42d7-aeb8-cb020ce25296",
+      "symbol": "WLD_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.6665626695605009,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "4de7e805-6e3d-4ea6-bdf2-824efd5b3d80",
+      "symbol": "HYPE_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999933,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "5fb6d531-2b56-4e34-ad7b-0c952a8cebe4",
+      "symbol": "HYPE_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999933,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "7fa52137-4195-4fa7-a787-2bf1ee8b120d",
+      "symbol": "HYPE_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999957,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "8add84e5-bd10-42de-a2a3-58ffccc8b247",
+      "symbol": "HYPE_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999957,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "da4722c0-0fae-4f54-8f74-3f81bc23fbd7",
+      "symbol": "HYPE_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999933,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "00bb4d38-6ec4-40cf-9585-818447073899",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.3521999999999994,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "0b63c530-31d5-4a18-b75e-67d7058ecf3d",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999907,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "1081ed5b-a1a1-4eaa-97a1-baf24dd6b7f7",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999916,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "1f5eecd4-a49b-4d7b-b602-5f9b20f882e2",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.4918191322530077,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "263e0e38-8e33-4bdb-a839-7bfcd730960f",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8710338680926903,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "2eebe161-85ec-424e-8dd9-3043d0a04d5e",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.9062384909580286,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "335a8ed3-02c7-477b-98ff-6674c5422f9b",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.3521999999999994,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "3d081a96-c654-4127-aa45-4df24deef5d6",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8710338680926903,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "4152c452-62ba-417d-9dc1-a8da35ae4542",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.644684960703338,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "449be17c-77e2-4c07-997d-6f98678a66b3",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.9062384909580286,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "466aac6c-e92f-4e5a-bb19-15f392c2b088",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.9062384909580286,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "4746c806-5bbe-48d7-a0bf-3b5014ca675f",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999916,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "4c82e857-10d7-4113-b2d2-4f90eee9eebf",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.644684960703338,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "53dd0325-5302-4631-a13d-c589f0287a42",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999916,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "54a5a0d0-8bd0-421d-833f-bb7b5af4b6b8",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.9062384909580286,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "5dd5e11a-edb1-4d16-b846-cb2256e2d1fd",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8710338680926903,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "5de727f4-185a-4c9b-b3df-17d5ea9da9c6",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999916,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "639a5650-bc98-4718-b427-c746189bd23a",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 2.334400000000009,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "6a7f8ec3-a44a-4675-ba06-f98fbce89254",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.6518615626638735,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "6ec13619-7d46-4e17-8486-ae17297fd182",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.3521999999999994,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "783abcbc-b06f-4160-8530-5694a8afb58e",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8710338680926903,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "7d0f8847-eba0-433d-b47c-ec392dc56155",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.3521999999999994,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "83ccc5d0-229c-4861-8d2d-20e365e3cb12",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8710338680926903,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "84ff7e35-3d85-4af7-8503-8425bfe29768",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8710338680926903,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "862b5e96-6a10-450a-adc7-39a6503f0b80",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8710338680926903,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "9cbf5dfb-614c-4493-a947-e3ec964e7526",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999865,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "aba32f33-11ee-471d-9d36-b6f826e3532e",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8710338680926903,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "baac835e-beb9-4e55-8385-a160e7c030c7",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8710338680926903,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "c274faee-7086-4a9d-9c47-7799388769f9",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.3521999999999994,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "c6eba96e-5801-452f-bd3a-c4eb8496cd68",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.9062384909580286,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "cd5581bf-c16b-43e5-af52-6a040afc1473",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999916,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "d04f4a1e-8974-48ab-b340-5e34e172f70f",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.29999999999999,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "d8219f8b-a717-403f-bb5a-f8d3dce0ecd7",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.29999999999999,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "e4245dd9-3ded-4740-8fc0-a7531358eb9e",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.3521999999999994,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "e8792ae3-24cb-44a8-bea2-832ca43dd9e4",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.9062384909580286,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "f4edebea-5ba1-4f09-8174-dfbeb9fc64ef",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8710338680926903,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "0213c4fb-b021-404c-8699-ec5d3d512154",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5712376933896011,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "0ef8ada9-d207-476d-b7ac-c663f2a989b1",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5712376933896011,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "58de397f-978b-425b-9862-71f82c911869",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5712376933896011,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "3316fdb7-4452-4ba9-bacf-2d4695e8a642",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7292262988984253,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "bfc26a0a-e793-4fcd-84ed-93c088cae3e6",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5712376933896011,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "4b9ad727-24fd-45cf-8395-44fa9c508b15",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5018611111111091,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "adec3de6-0f24-43e6-8855-8c38a28dd82e",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.6323813465783621,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "27329c44-6174-4f01-9bd1-e23999b1d90d",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000068,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "485dfa05-de3b-4b60-b21a-447c22cb07e6",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5166970504370603,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "60344cec-1d60-4acc-a14f-f759e5d73c79",
+      "symbol": "LINK_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.492125845856398,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "02368961-7605-4a12-8b93-b42865748cc1",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000048,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "55bb699e-7b78-47a1-b102-22e8c2bc5124",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000048,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "9e91aac2-c59b-45e8-af30-2b17c20f26e6",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.515504073319768,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "60f184a8-60d8-45b0-b3f8-74463f6ba5d7",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000048,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "6437329a-c872-43b7-acca-0da2d6bbb380",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999997,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "8c06f2cf-dcc8-4ebf-8d60-8acf5eedd387",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000048,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "ccfc2f49-77a2-4aa1-8c32-6dd8fdf7e871",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000048,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "0acdfb86-b6ca-4d8a-8e15-1f919a2b22f9",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5212100330760705,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "2f4324ba-91c6-4f33-a12b-b72abc7efa9d",
+      "symbol": "LINK_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999942,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "61cd19b7-0770-40b6-bf68-dba028233376",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000088,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "e29f8f7f-448c-457e-ac4b-b0b9412a4b22",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999958,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "45107d1a-289e-48bf-a71a-064125c21167",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7742524916943536,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "bcba57c4-b02a-4110-bc03-bea5d7b42e43",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5018611111111091,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "d36eb7f2-71e0-4cc9-b0ae-12cee46440f3",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5578376876042288,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "27a846bc-8695-4447-a53a-2687e5ac9d59",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8757537046499817,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "792e52b0-1188-467f-8e04-9b248d616c65",
+      "symbol": "INJ_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.6012059181191696,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "a5cb6db9-954c-4e9a-b25c-a930e05891d6",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999905,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "cda8c330-4148-49bf-aff3-16869cff2b66",
+      "symbol": "HYPE_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000086,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "dc2f066d-46f9-4451-9e92-22133915cbf7",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000035,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "748e5417-a96f-4fae-ae8d-a6bb02c2aa50",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999936,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "c857241c-3932-454e-b592-842ee02b52a3",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "SL_HIT",
+      "match": false,
+      "net_return_pct_recorded": 0.4978527853588059,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "263d541f-ea3b-42c9-b743-62883fda472c",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999936,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "792bef30-bac0-4274-a230-e7d8f7fad55c",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5212100330760705,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "679e6847-1475-4962-9ed4-8f36dad670cc",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8871465325968879,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "38f814d6-5a45-4268-a23d-a9446ccf93ff",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.515504073319768,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "9132ef5f-a4e3-4ac0-800b-3ead83790f8d",
+      "symbol": "ADA_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000033,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "e5eca737-8d9f-4dd9-9c5b-f31f3f1c09d7",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.331799999999987,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "2006ea7d-cf62-4c02-b988-3e34d27361e2",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.699999999999999,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "55b89d46-28f2-475c-a202-6c1d976688e7",
+      "symbol": "INJ_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.49450715581535637,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "9f8801a3-01f4-40d1-9ade-02a200ff86d8",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5008995037220965,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "fe895b95-881f-44f9-a674-11757f54b2c1",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.700000000000004,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "4bdb4006-865c-4c77-9e8a-458b376290e8",
+      "symbol": "SOL_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999977,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "0a92a238-643e-4a1f-8d2c-2fdb048a27d1",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8047247604189889,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "24319809-b00f-4e6f-bb7b-3d599e20bd6e",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999985,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "964b3e1a-8a5a-498b-acf8-17a89e518bfc",
+      "symbol": "HYPE_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999942,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "2db8e609-5499-4d76-a18c-2657f72d3fd1",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.4957450868155027,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "49328149-a5a4-4011-8b4a-0466e063e6c1",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8871465325968879,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "55444910-1aec-4b79-9aa0-617b5254d3b4",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999936,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "57d6d893-a139-4396-906a-ef67830d653f",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.578887744593213,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "684b4d67-86f1-4e5a-bcc8-f22830dd296b",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "SL_HIT",
+      "match": false,
+      "net_return_pct_recorded": 0.4978527853588059,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "7651b19d-0cc5-4e85-9f3a-ebe0c38defae",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 1.1696975320096556,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "47ca7995-746c-4f54-816f-5898ca676628",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000022,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "a924b516-e142-47a6-a50b-52aef44fa397",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000035,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "d231ad95-b391-4ec1-9311-4837bb3f00aa",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000035,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "02ac4bef-eb5a-40db-a8f1-55d42462bcbb",
+      "symbol": "WLD_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999852,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "17c25b2e-42a4-48f1-aa16-b9edb293a425",
+      "symbol": "WLD_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7551023192360282,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "2f53cb2e-8fde-46f8-961a-606bee076c94",
+      "symbol": "WLD_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999852,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "3d37c4ba-34c1-4fbd-88d3-6a30e24871b0",
+      "symbol": "WLD_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999852,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "8aed11cd-20fa-44bb-be7f-bcc9750482df",
+      "symbol": "WLD_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999852,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "a000d732-0df7-4aa2-8817-5e7fd38d7692",
+      "symbol": "WLD_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999852,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "3b52ae78-6858-4711-ba98-2cb2bcccfe11",
+      "symbol": "AAVE_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.6155904502483747,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "52889297-0a4e-4577-b106-157d35a7b699",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 1.1696975320096556,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "87bdd516-9514-4deb-ab3e-7154a67eab9e",
+      "symbol": "WLD_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000057,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "12ce0962-16d5-413a-9e91-844c30a51255",
+      "symbol": "AAVE_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7287937119024763,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "6d0b3449-191f-4a71-bcac-920438fb7fb1",
+      "symbol": "SUI_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000068,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "b2e51a39-be73-4679-817d-be004a66bdaa",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000042,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "20974bc1-d8cb-4aa1-b2e0-43635d38991b",
+      "symbol": "BTC_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999926,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "2e9ae949-4381-41f1-8f40-2a73fa4eca0f",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5980711974110033,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "2f276b00-da60-49c7-8cf9-6502e92ff6d5",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5980711974110033,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "32811993-5f4c-45e3-8dc9-9585c94445f1",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.299999999999991,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "6165ee60-7544-4d0e-9148-68615dd82eae",
+      "symbol": "ADA_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5730277986476329,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "67141a77-c9b7-460a-8138-7ba1d604e4fd",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7299125659879353,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "7a0ece14-fe6c-4b96-850d-51602ab8856a",
+      "symbol": "ADA_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.658908161219171,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "7c09cf51-8c3a-42d6-a66d-12ff0348c00b",
+      "symbol": "ADA_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.6841949556235256,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "8b70d6d7-a2ce-45b0-98b6-d883da69face",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5601268130859753,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "9a0a1637-cf5d-4ecc-ad8f-87f86df06326",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000086,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "1cfb7a04-f9da-4452-a615-dd59aaf33699",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000086,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "2c36495e-1890-40d6-aa6e-e26743b75992",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000086,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "eb9a49fe-3422-4f03-a52d-4a5e635a64a3",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999986,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "cdf35ff9-d398-408f-8785-536c67b3f114",
+      "symbol": "INJ_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000006,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "46cd9bd2-ebfa-487f-bb7c-854a73992537",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000042,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "6d9cf269-8a33-4609-8c9b-3a6825f479ab",
+      "symbol": "WLD_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000026,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "742ad1ae-348f-4d88-849f-d8e08cc22b83",
+      "symbol": "WLD_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000035,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "3a8a4347-19b8-4d43-9ae6-45fdc6c46ae1",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999903,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "4ea41415-11b3-428a-8709-4de88f0147c5",
+      "symbol": "AAVE_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999993,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "4e0bd2f8-00c1-41b5-99e4-87a534ab3ede",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.515504073319768,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "6b4cdd15-dd13-48a3-b96d-42cbb24c3bd6",
+      "symbol": "INJ_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.4742140266021844,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "16deee6c-6e2b-477c-8bb5-dc863dac7fa9",
+      "symbol": "INJ_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.6012059181191696,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "1054fd47-b827-4dfc-9911-26f4e76f2139",
+      "symbol": "HYPE_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999942,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "1d87f9c2-ae5e-4be5-aead-5d3277ef5365",
+      "symbol": "SUI_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.700000000000002,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "24fed899-44ad-45de-884c-c1f115e41a4a",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000026,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "3006a633-81df-4ecf-9237-977c4f536e10",
+      "symbol": "XRP_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "497da7aa-eae3-4b8e-b8fe-53519fcf35b6",
+      "symbol": "SOL_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999964,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "54ba3238-e3e5-41b7-a206-cfacf43a8aad",
+      "symbol": "ETH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999935,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "4b3c2979-7c8f-47bd-b1a6-daaa6cc7b127",
+      "symbol": "SOL_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000048,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "55bb7777-1488-46f4-9341-7fb2309a1132",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.9427271454570996,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "69b918ee-4d99-470e-8efa-c66b4bd68429",
+      "symbol": "XRP_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "71c3f03a-9aa4-4720-a202-69346fcf9a4b",
+      "symbol": "SOL_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.699999999999997,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "74cd565d-7789-4a46-8814-f612f27e90a1",
+      "symbol": "INJ_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.881636989073249,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "74a27408-8c6b-42bc-9930-9fa673723892",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000053,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "9af43c36-6a2f-4a83-be64-546941b0d084",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.4729529232496645,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "16445b9c-223b-4dba-810b-1f3f30f69025",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000053,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "548f52c6-01f6-4b17-a429-8a53d0c03686",
+      "symbol": "SOL_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999993,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "66e6368b-5558-41dc-9c0f-a635d14938d7",
+      "symbol": "SUI_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.700000000000007,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "7f3f055b-4d46-49f2-bd33-531184e9a387",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.9427271454570996,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "1f501487-1344-4a35-a928-9d81cc7236b6",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7497826086956552,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "7e21b78e-a15c-4d3d-bf38-fa0c189ac9d5",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.6701999999999924,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "d47b8612-be87-4b90-87f9-2c9c1ba3ed21",
+      "symbol": "ETH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999953,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "97be4b63-7a4c-42cc-bc9a-fca36fb36790",
+      "symbol": "ETH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999935,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "0982a45a-5e41-44a4-adae-49fae8f274bd",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7497826086956552,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "7486eb9a-49a9-40d8-8eea-2ee305bb5025",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.6701999999999924,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "41ebcb51-6cdb-4932-9b82-d2612935dc91",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7105569905291811,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "0e3b02cd-5317-47ca-a39e-95a8caf071ce",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7105569905291811,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "403c8649-5a77-4dc9-b099-271fe1974f84",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.587842386641136,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "4924918f-291f-4a2e-8b72-cb04b6db9fb0",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.5159999999999985,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "55501c9a-b7de-4ef8-b6c1-7d78f7e5254e",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7544228480761508,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "225a222b-3e12-4cf6-8afb-55f7ffb1a94a",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.4860000000000158,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "2f12be83-3d69-4f5a-9cb7-fec1f7b86816",
+      "symbol": "TRX_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.700000000000001,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "333cb2c3-a033-47da-bc39-5e4fe0b575d1",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999953,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "79709b1d-e640-4d11-b5a0-51fab1c6ea11",
+      "symbol": "SOL_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000048,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "696eb174-ae5f-420b-85a4-54750578b489",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.47937620115311524,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "71eda6b9-b66a-4c1a-8686-45501337a6f3",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.45519574093348975,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "722c0974-038f-42ed-9b50-a7fff885a9a4",
+      "symbol": "LTC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.6913007964059625,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "d3ad3834-4159-4c58-94f9-2e679b9531ea",
+      "symbol": "BNB_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000064,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "0683f7b3-6e9c-46a1-a17d-aca173af7801",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.844258183738138,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "e65040e0-a7d9-4719-b03b-de948793e4fb",
+      "symbol": "HYPE_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999988,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "e77c59ee-6e88-470c-b4a2-21192e92a65e",
+      "symbol": "SOL_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.48219264278801394,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "c8013994-80b2-43f7-a168-f4c30fb7c3c8",
+      "symbol": "AAVE_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.6155904502483747,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "23bf4e84-1620-4cfe-af30-60fdcdb4b818",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.9447500000000055,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "d63c9ce1-0dbd-47a4-a118-755bba2b40a4",
+      "symbol": "SOL_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000048,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "dec4bb9b-9653-4be0-9e99-545e01fcf88c",
+      "symbol": "SOL_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999993,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "9531feba-9e10-4ed9-bf0f-d72448aeb08a",
+      "symbol": "LTC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7531467102574603,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "ed737468-4387-4a85-aea7-184414f57e77",
+      "symbol": "ADA_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.6791365824307996,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "8f2a9a6f-07fa-47e2-9c41-84d2e38d5f2d",
+      "symbol": "AAVE_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5348863272494497,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "a0d93314-2677-4084-89e2-ca366bc1e932",
+      "symbol": "AAVE_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5348863272494497,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "77cc3e44-a1c0-4746-833b-176778c5883a",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": false,
+      "net_return_pct_recorded": 1.623100000000012,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "6762edae-260f-4baa-9269-2fbb6dac1c28",
+      "symbol": "BNB_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000004,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "f0b5528f-326c-42a2-ab92-05d9ef790fd8",
+      "symbol": "LTC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5182544498381914,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "839af0f6-ed47-4a47-818e-ec847864e8ab",
+      "symbol": "AAVE_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5348863272494497,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "ff21abe9-9067-4a74-b663-144c1583a1f3",
+      "symbol": "AAVE_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5348863272494497,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "60d69183-2753-4224-b1c6-2eee6b049e54",
+      "symbol": "BTC_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000082,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "a5c37f10-2502-4081-94f9-f646aac4802c",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5601268130859753,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "e407ff08-dab8-43f4-b8ea-082d08a51cc6",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5601268130859753,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "a9f246a7-7825-4869-8beb-d3c69fbcb2a1",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999986,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "f7edb82e-079d-4848-b081-27b366dc7bab",
+      "symbol": "INJ_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000002,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "4745cbe8-2dc8-4cdf-b6f7-27066d7b554b",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999986,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "37965371-5ea7-4e38-ad06-f4fb8b9d0ace",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999986,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "bc80ef94-daf4-4ff5-b394-4b887730029c",
+      "symbol": "XRP_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "c89dd4b6-b3bc-4300-87ce-06b42f7b2d4a",
+      "symbol": "ETH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.699999999999993,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "60088679-2686-48f4-bbf8-bd6e990cc5c5",
+      "symbol": "ETH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.699999999999993,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "e62a6424-3ee1-4239-b567-30d0c60209b0",
+      "symbol": "SUI_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000002,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "82c78e36-b8c3-4e05-a41b-fd524c98e92d",
+      "symbol": "SOL_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.462703252032542,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "8decfc01-84bc-49b5-9487-d32708bc8741",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7105569905291811,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "9fc8d238-3197-4aac-b831-1e182801eddf",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5980711974110033,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "aa82f2b0-1565-4c06-8111-96f3cd6da6b4",
+      "symbol": "INJ_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.9085891441349951,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "b2d454da-c38d-49db-bf50-8b791420bf55",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5601268130859753,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "b7e6a6a3-db79-42d0-a3d3-26e091eaa903",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5601268130859753,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "c0b38cff-3b85-4952-99af-f5773dd32aee",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5601268130859753,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "c1f746f8-8098-4d23-81f9-50caae276cb7",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7105569905291811,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "c3e81cf1-4d62-48ed-85de-6c66aec63115",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5601268130859753,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "eb844602-adc0-48b9-aaea-e2b3df589e7b",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5601268130859753,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "9efc7aa0-42f9-4ae9-bc34-33448d365246",
+      "symbol": "XRP_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.700000000000007,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "5c79fe22-9aab-4c44-bfc2-189939d6bee0",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.6133021406012473,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "ac59a6c0-5521-4f66-924a-39b262125e77",
+      "symbol": "XRP_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.700000000000007,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "83f09d1d-90ac-4c1e-bc00-f8d3b2b26d8e",
+      "symbol": "ADA_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.47721677341873664,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "7e3f752b-93c9-45e5-a73b-dd2bc6f96290",
+      "symbol": "LTC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.49206479393069064,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "26bbff6f-3a45-4ddd-aa6f-733d76db0430",
+      "symbol": "LINK_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5541065775589096,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "778eeba9-0db2-4526-88c0-d89a8e3b7074",
+      "symbol": "LINK_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5541065775589096,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "65dfe968-e2de-494c-8f51-4f7b957948b9",
+      "symbol": "LINK_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5604281828551307,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "838700a3-ec7d-41f1-b0bb-b2de3793b1dd",
+      "symbol": "LINK_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5604281828551307,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "ea8c0989-a445-4f6b-acab-ccef377d1fa6",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.4521880945909355,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "ce2dd3e3-41a1-48a1-918c-007c52afdb0a",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.587842386641136,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "f0cbd813-724a-4449-883c-7d4fdfeec762",
+      "symbol": "HYPE_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000086,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "92d17588-6ce7-4e8f-830b-29aa846fc9b8",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7184168655529151,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "6e57845c-eda8-4264-aad6-9f0318f51e03",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999957,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "b0bd23d1-b187-4522-bd7e-43e39da5b4cf",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7544228480761508,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "e9638a7b-50c3-49f3-9c15-3f6d2ff1d1f1",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999957,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "cf0ded98-50ae-4bc5-a674-115869d1df53",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.699999999999999,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "66af8772-835d-47d6-9f7a-73c5b644a6f7",
+      "symbol": "LTC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.9184404420794092,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "cba8eef7-db13-4371-9af0-a11a0a478e89",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 1.803793889648899,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "be44a1d5-ef63-403a-a23b-b293451af3f3",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000015,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "a76f8927-2e90-41ea-a66d-a93366e594f5",
+      "symbol": "HYPE_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999942,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "eff0f618-d383-4d47-abd3-83ae41e9608e",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5859067357512964,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "5cc8d3cf-71a1-4141-836c-97bdee233901",
+      "symbol": "LTC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5540418547394315,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "c23fdffb-66c7-4fcc-9bfe-a431ab24c060",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7314090287277835,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "e3354277-74da-47f3-90c9-c2f1cfe35ecf",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 1.1696975320096556,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "f005b47a-2aca-476c-9706-78e3465ddc37",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.4934554973822201,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "f4860df7-8314-4010-a43c-fce835c1e69e",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7544228480761508,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "9f1b176b-04ae-41a1-9d37-65a21375c847",
+      "symbol": "ADA_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999953,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "029c25a3-8907-4350-9fed-c40afa0986dc",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8820366699702846,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "1d6c5e59-5579-403c-bef2-0ccdb969b758",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000062,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "3576e74e-934d-4ee8-bfd7-b2dfe0c2f3a4",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999957,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "007739a2-5cae-4593-af47-a6dd4e282d4f",
+      "symbol": "XRP_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000002,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "60aec441-86b3-4b65-85f0-437cbde8054d",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999957,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "66e74268-ad36-4fbd-8bcf-e26f992eb033",
+      "symbol": "WLD_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999962,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "679019fb-86ff-4f44-af98-05bead12618d",
+      "symbol": "HYPE_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000044,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "6aca019e-9554-4c58-9b77-29f392e22d81",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7285886126704211,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "e5ca5c92-7369-4baf-97ec-5e93b0d3ea98",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5213396241008763,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "38bcc01e-5883-4f5f-9b60-b24eb990c23c",
+      "symbol": "HYPE_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.6805419014506637,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "885bee48-9bb3-4dbd-bde7-38b8e9a5840a",
+      "symbol": "XRP_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.700000000000008,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "97682b60-c731-422b-9f84-f6f1ff59ec8c",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999952,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "ff8f7cb3-358f-4267-acea-eebce661f38d",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 1.1696975320096556,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "bed7bd58-0ad9-4bf9-9ffb-d5770a8c1d6b",
+      "symbol": "ETH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999953,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "ec4ffd7c-63cb-4d6f-a47b-a7681edc6d63",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000042,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "a716de6e-72b8-4d8e-afa6-438977876b9b",
+      "symbol": "BTC_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999926,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "fc866560-f265-4dda-ac2d-53f6ec936b57",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000086,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "9ec4a82f-42bd-4cea-b695-d762bf4bfece",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000086,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "e9b08bc9-1e90-4712-b14f-4bd80278ef1f",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000086,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "b73d60aa-3160-45b1-8595-a776c06d7caa",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000008,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "9b3051ba-f23e-46ef-99bf-a8b1feeb7005",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000008,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "ad639040-0c72-4cbf-9dfc-71612e448e9b",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000008,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "c57640ed-d0e9-4f40-b383-7315ba5432d4",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999953,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "f5fb06fa-ac37-4312-9d1f-429f892d5283",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999953,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "f1ca0d0b-efc0-4d0f-a75b-a89527d7280c",
+      "symbol": "AAVE_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999993,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "6eeb51a7-2b29-4949-94a6-4bf66eea5f21",
+      "symbol": "AAVE_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999993,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "868392fa-349c-423e-b01e-b0524b644baa",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000053,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "986cdd7a-6c1a-4017-9fa7-8abf261c6e35",
+      "symbol": "WLD_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999872,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "da0beb9b-65d1-49aa-becf-2353ccab311f",
+      "symbol": "WLD_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "c662b759-79f6-4adf-9b79-b72201cf53b6",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.45519574093348975,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "fc7a255f-84e6-4176-99cb-26289f097d10",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999986,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "709f1bce-3c26-46b5-92b5-1cde278e0bf1",
+      "symbol": "ADA_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000022,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "7dc75ae3-f87d-4393-a368-050edcbec04a",
+      "symbol": "ADA_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999995,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "5c27785e-ac55-4d31-b41c-6f377e375226",
+      "symbol": "SUI_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000017,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "91a0d2b6-071d-4ca2-ac83-228ed1b24113",
+      "symbol": "HYPE_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999946,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "b90108ad-0e38-4093-bd15-d25f3e4c83b9",
+      "symbol": "SUI_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999986,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "beba2729-5769-4cb1-a513-08f1a8e52f29",
+      "symbol": "HYPE_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000026,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "9c3470df-1187-4a0f-9dbd-e614f2ac00ff",
+      "symbol": "SUI_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999986,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "21ee4acf-af02-4a6e-a403-4fee3d033600",
+      "symbol": "SUI_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.700000000000007,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "94b6d777-b186-4fda-bdb8-51a1a14ac457",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.699999999999999,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "d38a8ef3-84e3-4494-ad32-0b2e95334a82",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000008,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "e9762591-7fe9-41bd-a75c-a99eea969c6b",
+      "symbol": "LTC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5182544498381914,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "6f77c10c-d1d7-4434-9528-ec8f6a51bae0",
+      "symbol": "AAVE_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8986529193331829,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "c0f15b91-dc23-4e2e-a161-c2d824d58d7d",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.700000000000008,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "6c0a84ff-953e-45d7-b885-6ff69311f815",
+      "symbol": "BNB_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000086,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "8c01baf7-af16-4110-a638-3d47f45731ca",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999986,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "9d29ff03-569c-4cd0-99c7-02d3acaea701",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.9906271429462177,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "f6e53074-ea51-4481-80f4-cbacf0f7efd0",
+      "symbol": "BNB_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000064,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "aedd3de9-26d2-4d05-a55b-e46d37ed5ca1",
+      "symbol": "BNB_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000064,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "94f827a4-5da1-4386-9bc8-34b91115245f",
+      "symbol": "BNB_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000064,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "a5594693-2d45-4d61-b828-004f455472e9",
+      "symbol": "BNB_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000064,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "a6258b65-2eee-40e0-a5c2-3c26a9b0c858",
+      "symbol": "BNB_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000064,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "cfa78d19-eddb-4fb9-9663-666639f582bf",
+      "symbol": "BNB_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000064,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "01078259-ce78-423b-a2ed-3aa4dfc78f77",
+      "symbol": "BNB_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000064,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "d79b4c66-da02-4498-857d-64cc0b72c803",
+      "symbol": "BNB_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000064,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "fc5c8e76-ecfc-4826-a00c-39e1b0b45754",
+      "symbol": "BNB_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000064,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "a6e77d48-1fc6-4b66-b32d-f7cf348a4225",
+      "symbol": "BNB_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000064,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "648dc02f-c5c4-4062-8cfe-83f86b28a366",
+      "symbol": "BNB_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000064,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "4a35c8b2-84b5-4ef2-bbf8-deb3240af121",
+      "symbol": "SOL_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999984,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "4add54dc-94c0-4678-9625-ec35bf1de104",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.4943668122270834,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "a9f02836-fd74-4438-84e6-4fcffe6c244b",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999957,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "b382e9bc-bfc0-4ba6-8250-06ef63b58ded",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000075,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "e77e9f27-23ee-416e-8eae-f62eb7b783fe",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000042,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "233abcc5-c21e-4a0f-b7e1-8f84a20b8a15",
+      "symbol": "ONDO_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000008,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "bd3dc913-a44f-4644-99eb-c4373bc00be7",
+      "symbol": "ONDO_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.4740017615971925,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "e206c4f1-5c45-4656-ac5c-aa3611a5d221",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.699999999999997,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "c06a172b-0b18-4829-946a-abea0f260741",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.699999999999997,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "6eebb5a9-8395-4984-b9e8-450dd579b332",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000062,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "a45ab7e3-ee64-4ec6-a312-4b32c787e914",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000062,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "d02c5fec-c6d5-42f6-90be-b985249bd78c",
+      "symbol": "LINK_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999948,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "e3158c43-ac5d-47fe-ac50-d51d12220805",
+      "symbol": "ADA_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999953,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "dddd4323-0b41-4f24-87df-1a5f57f630c3",
+      "symbol": "ADA_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999953,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "b1b8708a-9fc4-4e8e-b874-2b3e153f0785",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.700000000000001,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "5aec7a26-f373-44c1-9942-ed013af64f4c",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7829320492241796,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "bf447334-85ef-470a-a206-e23a5121639e",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.6461395492914244,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "3f3a3296-93b4-4c7f-a6dd-4eb305f65c81",
+      "symbol": "DASH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000022,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "efd27f1e-f22e-4113-9e8b-b0196267dcf3",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7346864111498315,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "cf691b30-31d4-4206-930f-7e9f4097b431",
+      "symbol": "SUI_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000088,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "75a26b5b-2227-4739-9c47-8c17197baff2",
+      "symbol": "SUI_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000088,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "9a2480ad-7db9-4d0e-9bb6-649cf7de3bd8",
+      "symbol": "XRP_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999995,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "174d4d49-80e8-4cf3-8332-40f790af71a8",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999986,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "0011a18a-ad5a-4f8e-9924-392abb627f46",
+      "symbol": "WLD_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000008,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "3b9dcebc-baea-4e09-8006-aa3812aa8651",
+      "symbol": "SUI_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000004,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "062456f8-4944-4db2-8df6-3f54f78d9875",
+      "symbol": "SUI_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000004,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "04b1a7b1-2127-41f1-9711-192715f9f178",
+      "symbol": "XRP_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7705923268414139,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "193ab329-f32e-460b-8ca6-a4e71e7a2a95",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7110598470867473,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "2c0ec141-0d19-4c91-ad63-80ac24f9fdd6",
+      "symbol": "WLD_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.6990190735694843,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "2ea82359-2fa4-4dd2-be38-588886f606e2",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7346864111498315,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "3206c8c3-949b-4d53-b47a-89c846907ed0",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7346864111498315,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "36cc992a-39e8-49a8-b21d-b04832300b41",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.844258183738138,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "432a1651-44b5-4243-a864-9848b19763b4",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5161421510354691,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "472d6ee9-171a-4762-8c93-7f4b5bcf701b",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7285886126704211,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "57a6f10d-a583-429e-933c-1dad89222b34",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7405320266013253,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "6346e624-50f4-4c3d-ad42-e3a3ecea6642",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5669735788631083,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "7908f964-e510-4e49-91f6-6c7b9013576b",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": false,
+      "net_return_pct_recorded": 1.623100000000012,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "798c3b86-aa63-4b67-997f-3562326fc030",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.6323301031184079,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "81ac07c3-f276-4dbf-82c6-d603b3919bcb",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7285886126704211,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "846e39a8-5af9-438c-99ab-354511359fea",
+      "symbol": "ASTER_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7290380732621904,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "8c3db898-eb50-4076-961d-ebe19be365ba",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.45519574093348975,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "8c3fce7f-3022-4fd8-bf85-ec06a18fe6de",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 1.0406514879663469,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "a9033f24-d06f-4577-972f-8ed9d600d5e5",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.45519574093348975,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "aed552d8-abd5-4cb9-86cf-7a577a7b5501",
+      "symbol": "LTC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5182544498381914,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "b0ec36eb-5b25-4d74-83ca-b955c1fc15a1",
+      "symbol": "FLR_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8611021897810223,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "bfc01e46-5943-4324-976d-cd22c91f302c",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.6461395492914244,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "cab375b7-9ea7-4ba3-8b80-37151fb94ebc",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.6974999999999913,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "cf023bda-998d-45c8-b79c-d93bd5424a3d",
+      "symbol": "SUI_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.575213439823757,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "d78dd843-428c-4c71-ab0c-54f77ae0fe6a",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7698675496688843,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "e2f0d839-3f31-4c02-b777-9b2f632574f3",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.4562272623578673,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "e9227d8e-6fe2-4960-951e-e185251ce059",
+      "symbol": "UNI_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7346864111498315,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "f3bb8bfe-3a6f-4e66-8407-30866512d887",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.4729529232496645,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "f6c86cd2-5d00-45ff-a774-568b6cc18ef1",
+      "symbol": "SUI_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.575213439823757,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "f778993a-d7a8-40f1-b28b-e1b03aad6df4",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 1.0406514879663469,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "fa30b66f-a2bf-4cc8-9cda-0f7bd32580cc",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.45519574093348975,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "e4528482-61ee-47fb-bb31-33335b5f5b78",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.699999999999996,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "3d8399c4-d3c4-44ea-be9c-d4788f492967",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.699999999999996,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "399fd39e-1bbd-4bcc-96dd-87bbc3a9f2fe",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 1.2747397841171988,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "77573b07-a559-4a0b-90ee-67dfb794d20d",
+      "symbol": "ETH_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.700000000000009,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "23d386d0-c2d6-42d1-9ae5-72d4004509f5",
+      "symbol": "LTC_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000053,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "3f1e025f-914c-4eb4-9afc-c9342f771039",
+      "symbol": "SOL_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "887261ec-20dc-4568-893a-88aefbde402e",
+      "symbol": "TAO_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8722772727272783,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "eea66744-79bb-4392-ac45-01780a579ddd",
+      "symbol": "HYPE_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999944,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "abb8fdef-c904-450c-8eab-9ff5a4c427d0",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000028,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "a3b7c201-74b9-4765-8063-84faabdf032f",
+      "symbol": "LINK_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000008,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "59720f19-b19d-4245-baa2-4d25d776f1b6",
+      "symbol": "FIL_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -2.021819999999993,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "56292d64-f7e9-4ca9-9306-a93dc0cec3be",
+      "symbol": "WLD_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5805063641394683,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "2ee42c6a-c7b0-44c8-bd1d-c679405f3aea",
+      "symbol": "SUI_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8101253481894306,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "8201eed4-c3ac-4fca-aae5-5d21a7b5d041",
+      "symbol": "HYPE_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.696550656428049,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "85c8abc7-967a-4da9-8d7d-9599137ac4fa",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7262799999999978,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "e53cbf25-0fea-4a6e-ba9c-75cca8647077",
+      "symbol": "BEAT_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5915276389636528,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "47829de8-0cd0-41fb-8982-b75960c0eda2",
+      "symbol": "FIL_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 1.4253535086560178,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "d87cf4c1-8ebf-4294-86f8-7fcb693d61d8",
+      "symbol": "ARB_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.8781350179143823,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "fe3d7763-422a-4175-81f5-85a243f4355d",
+      "symbol": "ZEC_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5262698788740345,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "c44a3500-cbdb-4fd4-8b1e-8b82b917c54c",
+      "symbol": "XRP_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.6692992213570692,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "80c7fae7-ab69-4363-abab-d956e09d2bd2",
+      "symbol": "INJ_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999957,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "32453b8c-6e48-4d5d-bf6b-b3e4ce124b4c",
+      "symbol": "INJ_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.6999999999999957,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "3a854b8a-53c8-4e0e-b315-d2ec94ff2127",
+      "symbol": "LIT_USDT",
+      "recorded_outcome": "SL_HIT",
+      "reparado_outcome": "SL_HIT",
+      "match": true,
+      "net_return_pct_recorded": -1.7000000000000048,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "18d1ba3e-3521-45c7-a7ee-73f892e67a70",
+      "symbol": "NEAR_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5467767295597659,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "2e251583-1f02-48eb-998e-559c8bb67c2f",
+      "symbol": "HYPE_USDT",
+      "recorded_outcome": "TP_HIT",
+      "reparado_outcome": "TP_HIT",
+      "match": true,
+      "net_return_pct_recorded": 1.2999999999999907,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "4ac6a7a9-f5e0-4c47-a59f-6c3cc9a9cc90",
+      "symbol": "ETH_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.7426797934474922,
+      "final_return_pct_recorded": null
+    },
+    {
+      "id": "d905c302-4104-4f4d-9f58-8b923e1853de",
+      "symbol": "ENA_USDT",
+      "recorded_outcome": "TRAILING_STOP",
+      "reparado_outcome": "TRAILING_STOP",
+      "match": true,
+      "net_return_pct_recorded": 0.5742758445838896,
+      "final_return_pct_recorded": null
+    }
+  ]
+}

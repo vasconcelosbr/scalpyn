@@ -199,7 +199,55 @@ def _apply_barrier_params(user_config: dict, ml_config: dict) -> dict:
         "ml_win_fast_threshold_seconds"
     )
     user_config.pop("shadow_tp_pct", None)
+    _apply_shadow_trailing_policy(user_config, ml_config)
     return user_config
+
+
+def _apply_shadow_trailing_policy(user_config: dict, ml_config: dict) -> None:
+    """Override the frozen trailing MECHANISM with the Shadow-owned policy.
+
+    Default (``shadow_trailing_contract_version`` absent or
+    ``shadow_hwm_trailing_v1``): no-op -- ``user_config["trailing"]`` keeps
+    whatever ``_trailing_policy_from_spot_config`` already froze from
+    ``spot_engine.sell_flow.trailing`` (unchanged production behaviour).
+
+    Opt-in (``shadow_trailing_contract_version == "shadow_trailing_policy_v2"``):
+    replaces only the trailing MECHANISM fields with the Shadow-only policy
+    from ``config_type='ml'``. ``enabled``/``never_sell_at_loss``/
+    ``min_profit_pct``/``safety_margin_above_entry_pct`` keep coming from
+    spot_engine (they gate the live-spot L4 layer too and are out of scope
+    for this contract) -- only the numeric trailing mechanism becomes
+    Shadow-only.  Never touches live-spot selling.
+    """
+    contract_version = ml_config.get("shadow_trailing_contract_version")
+    if contract_version != "shadow_trailing_policy_v2":
+        return
+    trailing = dict(user_config.get("trailing") or {})
+    family = ml_config.get("shadow_trailing_policy_family")
+    policy: Dict[str, Any] = {"policy_family": family}
+    if family == "FIXED":
+        policy["activation_profit_pct"] = ml_config.get(
+            "shadow_trailing_fixed_activation_profit_pct"
+        )
+        policy["hwm_trail_pct"] = ml_config.get("shadow_trailing_fixed_hwm_trail_pct")
+    elif family == "PROPORTIONAL":
+        policy["k"] = ml_config.get("shadow_trailing_proportional_k")
+    elif family == "STEPPED":
+        policy["steps"] = deepcopy(ml_config.get("shadow_trailing_stepped_steps") or [])
+        policy["base_activation_profit_pct"] = ml_config.get(
+            "shadow_trailing_stepped_base_activation_profit_pct"
+        )
+        policy["base_hwm_trail_pct"] = ml_config.get(
+            "shadow_trailing_stepped_base_hwm_trail_pct"
+        )
+    else:
+        raise ValueError(
+            f"shadow_trailing_policy_family_invalid: {family!r} under contract "
+            f"{contract_version}"
+        )
+    trailing["contract_version"] = contract_version
+    trailing["policy"] = policy
+    user_config["trailing"] = trailing
 
 
 def _resolve_atr_barriers(

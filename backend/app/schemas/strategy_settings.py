@@ -28,7 +28,33 @@ ML_SHADOW_OPTIONAL_KEYS = (
     "shadow_canonical_barrier_profile_allowlist",
     "shadow_canonical_barrier_policy_version",
     "canary_minimum_outcomes",
+    "shadow_trailing_contract_version",
+    "shadow_trailing_policy_family",
+    "shadow_trailing_fixed_activation_profit_pct",
+    "shadow_trailing_fixed_hwm_trail_pct",
+    "shadow_trailing_stepped_steps",
+    "shadow_trailing_stepped_base_activation_profit_pct",
+    "shadow_trailing_stepped_base_hwm_trail_pct",
+    "shadow_trailing_proportional_k",
 )
+
+
+class ShadowTrailingStep(BaseModel):
+    """One rung of the STEPPED trailing ladder: floor jumps to floor_profit_pct
+    once high-water-mark profit reaches peak_profit_pct."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    peak_profit_pct: float = Field(gt=0, le=1000)
+    floor_profit_pct: float = Field(gt=-100, le=1000)
+
+    @model_validator(mode="after")
+    def validate_floor_below_peak(self) -> "ShadowTrailingStep":
+        if self.floor_profit_pct >= self.peak_profit_pct:
+            raise ValueError(
+                "floor_profit_pct must be less than peak_profit_pct for each step"
+            )
+        return self
 
 
 class StrategyDefinition(BaseModel):
@@ -86,6 +112,54 @@ class MLShadowConfig(BaseModel):
         Literal["1m", "5m", "15m", "1h"]
     ] | None = None
     shadow_entry_max_lag_seconds: int | None = Field(default=None, ge=0)
+
+    # Shadow-only trailing policy (R1 trailing-policy study). Governs the
+    # Shadow exit trailing mechanism exclusively; live-spot selling
+    # (spot_engine.sell_flow.trailing) is untouched by these fields.
+    # v1 (default) keeps trailing sourced from spot_engine.sell_flow.trailing,
+    # exactly as before this contract existed. v2 activates this Shadow-owned
+    # policy instead. Succeeds shadow_hwm_trailing_v1.
+    shadow_trailing_contract_version: Literal[
+        "shadow_hwm_trailing_v1", "shadow_trailing_policy_v2"
+    ] = "shadow_hwm_trailing_v1"
+    shadow_trailing_policy_family: Literal["FIXED", "STEPPED", "PROPORTIONAL"] = "FIXED"
+    shadow_trailing_fixed_activation_profit_pct: float = Field(1.0, ge=0.1, le=100)
+    shadow_trailing_fixed_hwm_trail_pct: float = Field(0.35, ge=0.05, le=50)
+    shadow_trailing_stepped_steps: List[ShadowTrailingStep] = Field(default_factory=list)
+    # Below the first step's peak_profit_pct: None means no trailing at all
+    # (hard SL only) until the first step is reached; a pair activates a
+    # FIXED-style trail in that region instead.
+    shadow_trailing_stepped_base_activation_profit_pct: float | None = Field(
+        default=None, ge=0.1, le=100
+    )
+    shadow_trailing_stepped_base_hwm_trail_pct: float | None = Field(
+        default=None, ge=0.05, le=50
+    )
+    shadow_trailing_proportional_k: float = Field(0.30, gt=0, lt=1)
+
+    @model_validator(mode="after")
+    def validate_shadow_trailing_policy(self) -> "MLShadowConfig":
+        if self.shadow_trailing_policy_family == "STEPPED":
+            if not self.shadow_trailing_stepped_steps:
+                raise ValueError(
+                    "shadow_trailing_stepped_steps must be non-empty when "
+                    "shadow_trailing_policy_family is STEPPED"
+                )
+            peaks = [s.peak_profit_pct for s in self.shadow_trailing_stepped_steps]
+            if peaks != sorted(peaks) or len(set(peaks)) != len(peaks):
+                raise ValueError(
+                    "shadow_trailing_stepped_steps must have strictly "
+                    "increasing peak_profit_pct values"
+                )
+            base_activation = self.shadow_trailing_stepped_base_activation_profit_pct
+            base_trail = self.shadow_trailing_stepped_base_hwm_trail_pct
+            if (base_activation is None) != (base_trail is None):
+                raise ValueError(
+                    "shadow_trailing_stepped_base_activation_profit_pct and "
+                    "shadow_trailing_stepped_base_hwm_trail_pct must be both "
+                    "set or both null"
+                )
+        return self
 
     @model_validator(mode="after")
     def validate_contract_pair(self) -> "MLShadowConfig":

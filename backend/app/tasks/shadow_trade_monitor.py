@@ -44,7 +44,10 @@ from .celery_app import celery_app
 from ..config import settings
 from ..models.shadow_trade import ShadowTrade
 from ..services import exit_metrics, indicators_provider, shadow_trade_service
-from ..services.shadow_barrier_evaluator import evaluate_closed_candles
+from ..services.shadow_barrier_evaluator import (
+    evaluate_closed_candles,
+    evaluate_closed_candles_policy_v2,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -391,34 +394,53 @@ async def _advance_shadow_canonical(
         float(trailing.get("min_profit_pct") or 0.0),
         float(trailing.get("safety_margin_above_entry_pct") or 0.0),
     )
-    result = evaluate_closed_candles(
-        candles,
-        entry_price=entry_price,
-        entry_timestamp=entry_at,
-        tp_price=tp,
-        sl_price=sl,
-        timeout_candles=timeout_candles,
-        candles_seen_before=candles_seen_before,
-        prior_high_water_mark=prior_hwm,
-        trailing_activation_profit_pct=(
-            float(trailing["activation_profit_pct"])
-            if trailing.get("enabled") is True
-            and trailing.get("contract_version")
-            == shadow_trade_service.SHADOW_TRAILING_CONTRACT_VERSION
-            and trailing.get("activation_profit_pct") is not None
-            else None
-        ),
-        trailing_hwm_pct=(
-            float(trailing["hwm_trail_pct"])
-            if trailing.get("enabled") is True
-            and trailing.get("contract_version")
-            == shadow_trade_service.SHADOW_TRAILING_CONTRACT_VERSION
-            and trailing.get("hwm_trail_pct") is not None
-            else None
-        ),
-        trailing_never_sell_at_loss=bool(trailing.get("never_sell_at_loss")),
-        trailing_protected_profit_pct=protected_profit,
-    )
+    if (
+        trailing.get("enabled") is True
+        and trailing.get("contract_version") == "shadow_trailing_policy_v2"
+        and isinstance(trailing.get("policy"), dict)
+    ):
+        result = evaluate_closed_candles_policy_v2(
+            candles,
+            entry_price=entry_price,
+            entry_timestamp=entry_at,
+            tp_price=tp,
+            sl_price=sl,
+            timeout_candles=timeout_candles,
+            candles_seen_before=candles_seen_before,
+            prior_high_water_mark=prior_hwm,
+            trailing_policy=trailing["policy"],
+            trailing_never_sell_at_loss=bool(trailing.get("never_sell_at_loss")),
+            trailing_protected_profit_pct=protected_profit,
+        )
+    else:
+        result = evaluate_closed_candles(
+            candles,
+            entry_price=entry_price,
+            entry_timestamp=entry_at,
+            tp_price=tp,
+            sl_price=sl,
+            timeout_candles=timeout_candles,
+            candles_seen_before=candles_seen_before,
+            prior_high_water_mark=prior_hwm,
+            trailing_activation_profit_pct=(
+                float(trailing["activation_profit_pct"])
+                if trailing.get("enabled") is True
+                and trailing.get("contract_version")
+                == shadow_trade_service.SHADOW_TRAILING_CONTRACT_VERSION
+                and trailing.get("activation_profit_pct") is not None
+                else None
+            ),
+            trailing_hwm_pct=(
+                float(trailing["hwm_trail_pct"])
+                if trailing.get("enabled") is True
+                and trailing.get("contract_version")
+                == shadow_trade_service.SHADOW_TRAILING_CONTRACT_VERSION
+                and trailing.get("hwm_trail_pct") is not None
+                else None
+            ),
+            trailing_never_sell_at_loss=bool(trailing.get("never_sell_at_loss")),
+            trailing_protected_profit_pct=protected_profit,
+        )
     if result.get("min_price") is not None and (
         shadow.min_price_post_entry is None
         or result["min_price"] < shadow.min_price_post_entry

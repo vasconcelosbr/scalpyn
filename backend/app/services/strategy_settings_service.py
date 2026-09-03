@@ -185,14 +185,20 @@ class StrategySettingsService:
                     "ATR_CLAMPED_BEFORE_MULTIPLY",
                 ],
                 "trailing_contract_versions": ["shadow_hwm_trailing_v1"],
+                "shadow_trailing_contract_versions": [
+                    "shadow_hwm_trailing_v1",
+                    "shadow_trailing_policy_v2",
+                ],
+                "shadow_trailing_policy_families": ["FIXED", "STEPPED", "PROPORTIONAL"],
                 "atr_timeframes": list(ATR_TIMEFRAMES),
             },
             "effects": {
                 "strategy": "Ambos",
                 "spot_engine": "Spot real",
                 "spot_engine.shadow": "Shadow",
-                "spot_engine.sell_flow.trailing": "Ambos",
+                "spot_engine.sell_flow.trailing": "Ambos (enabled/never_sell_at_loss/min_profit_pct); Ambos ate' shadow_trailing_contract_version=v2, quando os campos numericos de trilha em ml_shadow passam a valer so' para o Shadow",
                 "ml_shadow": "Shadow",
+                "ml_shadow.shadow_trailing_*": "Shadow apenas (nunca afeta a venda do spot ao vivo)",
             },
         }
 
