@@ -1,0 +1,1465 @@
+[
+  {
+    "id": "2ff8a0f3-a1a6-4b84-a107-0de7d4f1927b",
+    "symbol": "NEAR_USDT",
+    "rsi_6_recomputed": 44.73,
+    "stoch_k_recomputed": 85.23,
+    "diff_pp": 7.319393139841668
+  },
+  {
+    "id": "56af0960-7792-4c49-9a65-3dba46077ee0",
+    "symbol": "NEAR_USDT",
+    "rsi_6_recomputed": 44.73,
+    "stoch_k_recomputed": 85.23,
+    "diff_pp": 7.319393139841668
+  },
+  {
+    "id": "8aed4e3c-d0e4-4a47-aea9-2d73dda47123",
+    "symbol": "ARB_USDT",
+    "rsi_6_recomputed": 53.38,
+    "stoch_k_recomputed": 75.92,
+    "diff_pp": 11.61308284079181
+  },
+  {
+    "id": "83b35d59-ad59-446c-96b0-8c865d8ba017",
+    "symbol": "ARB_USDT",
+    "rsi_6_recomputed": 53.38,
+    "stoch_k_recomputed": 75.92,
+    "diff_pp": 11.61308284079181
+  },
+  {
+    "id": "e0c3e467-2056-4554-a5b1-b28cf72d3074",
+    "symbol": "ARB_USDT",
+    "rsi_6_recomputed": 53.38,
+    "stoch_k_recomputed": 75.92,
+    "diff_pp": 11.61308284079181
+  },
+  {
+    "id": "dabb9388-fdc7-4f01-84c9-94a474855740",
+    "symbol": "WLD_USDT",
+    "rsi_6_recomputed": 47.71,
+    "stoch_k_recomputed": 86.0,
+    "diff_pp": 1.3641336971350393
+  },
+  {
+    "id": "abd98701-9d7e-4b18-9a34-5aed33e88400",
+    "symbol": "LTC_USDT",
+    "rsi_6_recomputed": 28.74,
+    "stoch_k_recomputed": 44.93,
+    "diff_pp": 2.0157570783750467
+  },
+  {
+    "id": "b45e30cc-0a7e-46fb-b4a0-4427070f10bb",
+    "symbol": "NEAR_USDT",
+    "rsi_6_recomputed": 44.73,
+    "stoch_k_recomputed": 85.23,
+    "diff_pp": 7.319393139841668
+  },
+  {
+    "id": "704aa590-14b0-4b9f-82b5-e241d0ba1eb5",
+    "symbol": "NEAR_USDT",
+    "rsi_6_recomputed": 44.73,
+    "stoch_k_recomputed": 85.23,
+    "diff_pp": 7.319393139841668
+  },
+  {
+    "id": "6c03a606-76b9-450c-8fa9-19a3dae050a1",
+    "symbol": "AAVE_USDT",
+    "rsi_6_recomputed": 61.8,
+    "stoch_k_recomputed": 72.66,
+    "diff_pp": 2.605335683384058
+  },
+  {
+    "id": "35580d44-a008-43fd-9471-03e88f8a6292",
+    "symbol": "WLD_USDT",
+    "rsi_6_recomputed": 47.71,
+    "stoch_k_recomputed": 86.0,
+    "diff_pp": 1.3630179934569053
+  },
+  {
+    "id": "382bc79f-1a4c-4525-8d11-1c38bb2be287",
+    "symbol": "AAVE_USDT",
+    "rsi_6_recomputed": 61.8,
+    "stoch_k_recomputed": 72.66,
+    "diff_pp": 2.6045010411660963
+  },
+  {
+    "id": "cb833278-c429-4d37-a2b2-6fe06a22fa84",
+    "symbol": "AAVE_USDT",
+    "rsi_6_recomputed": 61.8,
+    "stoch_k_recomputed": 72.66,
+    "diff_pp": 2.6045010411660963
+  },
+  {
+    "id": "47b07747-d860-44be-9923-bcd54df08b9b",
+    "symbol": "AAVE_USDT",
+    "rsi_6_recomputed": 61.8,
+    "stoch_k_recomputed": 72.66,
+    "diff_pp": 2.6045010411660963
+  },
+  {
+    "id": "2ded9d21-aa35-4e09-b8cd-70ab12bb37dd",
+    "symbol": "AAVE_USDT",
+    "rsi_6_recomputed": 61.8,
+    "stoch_k_recomputed": 72.66,
+    "diff_pp": 2.6082611485402474
+  },
+  {
+    "id": "aa3bd303-689e-4aaf-9ce6-d122e95e5821",
+    "symbol": "ENA_USDT",
+    "rsi_6_recomputed": 45.55,
+    "stoch_k_recomputed": 79.69,
+    "diff_pp": 12.024056189640042
+  },
+  {
+    "id": "9584fcf2-1d17-406c-adc3-0fd97f011cea",
+    "symbol": "ENA_USDT",
+    "rsi_6_recomputed": 82.79,
+    "stoch_k_recomputed": 94.41,
+    "diff_pp": 9.692794224783086
+  },
+  {
+    "id": "0188a573-9d38-4e81-a9f2-8979d56956b6",
+    "symbol": "LIT_USDT",
+    "rsi_6_recomputed": 75.39,
+    "stoch_k_recomputed": 71.8,
+    "diff_pp": 1.970007944915242
+  },
+  {
+    "id": "a4388ed3-e234-4512-8847-72bf4f9e8731",
+    "symbol": "ENA_USDT",
+    "rsi_6_recomputed": 45.55,
+    "stoch_k_recomputed": 79.69,
+    "diff_pp": 12.024056189640042
+  },
+  {
+    "id": "7549dd76-166e-46c8-a975-7ff11cfb2ded",
+    "symbol": "ZEC_USDT",
+    "rsi_6_recomputed": 29.0,
+    "stoch_k_recomputed": 37.0,
+    "diff_pp": 1.5898283677227454
+  },
+  {
+    "id": "940e73b0-9cb4-4076-81cc-4f95fc09977e",
+    "symbol": "INJ_USDT",
+    "rsi_6_recomputed": 69.19,
+    "stoch_k_recomputed": 77.31,
+    "diff_pp": 0.8023683675543847
+  },
+  {
+    "id": "76ab235c-8ddc-4295-9a8e-b41005e8d4d2",
+    "symbol": "ARB_USDT",
+    "rsi_6_recomputed": 53.38,
+    "stoch_k_recomputed": 75.92,
+    "diff_pp": 11.61308284079181
+  },
+  {
+    "id": "bfeec778-a902-420e-a855-c3cbcad38d27",
+    "symbol": "ARB_USDT",
+    "rsi_6_recomputed": 53.38,
+    "stoch_k_recomputed": 75.92,
+    "diff_pp": 11.61308284079181
+  },
+  {
+    "id": "d1b3d0fa-2592-4bfd-9b33-14b57e4115c7",
+    "symbol": "NEAR_USDT",
+    "rsi_6_recomputed": 68.09,
+    "stoch_k_recomputed": 90.48,
+    "diff_pp": 6.489512323020441
+  },
+  {
+    "id": "45332739-ffcc-44d6-91dd-cef6bca41acc",
+    "symbol": "NEAR_USDT",
+    "rsi_6_recomputed": 44.73,
+    "stoch_k_recomputed": 85.23,
+    "diff_pp": 7.319393139841668
+  },
+  {
+    "id": "5e6ce175-9527-4802-88bc-b95c1b091f2a",
+    "symbol": "NEAR_USDT",
+    "rsi_6_recomputed": 44.73,
+    "stoch_k_recomputed": 85.23,
+    "diff_pp": 7.319393139841668
+  },
+  {
+    "id": "8f8bc226-b62b-4e61-b1ed-4920386c5408",
+    "symbol": "NEAR_USDT",
+    "rsi_6_recomputed": 44.73,
+    "stoch_k_recomputed": 85.23,
+    "diff_pp": 7.319393139841668
+  },
+  {
+    "id": "e5def4c3-83ad-43ee-916d-856aca5684ff",
+    "symbol": "NEAR_USDT",
+    "rsi_6_recomputed": 44.73,
+    "stoch_k_recomputed": 85.23,
+    "diff_pp": 7.319393139841668
+  },
+  {
+    "id": "b2fee0bd-e1e9-4ff2-bf79-7c16412ef89b",
+    "symbol": "NEAR_USDT",
+    "rsi_6_recomputed": 48.65,
+    "stoch_k_recomputed": 77.78,
+    "diff_pp": 5.439621172807474
+  },
+  {
+    "id": "dfde72b3-32c1-44f1-ad27-0315a38fe766",
+    "symbol": "NEAR_USDT",
+    "rsi_6_recomputed": 44.73,
+    "stoch_k_recomputed": 85.23,
+    "diff_pp": 7.319393139841668
+  },
+  {
+    "id": "135859a2-cc69-4f81-960e-58ae1853261f",
+    "symbol": "ARB_USDT",
+    "rsi_6_recomputed": 53.38,
+    "stoch_k_recomputed": 75.92,
+    "diff_pp": 11.61308284079181
+  },
+  {
+    "id": "09356796-caf4-4a67-af56-71258f10a1ae",
+    "symbol": "NEAR_USDT",
+    "rsi_6_recomputed": 68.09,
+    "stoch_k_recomputed": 90.48,
+    "diff_pp": 6.489512323020441
+  },
+  {
+    "id": "1ca1da73-6fc0-4a01-94f1-8fc670f9e482",
+    "symbol": "ENA_USDT",
+    "rsi_6_recomputed": 69.1,
+    "stoch_k_recomputed": 84.03,
+    "diff_pp": 10.38483415478888
+  },
+  {
+    "id": "be210168-d450-44b3-9cdb-c75fd44220a3",
+    "symbol": "ARB_USDT",
+    "rsi_6_recomputed": 53.38,
+    "stoch_k_recomputed": 75.92,
+    "diff_pp": 11.61308284079181
+  },
+  {
+    "id": "c4cd8774-8b50-4dd1-a0a0-c46b2c2aeac2",
+    "symbol": "ARB_USDT",
+    "rsi_6_recomputed": 53.38,
+    "stoch_k_recomputed": 75.92,
+    "diff_pp": 11.61308284079181
+  },
+  {
+    "id": "fcddcbe8-8371-4fd4-a739-14932a6da109",
+    "symbol": "ARB_USDT",
+    "rsi_6_recomputed": 53.38,
+    "stoch_k_recomputed": 75.92,
+    "diff_pp": 11.61308284079181
+  },
+  {
+    "id": "f39a4b95-d78c-4ffc-9c1a-1ab599ed793d",
+    "symbol": "NEAR_USDT",
+    "rsi_6_recomputed": 58.28,
+    "stoch_k_recomputed": 83.33,
+    "diff_pp": 6.31949241234957
+  },
+  {
+    "id": "ffe1bbc3-ee68-49e1-ae89-4815ad1cc51e",
+    "symbol": "NEAR_USDT",
+    "rsi_6_recomputed": 58.28,
+    "stoch_k_recomputed": 83.33,
+    "diff_pp": 6.312885520125477
+  },
+  {
+    "id": "ef7a45f6-8e52-42d7-aeb8-cb020ce25296",
+    "symbol": "WLD_USDT",
+    "rsi_6_recomputed": 46.1,
+    "stoch_k_recomputed": 73.74,
+    "diff_pp": 0.8697368421052509
+  },
+  {
+    "id": "1f5eecd4-a49b-4d7b-b602-5f9b20f882e2",
+    "symbol": "NEAR_USDT",
+    "rsi_6_recomputed": 58.28,
+    "stoch_k_recomputed": 83.33,
+    "diff_pp": 6.312885520125477
+  },
+  {
+    "id": "263e0e38-8e33-4bdb-a839-7bfcd730960f",
+    "symbol": "ARB_USDT",
+    "rsi_6_recomputed": 53.38,
+    "stoch_k_recomputed": 75.92,
+    "diff_pp": 11.61308284079181
+  },
+  {
+    "id": "2eebe161-85ec-424e-8dd9-3043d0a04d5e",
+    "symbol": "ZEC_USDT",
+    "rsi_6_recomputed": 29.0,
+    "stoch_k_recomputed": 37.0,
+    "diff_pp": 1.5898283677227454
+  },
+  {
+    "id": "3d081a96-c654-4127-aa45-4df24deef5d6",
+    "symbol": "ARB_USDT",
+    "rsi_6_recomputed": 53.38,
+    "stoch_k_recomputed": 75.92,
+    "diff_pp": 11.61308284079181
+  },
+  {
+    "id": "4152c452-62ba-417d-9dc1-a8da35ae4542",
+    "symbol": "ENA_USDT",
+    "rsi_6_recomputed": 69.1,
+    "stoch_k_recomputed": 84.03,
+    "diff_pp": 10.38483415478888
+  },
+  {
+    "id": "449be17c-77e2-4c07-997d-6f98678a66b3",
+    "symbol": "ZEC_USDT",
+    "rsi_6_recomputed": 29.0,
+    "stoch_k_recomputed": 37.0,
+    "diff_pp": 1.5898283677227454
+  },
+  {
+    "id": "466aac6c-e92f-4e5a-bb19-15f392c2b088",
+    "symbol": "ZEC_USDT",
+    "rsi_6_recomputed": 29.0,
+    "stoch_k_recomputed": 37.0,
+    "diff_pp": 1.5898283677227454
+  },
+  {
+    "id": "4c82e857-10d7-4113-b2d2-4f90eee9eebf",
+    "symbol": "ENA_USDT",
+    "rsi_6_recomputed": 69.1,
+    "stoch_k_recomputed": 84.03,
+    "diff_pp": 10.38483415478888
+  },
+  {
+    "id": "54a5a0d0-8bd0-421d-833f-bb7b5af4b6b8",
+    "symbol": "ZEC_USDT",
+    "rsi_6_recomputed": 29.0,
+    "stoch_k_recomputed": 37.0,
+    "diff_pp": 1.5898283677227454
+  },
+  {
+    "id": "5dd5e11a-edb1-4d16-b846-cb2256e2d1fd",
+    "symbol": "ARB_USDT",
+    "rsi_6_recomputed": 53.38,
+    "stoch_k_recomputed": 75.92,
+    "diff_pp": 11.61308284079181
+  },
+  {
+    "id": "6a7f8ec3-a44a-4675-ba06-f98fbce89254",
+    "symbol": "NEAR_USDT",
+    "rsi_6_recomputed": 68.09,
+    "stoch_k_recomputed": 90.48,
+    "diff_pp": 6.489512323020441
+  },
+  {
+    "id": "783abcbc-b06f-4160-8530-5694a8afb58e",
+    "symbol": "ARB_USDT",
+    "rsi_6_recomputed": 53.38,
+    "stoch_k_recomputed": 75.92,
+    "diff_pp": 11.61308284079181
+  },
+  {
+    "id": "83ccc5d0-229c-4861-8d2d-20e365e3cb12",
+    "symbol": "ARB_USDT",
+    "rsi_6_recomputed": 53.38,
+    "stoch_k_recomputed": 75.92,
+    "diff_pp": 11.61308284079181
+  },
+  {
+    "id": "84ff7e35-3d85-4af7-8503-8425bfe29768",
+    "symbol": "ARB_USDT",
+    "rsi_6_recomputed": 53.38,
+    "stoch_k_recomputed": 75.92,
+    "diff_pp": 11.61308284079181
+  },
+  {
+    "id": "862b5e96-6a10-450a-adc7-39a6503f0b80",
+    "symbol": "ARB_USDT",
+    "rsi_6_recomputed": 53.38,
+    "stoch_k_recomputed": 75.92,
+    "diff_pp": 11.61308284079181
+  },
+  {
+    "id": "aba32f33-11ee-471d-9d36-b6f826e3532e",
+    "symbol": "ARB_USDT",
+    "rsi_6_recomputed": 53.38,
+    "stoch_k_recomputed": 75.92,
+    "diff_pp": 11.61308284079181
+  },
+  {
+    "id": "baac835e-beb9-4e55-8385-a160e7c030c7",
+    "symbol": "ARB_USDT",
+    "rsi_6_recomputed": 53.38,
+    "stoch_k_recomputed": 75.92,
+    "diff_pp": 11.61308284079181
+  },
+  {
+    "id": "c6eba96e-5801-452f-bd3a-c4eb8496cd68",
+    "symbol": "ZEC_USDT",
+    "rsi_6_recomputed": 29.0,
+    "stoch_k_recomputed": 37.0,
+    "diff_pp": 1.5898283677227454
+  },
+  {
+    "id": "e8792ae3-24cb-44a8-bea2-832ca43dd9e4",
+    "symbol": "ZEC_USDT",
+    "rsi_6_recomputed": 29.0,
+    "stoch_k_recomputed": 37.0,
+    "diff_pp": 1.5898283677227454
+  },
+  {
+    "id": "f4edebea-5ba1-4f09-8174-dfbeb9fc64ef",
+    "symbol": "ARB_USDT",
+    "rsi_6_recomputed": 53.38,
+    "stoch_k_recomputed": 75.92,
+    "diff_pp": 11.61308284079181
+  },
+  {
+    "id": "0213c4fb-b021-404c-8699-ec5d3d512154",
+    "symbol": "LIT_USDT",
+    "rsi_6_recomputed": 53.92,
+    "stoch_k_recomputed": 81.5,
+    "diff_pp": 8.539592123769335
+  },
+  {
+    "id": "0ef8ada9-d207-476d-b7ac-c663f2a989b1",
+    "symbol": "LIT_USDT",
+    "rsi_6_recomputed": 53.92,
+    "stoch_k_recomputed": 81.5,
+    "diff_pp": 8.539592123769335
+  },
+  {
+    "id": "58de397f-978b-425b-9862-71f82c911869",
+    "symbol": "LIT_USDT",
+    "rsi_6_recomputed": 53.92,
+    "stoch_k_recomputed": 81.5,
+    "diff_pp": 8.539592123769335
+  },
+  {
+    "id": "3316fdb7-4452-4ba9-bacf-2d4695e8a642",
+    "symbol": "ARB_USDT",
+    "rsi_6_recomputed": 71.56,
+    "stoch_k_recomputed": 85.23,
+    "diff_pp": 3.251535258912308
+  },
+  {
+    "id": "bfc26a0a-e793-4fcd-84ed-93c088cae3e6",
+    "symbol": "LIT_USDT",
+    "rsi_6_recomputed": 53.92,
+    "stoch_k_recomputed": 81.5,
+    "diff_pp": 8.539592123769335
+  },
+  {
+    "id": "4b9ad727-24fd-45cf-8395-44fa9c508b15",
+    "symbol": "LIT_USDT",
+    "rsi_6_recomputed": 50.71,
+    "stoch_k_recomputed": 86.33,
+    "diff_pp": 7.242583333333341
+  },
+  {
+    "id": "adec3de6-0f24-43e6-8855-8c38a28dd82e",
+    "symbol": "LIT_USDT",
+    "rsi_6_recomputed": 57.19,
+    "stoch_k_recomputed": 91.42,
+    "diff_pp": 6.397199227373074
+  },
+  {
+    "id": "485dfa05-de3b-4b60-b21a-447c22cb07e6",
+    "symbol": "ZEC_USDT",
+    "rsi_6_recomputed": 64.43,
+    "stoch_k_recomputed": 62.75,
+    "diff_pp": 0.9520731080259859
+  },
+  {
+    "id": "60344cec-1d60-4acc-a14f-f759e5d73c79",
+    "symbol": "LINK_USDT",
+    "rsi_6_recomputed": 41.63,
+    "stoch_k_recomputed": 65.85,
+    "diff_pp": 0.5909394498637921
+  },
+  {
+    "id": "9e91aac2-c59b-45e8-af30-2b17c20f26e6",
+    "symbol": "NEAR_USDT",
+    "rsi_6_recomputed": 56.25,
+    "stoch_k_recomputed": 88.89,
+    "diff_pp": 3.510565173116076
+  },
+  {
+    "id": "0acdfb86-b6ca-4d8a-8e15-1f919a2b22f9",
+    "symbol": "LIT_USDT",
+    "rsi_6_recomputed": 57.19,
+    "stoch_k_recomputed": 91.42,
+    "diff_pp": 6.390146085997794
+  },
+  {
+    "id": "45107d1a-289e-48bf-a71a-064125c21167",
+    "symbol": "LIT_USDT",
+    "rsi_6_recomputed": 53.01,
+    "stoch_k_recomputed": 76.77,
+    "diff_pp": 6.611572535991139
+  },
+  {
+    "id": "bcba57c4-b02a-4110-bc03-bea5d7b42e43",
+    "symbol": "LIT_USDT",
+    "rsi_6_recomputed": 50.71,
+    "stoch_k_recomputed": 86.33,
+    "diff_pp": 7.242583333333341
+  },
+  {
+    "id": "d36eb7f2-71e0-4cc9-b0ae-12cee46440f3",
+    "symbol": "LIT_USDT",
+    "rsi_6_recomputed": 50.71,
+    "stoch_k_recomputed": 86.33,
+    "diff_pp": 7.246609227348544
+  },
+  {
+    "id": "27a846bc-8695-4447-a53a-2687e5ac9d59",
+    "symbol": "NEAR_USDT",
+    "rsi_6_recomputed": 56.25,
+    "stoch_k_recomputed": 88.89,
+    "diff_pp": 3.5231221257026046
+  },
+  {
+    "id": "792e52b0-1188-467f-8e04-9b248d616c65",
+    "symbol": "INJ_USDT",
+    "rsi_6_recomputed": 69.19,
+    "stoch_k_recomputed": 77.31,
+    "diff_pp": 0.7999290636400591
+  },
+  {
+    "id": "c857241c-3932-454e-b592-842ee02b52a3",
+    "symbol": "BEAT_USDT",
+    "rsi_6_recomputed": 41.9,
+    "stoch_k_recomputed": 76.51,
+    "diff_pp": 9.745235992936264
+  },
+  {
+    "id": "792bef30-bac0-4274-a230-e7d8f7fad55c",
+    "symbol": "LIT_USDT",
+    "rsi_6_recomputed": 57.19,
+    "stoch_k_recomputed": 91.42,
+    "diff_pp": 6.390146085997794
+  },
+  {
+    "id": "679e6847-1475-4962-9ed4-8f36dad670cc",
+    "symbol": "ZEC_USDT",
+    "rsi_6_recomputed": 29.0,
+    "stoch_k_recomputed": 37.0,
+    "diff_pp": 1.589528159373077
+  },
+  {
+    "id": "38f814d6-5a45-4268-a23d-a9446ccf93ff",
+    "symbol": "NEAR_USDT",
+    "rsi_6_recomputed": 56.25,
+    "stoch_k_recomputed": 88.89,
+    "diff_pp": 3.510565173116076
+  },
+  {
+    "id": "55b89d46-28f2-475c-a202-6c1d976688e7",
+    "symbol": "INJ_USDT",
+    "rsi_6_recomputed": 52.84,
+    "stoch_k_recomputed": 83.07,
+    "diff_pp": 0.2931969361015918
+  },
+  {
+    "id": "9f8801a3-01f4-40d1-9ade-02a200ff86d8",
+    "symbol": "ARB_USDT",
+    "rsi_6_recomputed": 18.06,
+    "stoch_k_recomputed": 10.21,
+    "diff_pp": 2.329940623892224
+  },
+  {
+    "id": "0a92a238-643e-4a1f-8d2c-2fdb048a27d1",
+    "symbol": "DASH_USDT",
+    "rsi_6_recomputed": 53.94,
+    "stoch_k_recomputed": 86.09,
+    "diff_pp": 5.01265879206596
+  },
+  {
+    "id": "2db8e609-5499-4d76-a18c-2657f72d3fd1",
+    "symbol": "UNI_USDT",
+    "rsi_6_recomputed": 68.59,
+    "stoch_k_recomputed": 88.29,
+    "diff_pp": 13.023010875787055
+  },
+  {
+    "id": "49328149-a5a4-4011-8b4a-0466e063e6c1",
+    "symbol": "ZEC_USDT",
+    "rsi_6_recomputed": 29.0,
+    "stoch_k_recomputed": 37.0,
+    "diff_pp": 1.589528159373077
+  },
+  {
+    "id": "57d6d893-a139-4396-906a-ef67830d653f",
+    "symbol": "NEAR_USDT",
+    "rsi_6_recomputed": 54.93,
+    "stoch_k_recomputed": 72.97,
+    "diff_pp": 4.62790937178168
+  },
+  {
+    "id": "684b4d67-86f1-4e5a-bcc8-f22830dd296b",
+    "symbol": "BEAT_USDT",
+    "rsi_6_recomputed": 41.9,
+    "stoch_k_recomputed": 76.51,
+    "diff_pp": 9.745235992936264
+  },
+  {
+    "id": "7651b19d-0cc5-4e85-9f3a-ebe0c38defae",
+    "symbol": "UNI_USDT",
+    "rsi_6_recomputed": 80.19,
+    "stoch_k_recomputed": 90.25,
+    "diff_pp": 14.514511041009447
+  },
+  {
+    "id": "17c25b2e-42a4-48f1-aa16-b9edb293a425",
+    "symbol": "WLD_USDT",
+    "rsi_6_recomputed": 47.71,
+    "stoch_k_recomputed": 86.0,
+    "diff_pp": 1.3641336971350393
+  },
+  {
+    "id": "3b52ae78-6858-4711-ba98-2cb2bcccfe11",
+    "symbol": "AAVE_USDT",
+    "rsi_6_recomputed": 61.8,
+    "stoch_k_recomputed": 72.66,
+    "diff_pp": 2.605335683384058
+  },
+  {
+    "id": "52889297-0a4e-4577-b106-157d35a7b699",
+    "symbol": "UNI_USDT",
+    "rsi_6_recomputed": 80.19,
+    "stoch_k_recomputed": 90.25,
+    "diff_pp": 14.514511041009447
+  },
+  {
+    "id": "12ce0962-16d5-413a-9e91-844c30a51255",
+    "symbol": "AAVE_USDT",
+    "rsi_6_recomputed": 61.8,
+    "stoch_k_recomputed": 72.66,
+    "diff_pp": 2.6082611485402474
+  },
+  {
+    "id": "2e9ae949-4381-41f1-8f40-2a73fa4eca0f",
+    "symbol": "ZEC_USDT",
+    "rsi_6_recomputed": 29.0,
+    "stoch_k_recomputed": 37.0,
+    "diff_pp": 1.5849826419535251
+  },
+  {
+    "id": "2f276b00-da60-49c7-8cf9-6502e92ff6d5",
+    "symbol": "ZEC_USDT",
+    "rsi_6_recomputed": 29.0,
+    "stoch_k_recomputed": 37.0,
+    "diff_pp": 1.5849826419535251
+  },
+  {
+    "id": "6165ee60-7544-4d0e-9148-68615dd82eae",
+    "symbol": "ADA_USDT",
+    "rsi_6_recomputed": 38.73,
+    "stoch_k_recomputed": 64.37,
+    "diff_pp": 0.8898822940145434
+  },
+  {
+    "id": "67141a77-c9b7-460a-8138-7ba1d604e4fd",
+    "symbol": "ZEC_USDT",
+    "rsi_6_recomputed": 29.0,
+    "stoch_k_recomputed": 37.0,
+    "diff_pp": 1.5870557598039126
+  },
+  {
+    "id": "7a0ece14-fe6c-4b96-850d-51602ab8856a",
+    "symbol": "ADA_USDT",
+    "rsi_6_recomputed": 38.73,
+    "stoch_k_recomputed": 64.37,
+    "diff_pp": 0.890640665730924
+  },
+  {
+    "id": "7c09cf51-8c3a-42d6-a66d-12ff0348c00b",
+    "symbol": "ADA_USDT",
+    "rsi_6_recomputed": 38.73,
+    "stoch_k_recomputed": 64.37,
+    "diff_pp": 0.8908639622925429
+  },
+  {
+    "id": "8b70d6d7-a2ce-45b0-98b6-d883da69face",
+    "symbol": "ZEC_USDT",
+    "rsi_6_recomputed": 29.0,
+    "stoch_k_recomputed": 37.0,
+    "diff_pp": 1.5843859917418657
+  },
+  {
+    "id": "4e0bd2f8-00c1-41b5-99e4-87a534ab3ede",
+    "symbol": "NEAR_USDT",
+    "rsi_6_recomputed": 56.25,
+    "stoch_k_recomputed": 88.89,
+    "diff_pp": 3.510565173116076
+  },
+  {
+    "id": "6b4cdd15-dd13-48a3-b96d-42cbb24c3bd6",
+    "symbol": "INJ_USDT",
+    "rsi_6_recomputed": 52.84,
+    "stoch_k_recomputed": 83.07,
+    "diff_pp": 0.2931378476420665
+  },
+  {
+    "id": "16deee6c-6e2b-477c-8bb5-dc863dac7fa9",
+    "symbol": "INJ_USDT",
+    "rsi_6_recomputed": 69.19,
+    "stoch_k_recomputed": 77.31,
+    "diff_pp": 0.7999290636400591
+  },
+  {
+    "id": "55bb7777-1488-46f4-9341-7fb2309a1132",
+    "symbol": "ZEC_USDT",
+    "rsi_6_recomputed": 71.02,
+    "stoch_k_recomputed": 86.95,
+    "diff_pp": 0.0379159083484959
+  },
+  {
+    "id": "74cd565d-7789-4a46-8814-f612f27e90a1",
+    "symbol": "INJ_USDT",
+    "rsi_6_recomputed": 52.84,
+    "stoch_k_recomputed": 83.07,
+    "diff_pp": 0.29432416025900743
+  },
+  {
+    "id": "9af43c36-6a2f-4a83-be64-546941b0d084",
+    "symbol": "BEAT_USDT",
+    "rsi_6_recomputed": 87.92,
+    "stoch_k_recomputed": 91.04,
+    "diff_pp": 10.779449033603328
+  },
+  {
+    "id": "7f3f055b-4d46-49f2-bd33-531184e9a387",
+    "symbol": "ZEC_USDT",
+    "rsi_6_recomputed": 71.02,
+    "stoch_k_recomputed": 86.95,
+    "diff_pp": 0.0379159083484959
+  },
+  {
+    "id": "1f501487-1344-4a35-a928-9d81cc7236b6",
+    "symbol": "UNI_USDT",
+    "rsi_6_recomputed": 73.06,
+    "stoch_k_recomputed": 88.65,
+    "diff_pp": 9.937173913043495
+  },
+  {
+    "id": "0982a45a-5e41-44a4-adae-49fae8f274bd",
+    "symbol": "UNI_USDT",
+    "rsi_6_recomputed": 73.06,
+    "stoch_k_recomputed": 88.65,
+    "diff_pp": 9.937173913043495
+  },
+  {
+    "id": "41ebcb51-6cdb-4932-9b82-d2612935dc91",
+    "symbol": "ENA_USDT",
+    "rsi_6_recomputed": 82.79,
+    "stoch_k_recomputed": 94.41,
+    "diff_pp": 9.692794224783086
+  },
+  {
+    "id": "0e3b02cd-5317-47ca-a39e-95a8caf071ce",
+    "symbol": "ENA_USDT",
+    "rsi_6_recomputed": 82.79,
+    "stoch_k_recomputed": 94.41,
+    "diff_pp": 9.692794224783086
+  },
+  {
+    "id": "403c8649-5a77-4dc9-b099-271fe1974f84",
+    "symbol": "ENA_USDT",
+    "rsi_6_recomputed": 52.66,
+    "stoch_k_recomputed": 80.31,
+    "diff_pp": 9.435905220777531
+  },
+  {
+    "id": "55501c9a-b7de-4ef8-b6c1-7d78f7e5254e",
+    "symbol": "ENA_USDT",
+    "rsi_6_recomputed": 52.66,
+    "stoch_k_recomputed": 80.31,
+    "diff_pp": 9.451500727224671
+  },
+  {
+    "id": "696eb174-ae5f-420b-85a4-54750578b489",
+    "symbol": "BEAT_USDT",
+    "rsi_6_recomputed": 42.44,
+    "stoch_k_recomputed": 69.25,
+    "diff_pp": 10.603455317104405
+  },
+  {
+    "id": "71eda6b9-b66a-4c1a-8686-45501337a6f3",
+    "symbol": "BEAT_USDT",
+    "rsi_6_recomputed": 42.44,
+    "stoch_k_recomputed": 69.25,
+    "diff_pp": 10.600908654231045
+  },
+  {
+    "id": "722c0974-038f-42ed-9b50-a7fff885a9a4",
+    "symbol": "LTC_USDT",
+    "rsi_6_recomputed": 66.0,
+    "stoch_k_recomputed": 75.18,
+    "diff_pp": 1.1507657749642686
+  },
+  {
+    "id": "0683f7b3-6e9c-46a1-a17d-aca173af7801",
+    "symbol": "LIT_USDT",
+    "rsi_6_recomputed": 60.55,
+    "stoch_k_recomputed": 87.27,
+    "diff_pp": 1.5428590285110788
+  },
+  {
+    "id": "e77c59ee-6e88-470c-b4a2-21192e92a65e",
+    "symbol": "SOL_USDT",
+    "rsi_6_recomputed": 37.53,
+    "stoch_k_recomputed": 9.34,
+    "diff_pp": 0.15033397870278797
+  },
+  {
+    "id": "c8013994-80b2-43f7-a168-f4c30fb7c3c8",
+    "symbol": "AAVE_USDT",
+    "rsi_6_recomputed": 61.8,
+    "stoch_k_recomputed": 72.66,
+    "diff_pp": 2.605335683384058
+  },
+  {
+    "id": "23bf4e84-1620-4cfe-af30-60fdcdb4b818",
+    "symbol": "NEAR_USDT",
+    "rsi_6_recomputed": 52.32,
+    "stoch_k_recomputed": 70.83,
+    "diff_pp": 1.2052500000000022
+  },
+  {
+    "id": "9531feba-9e10-4ed9-bf0f-d72448aeb08a",
+    "symbol": "LTC_USDT",
+    "rsi_6_recomputed": 66.0,
+    "stoch_k_recomputed": 75.18,
+    "diff_pp": 1.1514711892112839
+  },
+  {
+    "id": "ed737468-4387-4a85-aea7-184414f57e77",
+    "symbol": "ADA_USDT",
+    "rsi_6_recomputed": 38.73,
+    "stoch_k_recomputed": 64.37,
+    "diff_pp": 0.8908192940232817
+  },
+  {
+    "id": "8f2a9a6f-07fa-47e2-9c41-84d2e38d5f2d",
+    "symbol": "AAVE_USDT",
+    "rsi_6_recomputed": 61.8,
+    "stoch_k_recomputed": 72.66,
+    "diff_pp": 2.6032500800512226
+  },
+  {
+    "id": "a0d93314-2677-4084-89e2-ca366bc1e932",
+    "symbol": "AAVE_USDT",
+    "rsi_6_recomputed": 61.8,
+    "stoch_k_recomputed": 72.66,
+    "diff_pp": 2.6032500800512226
+  },
+  {
+    "id": "f0b5528f-326c-42a2-ab92-05d9ef790fd8",
+    "symbol": "LTC_USDT",
+    "rsi_6_recomputed": 21.29,
+    "stoch_k_recomputed": 7.78,
+    "diff_pp": 0.596470469255661
+  },
+  {
+    "id": "839af0f6-ed47-4a47-818e-ec847864e8ab",
+    "symbol": "AAVE_USDT",
+    "rsi_6_recomputed": 61.8,
+    "stoch_k_recomputed": 72.66,
+    "diff_pp": 2.6032500800512226
+  },
+  {
+    "id": "ff21abe9-9067-4a74-b663-144c1583a1f3",
+    "symbol": "AAVE_USDT",
+    "rsi_6_recomputed": 61.8,
+    "stoch_k_recomputed": 72.66,
+    "diff_pp": 2.6032500800512226
+  },
+  {
+    "id": "a5c37f10-2502-4081-94f9-f646aac4802c",
+    "symbol": "ZEC_USDT",
+    "rsi_6_recomputed": 29.0,
+    "stoch_k_recomputed": 37.0,
+    "diff_pp": 1.5843859917418657
+  },
+  {
+    "id": "e407ff08-dab8-43f4-b8ea-082d08a51cc6",
+    "symbol": "ZEC_USDT",
+    "rsi_6_recomputed": 29.0,
+    "stoch_k_recomputed": 37.0,
+    "diff_pp": 1.5843859917418657
+  },
+  {
+    "id": "82c78e36-b8c3-4e05-a41b-fd524c98e92d",
+    "symbol": "SOL_USDT",
+    "rsi_6_recomputed": 37.53,
+    "stoch_k_recomputed": 9.34,
+    "diff_pp": 0.15030487804874593
+  },
+  {
+    "id": "8decfc01-84bc-49b5-9487-d32708bc8741",
+    "symbol": "ENA_USDT",
+    "rsi_6_recomputed": 82.79,
+    "stoch_k_recomputed": 94.41,
+    "diff_pp": 9.692794224783086
+  },
+  {
+    "id": "9fc8d238-3197-4aac-b831-1e182801eddf",
+    "symbol": "ZEC_USDT",
+    "rsi_6_recomputed": 29.0,
+    "stoch_k_recomputed": 37.0,
+    "diff_pp": 1.5849826419535251
+  },
+  {
+    "id": "aa82f2b0-1565-4c06-8111-96f3cd6da6b4",
+    "symbol": "INJ_USDT",
+    "rsi_6_recomputed": 69.19,
+    "stoch_k_recomputed": 77.31,
+    "diff_pp": 0.8023683675543847
+  },
+  {
+    "id": "b2d454da-c38d-49db-bf50-8b791420bf55",
+    "symbol": "ZEC_USDT",
+    "rsi_6_recomputed": 29.0,
+    "stoch_k_recomputed": 37.0,
+    "diff_pp": 1.5843859917418657
+  },
+  {
+    "id": "b7e6a6a3-db79-42d0-a3d3-26e091eaa903",
+    "symbol": "ZEC_USDT",
+    "rsi_6_recomputed": 29.0,
+    "stoch_k_recomputed": 37.0,
+    "diff_pp": 1.5843859917418657
+  },
+  {
+    "id": "c0b38cff-3b85-4952-99af-f5773dd32aee",
+    "symbol": "ZEC_USDT",
+    "rsi_6_recomputed": 29.0,
+    "stoch_k_recomputed": 37.0,
+    "diff_pp": 1.5843859917418657
+  },
+  {
+    "id": "c1f746f8-8098-4d23-81f9-50caae276cb7",
+    "symbol": "ENA_USDT",
+    "rsi_6_recomputed": 82.79,
+    "stoch_k_recomputed": 94.41,
+    "diff_pp": 9.692794224783086
+  },
+  {
+    "id": "c3e81cf1-4d62-48ed-85de-6c66aec63115",
+    "symbol": "ZEC_USDT",
+    "rsi_6_recomputed": 29.0,
+    "stoch_k_recomputed": 37.0,
+    "diff_pp": 1.5843859917418657
+  },
+  {
+    "id": "eb844602-adc0-48b9-aaea-e2b3df589e7b",
+    "symbol": "ZEC_USDT",
+    "rsi_6_recomputed": 29.0,
+    "stoch_k_recomputed": 37.0,
+    "diff_pp": 1.5843859917418657
+  },
+  {
+    "id": "5c79fe22-9aab-4c44-bfc2-189939d6bee0",
+    "symbol": "ZEC_USDT",
+    "rsi_6_recomputed": 64.43,
+    "stoch_k_recomputed": 62.75,
+    "diff_pp": 0.9529863141887862
+  },
+  {
+    "id": "83f09d1d-90ac-4c1e-bc00-f8d3b2b26d8e",
+    "symbol": "ADA_USDT",
+    "rsi_6_recomputed": 38.73,
+    "stoch_k_recomputed": 64.37,
+    "diff_pp": 0.8890362289831977
+  },
+  {
+    "id": "7e3f752b-93c9-45e5-a73b-dd2bc6f96290",
+    "symbol": "LTC_USDT",
+    "rsi_6_recomputed": 28.74,
+    "stoch_k_recomputed": 44.93,
+    "diff_pp": 2.0145171211810586
+  },
+  {
+    "id": "26bbff6f-3a45-4ddd-aa6f-733d76db0430",
+    "symbol": "LINK_USDT",
+    "rsi_6_recomputed": 41.63,
+    "stoch_k_recomputed": 65.85,
+    "diff_pp": 0.5913032008441954
+  },
+  {
+    "id": "778eeba9-0db2-4526-88c0-d89a8e3b7074",
+    "symbol": "LINK_USDT",
+    "rsi_6_recomputed": 41.63,
+    "stoch_k_recomputed": 65.85,
+    "diff_pp": 0.5913032008441954
+  },
+  {
+    "id": "65dfe968-e2de-494c-8f51-4f7b957948b9",
+    "symbol": "LINK_USDT",
+    "rsi_6_recomputed": 29.55,
+    "stoch_k_recomputed": 18.35,
+    "diff_pp": 0.36267438799684193
+  },
+  {
+    "id": "838700a3-ec7d-41f1-b0bb-b2de3793b1dd",
+    "symbol": "LINK_USDT",
+    "rsi_6_recomputed": 29.55,
+    "stoch_k_recomputed": 18.35,
+    "diff_pp": 0.36267438799684193
+  },
+  {
+    "id": "ea8c0989-a445-4f6b-acab-ccef377d1fa6",
+    "symbol": "LIT_USDT",
+    "rsi_6_recomputed": 34.67,
+    "stoch_k_recomputed": 72.49,
+    "diff_pp": 4.974340853492798
+  },
+  {
+    "id": "ce2dd3e3-41a1-48a1-918c-007c52afdb0a",
+    "symbol": "ENA_USDT",
+    "rsi_6_recomputed": 52.66,
+    "stoch_k_recomputed": 80.31,
+    "diff_pp": 9.435905220777531
+  },
+  {
+    "id": "92d17588-6ce7-4e8f-830b-29aa846fc9b8",
+    "symbol": "LIT_USDT",
+    "rsi_6_recomputed": 53.76,
+    "stoch_k_recomputed": 85.47,
+    "diff_pp": 2.131172102890466
+  },
+  {
+    "id": "b0bd23d1-b187-4522-bd7e-43e39da5b4cf",
+    "symbol": "ENA_USDT",
+    "rsi_6_recomputed": 52.66,
+    "stoch_k_recomputed": 80.31,
+    "diff_pp": 9.451500727224671
+  },
+  {
+    "id": "66af8772-835d-47d6-9f7a-73c5b644a6f7",
+    "symbol": "LTC_USDT",
+    "rsi_6_recomputed": 66.0,
+    "stoch_k_recomputed": 75.18,
+    "diff_pp": 1.3989562013917434
+  },
+  {
+    "id": "cba8eef7-db13-4371-9af0-a11a0a478e89",
+    "symbol": "ARB_USDT",
+    "rsi_6_recomputed": 51.4,
+    "stoch_k_recomputed": 88.4,
+    "diff_pp": 4.024477884176902
+  },
+  {
+    "id": "eff0f618-d383-4d47-abd3-83ae41e9608e",
+    "symbol": "BEAT_USDT",
+    "rsi_6_recomputed": 66.48,
+    "stoch_k_recomputed": 75.78,
+    "diff_pp": 9.991295336787577
+  },
+  {
+    "id": "5cc8d3cf-71a1-4141-836c-97bdee233901",
+    "symbol": "LTC_USDT",
+    "rsi_6_recomputed": 28.74,
+    "stoch_k_recomputed": 44.93,
+    "diff_pp": 2.0157570783750467
+  },
+  {
+    "id": "c23fdffb-66c7-4fcc-9bfe-a431ab24c060",
+    "symbol": "LIT_USDT",
+    "rsi_6_recomputed": 52.8,
+    "stoch_k_recomputed": 80.18,
+    "diff_pp": 5.388700410396696
+  },
+  {
+    "id": "e3354277-74da-47f3-90c9-c2f1cfe35ecf",
+    "symbol": "UNI_USDT",
+    "rsi_6_recomputed": 80.19,
+    "stoch_k_recomputed": 90.25,
+    "diff_pp": 16.462924475783993
+  },
+  {
+    "id": "f005b47a-2aca-476c-9706-78e3465ddc37",
+    "symbol": "BEAT_USDT",
+    "rsi_6_recomputed": 36.91,
+    "stoch_k_recomputed": 50.27,
+    "diff_pp": 11.243717277486898
+  },
+  {
+    "id": "f4860df7-8314-4010-a43c-fce835c1e69e",
+    "symbol": "ENA_USDT",
+    "rsi_6_recomputed": 52.66,
+    "stoch_k_recomputed": 80.31,
+    "diff_pp": 9.451500727224671
+  },
+  {
+    "id": "029c25a3-8907-4350-9fed-c40afa0986dc",
+    "symbol": "NEAR_USDT",
+    "rsi_6_recomputed": 59.56,
+    "stoch_k_recomputed": 78.9,
+    "diff_pp": 0.20636769078294925
+  },
+  {
+    "id": "6aca019e-9554-4c58-9b77-29f392e22d81",
+    "symbol": "LIT_USDT",
+    "rsi_6_recomputed": 83.88,
+    "stoch_k_recomputed": 83.69,
+    "diff_pp": 2.9473803795776465
+  },
+  {
+    "id": "e5ca5c92-7369-4baf-97ec-5e93b0d3ea98",
+    "symbol": "BEAT_USDT",
+    "rsi_6_recomputed": 68.72,
+    "stoch_k_recomputed": 48.08,
+    "diff_pp": 6.765705004253997
+  },
+  {
+    "id": "38bcc01e-5883-4f5f-9b60-b24eb990c23c",
+    "symbol": "HYPE_USDT",
+    "rsi_6_recomputed": 48.23,
+    "stoch_k_recomputed": 68.94,
+    "diff_pp": 0.15050953123127986
+  },
+  {
+    "id": "ff8f7cb3-358f-4267-acea-eebce661f38d",
+    "symbol": "UNI_USDT",
+    "rsi_6_recomputed": 80.19,
+    "stoch_k_recomputed": 90.25,
+    "diff_pp": 16.462924475783993
+  },
+  {
+    "id": "c662b759-79f6-4adf-9b79-b72201cf53b6",
+    "symbol": "BEAT_USDT",
+    "rsi_6_recomputed": 42.44,
+    "stoch_k_recomputed": 69.25,
+    "diff_pp": 10.600908654231045
+  },
+  {
+    "id": "e9762591-7fe9-41bd-a75c-a99eea969c6b",
+    "symbol": "LTC_USDT",
+    "rsi_6_recomputed": 21.29,
+    "stoch_k_recomputed": 7.78,
+    "diff_pp": 0.596470469255661
+  },
+  {
+    "id": "6f77c10c-d1d7-4434-9528-ec8f6a51bae0",
+    "symbol": "AAVE_USDT",
+    "rsi_6_recomputed": 37.06,
+    "stoch_k_recomputed": 49.35,
+    "diff_pp": 5.933029153827918
+  },
+  {
+    "id": "9d29ff03-569c-4cd0-99c7-02d3acaea701",
+    "symbol": "ENA_USDT",
+    "rsi_6_recomputed": 79.64,
+    "stoch_k_recomputed": 93.23,
+    "diff_pp": 1.3902593354528925
+  },
+  {
+    "id": "4add54dc-94c0-4678-9625-ec35bf1de104",
+    "symbol": "UNI_USDT",
+    "rsi_6_recomputed": 60.62,
+    "stoch_k_recomputed": 77.89,
+    "diff_pp": 10.67681222707424
+  },
+  {
+    "id": "bd3dc913-a44f-4644-99eb-c4373bc00be7",
+    "symbol": "ONDO_USDT",
+    "rsi_6_recomputed": 40.69,
+    "stoch_k_recomputed": 25.0,
+    "diff_pp": 0.7352759835584033
+  },
+  {
+    "id": "5aec7a26-f373-44c1-9942-ed013af64f4c",
+    "symbol": "LIT_USDT",
+    "rsi_6_recomputed": 54.48,
+    "stoch_k_recomputed": 82.33,
+    "diff_pp": 0.5151952915998015
+  },
+  {
+    "id": "bf447334-85ef-470a-a206-e23a5121639e",
+    "symbol": "BEAT_USDT",
+    "rsi_6_recomputed": 68.72,
+    "stoch_k_recomputed": 48.08,
+    "diff_pp": 6.77408812824285
+  },
+  {
+    "id": "efd27f1e-f22e-4113-9e8b-b0196267dcf3",
+    "symbol": "UNI_USDT",
+    "rsi_6_recomputed": 71.73,
+    "stoch_k_recomputed": 80.85,
+    "diff_pp": 10.145452961672484
+  },
+  {
+    "id": "04b1a7b1-2127-41f1-9711-192715f9f178",
+    "symbol": "XRP_USDT",
+    "rsi_6_recomputed": 34.04,
+    "stoch_k_recomputed": 50.71,
+    "diff_pp": 0.6035766583687208
+  },
+  {
+    "id": "193ab329-f32e-460b-8ca6-a4e71e7a2a95",
+    "symbol": "LIT_USDT",
+    "rsi_6_recomputed": 60.55,
+    "stoch_k_recomputed": 87.27,
+    "diff_pp": 1.540825204323748
+  },
+  {
+    "id": "2c0ec141-0d19-4c91-ad63-80ac24f9fdd6",
+    "symbol": "WLD_USDT",
+    "rsi_6_recomputed": 58.79,
+    "stoch_k_recomputed": 84.37,
+    "diff_pp": 1.008337874659393
+  },
+  {
+    "id": "2ea82359-2fa4-4dd2-be38-588886f606e2",
+    "symbol": "UNI_USDT",
+    "rsi_6_recomputed": 71.73,
+    "stoch_k_recomputed": 80.85,
+    "diff_pp": 10.145452961672484
+  },
+  {
+    "id": "3206c8c3-949b-4d53-b47a-89c846907ed0",
+    "symbol": "UNI_USDT",
+    "rsi_6_recomputed": 71.73,
+    "stoch_k_recomputed": 80.85,
+    "diff_pp": 10.145452961672484
+  },
+  {
+    "id": "36cc992a-39e8-49a8-b21d-b04832300b41",
+    "symbol": "LIT_USDT",
+    "rsi_6_recomputed": 60.55,
+    "stoch_k_recomputed": 87.27,
+    "diff_pp": 1.5428590285110788
+  },
+  {
+    "id": "432a1651-44b5-4243-a864-9848b19763b4",
+    "symbol": "ENA_USDT",
+    "rsi_6_recomputed": 66.34,
+    "stoch_k_recomputed": 88.68,
+    "diff_pp": 3.769874241381488
+  },
+  {
+    "id": "472d6ee9-171a-4762-8c93-7f4b5bcf701b",
+    "symbol": "LIT_USDT",
+    "rsi_6_recomputed": 83.88,
+    "stoch_k_recomputed": 83.69,
+    "diff_pp": 2.9473803795776465
+  },
+  {
+    "id": "57a6f10d-a583-429e-933c-1dad89222b34",
+    "symbol": "UNI_USDT",
+    "rsi_6_recomputed": 81.05,
+    "stoch_k_recomputed": 90.82,
+    "diff_pp": 10.645047252362637
+  },
+  {
+    "id": "6346e624-50f4-4c3d-ad42-e3a3ecea6642",
+    "symbol": "LIT_USDT",
+    "rsi_6_recomputed": 83.88,
+    "stoch_k_recomputed": 83.69,
+    "diff_pp": 2.9426607953028983
+  },
+  {
+    "id": "798c3b86-aa63-4b67-997f-3562326fc030",
+    "symbol": "ENA_USDT",
+    "rsi_6_recomputed": 79.64,
+    "stoch_k_recomputed": 93.23,
+    "diff_pp": 1.3853366877872864
+  },
+  {
+    "id": "81ac07c3-f276-4dbf-82c6-d603b3919bcb",
+    "symbol": "LIT_USDT",
+    "rsi_6_recomputed": 83.88,
+    "stoch_k_recomputed": 83.69,
+    "diff_pp": 2.9473803795776465
+  },
+  {
+    "id": "846e39a8-5af9-438c-99ab-354511359fea",
+    "symbol": "ASTER_USDT",
+    "rsi_6_recomputed": 35.42,
+    "stoch_k_recomputed": 40.65,
+    "diff_pp": 5.7914695702336205
+  },
+  {
+    "id": "8c3db898-eb50-4076-961d-ebe19be365ba",
+    "symbol": "BEAT_USDT",
+    "rsi_6_recomputed": 42.44,
+    "stoch_k_recomputed": 69.25,
+    "diff_pp": 10.600908654231045
+  },
+  {
+    "id": "8c3fce7f-3022-4fd8-bf85-ec06a18fe6de",
+    "symbol": "ENA_USDT",
+    "rsi_6_recomputed": 64.31,
+    "stoch_k_recomputed": 85.02,
+    "diff_pp": 0.12666893522241818
+  },
+  {
+    "id": "a9033f24-d06f-4577-972f-8ed9d600d5e5",
+    "symbol": "BEAT_USDT",
+    "rsi_6_recomputed": 42.44,
+    "stoch_k_recomputed": 69.25,
+    "diff_pp": 10.600908654231045
+  },
+  {
+    "id": "aed552d8-abd5-4cb9-86cf-7a577a7b5501",
+    "symbol": "LTC_USDT",
+    "rsi_6_recomputed": 21.29,
+    "stoch_k_recomputed": 7.78,
+    "diff_pp": 0.596470469255661
+  },
+  {
+    "id": "bfc01e46-5943-4324-976d-cd22c91f302c",
+    "symbol": "BEAT_USDT",
+    "rsi_6_recomputed": 68.72,
+    "stoch_k_recomputed": 48.08,
+    "diff_pp": 6.77408812824285
+  },
+  {
+    "id": "cf023bda-998d-45c8-b79c-d93bd5424a3d",
+    "symbol": "SUI_USDT",
+    "rsi_6_recomputed": 52.3,
+    "stoch_k_recomputed": 73.8,
+    "diff_pp": 0.8496832828421841
+  },
+  {
+    "id": "d78dd843-428c-4c71-ab0c-54f77ae0fe6a",
+    "symbol": "LIT_USDT",
+    "rsi_6_recomputed": 75.39,
+    "stoch_k_recomputed": 71.8,
+    "diff_pp": 1.9705298013245054
+  },
+  {
+    "id": "e2f0d839-3f31-4c02-b777-9b2f632574f3",
+    "symbol": "ZEC_USDT",
+    "rsi_6_recomputed": 39.58,
+    "stoch_k_recomputed": 62.68,
+    "diff_pp": 0.49881494110723956
+  },
+  {
+    "id": "e9227d8e-6fe2-4960-951e-e185251ce059",
+    "symbol": "UNI_USDT",
+    "rsi_6_recomputed": 71.73,
+    "stoch_k_recomputed": 80.85,
+    "diff_pp": 10.145452961672484
+  },
+  {
+    "id": "f3bb8bfe-3a6f-4e66-8407-30866512d887",
+    "symbol": "BEAT_USDT",
+    "rsi_6_recomputed": 87.92,
+    "stoch_k_recomputed": 91.04,
+    "diff_pp": 10.779449033603328
+  },
+  {
+    "id": "f6c86cd2-5d00-45ff-a774-568b6cc18ef1",
+    "symbol": "SUI_USDT",
+    "rsi_6_recomputed": 52.3,
+    "stoch_k_recomputed": 73.8,
+    "diff_pp": 0.8496832828421841
+  },
+  {
+    "id": "f778993a-d7a8-40f1-b28b-e1b03aad6df4",
+    "symbol": "ENA_USDT",
+    "rsi_6_recomputed": 64.31,
+    "stoch_k_recomputed": 85.02,
+    "diff_pp": 0.12666893522241818
+  },
+  {
+    "id": "fa30b66f-a2bf-4cc8-9cda-0f7bd32580cc",
+    "symbol": "BEAT_USDT",
+    "rsi_6_recomputed": 42.44,
+    "stoch_k_recomputed": 69.25,
+    "diff_pp": 10.600908654231045
+  },
+  {
+    "id": "399fd39e-1bbd-4bcc-96dd-87bbc3a9f2fe",
+    "symbol": "ENA_USDT",
+    "rsi_6_recomputed": 88.12,
+    "stoch_k_recomputed": 93.88,
+    "diff_pp": 2.830066178360302
+  },
+  {
+    "id": "887261ec-20dc-4568-893a-88aefbde402e",
+    "symbol": "TAO_USDT",
+    "rsi_6_recomputed": 52.21,
+    "stoch_k_recomputed": 67.13,
+    "diff_pp": 0.4595409090909053
+  },
+  {
+    "id": "56292d64-f7e9-4ca9-9306-a93dc0cec3be",
+    "symbol": "WLD_USDT",
+    "rsi_6_recomputed": 66.67,
+    "stoch_k_recomputed": 75.0,
+    "diff_pp": 1.654468732706138
+  },
+  {
+    "id": "2ee42c6a-c7b0-44c8-bd1d-c679405f3aea",
+    "symbol": "SUI_USDT",
+    "rsi_6_recomputed": 58.7,
+    "stoch_k_recomputed": 78.93,
+    "diff_pp": 0.6472562674094684
+  },
+  {
+    "id": "8201eed4-c3ac-4fca-aae5-5d21a7b5d041",
+    "symbol": "HYPE_USDT",
+    "rsi_6_recomputed": 26.59,
+    "stoch_k_recomputed": 39.29,
+    "diff_pp": 2.8066943274709155
+  },
+  {
+    "id": "e53cbf25-0fea-4a6e-ba9c-75cca8647077",
+    "symbol": "BEAT_USDT",
+    "rsi_6_recomputed": 71.68,
+    "stoch_k_recomputed": 92.04,
+    "diff_pp": 6.05094180056891
+  },
+  {
+    "id": "47829de8-0cd0-41fb-8982-b75960c0eda2",
+    "symbol": "FIL_USDT",
+    "rsi_6_recomputed": 64.57,
+    "stoch_k_recomputed": 91.25,
+    "diff_pp": 6.0791529007532485
+  },
+  {
+    "id": "d87cf4c1-8ebf-4294-86f8-7fcb693d61d8",
+    "symbol": "ARB_USDT",
+    "rsi_6_recomputed": 77.77,
+    "stoch_k_recomputed": 87.19,
+    "diff_pp": 18.307118612106365
+  },
+  {
+    "id": "fe3d7763-422a-4175-81f5-85a243f4355d",
+    "symbol": "ZEC_USDT",
+    "rsi_6_recomputed": 74.37,
+    "stoch_k_recomputed": 84.35,
+    "diff_pp": 1.6282149408948898
+  },
+  {
+    "id": "c44a3500-cbdb-4fd4-8b1e-8b82b917c54c",
+    "symbol": "XRP_USDT",
+    "rsi_6_recomputed": 31.05,
+    "stoch_k_recomputed": 24.42,
+    "diff_pp": 0.013162773451980136
+  },
+  {
+    "id": "18d1ba3e-3521-45c7-a7ee-73f892e67a70",
+    "symbol": "NEAR_USDT",
+    "rsi_6_recomputed": 56.62,
+    "stoch_k_recomputed": 77.78,
+    "diff_pp": 0.0393867924528335
+  },
+  {
+    "id": "4ac6a7a9-f5e0-4c47-a59f-6c3cc9a9cc90",
+    "symbol": "ETH_USDT",
+    "rsi_6_recomputed": 27.9,
+    "stoch_k_recomputed": 7.03,
+    "diff_pp": 0.5329341404924692
+  },
+  {
+    "id": "d905c302-4104-4f4d-9f58-8b923e1853de",
+    "symbol": "ENA_USDT",
+    "rsi_6_recomputed": 73.83,
+    "stoch_k_recomputed": 88.77,
+    "diff_pp": 2.1223458198643685
+  }
+]
