@@ -266,8 +266,13 @@ async def fetch_gate_closed_candles(
     )
 
 
-SETTLEMENT_LATENCY_DELAYS_SECONDS: tuple[int, ...] = (10, 30, 60, 120, 300)
+SETTLEMENT_LATENCY_DELAYS_SECONDS: tuple[int, ...] = (10, 30, 60, 120, 300, 3600)
 _SETTLEMENT_LATENCY_TOLERANCE_SECONDS = 6
+# B.1 (2026-09-03): 3600s (1h) is a late anchor, not just another sample
+# point -- comparing 10-300s against each other only answers "did it change
+# within 300s"; since ohlcv_shadow is immutable, a revision arriving after
+# 300s would freeze the wrong value forever undetected. The 1h read is the
+# ground-truth reference the earlier samples get compared against.
 
 
 async def fetch_gate_raw_candle(

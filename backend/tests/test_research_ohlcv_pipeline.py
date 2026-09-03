@@ -246,6 +246,21 @@ def test_settlement_latency_targets_resolve_multi_interval_delays_on_5m() -> Non
     assert open_time == close_5m - timedelta(seconds=300)
 
 
+def test_settlement_latency_late_anchor_resolves_across_timeframes() -> None:
+    # B.1 late anchor (2026-09-03): 3600s must resolve to the candle that
+    # closed exactly 1h ago on every timeframe, not just 1m.
+    for timeframe, interval_seconds in (("1m", 60), ("5m", 300), ("30m", 1800)):
+        close = datetime(2026, 9, 2, 12, 0, 0, tzinfo=timezone.utc)
+        now = close + timedelta(seconds=3600)
+        due = due_settlement_latency_targets(timeframe=timeframe, now=now)
+        matches = [item for item in due if item[1] == 3600]
+        assert len(matches) == 1, timeframe
+        open_time, delay_target, delay_actual = matches[0]
+        assert open_time == close - timedelta(seconds=interval_seconds)
+        assert delay_target == 3600
+        assert delay_actual == pytest.approx(3600.0)
+
+
 def test_settlement_latency_sampler_has_no_default_symbol_overlap_bug() -> None:
     symbols = sample_ohlcv_settlement_latency.sample_symbols()
     assert len(symbols) == len(set(symbols))
