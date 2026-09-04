@@ -1006,12 +1006,10 @@ async def _capture_exit_features(db, shadow: ShadowTrade) -> None:
     # Mantemos a UX da Task #312 (marcador estruturado quando NULL não
     # serve) mapeando ``{}`` → ``_capture_failed=indicators_unavailable_at_close``.
     snapshot = await exit_metrics.build_exit_snapshot(db, shadow.symbol)
-    # Bloco A.7: always stamp the real capture instant, regardless of which
-    # branch below runs -- previously feature_source_at stayed NULL in the
-    # overwhelming majority of rows (216/225 TRAILING_STOP in the frozen
-    # 559 cohort), making it impossible to know how stale the exit
-    # indicators were relative to the real exit (barrier_touched_at).
-    shadow.feature_source_at = datetime.now(timezone.utc)
+    # ``feature_source_at`` belongs to the immutable ENTRY capture contract
+    # (migration 142) and must never be rewritten while persisting exit data.
+    # The exit capture instant is recorded separately in
+    # ``exit_metrics_json.captured_at`` by ``_build_exit_metrics_json``.
 
     if snapshot.get("_capture_error") is not None:
         logger.warning(

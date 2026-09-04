@@ -115,7 +115,7 @@ async def test_build_full_flat_snapshot_empty_when_symbol_missing():
 
 @pytest.mark.asyncio
 async def test_capture_exit_features_uses_canonical_helper():
-    """Delega para o helper canônico e grava o snapshot completo."""
+    """Grava a saída sem alterar a linhagem imutável da entrada."""
     from app.tasks import shadow_trade_monitor
 
     full_snap = {
@@ -124,8 +124,12 @@ async def test_capture_exit_features_uses_canonical_helper():
         "ema9": 1.23, "ema21": 1.20, "ema50": 1.18, "ema200": 1.10,
         "vwap": 1.22, "bb_upper": 1.30, "bb_lower": 1.10,
     }
+    entry_source_at = datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc)
     shadow = SimpleNamespace(
-        id=uuid4(), symbol="BTC_USDT", features_snapshot_exit=None,
+        id=uuid4(),
+        symbol="BTC_USDT",
+        feature_source_at=entry_source_at,
+        features_snapshot_exit=None,
     )
 
     async def _fake_helper(db, symbol, **kw):
@@ -141,6 +145,7 @@ async def test_capture_exit_features_uses_canonical_helper():
         await shadow_trade_monitor._capture_exit_features(db=None, shadow=shadow)
 
     assert shadow.features_snapshot_exit == full_snap
+    assert shadow.feature_source_at == entry_source_at
     # ML contract: all values scalar
     for v in shadow.features_snapshot_exit.values():
         assert isinstance(v, (int, float, bool)) or v is None
