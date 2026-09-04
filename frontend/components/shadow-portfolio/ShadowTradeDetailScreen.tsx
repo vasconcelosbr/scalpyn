@@ -2,9 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Activity, AlertTriangle, ArrowLeft, Clock, Crosshair, Database, Download } from "lucide-react";
+import { Activity, AlertTriangle, ArrowLeft, Clock, Crosshair, Database, Download, Sparkles } from "lucide-react";
 
-import { ModuleAIAnalysisAction } from "@/components/ai/ModuleAIAnalysisAction";
 import { ApiError, apiGet } from "@/lib/api";
 import { buildShadowTradeExport, shadowTradeExportFilename } from "./shadowTradeExport";
 import { TradeCandlestickChart } from "./TradeCandlestickChart";
@@ -285,13 +284,15 @@ export function ShadowTradeDetailScreen({ shadowId }: { shadowId: string }) {
           </div>
           <div className={styles.heroAside}>
             <div className={styles.heroActions}>
-              <ModuleAIAnalysisAction
-                originModule="shadow_portfolio"
-                originView="shadow-portfolio-trade-detail"
-                entityIds={[data.id]}
-                label="Análise por IA"
-                compact
-              />
+              <Link
+                href="/dashboard/shadow-portfolio#detailed-report"
+                className={styles.downloadButton}
+                title="Materialize uma amostra canônica antes de criar a análise"
+                style={{ textDecoration: "none" }}
+              >
+                <Sparkles size={14} aria-hidden="true" />
+                Preparar análise por IA
+              </Link>
               <button
                 type="button"
                 className={styles.downloadButton}

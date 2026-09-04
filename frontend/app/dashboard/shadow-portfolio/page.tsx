@@ -12,6 +12,7 @@ import {
   Clock,
   Hourglass,
   RefreshCw,
+  Sparkles,
   Target,
   TrendingDown,
   TrendingUp,
@@ -20,7 +21,6 @@ import {
 import { apiGet, ApiError } from "@/lib/api";
 import DetailedReportWorkspace from "@/components/shadow-portfolio/DetailedReportWorkspace";
 import ProfilePerformanceDashboard from "@/components/shadow-portfolio/ProfilePerformanceDashboard";
-import { ModuleAIAnalysisAction } from "@/components/ai/ModuleAIAnalysisAction";
 
 // ── theme (alinhado com /dashboard/performance) ──────────────────────────────
 const C = {
@@ -2351,6 +2351,12 @@ export default function ShadowPortfolioPage() {
   const [watchlistNames, setWatchlistNames] = useState<Record<string, string>>({});
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
   const [mainTab, setMainTab] = useState<"trades" | "report" | "detailed-report" | "profile-performance">("trades");
+
+  useEffect(() => {
+    if (window.location.hash !== "#detailed-report") return;
+    const timer = window.setTimeout(() => setMainTab("detailed-report"), 0);
+    return () => window.clearTimeout(timer);
+  }, []);
   const [profileReport, setProfileReport] = useState<ProfileReportRow[]>([]);
   const [loadingReport, setLoadingReport] = useState(false);
 
@@ -2578,13 +2584,28 @@ export default function ShadowPortfolioPage() {
             Shadow Portfolio
           </h1>
           {mainTab !== "detailed-report" && (
-            <ModuleAIAnalysisAction
-              originModule="shadow_portfolio"
-              originView="shadow-portfolio"
-              entityIds={(list?.items ?? []).map((item) => item.id)}
-              supportsRegenerative
-              compact
-            />
+            <button
+              type="button"
+              onClick={() => setMainTab("detailed-report")}
+              title="Materialize uma amostra canônica antes de criar a análise"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 7,
+                minHeight: 32,
+                padding: "0 12px",
+                border: `1px solid ${C.blue}`,
+                borderRadius: 7,
+                background: "rgba(79,123,247,0.14)",
+                color: "#cbd7ff",
+                cursor: "pointer",
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              <Sparkles size={14} aria-hidden="true" />
+              Preparar análise por IA
+            </button>
           )}
           </div>
           <div style={{ display: "flex", gap: 6, marginTop: 10 }}>

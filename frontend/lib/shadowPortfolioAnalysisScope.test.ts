@@ -10,9 +10,17 @@ const detailedReport = readFileSync(
   new URL("../components/shadow-portfolio/DetailedReportWorkspace.tsx", import.meta.url),
   "utf8",
 );
+const tradeDetail = readFileSync(
+  new URL("../components/shadow-portfolio/ShadowTradeDetailScreen.tsx", import.meta.url),
+  "utf8",
+);
 
-test("detailed reports cannot start an Intelligence Run from the paginated trade list", () => {
-  assert.match(page, /mainTab !== "detailed-report" && \(\s*<ModuleAIAnalysisAction/);
+test("shadow analysis entry points require the canonical detailed-report flow", () => {
+  assert.doesNotMatch(page, /<ModuleAIAnalysisAction/);
+  assert.match(page, /onClick=\{\(\) => setMainTab\("detailed-report"\)\}/);
+  assert.match(page, /Preparar análise por IA/);
+  assert.doesNotMatch(tradeDetail, /<ModuleAIAnalysisAction/);
+  assert.match(tradeDetail, /href="\/dashboard\/shadow-portfolio#detailed-report"/);
   assert.match(detailedReport, /reportRunId=\{run\.id\}/);
   assert.match(detailedReport, /Análise por IA \(\$\{run\.total_trades\} trades\)/);
 });
