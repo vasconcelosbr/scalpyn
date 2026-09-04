@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..repositories.ohlcv_repository import OHLCVRepository
 from .research_ohlcv_service import (
     CANONICAL_RESEARCH_TIMEFRAMES,
+    SHADOW_STATE_TIMEFRAMES,
     fetch_gate_closed_candles,
     paced_request_delay,
     validate_timeframe,
@@ -67,6 +68,18 @@ class OHLCVBackfillService:
         """
         start_time = datetime.now(timezone.utc)
         logger.info(f"[BACKFILL] Starting {symbol} {timeframe} - {days} days")
+
+        if timeframe in SHADOW_STATE_TIMEFRAMES:
+            # R1 cutover (2026-09-04): 1m/5m/30m are owned by the contract-
+            # driven closed/live capture (research_ohlcv_service). This
+            # generic path bypasses is_closed filtering, provenance columns,
+            # and the active-contract lookup -- an accidental write here was
+            # exactly the gap etapa 2.1 of the cutover closed. Mirrors the
+            # same guard already on backfill_research_symbol below.
+            raise ValueError(
+                f"generic backfill is disabled for {timeframe!r}; "
+                "1m/5m/30m are owned by the contract-driven capture path"
+            )
 
         try:
             # Calculate time range

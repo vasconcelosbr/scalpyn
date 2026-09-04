@@ -18,6 +18,7 @@ from ..services.research_ohlcv_service import (
     SHADOW_STATE_TIMEFRAMES,
     STATE_CAPTURE_CONTRACT_VERSION,
     SUPPORTED_TIMEFRAMES,
+    active_capture_contract,
     fetch_gate_closed_candles,
     paced_request_delay,
     persist_gate_closed_batch,
@@ -203,22 +204,8 @@ async def _collect_state_shadow_async(timeframe: str) -> dict[str, Any]:
     started_at = datetime.now(timezone.utc)
     async with CeleryAsyncSessionLocal() as db:
         symbols = sorted(await get_active_pool_symbols(db, "spot"))
-        finalization_delay_seconds = int(
-            (
-                await db.execute(
-                    text(
-                        """
-                        SELECT finalization_delay_seconds
-                          FROM ohlcv_capture_contracts
-                         WHERE capture_contract_version = :version
-                           AND mode = 'SHADOW'
-                           AND canonical_read_enabled IS FALSE
-                        """
-                    ),
-                    {"version": STATE_CAPTURE_CONTRACT_VERSION},
-                )
-            ).scalar_one()
-        )
+        contract = await active_capture_contract(db, timeframe=timeframe)
+        finalization_delay_seconds = int(contract["finalization_delay_seconds"])
         if db.in_transaction():
             await db.rollback()
 
@@ -264,6 +251,7 @@ async def _collect_state_shadow_async(timeframe: str) -> dict[str, Any]:
                     timeframe=timeframe,
                     observed_at=datetime.now(timezone.utc),
                     error_code=type(error).__name__ if error else "EmptyBatch",
+                    capture_contract_version=contract["capture_contract_version"],
                 )
                 logger.error(
                     "[OHLCV-STATE-SHADOW][FAILED] symbol=%s timeframe=%s error=%s",
@@ -274,7 +262,12 @@ async def _collect_state_shadow_async(timeframe: str) -> dict[str, Any]:
                 continue
 
             try:
-                inserted_now, live_now = await persist_gate_state_batch(db, batch)
+                inserted_now, live_now = await persist_gate_state_batch(
+                    db,
+                    batch,
+                    capture_contract_version=contract["capture_contract_version"],
+                    closed_table=contract["closed_table"],
+                )
             except Exception as exc:
                 failures += 1
                 if db.in_transaction():
@@ -285,6 +278,7 @@ async def _collect_state_shadow_async(timeframe: str) -> dict[str, Any]:
                     timeframe=timeframe,
                     observed_at=datetime.now(timezone.utc),
                     error_code=type(exc).__name__,
+                    capture_contract_version=contract["capture_contract_version"],
                 )
                 logger.exception(
                     "[OHLCV-STATE-SHADOW][PERSIST-FAILED] symbol=%s timeframe=%s",
@@ -312,9 +306,10 @@ async def _collect_state_shadow_async(timeframe: str) -> dict[str, Any]:
                 )
 
     summary = {
-        "mode": "SHADOW",
-        "capture_contract_version": STATE_CAPTURE_CONTRACT_VERSION,
-        "canonical_read_enabled": False,
+        "mode": contract["mode"],
+        "capture_contract_version": contract["capture_contract_version"],
+        "closed_table": contract["closed_table"],
+        "canonical_read_enabled": contract["mode"] == "CANONICAL",
         "finalization_delay_seconds": finalization_delay_seconds,
         "timeframe": timeframe,
         "target_symbols": len(symbols),

@@ -698,23 +698,13 @@ async def _collect_5m_async():
             sym_market_type = symbol_market_type.get(symbol, "spot")
             try:
                 logger.info(f"[COLLECT][START] symbol={symbol} timeframe=5m")
-                fetched_5m, fetched_1m = await asyncio.gather(
-                    market_data_service.fetch_ohlcv(symbol, "5m", limit=288),
-                    market_data_service.fetch_ohlcv(symbol, "1m", limit=50),
-                    return_exceptions=True,
-                )
-                if isinstance(fetched_5m, BaseException):
-                    raise fetched_5m
-                df = fetched_5m
-                if isinstance(fetched_1m, BaseException):
-                    logger.warning(
-                        "[COLLECT][1m_UNAVAILABLE] symbol=%s error=%s",
-                        symbol,
-                        fetched_1m,
-                    )
-                    df_1m = None
-                else:
-                    df_1m = fetched_1m
+                # R1 cutover (2026-09-04): this fetch used to also pull 1m
+                # candles for a direct `ohlcv` write. 1m/5m/30m closed
+                # candles are now owned by the contract-driven capture
+                # (collect_research_ohlcv.collect_*_shadow); this 5m fetch
+                # stays only as the per-symbol health signal that gates the
+                # compute_5m/compute_structural_5m chain dispatch below.
+                df = await market_data_service.fetch_ohlcv(symbol, "5m", limit=288)
                 logger.info(f"[COLLECT][RESULT] symbol={symbol} result={type(df).__name__} rows={len(df) if df is not None else 'None'}")
 
                 if df is None:
@@ -734,69 +724,22 @@ async def _collect_5m_async():
                     logger.error(f"[PIPELINE] INVALID_COLUMNS symbol={symbol} missing={missing} columns={list(df.columns)}")
                     continue
 
-                ohlcv_exchange = df.attrs.get("exchange", "gate.io")
-                logger.info(f"[PIPELINE] INSERT_START symbol={symbol} rows={len(df)} timeframe=5m")
-
                 latest_5m = df.iloc[-1]
                 _now_5m = datetime.now(timezone.utc)
+                # R1 cutover (2026-09-04): the OHLCV 5m/1m INSERT that used to
+                # live here (both queue_mode's OhlcvBatch enqueue and the
+                # direct SAVEPOINT INSERT) is removed. 1m/5m/30m closed
+                # candles are now owned exclusively by the contract-driven
+                # capture (collect_research_ohlcv.collect_5m_shadow /
+                # collect_1m_shadow, dispatched independently on their own
+                # beat schedule). This block keeps only the price seed for
+                # market_metadata, which nothing else in this cycle writes.
+                # NOTE: that contract-driven path is spot-only
+                # (get_active_pool_symbols(db, "spot")) — if futures pool
+                # coins are ever activated, this fetch (which does cover
+                # sym_market_type == "futures") would need a canonical
+                # futures capture path before it could safely be removed too.
                 if queue_mode:
-                    # Task #236: one OhlcvBatch + one MarketMetadataUpsert per
-                    # symbol — no SAVEPOINTs, no per-row round-trips.
-                    rows_payload = tuple(
-                        {
-                            "time":         row["time"],
-                            "open":         float(row["open"]),
-                            "high":         float(row["high"]),
-                            "low":          float(row["low"]),
-                            "close":        float(row["close"]),
-                            "volume":       float(row["volume"]),
-                            "quote_volume": float(row.get(
-                                "quote_volume",
-                                float(row["close"]) * float(row["volume"]),
-                            )),
-                        }
-                        for _, row in df.iterrows()
-                    )
-                    await _pq.enqueue_or_log(
-                        producer="collect-5m",
-                        msg=_pq.OhlcvBatch(
-                            category="ingest",
-                            enqueued_at=_pq.now_monotonic(),
-                            symbol=symbol,
-                            exchange=ohlcv_exchange,
-                            timeframe="5m",
-                            market_type=sym_market_type,
-                            rows=rows_payload,
-                        ),
-                    )
-                    if df_1m is not None and not df_1m.empty:
-                        rows_1m_payload = tuple(
-                            {
-                                "time": row["time"],
-                                "open": float(row["open"]),
-                                "high": float(row["high"]),
-                                "low": float(row["low"]),
-                                "close": float(row["close"]),
-                                "volume": float(row["volume"]),
-                                "quote_volume": float(row.get(
-                                    "quote_volume",
-                                    float(row["close"]) * float(row["volume"]),
-                                )),
-                            }
-                            for _, row in df_1m.iterrows()
-                        )
-                        await _pq.enqueue_or_log(
-                            producer="collect-1m-price-position",
-                            msg=_pq.OhlcvBatch(
-                                category="ingest",
-                                enqueued_at=_pq.now_monotonic(),
-                                symbol=symbol,
-                                exchange=df_1m.attrs.get("exchange", "gate.io"),
-                                timeframe="1m",
-                                market_type=sym_market_type,
-                                rows=rows_1m_payload,
-                            ),
-                        )
                     await _pq.enqueue_or_log(
                         producer="collect-5m",
                         msg=_pq.MarketMetadataUpsert(
@@ -807,74 +750,6 @@ async def _collect_5m_async():
                             price=float(latest_5m["close"]),
                         ),
                     )
-                else:
-                    # SAVEPOINT 1: OHLCV candles + price seed.
-                    # Isolated so a single symbol failure never aborts the whole
-                    # collection transaction.
-                    try:
-                        async with db.begin_nested():
-                            # Bulk-insert all returned candles (ON CONFLICT DO NOTHING is idempotent)
-                            for _, row in df.iterrows():
-                                await db.execute(text("""
-                                    INSERT INTO ohlcv (time, symbol, exchange, timeframe, market_type, open, high, low, close, volume, quote_volume)
-                                    VALUES (:time, :symbol, :exchange, :timeframe, :market_type, :open, :high, :low, :close, :volume, :quote_volume)
-                                    ON CONFLICT DO NOTHING
-                                """), {
-                                    "time":        row["time"],
-                                    "symbol":      symbol,
-                                    "exchange":    ohlcv_exchange,
-                                    "timeframe":   "5m",
-                                    "market_type": sym_market_type,
-                                    "open":        float(row["open"]),
-                                    "high":        float(row["high"]),
-                                    "low":         float(row["low"]),
-                                    "close":       float(row["close"]),
-                                    "volume":      float(row["volume"]),
-                                    "quote_volume": float(row.get("quote_volume", float(row["close"]) * float(row["volume"]))),
-                                })
-
-                            if df_1m is not None and not df_1m.empty:
-                                for _, row in df_1m.iterrows():
-                                    await db.execute(text("""
-                                        INSERT INTO ohlcv (time, symbol, exchange, timeframe, market_type, open, high, low, close, volume, quote_volume)
-                                        VALUES (:time, :symbol, :exchange, :timeframe, :market_type, :open, :high, :low, :close, :volume, :quote_volume)
-                                        ON CONFLICT DO NOTHING
-                                    """), {
-                                        "time": row["time"],
-                                        "symbol": symbol,
-                                        "exchange": df_1m.attrs.get("exchange", "gate.io"),
-                                        "timeframe": "1m",
-                                        "market_type": sym_market_type,
-                                        "open": float(row["open"]),
-                                        "high": float(row["high"]),
-                                        "low": float(row["low"]),
-                                        "close": float(row["close"]),
-                                        "volume": float(row["volume"]),
-                                        "quote_volume": float(row.get("quote_volume", float(row["close"]) * float(row["volume"]))),
-                                    })
-
-                            # 2026-05-08 — REMOVED redundant market_metadata UPSERT.
-                            # Three sources already keep market_metadata.price fresh
-                            # (collect_all every 1h, Gate.io WS tickers in real time,
-                            # the orderbook SAVEPOINT below for spread/depth). Doing
-                            # it again HERE created cross-task row-lock contention
-                            # between worker-micro (collect_5m) and worker-structural
-                            # (collect_all) on the same 95 hot rows, which surfaced
-                            # as ``canceling statement due to user request`` once
-                            # _MICRO_GUARDS was bumped to 480 s and tasks actually
-                            # held the outer transaction long enough to collide.
-                            # Keep this comment as the authoritative justification —
-                            # do NOT re-add the UPSERT without a new contention
-                            # mitigation strategy (e.g. SKIP LOCKED, separate session).
-                    except Exception as _sp_ohlcv5m_exc:
-                        # SAVEPOINT auto-rolled back by begin_nested.
-                        # See "Nested-savepoint rollback rule" gotcha — do NOT
-                        # call db.rollback() here (would close outer tx).
-                        logger.error(
-                            "[CollectMarketData] SAVEPOINT (OHLCV 5m) failed for %s — savepoint rolled back: %s",
-                            symbol, _sp_ohlcv5m_exc,
-                        )
-                        raise
 
                 # SAVEPOINT 2: orderbook metrics (separate SAVEPOINT so that a
                 # DB failure here never rolls back the OHLCV + price writes above).

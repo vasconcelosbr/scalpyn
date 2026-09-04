@@ -188,88 +188,16 @@ async def _collect_structural_30m_async() -> int:
                     symbol, len(df), ohlcv_exchange, _TIMEFRAME,
                 )
 
-                # ── Persist OHLCV ─────────────────────────────────────────────
-                if queue_mode:
-                    rows_payload = tuple(
-                        {
-                            "time":         row["time"],
-                            "open":         float(row["open"]),
-                            "high":         float(row["high"]),
-                            "low":          float(row["low"]),
-                            "close":        float(row["close"]),
-                            "volume":       float(row["volume"]),
-                            "quote_volume": float(
-                                row.get(
-                                    "quote_volume",
-                                    float(row["close"]) * float(row["volume"]),
-                                )
-                            ),
-                        }
-                        for _, row in df.iterrows()
-                    )
-                    await _pq.enqueue_or_log(
-                        producer="collect-structural-30m",
-                        msg=_pq.OhlcvBatch(
-                            category="ingest",
-                            enqueued_at=_pq.now_monotonic(),
-                            symbol=symbol,
-                            exchange=ohlcv_exchange,
-                            timeframe=_TIMEFRAME,
-                            market_type="spot",
-                            rows=rows_payload,
-                        ),
-                    )
-                else:
-                    # SAVEPOINT per symbol — failure of one never aborts the cycle.
-                    try:
-                        async with db.begin_nested():
-                            for _, row in df.iterrows():
-                                await db.execute(
-                                    text("""
-                                        INSERT INTO ohlcv
-                                            (time, symbol, exchange, timeframe,
-                                             market_type, open, high, low,
-                                             close, volume, quote_volume)
-                                        VALUES
-                                            (:time, :symbol, :exchange, :timeframe,
-                                             :market_type, :open, :high, :low,
-                                             :close, :volume, :quote_volume)
-                                        ON CONFLICT DO NOTHING
-                                    """),
-                                    {
-                                        "time":         row["time"],
-                                        "symbol":       symbol,
-                                        "exchange":     ohlcv_exchange,
-                                        "timeframe":    _TIMEFRAME,
-                                        "market_type":  "spot",
-                                        "open":         float(row["open"]),
-                                        "high":         float(row["high"]),
-                                        "low":          float(row["low"]),
-                                        "close":        float(row["close"]),
-                                        "volume":       float(row["volume"]),
-                                        "quote_volume": float(
-                                            row.get(
-                                                "quote_volume",
-                                                float(row["close"]) * float(row["volume"]),
-                                            )
-                                        ),
-                                    },
-                                )
-                    except Exception as sp_exc:
-                        if not db.is_active:
-                            logger.error(
-                                "[STRUCTURAL-30m] outer tx poisoned after %s — stopping. %s",
-                                symbol, sp_exc,
-                            )
-                            failures += 1
-                            break
-                        logger.error(
-                            "[STRUCTURAL-30m] SAVEPOINT failed for %s — savepoint "
-                            "rolled back, continuing. %s",
-                            symbol, sp_exc,
-                        )
-                        failures += 1
-                        continue
+                # R1 cutover (2026-09-04): the OHLCV 30m INSERT that used to
+                # live here (both queue_mode's OhlcvBatch enqueue and the
+                # direct per-symbol SAVEPOINT INSERT) is removed. 1m/5m/30m
+                # closed candles are now owned exclusively by the
+                # contract-driven capture
+                # (collect_research_ohlcv.collect_30m_shadow, dispatched
+                # independently on its own beat schedule). The fetch above is
+                # kept as the per-symbol health signal that gates the
+                # compute_30m chain dispatch in run() below — this task's
+                # sole remaining purpose besides that signal.
 
                 if _ohlcv_metrics is not None:
                     _ohlcv_metrics.record_received(symbol, _TIMEFRAME, len(df))

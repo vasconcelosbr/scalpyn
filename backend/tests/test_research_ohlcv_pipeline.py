@@ -10,10 +10,12 @@ import pytest
 from app.services import ohlcv_backfill_service as backfill_module
 from app.services.ohlcv_backfill_service import OHLCVBackfillService
 from app.services.research_ohlcv_service import (
+    CANONICAL_STATE_CAPTURE_CONTRACT_VERSION,
     GateClosedCandleBatch,
     SETTLEMENT_LATENCY_DELAYS_SECONDS,
     SHADOW_STATE_TIMEFRAMES,
     STATE_CAPTURE_CONTRACT_VERSION,
+    _ACTIVE_CONTRACT_SQL,
     _closed_records,
     _normalize_state_db_record,
     _partition_records,
@@ -22,7 +24,9 @@ from app.services.research_ohlcv_service import (
     persist_gate_state_batch,
     validate_retention_contract,
 )
+from app.tasks import collect_market_data
 from app.tasks import collect_research_ohlcv
+from app.tasks import collect_structural_30m
 from app.tasks import sample_ohlcv_settlement_latency
 from app.tasks.celery_app import (
     QUEUE_RESEARCH_OHLCV,
@@ -446,3 +450,148 @@ async def test_canonical_backfill_rejects_shadow_state_timeframes() -> None:
         await service.backfill_research_symbol(
             "BTC_USDT", "1m", target_candles=1_000
         )
+
+
+# ── R1 cutover: canonical promotion of 1m/5m/30m (2026-09-04) ──────────────
+
+
+def test_r1_cutover_migration_promotes_canonical_ohlcv() -> None:
+    migration = (
+        __import__("pathlib").Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "214_ohlcv_canonical_cutover.py"
+    ).read_text(encoding="utf-8")
+    assert 'revision = "214_ohlcv_canonical_cutover"' in migration
+    assert len("214_ohlcv_canonical_cutover") <= 32
+    assert 'down_revision = "213_settlement_latency_anchor"' in migration
+    assert "ADD COLUMN IF NOT EXISTS is_closed BOOLEAN NOT NULL DEFAULT TRUE" in migration
+    assert "ADD COLUMN IF NOT EXISTS capture_contract_version VARCHAR(80) NULL" in migration
+    assert "CHECK (is_closed IS TRUE)" in migration
+    assert "'CANONICAL'" in migration
+    assert "gate_ohlcv_canonical_v1" in migration
+    assert "INTERVAL '5 minutes'" in migration
+    assert "'ohlcv', 'ohlcv_live', TRUE, 60" in migration
+
+
+@pytest.mark.asyncio
+async def test_generic_backfill_symbol_rejects_shadow_state_timeframes() -> None:
+    service = OHLCVBackfillService(session=object())
+    for timeframe in SHADOW_STATE_TIMEFRAMES:
+        with pytest.raises(ValueError, match="contract-driven capture path"):
+            await service.backfill_symbol("BTC_USDT", timeframe, days=1)
+
+
+@pytest.mark.asyncio
+async def test_persist_gate_state_batch_can_target_canonical_ohlcv() -> None:
+    statements: list[str] = []
+
+    class Result:
+        rowcount = 1
+
+    class Session:
+        async def execute(self, statement, _params=None):
+            statements.append(str(statement))
+            return Result()
+
+        async def commit(self):
+            pass
+
+    observed_at = datetime.fromtimestamp(1_700_002_000, tz=timezone.utc)
+    closed, live, rejected = _partition_records(
+        [
+            _raw_candle(1_700_000_000, "true"),
+            _raw_candle(1_700_001_980, "false"),
+        ],
+        symbol="BTC_USDT",
+        timeframe="5m",
+        observed_at=observed_at,
+    )
+    batch = GateClosedCandleBatch(
+        symbol="BTC_USDT",
+        timeframe="5m",
+        observed_at=observed_at,
+        records=closed,
+        rejected_open_candles=rejected,
+        rate_limit="200",
+        rate_limit_remaining="199",
+        live_records=live,
+    )
+
+    inserted, upserted = await persist_gate_state_batch(
+        Session(),
+        batch,
+        capture_contract_version=CANONICAL_STATE_CAPTURE_CONTRACT_VERSION,
+        closed_table="ohlcv",
+    )
+
+    sql = "\n".join(statements)
+    assert inserted == 1
+    assert upserted == 1
+    assert "INSERT INTO ohlcv\n" in sql
+    assert "INSERT INTO ohlcv_shadow" not in sql
+    assert "INSERT INTO ohlcv_live" in sql
+    assert "INSERT INTO ohlcv_state_ingestion_observations" in sql
+
+
+@pytest.mark.asyncio
+async def test_persist_gate_state_batch_rejects_unknown_closed_table() -> None:
+    class Session:
+        async def execute(self, *_args, **_kwargs):
+            raise AssertionError("must reject before any statement executes")
+
+        async def commit(self):
+            raise AssertionError("must reject before commit")
+
+    batch = GateClosedCandleBatch(
+        symbol="BTC_USDT",
+        timeframe="5m",
+        observed_at=datetime.fromtimestamp(1_700_002_000, tz=timezone.utc),
+        records=(),
+        rejected_open_candles=0,
+        rate_limit=None,
+        rate_limit_remaining=None,
+    )
+    with pytest.raises(ValueError, match="unsupported closed_table"):
+        await persist_gate_state_batch(Session(), batch, closed_table="not_a_table")
+
+
+def test_active_contract_sql_prefers_latest_elapsed_valid_from() -> None:
+    sql = str(_ACTIVE_CONTRACT_SQL)
+    assert "timeframes ? :timeframe" in sql
+    assert "mode IN ('SHADOW', 'CANONICAL')" in sql
+    assert "valid_from <= clock_timestamp()" in sql
+    assert "ORDER BY valid_from DESC" in sql
+    assert "LIMIT 1" in sql
+
+
+def test_old_collectors_no_longer_write_ohlcv_for_cutover_timeframes() -> None:
+    # Etapa 2.1: the old collectors must not write 1m/5m/30m into `ohlcv`
+    # any more -- that is now owned exclusively by the contract-driven
+    # capture (collect_research_ohlcv). Source-level check since this suite
+    # has no live DB.
+    market_data_source = inspect.getsource(collect_market_data)
+    assert "INSERT INTO ohlcv" not in market_data_source
+    assert "OhlcvBatch(" not in market_data_source
+
+    structural_30m_source = inspect.getsource(collect_structural_30m)
+    assert "INSERT INTO ohlcv\n" not in structural_30m_source
+    assert "OhlcvBatch(" not in structural_30m_source
+
+    # The compute/score/evaluate chain dispatch (Etapa 2.1 fora-de-escopo
+    # guard: this cutover must not touch the decision pipeline) must be
+    # untouched -- both collectors still gate their chain on fetch success.
+    assert "compute_5m" in market_data_source
+    assert "compute_structural_5m" in market_data_source
+    assert "compute_30m" in structural_30m_source
+
+
+def test_canonical_persist_call_site_resolves_contract_dynamically() -> None:
+    source = inspect.getsource(collect_research_ohlcv._collect_state_shadow_async)
+    assert "active_capture_contract(db, timeframe=timeframe)" in source
+    assert "closed_table=contract[\"closed_table\"]" in source
+    assert "capture_contract_version=contract[\"capture_contract_version\"]" in source
+    # Etapa 4 rollback: no hardcoded mode/version left in the hot path --
+    # flipping back to SHADOW is a DB row insert, not a code change.
+    assert "mode = 'SHADOW'" not in source
+    assert "canonical_read_enabled IS FALSE" not in source

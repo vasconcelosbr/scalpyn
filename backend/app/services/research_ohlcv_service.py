@@ -44,6 +44,11 @@ DEFAULT_TARGET_CANDLES: Mapping[str, int] = {
 }
 DEFAULT_RETENTION_DAYS: Mapping[str, int] = {"15m": 180, "1h": 730}
 STATE_CAPTURE_CONTRACT_VERSION = "gate_ohlcv_state_v3"
+# R1 cutover (2026-09-04): the 1m/5m/30m closed-candle capture promoted from
+# ohlcv_shadow to the canonical ``ohlcv`` table. Which one is actually live is
+# a DB fact, not a code constant -- see ``active_capture_contract`` below.
+CANONICAL_STATE_CAPTURE_CONTRACT_VERSION = "gate_ohlcv_canonical_v1"
+_STATE_CLOSED_TABLES = ("ohlcv_shadow", "ohlcv")
 _STATE_PRICE_QUANTUM = Decimal("0.00000001")
 _STATE_VOLUME_QUANTUM = Decimal("0.0001")
 
@@ -468,19 +473,30 @@ async def persist_gate_state_batch(
     batch: GateClosedCandleBatch,
     *,
     capture_contract_version: str = STATE_CAPTURE_CONTRACT_VERSION,
+    closed_table: str = "ohlcv_shadow",
 ) -> tuple[int, int]:
-    """Persist one dual-run batch without mutating canonical ``ohlcv``."""
+    """Persist one dual-run batch's closed rows to ``closed_table``.
+
+    ``closed_table`` is driven by the active row in
+    ``ohlcv_capture_contracts`` (see ``active_capture_contract``): SHADOW
+    contracts point at ``ohlcv_shadow`` (default -- preserves the pre-R1
+    behavior of never mutating canonical ``ohlcv``), CANONICAL contracts
+    point at ``ohlcv``. Restricted to a fixed allowlist since it is
+    interpolated into the INSERT statement.
+    """
     if batch.timeframe not in SHADOW_STATE_TIMEFRAMES:
         raise ValueError(
             f"state capture is unsupported for timeframe {batch.timeframe!r}"
         )
+    if closed_table not in _STATE_CLOSED_TABLES:
+        raise ValueError(f"unsupported closed_table {closed_table!r}")
 
     inserted_closed = 0
     for record in batch.records:
         result = await session.execute(
             text(
-                """
-                INSERT INTO ohlcv_shadow
+                f"""
+                INSERT INTO {closed_table}
                     (time, symbol, exchange, timeframe, market_type,
                      open, high, low, close, volume, quote_volume,
                      is_closed, capture_contract_version)
@@ -586,6 +602,43 @@ async def persist_gate_state_batch(
     )
     await session.commit()
     return inserted_closed, upserted_live
+
+
+_ACTIVE_CONTRACT_SQL = text(
+    """
+    SELECT capture_contract_version, mode, closed_table, live_table,
+           finalization_delay_seconds
+      FROM ohlcv_capture_contracts
+     WHERE timeframes ? :timeframe
+       AND mode IN ('SHADOW', 'CANONICAL')
+       AND valid_from <= clock_timestamp()
+     ORDER BY valid_from DESC
+     LIMIT 1
+    """
+)
+
+
+async def active_capture_contract(
+    session: AsyncSession,
+    *,
+    timeframe: str,
+) -> Mapping[str, Any]:
+    """Return the currently active 1m/5m/30m capture contract row.
+
+    "Active" = the row with the latest ``valid_from`` that has already
+    elapsed, among contracts covering ``timeframe``. This is the single
+    switch for the R1 cutover: promoting means inserting a new CANONICAL
+    row with a future ``valid_from``; rolling back means inserting a new
+    SHADOW row the same way. No code deploy is required to flip which table
+    receives closed candles -- only to change which task writes them.
+    """
+    result = await session.execute(_ACTIVE_CONTRACT_SQL, {"timeframe": timeframe})
+    row = result.mappings().one_or_none()
+    if row is None:
+        raise RuntimeError(
+            f"no active ohlcv_capture_contracts row for timeframe {timeframe!r}"
+        )
+    return row
 
 
 def _normalize_state_db_record(record: Mapping[str, Any]) -> dict[str, Any]:
