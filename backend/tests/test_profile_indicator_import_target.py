@@ -86,6 +86,139 @@ def test_indicator_update_requires_optimistic_concurrency_fields(missing_field):
         _prepare_indicator_update_items([item])
 
 
+def test_indicator_update_accepts_all_eight_canonical_indicators():
+    block_indicators = [
+        "adx_acceleration",
+        "adx_slope_3",
+        "macd_hist_slope_3",
+        "rsi_slope_3",
+        "entry_exhaustion_score",
+        "rsi_6",
+        "breakout_distance_pct",
+    ]
+    item = _item(
+        block_rules={
+            "blocks": [{
+                "id": "b1",
+                "conditions": [
+                    {
+                        "type": "threshold",
+                        "indicator": indicator,
+                        "operator": ">=",
+                        "value": 0,
+                        **({"period": 6} if indicator == "rsi_6" else {}),
+                        **(
+                            {"reference_window": "15m"}
+                            if indicator == "breakout_distance_pct"
+                            else {}
+                        ),
+                    }
+                    for indicator in block_indicators
+                ],
+            }],
+        },
+        entry_triggers={
+            "logic": "AND",
+            "conditions": [{
+                "type": "threshold",
+                "indicator": "macd_hist_slope_5",
+                "operator": ">=",
+                "value": 0,
+                "required": True,
+                "enabled": True,
+            }],
+        },
+    )
+
+    assert _prepare_indicator_update_items([item])[0][2] == UUID(PROFILE_ID)
+
+
+def test_indicator_update_rejects_unknown_indicator_with_exact_path():
+    item = _item(
+        signals={
+            "logic": "AND",
+            "conditions": [{"field": "future_indicator", "operator": ">=", "value": 1}],
+        }
+    )
+
+    with pytest.raises(ValueError, match=r"UNKNOWN_INDICATOR.*profiles\[0\]\.signals\.conditions\[0\]\.field"):
+        _prepare_indicator_update_items([item])
+
+
+def test_indicator_update_rejects_breakout_without_reference_window():
+    item = _item(
+        block_rules={
+            "blocks": [{
+                "conditions": [{
+                    "type": "threshold",
+                    "indicator": "breakout_distance_pct",
+                    "operator": ">",
+                    "value": 0.8,
+                }],
+            }],
+        }
+    )
+
+    with pytest.raises(ValueError, match=r"REFERENCE_WINDOW_REQUIRED.*reference_window"):
+        _prepare_indicator_update_items([item])
+
+
+def test_indicator_update_rejects_indicator_in_wrong_section():
+    item = _item(
+        filters={
+            "logic": "AND",
+            "conditions": [{"field": "adx_acceleration", "operator": ">=", "value": 0}],
+        }
+    )
+
+    with pytest.raises(ValueError, match="INDICATOR_SECTION_NOT_ALLOWED"):
+        _prepare_indicator_update_items([item])
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("expected_profile_version_id", "not-a-uuid"),
+        ("expected_profile_config_hash", "not-a-hash"),
+    ],
+)
+def test_indicator_update_rejects_invalid_optimistic_concurrency_values(field, value):
+    with pytest.raises(ValueError, match=field):
+        _prepare_indicator_update_items([_item(**{field: value})])
+
+
+@pytest.mark.asyncio
+async def test_structurally_invalid_batch_is_rejected_before_lock_or_write(monkeypatch):
+    lock = AsyncMock()
+    activate = AsyncMock()
+    monkeypatch.setattr(profiles_api, "lock_profiles_for_update", lock)
+    monkeypatch.setattr(profiles_api, "activate_profile_config", activate)
+    db = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
+    invalid = _item(
+        block_rules={
+            "blocks": [{
+                "conditions": [{
+                    "indicator": "breakout_distance_pct",
+                    "operator": ">",
+                    "value": 0.8,
+                }],
+            }],
+        }
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await profiles_api.bulk_import_profiles(
+            {"update_indicators_only": True, "profiles": [_item(), invalid]},
+            db=db,
+            user_id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+        )
+
+    assert exc.value.status_code == 422
+    lock.assert_not_awaited()
+    activate.assert_not_awaited()
+    db.commit.assert_not_awaited()
+
+
 def test_indicator_update_replaces_all_sections_and_preserves_everything_else():
     current = {
         "default_timeframe": "5m",

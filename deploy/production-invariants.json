@@ -583,7 +583,8 @@
         {
           "path": "frontend/components/profiles/ProfileBuilder.tsx",
           "contains_all": [
-            "PRICE_POSITION_INDICATORS",
+            "indicatorOptionsForSection",
+            "optionsWithUnsupportedIndicator",
             "BREAKOUT_REFERENCE_WINDOWS",
             "hasBreakoutWithoutReference"
           ]
@@ -602,6 +603,76 @@
             "test_recent_high_excludes_base_and_partial_candles",
             "test_robust_scoring_resolves_breakout_reference_window",
             "test_frontend_uses_one_price_position_catalog_on_every_profile_surface"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "strategy-profile-indicator-import-contract",
+      "description": "Strategy Profile imports use one indicator catalog, fail-closed preflight validation, lossless editor state, and equivalent backend defense",
+      "files": [
+        {
+          "path": "frontend/lib/indicatorCatalog.ts",
+          "contains_all": [
+            "STRATEGY_PROFILE_INDICATORS",
+            "optionsWithUnsupportedIndicator",
+            "adx_acceleration",
+            "macd_hist_slope_5",
+            "entry_exhaustion_score",
+            "rsi_6",
+            "requiresReferenceWindow"
+          ]
+        },
+        {
+          "path": "frontend/lib/profileImportPreflight.ts",
+          "contains_all": [
+            "validateProfileImport",
+            "profilesEligibleForSubmission",
+            "EXPECTED_PROFILE_VERSION_REQUIRED",
+            "EXPECTED_PROFILE_CONFIG_HASH_REQUIRED",
+            "REFERENCE_WINDOW_REQUIRED",
+            "UNKNOWN_INDICATOR"
+          ]
+        },
+        {
+          "path": "frontend/lib/profileConditionState.ts",
+          "contains_all": [
+            "Normalize editor state while retaining every source field verbatim",
+            "updateProfileRuleCondition",
+            "serializeProfileRuleCondition"
+          ]
+        },
+        {
+          "path": "backend/app/services/profile_indicator_contract.py",
+          "contains_all": [
+            "PROFILE_INDICATOR_CONTRACT",
+            "validate_profile_execution_structure",
+            "REFERENCE_WINDOW_REQUIRED",
+            "UNKNOWN_INDICATOR"
+          ]
+        },
+        {
+          "path": "backend/app/api/profiles.py",
+          "contains_all": [
+            "validate_profile_execution_structure",
+            "PROFILE_CONDITION_INVALID",
+            "expected_profile_version_id is invalid",
+            "expected_profile_config_hash is invalid"
+          ]
+        },
+        {
+          "path": "backend/tests/test_profile_indicator_import_target.py",
+          "contains_all": [
+            "test_indicator_update_accepts_all_eight_canonical_indicators",
+            "test_structurally_invalid_batch_is_rejected_before_lock_or_write",
+            "test_invalid_batch_rolls_back_every_profile"
+          ]
+        },
+        {
+          "path": "backend/tests/test_strategy_profile_indicator_runtime.py",
+          "contains_all": [
+            "test_seven_direct_producers_reach_the_condition_evaluator_from_closed_candles",
+            "test_breakout_virtual_indicator_resolves_every_admitted_window"
           ]
         }
       ]
@@ -851,7 +922,7 @@
     },
     {
       "id": "ohlcv-state-separated-dual-run",
-      "description": "Gate 1m/5m/30m capture separates immutable closed candles from mutable live candles in shadow-only tables with a versioned valid_from contract",
+      "description": "Gate 1m/5m/30m capture separates immutable closed candles from mutable live candles and resolves the active SHADOW or CANONICAL destination from a versioned valid_from contract",
       "files": [
         {
           "path": "backend/app/services/research_ohlcv_service.py",
@@ -867,7 +938,9 @@
           "path": "backend/app/tasks/collect_research_ohlcv.py",
           "contains_all": [
             "collect_1m_shadow",
-            "canonical_read_enabled\": False",
+            "active_capture_contract(db, timeframe=timeframe)",
+            "closed_table=contract[\"closed_table\"]",
+            "canonical_read_enabled\": contract[\"mode\"] == \"CANONICAL\"",
             "capture_state_comparison",
             "decision_dispatches\": 0"
           ]
@@ -905,7 +978,8 @@
             "test_dual_run_migration_enforces_state_and_valid_from_contracts",
             "test_state_persistence_rounds_decimal_half_up_before_driver_conversion",
             "test_state_partition_keeps_recently_closed_candle_mutable_during_grace",
-            "test_comparison_contract_compares_all_ohlcv_fields"
+            "test_comparison_contract_compares_all_ohlcv_fields",
+            "test_canonical_persist_call_site_resolves_contract_dynamically"
           ]
         }
       ]

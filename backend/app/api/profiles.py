@@ -7,6 +7,7 @@ from typing import Dict, Any, List, Optional
 from uuid import UUID
 import logging
 import json
+import re
 from copy import deepcopy
 
 from ..database import get_db
@@ -16,6 +17,7 @@ from ..services.profile_engine import ProfileEngine
 from ..services.score_engine import hydrate_profile_scoring
 from ..services.config_service import config_service
 from ..services.profile_config_validation import validate_profile_config
+from ..services.profile_indicator_contract import validate_profile_execution_structure
 from ..services.profile_execution_contract import (
     EXECUTION_SECTIONS,
     ProfileContractConflict,
@@ -298,9 +300,27 @@ def _prepare_indicator_update_items(
             raise ValueError(
                 f"profiles[{index}].expected_profile_version_id is required"
             )
+        try:
+            UUID(str(item["expected_profile_version_id"]))
+        except ValueError as exc:
+            raise ValueError(
+                f"profiles[{index}].expected_profile_version_id is invalid"
+            ) from exc
         if not item.get("expected_profile_config_hash"):
             raise ValueError(
                 f"profiles[{index}].expected_profile_config_hash is required"
+            )
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", str(item["expected_profile_config_hash"])):
+            raise ValueError(
+                f"profiles[{index}].expected_profile_config_hash is invalid"
+            )
+        structural_errors = validate_profile_execution_structure(
+            item, path=f"profiles[{index}]", require_sections=True
+        )
+        if structural_errors:
+            raise ValueError(
+                "PROFILE_CONDITION_INVALID:"
+                + json.dumps(structural_errors, sort_keys=True)
             )
         prepared.append((index, item, profile_id))
     return prepared
@@ -641,6 +661,14 @@ async def bulk_import_profiles(
                 "entry_triggers": p.get("entry_triggers", {"logic": "AND", "conditions": []}),
                 "scoring":        _normalize_import_scoring(p.get("scoring"), shared_scoring),
             }
+            structural_errors = validate_profile_execution_structure(
+                config_input, path=f"profiles[{i}]", require_sections=True
+            )
+            if structural_errors:
+                raise ValueError(
+                    "PROFILE_CONDITION_INVALID:"
+                    + json.dumps(structural_errors, sort_keys=True)
+                )
             validated_config = _validate_profile_config(
                 config_input, require_feature_identity=True
             )
