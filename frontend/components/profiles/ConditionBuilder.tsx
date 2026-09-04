@@ -1,11 +1,14 @@
 "use client";
 
 import { Plus, Trash2 } from "lucide-react";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import {
   BREAKOUT_REFERENCE_WINDOWS,
-  PRICE_POSITION_INDICATORS,
-  PRICE_POSITION_INDICATOR_VALUES,
+  PROFILE_NO_TIMEFRAME_INDICATORS,
+  PROFILE_PERIOD_DEFAULTS,
+  indicatorOptionsForSection,
+  optionsWithUnsupportedIndicator,
+  type StrategyProfileSection,
 } from "@/lib/indicatorCatalog";
 
 export function numFmt(n: number | null): string {
@@ -105,54 +108,12 @@ interface Condition {
 interface ConditionBuilderProps {
   conditions: Condition[];
   onChange: (conditions: Condition[]) => void;
+  section?: Extract<StrategyProfileSection, "filters" | "signals">;
   showRequired?: boolean;
   defaultTimeframe?: string;
   scoreRules?: ScoreRule[];
   showPoints?: boolean;
 }
-
-const INDICATOR_FIELDS = [
-  { value: "volume_24h", label: "Volume 24h", type: "number", group: "price" },
-  { value: "market_cap", label: "Market Cap", type: "number", group: "price" },
-  { value: "price", label: "Preco", type: "number", group: "price" },
-  { value: "change_24h", label: "Variacao 24h %", type: "number", group: "price" },
-  { value: "spread_pct", label: "Spread %", type: "number", group: "liquidity" },
-  { value: "orderbook_depth_usdt", label: "Profundidade Book (USDT)", type: "number", group: "liquidity" },
-  { value: "taker_ratio", label: "Taker Ratio (buy/(buy+sell), 0-1)", type: "number", group: "liquidity" },
-  { value: "volume_spike", label: "Volume Spike", type: "number", group: "liquidity" },
-  { value: "volume_delta", label: "Volume Delta", type: "number", group: "liquidity" },
-  { value: "orderbook_pressure", label: "Orderbook Pressure", type: "number", group: "liquidity" },
-  { value: "bid_ask_imbalance", label: "Bid/Ask Imbalance", type: "number", group: "liquidity" },
-  { value: "obv", label: "OBV", type: "number", group: "liquidity" },
-  ...PRICE_POSITION_INDICATORS.map((indicator) => ({
-    value: indicator.value,
-    label: indicator.label,
-    type: indicator.kind,
-    group: indicator.group,
-  })),
-  { value: "rsi", label: "RSI", type: "number", group: "momentum" },
-  { value: "macd", label: "MACD", type: "number", group: "momentum" },
-  { value: "macd_histogram", label: "MACD Histogram", type: "number", group: "momentum" },
-  { value: "macd_signal", label: "MACD Signal", type: "string", group: "momentum" },
-  { value: "stoch_k", label: "Stochastic %K", type: "number", group: "momentum" },
-  { value: "stoch_d", label: "Stochastic %D", type: "number", group: "momentum" },
-  { value: "zscore", label: "Z-Score", type: "number", group: "momentum" },
-  { value: "adx", label: "ADX", type: "number", group: "trend" },
-  { value: "di_plus", label: "DI+", type: "number", group: "trend" },
-  { value: "di_minus", label: "DI-", type: "number", group: "trend" },
-  { value: "di_trend", label: "DI+ > DI- (Alta)", type: "boolean", group: "trend" },
-  { value: "atr", label: "ATR", type: "number", group: "trend" },
-  { value: "atr_percent", label: "ATR %", type: "number", group: "trend" },
-  { value: "bb_width", label: "Bollinger Width", type: "number", group: "trend" },
-  { value: "psar_trend", label: "PSAR Trend", type: "string", group: "trend" },
-  { value: "ema_full_alignment", label: "EMA Full Alignment", type: "boolean", group: "ema" },
-  { value: "ema9_gt_ema21", label: "EMA9 > EMA21", type: "boolean", group: "ema" },
-  { value: "ema9_gt_ema50", label: "EMA9 > EMA50", type: "boolean", group: "ema" },
-  { value: "ema50_gt_ema200", label: "EMA50 > EMA200", type: "boolean", group: "ema" },
-  { value: "score", label: "Alpha Score", type: "number", group: "scores" },
-  { value: "liquidity_score", label: "Liquidity Score", type: "number", group: "scores" },
-  { value: "momentum_score", label: "Momentum Score", type: "number", group: "scores" },
-];
 
 const OPERATORS = [
   { value: ">", label: ">" },
@@ -174,34 +135,6 @@ const TIMEFRAME_OPTIONS = [
   { value: "15m", label: "15m" },
   { value: "1h", label: "1h" },
 ];
-
-const PERIOD_DEFAULTS: Record<string, number> = {
-  rsi: 14,
-  adx: 14,
-  di_plus: 14,
-  di_minus: 14,
-  atr: 14,
-  atr_percent: 14,
-  stoch_k: 14,
-  stoch_d: 14,
-  macd: 12,
-  macd_histogram: 12,
-  bb_width: 20,
-  zscore: 20,
-  volume_spike: 20,
-  obv: 20,
-  volume_delta: 20,
-};
-
-const NO_TF_INDICATORS = new Set([
-  "volume_24h", "market_cap", "price", "change_24h",
-  "spread_pct", "orderbook_depth_usdt",
-  "score", "liquidity_score", "momentum_score",
-  "di_trend", "ema_full_alignment", "ema9_gt_ema21",
-  "ema9_gt_ema50", "ema50_gt_ema200", "psar_trend",
-  "macd_signal",
-  ...PRICE_POSITION_INDICATOR_VALUES,
-]);
 
 function buildRuleLabel(rule: ScoreRule) {
   const points = Number(rule.points ?? 0);
@@ -230,16 +163,18 @@ function applyScoreRule(rule: ScoreRule): Partial<Condition> {
 export function ConditionBuilder({
   conditions,
   onChange,
+  section = "filters",
   showRequired = false,
   defaultTimeframe = "5m",
   scoreRules = [],
   showPoints = false,
 }: ConditionBuilderProps) {
+  const indicatorFields = useMemo(() => indicatorOptionsForSection(section), [section]);
   const getFieldType = (field: string) =>
-    INDICATOR_FIELDS.find((candidate) => candidate.value === field)?.type || "number";
+    indicatorFields.find((candidate) => candidate.value === field)?.kind || "number";
 
   const fieldsByGroup = (group: string) =>
-    INDICATOR_FIELDS.filter((field) => field.group === group);
+    indicatorFields.filter((field) => field.group === group);
 
   const getRulesForField = (field: string) =>
     scoreRules.filter((rule) => rule.indicator === field);
@@ -279,6 +214,8 @@ export function ConditionBuilder({
   return (
     <div className="space-y-3">
       {conditions.map((condition, index) => {
+        const renderedFields = optionsWithUnsupportedIndicator(indicatorFields, condition.field);
+        const unsupportedField = renderedFields.find((field) => field.unsupported);
         const fieldType = getFieldType(condition.field);
         const isBetween = condition.operator === "between";
         const operators = fieldType === "boolean" ? BOOLEAN_OPERATORS : OPERATORS;
@@ -324,6 +261,9 @@ export function ConditionBuilder({
               }}
               data-testid={`condition-field-${index}`}
             >
+              {unsupportedField && (
+                <option value={unsupportedField.value}>{unsupportedField.label}</option>
+              )}
               <optgroup label="Preco e Volume">
                 {fieldsByGroup("price").map((field) => (
                   <option key={field.value} value={field.value}>{field.label}</option>
@@ -518,7 +458,7 @@ export function ConditionBuilder({
               </div>
             )}
 
-            {!NO_TF_INDICATORS.has(condition.field) && (
+            {!PROFILE_NO_TIMEFRAME_INDICATORS.has(condition.field) && (
               <select
                 className="input w-[72px] text-[11px]"
                 value={condition.timeframe || ""}
@@ -534,7 +474,7 @@ export function ConditionBuilder({
               </select>
             )}
 
-            {PERIOD_DEFAULTS[condition.field] !== undefined && (
+            {PROFILE_PERIOD_DEFAULTS[condition.field] !== undefined && (
               <input
                 className="input w-20 text-[11px] font-mono"
                 type="number"
@@ -544,8 +484,8 @@ export function ConditionBuilder({
                   const value = parseInt(event.target.value, 10);
                   updateCondition(index, { period: Number.isNaN(value) ? undefined : value });
                 }}
-                placeholder={`P:${PERIOD_DEFAULTS[condition.field]}`}
-                title={`Period (default: ${PERIOD_DEFAULTS[condition.field]})`}
+                placeholder={`P:${PROFILE_PERIOD_DEFAULTS[condition.field]}`}
+                title={`Period (default: ${PROFILE_PERIOD_DEFAULTS[condition.field]})`}
                 data-testid={`condition-period-${index}`}
               />
             )}

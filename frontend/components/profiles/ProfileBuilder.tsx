@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
 import { ArrowLeft, Save, Play, ShieldOff, Zap, Plus, Trash2, Target } from "lucide-react";
 import { apiPost } from "@/lib/api";
 import { ConditionBuilder, NumericInput, type ScoreRule } from "./ConditionBuilder";
@@ -10,9 +10,13 @@ import ProfileRoleSelector, { ProfileRole } from "./ProfileRoleSelector";
 import { useConfig } from "@/hooks/useConfig";
 import {
   BREAKOUT_REFERENCE_WINDOWS,
-  PRICE_POSITION_INDICATORS,
-  PRICE_POSITION_INDICATOR_VALUES,
+  PROFILE_NO_TIMEFRAME_INDICATORS,
+  PROFILE_PERIOD_DEFAULTS,
+  indicatorOptionsForSection,
+  optionsWithUnsupportedIndicator,
 } from "@/lib/indicatorCatalog";
+import { normalizeProfileRuleCondition } from "@/lib/profileConditionState";
+import { formatPreflightIssue, validateExecutionSections } from "@/lib/profileImportPreflight";
 import {
   blockThresholdIndicatorOptions,
   COMPARISON_OPERATORS,
@@ -37,12 +41,6 @@ interface Condition {
 
 type RuleConditionType = "threshold" | "boolean" | "comparison";
 type RuleValue = string | number | boolean | null | undefined;
-
-interface RuleIndicatorOption {
-  value: string;
-  label: string;
-  kind: "number" | "boolean" | "string";
-}
 
 interface RuleCondition {
   id: string;
@@ -77,56 +75,19 @@ interface EntryTrigger extends RuleCondition {
   period?: number;
 }
 
-const RULE_INDICATORS: RuleIndicatorOption[] = [
-  { value: "price", label: "Price", kind: "number" },
-  ...PRICE_POSITION_INDICATORS,
-  { value: "ema5", label: "EMA 5", kind: "number" },
-  { value: "ema9", label: "EMA 9", kind: "number" },
-  { value: "ema21", label: "EMA 21", kind: "number" },
-  { value: "ema50", label: "EMA 50", kind: "number" },
-  { value: "ema200", label: "EMA 200", kind: "number" },
-  { value: "alpha_score", label: "Alpha Score", kind: "number" },
-  { value: "rsi", label: "RSI", kind: "number" },
-  { value: "adx", label: "ADX", kind: "number" },
-  { value: "macd", label: "MACD", kind: "number" },
-  { value: "macd_histogram", label: "MACD Histogram", kind: "number" },
-  { value: "volume_spike", label: "Volume Spike", kind: "number" },
-  { value: "taker_ratio", label: "Taker Ratio (buy/(buy+sell), 0-1)", kind: "number" },
-  { value: "volume_delta", label: "Volume Delta", kind: "number" },
-  { value: "orderbook_pressure", label: "Orderbook Pressure", kind: "number" },
-  { value: "bid_ask_imbalance", label: "Bid/Ask Imbalance", kind: "number" },
-  { value: "atr_percent", label: "ATR %", kind: "number" },
-  { value: "bb_width", label: "BB Width", kind: "number" },
-  { value: "spread_pct", label: "Spread %", kind: "number" },
-  { value: "zscore", label: "Z-Score", kind: "number" },
-  { value: "funding_rate", label: "Funding Rate", kind: "number" },
-  { value: "volume_24h", label: "Volume 24h", kind: "number" },
-  { value: "stoch_k", label: "Stoch %K", kind: "number" },
-  { value: "stoch_d", label: "Stoch %D", kind: "number" },
-  { value: "di_plus", label: "DI+", kind: "number" },
-  { value: "di_minus", label: "DI-", kind: "number" },
-  { value: "ema_full_alignment", label: "EMA Full Alignment", kind: "boolean" },
-  { value: "ema9_gt_ema21", label: "EMA9 > EMA21", kind: "boolean" },
-  { value: "ema9_gt_ema50", label: "EMA9 > EMA50", kind: "boolean" },
-  { value: "ema50_gt_ema200", label: "EMA50 > EMA200", kind: "boolean" },
-  { value: "market_cap", label: "Market Cap", kind: "number" },
-  { value: "change_24h", label: "Variacao 24h %", kind: "number" },
-  { value: "orderbook_depth_usdt", label: "Profundidade Book (USDT)", kind: "number" },
-  { value: "obv", label: "OBV", kind: "number" },
-  { value: "macd_signal", label: "MACD Signal", kind: "string" },
-  { value: "di_trend", label: "DI+ > DI- (Alta)", kind: "boolean" },
-  { value: "atr", label: "ATR", kind: "number" },
-  { value: "psar_trend", label: "PSAR Trend", kind: "string" },
-];
-
-const RULE_INDICATOR_MAP = new Map(RULE_INDICATORS.map((indicator) => [indicator.value, indicator]));
-const NUMERIC_RULE_INDICATORS = RULE_INDICATORS.filter((indicator) => indicator.kind === "number");
-const BLOCK_THRESHOLD_RULE_INDICATORS = blockThresholdIndicatorOptions(NUMERIC_RULE_INDICATORS);
-const COMPARABLE_NUMERIC_RULE_INDICATORS = NUMERIC_RULE_INDICATORS.filter(
+const BLOCK_RULE_INDICATORS = indicatorOptionsForSection("block_rules");
+const ENTRY_RULE_INDICATORS = indicatorOptionsForSection("entry_triggers");
+const BLOCK_NUMERIC_RULE_INDICATORS = BLOCK_RULE_INDICATORS.filter((indicator) => indicator.kind === "number");
+const ENTRY_NUMERIC_RULE_INDICATORS = ENTRY_RULE_INDICATORS.filter((indicator) => indicator.kind === "number");
+const BLOCK_THRESHOLD_RULE_INDICATORS = blockThresholdIndicatorOptions(BLOCK_NUMERIC_RULE_INDICATORS);
+const BLOCK_COMPARABLE_NUMERIC_RULE_INDICATORS = BLOCK_NUMERIC_RULE_INDICATORS.filter(
   (indicator) => indicator.value !== "breakout_distance_pct",
 );
-const BOOLEAN_RULE_INDICATORS = RULE_INDICATORS.filter((indicator) => indicator.kind === "boolean");
-const BOOLEAN_RULE_INDICATOR_VALUES = new Set(BOOLEAN_RULE_INDICATORS.map((indicator) => indicator.value));
+const ENTRY_COMPARABLE_NUMERIC_RULE_INDICATORS = ENTRY_NUMERIC_RULE_INDICATORS.filter(
+  (indicator) => indicator.value !== "breakout_distance_pct",
+);
+const BLOCK_BOOLEAN_RULE_INDICATORS = BLOCK_RULE_INDICATORS.filter((indicator) => indicator.kind === "boolean");
+const ENTRY_BOOLEAN_RULE_INDICATORS = ENTRY_RULE_INDICATORS.filter((indicator) => indicator.kind === "boolean");
 
 const TIMEFRAME_OPTIONS = [
   { value: "1m",  label: "1m" },
@@ -137,23 +98,6 @@ const TIMEFRAME_OPTIONS = [
 ];
 
 /** Period defaults for indicators that support configurable periods */
-const PERIOD_DEFAULTS: Record<string, number> = {
-  rsi: 14, adx: 14, di_plus: 14, di_minus: 14,
-  atr_percent: 14, stoch_k: 14, stoch_d: 14,
-  macd: 12, macd_histogram: 12, bb_width: 20,
-  zscore: 20, volume_spike: 20, volume_delta: 20,
-  ema5: 5, ema9: 9, ema21: 21, ema50: 50, ema200: 200,
-};
-
-/** Indicators that should NOT show the timeframe selector (metadata / derived / scores) */
-const NO_TF_INDICATORS = new Set([
-  "alpha_score", "price", "volume_24h", "spread_pct", "taker_ratio",
-  "ema_full_alignment", "ema9_gt_ema21", "ema9_gt_ema50",
-  "ema50_gt_ema200", "orderbook_pressure", "bid_ask_imbalance",
-  "funding_rate",
-  ...PRICE_POSITION_INDICATOR_VALUES,
-]);
-
 const DEFAULT_SCORING_CONFIG = {
   enabled: true,
   selected_rule_ids: [] as string[],
@@ -210,43 +154,7 @@ function createRuleCondition(type: RuleConditionType = "threshold"): RuleConditi
 }
 
 function normalizeRuleCondition(raw: any): RuleCondition {
-  if (raw?.type === "comparison" || (raw?.left && raw?.right)) {
-    return {
-      id: raw?.id || `cond_${Date.now()}`,
-      type: "comparison",
-      left: raw?.left || "price",
-      operator: raw?.operator || ">",
-      right: raw?.right || "ema9",
-      min: raw?.min,
-      max: raw?.max,
-      period: raw?.period,
-    };
-  }
-
-  const indicator = raw?.indicator || raw?.field || "rsi";
-  const inferredType: RuleConditionType =
-    raw?.type === "boolean" || BOOLEAN_RULE_INDICATOR_VALUES.has(indicator) || raw?.operator === "is_true" || raw?.operator === "is_false" || typeof raw?.value === "boolean"
-      ? "boolean"
-      : "threshold";
-
-  return {
-    id: raw?.id || `cond_${Date.now()}`,
-    type: inferredType,
-    indicator,
-    operator: raw?.operator || (inferredType === "boolean" ? "is_true" : "<"),
-    value:
-      inferredType === "boolean"
-        ? raw?.operator === "is_false"
-          ? false
-          : raw?.value ?? true
-        : raw?.operator === "between"
-          ? undefined
-          : raw?.value ?? 60,
-    min: raw?.min,
-    max: raw?.max,
-    period: raw?.period,
-    reference_window: raw?.reference_window,
-  };
+  return normalizeProfileRuleCondition(raw) as RuleCondition;
 }
 
 function hasBreakoutWithoutReference(value: any): boolean {
@@ -262,6 +170,7 @@ function hasBreakoutWithoutReference(value: any): boolean {
 function normalizeBlockRule(raw: any): BlockRule {
   const id = raw?.id || `block_${Date.now()}`;
   const base = {
+    ...(raw || {}),
     id,
     name: raw?.name || "New Block",
     enabled: raw?.enabled !== false,
@@ -323,6 +232,7 @@ function normalizeBlockRule(raw: any): BlockRule {
     ...base,
     conditions: [
       normalizeRuleCondition({
+        ...(raw || {}),
         id: `${id}_legacy`,
         type: raw?.type === "comparison" ? "comparison" : undefined,
         indicator: raw?.indicator,
@@ -340,7 +250,7 @@ function normalizeEntryTrigger(raw: any): EntryTrigger {
   return {
     ...normalized,
     id: raw?.id || normalized.id,
-    required: raw?.required || false,
+    required: raw?.required === true,
     enabled: raw?.enabled !== false,
     timeframe: raw?.timeframe,
     period: raw?.period,
@@ -348,11 +258,11 @@ function normalizeEntryTrigger(raw: any): EntryTrigger {
 }
 
 function normalizeBuilderCondition(raw: any, index: number) {
-  const { indicator, ...condition } = raw || {};
+  const condition = raw || {};
   return {
     ...condition,
     id: condition.id || `cond_loaded_${index}`,
-    field: condition.field || indicator || "rsi",
+    field: condition.field || condition.indicator || "rsi",
     operator: condition.operator || "==",
     value: condition.value,
   };
@@ -362,15 +272,23 @@ function normalizeProfileConfig(rawConfig: any) {
   return {
     ...DEFAULT_CONFIG,
     ...(rawConfig || {}),
+    filters: {
+      ...(rawConfig?.filters || {}),
+      logic: rawConfig?.filters?.logic || "AND",
+      conditions: (rawConfig?.filters?.conditions || []).map(normalizeBuilderCondition),
+    },
     signals: {
+      ...(rawConfig?.signals || {}),
       logic: rawConfig?.signals?.logic || "AND",
       conditions: (rawConfig?.signals?.conditions || []).map(normalizeBuilderCondition),
       scoring: rawConfig?.signals?.scoring ?? { ...DEFAULT_SCORING_CONFIG },
     },
     block_rules: {
+      ...(rawConfig?.block_rules || {}),
       blocks: (rawConfig?.block_rules?.blocks || []).map(normalizeBlockRule),
     },
     entry_triggers: {
+      ...(rawConfig?.entry_triggers || {}),
       logic: rawConfig?.entry_triggers?.logic || "AND",
       logic_preview_text: rawConfig?.entry_triggers?.logic_preview_text,
       conditions: (rawConfig?.entry_triggers?.conditions || []).map(normalizeEntryTrigger),
@@ -561,6 +479,11 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
 
   const handleSave = async () => {
     if (!name.trim()) { alert("Profile name is required"); return; }
+    const structuralIssues = validateExecutionSections(config, "config", true);
+    if (structuralIssues.length > 0) {
+      alert(`Configuração incompatível:\n${structuralIssues.slice(0, 8).map(formatPreflightIssue).join("\n")}`);
+      return;
+    }
     if (hasCurrentPriceThreshold(config.block_rules?.blocks)) {
       alert("Price é o preço atual do ativo. Em Block Rules, altere esta condição para Comparison e escolha o indicador de comparação.");
       return;
@@ -787,7 +710,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
   ) => {
     const describe = (trigger: EntryTrigger, requiredLabel = false) => {
       const referenceIndicator = trigger.type === "comparison" ? trigger.left : trigger.indicator;
-      const tf = referenceIndicator && NO_TF_INDICATORS.has(referenceIndicator)
+      const tf = referenceIndicator && PROFILE_NO_TIMEFRAME_INDICATORS.has(referenceIndicator)
         ? ""
         : ` (${trigger.timeframe || defaultTimeframe}${trigger.period ? `, P:${trigger.period}` : ""})`;
       let conditionText = "";
@@ -1072,6 +995,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
               <ConditionBuilder
                 conditions={config.filters?.conditions ?? []}
                 onChange={(conditions) => updateFilters(conditions, config.filters?.logic ?? "AND")}
+                section="filters"
                 showRequired={false}
                 defaultTimeframe={config.default_timeframe || "5m"}
                 scoreRules={scoreRules}
@@ -1127,6 +1051,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                 <ConditionBuilder
                   conditions={config.signals?.conditions ?? []}
                   onChange={(conditions) => updateSignals(conditions, config.signals?.logic ?? "AND")}
+                  section="signals"
                   showRequired={true}
                   defaultTimeframe={config.default_timeframe || "5m"}
                 />
@@ -1206,7 +1131,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                       {/* Timeframe / Period overrides */}
                       {block.conditions.some((condition) => {
                         const reference = condition.type === "comparison" ? condition.left : condition.indicator;
-                        return reference ? !NO_TF_INDICATORS.has(reference) : false;
+                        return reference ? !PROFILE_NO_TIMEFRAME_INDICATORS.has(reference) : false;
                       }) && (
                         <div className="grid grid-cols-2 gap-2">
                           <div className="space-y-1">
@@ -1260,11 +1185,11 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                                   value={condition.left || "price"}
                                   onChange={(e) => updateBlockCondition(block.id, condition.id, { left: e.target.value })}
                                 >
-                                  {COMPARABLE_NUMERIC_RULE_INDICATORS.map((indicator) => (
+                                  {optionsWithUnsupportedIndicator(BLOCK_COMPARABLE_NUMERIC_RULE_INDICATORS, condition.left || "price").map((indicator) => (
                                     <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
                                   ))}
                                 </select>
-                                {PERIOD_DEFAULTS[condition.left || ""] !== undefined && (
+                                {PROFILE_PERIOD_DEFAULTS[condition.left || ""] !== undefined && (
                                   <input
                                     type="number"
                                     className="input h-8 w-20 text-[12px] font-mono text-center"
@@ -1273,8 +1198,8 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                                       const v = parseInt(e.target.value, 10);
                                       updateBlockCondition(block.id, condition.id, { period: isNaN(v) ? undefined : v });
                                     }}
-                                    placeholder={`P:${PERIOD_DEFAULTS[condition.left || ""]}`}
-                                    title={`Period (default: ${PERIOD_DEFAULTS[condition.left || ""]})`}
+                                    placeholder={`P:${PROFILE_PERIOD_DEFAULTS[condition.left || ""]}`}
+                                    title={`Period (default: ${PROFILE_PERIOD_DEFAULTS[condition.left || ""]})`}
                                   />
                                 )}
                                 <select
@@ -1315,7 +1240,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                                     value={condition.right || "ema9"}
                                     onChange={(e) => updateBlockCondition(block.id, condition.id, { right: e.target.value })}
                                   >
-                                    {COMPARABLE_NUMERIC_RULE_INDICATORS.map((indicator) => (
+                                    {optionsWithUnsupportedIndicator(BLOCK_COMPARABLE_NUMERIC_RULE_INDICATORS, condition.right || "ema9").map((indicator) => (
                                       <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
                                     ))}
                                   </select>
@@ -1328,11 +1253,11 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                                   value={condition.indicator || "ema9_gt_ema21"}
                                   onChange={(e) => updateBlockCondition(block.id, condition.id, { indicator: e.target.value })}
                                 >
-                                  {BOOLEAN_RULE_INDICATORS.map((indicator) => (
+                                  {optionsWithUnsupportedIndicator(BLOCK_BOOLEAN_RULE_INDICATORS, condition.indicator || "ema9_gt_ema21").map((indicator) => (
                                     <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
                                   ))}
                                 </select>
-                                {PERIOD_DEFAULTS[condition.indicator || ""] !== undefined && (
+                                {PROFILE_PERIOD_DEFAULTS[condition.indicator || ""] !== undefined && (
                                   <input
                                     type="number"
                                     className="input h-8 w-20 text-[12px] font-mono text-center"
@@ -1341,8 +1266,8 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                                       const v = parseInt(e.target.value, 10);
                                       updateBlockCondition(block.id, condition.id, { period: isNaN(v) ? undefined : v });
                                     }}
-                                    placeholder={`P:${PERIOD_DEFAULTS[condition.indicator || ""]}`}
-                                    title={`Period (default: ${PERIOD_DEFAULTS[condition.indicator || ""]})`}
+                                    placeholder={`P:${PROFILE_PERIOD_DEFAULTS[condition.indicator || ""]}`}
+                                    title={`Period (default: ${PROFILE_PERIOD_DEFAULTS[condition.indicator || ""]})`}
                                   />
                                 )}
                                 <select
@@ -1373,7 +1298,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                                   {isCurrentPriceThreshold(condition) && (
                                     <option value="price" disabled>Price — use Comparison</option>
                                   )}
-                                  {BLOCK_THRESHOLD_RULE_INDICATORS.map((indicator) => (
+                                  {optionsWithUnsupportedIndicator(BLOCK_THRESHOLD_RULE_INDICATORS, condition.indicator || "rsi").map((indicator) => (
                                     <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
                                   ))}
                                 </select>
@@ -1397,7 +1322,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                                         ))}
                                       </select>
                                     )}
-                                    {PERIOD_DEFAULTS[condition.indicator || ""] !== undefined && (
+                                    {PROFILE_PERIOD_DEFAULTS[condition.indicator || ""] !== undefined && (
                                   <input
                                     type="number"
                                     className="input h-8 w-20 text-[12px] font-mono text-center"
@@ -1406,8 +1331,8 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                                       const v = parseInt(e.target.value, 10);
                                       updateBlockCondition(block.id, condition.id, { period: isNaN(v) ? undefined : v });
                                     }}
-                                    placeholder={`P:${PERIOD_DEFAULTS[condition.indicator || ""]}`}
-                                    title={`Period (default: ${PERIOD_DEFAULTS[condition.indicator || ""]})`}
+                                    placeholder={`P:${PROFILE_PERIOD_DEFAULTS[condition.indicator || ""]}`}
+                                    title={`Period (default: ${PROFILE_PERIOD_DEFAULTS[condition.indicator || ""]})`}
                                   />
                                     )}
                                     <select
@@ -1573,7 +1498,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                           value={trig.left || "price"}
                           onChange={(e) => updateTrigger(trig.id, "left", e.target.value)}
                         >
-                          {COMPARABLE_NUMERIC_RULE_INDICATORS.map((indicator) => (
+                          {optionsWithUnsupportedIndicator(ENTRY_COMPARABLE_NUMERIC_RULE_INDICATORS, trig.left || "price").map((indicator) => (
                             <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
                           ))}
                         </select>
@@ -1611,7 +1536,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                             value={trig.right || "ema9"}
                             onChange={(e) => updateTrigger(trig.id, "right", e.target.value)}
                           >
-                            {COMPARABLE_NUMERIC_RULE_INDICATORS.map((indicator) => (
+                            {optionsWithUnsupportedIndicator(ENTRY_COMPARABLE_NUMERIC_RULE_INDICATORS, trig.right || "ema9").map((indicator) => (
                               <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
                             ))}
                           </select>
@@ -1624,7 +1549,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                           value={trig.indicator || "ema9_gt_ema21"}
                           onChange={(e) => updateTrigger(trig.id, "indicator", e.target.value)}
                         >
-                          {BOOLEAN_RULE_INDICATORS.map((indicator) => (
+                          {optionsWithUnsupportedIndicator(ENTRY_BOOLEAN_RULE_INDICATORS, trig.indicator || "ema9_gt_ema21").map((indicator) => (
                             <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
                           ))}
                         </select>
@@ -1651,7 +1576,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                             updateTrigger(trig.id, "reference_window", undefined);
                           }}
                         >
-                          {NUMERIC_RULE_INDICATORS.map((indicator) => (
+                          {optionsWithUnsupportedIndicator(ENTRY_NUMERIC_RULE_INDICATORS, trig.indicator || "rsi").map((indicator) => (
                             <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
                           ))}
                         </select>
@@ -1719,7 +1644,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                       </>
                     )}
                     {/* Timeframe override */}
-                    {!NO_TF_INDICATORS.has((trig.type === "comparison" ? trig.left : trig.indicator) || "") && (
+                    {!PROFILE_NO_TIMEFRAME_INDICATORS.has((trig.type === "comparison" ? trig.left : trig.indicator) || "") && (
                       <select
                         className="input h-8 text-[11px] w-[68px]"
                         value={trig.timeframe || ""}
@@ -1733,7 +1658,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                       </select>
                     )}
                     {/* Period override */}
-                    {trig.type !== "comparison" && PERIOD_DEFAULTS[trig.indicator || ""] !== undefined && (
+                    {trig.type !== "comparison" && PROFILE_PERIOD_DEFAULTS[trig.indicator || ""] !== undefined && (
                       <input
                         type="number"
                         min={1}
@@ -1743,8 +1668,8 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                           const v = parseInt(e.target.value, 10);
                           updateTrigger(trig.id, "period", isNaN(v) ? undefined : v);
                         }}
-                        placeholder={`P:${PERIOD_DEFAULTS[trig.indicator || ""]}`}
-                        title={`Period (default: ${PERIOD_DEFAULTS[trig.indicator || ""]})`}
+                        placeholder={`P:${PROFILE_PERIOD_DEFAULTS[trig.indicator || ""]}`}
+                        title={`Period (default: ${PROFILE_PERIOD_DEFAULTS[trig.indicator || ""]})`}
                       />
                     )}
                     <label className="flex items-center gap-1.5 text-[12px] cursor-pointer">

@@ -10,6 +10,12 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { apiGet, apiPost } from "@/lib/api";
 import { useConfig } from "@/hooks/useConfig";
+import {
+  formatPreflightIssue,
+  profilesEligibleForSubmission,
+  validateProfileImport,
+  type ImportPreflightIssue,
+} from "@/lib/profileImportPreflight";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type FunnelRole = "universe_filter" | "primary_filter" | "score_engine" | "acquisition_queue";
@@ -78,7 +84,7 @@ interface ParsedProfile {
   raw: ImportProfile;
   editedName: string;
   valid: boolean;
-  validationError?: string;
+  validationErrors: ImportPreflightIssue[];
 }
 
 interface ParsedImportPayload {
@@ -104,28 +110,6 @@ const ROLE_META: Record<string, { label: string; short: string; color: string; b
   score_engine:      { label: "Score Engine",       short: "L2",   color: "#FBBF24", bg: "rgba(251,191,36,0.12)", border: "rgba(251,191,36,0.25)",  icon: Target },
   acquisition_queue: { label: "Fila de Execução",   short: "L3",   color: "#34D399", bg: "rgba(52,211,153,0.12)", border: "rgba(52,211,153,0.25)",  icon: ShoppingCart },
 };
-
-const VALID_ROLES = new Set(Object.keys(ROLE_META));
-const VALID_TF    = new Set(["1m", "3m", "5m", "15m", "1h"]);
-
-// ── Validation ────────────────────────────────────────────────────────────────
-function validateProfile(p: ImportProfile, updateIndicatorsOnly = false): { valid: boolean; error?: string } {
-  if (updateIndicatorsOnly) {
-    if (!p.profile_id && !p.id) return { valid: false, error: "'profile_id' é obrigatório" };
-    if (!p.expected_profile_version_id) return { valid: false, error: "'expected_profile_version_id' é obrigatório" };
-    if (!p.expected_profile_config_hash) return { valid: false, error: "'expected_profile_config_hash' é obrigatório" };
-    for (const section of ["filters", "signals", "entry_triggers", "block_rules"] as const) {
-      if (p[section] === undefined) return { valid: false, error: `'${section}' é obrigatório` };
-    }
-  } else if (!p.name?.trim()) {
-    return { valid: false, error: "'name' é obrigatório" };
-  }
-  if (p.funnel_role && !VALID_ROLES.has(p.funnel_role))
-    return { valid: false, error: `funnel_role inválido: "${p.funnel_role}"` };
-  if (p.default_timeframe && !VALID_TF.has(p.default_timeframe))
-    return { valid: false, error: `default_timeframe inválido: "${p.default_timeframe}"` };
-  return { valid: true };
-}
 
 // ── Count helpers ─────────────────────────────────────────────────────────────
 const countConds  = (p: ImportProfile) =>
@@ -327,9 +311,14 @@ export function JsonImportBuilder({ onClose }: Props) {
         return;
       }
 
-      const parsedList: ParsedProfile[] = profiles.map((p) => {
-        const v = validateProfile(p, parsedPayload.updateIndicatorsOnly);
-        return { raw: p, editedName: p.name?.trim() ?? "", valid: v.valid, validationError: v.error };
+      const parsedList: ParsedProfile[] = profiles.map((p, index) => {
+        const validation = validateProfileImport(p as unknown as Record<string, unknown>, index, parsedPayload.updateIndicatorsOnly);
+        return {
+          raw: p,
+          editedName: p.name?.trim() ?? "",
+          valid: validation.valid,
+          validationErrors: validation.issues,
+        };
       });
 
       setParseError(null);
@@ -388,9 +377,16 @@ export function JsonImportBuilder({ onClose }: Props) {
 
   // ── Import ──────────────────────────────────────────────────────────────────
   const handleImport = async () => {
+    const eligibleProfiles = profilesEligibleForSubmission(parsed, updateIndicatorsOnly);
+    if (!applyToActiveProfiles && parsed.length > 0 && eligibleProfiles.length === 0) {
+      alert(updateIndicatorsOnly
+        ? "Importação bloqueada: corrija todos os erros de preflight antes de atualizar o lote."
+        : "Importação bloqueada: nenhum profile válido para envio.");
+      return;
+    }
     setImporting(true);
     try {
-      const profilesPayload = parsed.map((p) => ({
+      const profilesPayload = eligibleProfiles.map((p) => ({
         ...p.raw,
         name: p.editedName || p.raw.name,
       }));
@@ -420,7 +416,10 @@ export function JsonImportBuilder({ onClose }: Props) {
   const selectedScoringCount = sharedScoring?.selected_rule_ids?.length ?? 0;
   const canImport = applyToActiveProfiles
     ? Array.isArray(sharedScoring?.selected_rule_ids)
-    : validCount > 0 || scoringAssignments.length > 0;
+    : updateIndicatorsOnly
+      ? validCount > 0 && invalidCount === 0
+      : validCount > 0 || scoringAssignments.length > 0;
+  const preflightIssues = parsed.flatMap((profile) => profile.validationErrors);
 
   const existingProfileById = new Map(existingProfiles.map((p) => [p.id, p]));
   const existingProfileByName = new Map(existingProfiles.map((p) => [p.name.toLowerCase(), p]));
@@ -1012,7 +1011,9 @@ export function JsonImportBuilder({ onClose }: Props) {
               <div className="flex items-center gap-2 text-[13px]">
                 <XCircle className="w-4 h-4 text-[var(--color-loss)]" />
                 <span className="text-[var(--text-primary)] font-semibold">{invalidCount}</span>
-                <span className="text-[var(--text-secondary)]">com erro (serão ignorados)</span>
+                <span className="text-[var(--text-secondary)]">
+                  {updateIndicatorsOnly ? "com erro (bloqueiam o lote inteiro)" : "com erro (não serão enviados)"}
+                </span>
               </div>
             )}
             <div className="ml-auto flex items-center gap-3">
@@ -1053,6 +1054,27 @@ export function JsonImportBuilder({ onClose }: Props) {
           {showJson && (
             <div className="bg-[var(--bg-base)] border border-[var(--border-subtle)] rounded-xl p-4 max-h-64 overflow-auto">
               <pre className="text-[11px] font-mono text-[var(--text-secondary)] whitespace-pre-wrap">{rawJson}</pre>
+            </div>
+          )}
+
+          {preflightIssues.length > 0 && (
+            <div
+              className="rounded-xl border border-red-500/25 bg-red-500/5 p-4"
+              data-testid="import-preflight-errors"
+            >
+              <h3 className="text-[13px] font-semibold text-red-400">
+                JSON incompatível com o contrato atual ({preflightIssues.length} erro{preflightIssues.length !== 1 ? "s" : ""})
+              </h3>
+              <p className="mt-1 text-[11px] text-[var(--text-secondary)]">
+                {updateIndicatorsOnly
+                  ? "Nenhuma requisição de escrita será enviada enquanto existir qualquer erro."
+                  : "Somente profiles integralmente válidos poderão ser enviados."}
+              </p>
+              <ul className="mt-3 max-h-52 space-y-1 overflow-auto font-mono text-[10px] text-red-300">
+                {preflightIssues.map((value, index) => (
+                  <li key={`${value.path}-${value.code}-${index}`}>{formatPreflightIssue(value)}</li>
+                ))}
+              </ul>
             </div>
           )}
 
@@ -1235,7 +1257,8 @@ export function JsonImportBuilder({ onClose }: Props) {
                         <div className="flex flex-col items-center gap-0.5">
                           <XCircle className="w-4 h-4 text-[var(--color-loss)] mx-auto" />
                           <span className="text-[10px] text-[var(--color-loss)] max-w-[120px] text-center leading-tight">
-                            {p.validationError}
+                            {p.validationErrors[0] ? formatPreflightIssue(p.validationErrors[0]) : "Erro de validação"}
+                            {p.validationErrors.length > 1 ? ` (+${p.validationErrors.length - 1})` : ""}
                           </span>
                         </div>
                       )}

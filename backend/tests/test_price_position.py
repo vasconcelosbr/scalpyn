@@ -169,7 +169,8 @@ def test_frontend_uses_one_price_position_catalog_on_every_profile_surface():
         "components/profiles/ConditionBuilder.tsx",
         "components/profiles/ProfileBuilder.tsx",
         "components/profiles/BulkProfileBuilder.tsx",
-        "app/settings/score/page.tsx",
     ):
         source = (frontend / relative).read_text(encoding="utf-8")
-        assert "PRICE_POSITION_INDICATORS" in source
+        assert "indicatorOptionsForSection" in source
+    score_source = (frontend / "app/settings/score/page.tsx").read_text(encoding="utf-8")
+    assert "PRICE_POSITION_INDICATORS" in score_source
