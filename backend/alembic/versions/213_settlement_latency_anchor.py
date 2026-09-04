@@ -8,15 +8,20 @@ CHECK constraint so the sampler (research_ohlcv_service.
 SETTLEMENT_LATENCY_DELAYS_SECONDS) can record a 1h ground-truth read
 against which the 10-300s samples get compared.
 
-Revision ID: 213_settlement_latency_late_anchor
+Revision ID: 213_settlement_latency_anchor
 Revises: 212_shadow_monitor_unstick
+
+Note: revision id must stay <=32 chars -- alembic_version.version_num is
+VARCHAR(32) (StringDataRightTruncationError otherwise, as happened with
+the original 34-char id "213_settlement_latency_late_anchor" on
+2026-09-03, which crash-looped the API on boot).
 """
 
 from alembic import op
 import sqlalchemy as sa
 
 
-revision = "213_settlement_latency_late_anchor"
+revision = "213_settlement_latency_anchor"
 down_revision = "212_shadow_monitor_unstick"
 branch_labels = None
 depends_on = None
