@@ -247,6 +247,18 @@ def test_mtf_collector_uses_the_production_ohlcv_identity():
     assert "ON CONFLICT (time, symbol, exchange, timeframe)" in source
 
 
+def test_mtf_collectors_use_the_isolated_research_queue():
+    from app.tasks.celery_app import TASK_ROUTES, celery_app
+
+    for suffix, schedule_name in (
+        ("collect_15m", "collect_mtf_15m_after_close"),
+        ("collect_1h", "collect_mtf_1h_after_close"),
+    ):
+        task_name = f"app.tasks.collect_mtf_ohlcv.{suffix}"
+        assert TASK_ROUTES[task_name]["queue"] == "research_ohlcv"
+        assert celery_app.conf.beat_schedule[schedule_name]["options"]["queue"] == "research_ohlcv"
+
+
 def test_discrete_semantics_are_fitted_without_reading_test_data():
     policy = {
         "candidate_quantiles": [0.5],
