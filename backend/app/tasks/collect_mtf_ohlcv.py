@@ -15,6 +15,13 @@ _TF_SECONDS = {"15m": 900, "1h": 3600}
 _CAPTURE_CONTRACT_VERSION = "spot_mtf_closed_ohlcv_v2"
 
 
+def collection_fetch_limit(indicator_config: dict, timeframe: str) -> int:
+    """Include headroom for the exchange's current, still-open candle."""
+    from .compute_mtf_indicators import required_warmup_candles
+
+    return required_warmup_candles(indicator_config, timeframe) + 1
+
+
 async def collect_timeframe(timeframe: str) -> dict:
     if timeframe not in _TF_SECONDS:
         raise ValueError("MTF_TIMEFRAME_UNSUPPORTED")
@@ -45,7 +52,8 @@ async def collect_timeframe(timeframe: str) -> dict:
             }
         symbols = sorted(await get_active_pool_symbols(db, "spot"))
         indicator_config, _ = await _load_governed_indicator_config(db)
-        fetch_limit = required_warmup_candles(indicator_config, timeframe)
+        required_warmup = required_warmup_candles(indicator_config, timeframe)
+        fetch_limit = collection_fetch_limit(indicator_config, timeframe)
         if db.in_transaction():
             await db.rollback()
 
@@ -139,7 +147,8 @@ async def collect_timeframe(timeframe: str) -> dict:
         "closed_rows_submitted": persisted,
         "open_candles_rejected": True,
         "capture_contract_version": _CAPTURE_CONTRACT_VERSION,
-        "required_warmup_candles": fetch_limit,
+        "required_warmup_candles": required_warmup,
+        "fetch_limit": fetch_limit,
     }
     logger.info("[MTF-COLLECT] %s", result)
     return result

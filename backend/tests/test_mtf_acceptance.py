@@ -19,6 +19,7 @@ from app.services.mtf_walk_forward import (
 )
 from app.services.mtf_calibration_service import _l2_temporal_eligibility
 from app.tasks.compute_mtf_indicators import required_warmup_candles
+from app.tasks.collect_mtf_ohlcv import collection_fetch_limit
 
 
 NOW = datetime(2026, 9, 5, 12, tzinfo=timezone.utc)
@@ -180,6 +181,13 @@ def test_mtf_warmup_is_derived_from_active_periods_and_timeframe():
     assert required_warmup_candles(config, "15m") == 201
     config["ema"]["periods"] = [21, 50]
     assert required_warmup_candles(config, "15m") == 96
+
+
+def test_mtf_collection_reserves_headroom_for_open_candle():
+    config = {"ema": {"enabled": True, "periods": [21, 50, 200]}}
+
+    assert required_warmup_candles(config, "15m") == 201
+    assert collection_fetch_limit(config, "15m") == 202
 
 
 def test_mtf_warmup_rejects_missing_enabled_period_config():
