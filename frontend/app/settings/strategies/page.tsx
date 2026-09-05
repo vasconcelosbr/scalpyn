@@ -109,7 +109,14 @@ function FieldEditor({ path, value, onChange }: { path: string; value: JsonValue
   }
   if (Array.isArray(value) || path === "ml_shadow.shadow_measurement_timeframe_priority") {
     const arrayValue = Array.isArray(value) ? value : [];
-    return <label className="block space-y-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4"><span className="text-xs font-medium text-[var(--text-secondary)]">{label}</span><input className="input w-full font-mono text-sm" type="text" value={arrayValue.join(", ")} placeholder="1m, 5m" onChange={(event) => onChange(path, event.target.value.split(",").map((item) => item.trim()).filter(Boolean))} />{copy?.help && <span className="block text-[11px] leading-relaxed text-[var(--text-tertiary)]">{copy.help}</span>}</label>;
+    const placeholder = path.endsWith("profile_allowlist")
+      ? "UUID do profile, UUID do profile"
+      : path.endsWith("allowed_source_providers")
+        ? "gate_ohlcv_canonical, outro_provedor"
+        : path === "ml_shadow.shadow_measurement_timeframe_priority"
+          ? "1m, 5m"
+          : "";
+    return <label className="block space-y-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4"><span className="text-xs font-medium text-[var(--text-secondary)]">{label}</span><input className="input w-full font-mono text-sm" type="text" value={arrayValue.join(", ")} placeholder={placeholder} onChange={(event) => onChange(path, event.target.value.split(",").map((item) => item.trim()).filter(Boolean))} />{copy?.help && <span className="block text-[11px] leading-relaxed text-[var(--text-tertiary)]">{copy.help}</span>}</label>;
   }
   const nullableNumber = path === "ml_shadow.shadow_entry_max_lag_seconds" || path === "ml_shadow.canary_minimum_outcomes";
   return <label className="block space-y-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4"><span className="text-xs font-medium text-[var(--text-secondary)]">{label}</span>{options ? <select disabled={readOnly} className="input w-full text-sm disabled:cursor-not-allowed disabled:opacity-60" value={String(value)} onChange={(event) => onChange(path, event.target.value)}>{options.map((option) => <option key={option} value={option}>{option}</option>)}</select> : <input readOnly={readOnly} className="input w-full font-mono text-sm read-only:cursor-not-allowed read-only:opacity-60" type={typeof value === "number" || nullableNumber ? "number" : "text"} step={typeof value === "number" || nullableNumber ? "any" : undefined} value={String(value ?? "")} onChange={(event) => onChange(path, nullableNumber ? (event.target.value === "" ? null : Number(event.target.value)) : typeof value === "number" ? Number(event.target.value) : event.target.value)} />}{copy?.help && <span className="block text-[11px] leading-relaxed text-[var(--text-tertiary)]">{copy.help}</span>}</label>;
