@@ -1,0 +1,31 @@
+{
+  "profiles": [{
+    "name": "MTF Spot L1 1h - CONFIG_REQUIRED",
+    "description": "DRAFT sem thresholds; aguarda política estatística aprovada e calibração point-in-time.",
+    "profile_kind": "MTF_LAYER",
+    "layer": "L1",
+    "activation_mode": "DRAFT",
+    "default_timeframe": "1h",
+    "source_identity": {
+      "allowed_source_providers": ["gate.io"],
+      "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+      "allowed_capture_contract_versions": ["spot_mtf_closed_ohlcv_v2"],
+      "candle_policy": "CLOSED_ONLY",
+      "validity_margin_seconds": null
+    },
+    "calibration": {
+      "status": "CONFIG_REQUIRED", "method": "WALK_FORWARD", "run_id": null,
+      "policy_hash": null, "dataset_hash": null, "min_samples": null,
+      "thresholds_emitted": false,
+      "reason": "APPROVED_MTF_CALIBRATION_POLICY_AND_ELIGIBLE_POINT_IN_TIME_DATASET_REQUIRED"
+    },
+    "required_indicators_by_group": {"structural": ["adx", "atr_pct", "di_minus", "di_plus", "ema21", "ema21_slope_pct", "ema50", "ema50_slope_pct", "higher_highs_5", "higher_lows_5"]},
+    "mtf_semantics": {"adx_strong_min": null, "atr_pct_low": null, "atr_pct_high": null},
+    "filters": {"logic": "AND", "conditions": []},
+    "signals": {"logic": "AND", "conditions": []},
+    "block_rules": {"blocks": []},
+    "entry_triggers": {"logic": "AND", "conditions": []},
+    "scoring": {"enabled": false, "weights": {}, "rules": [], "selected_rule_ids": [], "thresholds": {}}
+  }],
+  "allow_duplicate_names": false
+}

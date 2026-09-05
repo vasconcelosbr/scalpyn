@@ -242,6 +242,11 @@ def test_watchlist_reads_do_not_sort_the_entire_indicators_table():
         assert "fetch_merged_indicators" in source
 
 
+def test_mtf_collector_uses_the_production_ohlcv_identity():
+    source = (BACKEND / "app/tasks/collect_mtf_ohlcv.py").read_text(encoding="utf-8")
+    assert "ON CONFLICT (time, symbol, exchange, timeframe)" in source
+
+
 def test_discrete_semantics_are_fitted_without_reading_test_data():
     policy = {
         "candidate_quantiles": [0.5],

@@ -111,7 +111,7 @@ async def collect_timeframe(timeframe: str) -> dict:
                     (:time, :symbol, :exchange, :timeframe, :market_type,
                      :open, :high, :low, :close, :volume, :quote_volume,
                      TRUE, clock_timestamp(), :capture_contract_version)
-                ON CONFLICT (time, symbol, timeframe) DO UPDATE SET
+                ON CONFLICT (time, symbol, exchange, timeframe) DO UPDATE SET
                     exchange = EXCLUDED.exchange,
                     market_type = EXCLUDED.market_type,
                     open = EXCLUDED.open,

@@ -1,0 +1,52 @@
+{
+  "status": "CONFIG_REQUIRED",
+  "proposal_version": "mtf_spot_policy_proposal_v1",
+  "requires_human_approval": true,
+  "scope": {"market_type": "spot", "timeframes": {"L1": "1h", "L2": "15m", "L3": "5m"}},
+  "evidence_snapshot": {
+    "captured_at": "2026-09-05T16:27:09-03:00",
+    "source": "backend/scripts/audit_mtf_acceptance_prod.py",
+    "governed_mtf_snapshots_v2": 0,
+    "active_mtf_calibration_policies": 0,
+    "mtf_calibration_runs": 0,
+    "completed_shadow_rows_with_governed_cost": 290483,
+    "note": "The legacy shadow population can support a baseline, but it does not prove point-in-time L1/L2 availability under spot_mtf_closed_ohlcv_v2."
+  },
+  "policy": {
+    "policy_version": null,
+    "approval_status": "PENDING_HUMAN_APPROVAL",
+    "approved_at": null,
+    "approved_by": null,
+    "sampling_unit": "SHADOW_DECISION",
+    "overlap_policy": "PURGE_TRAIN_OUTCOMES_AT_TEST_BOUNDARY",
+    "capital_policy": {"mode": "EQUAL_NOTIONAL_RETURN"},
+    "execution_policy": {"mode": "PERSISTED_POINT_IN_TIME", "return_field": "pnl_pct", "cost_field": "fee_roundtrip_pct_applied"},
+    "return_field": "pnl_pct",
+    "cost_field": "fee_roundtrip_pct_applied",
+    "min_samples": null,
+    "fold_count": null,
+    "train_window_rows": null,
+    "test_window_rows": null,
+    "embargo_rows": null,
+    "validation_holdout_rows": null,
+    "min_test_samples_per_fold": null,
+    "candidate_quantiles": null,
+    "candidate_dimensions": null,
+    "max_candidates": null,
+    "confidence_level": null,
+    "observation_min_samples": null,
+    "observation_min_hours": null,
+    "l2_history_candles": null,
+    "max_dataset_rows": null,
+    "dataset_query_timeout_ms": null
+  },
+  "approval_prerequisites": [
+    "Accumulate point-in-time L1/L2 snapshots under capture contract spot_mtf_closed_ohlcv_v2.",
+    "Measure the new producer latency distribution before setting validity margins.",
+    "Run a power and stability pilot on the eligible population to derive sample, fold, embargo, holdout and confidence parameters.",
+    "Review the candidate dimensions and computational budget against the bounded dataset query plan.",
+    "Approve the completed policy explicitly through the authenticated server endpoint."
+  ],
+  "thresholds_emitted": false,
+  "shadow_authorized": false
+}
