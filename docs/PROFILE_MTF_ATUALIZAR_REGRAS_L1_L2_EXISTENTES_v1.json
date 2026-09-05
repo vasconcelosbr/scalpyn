@@ -1,0 +1,1301 @@
+{
+  "update_indicators_only": true,
+  "allow_duplicate_names": false,
+  "_documentation": {
+    "purpose": "Atualizar atomicamente as regras dos profiles existentes L1 e L2, sem criar novos profiles.",
+    "source_template": "PROFILE_MTF_L1_1h_L2_15m_TENDENCIA_IMPULSO_v1.json",
+    "import_endpoint": "POST /api/profiles/bulk-import",
+    "update_scope": [
+      "filters",
+      "signals",
+      "entry_triggers",
+      "block_rules"
+    ],
+    "preserved_fields": [
+      "profile_id",
+      "name",
+      "profile_type",
+      "profile_role",
+      "default_timeframe",
+      "scoring",
+      "mtf_semantics",
+      "source_identity",
+      "activation state",
+      "watchlist associations",
+      "MTF contract"
+    ],
+    "calibration_warning": "As regras e thresholds vieram do documento de proposta e não foram aprovados por uma calibração PASSED. Este arquivo carrega regras; não ativa o contrato MTF.",
+    "compare_and_swap": "O upload falha integralmente se qualquer versão ou hash esperado não corresponder ao estado atual."
+  },
+  "profiles": [
+    {
+      "profile_id": "d44cddad-9370-49cf-b9f9-5ddd972704ea",
+      "expected_profile_version_id": "4d491cf1-34e8-4640-990c-5d9fa719ca7b",
+      "expected_profile_config_hash": "1e8bfc7f6f8dcf36001871e92cb8e802c9e476708add712119427ee94932bc99",
+      "name": "L1",
+      "filters": {
+        "logic": "AND",
+        "conditions": [
+          {
+            "field": "adx",
+            "operator": ">=",
+            "value": 20,
+            "period": 14,
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "1h",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 3660,
+            "required": true,
+            "enabled": true
+          },
+          {
+            "field": "rsi",
+            "operator": "between",
+            "min": 40,
+            "max": 72,
+            "period": 14,
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "1h",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 3660,
+            "required": true,
+            "enabled": true
+          },
+          {
+            "field": "atr_pct",
+            "operator": "between",
+            "min": 0.2,
+            "max": 6,
+            "period": 14,
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "1h",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 3660,
+            "required": true,
+            "enabled": true
+          },
+          {
+            "field": "ema21",
+            "type": "comparison",
+            "left": "ema21",
+            "right": "ema50",
+            "operator": ">",
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "1h",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 3660,
+            "required": true,
+            "enabled": true,
+            "resolved_operands": {
+              "left": {
+                "indicator": "ema21",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "1h",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 3660,
+                "period": 21
+              },
+              "right": {
+                "indicator": "ema50",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "1h",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 3660,
+                "period": 50
+              }
+            }
+          },
+          {
+            "field": "di_plus",
+            "type": "comparison",
+            "left": "di_plus",
+            "right": "di_minus",
+            "operator": ">",
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "1h",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 3660,
+            "required": true,
+            "enabled": true,
+            "resolved_operands": {
+              "left": {
+                "indicator": "di_plus",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "1h",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 3660,
+                "period": 14
+              },
+              "right": {
+                "indicator": "di_minus",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "1h",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 3660,
+                "period": 14
+              }
+            }
+          },
+          {
+            "field": "price",
+            "type": "comparison",
+            "left": "price",
+            "right": "ema50",
+            "operator": ">",
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "1h",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 3660,
+            "required": true,
+            "enabled": true,
+            "resolved_operands": {
+              "left": {
+                "indicator": "price",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "1h",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 3660
+              },
+              "right": {
+                "indicator": "ema50",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "1h",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 3660,
+                "period": 50
+              }
+            }
+          }
+        ]
+      },
+      "signals": {
+        "logic": "AND",
+        "conditions": [
+          {
+            "field": "ema21",
+            "type": "comparison",
+            "left": "ema21",
+            "right": "ema50",
+            "operator": ">",
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "1h",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 3660,
+            "required": true,
+            "enabled": true,
+            "resolved_operands": {
+              "left": {
+                "indicator": "ema21",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "1h",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 3660,
+                "period": 21
+              },
+              "right": {
+                "indicator": "ema50",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "1h",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 3660,
+                "period": 50
+              }
+            }
+          },
+          {
+            "field": "di_plus",
+            "type": "comparison",
+            "left": "di_plus",
+            "right": "di_minus",
+            "operator": ">",
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "1h",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 3660,
+            "required": true,
+            "enabled": true,
+            "resolved_operands": {
+              "left": {
+                "indicator": "di_plus",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "1h",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 3660,
+                "period": 14
+              },
+              "right": {
+                "indicator": "di_minus",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "1h",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 3660,
+                "period": 14
+              }
+            }
+          },
+          {
+            "field": "price",
+            "type": "comparison",
+            "left": "price",
+            "right": "ema50",
+            "operator": ">",
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "1h",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 3660,
+            "required": true,
+            "enabled": true,
+            "resolved_operands": {
+              "left": {
+                "indicator": "price",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "1h",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 3660
+              },
+              "right": {
+                "indicator": "ema50",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "1h",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 3660,
+                "period": 50
+              }
+            }
+          }
+        ]
+      },
+      "entry_triggers": {
+        "logic": "AND",
+        "conditions": [
+          {
+            "field": "ema21",
+            "type": "comparison",
+            "left": "ema21",
+            "right": "ema50",
+            "operator": ">",
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "1h",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 3660,
+            "required": true,
+            "enabled": true,
+            "resolved_operands": {
+              "left": {
+                "indicator": "ema21",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "1h",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 3660,
+                "period": 21
+              },
+              "right": {
+                "indicator": "ema50",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "1h",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 3660,
+                "period": 50
+              }
+            }
+          },
+          {
+            "field": "di_plus",
+            "type": "comparison",
+            "left": "di_plus",
+            "right": "di_minus",
+            "operator": ">",
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "1h",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 3660,
+            "required": true,
+            "enabled": true,
+            "resolved_operands": {
+              "left": {
+                "indicator": "di_plus",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "1h",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 3660,
+                "period": 14
+              },
+              "right": {
+                "indicator": "di_minus",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "1h",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 3660,
+                "period": 14
+              }
+            }
+          },
+          {
+            "field": "price",
+            "type": "comparison",
+            "left": "price",
+            "right": "ema50",
+            "operator": ">",
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "1h",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 3660,
+            "required": true,
+            "enabled": true,
+            "resolved_operands": {
+              "left": {
+                "indicator": "price",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "1h",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 3660
+              },
+              "right": {
+                "indicator": "ema50",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "1h",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 3660,
+                "period": 50
+              }
+            }
+          },
+          {
+            "operator": ">=",
+            "value": 20,
+            "period": 14,
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "1h",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 3660,
+            "required": true,
+            "enabled": true,
+            "indicator": "adx",
+            "type": "threshold"
+          }
+        ]
+      },
+      "block_rules": {
+        "blocks": [
+          {
+            "name": "L1_DIRECAO_NAO_COMPRADORA",
+            "enabled": true,
+            "logic": "OR",
+            "reason": "EMAs ou DMI sem direção compradora; igualdade não autoriza.",
+            "timeframe": "1h",
+            "conditions": [
+              {
+                "field": "ema21",
+                "type": "comparison",
+                "left": "ema21",
+                "right": "ema50",
+                "operator": "<=",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "1h",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 3660,
+                "required": true,
+                "enabled": true,
+                "resolved_operands": {
+                  "left": {
+                    "indicator": "ema21",
+                    "source": "ohlcv",
+                    "source_provider": "gate.io",
+                    "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                    "timeframe": "1h",
+                    "candle_policy": "CLOSED_ONLY",
+                    "max_age_seconds": 3660,
+                    "period": 21
+                  },
+                  "right": {
+                    "indicator": "ema50",
+                    "source": "ohlcv",
+                    "source_provider": "gate.io",
+                    "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                    "timeframe": "1h",
+                    "candle_policy": "CLOSED_ONLY",
+                    "max_age_seconds": 3660,
+                    "period": 50
+                  }
+                }
+              },
+              {
+                "field": "di_plus",
+                "type": "comparison",
+                "left": "di_plus",
+                "right": "di_minus",
+                "operator": "<=",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "1h",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 3660,
+                "required": true,
+                "enabled": true,
+                "resolved_operands": {
+                  "left": {
+                    "indicator": "di_plus",
+                    "source": "ohlcv",
+                    "source_provider": "gate.io",
+                    "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                    "timeframe": "1h",
+                    "candle_policy": "CLOSED_ONLY",
+                    "max_age_seconds": 3660,
+                    "period": 14
+                  },
+                  "right": {
+                    "indicator": "di_minus",
+                    "source": "ohlcv",
+                    "source_provider": "gate.io",
+                    "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                    "timeframe": "1h",
+                    "candle_policy": "CLOSED_ONLY",
+                    "max_age_seconds": 3660,
+                    "period": 14
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "name": "L1_EXCESSO_DE_VOLATILIDADE_OU_MOMENTUM",
+            "enabled": true,
+            "logic": "OR",
+            "reason": "Volatilidade ou RSI acima do limite proposto para o contexto de compra.",
+            "timeframe": "1h",
+            "conditions": [
+              {
+                "operator": ">",
+                "value": 6,
+                "period": 14,
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "1h",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 3660,
+                "required": true,
+                "enabled": true,
+                "indicator": "atr_pct",
+                "type": "threshold"
+              },
+              {
+                "operator": ">",
+                "value": 72,
+                "period": 14,
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "1h",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 3660,
+                "required": true,
+                "enabled": true,
+                "indicator": "rsi",
+                "type": "threshold"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "bc877b0f-3f4d-40bd-95b9-0f920423c469",
+      "expected_profile_version_id": "00eae63b-4b5f-416f-a890-9dde4ced89cb",
+      "expected_profile_config_hash": "fb92ffa5dbe61096c803f7d42230943ee08bee3ae517d1f8c30a3666402f9a1f",
+      "name": "L2",
+      "filters": {
+        "logic": "AND",
+        "conditions": [
+          {
+            "field": "rsi",
+            "operator": "between",
+            "min": 45,
+            "max": 70,
+            "period": 14,
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "15m",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 960,
+            "required": true,
+            "enabled": true
+          },
+          {
+            "field": "atr_pct",
+            "operator": "between",
+            "min": 0.1,
+            "max": 3,
+            "period": 14,
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "15m",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 960,
+            "required": true,
+            "enabled": true
+          },
+          {
+            "field": "bb_width",
+            "operator": "between",
+            "min": 0.01,
+            "max": 0.12,
+            "period": 20,
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "15m",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 960,
+            "required": true,
+            "enabled": true
+          },
+          {
+            "field": "ema21",
+            "type": "comparison",
+            "left": "ema21",
+            "right": "ema50",
+            "operator": ">",
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "15m",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 960,
+            "required": true,
+            "enabled": true,
+            "resolved_operands": {
+              "left": {
+                "indicator": "ema21",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960,
+                "period": 21
+              },
+              "right": {
+                "indicator": "ema50",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960,
+                "period": 50
+              }
+            }
+          },
+          {
+            "field": "ema9",
+            "type": "comparison",
+            "left": "ema9",
+            "right": "ema21",
+            "operator": ">",
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "15m",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 960,
+            "required": true,
+            "enabled": true,
+            "resolved_operands": {
+              "left": {
+                "indicator": "ema9",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960,
+                "period": 9
+              },
+              "right": {
+                "indicator": "ema21",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960,
+                "period": 21
+              }
+            }
+          },
+          {
+            "field": "di_plus",
+            "type": "comparison",
+            "left": "di_plus",
+            "right": "di_minus",
+            "operator": ">",
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "15m",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 960,
+            "required": true,
+            "enabled": true,
+            "resolved_operands": {
+              "left": {
+                "indicator": "di_plus",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960,
+                "period": 14
+              },
+              "right": {
+                "indicator": "di_minus",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960,
+                "period": 14
+              }
+            }
+          },
+          {
+            "field": "price",
+            "type": "comparison",
+            "left": "price",
+            "right": "ema9",
+            "operator": ">",
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "15m",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 960,
+            "required": true,
+            "enabled": true,
+            "resolved_operands": {
+              "left": {
+                "indicator": "price",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960
+              },
+              "right": {
+                "indicator": "ema9",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960,
+                "period": 9
+              }
+            }
+          },
+          {
+            "field": "macd_histogram",
+            "operator": ">",
+            "value": 0,
+            "period": 12,
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "15m",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 960,
+            "required": true,
+            "enabled": true
+          },
+          {
+            "field": "volume_spike",
+            "operator": ">=",
+            "value": 1,
+            "period": 20,
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "15m",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 960,
+            "required": true,
+            "enabled": true
+          }
+        ]
+      },
+      "signals": {
+        "logic": "AND",
+        "conditions": [
+          {
+            "field": "ema21",
+            "type": "comparison",
+            "left": "ema21",
+            "right": "ema50",
+            "operator": ">",
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "15m",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 960,
+            "required": true,
+            "enabled": true,
+            "resolved_operands": {
+              "left": {
+                "indicator": "ema21",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960,
+                "period": 21
+              },
+              "right": {
+                "indicator": "ema50",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960,
+                "period": 50
+              }
+            }
+          },
+          {
+            "field": "ema9",
+            "type": "comparison",
+            "left": "ema9",
+            "right": "ema21",
+            "operator": ">",
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "15m",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 960,
+            "required": true,
+            "enabled": true,
+            "resolved_operands": {
+              "left": {
+                "indicator": "ema9",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960,
+                "period": 9
+              },
+              "right": {
+                "indicator": "ema21",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960,
+                "period": 21
+              }
+            }
+          },
+          {
+            "field": "di_plus",
+            "type": "comparison",
+            "left": "di_plus",
+            "right": "di_minus",
+            "operator": ">",
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "15m",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 960,
+            "required": true,
+            "enabled": true,
+            "resolved_operands": {
+              "left": {
+                "indicator": "di_plus",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960,
+                "period": 14
+              },
+              "right": {
+                "indicator": "di_minus",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960,
+                "period": 14
+              }
+            }
+          },
+          {
+            "field": "price",
+            "type": "comparison",
+            "left": "price",
+            "right": "ema9",
+            "operator": ">",
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "15m",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 960,
+            "required": true,
+            "enabled": true,
+            "resolved_operands": {
+              "left": {
+                "indicator": "price",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960
+              },
+              "right": {
+                "indicator": "ema9",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960,
+                "period": 9
+              }
+            }
+          },
+          {
+            "field": "macd_histogram",
+            "operator": ">",
+            "value": 0,
+            "period": 12,
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "15m",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 960,
+            "required": true,
+            "enabled": true
+          },
+          {
+            "field": "volume_spike",
+            "operator": ">=",
+            "value": 1,
+            "period": 20,
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "15m",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 960,
+            "required": true,
+            "enabled": true
+          }
+        ]
+      },
+      "entry_triggers": {
+        "logic": "AND",
+        "conditions": [
+          {
+            "field": "ema21",
+            "type": "comparison",
+            "left": "ema21",
+            "right": "ema50",
+            "operator": ">",
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "15m",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 960,
+            "required": true,
+            "enabled": true,
+            "resolved_operands": {
+              "left": {
+                "indicator": "ema21",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960,
+                "period": 21
+              },
+              "right": {
+                "indicator": "ema50",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960,
+                "period": 50
+              }
+            }
+          },
+          {
+            "field": "ema9",
+            "type": "comparison",
+            "left": "ema9",
+            "right": "ema21",
+            "operator": ">",
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "15m",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 960,
+            "required": true,
+            "enabled": true,
+            "resolved_operands": {
+              "left": {
+                "indicator": "ema9",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960,
+                "period": 9
+              },
+              "right": {
+                "indicator": "ema21",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960,
+                "period": 21
+              }
+            }
+          },
+          {
+            "field": "di_plus",
+            "type": "comparison",
+            "left": "di_plus",
+            "right": "di_minus",
+            "operator": ">",
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "15m",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 960,
+            "required": true,
+            "enabled": true,
+            "resolved_operands": {
+              "left": {
+                "indicator": "di_plus",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960,
+                "period": 14
+              },
+              "right": {
+                "indicator": "di_minus",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960,
+                "period": 14
+              }
+            }
+          },
+          {
+            "field": "price",
+            "type": "comparison",
+            "left": "price",
+            "right": "ema9",
+            "operator": ">",
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "15m",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 960,
+            "required": true,
+            "enabled": true,
+            "resolved_operands": {
+              "left": {
+                "indicator": "price",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960
+              },
+              "right": {
+                "indicator": "ema9",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960,
+                "period": 9
+              }
+            }
+          },
+          {
+            "operator": ">",
+            "value": 0,
+            "period": 12,
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "15m",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 960,
+            "required": true,
+            "enabled": true,
+            "indicator": "macd_histogram",
+            "type": "threshold"
+          },
+          {
+            "operator": ">=",
+            "value": 1,
+            "period": 20,
+            "source": "ohlcv",
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "timeframe": "15m",
+            "candle_policy": "CLOSED_ONLY",
+            "max_age_seconds": 960,
+            "required": true,
+            "enabled": true,
+            "indicator": "volume_spike",
+            "type": "threshold"
+          }
+        ]
+      },
+      "block_rules": {
+        "blocks": [
+          {
+            "name": "L2_IMPULSO_INVALIDO",
+            "enabled": true,
+            "logic": "OR",
+            "reason": "Preço perdeu EMA9, alinhamento local não comprador ou momentum não positivo.",
+            "timeframe": "15m",
+            "conditions": [
+              {
+                "field": "price",
+                "type": "comparison",
+                "left": "price",
+                "right": "ema9",
+                "operator": "<=",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960,
+                "required": true,
+                "enabled": true,
+                "resolved_operands": {
+                  "left": {
+                    "indicator": "price",
+                    "source": "ohlcv",
+                    "source_provider": "gate.io",
+                    "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                    "timeframe": "15m",
+                    "candle_policy": "CLOSED_ONLY",
+                    "max_age_seconds": 960
+                  },
+                  "right": {
+                    "indicator": "ema9",
+                    "source": "ohlcv",
+                    "source_provider": "gate.io",
+                    "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                    "timeframe": "15m",
+                    "candle_policy": "CLOSED_ONLY",
+                    "max_age_seconds": 960,
+                    "period": 9
+                  }
+                }
+              },
+              {
+                "field": "ema9",
+                "type": "comparison",
+                "left": "ema9",
+                "right": "ema21",
+                "operator": "<=",
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960,
+                "required": true,
+                "enabled": true,
+                "resolved_operands": {
+                  "left": {
+                    "indicator": "ema9",
+                    "source": "ohlcv",
+                    "source_provider": "gate.io",
+                    "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                    "timeframe": "15m",
+                    "candle_policy": "CLOSED_ONLY",
+                    "max_age_seconds": 960,
+                    "period": 9
+                  },
+                  "right": {
+                    "indicator": "ema21",
+                    "source": "ohlcv",
+                    "source_provider": "gate.io",
+                    "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                    "timeframe": "15m",
+                    "candle_policy": "CLOSED_ONLY",
+                    "max_age_seconds": 960,
+                    "period": 21
+                  }
+                }
+              },
+              {
+                "operator": "<=",
+                "value": 0,
+                "period": 12,
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960,
+                "required": true,
+                "enabled": true,
+                "indicator": "macd_histogram",
+                "type": "threshold"
+              }
+            ]
+          },
+          {
+            "name": "L2_EXCESSO_DE_VOLATILIDADE_OU_RSI",
+            "enabled": true,
+            "logic": "OR",
+            "reason": "Aguardar normalização do RSI ou da volatilidade antes do gatilho L3.",
+            "timeframe": "15m",
+            "conditions": [
+              {
+                "operator": ">",
+                "value": 70,
+                "period": 14,
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960,
+                "required": true,
+                "enabled": true,
+                "indicator": "rsi",
+                "type": "threshold"
+              },
+              {
+                "operator": ">",
+                "value": 3,
+                "period": 14,
+                "source": "ohlcv",
+                "source_provider": "gate.io",
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "timeframe": "15m",
+                "candle_policy": "CLOSED_ONLY",
+                "max_age_seconds": 960,
+                "required": true,
+                "enabled": true,
+                "indicator": "atr_pct",
+                "type": "threshold"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
