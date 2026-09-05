@@ -46,6 +46,7 @@ async def ensure_current_profile_version(
     profile_id: UUID,
     config: dict,
     is_shadow_only: bool,
+    idempotency_namespace: str = "baseline-v2",
 ) -> tuple[UUID, UUID, bool]:
     """Create/reuse the exact current profile snapshot without backfilling history.
 
@@ -78,7 +79,7 @@ async def ensure_current_profile_version(
     })).scalar_one()
 
     status = "SHADOW" if is_shadow_only else "CHAMPION"
-    idempotency_key = f"baseline-v2:{profile_id}:{profile_hash}"
+    idempotency_key = f"{idempotency_namespace}:{profile_id}:{profile_hash}"
     existing = (await db.execute(text("""
         SELECT id, config, config_hash
           FROM profile_versions

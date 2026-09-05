@@ -112,6 +112,15 @@ class L2DecisionContextV2(L2DecisionContextV1):
     state_hash: str = Field(min_length=64, max_length=64)
 
 
+class L2DecisionContextV3(L2DecisionContextV2):
+    contract_version: Literal["l2_decision_context_v3"] = "l2_decision_context_v3"
+    adx: float
+    volume_relative: float
+    bb_width: float
+    volume_state: Literal["EXPANDED", "NORMAL"]
+    volatility_state: Literal["COMPRESSION", "EXPANSION", "NORMAL"]
+
+
 class MultilayerDecisionContextV2(BaseModel):
     contract_version: Literal["multilayer_decision_context_v2"] = (
         "multilayer_decision_context_v2"

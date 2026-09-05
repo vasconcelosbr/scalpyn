@@ -13,7 +13,7 @@ from sqlalchemy import text
 from ..schemas.layer_context import (
     CandleIdentity,
     L1DecisionContextV3,
-    L2DecisionContextV2,
+    L2DecisionContextV3,
     LayerVerdictRecord,
     MultilayerDecisionContextV3,
     ProfileIdentity,
@@ -97,12 +97,18 @@ def _validate_indicator_identity(
         str(item) for item in policy.get("allowed_capture_contract_versions") or []
     }
     policy_id = str(policy.get("provider_policy_id") or "")
+    expected_group = str(policy.get("scheduler_group") or "")
+    expected_config_profile_id = str(policy.get("indicator_config_profile_id") or "")
+    expected_config_hash = str(policy.get("indicator_config_hash") or "")
+    allowed_producer_versions = {
+        str(item) for item in policy.get("allowed_producer_versions") or []
+    }
     candidates_by_name = {
         str(candidate.get("indicator")): candidate
         for candidate in merged.candidates
         if candidate.get("timeframe") == timeframe
         and candidate.get("market_type") == "spot"
-        and candidate.get("group") == "structural"
+        and candidate.get("group") == expected_group
     }
     missing = sorted(name for name in required if name not in candidates_by_name)
     if missing:
@@ -123,6 +129,19 @@ def _validate_indicator_identity(
         raise ValueError("SOURCE_PROVIDER_REJECTED")
     if any(str(candidate.get("provider_policy_id")) != policy_id for candidate in selected):
         raise ValueError("PROVIDER_POLICY_REJECTED")
+    if any(str(candidate.get("config_hash") or "") != expected_config_hash for candidate in selected):
+        raise ValueError("INDICATOR_CONFIG_HASH_REJECTED")
+    if any(
+        str((candidate.get("envelope") or {}).get("config_profile_id") or "")
+        != expected_config_profile_id
+        for candidate in selected
+    ):
+        raise ValueError("INDICATOR_CONFIG_PROFILE_REJECTED")
+    if any(
+        str(candidate.get("producer_version") or "") not in allowed_producer_versions
+        for candidate in selected
+    ):
+        raise ValueError("INDICATOR_PRODUCER_VERSION_REJECTED")
     if not allowed_capture or any(
         str((candidate.get("envelope") or {}).get("capture_contract_version"))
         not in allowed_capture
@@ -259,7 +278,9 @@ def advance_l2_setup_state(
     required = (
         "max_extension_atr", "pullback_max_distance_atr",
         "breakout_min_distance_atr", "retest_tolerance_atr",
-        "invalidation_atr", "setup_valid_candles",
+        "invalidation_atr", "setup_valid_candles", "adx_impulse_min",
+        "volume_relative_min", "bb_width_compression_max",
+        "bb_width_expansion_min",
     )
     missing = [key for key in required if semantics.get(key) is None]
     if missing:
@@ -310,6 +331,14 @@ def advance_l2_setup_state(
     if atr <= 0:
         raise ValueError("INDICATOR_VALUE_INVALID:atr")
     extension = abs(price - ema) / atr
+    adx = float(values["adx"])
+    volume_relative = float(values["volume_spike"])
+    bb_width = float(values["bb_width"])
+    impulse_ok = (
+        adx >= float(semantics["adx_impulse_min"])
+        and volume_relative >= float(semantics["volume_relative_min"])
+    )
+    expanding = bb_width >= float(semantics["bb_width_expansion_min"])
     direction = _direction(values)
     previous_payload = dict((previous or {}).get("state_payload") or {})
     remaining = int(previous_payload.get("remaining_candles") or 0)
@@ -333,7 +362,10 @@ def advance_l2_setup_state(
         state_after = "INVALIDATED"
     elif before == "PULLBACK_SEEN" and remaining >= 0:
         anchor = float(previous_payload["anchor"])
-        if price >= anchor and bool(values.get("vwap_reclaim_bool")) and direction != "DOWN":
+        if (
+            price >= anchor and bool(values.get("vwap_reclaim_bool"))
+            and direction != "DOWN" and impulse_ok
+        ):
             state_after = "PULLBACK_RECLAIM"
         else:
             state_after = "PULLBACK_SEEN" if remaining > 0 else "NONE"
@@ -358,7 +390,7 @@ def advance_l2_setup_state(
         })
     elif (
         price >= upper + float(semantics["breakout_min_distance_atr"]) * atr
-        and direction == "UP"
+        and direction == "UP" and impulse_ok and expanding
     ):
         state_after = "BREAKOUT_SEEN"
         payload.update({
@@ -400,7 +432,11 @@ def build_l2_context(
         verdict = "REJECT"
     elif setup not in {"PULLBACK_RECLAIM", "BREAKOUT_RETEST"}:
         verdict = "INSUFFICIENT_DATA"
-    payload = L2DecisionContextV2(
+    adx = float(values["adx"])
+    volume_relative = float(values["volume_spike"])
+    bb_width = float(values["bb_width"])
+    semantics = profile.get("mtf_semantics") or {}
+    payload = L2DecisionContextV3(
         local_direction=direction,
         setup_state=setup_for_contract,
         extension_atr=extension,
@@ -418,6 +454,18 @@ def build_l2_context(
         state_before=str(state_transition["state_before"]),
         state_after=setup,
         state_hash=str(state_transition["state_hash"]),
+        adx=adx,
+        volume_relative=volume_relative,
+        bb_width=bb_width,
+        volume_state=(
+            "EXPANDED" if volume_relative >= float(semantics["volume_relative_min"])
+            else "NORMAL"
+        ),
+        volatility_state=(
+            "COMPRESSION" if bb_width <= float(semantics["bb_width_compression_max"])
+            else "EXPANSION" if bb_width >= float(semantics["bb_width_expansion_min"])
+            else "NORMAL"
+        ),
     ).model_dump(mode="json")
     return _seal(payload)
 
@@ -724,6 +772,7 @@ async def build_observations_for_assets(db, *, user_id: Any, assets: list[dict[s
                 "price", "atr", "ema21", "ema50", "vwap",
                 "vwap_reclaim_bool", "bb_upper", "bb_lower",
                 "di_plus", "di_minus", "higher_highs_5", "higher_lows_5",
+                "adx", "volume_spike", "bb_width",
             }
             l2_values, l2_candle, l2_expiry = _validate_indicator_identity(
                 l2_rows[symbol], required=l2_required,

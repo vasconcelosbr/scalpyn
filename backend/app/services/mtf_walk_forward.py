@@ -61,7 +61,12 @@ def require_calibration_config(config: Mapping[str, Any]) -> dict[str, Any]:
     dimensions = list(parsed["candidate_dimensions"] or [])
     if not dimensions:
         raise MTFCalibrationConfigRequired("CONFIG_INVALID:candidate_dimensions")
+    search_mode = str(parsed.get("candidate_search_mode") or "CARTESIAN")
+    if search_mode not in {"CARTESIAN", "BOUNDED_COORDINATE"}:
+        raise MTFCalibrationConfigRequired("CONFIG_INVALID:candidate_search_mode")
     option_count = 1
+    quantile_dimension_count = 0
+    discrete_option_count = 1
     for item in dimensions:
         mode = str(item.get("mode") or "quantile")
         applies_to = str(item.get("applies_to") or "BOTH")
@@ -85,8 +90,14 @@ def require_calibration_config(config: Mapping[str, Any]) -> dict[str, Any]:
                     "CONFIG_INVALID:candidate_dimension_values"
                 )
             option_count *= len(values)
+            discrete_option_count *= len(values)
         else:
             option_count *= len(quantiles)
+            quantile_dimension_count += 1
+    if search_mode == "BOUNDED_COORDINATE":
+        option_count = discrete_option_count * (
+            1 + quantile_dimension_count * max(0, len(quantiles) - 1)
+        )
     if option_count > int(parsed["max_candidates"]):
         raise MTFCalibrationConfigRequired("CONFIG_INVALID:candidate_budget_exceeded")
     scope = dict(parsed["scope"] or {})
@@ -104,7 +115,9 @@ def require_calibration_config(config: Mapping[str, Any]) -> dict[str, Any]:
         "L2": {
             "max_extension_atr", "pullback_max_distance_atr",
             "breakout_min_distance_atr", "retest_tolerance_atr",
-            "invalidation_atr", "setup_valid_candles",
+            "invalidation_atr", "setup_valid_candles", "adx_impulse_min",
+            "volume_relative_min", "bb_width_compression_max",
+            "bb_width_expansion_min",
         },
     }
     calibrated_semantics = {
@@ -134,6 +147,10 @@ def require_calibration_config(config: Mapping[str, Any]) -> dict[str, Any]:
             or not source.get("allowed_source_providers")
             or not source.get("provider_policy_id")
             or not source.get("allowed_capture_contract_versions")
+            or source.get("scheduler_group") != "structural"
+            or not source.get("allowed_producer_versions")
+            or not source.get("indicator_config_profile_id")
+            or not source.get("indicator_config_hash")
         ):
             raise MTFCalibrationConfigRequired(
                 f"CONFIG_INVALID:{layer.lower()}_source_identity"
@@ -189,6 +206,7 @@ def require_calibration_config(config: Mapping[str, Any]) -> dict[str, Any]:
         raise MTFCalibrationConfigRequired("CONFIG_INVALID:execution_policy")
     parsed["candidate_quantiles"] = quantiles
     parsed["candidate_dimensions"] = dimensions
+    parsed["candidate_search_mode"] = search_mode
     return parsed
 
 
@@ -302,6 +320,52 @@ def empirical_quantile(values: Sequence[float], quantile: float) -> float:
 
 def candidate_grid(policy: Mapping[str, Any]) -> list[dict[str, Any]]:
     dimensions = list(policy["candidate_dimensions"])
+    if str(policy.get("candidate_search_mode") or "CARTESIAN") == "BOUNDED_COORDINATE":
+        quantile_dimensions = [
+            dict(item) for item in dimensions
+            if str(item.get("mode") or "quantile") != "discrete"
+        ]
+        discrete_dimensions = [
+            dict(item) for item in dimensions
+            if str(item.get("mode") or "quantile") == "discrete"
+        ]
+        quantiles = [float(value) for value in policy["candidate_quantiles"]]
+        base_quantile = quantiles[0]
+        quantile_vectors = [
+            [base_quantile for _ in quantile_dimensions]
+        ]
+        for index in range(len(quantile_dimensions)):
+            for quantile in quantiles[1:]:
+                vector = [base_quantile for _ in quantile_dimensions]
+                vector[index] = quantile
+                quantile_vectors.append(vector)
+        discrete_options = [
+            list(item.get("values") or []) for item in discrete_dimensions
+        ]
+        discrete_combinations = list(product(*discrete_options)) if discrete_options else [()]
+        candidates: list[dict[str, Any]] = []
+        for vector in quantile_vectors:
+            for discrete_values in discrete_combinations:
+                rules = [
+                    {**item, "quantile": vector[index]}
+                    for index, item in enumerate(quantile_dimensions)
+                ] + [
+                    {**item, "value": discrete_values[index]}
+                    for index, item in enumerate(discrete_dimensions)
+                ]
+                identifier = "&".join(
+                    f"{rule['layer']}:{rule.get('feature') or rule['semantic_key']}:"
+                    + (
+                        f"{rule.get('operator') or 'set'}@v{rule['value']}"
+                        if "value" in rule
+                        else f"{rule['operator']}@q{rule['quantile']:.6f}"
+                    )
+                    for rule in rules
+                )
+                candidates.append({"id": identifier, "rules": rules})
+        if len(candidates) > int(policy["max_candidates"]):
+            raise ValueError("CANDIDATE_BUDGET_EXCEEDED")
+        return candidates
     candidates: list[dict[str, Any]] = []
     options = [
         [

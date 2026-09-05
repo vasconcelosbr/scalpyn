@@ -33,6 +33,7 @@ def _l2_values(price=99.5, reclaim=False):
         "bb_upper": 103.0, "bb_lower": 97.0,
         "di_plus": 30.0, "di_minus": 10.0,
         "higher_highs_5": True, "higher_lows_5": True,
+        "adx": 28.0, "volume_spike": 1.5, "bb_width": 0.04,
     }
 
 
@@ -43,6 +44,10 @@ SEMANTICS = {
     "retest_tolerance_atr": 0.3,
     "invalidation_atr": 0.5,
     "setup_valid_candles": 3,
+    "adx_impulse_min": 20.0,
+    "volume_relative_min": 1.2,
+    "bb_width_compression_max": 0.02,
+    "bb_width_expansion_min": 0.03,
 }
 
 
@@ -307,6 +312,49 @@ def test_discrete_semantics_are_fitted_without_reading_test_data():
     candidates = candidate_grid(policy)
     assert len(candidates) == 2
     assert {fit_candidate(item, [])["rules"][0]["threshold"] for item in candidates} == {2, 3}
+
+
+def test_bounded_coordinate_search_honours_candidate_budget_without_cartesian_explosion():
+    policy = {
+        "candidate_search_mode": "BOUNDED_COORDINATE",
+        "candidate_quantiles": [0.35, 0.65],
+        "max_candidates": 8,
+        "candidate_dimensions": [
+            {"layer": "L1", "feature": "L1.adx", "operator": "min"},
+            {"layer": "L2", "feature": "L2.volume_spike", "operator": "min"},
+            {
+                "layer": "L2", "mode": "discrete", "applies_to": "SEMANTIC",
+                "semantic_key": "setup_valid_candles", "values": [2, 3],
+            },
+        ],
+    }
+
+    candidates = candidate_grid(policy)
+
+    assert len(candidates) == 6
+    assert all(len(item["rules"]) == 3 for item in candidates)
+
+
+def test_l2_geometry_features_are_derived_not_requested_from_indicator_storage():
+    from app.services.mtf_calibration_service import (
+        _L2_DERIVED_FEATURES,
+        derive_l2_geometry_features,
+    )
+
+    assert _L2_DERIVED_FEATURES == {
+        "extension_atr", "ema21_distance_atr", "breakout_distance_atr",
+        "retest_distance_atr", "invalidation_distance_atr",
+    }
+    assert derive_l2_geometry_features({
+        "price": 102.0, "ema21": 100.0, "bb_upper": 101.0,
+        "vwap": 99.0, "atr": 2.0,
+    }) == {
+        "extension_atr": 1.0,
+        "ema21_distance_atr": 1.0,
+        "breakout_distance_atr": 0.5,
+        "retest_distance_atr": 0.5,
+        "invalidation_distance_atr": 1.5,
+    }
 
 
 def test_candidate_l2_eligibility_replays_a_real_two_candle_sequence():

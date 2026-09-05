@@ -269,6 +269,7 @@ async def activate_profile_config(
     previous_config_override: Mapping[str, Any] | None = None,
     shadow_cycle_id: UUID | None = None,
     origin_profile_id: UUID | None = None,
+    version_idempotency_namespace: str = "baseline-v2",
 ) -> dict[str, Any]:
     """Atomically project validated config and activate its immutable version."""
     await db.execute(
@@ -347,6 +348,7 @@ async def activate_profile_config(
             profile_id=profile.id,
             config=validated,
             is_shadow_only=bool(getattr(profile, "is_shadow_only", False)),
+            idempotency_namespace=version_idempotency_namespace,
         )
     new_hash = canonical_profile_config_hash(validated)
     new_section_hashes = section_hashes(validated)
@@ -386,4 +388,102 @@ async def activate_profile_config(
         "profile_config_hash": new_hash,
         "section_hashes": new_section_hashes,
         "version_created": created,
+    }
+
+
+async def restore_profile_config_version(
+    db: AsyncSession,
+    *,
+    profile: Profile,
+    prior_config: Mapping[str, Any],
+    prior_profile_version_id: UUID,
+    expected_current_profile_version_id: UUID,
+    expected_current_profile_config_hash: str,
+    restored_is_shadow_only: bool,
+    changed_by: UUID,
+    change_description: str,
+) -> dict[str, Any]:
+    """Restore an immutable prior version after a governed compare-and-swap."""
+
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:profile_id))"),
+        {"profile_id": str(profile.id)},
+    )
+    if canonical_profile_config_hash(profile.config or {}) != expected_current_profile_config_hash:
+        raise ProfileContractConflict("PROFILE_CONFIG_HASH_CONFLICT: rollback state changed")
+    current = (await db.execute(text("""
+        SELECT id, config_hash
+          FROM profile_versions
+         WHERE id = CAST(:version_id AS UUID)
+           AND profile_id = CAST(:profile_id AS UUID)
+         FOR UPDATE
+    """), {
+        "version_id": str(expected_current_profile_version_id),
+        "profile_id": str(profile.id),
+    })).mappings().one_or_none()
+    if current is None or current["config_hash"] != expected_current_profile_config_hash:
+        raise ProfileContractConflict("PROFILE_VERSION_CONFLICT: rollback state changed")
+
+    prior = (await db.execute(text("""
+        SELECT id, config, config_hash
+          FROM profile_versions
+         WHERE id = CAST(:version_id AS UUID)
+           AND profile_id = CAST(:profile_id AS UUID)
+         FOR UPDATE
+    """), {
+        "version_id": str(prior_profile_version_id),
+        "profile_id": str(profile.id),
+    })).mappings().one_or_none()
+    prior_payload = deepcopy(dict(prior_config or {}))
+    prior_hash = canonical_profile_config_hash(prior_payload)
+    if (
+        prior is None
+        or prior["config_hash"] != prior_hash
+        or canonical_profile_config_hash(prior["config"] or {}) != prior_hash
+    ):
+        raise ProfileContractConflict("PROFILE_PRIOR_VERSION_INVALID")
+
+    restored_status = "SHADOW" if restored_is_shadow_only else "CHAMPION"
+    await db.execute(text("""
+        UPDATE profile_versions
+           SET status = 'ARCHIVED', is_active = false, deactivated_at = now()
+         WHERE profile_id = CAST(:profile_id AS UUID)
+           AND (id = CAST(:current_id AS UUID) OR status = :restored_status)
+           AND id <> CAST(:prior_id AS UUID)
+    """), {
+        "profile_id": str(profile.id),
+        "current_id": str(expected_current_profile_version_id),
+        "restored_status": restored_status,
+        "prior_id": str(prior_profile_version_id),
+    })
+    await db.execute(text("""
+        UPDATE profile_versions
+           SET status = :restored_status, is_active = :is_active,
+               activated_at = COALESCE(activated_at, now()), deactivated_at = NULL
+         WHERE id = CAST(:prior_id AS UUID)
+    """), {
+        "restored_status": restored_status,
+        "is_active": not restored_is_shadow_only,
+        "prior_id": str(prior_profile_version_id),
+    })
+    previous_config = deepcopy(dict(profile.config or {}))
+    previous_timestamp = getattr(profile, "profile_version", None)
+    profile.config = prior_payload
+    profile.profile_version = datetime.now(timezone.utc)
+    db.add(ProfileAuditLog(
+        user_id=profile.user_id,
+        profile_id=profile.id,
+        changed_by=changed_by,
+        change_source="mtf_governed_rollback",
+        change_description=change_description,
+        previous_config=previous_config,
+        new_config=deepcopy(prior_payload),
+        previous_profile_version=previous_timestamp,
+        new_profile_version=profile.profile_version,
+    ))
+    return {
+        "profile_id": str(profile.id),
+        "profile_version_id": str(prior_profile_version_id),
+        "profile_config_hash": prior_hash,
+        "status": restored_status,
     }

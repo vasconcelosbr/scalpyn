@@ -187,6 +187,14 @@ class StrategySettingsService:
             policy = policies.get(source_kind) or {}
             allowed = {str(value) for value in policy.get("allowed_source_providers") or []}
             expected_policy = str(policy.get("provider_policy_id") or "")
+            expected_group = str(policy.get("scheduler_group") or "")
+            expected_config_profile_id = str(
+                policy.get("indicator_config_profile_id") or ""
+            )
+            expected_config_hash = str(policy.get("indicator_config_hash") or "")
+            allowed_producer_versions = {
+                str(value) for value in policy.get("allowed_producer_versions") or []
+            }
             allowed_capture = {
                 str(value) for value in policy.get("allowed_capture_contract_versions") or []
             }
@@ -200,6 +208,7 @@ class StrategySettingsService:
                 envelope.get("timeframe") != timeframe
                 or envelope.get("market_type") != "spot"
                 or envelope.get("scheduler_group") != scheduler_group
+                or (expected_group and expected_group != scheduler_group)
             ):
                 raise StrategySettingsValidationError(
                     f"{timeframe}_{symbol}_{scheduler_group}_TEMPORAL_IDENTITY_INVALID"
@@ -215,6 +224,29 @@ class StrategySettingsService:
             if str(envelope.get("provider_policy_id") or "") != expected_policy:
                 raise StrategySettingsValidationError(
                     f"{timeframe}_{symbol}_{scheduler_group}_PROVIDER_POLICY_REJECTED"
+                )
+            if (
+                expected_config_profile_id
+                and str(envelope.get("config_profile_id") or "")
+                != expected_config_profile_id
+            ):
+                raise StrategySettingsValidationError(
+                    f"{timeframe}_{symbol}_{scheduler_group}_CONFIG_PROFILE_REJECTED"
+                )
+            if (
+                expected_config_hash
+                and str(envelope.get("config_hash") or "") != expected_config_hash
+            ):
+                raise StrategySettingsValidationError(
+                    f"{timeframe}_{symbol}_{scheduler_group}_CONFIG_HASH_REJECTED"
+                )
+            if (
+                allowed_producer_versions
+                and str(envelope.get("producer_version") or "")
+                not in allowed_producer_versions
+            ):
+                raise StrategySettingsValidationError(
+                    f"{timeframe}_{symbol}_{scheduler_group}_PRODUCER_VERSION_REJECTED"
                 )
             value = envelope.get("value")
             try:
@@ -878,6 +910,7 @@ class StrategySettingsService:
         calibration_run_id: UUID,
         l3_source_identity: Dict[str, Any],
         apply: bool = False,
+        commit: bool = True,
     ) -> Dict[str, Any]:
         """Bind immutable calibrated profiles and enable observation only."""
         if set(layer_profile_ids) != {"L1", "L2"}:
@@ -975,7 +1008,8 @@ class StrategySettingsService:
                 else {
                     "price", "atr", "ema21", "ema50", "vwap",
                     "vwap_reclaim_bool", "bb_upper", "bb_lower", "di_plus",
-                    "di_minus", "higher_highs_5", "higher_lows_5",
+                    "di_minus", "higher_highs_5", "higher_lows_5", "adx",
+                    "volume_spike", "bb_width",
                 }
             )
             bindings[layer] = {
@@ -1020,6 +1054,10 @@ class StrategySettingsService:
                 "source_policies": {"ohlcv": {
                     "allowed_source_providers": source.get("allowed_source_providers") or [],
                     "provider_policy_id": source.get("provider_policy_id"),
+                    "scheduler_group": source.get("scheduler_group"),
+                    "allowed_producer_versions": source.get("allowed_producer_versions") or [],
+                    "indicator_config_profile_id": source.get("indicator_config_profile_id"),
+                    "indicator_config_hash": source.get("indicator_config_hash"),
                     "timeframe": expected_tf[layer],
                     "candle_policy": source.get("candle_policy"),
                     "allowed_capture_contract_versions": (
@@ -1038,9 +1076,29 @@ class StrategySettingsService:
                     l3_source_identity.get("allowed_capture_contract_versions") or []
                 ),
             }}
+        l3_profile_ids = [
+            str(row[0])
+            for row in (await db.execute(text("""
+                SELECT DISTINCT p.id
+                  FROM profiles p
+                  JOIN pipeline_watchlists pw ON pw.profile_id = p.id
+                 WHERE p.user_id = CAST(:user_id AS UUID)
+                   AND p.is_active IS TRUE
+                   AND pw.user_id = CAST(:user_id AS UUID)
+                   AND pw.auto_refresh IS TRUE
+                   AND UPPER(pw.level) = 'L3'
+                 ORDER BY p.id
+            """), {"user_id": str(user_id)})).fetchall()
+        ]
+        if not l3_profile_ids:
+            raise StrategySettingsValidationError("MTF_L3_PROFILE_ALLOWLIST_REQUIRED")
         contract["layers"]["L3"].update({
             "observational_enabled": True,
             "default_timeframe": "5m",
+            "profile_id": None,
+            "profile_version_id": None,
+            "profile_config_hash": None,
+            "profile_allowlist": l3_profile_ids,
             "validity_margin_seconds": l3_source_identity.get("validity_margin_seconds"),
             "required_indicators": sorted({
                 str(value) for value in l3_source_identity.get("required_indicators") or []
@@ -1093,8 +1151,13 @@ class StrategySettingsService:
                 "operational_effect=false"
             ),
         ))
-        await db.commit()
-        await config_service.invalidate_cache("spot_engine", user_id, None, strict=True)
+        if commit:
+            await db.commit()
+            await config_service.invalidate_cache(
+                "spot_engine", user_id, None, strict=True
+            )
+        else:
+            await db.flush()
         return {
             "changed": True,
             "applied": True,

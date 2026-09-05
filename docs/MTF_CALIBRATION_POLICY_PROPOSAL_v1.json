@@ -1,0 +1,120 @@
+{
+  "approval_confirmed": false,
+  "policy_version": "mtf_spot_l1_1h_l2_15m_v1",
+  "candidate_search_mode": "BOUNDED_COORDINATE",
+  "min_samples": 5000,
+  "fold_count": 5,
+  "train_window_rows": 2500,
+  "test_window_rows": 400,
+  "embargo_rows": 50,
+  "validation_holdout_rows": 1000,
+  "min_test_samples_per_fold": 100,
+  "candidate_quantiles": [0.35, 0.65],
+  "candidate_dimensions": [
+    {"layer": "L1", "feature": "L1.adx", "operator": "min", "applies_to": "BOTH", "semantic_key": "adx_strong_min"},
+    {"layer": "L1", "feature": "L1.atr_pct", "operator": "min", "applies_to": "BOTH", "semantic_key": "atr_pct_low"},
+    {"layer": "L1", "feature": "L1.atr_pct", "operator": "max", "applies_to": "BOTH", "semantic_key": "atr_pct_high"},
+    {"layer": "L2", "feature": "L2.adx", "operator": "min", "applies_to": "BOTH", "semantic_key": "adx_impulse_min"},
+    {"layer": "L2", "feature": "L2.volume_spike", "operator": "min", "applies_to": "BOTH", "semantic_key": "volume_relative_min"},
+    {"layer": "L2", "feature": "L2.bb_width", "operator": "max", "applies_to": "SEMANTIC", "semantic_key": "bb_width_compression_max"},
+    {"layer": "L2", "feature": "L2.bb_width", "operator": "min", "applies_to": "SEMANTIC", "semantic_key": "bb_width_expansion_min"},
+    {"layer": "L2", "feature": "L2.extension_atr", "operator": "max", "applies_to": "SEMANTIC", "semantic_key": "max_extension_atr"},
+    {"layer": "L2", "feature": "L2.ema21_distance_atr", "operator": "max", "applies_to": "SEMANTIC", "semantic_key": "pullback_max_distance_atr"},
+    {"layer": "L2", "feature": "L2.breakout_distance_atr", "operator": "min", "applies_to": "SEMANTIC", "semantic_key": "breakout_min_distance_atr"},
+    {"layer": "L2", "feature": "L2.retest_distance_atr", "operator": "max", "applies_to": "SEMANTIC", "semantic_key": "retest_tolerance_atr"},
+    {"layer": "L2", "feature": "L2.invalidation_distance_atr", "operator": "max", "applies_to": "SEMANTIC", "semantic_key": "invalidation_atr"},
+    {"layer": "L2", "mode": "discrete", "applies_to": "SEMANTIC", "semantic_key": "setup_valid_candles", "values": [2, 3, 4]}
+  ],
+  "max_candidates": 64,
+  "confidence_level": 0.95,
+  "observation_min_samples": 1000,
+  "observation_min_hours": 168,
+  "cost_field": "fee_roundtrip_pct_applied",
+  "return_field": "pnl_pct",
+  "l2_history_candles": 8,
+  "sampling_unit": "SHADOW_DECISION",
+  "overlap_policy": "PURGE_TRAIN_OUTCOMES_AT_TEST_BOUNDARY",
+  "capital_policy": {"mode": "EQUAL_NOTIONAL_RETURN"},
+  "execution_policy": {
+    "mode": "PERSISTED_POINT_IN_TIME",
+    "return_field": "pnl_pct",
+    "cost_field": "fee_roundtrip_pct_applied"
+  },
+  "max_dataset_rows": 10000,
+  "dataset_query_timeout_ms": 30000,
+  "scope": {
+    "market_type": "spot",
+    "timeframes": {"L1": "1h", "L2": "15m", "L3": "5m"}
+  },
+  "profile_templates": {
+    "L1": {
+      "name": "L1",
+      "default_timeframe": "1h",
+      "funnel_role": "primary_filter",
+      "filters": {"logic": "AND", "conditions": []},
+      "signals": {"logic": "AND", "conditions": []},
+      "entry_triggers": {"logic": "AND", "conditions": []},
+      "block_rules": {"blocks": []},
+      "scoring": {"enabled": false, "rules": [], "selected_rule_ids": []},
+      "mtf_semantics": {"adx_strong_min": null, "atr_pct_low": null, "atr_pct_high": null},
+      "source_identity": {
+        "allowed_source_providers": ["gate.io"],
+        "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+        "scheduler_group": "structural",
+        "allowed_producer_versions": ["mtf_indicator_producer_v1"],
+        "indicator_config_profile_id": "6359a25d-d598-4243-adbc-9e981e48139a",
+        "indicator_config_hash": "6f8e413697fbd48c833e04cf71c2afc255118d04aef20d4fb5a49de0e4528418",
+        "candle_policy": "CLOSED_ONLY",
+        "allowed_capture_contract_versions": ["spot_mtf_closed_ohlcv_v2"],
+        "validity_margin_seconds": 3679
+      }
+    },
+    "L2": {
+      "name": "L2",
+      "default_timeframe": "15m",
+      "funnel_role": "score_engine",
+      "filters": {"logic": "AND", "conditions": []},
+      "signals": {"logic": "AND", "conditions": []},
+      "entry_triggers": {"logic": "AND", "conditions": []},
+      "block_rules": {"blocks": []},
+      "scoring": {"enabled": true, "rules": [], "selected_rule_ids": []},
+      "mtf_semantics": {
+        "adx_impulse_min": null,
+        "volume_relative_min": null,
+        "bb_width_compression_max": null,
+        "bb_width_expansion_min": null,
+        "max_extension_atr": null,
+        "pullback_max_distance_atr": null,
+        "breakout_min_distance_atr": null,
+        "retest_tolerance_atr": null,
+        "invalidation_atr": null,
+        "setup_valid_candles": null
+      },
+      "source_identity": {
+        "allowed_source_providers": ["gate.io"],
+        "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+        "scheduler_group": "structural",
+        "allowed_producer_versions": ["mtf_indicator_producer_v1"],
+        "indicator_config_profile_id": "6359a25d-d598-4243-adbc-9e981e48139a",
+        "indicator_config_hash": "6f8e413697fbd48c833e04cf71c2afc255118d04aef20d4fb5a49de0e4528418",
+        "candle_policy": "CLOSED_ONLY",
+        "allowed_capture_contract_versions": ["spot_mtf_closed_ohlcv_v2"],
+        "validity_margin_seconds": 995
+      }
+    }
+  },
+  "proposal_evidence": {
+    "captured_at": "2026-09-05T18:30:24.457048-03:00",
+    "production_mtf_policy_count": 0,
+    "production_mtf_run_count": 0,
+    "governed_indicator_history": {
+      "15m": {"first_computed_at": "2026-09-05T16:45:05.249021+00:00", "last_computed_at": "2026-09-05T21:15:41.574352+00:00", "governed_snapshots": 390, "symbols": 65},
+      "1h": {"first_computed_at": "2026-09-05T16:48:28.730637+00:00", "last_computed_at": "2026-09-05T21:01:18.842193+00:00", "governed_snapshots": 260, "symbols": 65}
+    },
+    "validity_margin_formula": {
+      "15m": "ceil(1894.611329 - 900) = 995",
+      "1h": "ceil(7278.842193 - 3600) = 3679"
+    },
+    "readiness": "NOT_READY_FOR_CALIBRATION_HISTORY"
+  }
+}

@@ -478,6 +478,10 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
   );
 
   const handleSave = async () => {
+    if (profile?.profile_type === "MTF_LAYER") {
+      alert("Profiles MTF só podem ser alterados pelo fluxo governado de importação e ativação.");
+      return;
+    }
     if (!name.trim()) { alert("Profile name is required"); return; }
     const structuralIssues = validateExecutionSections(config, "config", true);
     if (structuralIssues.length > 0) {
@@ -501,7 +505,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
       name,
       description,
       config,
-      is_active: true,
+      is_active: profile?.is_active ?? true,
       profile_role: profileRole,
       pipeline_order: profileRole
         ? { universe_filter: 0, primary_filter: 1, score_engine: 2, acquisition_queue: 3 }[profileRole] ?? 99

@@ -60,6 +60,7 @@ interface ScoringAssignment {
 }
 
 interface ImportFilePayload {
+  import_mode?: string;
   profiles?: ImportProfile[];
   profile_scoring?: ImportProfile["scoring"];
   scoring?: ImportProfile["scoring"];
@@ -242,6 +243,8 @@ export function JsonImportBuilder({ onClose }: Props) {
   const [sharedScoring, setSharedScoring] = useState<ScoringPayload | undefined>(undefined);
   const [applyToActiveProfiles, setApplyToActiveProfiles] = useState(false);
   const [updateIndicatorsOnly, setUpdateIndicatorsOnly] = useState(false);
+  const [mtfActivationPayload, setMtfActivationPayload] = useState<Record<string, unknown> | null>(null);
+  const [mtfServerPreview, setMtfServerPreview] = useState<Record<string, unknown> | null>(null);
   const [scoringAssignments, setScoringAssignments] = useState<ScoringAssignment[]>([]);
   const [existingProfiles, setExistingProfiles] = useState<ExistingProfileRef[]>([]);
   const { config: globalScoreConfig } = useConfig("score");
@@ -289,10 +292,26 @@ export function JsonImportBuilder({ onClose }: Props) {
   const [summary, setSummary]           = useState({ created: 0, updated: 0, failed: 0 });
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const processJsonText = useCallback((text: string) => {
+  const processJsonText = useCallback(async (text: string) => {
     setRawJson(text);
     try {
-      const parsedPayload = parseProfilesPayload(JSON.parse(text));
+      const rawPayload = JSON.parse(text) as ImportFilePayload & Record<string, unknown>;
+      if (rawPayload.import_mode === "UPDATE_EXISTING_MTF_AND_ACTIVATE_SHADOW") {
+        const preview = await apiPost("/profiles/mtf/activation-preview", rawPayload);
+        setParseError(null);
+        setParsed([]);
+        setSharedScoring(undefined);
+        setApplyToActiveProfiles(false);
+        setUpdateIndicatorsOnly(false);
+        setScoringAssignments([]);
+        setMtfActivationPayload(rawPayload);
+        setMtfServerPreview(preview);
+        setStage("preview");
+        return;
+      }
+      setMtfActivationPayload(null);
+      setMtfServerPreview(null);
+      const parsedPayload = parseProfilesPayload(rawPayload);
       const profiles = parsedPayload.profiles;
       if (
         !parsedPayload.applyToActiveProfiles
@@ -377,6 +396,26 @@ export function JsonImportBuilder({ onClose }: Props) {
 
   // ── Import ──────────────────────────────────────────────────────────────────
   const handleImport = async () => {
+    if (mtfActivationPayload) {
+      setImporting(true);
+      try {
+        const res = await apiPost("/profiles/mtf/activate-existing", mtfActivationPayload);
+        const activated = (res.after?.profiles ?? {}) as Record<string, Record<string, unknown>>;
+        setResults(Object.entries(activated).map(([layer, item]) => ({
+          index: layer === "L1" ? 0 : 1,
+          name: layer,
+          status: "updated" as const,
+          id: String(item.profile_id ?? ""),
+        })));
+        setSummary({ created: 0, updated: Object.keys(activated).length, failed: 0 });
+        setStage("result");
+      } catch (err: unknown) {
+        alert(`Erro na ativação MTF: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        setImporting(false);
+      }
+      return;
+    }
     const eligibleProfiles = profilesEligibleForSubmission(parsed, updateIndicatorsOnly);
     if (!applyToActiveProfiles && parsed.length > 0 && eligibleProfiles.length === 0) {
       alert(updateIndicatorsOnly
@@ -414,7 +453,7 @@ export function JsonImportBuilder({ onClose }: Props) {
   const validCount   = applyToActiveProfiles ? 1 : parsed.filter((p) => p.valid).length;
   const invalidCount = applyToActiveProfiles ? 0 : parsed.length - validCount;
   const selectedScoringCount = sharedScoring?.selected_rule_ids?.length ?? 0;
-  const canImport = applyToActiveProfiles
+  const canImport = mtfActivationPayload ? Boolean(mtfServerPreview) : applyToActiveProfiles
     ? Array.isArray(sharedScoring?.selected_rule_ids)
     : updateIndicatorsOnly
       ? validCount > 0 && invalidCount === 0
@@ -447,7 +486,9 @@ export function JsonImportBuilder({ onClose }: Props) {
           </h1>
           <p className="text-[var(--text-secondary)] mt-0.5 text-[13px]">
             {stage === "upload"  && "Faça upload do arquivo .json com os profiles a criar"}
-            {stage === "preview" && (applyToActiveProfiles
+            {stage === "preview" && (mtfActivationPayload
+              ? "Prévia governada validada pelo servidor — atualização atômica de L1/L2"
+              : applyToActiveProfiles
               ? `${selectedScoringCount} regras de Scoring para aplicar aos profiles ativos`
               : [
                   parsed.length > 0 ? `${parsed.length} profiles encontrados` : null,
@@ -1026,7 +1067,7 @@ export function JsonImportBuilder({ onClose }: Props) {
               </button>
               <button
                 className="btn btn-secondary text-[12px] px-3 py-1.5"
-                onClick={() => { setParsed([]); setScoringAssignments([]); setApplyToActiveProfiles(false); setUpdateIndicatorsOnly(false); setStage("upload"); setParseError(null); }}
+                onClick={() => { setParsed([]); setScoringAssignments([]); setApplyToActiveProfiles(false); setUpdateIndicatorsOnly(false); setMtfActivationPayload(null); setMtfServerPreview(null); setStage("upload"); setParseError(null); }}
               >
                 Trocar arquivo
               </button>
@@ -1037,6 +1078,8 @@ export function JsonImportBuilder({ onClose }: Props) {
               >
                 {importing
                   ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Importando...</>
+                  : mtfActivationPayload
+                  ? <><Upload className="w-4 h-4 mr-2" />Aplicar ativação MTF SHADOW</>
                   : applyToActiveProfiles
                   ? <><Upload className="w-4 h-4 mr-2" />Atualizar profiles ativos</>
                   : <><Upload className="w-4 h-4 mr-2" />
@@ -1054,6 +1097,17 @@ export function JsonImportBuilder({ onClose }: Props) {
           {showJson && (
             <div className="bg-[var(--bg-base)] border border-[var(--border-subtle)] rounded-xl p-4 max-h-64 overflow-auto">
               <pre className="text-[11px] font-mono text-[var(--text-secondary)] whitespace-pre-wrap">{rawJson}</pre>
+            </div>
+          )}
+
+          {mtfServerPreview && (
+            <div className="bg-[var(--bg-secondary)] border border-[var(--color-profit)]/30 rounded-xl p-4">
+              <div className="flex items-center gap-2 text-[13px] font-semibold text-[var(--color-profit)] mb-3">
+                <CheckCircle2 className="w-4 h-4" /> Prévia validada sem gravação
+              </div>
+              <pre className="text-[11px] font-mono text-[var(--text-secondary)] whitespace-pre-wrap max-h-80 overflow-auto">
+                {JSON.stringify(mtfServerPreview, null, 2)}
+              </pre>
             </div>
           )}
 

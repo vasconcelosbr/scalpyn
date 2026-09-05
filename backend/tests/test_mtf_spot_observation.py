@@ -14,6 +14,7 @@ from app.services.mtf_observation_service import (
 from app.services.multilayer_contract import require_shadow_multilayer_config
 from app.services.profile_engine import ProfileEngine
 from app.services.profile_runtime_config import canonical_hash
+from app.tasks.pipeline_scan import _apply_level_filter
 from app.services.strategy_settings_service import (
     StrategySettingsService,
     StrategySettingsValidationError,
@@ -107,6 +108,10 @@ def test_context_chain_hashes_and_wait_semantics():
             "retest_tolerance_atr": 0.3,
             "invalidation_atr": 0.5,
             "setup_valid_candles": 3,
+            "adx_impulse_min": 20.0,
+            "volume_relative_min": 1.2,
+            "bb_width_compression_max": 0.02,
+            "bb_width_expansion_min": 0.03,
         },
     }
     l2_values = {
@@ -122,6 +127,9 @@ def test_context_chain_hashes_and_wait_semantics():
         "di_minus": 10,
         "higher_highs_5": True,
         "higher_lows_5": True,
+        "adx": 28,
+        "volume_spike": 1.5,
+        "bb_width": 0.04,
     }
     first_transition = advance_l2_setup_state(
         values=l2_values,
@@ -234,6 +242,7 @@ def _coverage_payload(*, source_timestamp: datetime, envelope_hash: str | None =
         "source_timestamp": source_timestamp.isoformat(),
         "available_at": NOW.isoformat(),
         "config_hash": "c" * 64,
+        "config_profile_id": "99999999-9999-9999-9999-999999999999",
         "producer_version": "mtf_indicator_producer_v1",
         "capture_contract_version": "gate_ohlcv_canonical_v1",
     }
@@ -247,6 +256,10 @@ def test_activation_coverage_recomputes_hash_and_derives_expiry_from_contract():
         "source_policies": {"ohlcv": {
             "allowed_source_providers": ["gate.io"],
             "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "scheduler_group": "structural",
+            "allowed_producer_versions": ["mtf_indicator_producer_v1"],
+            "indicator_config_profile_id": "99999999-9999-9999-9999-999999999999",
+            "indicator_config_hash": "c" * 64,
             "allowed_capture_contract_versions": ["gate_ohlcv_canonical_v1"],
         }},
         "required_indicators_by_group": {"structural": ["adx"]},
@@ -273,6 +286,90 @@ def test_activation_coverage_recomputes_hash_and_derives_expiry_from_contract():
             layer_config=layer,
             now=NOW,
         )
+
+    wrong_config = _coverage_payload(
+        source_timestamp=NOW - timedelta(minutes=15)
+    )
+    wrong_config["adx"]["config_hash"] = "d" * 64
+    wrong_config["adx"]["envelope_hash"] = canonical_hash({
+        key: value for key, value in wrong_config["adx"].items()
+        if key != "envelope_hash"
+    })
+    with pytest.raises(StrategySettingsValidationError, match="CONFIG_HASH_REJECTED"):
+        StrategySettingsService._assert_coverage_envelope(
+            wrong_config,
+            symbol="BTC_USDT",
+            timeframe="15m",
+            scheduler_group="structural",
+            layer_config=layer,
+            now=NOW,
+        )
+
+
+def test_pipeline_mtf_filter_uses_exact_layer_snapshot_not_flat_values():
+    profile = {
+        "default_timeframe": "1h",
+        "mtf_layer": {
+            "layer": "L1",
+            "activation_mode": "SHADOW",
+            "operational_effect": False,
+        },
+        "filters": {
+            "logic": "AND",
+            "conditions": [
+                {
+                    "field": "rsi",
+                    "operator": ">",
+                    "value": 50,
+                    "timeframe": "1h",
+                }
+            ],
+        },
+    }
+    asset = {
+        "symbol": "BTC_USDT",
+        "indicators": {"rsi": 80},
+        "_indicators_by_tf": {"1h": {"rsi": 20}},
+        "_score": 100,
+    }
+
+    passed, filtered = _apply_level_filter([asset], profile, "L1")
+
+    assert passed == []
+    assert filtered == []
+
+
+def test_pipeline_mtf_filter_fails_closed_when_exact_snapshot_is_missing():
+    profile = {
+        "default_timeframe": "15m",
+        "mtf_layer": {
+            "layer": "L2",
+            "activation_mode": "SHADOW",
+            "operational_effect": False,
+        },
+        "filters": {
+            "logic": "AND",
+            "conditions": [
+                {
+                    "field": "adx",
+                    "operator": ">=",
+                    "value": 20,
+                    "timeframe": "15m",
+                }
+            ],
+        },
+    }
+    asset = {
+        "symbol": "BTC_USDT",
+        "indicators": {"adx": 40},
+        "_indicators_by_tf": {},
+        "_score": 100,
+    }
+
+    passed, filtered = _apply_level_filter([asset], profile, "L2")
+
+    assert passed == []
+    assert filtered == []
 
 
 def test_activation_coverage_rejects_expired_context():

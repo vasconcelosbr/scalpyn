@@ -807,7 +807,13 @@ async def _update_last_scanned(db, watchlist_id: str):
 
 # ─── market data loader ───────────────────────────────────────────────────────
 
-async def _fetch_market_data(db, symbols: list) -> list:
+async def _fetch_market_data(
+    db,
+    symbols: list,
+    *,
+    mtf_timeframe: str | None = None,
+    mtf_layer_config: dict | None = None,
+) -> list:
     """
     Return a list of asset dicts for the given symbols,
     joining market_metadata + indicators + alpha_scores.
@@ -886,8 +892,50 @@ async def _fetch_market_data(db, symbols: list) -> list:
         # Task #215: route through the unified provider so the same merge
         # path + telemetry + quarantine semantics apply across pipeline_scan,
         # evaluate_signals, and execute_buy.
-        from ..services.indicators_provider import get_merged_indicators
+        from ..services.indicators_provider import (
+            get_merged_indicators,
+            get_timeframe_indicators,
+        )
         _merged_by_sym = await get_merged_indicators(db, syms_list)
+        _mtf_values_by_sym: dict[str, dict] = {}
+        _mtf_unavailable_by_sym: dict[str, str] = {}
+        if mtf_timeframe and mtf_layer_config:
+            from ..services.mtf_observation_service import (
+                _validate_indicator_identity,
+            )
+
+            exact = await get_timeframe_indicators(
+                db,
+                syms_list,
+                timeframe=mtf_timeframe,
+                market_type="spot",
+                groups=["structural"],
+            )
+            required = {
+                str(value)
+                for value in (
+                    (mtf_layer_config.get("required_indicators_by_group") or {})
+                    .get("structural")
+                    or []
+                )
+            }
+            identity_now = datetime.now(timezone.utc)
+            for sym in syms_list:
+                merged = exact.get(sym)
+                if merged is None:
+                    _mtf_unavailable_by_sym[sym] = "INDICATOR_INPUTS_UNAVAILABLE"
+                    continue
+                try:
+                    values, _candle, _expires_at = _validate_indicator_identity(
+                        merged,
+                        required=required,
+                        timeframe=mtf_timeframe,
+                        layer_config=mtf_layer_config,
+                        now=identity_now,
+                    )
+                    _mtf_values_by_sym[sym] = values
+                except (TypeError, ValueError) as exc:
+                    _mtf_unavailable_by_sym[sym] = str(exc)
 
         score_rows = (await db.execute(
             text("""
@@ -953,7 +1001,7 @@ async def _fetch_market_data(db, symbols: list) -> list:
         indicators = ind_map.get(sym, {})
         score_row  = score_map.get(sym)
 
-        assets.append(_build_pipeline_asset(
+        asset = _build_pipeline_asset(
             sym,
             name=row.name,
             indicators=indicators,
@@ -968,12 +1016,20 @@ async def _fetch_market_data(db, symbols: list) -> list:
             merged_indicators=_merged_by_sym.get(sym),
             price_source_at=row.price_source_at,
             score_source_at=score_row.score_source_at if score_row else None,
-        ))
+        )
+        if mtf_timeframe:
+            asset["_indicators_by_tf"] = (
+                {mtf_timeframe: _mtf_values_by_sym[sym]}
+                if sym in _mtf_values_by_sym else {}
+            )
+            if sym in _mtf_unavailable_by_sym:
+                asset["_mtf_unavailable_reason"] = _mtf_unavailable_by_sym[sym]
+        assets.append(asset)
 
     for sym in sorted(missing_meta):
         indicators = ind_map.get(sym, {})
         score_row = score_map.get(sym)
-        assets.append(_build_pipeline_asset(
+        asset = _build_pipeline_asset(
             sym,
             name=sym,
             indicators=indicators,
@@ -981,7 +1037,15 @@ async def _fetch_market_data(db, symbols: list) -> list:
             has_market_metadata=False,
             merged_indicators=_merged_by_sym.get(sym),
             score_source_at=score_row.score_source_at if score_row else None,
-        ))
+        )
+        if mtf_timeframe:
+            asset["_indicators_by_tf"] = (
+                {mtf_timeframe: _mtf_values_by_sym[sym]}
+                if sym in _mtf_values_by_sym else {}
+            )
+            if sym in _mtf_unavailable_by_sym:
+                asset["_mtf_unavailable_reason"] = _mtf_unavailable_by_sym[sym]
+        assets.append(asset)
 
     return assets
 
@@ -1108,7 +1172,10 @@ def _apply_level_filter(
     """
     from ..services.profile_engine import ProfileEngine
 
-    engine = ProfileEngine(profile_config)
+    is_mtf_layer = bool((profile_config or {}).get("mtf_layer"))
+    engine = ProfileEngine(
+        profile_config, strict_timeframe_mode=is_mtf_layer
+    )
 
     # Replace the profile's internal ScoreEngine with a thin shim that
     # returns the asset's pre-computed robust score. This guarantees L2 /
@@ -1137,7 +1204,17 @@ def _apply_level_filter(
                 field = cond.get("field", "")
                 if not field:
                     continue
-                val = flat.get(field)
+                if is_mtf_layer:
+                    timeframe = cond.get("timeframe") or (
+                        profile_config or {}
+                    ).get("default_timeframe")
+                    val = (
+                        (asset.get("_indicators_by_tf") or {})
+                        .get(timeframe, {})
+                        .get(field)
+                    )
+                else:
+                    val = flat.get(field)
                 if val is None:
                     null_counts[field] = null_counts.get(field, 0) + 1
                     if field in _DIAG_STRICT_META:
@@ -3590,7 +3667,29 @@ async def _run_pipeline_scan():
                         await _update_last_scanned(db, wl_id)
                         continue
 
-                    assets = await _fetch_market_data(db, symbols)
+                    mtf_timeframe = None
+                    mtf_layer_config = None
+                    mtf_profile_layer = str(
+                        ((profile_config or {}).get("mtf_layer") or {}).get("layer")
+                        or ""
+                    ).upper()
+                    mtf_contract = _current_spot_cfg.scanner.multilayer_contract
+                    if (
+                        mtf_profile_layer in {"L1", "L2"}
+                        and mtf_profile_layer == effective_level
+                        and mtf_contract.enabled
+                        and mtf_contract.activation_mode == "SHADOW"
+                    ):
+                        layer_contract = mtf_contract.layers.get(mtf_profile_layer)
+                        if layer_contract and layer_contract.observational_enabled:
+                            mtf_timeframe = layer_contract.default_timeframe
+                            mtf_layer_config = layer_contract.model_dump(mode="json")
+                    assets = await _fetch_market_data(
+                        db,
+                        symbols,
+                        mtf_timeframe=mtf_timeframe,
+                        mtf_layer_config=mtf_layer_config,
+                    )
                     if assets is None or not assets:
                         logger.warning(
                             "[PipelineScan] %s (%s): no market data available — running staleness check.",

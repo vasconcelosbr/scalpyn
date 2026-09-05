@@ -26,6 +26,10 @@ class L3ProvenanceSourcePolicyConfig(BaseModel):
     snapshot: Optional[bool] = None
     candle_policy: Optional[Literal["CLOSED_ONLY", "CURRENT_ALLOWED"]] = None
     allowed_capture_contract_versions: List[str] = Field(default_factory=list)
+    scheduler_group: Optional[Literal["structural", "microstructure"]] = None
+    allowed_producer_versions: List[str] = Field(default_factory=list)
+    indicator_config_profile_id: Optional[str] = None
+    indicator_config_hash: Optional[str] = None
 
 
 class L3ProvenanceSourcePoliciesConfig(BaseModel):

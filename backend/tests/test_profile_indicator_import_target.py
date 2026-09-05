@@ -401,7 +401,7 @@ def _mtf_profile_payload(*, activation_mode="DRAFT"):
 
 
 @pytest.mark.asyncio
-async def test_mtf_draft_import_is_inactive_shadow_only_and_never_live(monkeypatch):
+async def test_generic_import_cannot_create_mtf_profile(monkeypatch):
     db = SimpleNamespace(
         add=MagicMock(), flush=AsyncMock(), commit=AsyncMock(), rollback=AsyncMock()
     )
@@ -417,13 +417,11 @@ async def test_mtf_draft_import_is_inactive_shadow_only_and_never_live(monkeypat
         user_id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
     )
 
-    assert result["created"] == 1
-    profile = activate.await_args.kwargs["profile"]
-    assert profile.profile_type == "MTF_LAYER"
-    assert profile.is_active is False
-    assert profile.is_shadow_only is True
-    assert profile.live_trading_enabled is False
-    assert profile.config["mtf_layer"]["operational_effect"] is False
+    assert result["created"] == 0
+    assert result["failed"] == 1
+    assert "MTF_PROFILE_CREATE_FORBIDDEN" in result["results"][0]["error"]
+    db.add.assert_not_called()
+    activate.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -444,6 +442,6 @@ async def test_mtf_import_rejects_active_mode_before_write(monkeypatch):
     )
 
     assert result["failed"] == 1
-    assert "MTF_LAYER_ACTIVE_FORBIDDEN" in result["results"][0]["error"]
+    assert "MTF_PROFILE_CREATE_FORBIDDEN" in result["results"][0]["error"]
     db.add.assert_not_called()
     activate.assert_not_awaited()

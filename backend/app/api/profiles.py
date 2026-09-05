@@ -27,6 +27,11 @@ from ..services.profile_execution_contract import (
 )
 from ..services.seed_service import DEFAULT_SCORE
 from ..services.profile_runtime_config import canonical_hash
+from ..services.mtf_profile_activation_service import (
+    MTFActivationConflict,
+    activate_existing_mtf_profiles,
+    rollback_existing_mtf_activation,
+)
 from ..utils.indicator_merge import fetch_merged_indicators
 
 logger = logging.getLogger(__name__)
@@ -155,6 +160,63 @@ async def audit_profile_execution_contracts(
         "mismatches": mismatches,
         "items": items,
     }
+
+
+@router.post("/mtf/activation-preview")
+async def preview_existing_mtf_activation(
+    payload: Dict[str, Any],
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """Validate the governed L1/L2 replacement document without writing."""
+    try:
+        return await activate_existing_mtf_profiles(
+            db, user_id=user_id, payload=payload, apply=False
+        )
+    except MTFActivationConflict as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/mtf/activate-existing")
+async def apply_existing_mtf_activation(
+    payload: Dict[str, Any],
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """Update existing profiles, watchlists and MTF contract in one transaction."""
+    try:
+        return await activate_existing_mtf_profiles(
+            db, user_id=user_id, payload=payload, apply=True
+        )
+    except MTFActivationConflict as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/mtf/activation/{audit_id}/rollback")
+async def rollback_existing_mtf_profiles(
+    audit_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """Restore the exact profiles, bindings and contract captured before activation."""
+    try:
+        return await rollback_existing_mtf_activation(
+            db, user_id=user_id, audit_id=audit_id
+        )
+    except MTFActivationConflict as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/{profile_id}")
@@ -428,6 +490,11 @@ async def bulk_import_profiles(
 
         query = select(Profile).where(Profile.user_id == user_id, Profile.is_active.is_(True))
         profiles = (await db.execute(query)).scalars().all()
+        if any(profile.profile_type == "MTF_LAYER" for profile in profiles):
+            raise HTTPException(
+                status_code=409,
+                detail="MTF_PROFILE_GOVERNED_FLOW_REQUIRED",
+            )
 
         for i, profile in enumerate(profiles):
             try:
@@ -519,6 +586,8 @@ async def bulk_import_profiles(
 
             if not profile:
                 raise ValueError("profile not found")
+            if profile.profile_type == "MTF_LAYER":
+                raise ValueError("MTF_PROFILE_GOVERNED_FLOW_REQUIRED")
 
             previous_config = profile.config or {}
             next_config = {**previous_config, "scoring": merged_scoring}
@@ -584,6 +653,8 @@ async def bulk_import_profiles(
 
             for i, item, parsed_profile_id in prepared:
                 profile = locked[parsed_profile_id]
+                if getattr(profile, "profile_type", "STANDARD") == "MTF_LAYER":
+                    raise ValueError("MTF_PROFILE_GOVERNED_FLOW_REQUIRED")
                 asserted_name = item.get("name")
                 if asserted_name is not None and str(asserted_name) != profile.name:
                     raise ValueError(
@@ -670,67 +741,7 @@ async def bulk_import_profiles(
             layer = str(p.get("layer") or "").upper() or None
             activation_mode = str(p.get("activation_mode") or "ACTIVE").upper()
             if profile_kind == "MTF_LAYER":
-                if layer not in {"L1", "L2"}:
-                    raise ValueError("MTF_LAYER_REQUIRES_LAYER_L1_OR_L2")
-                if activation_mode not in {"DRAFT", "SHADOW"}:
-                    raise ValueError("MTF_LAYER_ACTIVE_FORBIDDEN")
-                expected_tf = "1h" if layer == "L1" else "15m"
-                if config_input["default_timeframe"] != expected_tf:
-                    raise ValueError(f"{layer}_TIMEFRAME_MUST_BE_{expected_tf}")
-                if not config_input["mtf_semantics"]:
-                    raise ValueError("MTF_SEMANTICS_CONFIG_REQUIRED")
-                source_identity = config_input["source_identity"]
-                if (
-                    source_identity.get("candle_policy") != "CLOSED_ONLY"
-                    or not source_identity.get("allowed_source_providers")
-                    or not source_identity.get("provider_policy_id")
-                    or not source_identity.get("allowed_capture_contract_versions")
-                ):
-                    raise ValueError("MTF_SOURCE_IDENTITY_CONFIG_REQUIRED")
-                if (
-                    activation_mode == "SHADOW"
-                    and source_identity.get("validity_margin_seconds") is None
-                ):
-                    raise ValueError("MTF_VALIDITY_MARGIN_CONFIG_REQUIRED")
-                calibration = config_input["calibration"]
-                if activation_mode == "SHADOW" and (
-                    calibration.get("status") != "PASSED"
-                    or calibration.get("method") != "WALK_FORWARD"
-                    or calibration.get("min_samples") is None
-                    or calibration.get("baseline_outperformed") is not True
-                    or calibration.get("worst_fold_drawdown_not_worse") is not True
-                    or not calibration.get("run_id")
-                    or not calibration.get("policy_hash")
-                    or not calibration.get("thresholds_hash")
-                ):
-                    raise ValueError("MTF_SHADOW_CALIBRATION_GATE_FAILED")
-                if activation_mode == "SHADOW":
-                    run = (await db.execute(text("""
-                        SELECT approved_policy_hash, selected_profiles
-                          FROM mtf_calibration_runs
-                         WHERE id = CAST(:run_id AS UUID)
-                           AND user_id = CAST(:user_id AS UUID)
-                           AND status = 'PASSED'
-                         FOR UPDATE
-                    """), {
-                        "run_id": str(calibration["run_id"]),
-                        "user_id": str(user_id),
-                    })).mappings().one_or_none()
-                    selected = dict((run or {}).get("selected_profiles") or {}).get(layer) or {}
-                    if (
-                        run is None
-                        or calibration["policy_hash"] != run["approved_policy_hash"]
-                        or calibration["thresholds_hash"] != canonical_hash(
-                            calibration.get("thresholds") or {}
-                        )
-                        or selected.get("thresholds_hash") != calibration["thresholds_hash"]
-                    ):
-                        raise ValueError("MTF_CALIBRATION_RUN_GATE_FAILED")
-                config_input["mtf_layer"] = {
-                    "layer": layer,
-                    "activation_mode": activation_mode,
-                    "operational_effect": False,
-                }
+                raise ValueError("MTF_PROFILE_CREATE_FORBIDDEN_USE_GOVERNED_FLOW")
             elif profile_kind != "STANDARD":
                 raise ValueError("PROFILE_KIND_UNSUPPORTED")
             structural_errors = validate_profile_execution_structure(
@@ -835,6 +846,10 @@ async def create_profile(
     name = payload.get("name")
     if not name:
         raise HTTPException(status_code=400, detail="Profile name is required")
+    if str(payload.get("profile_type") or "STANDARD").upper() == "MTF_LAYER":
+        raise HTTPException(
+            status_code=409, detail="MTF_PROFILE_CREATE_FORBIDDEN_USE_GOVERNED_FLOW"
+        )
 
     # Duplicate name check — non-blocking warning
     duplicates = await _find_duplicate_names(db, user_id, name)
@@ -900,6 +915,9 @@ async def update_profile(
     
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
+
+    if profile.profile_type == "MTF_LAYER":
+        raise HTTPException(status_code=409, detail="MTF_PROFILE_GOVERNED_FLOW_REQUIRED")
 
     _config_changed = False
     _next_config: Optional[Dict[str, Any]] = None
@@ -976,65 +994,24 @@ async def delete_profile(
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
     
-    pid = {"pid": str(profile_id)}
-
-    # ── Step 1: profile_intelligence_autopilot_audit ──────────────────────────
-    # This table is append-only (immutable trigger blocks all UPDATEs/DELETEs).
-    # Two cascade SET NULLs would fire when we later delete candidates and the
-    # profile itself — both blocked by the trigger. Disable it, null them out
-    # manually up front, then re-enable before proceeding.
-    await db.execute(text(
-        "ALTER TABLE profile_intelligence_autopilot_audit "
-        "DISABLE TRIGGER trg_pi_autopilot_audit_immutable"
-    ))
-    # candidate_id → SET NULL cascade triggered when we delete candidates below
-    await db.execute(text("""
-        UPDATE profile_intelligence_autopilot_audit
-        SET candidate_id = NULL
-        WHERE candidate_id IN (
-            SELECT id FROM profile_intelligence_autopilot_candidates
-            WHERE profile_id = :pid
+    references = (await db.execute(text("""
+        SELECT
+          (SELECT count(*) FROM pipeline_watchlists WHERE profile_id = :pid) AS pipeline_watchlists,
+          (SELECT count(*) FROM watchlist_profiles WHERE profile_id = :pid) AS watchlist_profiles,
+          (SELECT count(*) FROM shadow_trades WHERE profile_id = :pid) AS shadow_trades,
+          (SELECT count(*) FROM profile_versions WHERE profile_id = :pid) AS profile_versions,
+          (SELECT count(*) FROM profile_audit_log WHERE profile_id = :pid) AS profile_audit_log
+    """), {"pid": str(profile_id)})).mappings().one()
+    blocking = {key: int(value or 0) for key, value in references.items() if int(value or 0) > 0}
+    if blocking:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "PROFILE_HAS_ASSOCIATIONS_OR_HISTORY",
+                "action": "ARCHIVE_OR_DEACTIVATE",
+                "references": blocking,
+            },
         )
-    """), pid)
-    # profile_id → SET NULL cascade triggered when we delete the profile itself
-    await db.execute(
-        text("UPDATE profile_intelligence_autopilot_audit SET profile_id = NULL WHERE profile_id = :pid"),
-        pid,
-    )
-    await db.execute(text(
-        "ALTER TABLE profile_intelligence_autopilot_audit "
-        "ENABLE TRIGGER trg_pi_autopilot_audit_immutable"
-    ))
-
-    # ── Step 2: shadow_trades ─────────────────────────────────────────────────
-    # shadow_trades.profile_id is SET NULL, but ux_shadow_running_user_source
-    # (narrowed in migration c003 to WHERE profile_id IS NULL AND completed_at
-    # IS NULL) could still conflict if there are running baseline trades for the
-    # same (user, symbol, source).  Close any running trades for this profile
-    # first so they exit the unique-index scope before cascade sets profile_id=NULL.
-    await db.execute(text("""
-        UPDATE shadow_trades
-        SET completed_at = NOW()
-        WHERE profile_id = :pid AND completed_at IS NULL
-    """), pid)
-
-    # ── Step 3: RESTRICT-FK tables ────────────────────────────────────────────
-    await db.execute(text(
-        "DELETE FROM profile_intelligence_autopilot_candidates WHERE profile_id = :pid"
-    ), pid)
-    await db.execute(text(
-        "DELETE FROM autopilot_pending_actions WHERE profile_id = :pid"
-    ), pid)
-    # profile_adjustment_versions has CASCADE from profile_adjustment_suggestions;
-    # delete versions first to satisfy its own RESTRICT FK on profiles.id.
-    await db.execute(text(
-        "DELETE FROM profile_adjustment_versions WHERE profile_id = :pid"
-    ), pid)
-    await db.execute(text(
-        "DELETE FROM profile_adjustment_suggestions WHERE profile_id = :pid"
-    ), pid)
-
-    # ── Step 4: delete profile (remaining SET NULL cascades fire here) ────────
     await db.delete(profile)
     await db.commit()
 

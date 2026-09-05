@@ -12,7 +12,7 @@ def test_shadow_measurement_migration_remains_in_the_single_head_chain() -> None
     config.set_main_option("script_location", str(BACKEND / "alembic"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["217_indicator_identity_idx"]
+    assert scripts.get_heads() == ["218_mtf_profile_activation_audit"]
     revisions = {revision.revision for revision in scripts.walk_revisions()}
     assert "204_shadow_exit_measurement" in revisions
 

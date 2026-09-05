@@ -27,6 +27,27 @@ from .profile_runtime_config import canonical_hash
 
 _TF_SECONDS = {"1h": 3600, "15m": 900}
 _DATASET_CONTRACT = "mtf_point_in_time_dataset_v1"
+_L2_DERIVED_FEATURES = {
+    "extension_atr", "ema21_distance_atr", "breakout_distance_atr",
+    "retest_distance_atr", "invalidation_distance_atr",
+}
+
+
+def derive_l2_geometry_features(values: Mapping[str, Any]) -> dict[str, float]:
+    atr = float(values["atr"])
+    if atr <= 0:
+        raise ValueError("INDICATOR_VALUE_INVALID:atr")
+    price = float(values["price"])
+    ema21 = float(values["ema21"])
+    bb_upper = float(values["bb_upper"])
+    vwap = float(values["vwap"])
+    return {
+        "extension_atr": abs(price - ema21) / atr,
+        "ema21_distance_atr": abs(price - ema21) / atr,
+        "breakout_distance_atr": max(0.0, (price - bb_upper) / atr),
+        "retest_distance_atr": abs(price - bb_upper) / atr,
+        "invalidation_distance_atr": abs(price - min(ema21, vwap)) / atr,
+    }
 
 
 def _utc(value: Any) -> datetime:
@@ -63,8 +84,20 @@ def _validated_features(
         for value in source_identity.get("allowed_source_providers") or []
     }
     provider_policy_id = str(source_identity.get("provider_policy_id") or "")
+    scheduler_group = str(source_identity.get("scheduler_group") or "")
+    expected_config_profile_id = str(
+        source_identity.get("indicator_config_profile_id") or ""
+    )
+    expected_config_hash = str(source_identity.get("indicator_config_hash") or "")
+    allowed_producer_versions = {
+        str(value) for value in source_identity.get("allowed_producer_versions") or []
+    }
     validity_margin = source_identity.get("validity_margin_seconds")
-    if not allowed_capture_contracts or not allowed_providers or not provider_policy_id:
+    if (
+        not allowed_capture_contracts or not allowed_providers or not provider_policy_id
+        or scheduler_group != "structural" or not expected_config_profile_id
+        or not expected_config_hash or not allowed_producer_versions
+    ):
         raise ValueError("SOURCE_IDENTITY_CONFIG_REQUIRED")
     if validity_margin is None:
         raise ValueError("VALIDITY_MARGIN_CONFIG_REQUIRED")
@@ -78,12 +111,18 @@ def _validated_features(
             raise ValueError(f"FEATURE_HASH_INVALID:{feature}")
         if material.get("timeframe") != timeframe or material.get("market_type") != "spot":
             raise ValueError(f"FEATURE_IDENTITY_INVALID:{feature}")
-        if material.get("scheduler_group") != "structural":
+        if material.get("scheduler_group") != scheduler_group:
             raise ValueError(f"FEATURE_GROUP_INVALID:{feature}")
         if str(material.get("source_provider")) not in allowed_providers:
             raise ValueError(f"FEATURE_PROVIDER_INVALID:{feature}")
         if str(material.get("provider_policy_id")) != provider_policy_id:
             raise ValueError(f"FEATURE_PROVIDER_POLICY_INVALID:{feature}")
+        if str(material.get("config_profile_id") or "") != expected_config_profile_id:
+            raise ValueError(f"FEATURE_CONFIG_PROFILE_INVALID:{feature}")
+        if str(material.get("config_hash") or "") != expected_config_hash:
+            raise ValueError(f"FEATURE_CONFIG_HASH_INVALID:{feature}")
+        if str(material.get("producer_version") or "") not in allowed_producer_versions:
+            raise ValueError(f"FEATURE_PRODUCER_VERSION_INVALID:{feature}")
         if material.get("candle_closed") is not True or material.get("candle_policy") != "CLOSED_ONLY":
             raise ValueError(f"FEATURE_OPEN_CANDLE:{feature}")
         if str(material.get("capture_contract_version")) not in allowed_capture_contracts:
@@ -247,13 +286,15 @@ async def build_point_in_time_dataset(
         "15m": {
             "price", "atr", "ema21", "ema50", "vwap",
             "vwap_reclaim_bool", "bb_upper", "bb_lower", "di_plus",
-            "di_minus", "higher_highs_5", "higher_lows_5",
+            "di_minus", "higher_highs_5", "higher_lows_5", "adx",
+            "volume_spike", "bb_width",
         },
     }
     for dimension in policy["candidate_dimensions"]:
-        if dimension.get("feature"):
+        feature_name = str(dimension.get("feature") or "").split(".", 1)[-1]
+        if feature_name and feature_name not in _L2_DERIVED_FEATURES:
             required_by_tf["1h" if dimension["layer"] == "L1" else "15m"].add(
-                str(dimension["feature"]).split(".", 1)[-1]
+                feature_name
             )
     requested = (
         int(policy["train_window_rows"])
@@ -390,9 +431,11 @@ async def build_point_in_time_dataset(
             net_return = float(raw_return) - float(raw_cost)
             if not math.isfinite(net_return):
                 raise ValueError("NET_RETURN_INVALID")
+            l2_derived = derive_l2_geometry_features(l2)
             features = {
                 **{f"L1.{name}": value for name, value in l1.items()},
                 **{f"L2.{name}": value for name, value in l2.items()},
+                **{f"L2.{name}": value for name, value in l2_derived.items()},
             }
             accepted.append({
                 "id": str(source["id"]), "symbol": source["symbol"],
@@ -448,6 +491,12 @@ def _profile_payloads(
         payload["activation_mode"] = "SHADOW"
         payload.setdefault("mtf_semantics", {})
         filters = payload.setdefault("filters", {"logic": "AND", "conditions": []})
+        source_identity = dict(payload.get("source_identity") or {})
+        timeframe = "1h" if layer == "L1" else "15m"
+        timeframe_seconds = _TF_SECONDS[timeframe]
+        source_provider = str(
+            (source_identity.get("allowed_source_providers") or [""])[0]
+        )
         for rule in by_layer[layer]:
             if str(rule.get("applies_to") or "BOTH") in {"FILTER", "BOTH"}:
                 field = str(rule["feature"]).split(".", 1)[-1]
@@ -455,7 +504,16 @@ def _profile_payloads(
                     "field": field,
                     "operator": ">=" if rule["operator"] == "min" else "<=",
                     "value": rule["threshold"],
-                    "timeframe": "1h" if layer == "L1" else "15m",
+                    "timeframe": timeframe,
+                    "source": "ohlcv",
+                    "source_provider": source_provider,
+                    "provider_policy_id": source_identity.get("provider_policy_id"),
+                    "max_age_seconds": (
+                        timeframe_seconds
+                        + int(source_identity["validity_margin_seconds"])
+                    ),
+                    "candle_policy": "CLOSED_ONLY",
+                    "required": True,
                 })
             if rule.get("semantic_key"):
                 payload["mtf_semantics"][rule["semantic_key"]] = rule["threshold"]
@@ -489,7 +547,9 @@ def _l2_temporal_eligibility(
     required = {
         "max_extension_atr", "pullback_max_distance_atr",
         "breakout_min_distance_atr", "retest_tolerance_atr",
-        "invalidation_atr", "setup_valid_candles",
+        "invalidation_atr", "setup_valid_candles", "adx_impulse_min",
+        "volume_relative_min", "bb_width_compression_max",
+        "bb_width_expansion_min",
     }
     if not required.issubset(semantics):
         return False
