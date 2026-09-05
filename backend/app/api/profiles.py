@@ -660,7 +660,51 @@ async def bulk_import_profiles(
                 "block_rules":    p.get("block_rules",    {"blocks": []}),
                 "entry_triggers": p.get("entry_triggers", {"logic": "AND", "conditions": []}),
                 "scoring":        _normalize_import_scoring(p.get("scoring"), shared_scoring),
+                "mtf_semantics":  p.get("mtf_semantics", {}),
+                "source_identity": p.get("source_identity", {}),
+                "calibration": p.get("calibration", {}),
             }
+            profile_kind = str(p.get("profile_kind") or "STANDARD").upper()
+            layer = str(p.get("layer") or "").upper() or None
+            activation_mode = str(p.get("activation_mode") or "ACTIVE").upper()
+            if profile_kind == "MTF_LAYER":
+                if layer not in {"L1", "L2"}:
+                    raise ValueError("MTF_LAYER_REQUIRES_LAYER_L1_OR_L2")
+                if activation_mode not in {"DRAFT", "SHADOW"}:
+                    raise ValueError("MTF_LAYER_ACTIVE_FORBIDDEN")
+                expected_tf = "1h" if layer == "L1" else "15m"
+                if config_input["default_timeframe"] != expected_tf:
+                    raise ValueError(f"{layer}_TIMEFRAME_MUST_BE_{expected_tf}")
+                if not config_input["mtf_semantics"]:
+                    raise ValueError("MTF_SEMANTICS_CONFIG_REQUIRED")
+                source_identity = config_input["source_identity"]
+                if (
+                    source_identity.get("candle_policy") != "CLOSED_ONLY"
+                    or not source_identity.get("allowed_source_providers")
+                    or not source_identity.get("provider_policy_id")
+                ):
+                    raise ValueError("MTF_SOURCE_IDENTITY_CONFIG_REQUIRED")
+                if (
+                    activation_mode == "SHADOW"
+                    and source_identity.get("validity_margin_seconds") is None
+                ):
+                    raise ValueError("MTF_VALIDITY_MARGIN_CONFIG_REQUIRED")
+                calibration = config_input["calibration"]
+                if activation_mode == "SHADOW" and (
+                    calibration.get("status") != "PASSED"
+                    or calibration.get("method") != "WALK_FORWARD"
+                    or calibration.get("min_samples") is None
+                    or calibration.get("baseline_outperformed") is not True
+                    or calibration.get("worst_fold_drawdown_not_worse") is not True
+                ):
+                    raise ValueError("MTF_SHADOW_CALIBRATION_GATE_FAILED")
+                config_input["mtf_layer"] = {
+                    "layer": layer,
+                    "activation_mode": activation_mode,
+                    "operational_effect": False,
+                }
+            elif profile_kind != "STANDARD":
+                raise ValueError("PROFILE_KIND_UNSUPPORTED")
             structural_errors = validate_profile_execution_structure(
                 config_input, path=f"profiles[{i}]", require_sections=True
             )
@@ -682,12 +726,18 @@ async def bulk_import_profiles(
                 user_id=user_id,
                 name=name,
                 description=p.get("description", ""),
-                is_active=True,
+                is_active=(
+                    activation_mode != "DRAFT"
+                    if profile_kind == "MTF_LAYER"
+                    else True
+                ),
                 config=validated_config,
                 profile_role=profile_role,
                 pipeline_order=pipeline_order,
                 pipeline_label=pipeline_label,
-                profile_type="STANDARD",
+                profile_type=profile_kind,
+                is_shadow_only=(profile_kind == "MTF_LAYER"),
+                live_trading_enabled=False,
             )
             db.add(profile)
             await db.flush()

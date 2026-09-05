@@ -68,6 +68,51 @@ def audit_indicator_registry(
             if str(input_id) not in registry
         }
     )
+    alias_targets_missing = sorted(
+        {target for target in aliases.values() if target not in registry}
+    )
+    cycles: set[tuple[str, ...]] = set()
+    identity_conflicts: list[dict[str, Any]] = []
+    transitive_inputs: dict[str, list[str]] = {}
+
+    def _walk(root: str, current: str, path: tuple[str, ...]) -> set[str]:
+        if current in path:
+            cycle = path[path.index(current):] + (current,)
+            cycles.add(cycle)
+            return set()
+        row = registry.get(current)
+        if row is None:
+            return {current}
+        next_path = path + (current,)
+        found: set[str] = set()
+        alias = row.get("alias_of")
+        children = ([alias] if alias else []) + list(row.get("composed_inputs") or [])
+        for child_id in children:
+            child = registry.get(str(child_id))
+            found.add(str(child_id))
+            if (
+                child is not None
+                and row.get("identity_strict") is True
+                and not row.get("cross_identity_allowed")
+            ):
+                mismatched = [
+                    field for field in ("owning_layer", "timeframe", "source_family")
+                    if row.get(field) != child.get(field)
+                ]
+                if mismatched:
+                    identity_conflicts.append({
+                        "root": root,
+                        "parent": current,
+                        "input": str(child_id),
+                        "mismatched_fields": mismatched,
+                    })
+            found.update(_walk(root, str(child_id), next_path))
+        return found
+
+    for indicator_id in sorted(registry):
+        transitive_inputs[indicator_id] = sorted(
+            _walk(indicator_id, indicator_id, tuple()) - {indicator_id}
+        )
     blocking_layers: dict[str, set[str]] = defaultdict(set)
     for row in registry.values():
         if row.get("is_blocking"):
@@ -85,11 +130,18 @@ def audit_indicator_registry(
         "profile_indicator_count": len(used),
         "unregistered_profile_indicators": sorted(used - set(registry)),
         "missing_composed_inputs": missing_inputs,
+        "alias_targets_missing": alias_targets_missing,
+        "dependency_cycles": [list(cycle) for cycle in sorted(cycles)],
+        "composed_identity_conflicts": identity_conflicts,
+        "transitive_inputs": transitive_inputs,
         "duplicated_blocking_phenomena": duplicated_blocking_phenomena,
         "collapsed_rule_conditions": collapsed,
         "valid": not (
             used - set(registry)
             or missing_inputs
+            or alias_targets_missing
+            or cycles
+            or identity_conflicts
             or duplicated_blocking_phenomena
         ),
     }

@@ -35,6 +35,7 @@ from .indicator_validity import unwrap_envelope_value
 from ..utils.indicator_merge import (
     MergedIndicators,
     fetch_merged_indicators,
+    fetch_timeframe_indicators,
 )
 
 
@@ -127,6 +128,30 @@ async def get_merged_indicators(
     """
     merged = await fetch_merged_indicators(
         db, symbols, now=now, include_stale=include_stale
+    )
+    _emit_sampled_telemetry(merged)
+    return merged
+
+
+async def get_timeframe_indicators(
+    db,
+    symbols: List[str],
+    *,
+    timeframe: str,
+    market_type: str = "spot",
+    groups: Optional[List[str]] = None,
+    now=None,
+    include_stale: bool = False,
+) -> Dict[str, MergedIndicators]:
+    """Governed exact-identity provider used by the observational MTF path."""
+    merged = await fetch_timeframe_indicators(
+        db,
+        symbols,
+        timeframe=timeframe,
+        market_type=market_type,
+        groups=groups,
+        now=now,
+        include_stale=include_stale,
     )
     _emit_sampled_telemetry(merged)
     return merged

@@ -1801,6 +1801,19 @@ async def _evaluate_l3_decisions(
     timeframe = (profile_config or {}).get("default_timeframe", "5m")
 
     inject_live = db is not None and user_id is not None
+    mtf_observations: dict[str, dict] = {}
+    if inject_live and assets:
+        try:
+            from ..services.mtf_observation_service import (
+                build_observations_for_assets,
+            )
+            mtf_observations = await build_observations_for_assets(
+                db, user_id=user_id, assets=assets
+            )
+        except Exception:
+            logger.exception(
+                "[MTF-SHADOW] preload failed; legacy decisions remain authoritative"
+            )
     decisions: list[dict] = []
     for asset in assets:
         # ── L3 LIVE ORDER FLOW INJECTION ─────────────────────────────────
@@ -2060,6 +2073,45 @@ async def _evaluate_l3_decisions(
         metrics["block_rules_lineage"] = (
             (profile_config or {}).get("_block_rules_lineage") or {}
         )
+        mtf_observation = mtf_observations.get(str(asset.get("symbol") or ""))
+        if mtf_observation:
+            if mtf_observation.get("l1") and mtf_observation.get("l2"):
+                try:
+                    from ..services.mtf_observation_service import (
+                        build_l3_confirmation,
+                        build_multilayer_context,
+                    )
+                    l3_confirmation = build_l3_confirmation(
+                        legacy_decision=decision,
+                        indicators_snapshot=metrics.get("indicators_snapshot") or {},
+                        gate_evaluation_hash=gate_v2.get("evaluation_envelope_hash"),
+                        now=evaluated_at,
+                    )
+                    metrics["multilayer_decision_context_v2"] = (
+                        build_multilayer_context(
+                            l1=mtf_observation["l1"],
+                            l2=mtf_observation["l2"],
+                            l3_confirmation=l3_confirmation,
+                            canonical_score=float(score) if score is not None else None,
+                            now=evaluated_at,
+                        )
+                    )
+                except Exception as exc:
+                    metrics["multilayer_decision_context_v2"] = {
+                        "contract_version": "multilayer_decision_context_v2",
+                        "mode": "SHADOW",
+                        "operational_effect": False,
+                        "observational_decision": "WAIT",
+                        "reason_codes": ["CONTEXT_BUILD_ERROR"],
+                        "error_type": type(exc).__name__,
+                    }
+            else:
+                metrics["multilayer_decision_context_v2"] = {
+                    "contract_version": "multilayer_decision_context_v2",
+                    "mode": "SHADOW",
+                    "operational_effect": False,
+                    **mtf_observation,
+                }
         # V3 is intentionally observational in this release.  Its source-aware
         # decision is persisted beside the current deterministic authority and
         # can never change ``decision`` or ``l3_pass`` while mode=SHADOW.

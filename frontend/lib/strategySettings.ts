@@ -40,6 +40,22 @@ export interface StrategySettingsValidation {
   catalog: JsonObject;
 }
 
+export interface MTFRuntimeAudit {
+  runtime: {
+    producer_versions: Record<string, string>;
+    active_spot_symbols: number;
+    coverage: Array<{
+      timeframe: string;
+      scheduler_group: string;
+      symbols: number;
+      latest: string | null;
+    }>;
+    decisions_24h: Record<string, number>;
+  };
+  multilayer_contract: JsonObject | null;
+  spot_engine_updated_at: string | null;
+}
+
 export const EDITABLE_ROOTS = ["strategy", "spot_engine", "ml_shadow"] as const;
 
 export const ENUM_OPTIONS: Record<string, string[]> = {
@@ -48,7 +64,7 @@ export const ENUM_OPTIONS: Record<string, string[]> = {
   "spot_engine.scanner.multilayer_contract.execution_contract_version": ["multilayer_profile_execution_contract_v2"],
   "spot_engine.scanner.multilayer_contract.provenance_policy_version": ["multilayer_provenance_resolver_v1"],
   "spot_engine.scanner.multilayer_contract.consolidation_rule_version": ["single_profile_per_symbol_v2"],
-  "spot_engine.scanner.multilayer_contract.decision_feature_contract_version": ["multilayer_decision_context_v1"],
+  "spot_engine.scanner.multilayer_contract.decision_feature_contract_version": ["multilayer_decision_context_v1", "multilayer_decision_context_v2"],
   "spot_engine.scanner.multilayer_contract.layers.L1.default_timeframe": ["5m", "15m", "1h"],
   "spot_engine.scanner.multilayer_contract.layers.L2.default_timeframe": ["5m", "15m", "1h"],
   "spot_engine.scanner.multilayer_contract.layers.L3.default_timeframe": ["5m", "15m", "1h"],
@@ -72,6 +88,8 @@ export const ENUM_OPTIONS: Record<string, string[]> = {
 
 export const R6_READ_ONLY_PATHS = new Set([
   "spot_engine.scanner.multilayer_contract.enabled",
+  "spot_engine.scanner.multilayer_contract.activation_mode",
+  "spot_engine.scanner.multilayer_contract.operational_effect",
   "spot_engine.scanner.multilayer_contract.execution_contract_version",
   "spot_engine.scanner.multilayer_contract.execution_contract_valid_from",
   "spot_engine.scanner.multilayer_contract.provenance_policy_version",
@@ -141,6 +159,10 @@ export function normaliseBarrierContract(payload: JsonObject): JsonObject {
 
 export async function loadStrategySettings(): Promise<StrategySettingsResponse> {
   return apiGet<StrategySettingsResponse>("/strategy-settings/config");
+}
+
+export async function loadMTFRuntimeAudit(): Promise<MTFRuntimeAudit> {
+  return apiGet<MTFRuntimeAudit>("/strategy-settings/multilayer-runtime/audit");
 }
 
 export async function validateStrategySettings(

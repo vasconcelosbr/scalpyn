@@ -147,6 +147,7 @@ def envelop_results(
     default_source: str = "candle_computed",
     default_confidence: float = 0.80,
     key_source_map: Optional[Dict[str, tuple]] = None,
+    envelope_metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Wrap a flat indicator dict into the IndicatorEnvelope dict format.
 
@@ -167,6 +168,7 @@ def envelop_results(
     unchanged, so calling this function twice is safe (idempotent).
     """
     ksm = key_source_map or {}
+    metadata = dict(envelope_metadata or {})
     out: Dict[str, Any] = {}
     for k, v in results.items():
         # Defense-in-depth (post-#246): order-flow audit metadata
@@ -177,13 +179,20 @@ def envelop_results(
         if k in _ORDER_FLOW_AUDIT_KEYS:
             continue
         if isinstance(v, dict) and "value" in v:
-            out[k] = v  # already enveloped — pass through unchanged
+            out[k] = {**v, **metadata}
             continue
         src, conf = ksm.get(k, (default_source, default_confidence))
         if v is None:
-            out[k] = {"value": None, "source": "unknown", "confidence": 0.0, "status": "NO_DATA"}
+            out[k] = {"value": None, "source": "unknown", "confidence": 0.0, "status": "NO_DATA", **metadata}
         else:
-            out[k] = {"value": v, "source": src, "confidence": conf, "status": "VALID"}
+            out[k] = {"value": v, "source": src, "confidence": conf, "status": "VALID", **metadata}
+    if metadata:
+        from ..services.profile_runtime_config import canonical_hash
+
+        for envelope in out.values():
+            if isinstance(envelope, dict):
+                envelope.pop("envelope_hash", None)
+                envelope["envelope_hash"] = canonical_hash(envelope)
     return out
 
 
@@ -430,6 +439,25 @@ def merge_indicator_rows(
                 "fallback_used": bool(
                     raw.get("fallback_used", False) if isinstance(raw, dict) else False
                 ),
+                "candle_closed": (
+                    raw.get("candle_closed") if isinstance(raw, dict) else None
+                ),
+                "market_type": (
+                    raw.get("market_type") if isinstance(raw, dict) else None
+                ),
+                "scheduler_group": (
+                    raw.get("scheduler_group") if isinstance(raw, dict) else None
+                ),
+                "producer_version": (
+                    raw.get("producer_version") if isinstance(raw, dict) else None
+                ),
+                "config_profile_id": (
+                    raw.get("config_profile_id") if isinstance(raw, dict) else None
+                ),
+                "config_hash": (
+                    raw.get("config_hash") if isinstance(raw, dict) else None
+                ),
+                "envelope": dict(raw) if isinstance(raw, dict) else None,
             })
 
     for grp, ts_utc, timeframe, ind_json, age, is_stale in live:
@@ -710,6 +738,73 @@ async def fetch_merged_indicators(
     legacy = await _fetch_legacy(db, symbols)
     _add_legacy_rows(merged, legacy, now, include_stale=include_stale)
     return merged
+
+
+async def fetch_timeframe_indicators(
+    db,
+    symbols: List[str],
+    *,
+    timeframe: str,
+    market_type: str,
+    groups: Optional[List[str]] = None,
+    now: Optional[datetime] = None,
+    include_stale: bool = False,
+) -> Dict[str, MergedIndicators]:
+    """Fetch one exact temporal identity without any cross-timeframe fallback."""
+    from collections import defaultdict
+    from sqlalchemy import text
+
+    if not symbols:
+        return {}
+    requested_groups = groups or ["structural", "microstructure"]
+    if not requested_groups:
+        return {}
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    rows = (await db.execute(text("""
+        WITH requested(symbol) AS (
+            SELECT unnest(CAST(:syms AS text[]))
+        ), requested_groups(scheduler_group) AS (
+            SELECT unnest(CAST(:groups AS text[]))
+        )
+        SELECT req.symbol, grp.scheduler_group, latest.time,
+               latest.timeframe, latest.indicators_json
+        FROM requested req
+        CROSS JOIN requested_groups grp
+        CROSS JOIN LATERAL (
+            SELECT i.time, i.timeframe, i.indicators_json
+            FROM indicators i
+            WHERE i.symbol = req.symbol
+              AND i.market_type = :market_type
+              AND i.timeframe = :timeframe
+              AND i.scheduler_group = grp.scheduler_group
+            ORDER BY i.time DESC
+            LIMIT 1
+        ) latest
+    """), {
+        "syms": symbols,
+        "groups": requested_groups,
+        "market_type": market_type,
+        "timeframe": timeframe,
+    })).fetchall()
+
+    by_symbol: Dict[str, List] = defaultdict(list)
+    for row in rows:
+        by_symbol[row.symbol].append((
+            row.scheduler_group,
+            row.time,
+            row.timeframe,
+            row.indicators_json or {},
+        ))
+    return {
+        symbol: merge_indicator_rows(
+            symbol_rows,
+            now=now,
+            include_stale=include_stale,
+        )
+        for symbol, symbol_rows in by_symbol.items()
+    }
 
 
 async def _fetch_legacy(db, symbols: List[str]) -> List:

@@ -148,7 +148,12 @@ class ProfileEngine:
     A Profile is NOT just a filter — it's a FULL STRATEGY CONFIGURATION.
     """
 
-    def __init__(self, profile_config: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        profile_config: Optional[Dict[str, Any]] = None,
+        *,
+        strict_timeframe_mode: bool = False,
+    ):
         """
         Initialize Profile Engine with optional profile configuration.
 
@@ -161,6 +166,19 @@ class ProfileEngine:
         assert_no_observational_execution_fields(self.profile)
         self.rule_engine = RuleEngine()
         self.default_timeframe = self.profile.get("default_timeframe", "5m")
+        self.strict_timeframe_mode = strict_timeframe_mode
+        if strict_timeframe_mode:
+            if self.default_timeframe not in VALID_TIMEFRAMES:
+                raise ValueError("PROFILE_DEFAULT_TIMEFRAME_INVALID")
+            incompatible = sorted(
+                tf for tf in _collect_required_timeframes(self.profile)
+                if tf != self.default_timeframe
+            )
+            if incompatible:
+                raise ValueError(
+                    "PROFILE_TIMEFRAME_CONTRACT_MISMATCH: "
+                    + ",".join(incompatible)
+                )
 
         # Extract config sections
         self.filters_config = self.profile.get("filters", {})
@@ -284,13 +302,14 @@ class ProfileEngine:
         """
         symbol = asset.get("symbol", "?")
 
-        # Flat indicators → cache under default timeframe
+        # Flat indicators → cache under default timeframe for the legacy path.
         flat_indicators = asset.get("indicators", {})
         if not flat_indicators:
             flat_indicators = {k: v for k, v in asset.items()
                               if k not in ("symbol", "name", "_indicators_by_tf")}
 
-        self._indicator_cache.put(symbol, self.default_timeframe, flat_indicators)
+        if not self.strict_timeframe_mode or not asset.get("_indicators_by_tf"):
+            self._indicator_cache.put(symbol, self.default_timeframe, flat_indicators)
 
         # Multi-timeframe data (future-ready)
         by_tf = asset.get("_indicators_by_tf", {})
@@ -303,12 +322,14 @@ class ProfileEngine:
     ) -> Dict[str, Any]:
         """Return the best available indicator dict for a condition's timeframe.
 
-        Falls back to the default timeframe if the requested one is missing.
+        Falls back to the default timeframe only for the legacy path.
         """
         tf = condition.get("timeframe") or self.default_timeframe
         cached = self._indicator_cache.get(symbol, tf)
         if cached is not None:
             return cached
+        if self.strict_timeframe_mode:
+            return {}
         # Fallback: default timeframe data
         return self._indicator_cache.get(symbol, self.default_timeframe) or {}
 
@@ -485,6 +506,12 @@ class ProfileEngine:
 
     def _build_eval_data(self, asset: Dict[str, Any]) -> Dict[str, Any]:
         """Merge asset-level fields with indicators for evaluation."""
+        if self.strict_timeframe_mode:
+            symbol = asset.get("symbol", "?")
+            indicators = self._indicator_cache.get(
+                symbol, self.default_timeframe
+            ) or {}
+            return {**asset, **indicators}
         indicators = asset.get("indicators", {})
         if not indicators:
             indicators = {k: v for k, v in asset.items() if k not in ["symbol", "name"]}

@@ -80,8 +80,10 @@ _ALL_TASK_MODULES = (
         "app.tasks.collect_market_data",
         "app.tasks.collect_structural_30m",
         "app.tasks.collect_research_ohlcv",
+        "app.tasks.collect_mtf_ohlcv",
         "app.tasks.sample_ohlcv_settlement_latency",
         "app.tasks.compute_indicators",
+        "app.tasks.compute_mtf_indicators",
         "app.tasks.compute_scores",
         "app.tasks.evaluate_signals",
         "app.tasks.daily_summary",
@@ -156,6 +158,8 @@ TASK_ROUTES = {
     # Task #262 — structural 30m pipeline collector (stays structural so the
     # collect beat is never starved by a slow compute run on compute worker).
     "app.tasks.collect_structural_30m.run":              {"queue": QUEUE_STRUCTURAL},
+    "app.tasks.collect_mtf_ohlcv.collect_15m":           {"queue": QUEUE_STRUCTURAL},
+    "app.tasks.collect_mtf_ohlcv.collect_1h":            {"queue": QUEUE_STRUCTURAL},
 
     # Heavy TA + scoring → dedicated structural_compute worker so a slow
     # indicator pass cannot delay lighter structural ops (pipeline_scan,
@@ -167,6 +171,8 @@ TASK_ROUTES = {
     # compute (1h) — deprecated stub. Invariant #4 requires a route for
     # every registered task. Remove after post-stabilisation clean-up.
     "app.tasks.compute_indicators.compute":              {"queue": QUEUE_STRUCTURAL_COMPUTE},
+    "app.tasks.compute_mtf_indicators.compute_15m":      {"queue": QUEUE_STRUCTURAL_COMPUTE},
+    "app.tasks.compute_mtf_indicators.compute_1h":       {"queue": QUEUE_STRUCTURAL_COMPUTE},
     "app.tasks.compute_scores.score":                    {"queue": QUEUE_STRUCTURAL_COMPUTE},
     "app.tasks.crypto_ev_score.compute":                 {"queue": QUEUE_STRUCTURAL},
     # pipeline_scan.scan: structural per operator spec (cadence-locked
@@ -389,6 +395,10 @@ TASK_ANNOTATIONS = {
     # ad-hoc dispatch fica com folga).
     "app.tasks.compute_indicators.compute_structural_5m": {**_STRUCTURAL_GUARDS, "rate_limit": "12/m", **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.compute_indicators.compute":              {**_STRUCTURAL_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.collect_mtf_ohlcv.collect_15m":           {**_STRUCTURAL_GUARDS, "rate_limit": "4/h", **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.collect_mtf_ohlcv.collect_1h":            {**_STRUCTURAL_GUARDS, "rate_limit": "2/h", **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.compute_mtf_indicators.compute_15m":      {**_STRUCTURAL_GUARDS, "rate_limit": "4/h", **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.compute_mtf_indicators.compute_1h":       {**_STRUCTURAL_GUARDS, "rate_limit": "2/h", **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.compute_scores.score":                    {**_STRUCTURAL_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},
     # pipeline_scan.scan: structural cadence (5-min safety-net scan,
     # but heavier than the 5m TA chain — uses structural cost guards).
@@ -772,6 +782,18 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.collect_research_ohlcv.collect_1h",
         "schedule": crontab(minute=4),
         "options": {"queue": QUEUE_RESEARCH_OHLCV},
+    },
+    # Canonical Spot MTF chain: collect closed candles, commit, then enqueue
+    # the exact-timeframe producer. No 30m data may substitute for 15m.
+    "collect_mtf_15m_after_close": {
+        "task": "app.tasks.collect_mtf_ohlcv.collect_15m",
+        "schedule": crontab(minute="3,18,33,48"),
+        "options": {"queue": QUEUE_STRUCTURAL},
+    },
+    "collect_mtf_1h_after_close": {
+        "task": "app.tasks.collect_mtf_ohlcv.collect_1h",
+        "schedule": crontab(minute=5),
+        "options": {"queue": QUEUE_STRUCTURAL},
     },
     "capture_research_ohlcv_readiness": {
         "task": "app.tasks.collect_research_ohlcv.capture_readiness",

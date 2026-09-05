@@ -1,6 +1,6 @@
 from copy import deepcopy
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
 import pytest
@@ -360,3 +360,89 @@ async def test_duplicate_display_names_update_only_requested_profile_id(monkeypa
     lock.assert_awaited_once()
     assert lock.await_args.kwargs["profile_ids"] == [requested_id]
     db.commit.assert_awaited_once()
+
+
+def _mtf_profile_payload(*, activation_mode="DRAFT"):
+    return {
+        "name": "MTF L1 TEST",
+        "profile_kind": "MTF_LAYER",
+        "layer": "L1",
+        "activation_mode": activation_mode,
+        "default_timeframe": "1h",
+        "source_identity": {
+            "allowed_source_providers": ["gate.io"],
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "candle_policy": "CLOSED_ONLY",
+            "validity_margin_seconds": None,
+        },
+        "calibration": {
+            "status": "CONFIG_REQUIRED",
+            "method": "WALK_FORWARD",
+            "min_samples": None,
+            "thresholds_emitted": False,
+        },
+        "mtf_semantics": {
+            "candidate_features": ["adx", "di_plus", "di_minus"],
+            "adx_strong_min": None,
+        },
+        "filters": {"logic": "AND", "conditions": []},
+        "signals": {"logic": "AND", "conditions": []},
+        "entry_triggers": {"logic": "AND", "conditions": []},
+        "block_rules": {"blocks": []},
+        "scoring": {
+            "enabled": False,
+            "weights": {},
+            "rules": [],
+            "selected_rule_ids": [],
+            "thresholds": {},
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_mtf_draft_import_is_inactive_shadow_only_and_never_live(monkeypatch):
+    db = SimpleNamespace(
+        add=MagicMock(), flush=AsyncMock(), commit=AsyncMock(), rollback=AsyncMock()
+    )
+    monkeypatch.setattr(
+        profiles_api, "_find_duplicate_names", AsyncMock(return_value=[])
+    )
+    activate = AsyncMock(return_value={"profile_version_id": VERSION_ID})
+    monkeypatch.setattr(profiles_api, "activate_profile_config", activate)
+
+    result = await profiles_api.bulk_import_profiles(
+        {"profiles": [_mtf_profile_payload()]},
+        db=db,
+        user_id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+    )
+
+    assert result["created"] == 1
+    profile = activate.await_args.kwargs["profile"]
+    assert profile.profile_type == "MTF_LAYER"
+    assert profile.is_active is False
+    assert profile.is_shadow_only is True
+    assert profile.live_trading_enabled is False
+    assert profile.config["mtf_layer"]["operational_effect"] is False
+
+
+@pytest.mark.asyncio
+async def test_mtf_import_rejects_active_mode_before_write(monkeypatch):
+    db = SimpleNamespace(
+        add=MagicMock(), flush=AsyncMock(), commit=AsyncMock(), rollback=AsyncMock()
+    )
+    monkeypatch.setattr(
+        profiles_api, "_find_duplicate_names", AsyncMock(return_value=[])
+    )
+    activate = AsyncMock()
+    monkeypatch.setattr(profiles_api, "activate_profile_config", activate)
+
+    result = await profiles_api.bulk_import_profiles(
+        {"profiles": [_mtf_profile_payload(activation_mode="ACTIVE")]},
+        db=db,
+        user_id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+    )
+
+    assert result["failed"] == 1
+    assert "MTF_LAYER_ACTIVE_FORBIDDEN" in result["results"][0]["error"]
+    db.add.assert_not_called()
+    activate.assert_not_awaited()

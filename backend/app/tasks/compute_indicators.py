@@ -110,6 +110,32 @@ _COMPUTE_KEY_SOURCE_MAP: dict = {k: ("gate_trades", 1.00) for k in _ORDER_FLOW_K
 COMPUTE_30M_BATCH_SIZE: int = int(os.environ.get("COMPUTE_30M_BATCH_SIZE", "10"))
 
 
+async def _load_active_indicator_config(db) -> tuple[dict, dict]:
+    """Load the single governed indicator config; cardinality is fail-closed."""
+    from ..services.profile_runtime_config import canonical_hash
+
+    rows = (await db.execute(text("""
+        SELECT id, user_id, config_json, updated_at
+          FROM config_profiles
+         WHERE config_type = 'indicators' AND is_active IS TRUE
+         ORDER BY updated_at DESC, id
+    """))).mappings().all()
+    if len(rows) != 1:
+        raise RuntimeError(
+            f"INDICATOR_CONFIG_CARDINALITY_INVALID: expected=1 actual={len(rows)}"
+        )
+    row = rows[0]
+    config = dict(row["config_json"] or {})
+    if not config:
+        raise RuntimeError("INDICATOR_CONFIG_EMPTY")
+    return config, {
+        "config_profile_id": str(row["id"]),
+        "config_user_id": str(row["user_id"]),
+        "config_updated_at": row["updated_at"].isoformat(),
+        "config_hash": canonical_hash(config),
+    }
+
+
 def _merge_order_flow_into_results(results: dict, of_data: dict) -> None:
     """Merge order-flow payload into ``results`` without overwriting valid values with ``None``.
 
@@ -743,20 +769,21 @@ async def _compute_5m_async():
     from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
     from ..services.feature_engine import FeatureEngine
     from ..services.market_data_service import market_data_service
-    from ..services.seed_service import DEFAULT_INDICATORS
     from ..services.order_flow_service import get_order_flow_data
 
     import sqlalchemy.exc as _sqla_exc
     logger.info("Starting 5m indicator computation...")
 
-    indicators_config = DEFAULT_INDICATORS
-    engine = FeatureEngine(indicators_config)
     computed = 0
-    min_candles_5m = _derive_min_candles(indicators_config, "5m")
-    query_limit_5m = max(288, min_candles_5m)
 
     async with AsyncSessionLocal() as db:
         try:
+            indicators_config, indicator_config_identity = (
+                await _load_active_indicator_config(db)
+            )
+            engine = FeatureEngine(indicators_config)
+            min_candles_5m = _derive_min_candles(indicators_config, "5m")
+            query_limit_5m = max(288, min_candles_5m)
             # Task #232: ingestion gate is ``is_active`` only — see
             # ``compute_indicators._compute_async`` above for rationale.
             symbols_result = await db.execute(text("""
@@ -776,9 +803,10 @@ async def _compute_5m_async():
             for symbol in symbols:
                 try:
                     ohlcv_result = await db.execute(text("""
-                        SELECT time, open, high, low, close, volume, quote_volume
+                        SELECT time, open, high, low, close, volume, quote_volume, exchange
                         FROM ohlcv
                         WHERE symbol = :symbol AND timeframe = '5m'
+                          AND time <= now() - interval '5 minutes'
                         ORDER BY time DESC
                         LIMIT :limit
                     """), {"symbol": symbol, "limit": query_limit_5m})
@@ -853,6 +881,20 @@ async def _compute_5m_async():
                         default_source="candle_computed",
                         default_confidence=0.80,
                         key_source_map=_COMPUTE_KEY_SOURCE_MAP,
+                        envelope_metadata={
+                            "timeframe": "5m",
+                            "market_type": symbol_market_type.get(symbol, "spot"),
+                            "scheduler_group": "microstructure",
+                            "source_provider": str(rows[0].exchange or "gate.io"),
+                            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                            "candle_policy": "CLOSED_ONLY",
+                            "candle_closed": True,
+                            "source_timestamp": rows[0].time.isoformat(),
+                            "computed_at": now.isoformat(),
+                            "available_at": now.isoformat(),
+                            "producer_version": "compute_5m_v2",
+                            **indicator_config_identity,
+                        },
                     ))
 
                     # Task #236: persistence-queue path. See _compute_async for rationale.
@@ -994,19 +1036,20 @@ async def _compute_structural_5m_async():
     """
     from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
     from ..services.feature_engine import FeatureEngine
-    from ..services.seed_service import DEFAULT_INDICATORS
 
     import sqlalchemy.exc as _sqla_exc
     logger.info("[COMPUTE-S5m] Starting structural-on-5m indicator computation…")
 
-    indicators_config = DEFAULT_INDICATORS
-    engine = FeatureEngine(indicators_config)
-    min_candles_5m = _derive_min_candles(indicators_config, "5m")
-    query_limit_5m = max(288, min_candles_5m)
     computed = 0
 
     async with AsyncSessionLocal() as db:
         try:
+            indicators_config, indicator_config_identity = (
+                await _load_active_indicator_config(db)
+            )
+            engine = FeatureEngine(indicators_config)
+            min_candles_5m = _derive_min_candles(indicators_config, "5m")
+            query_limit_5m = max(288, min_candles_5m)
             # Task #232: ingestion gate é ``is_active`` only.
             symbols_result = await db.execute(text("""
                 SELECT DISTINCT o.symbol, p.market_type
@@ -1025,9 +1068,10 @@ async def _compute_structural_5m_async():
             for symbol in symbols:
                 try:
                     ohlcv_result = await db.execute(text("""
-                        SELECT time, open, high, low, close, volume, quote_volume
+                        SELECT time, open, high, low, close, volume, quote_volume, exchange
                         FROM ohlcv
                         WHERE symbol = :symbol AND timeframe = '5m'
+                          AND time <= now() - interval '5 minutes'
                         ORDER BY time DESC
                         LIMIT :limit
                     """), {"symbol": symbol, "limit": query_limit_5m})
@@ -1060,6 +1104,20 @@ async def _compute_structural_5m_async():
                         default_source="candle_computed",
                         default_confidence=0.80,
                         key_source_map=_COMPUTE_KEY_SOURCE_MAP,
+                        envelope_metadata={
+                            "timeframe": "5m",
+                            "market_type": symbol_market_type.get(symbol, "spot"),
+                            "scheduler_group": "structural",
+                            "source_provider": str(rows[0].exchange or "gate.io"),
+                            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                            "candle_policy": "CLOSED_ONLY",
+                            "candle_closed": True,
+                            "source_timestamp": rows[0].time.isoformat(),
+                            "computed_at": now.isoformat(),
+                            "available_at": now.isoformat(),
+                            "producer_version": "compute_structural_5m_v2",
+                            **indicator_config_identity,
+                        },
                     ))
 
                     if _pq.is_enabled():

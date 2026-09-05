@@ -13,7 +13,7 @@ from .profile_runtime_config import canonical_hash
 MULTILAYER_EXECUTION_CONTRACT_VERSION = "multilayer_profile_execution_contract_v2"
 MULTILAYER_PROVENANCE_POLICY_VERSION = "multilayer_provenance_resolver_v1"
 MULTILAYER_CONSOLIDATION_VERSION = "single_profile_per_symbol_v2"
-MULTILAYER_DECISION_CONTEXT_VERSION = "multilayer_decision_context_v1"
+MULTILAYER_DECISION_CONTEXT_VERSION = "multilayer_decision_context_v2"
 LAYERS = ("L1", "L2", "L3")
 LAYER_VERDICTS = {"PASS", "REJECT", "INSUFFICIENT_DATA", "UNAVAILABLE"}
 
@@ -48,6 +48,43 @@ def require_prepared_multilayer_config(scanner: Mapping[str, Any]) -> dict[str, 
     for layer in ("L1", "L2"):
         if not layers[layer].get("profile_id"):
             raise ValueError(f"{layer}_PROFILE_ID_MISSING")
+    return config
+
+
+def require_shadow_multilayer_config(scanner: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate the only operationally loadable MTF mode in this release."""
+    config = deepcopy(dict(scanner.get("multilayer_contract") or {}))
+    if not config:
+        raise ValueError("MULTILAYER_CONTRACT_NOT_MATERIALIZED")
+    if config.get("enabled") is not True or config.get("activation_mode") != "SHADOW":
+        raise ValueError("MULTILAYER_SHADOW_NOT_ENABLED")
+    if config.get("operational_effect") is not False:
+        raise ValueError("MULTILAYER_OPERATIONAL_EFFECT_FORBIDDEN")
+    if config.get("decision_feature_contract_version") != MULTILAYER_DECISION_CONTEXT_VERSION:
+        raise ValueError("MULTILAYER_CONTEXT_VERSION_UNKNOWN")
+    layers = config.get("layers") or {}
+    if set(layers) != set(LAYERS):
+        raise ValueError("MULTILAYER_LAYER_CONFIG_INCOMPLETE")
+    expected_timeframes = {"L1": "1h", "L2": "15m", "L3": "5m"}
+    for layer, expected_timeframe in expected_timeframes.items():
+        item = layers.get(layer) or {}
+        if item.get("observational_enabled") is not True:
+            raise ValueError(f"{layer}_OBSERVATIONAL_NOT_ENABLED")
+        if item.get("default_timeframe") != expected_timeframe:
+            raise ValueError(f"{layer}_TIMEFRAME_MISMATCH")
+        if item.get("validity_margin_seconds") is None:
+            raise ValueError(f"{layer}_VALIDITY_MARGIN_CONFIG_REQUIRED")
+        policies = item.get("source_policies") or {}
+        ohlcv = policies.get("ohlcv") or {}
+        if ohlcv.get("candle_policy") != "CLOSED_ONLY":
+            raise ValueError(f"{layer}_CLOSED_ONLY_REQUIRED")
+        if not ohlcv.get("allowed_source_providers") or not ohlcv.get("provider_policy_id"):
+            raise ValueError(f"{layer}_SOURCE_POLICY_INCOMPLETE")
+    for layer in ("L1", "L2"):
+        item = layers[layer]
+        for field in ("profile_id", "profile_version_id", "profile_config_hash"):
+            if not item.get(field):
+                raise ValueError(f"{layer}_{field.upper()}_MISSING")
     return config
 
 
@@ -113,7 +150,31 @@ def read_execution_contract(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     if version == MULTILAYER_EXECUTION_CONTRACT_VERSION:
         if set(snapshot.get("layers") or {}) != set(LAYERS):
             raise ValueError("multilayer execution contract has incomplete layers")
-        return {"format": "MULTILAYER", "contract": deepcopy(dict(snapshot))}
+        contract = deepcopy(dict(snapshot))
+        expected_aggregate = contract.get("aggregate_hash")
+        aggregate_material = {
+            "contract_version": contract.get("contract_version"),
+            "valid_from": contract.get("valid_from"),
+            "child_hashes": {
+                layer: (contract["layers"][layer] or {}).get("contract_hash")
+                for layer in LAYERS
+            },
+        }
+        if expected_aggregate != canonical_hash(aggregate_material):
+            raise ValueError("MULTILAYER_AGGREGATE_HASH_INVALID")
+        for layer in LAYERS:
+            child = contract["layers"][layer] or {}
+            child_material = {
+                key: child.get(key)
+                for key in (
+                    "layer", "default_timeframe", "profile_id",
+                    "profile_version_id", "section_hashes",
+                    "legacy_contract_version",
+                )
+            }
+            if child.get("contract_hash") != canonical_hash(child_material):
+                raise ValueError(f"{layer}_CONTRACT_HASH_INVALID")
+        return {"format": "MULTILAYER", "contract": contract}
     raise ValueError(f"unsupported execution contract version: {version}")
 
 

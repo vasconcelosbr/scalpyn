@@ -70,7 +70,10 @@ class LayerRuntimeContractConfig(BaseModel):
 
     observational_enabled: bool = False
     profile_id: Optional[str] = None
+    profile_version_id: Optional[str] = None
+    profile_config_hash: Optional[str] = None
     default_timeframe: Literal["5m", "15m", "1h"]
+    validity_margin_seconds: Optional[int] = Field(None, ge=0)
     profile_allowlist: List[str] = Field(default_factory=list)
     outside_allowlist_policy: Literal["REPORT_ONLY", "REJECT_CONFIGURATION"] = (
         "REPORT_ONLY"
@@ -84,6 +87,8 @@ class MultiLayerExecutionConfig(BaseModel):
     """R6 contracts persisted before any layer receives authority."""
 
     enabled: bool = False
+    activation_mode: Literal["DRAFT", "SHADOW"] = "DRAFT"
+    operational_effect: Literal[False] = False
     execution_contract_version: Literal[
         "multilayer_profile_execution_contract_v2"
     ] = "multilayer_profile_execution_contract_v2"
@@ -96,7 +101,7 @@ class MultiLayerExecutionConfig(BaseModel):
     ] = "single_profile_per_symbol_v2"
     consolidation_valid_from: Optional[str] = None
     decision_feature_contract_version: Literal[
-        "multilayer_decision_context_v1"
+        "multilayer_decision_context_v1", "multilayer_decision_context_v2"
     ] = "multilayer_decision_context_v1"
     decision_feature_valid_from: Optional[str] = None
     layers: Dict[Literal["L1", "L2", "L3"], LayerRuntimeContractConfig] = Field(

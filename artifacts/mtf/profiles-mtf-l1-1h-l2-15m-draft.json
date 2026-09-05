@@ -1,0 +1,65 @@
+{
+  "profiles": [
+    {
+      "name": "MTF Spot L1 1h - CONFIG_REQUIRED",
+      "description": "DRAFT importável. Thresholds não emitidos porque o mínimo amostral MTF não está governado.",
+      "profile_kind": "MTF_LAYER",
+      "layer": "L1",
+      "activation_mode": "DRAFT",
+      "default_timeframe": "1h",
+      "source_identity": {
+        "allowed_source_providers": ["gate.io"],
+        "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+        "candle_policy": "CLOSED_ONLY",
+        "validity_margin_seconds": null
+      },
+      "calibration": {
+        "status": "CONFIG_REQUIRED",
+        "method": "WALK_FORWARD",
+        "min_samples": null,
+        "thresholds_emitted": false
+      },
+      "mtf_semantics": {
+        "candidate_features": ["ema21", "ema50", "di_plus", "di_minus", "adx", "atr_pct", "higher_highs_5", "higher_lows_5"],
+        "adx_strong_min": null,
+        "atr_pct_low": null,
+        "atr_pct_high": null
+      },
+      "filters": {"logic": "AND", "conditions": []},
+      "signals": {"logic": "AND", "conditions": []},
+      "block_rules": {"blocks": []},
+      "entry_triggers": {"logic": "AND", "conditions": []},
+      "scoring": {"enabled": false, "weights": {}, "rules": [], "selected_rule_ids": [], "thresholds": {}}
+    },
+    {
+      "name": "MTF Spot L2 15m - CONFIG_REQUIRED",
+      "description": "DRAFT importável. Thresholds não emitidos porque o mínimo amostral MTF não está governado.",
+      "profile_kind": "MTF_LAYER",
+      "layer": "L2",
+      "activation_mode": "DRAFT",
+      "default_timeframe": "15m",
+      "source_identity": {
+        "allowed_source_providers": ["gate.io"],
+        "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+        "candle_policy": "CLOSED_ONLY",
+        "validity_margin_seconds": null
+      },
+      "calibration": {
+        "status": "CONFIG_REQUIRED",
+        "method": "WALK_FORWARD",
+        "min_samples": null,
+        "thresholds_emitted": false
+      },
+      "mtf_semantics": {
+        "candidate_features": ["ema21", "ema50", "di_plus", "di_minus", "atr", "vwap", "vwap_reclaim_bool", "bb_upper", "bb_lower", "volume_spike", "bb_width"],
+        "max_extension_atr": null
+      },
+      "filters": {"logic": "AND", "conditions": []},
+      "signals": {"logic": "AND", "conditions": []},
+      "block_rules": {"blocks": []},
+      "entry_triggers": {"logic": "AND", "conditions": []},
+      "scoring": {"enabled": false, "weights": {}, "rules": [], "selected_rule_ids": [], "thresholds": {}}
+    }
+  ],
+  "allow_duplicate_names": false
+}
