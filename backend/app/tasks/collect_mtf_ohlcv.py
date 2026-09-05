@@ -165,13 +165,15 @@ def _collect_and_chain(timeframe: str) -> dict:
     if result["successful_symbols"]:
         from . import task_dispatch
 
-        task_dispatch.enqueue(
+        compute_task_id = task_dispatch.enqueue(
             f"app.tasks.compute_mtf_indicators.compute_{timeframe}",
             dedup_key=f"compute-mtf-{timeframe}",
             ttl_seconds=_TF_SECONDS[timeframe],
         )
-        result["compute_enqueued"] = True
+        result["compute_task_id"] = compute_task_id
+        result["compute_enqueued"] = compute_task_id is not None
     else:
+        result["compute_task_id"] = None
         result["compute_enqueued"] = False
     return result
 
