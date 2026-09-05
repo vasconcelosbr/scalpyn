@@ -46,6 +46,9 @@ export interface ShadowTradeDetail {
   pnl_usdt: number | null;
   status: ShadowStatus;
   skip_reason: string | null;
+  rejected_by_layer?: "L1" | "L2" | "L3" | "NONE" | null;
+  rejected_by_rule?: string | null;
+  layer_verdicts?: Record<string, unknown> | null;
   holding_seconds: number | null;
   created_at: string | null;
   completed_at: string | null;

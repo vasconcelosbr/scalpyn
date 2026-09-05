@@ -27,6 +27,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
@@ -96,6 +97,12 @@ class ShadowTrade(Base):
     # Default 'L3' garante back-compat com linhas pré-migration 060.
     # Histórico: 'ARROW' existia para watchlist custom (Task #321, removida).
     source = Column(String(20), nullable=False, default="L3", index=True)
+
+    # R6 observational attribution.  Historical rows intentionally remain
+    # NULL; NONE is used only after a future runtime emits all layer verdicts.
+    rejected_by_layer = Column(Text, nullable=True)
+    rejected_by_rule = Column(Text, nullable=True)
+    layer_verdicts = Column(JSONB, nullable=True)
 
     # True only for canonical L3 shadows created while consolidation is
     # enabled. The partial unique index is scoped to these rows so flag=false

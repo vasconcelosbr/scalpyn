@@ -169,6 +169,22 @@ async def test_optimistic_hash_conflict_rolls_back(aggregate):
         ),
         ({"spot_engine": {"shadow": {"amount_usdt": -1}}}, "greater than 0"),
         ({"ml_shadow": {"canary_minimum_outcomes": 0}}, "greater than or equal to 1"),
+        (
+            {"spot_engine": {"scanner": {"multilayer_contract": {"enabled": True}}}},
+            "authority must remain disabled",
+        ),
+        (
+            {
+                "spot_engine": {
+                    "scanner": {
+                        "multilayer_contract": {
+                            "layers": {"L1": {"observational_enabled": True}}
+                        }
+                    }
+                }
+            },
+            "observational layers must remain disabled",
+        ),
     ],
 )
 def test_invalid_imports_are_rejected(payload, expected):
@@ -269,5 +285,50 @@ async def test_l3_policy_materialization_is_scoped_idempotent_and_read_back(aggr
     invalidate.assert_awaited_once_with("spot_engine", user_id, None, strict=True)
 
     second = await service.materialize_l3_gate_policy(db, user_id, apply=True)
+    assert second["changed"] is False
+    assert second["applied"] is False
+
+
+@pytest.mark.asyncio
+async def test_r6_multilayer_materialization_is_disabled_audited_and_idempotent(aggregate, monkeypatch):
+    user_id, db = aggregate
+    service = StrategySettingsService()
+    spot_profile = next(p for p in db.profiles if p.config_type == "spot_engine")
+    spot_profile.config_json["scanner"].pop("multilayer_contract", None)
+    invalidate = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        "app.services.strategy_settings_service.config_service.invalidate_cache",
+        invalidate,
+    )
+    profile_ids = {"L1": uuid4(), "L2": uuid4()}
+
+    dry = await service.materialize_multilayer_contract(
+        db, user_id, layer_profile_ids=profile_ids, apply=False
+    )
+    assert dry["changed"] is True
+    assert dry["applied"] is False
+
+    applied = await service.materialize_multilayer_contract(
+        db, user_id, layer_profile_ids=profile_ids, apply=True
+    )
+    contract = applied["multilayer_contract"]
+    assert applied["applied"] is True
+    assert contract["enabled"] is False
+    assert contract["decision_feature_valid_from"] is None
+    assert all(
+        contract["layers"][layer]["observational_enabled"] is False
+        for layer in ("L1", "L2", "L3")
+    )
+    assert contract["layers"]["L1"]["default_timeframe"] == "1h"
+    assert contract["layers"]["L2"]["default_timeframe"] == "15m"
+    assert contract["layers"]["L3"]["default_timeframe"] == "5m"
+    assert contract["layers"]["L1"]["profile_id"] == str(profile_ids["L1"])
+    assert contract["layers"]["L2"]["profile_id"] == str(profile_ids["L2"])
+    assert db.audits[-1].change_description.startswith("[R6_MULTILAYER_CONTRACT]")
+    invalidate.assert_awaited_once_with("spot_engine", user_id, None, strict=True)
+
+    second = await service.materialize_multilayer_contract(
+        db, user_id, layer_profile_ids=profile_ids, apply=True
+    )
     assert second["changed"] is False
     assert second["applied"] is False

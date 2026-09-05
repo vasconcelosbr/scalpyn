@@ -6,9 +6,11 @@ import json
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
+from ..models.profile import Profile
 from ..schemas.strategy_settings import (
     StrategySettingsApplyRequest,
     StrategySettingsValidateRequest,
@@ -90,6 +92,45 @@ async def update_strategy_settings(
         )
     except StrategySettingsConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except StrategySettingsValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+
+
+@router.post("/multilayer-contract/materialize")
+async def materialize_multilayer_contract(
+    apply: bool = False,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    rows = (
+        await db.execute(
+            select(Profile.id, Profile.name)
+            .where(
+                Profile.user_id == user_id,
+                Profile.is_active.is_(True),
+                Profile.name.in_(("L1", "L2")),
+            )
+            .order_by(Profile.name, Profile.id)
+        )
+    ).all()
+    by_name: dict[str, list[UUID]] = {"L1": [], "L2": []}
+    for profile_id, name in rows:
+        by_name[name].append(profile_id)
+    invalid = {name: ids for name, ids in by_name.items() if len(ids) != 1}
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Exactly one active L1 and one active L2 profile are required",
+        )
+    try:
+        return await strategy_settings_service.materialize_multilayer_contract(
+            db,
+            user_id,
+            layer_profile_ids={"L1": by_name["L1"][0], "L2": by_name["L2"][0]},
+            apply=apply,
+        )
     except StrategySettingsValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)

@@ -61,6 +61,9 @@ class ShadowTradeRead(BaseModel):
     pnl_usdt: Optional[float] = None
     status: str  # PENDING | RUNNING | COMPLETED | ERROR
     skip_reason: Optional[str] = None
+    rejected_by_layer: Optional[str] = None
+    rejected_by_rule: Optional[str] = None
+    layer_verdicts: Optional[Dict[str, Any]] = None
     holding_seconds: Optional[int] = None
     created_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None

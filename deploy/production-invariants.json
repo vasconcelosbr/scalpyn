@@ -1025,6 +1025,62 @@
           ]
         }
       ]
+    },
+    {
+      "id": "r6-multilayer-contracts-prepared-disabled",
+      "description": "R6 persists layer-aware contracts and indicator ownership while L1/L2 authority and observation remain disabled",
+      "files": [
+        {
+          "path": "backend/app/services/multilayer_contract.py",
+          "contains_all": [
+            "multilayer_profile_execution_contract_v2",
+            "multilayer_provenance_resolver_v1",
+            "single_profile_per_symbol_v2",
+            "MULTILAYER_CONTRACT_MUST_REMAIN_DISABLED_IN_R6",
+            "suppressed_layers"
+          ]
+        },
+        {
+          "path": "backend/alembic/versions/215_r6_multilayer_contracts.py",
+          "contains_all": [
+            "rejected_by_layer TEXT NULL",
+            "rejected_by_rule TEXT NULL",
+            "layer_verdicts JSONB NULL",
+            "indicator_registry",
+            "NULL means",
+            "NONE"
+          ]
+        },
+        {
+          "path": "backend/app/contracts/r6_indicator_registry_v1.json",
+          "contains_all": [
+            "orderbook_pressure",
+            "bid_ask_imbalance",
+            "buy_pressure",
+            "taker_ratio",
+            "entry_exhaustion_score",
+            "composed_inputs"
+          ]
+        },
+        {
+          "path": "backend/tests/test_r6_multilayer_contract.py",
+          "contains_all": [
+            "test_multilayer_contract_keeps_homonymous_sections_under_each_layer",
+            "test_historical_single_profile_contract_remains_readable",
+            "test_registry_has_one_owner_complete_compositions_and_no_cross_layer_blocking",
+            "test_migration_uses_unbounded_text_and_preserves_historical_nulls"
+          ]
+        },
+        {
+          "path": "backend/scripts/audit_r6_contracts.py",
+          "contains_all": [
+            "indicator_conservation",
+            "single_blocking_owner_per_phenomenon",
+            "DEFINED_NOT_ACTIVE",
+            "DEFINED_NOT_APPLIED"
+          ]
+        }
+      ]
     }
   ]
 }

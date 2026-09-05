@@ -12,7 +12,7 @@ Sell Pipeline (5 layers):
 """
 
 from pydantic import BaseModel, Field
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 
 class L3ProvenanceSourcePolicyConfig(BaseModel):
@@ -65,6 +65,49 @@ class L3GlobalBlockRangeCompilerConfig(BaseModel):
     )
 
 
+class LayerRuntimeContractConfig(BaseModel):
+    """Prepared, non-operational contract for one decision layer."""
+
+    observational_enabled: bool = False
+    profile_id: Optional[str] = None
+    default_timeframe: Literal["5m", "15m", "1h"]
+    profile_allowlist: List[str] = Field(default_factory=list)
+    outside_allowlist_policy: Literal["REPORT_ONLY", "REJECT_CONFIGURATION"] = (
+        "REPORT_ONLY"
+    )
+    source_policies: L3ProvenanceSourcePoliciesConfig = Field(
+        default_factory=L3ProvenanceSourcePoliciesConfig
+    )
+
+
+class MultiLayerExecutionConfig(BaseModel):
+    """R6 contracts persisted before any layer receives authority."""
+
+    enabled: bool = False
+    execution_contract_version: Literal[
+        "multilayer_profile_execution_contract_v2"
+    ] = "multilayer_profile_execution_contract_v2"
+    execution_contract_valid_from: Optional[str] = None
+    provenance_policy_version: Literal[
+        "multilayer_provenance_resolver_v1"
+    ] = "multilayer_provenance_resolver_v1"
+    consolidation_rule_version: Literal[
+        "single_profile_per_symbol_v2"
+    ] = "single_profile_per_symbol_v2"
+    consolidation_valid_from: Optional[str] = None
+    decision_feature_contract_version: Literal[
+        "multilayer_decision_context_v1"
+    ] = "multilayer_decision_context_v1"
+    decision_feature_valid_from: Optional[str] = None
+    layers: Dict[Literal["L1", "L2", "L3"], LayerRuntimeContractConfig] = Field(
+        default_factory=lambda: {
+            "L1": LayerRuntimeContractConfig(default_timeframe="1h"),
+            "L2": LayerRuntimeContractConfig(default_timeframe="15m"),
+            "L3": LayerRuntimeContractConfig(default_timeframe="5m"),
+        }
+    )
+
+
 class ScannerConfig(BaseModel):
     scan_interval_seconds: int = Field(30, ge=5, le=3600)
     universe_source: Literal["dynamic", "watchlist", "custom"] = "dynamic"
@@ -97,6 +140,12 @@ class ScannerConfig(BaseModel):
     )
     l3_global_block_range_compiler: L3GlobalBlockRangeCompilerConfig = Field(
         default_factory=L3GlobalBlockRangeCompilerConfig
+    )
+    # R6 is materialized through StrategySettingsService.  The runtime must
+    # never infer activation from the presence of this document: both the
+    # parent and every child layer remain disabled in this release.
+    multilayer_contract: MultiLayerExecutionConfig = Field(
+        default_factory=MultiLayerExecutionConfig
     )
 
 

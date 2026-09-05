@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.config_profile import ConfigAuditLog, ConfigProfile
-from ..schemas.spot_engine_config import SpotEngineConfig
+from ..schemas.spot_engine_config import MultiLayerExecutionConfig, SpotEngineConfig
 from ..schemas.strategy_settings import (
     MLShadowConfig,
     ML_SHADOW_KEYS,
@@ -33,6 +33,7 @@ from .l3_gate_runtime_policy import (
     POLICY_FIELDS as L3_GATE_POLICY_FIELDS,
     build_policy_snapshot,
 )
+from .multilayer_contract import require_prepared_multilayer_config
 
 
 CONFIG_TYPES = ("strategy", "spot_engine", "ml")
@@ -285,14 +286,33 @@ class StrategySettingsService:
         merged = _deep_merge(current_parts, patch_parts)
         try:
             strategy = StrategyConfig.model_validate(merged["strategy"]).model_dump(mode="json")
-            spot_engine = SpotEngineConfig.model_validate(merged["spot_engine"]).model_dump(
-                mode="json"
-            )
+            spot_engine_model = SpotEngineConfig.model_validate(merged["spot_engine"])
+            spot_engine = spot_engine_model.model_dump(mode="json")
             ml_shadow = _ml_shadow_dump(
                 MLShadowConfig.model_validate(merged["ml_shadow"])
             )
         except ValidationError as exc:
             raise StrategySettingsValidationError(str(exc)) from exc
+
+        multilayer = spot_engine_model.scanner.multilayer_contract
+        if multilayer.enabled:
+            raise StrategySettingsValidationError(
+                "R6 multilayer authority must remain disabled"
+            )
+        enabled_layers = sorted(
+            layer
+            for layer, layer_config in multilayer.layers.items()
+            if layer_config.observational_enabled
+        )
+        if enabled_layers:
+            raise StrategySettingsValidationError(
+                "R6 observational layers must remain disabled: "
+                + ", ".join(enabled_layers)
+            )
+        if multilayer.decision_feature_valid_from is not None:
+            raise StrategySettingsValidationError(
+                "R6 decision feature boundary is defined but cannot be applied"
+            )
 
         if (
             ml_shadow["shadow_barrier_mode"] == "ATR_DYNAMIC"
@@ -468,6 +488,109 @@ class StrategySettingsService:
             "changed": True,
             "applied": True,
             "runtime_policy": readback_policy,
+        }
+
+    async def materialize_multilayer_contract(
+        self,
+        db: AsyncSession,
+        user_id: UUID,
+        *,
+        layer_profile_ids: Dict[str, UUID],
+        apply: bool = False,
+    ) -> Dict[str, Any]:
+        """Persist the R6 contract while keeping every layer non-operational."""
+
+        if set(layer_profile_ids) != {"L1", "L2"}:
+            raise StrategySettingsValidationError(
+                "layer_profile_ids must contain exactly L1 and L2"
+            )
+        profiles = await self._profiles(db, user_id, lock=apply)
+        profile = profiles.get("spot_engine")
+        before_json = dict(profile.config_json or {}) if profile else {}
+        candidate = deepcopy(before_json)
+        scanner = dict(candidate.get("scanner") or {})
+        existing = scanner.get("multilayer_contract")
+        if existing:
+            contract = deepcopy(existing)
+        else:
+            contract = MultiLayerExecutionConfig().model_dump(mode="json")
+            prepared_at = datetime.now(timezone.utc).isoformat()
+            contract["execution_contract_valid_from"] = prepared_at
+            contract["consolidation_valid_from"] = prepared_at
+            contract["decision_feature_valid_from"] = None
+            legacy_policies = (
+                (scanner.get("l3_global_block_range_compiler") or {}).get(
+                    "source_policies"
+                )
+                or {}
+            )
+            if legacy_policies:
+                contract["layers"]["L3"]["source_policies"] = deepcopy(
+                    legacy_policies
+                )
+
+        contract["enabled"] = False
+        for layer in ("L1", "L2", "L3"):
+            contract["layers"][layer]["observational_enabled"] = False
+        contract["layers"]["L1"]["profile_id"] = str(layer_profile_ids["L1"])
+        contract["layers"]["L2"]["profile_id"] = str(layer_profile_ids["L2"])
+        contract["layers"]["L3"]["profile_id"] = None
+        scanner["multilayer_contract"] = contract
+        candidate["scanner"] = scanner
+
+        SpotEngineConfig.from_config_json(candidate)
+        prepared = require_prepared_multilayer_config(scanner)
+        changed = candidate != before_json
+        contract_hash = _canonical_hash(prepared)
+        if not apply or not changed:
+            if apply:
+                await db.rollback()
+            return {
+                "user_id": str(user_id),
+                "changed": changed,
+                "applied": False,
+                "contract_hash": contract_hash,
+                "multilayer_contract": prepared,
+            }
+
+        if profile is None:
+            profile = ConfigProfile(
+                user_id=user_id,
+                pool_id=None,
+                config_type="spot_engine",
+                config_json=candidate,
+                is_active=True,
+            )
+            db.add(profile)
+            await db.flush()
+        else:
+            profile.config_json = candidate
+        db.add(
+            ConfigAuditLog(
+                config_id=profile.id,
+                changed_by=user_id,
+                previous_json=before_json or None,
+                new_json=candidate,
+                change_description=(
+                    "[R6_MULTILAYER_CONTRACT] materialize disabled layer contracts"
+                ),
+            )
+        )
+        await db.commit()
+        await config_service.invalidate_cache("spot_engine", user_id, None, strict=True)
+        readback = await self.get_config(db, user_id)
+        readback_contract = require_prepared_multilayer_config(
+            readback["config"]["spot_engine"]["scanner"]
+        )
+        if _canonical_hash(readback_contract) != contract_hash:
+            raise RuntimeError("R6 multilayer contract readback hash mismatch")
+        return {
+            "user_id": str(user_id),
+            "changed": True,
+            "applied": True,
+            "contract_hash": contract_hash,
+            "multilayer_contract": readback_contract,
+            "source_hash": readback["config"]["source_hash"],
         }
 
 

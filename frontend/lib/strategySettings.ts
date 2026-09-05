@@ -45,6 +45,16 @@ export const EDITABLE_ROOTS = ["strategy", "spot_engine", "ml_shadow"] as const;
 export const ENUM_OPTIONS: Record<string, string[]> = {
   "spot_engine.scanner.universe_source": ["dynamic", "watchlist", "custom"],
   "spot_engine.scanner.l3_profile_consolidation_rule_version": ["single_profile_per_symbol_v1"],
+  "spot_engine.scanner.multilayer_contract.execution_contract_version": ["multilayer_profile_execution_contract_v2"],
+  "spot_engine.scanner.multilayer_contract.provenance_policy_version": ["multilayer_provenance_resolver_v1"],
+  "spot_engine.scanner.multilayer_contract.consolidation_rule_version": ["single_profile_per_symbol_v2"],
+  "spot_engine.scanner.multilayer_contract.decision_feature_contract_version": ["multilayer_decision_context_v1"],
+  "spot_engine.scanner.multilayer_contract.layers.L1.default_timeframe": ["5m", "15m", "1h"],
+  "spot_engine.scanner.multilayer_contract.layers.L2.default_timeframe": ["5m", "15m", "1h"],
+  "spot_engine.scanner.multilayer_contract.layers.L3.default_timeframe": ["5m", "15m", "1h"],
+  "spot_engine.scanner.multilayer_contract.layers.L1.outside_allowlist_policy": ["REPORT_ONLY", "REJECT_CONFIGURATION"],
+  "spot_engine.scanner.multilayer_contract.layers.L2.outside_allowlist_policy": ["REPORT_ONLY", "REJECT_CONFIGURATION"],
+  "spot_engine.scanner.multilayer_contract.layers.L3.outside_allowlist_policy": ["REPORT_ONLY", "REJECT_CONFIGURATION"],
   "spot_engine.scanner.l3_block_and_skipped_policy": ["legacy", "not_satisfied"],
   "spot_engine.scanner.l3_missing_indicator_policy": ["warn", "disable_rule"],
   "spot_engine.scanner.l3_global_block_range_compiler.policy_version": ["l3_global_block_range_compiler_v1"],
@@ -59,6 +69,20 @@ export const ENUM_OPTIONS: Record<string, string[]> = {
   "ml_shadow.shadow_trailing_contract_version": ["shadow_hwm_trailing_v1", "shadow_trailing_policy_v2"],
   "ml_shadow.shadow_trailing_policy_family": ["FIXED", "STEPPED", "PROPORTIONAL"],
 };
+
+export const R6_READ_ONLY_PATHS = new Set([
+  "spot_engine.scanner.multilayer_contract.enabled",
+  "spot_engine.scanner.multilayer_contract.execution_contract_version",
+  "spot_engine.scanner.multilayer_contract.execution_contract_valid_from",
+  "spot_engine.scanner.multilayer_contract.provenance_policy_version",
+  "spot_engine.scanner.multilayer_contract.consolidation_rule_version",
+  "spot_engine.scanner.multilayer_contract.consolidation_valid_from",
+  "spot_engine.scanner.multilayer_contract.decision_feature_contract_version",
+  "spot_engine.scanner.multilayer_contract.decision_feature_valid_from",
+  "spot_engine.scanner.multilayer_contract.layers.L1.observational_enabled",
+  "spot_engine.scanner.multilayer_contract.layers.L2.observational_enabled",
+  "spot_engine.scanner.multilayer_contract.layers.L3.observational_enabled",
+]);
 
 export function parseStrategySettingsJson(text: string): JsonObject {
   let parsed: unknown;

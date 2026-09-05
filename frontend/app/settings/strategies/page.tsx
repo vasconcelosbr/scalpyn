@@ -10,7 +10,7 @@ import {
 import { ModuleAIAnalysisAction } from "@/components/ai/ModuleAIAnalysisAction";
 import { StrategySettingsJsonModal } from "@/components/settings/StrategySettingsJsonModal";
 import {
-  ENUM_OPTIONS, JsonObject, JsonValue, StrategyDefinition,
+  ENUM_OPTIONS, JsonObject, JsonValue, R6_READ_ONLY_PATHS, StrategyDefinition,
   StrategySettingsBundle, StrategySettingsValidation,
   downloadSavedStrategySettings, editablePayload, loadStrategySettings,
   normaliseBarrierContract, saveStrategySettings, updateAtPath,
@@ -18,6 +18,14 @@ import {
 } from "@/lib/strategySettings";
 
 const COPY: Record<string, { label: string; help?: string }> = {
+  "spot_engine.scanner.multilayer_contract.enabled": { label: "Autoridade multicamada", help: "Permanece desligada no R6. A ativação exige release e autorização posteriores." },
+  "spot_engine.scanner.multilayer_contract.execution_contract_version": { label: "Contrato de execução multicamada" },
+  "spot_engine.scanner.multilayer_contract.execution_contract_valid_from": { label: "Válido desde", help: "Identidade temporal da estrutura R6; não ativa L1 ou L2." },
+  "spot_engine.scanner.multilayer_contract.provenance_policy_version": { label: "Política de proveniência por camada" },
+  "spot_engine.scanner.multilayer_contract.consolidation_rule_version": { label: "Unidade de consolidação" },
+  "spot_engine.scanner.multilayer_contract.consolidation_valid_from": { label: "Consolidação válida desde" },
+  "spot_engine.scanner.multilayer_contract.decision_feature_contract_version": { label: "Contrato futuro das features de decisão" },
+  "spot_engine.scanner.multilayer_contract.decision_feature_valid_from": { label: "Fronteira futura de dados", help: "Deve permanecer vazia nesta release; será preenchida somente na migração de autoridade." },
   "spot_engine.scanner.l3_single_profile_per_symbol_enabled": { label: "Consolidar Shadows aprovados por ativo", help: "Cria um único Shadow aprovado por símbolo e direção. Esta ativação é independente da consolidação dos rejeitados." },
   "spot_engine.scanner.l3_rejected_single_profile_per_symbol_enabled": { label: "Consolidar Shadows rejeitados por ativo", help: "Cria um único L3_REJECTED por símbolo e direção, mantém o profile prioritário como principal e registra os demais como associados. Não autoriza trades e não altera a consolidação dos aprovados." },
   "ml_shadow.shadow_capture_l3_rejected_max_per_hour": { label: "Limite horário de rejeitados consolidados", help: "Aplicado somente depois da consolidação; conta vencedores canônicos, não a quantidade bruta de profiles. O valor precisa estar persistido antes da ativação." },
@@ -95,15 +103,16 @@ function FieldEditor({ path, value, onChange }: { path: string; value: JsonValue
   const copy = COPY[path];
   const label = copy?.label ?? humanise(path.split(".").at(-1) ?? path);
   const options = ENUM_OPTIONS[path];
+  const readOnly = R6_READ_ONLY_PATHS.has(path);
   if (typeof value === "boolean") {
-    return <label className="flex min-h-20 cursor-pointer items-center justify-between gap-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4"><span><span className="block text-sm font-medium text-[var(--text-primary)]">{label}</span>{copy?.help && <span className="mt-1 block text-[11px] leading-relaxed text-[var(--text-tertiary)]">{copy.help}</span>}</span><button type="button" role="switch" aria-checked={value} onClick={() => onChange(path, !value)} className={`relative h-6 w-11 shrink-0 rounded-full transition ${value ? "bg-violet-500" : "bg-[var(--border-default)]"}`}><span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition ${value ? "left-6" : "left-1"}`} /></button></label>;
+    return <label className="flex min-h-20 items-center justify-between gap-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4"><span><span className="block text-sm font-medium text-[var(--text-primary)]">{label}</span>{copy?.help && <span className="mt-1 block text-[11px] leading-relaxed text-[var(--text-tertiary)]">{copy.help}</span>}</span><button disabled={readOnly} type="button" role="switch" aria-checked={value} onClick={() => onChange(path, !value)} className={`relative h-6 w-11 shrink-0 rounded-full transition disabled:cursor-not-allowed disabled:opacity-50 ${value ? "bg-violet-500" : "bg-[var(--border-default)]"}`}><span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition ${value ? "left-6" : "left-1"}`} /></button></label>;
   }
   if (Array.isArray(value) || path === "ml_shadow.shadow_measurement_timeframe_priority") {
     const arrayValue = Array.isArray(value) ? value : [];
     return <label className="block space-y-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4"><span className="text-xs font-medium text-[var(--text-secondary)]">{label}</span><input className="input w-full font-mono text-sm" type="text" value={arrayValue.join(", ")} placeholder="1m, 5m" onChange={(event) => onChange(path, event.target.value.split(",").map((item) => item.trim()).filter(Boolean))} />{copy?.help && <span className="block text-[11px] leading-relaxed text-[var(--text-tertiary)]">{copy.help}</span>}</label>;
   }
   const nullableNumber = path === "ml_shadow.shadow_entry_max_lag_seconds" || path === "ml_shadow.canary_minimum_outcomes";
-  return <label className="block space-y-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4"><span className="text-xs font-medium text-[var(--text-secondary)]">{label}</span>{options ? <select className="input w-full text-sm" value={String(value)} onChange={(event) => onChange(path, event.target.value)}>{options.map((option) => <option key={option} value={option}>{option}</option>)}</select> : <input className="input w-full font-mono text-sm" type={typeof value === "number" || nullableNumber ? "number" : "text"} step={typeof value === "number" || nullableNumber ? "any" : undefined} value={String(value ?? "")} onChange={(event) => onChange(path, nullableNumber ? (event.target.value === "" ? null : Number(event.target.value)) : typeof value === "number" ? Number(event.target.value) : event.target.value)} />}{copy?.help && <span className="block text-[11px] leading-relaxed text-[var(--text-tertiary)]">{copy.help}</span>}</label>;
+  return <label className="block space-y-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4"><span className="text-xs font-medium text-[var(--text-secondary)]">{label}</span>{options ? <select disabled={readOnly} className="input w-full text-sm disabled:cursor-not-allowed disabled:opacity-60" value={String(value)} onChange={(event) => onChange(path, event.target.value)}>{options.map((option) => <option key={option} value={option}>{option}</option>)}</select> : <input readOnly={readOnly} className="input w-full font-mono text-sm read-only:cursor-not-allowed read-only:opacity-60" type={typeof value === "number" || nullableNumber ? "number" : "text"} step={typeof value === "number" || nullableNumber ? "any" : undefined} value={String(value ?? "")} onChange={(event) => onChange(path, nullableNumber ? (event.target.value === "" ? null : Number(event.target.value)) : typeof value === "number" ? Number(event.target.value) : event.target.value)} />}{copy?.help && <span className="block text-[11px] leading-relaxed text-[var(--text-tertiary)]">{copy.help}</span>}</label>;
 }
 
 function RecursiveEditor({ value, prefix, onChange }: { value: JsonObject; prefix: string; onChange: (path: string, value: JsonValue) => void }) {

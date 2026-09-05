@@ -11,6 +11,7 @@ from .api import (
     auth,
     config as config_api,
     strategy_settings,
+    indicator_registry,
     pools,
     exchanges,
     decisions,
@@ -373,6 +374,7 @@ app.add_middleware(_SchemaReadinessGate)
 app.include_router(auth.router)
 app.include_router(config_api.router)
 app.include_router(strategy_settings.router)
+app.include_router(indicator_registry.router)
 app.include_router(decisions.router)
 
 # Market Data & Watchlist
