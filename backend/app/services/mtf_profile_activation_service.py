@@ -297,10 +297,16 @@ async def _load_prerequisites(
         raise MTFActivationConflict("MTF_WATCHLIST_LAYER_MISMATCH")
     if l1.market_mode != "spot" or l2.market_mode != "spot":
         raise MTFActivationConflict("MTF_WATCHLIST_MARKET_MISMATCH")
-    if l1.source_pool_id is None or l1.source_watchlist_id is not None:
-        raise MTFActivationConflict("MTF_L1_SOURCE_CHAIN_INVALID")
-    if l2.source_watchlist_id != l1.id or l2.source_pool_id is not None:
-        raise MTFActivationConflict("MTF_L2_SOURCE_CHAIN_INVALID")
+    l1_source = None
+    if l1.source_watchlist_id is not None:
+        source_query = select(PipelineWatchlist).where(
+            PipelineWatchlist.user_id == user_id,
+            PipelineWatchlist.id == l1.source_watchlist_id,
+        )
+        if lock:
+            source_query = source_query.with_for_update()
+        l1_source = (await db.execute(source_query)).scalar_one_or_none()
+    _validate_watchlist_chain(l1, l2, l1_source=l1_source)
     if l1.profile_id != parsed["profiles"]["L1"]["profile_id"]:
         raise MTFActivationConflict("MTF_L1_PROFILE_ASSOCIATION_CHANGED")
     for layer, row in (("L1", l1), ("L2", l2)):
@@ -334,6 +340,26 @@ def _watchlist_snapshot(row: PipelineWatchlist) -> dict[str, Any]:
         "source_pool_id": str(row.source_pool_id) if row.source_pool_id else None,
         "source_watchlist_id": str(row.source_watchlist_id) if row.source_watchlist_id else None,
     }
+
+
+def _validate_watchlist_chain(
+    l1: PipelineWatchlist,
+    l2: PipelineWatchlist,
+    *,
+    l1_source: PipelineWatchlist | None,
+) -> None:
+    """Accept both supported POOL origins while preserving POOL -> L1 -> L2."""
+
+    if (l1.source_pool_id is None) == (l1.source_watchlist_id is None):
+        raise MTFActivationConflict("MTF_L1_SOURCE_CHAIN_INVALID")
+    if l1.source_watchlist_id is not None and (
+        l1_source is None
+        or str(l1_source.level or "").upper() != "POOL"
+        or l1_source.market_mode != "spot"
+    ):
+        raise MTFActivationConflict("MTF_L1_SOURCE_WATCHLIST_INVALID")
+    if l2.source_watchlist_id != l1.id or l2.source_pool_id is not None:
+        raise MTFActivationConflict("MTF_L2_SOURCE_CHAIN_INVALID")
 
 
 async def activate_existing_mtf_profiles(

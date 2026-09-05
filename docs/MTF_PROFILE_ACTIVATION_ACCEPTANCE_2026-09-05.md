@@ -33,6 +33,7 @@ Conclusão: a infraestrutura está apta a coletar, mas a janela point-in-time go
 ## Implementação entregue
 
 - O scanner das watchlists L1/L2 carrega indicadores por `symbol + market_type + timeframe + scheduler_group` e valida a identidade governada antes de avaliar o profile.
+- A validação preserva as duas representações suportadas de origem do funil e confirma explicitamente a forma usada em produção: watchlist `POOL → L1 → L2`.
 - O motor de profile entra em modo temporal estrito para `MTF_LAYER`: dado ausente, vencido ou pertencente a outro timeframe reprova a condição, sem fallback para o conjunto plano legado.
 - A prévia `POST /api/profiles/mtf/activation-preview` não grava. A aplicação `POST /api/profiles/mtf/activate-existing` exige compare-and-swap de profiles e vínculos, run `PASSED` no servidor e executa profiles, versões, watchlists, contrato e auditoria em uma transação.
 - A aplicação preserva os IDs dos profiles, gera novas versões, associa L1 à watchlist L1 e L2 à watchlist L2 e materializa o contrato `SHADOW` com `operational_effect:false`.
@@ -43,7 +44,7 @@ Conclusão: a infraestrutura está apta a coletar, mas a janela point-in-time go
 
 | Verificação | Origem | Resultado literal |
 |---|---|---|
-| Testes focados MTF/backend | `[test] pytest` | `70 passed in 3.11s` |
+| Testes focados MTF/backend | `[test] pytest` | `72 passed in 2.70s` |
 | Testes frontend | `[test] npm test` | `tests 83; pass 83; fail 0` |
 | Build frontend | `[build] npm run build` | `Compiled successfully`; `Finished TypeScript`; `44/44` páginas |
 | Cabeça Alembic | `[query] alembic heads` | `218_mtf_profile_activation_audit (head)` |
@@ -70,6 +71,6 @@ Os testes de integração que dependem de API/PostgreSQL locais foram mantidos c
 | 0 runs | `[query] mtf_runs` | `[]` |
 | 995 s | `[calc] ceil(1894.611329 - 900)` | p95 e duração acima |
 | 3679 s | `[calc] ceil(7278.842193 - 3600)` | p95 e duração acima |
-| 70 | `[test] pytest` | `70 passed in 3.11s` |
+| 72 | `[test] pytest` | `72 passed in 2.70s` |
 | 83 | `[test] npm test` | `tests 83; pass 83; fail 0` |
 | 44 | `[build] npm run build` | `Generating static pages ... (44/44)` |

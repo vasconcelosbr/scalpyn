@@ -1,12 +1,16 @@
 from copy import deepcopy
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 
 from app.api import profiles as profiles_api
 from app.services.mtf_profile_activation_service import (
     IMPORT_MODE,
+    MTFActivationConflict,
+    _validate_watchlist_chain,
     parse_activation_document,
 )
 from app.services.mtf_walk_forward import require_calibration_config
@@ -140,6 +144,45 @@ def test_governed_document_requires_watchlist_compare_and_swap_bindings():
 
     with pytest.raises(ValueError, match="expected_watchlist_bindings"):
         parse_activation_document(document)
+
+
+def test_watchlist_chain_accepts_existing_pool_watchlist_origin():
+    pool_id = UUID("77777777-7777-7777-7777-777777777777")
+    l1_id = UUID("55555555-5555-5555-5555-555555555555")
+    l1 = SimpleNamespace(
+        id=l1_id,
+        source_pool_id=None,
+        source_watchlist_id=pool_id,
+    )
+    l2 = SimpleNamespace(
+        source_pool_id=None,
+        source_watchlist_id=l1_id,
+    )
+    pool = SimpleNamespace(id=pool_id, level="POOL", market_mode="spot")
+
+    _validate_watchlist_chain(l1, l2, l1_source=pool)
+
+
+def test_watchlist_chain_rejects_non_pool_watchlist_origin():
+    source_id = UUID("77777777-7777-7777-7777-777777777777")
+    l1_id = UUID("55555555-5555-5555-5555-555555555555")
+    l1 = SimpleNamespace(
+        id=l1_id,
+        source_pool_id=None,
+        source_watchlist_id=source_id,
+    )
+    l2 = SimpleNamespace(
+        source_pool_id=None,
+        source_watchlist_id=l1_id,
+    )
+    wrong_source = SimpleNamespace(
+        id=source_id,
+        level="L3",
+        market_mode="spot",
+    )
+
+    with pytest.raises(MTFActivationConflict, match="SOURCE_WATCHLIST_INVALID"):
+        _validate_watchlist_chain(l1, l2, l1_source=wrong_source)
 
 
 def test_statistical_policy_proposal_is_validator_compatible_but_not_approved():
