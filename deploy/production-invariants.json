@@ -1009,7 +1009,7 @@
         {
           "path": "docs/runbooks/ohlcv-canonical-capture-contract.md",
           "contains_all": [
-            "ingested_at forensic boundary",
+            "`ingested_at` forensic boundary",
             "legacy_collect_market_data_untrusted",
             "DEFERRED_BY_OPERATOR"
           ]
