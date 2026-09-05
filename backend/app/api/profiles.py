@@ -26,6 +26,8 @@ from ..services.profile_execution_contract import (
     lock_profiles_for_update,
 )
 from ..services.seed_service import DEFAULT_SCORE
+from ..services.profile_runtime_config import canonical_hash
+from ..utils.indicator_merge import fetch_merged_indicators
 
 logger = logging.getLogger(__name__)
 
@@ -682,6 +684,7 @@ async def bulk_import_profiles(
                     source_identity.get("candle_policy") != "CLOSED_ONLY"
                     or not source_identity.get("allowed_source_providers")
                     or not source_identity.get("provider_policy_id")
+                    or not source_identity.get("allowed_capture_contract_versions")
                 ):
                     raise ValueError("MTF_SOURCE_IDENTITY_CONFIG_REQUIRED")
                 if (
@@ -696,8 +699,33 @@ async def bulk_import_profiles(
                     or calibration.get("min_samples") is None
                     or calibration.get("baseline_outperformed") is not True
                     or calibration.get("worst_fold_drawdown_not_worse") is not True
+                    or not calibration.get("run_id")
+                    or not calibration.get("policy_hash")
+                    or not calibration.get("thresholds_hash")
                 ):
                     raise ValueError("MTF_SHADOW_CALIBRATION_GATE_FAILED")
+                if activation_mode == "SHADOW":
+                    run = (await db.execute(text("""
+                        SELECT approved_policy_hash, selected_profiles
+                          FROM mtf_calibration_runs
+                         WHERE id = CAST(:run_id AS UUID)
+                           AND user_id = CAST(:user_id AS UUID)
+                           AND status = 'PASSED'
+                         FOR UPDATE
+                    """), {
+                        "run_id": str(calibration["run_id"]),
+                        "user_id": str(user_id),
+                    })).mappings().one_or_none()
+                    selected = dict((run or {}).get("selected_profiles") or {}).get(layer) or {}
+                    if (
+                        run is None
+                        or calibration["policy_hash"] != run["approved_policy_hash"]
+                        or calibration["thresholds_hash"] != canonical_hash(
+                            calibration.get("thresholds") or {}
+                        )
+                        or selected.get("thresholds_hash") != calibration["thresholds_hash"]
+                    ):
+                        raise ValueError("MTF_CALIBRATION_RUN_GATE_FAILED")
                 config_input["mtf_layer"] = {
                     "layer": layer,
                     "activation_mode": activation_mode,
@@ -1257,16 +1285,6 @@ async def _get_watchlist_assets(db: AsyncSession) -> List[Dict[str, Any]]:
         scores_result = await db.execute(scores_query)
         scores_rows = scores_result.fetchall()
         
-        # Get latest indicators
-        indicators_query = text("""
-            SELECT DISTINCT ON (symbol)
-                symbol, indicators_json
-            FROM indicators
-            ORDER BY symbol, time DESC
-        """)
-        indicators_result = await db.execute(indicators_query)
-        indicators_rows = indicators_result.fetchall()
-        
         # Get market metadata
         metadata_query = text("""
             SELECT symbol, name, market_cap, volume_24h, price, price_change_24h
@@ -1277,7 +1295,15 @@ async def _get_watchlist_assets(db: AsyncSession) -> List[Dict[str, Any]]:
         
         # Build assets list
         scores_map = {r.symbol: r for r in scores_rows}
-        indicators_map = {r.symbol: r.indicators_json or {} for r in indicators_rows}
+        merged = await fetch_merged_indicators(
+            db,
+            [row.symbol for row in metadata_rows],
+            include_stale=True,
+        )
+        indicators_map = {
+            symbol: snapshot.as_flat_dict()
+            for symbol, snapshot in merged.items()
+        }
         
         assets = []
         for row in metadata_rows:

@@ -803,7 +803,8 @@ async def _compute_5m_async():
             for symbol in symbols:
                 try:
                     ohlcv_result = await db.execute(text("""
-                        SELECT time, open, high, low, close, volume, quote_volume, exchange
+                        SELECT time, open, high, low, close, volume, quote_volume, exchange,
+                               is_closed, ingested_at, capture_contract_version
                         FROM ohlcv
                         WHERE symbol = :symbol AND timeframe = '5m'
                           AND time <= now() - interval '5 minutes'
@@ -817,6 +818,13 @@ async def _compute_5m_async():
                             "Skipping 5m indicator computation for %s: only %d candles (need ≥%d)",
                             symbol, len(rows), min_candles_5m,
                         )
+                        continue
+                    if (
+                        rows[0].is_closed is not True
+                        or rows[0].ingested_at is None
+                        or not rows[0].capture_contract_version
+                    ):
+                        logger.warning("[COMPUTE-5m] rejected ungoverned source symbol=%s", symbol)
                         continue
 
                     df = pd.DataFrame([{
@@ -893,6 +901,8 @@ async def _compute_5m_async():
                             "computed_at": now.isoformat(),
                             "available_at": now.isoformat(),
                             "producer_version": "compute_5m_v2",
+                            "capture_contract_version": rows[0].capture_contract_version,
+                            "source_ingested_at": rows[0].ingested_at.isoformat(),
                             **indicator_config_identity,
                         },
                     ))
@@ -1068,7 +1078,8 @@ async def _compute_structural_5m_async():
             for symbol in symbols:
                 try:
                     ohlcv_result = await db.execute(text("""
-                        SELECT time, open, high, low, close, volume, quote_volume, exchange
+                        SELECT time, open, high, low, close, volume, quote_volume, exchange,
+                               is_closed, ingested_at, capture_contract_version
                         FROM ohlcv
                         WHERE symbol = :symbol AND timeframe = '5m'
                           AND time <= now() - interval '5 minutes'
@@ -1082,6 +1093,13 @@ async def _compute_structural_5m_async():
                             "[COMPUTE-S5m] Skipping %s: only %d candles (need ≥%d)",
                             symbol, len(rows), min_candles_5m,
                         )
+                        continue
+                    if (
+                        rows[0].is_closed is not True
+                        or rows[0].ingested_at is None
+                        or not rows[0].capture_contract_version
+                    ):
+                        logger.warning("[COMPUTE-S5m] rejected ungoverned source symbol=%s", symbol)
                         continue
 
                     df = pd.DataFrame([{
@@ -1116,6 +1134,8 @@ async def _compute_structural_5m_async():
                             "computed_at": now.isoformat(),
                             "available_at": now.isoformat(),
                             "producer_version": "compute_structural_5m_v2",
+                            "capture_contract_version": rows[0].capture_contract_version,
+                            "source_ingested_at": rows[0].ingested_at.isoformat(),
                             **indicator_config_identity,
                         },
                     ))

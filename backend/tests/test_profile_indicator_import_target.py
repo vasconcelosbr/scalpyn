@@ -373,6 +373,7 @@ def _mtf_profile_payload(*, activation_mode="DRAFT"):
             "allowed_source_providers": ["gate.io"],
             "provider_policy_id": "spot_gate_closed_ohlcv_v1",
             "candle_policy": "CLOSED_ONLY",
+            "allowed_capture_contract_versions": ["spot_mtf_closed_ohlcv_v2"],
             "validity_margin_seconds": None,
         },
         "calibration": {

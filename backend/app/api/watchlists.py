@@ -55,6 +55,7 @@ from ..utils.pipeline_profile_filters import (
     uses_pipeline_filters,
     WATCHLIST_STAGE_ORDER,
 )
+from ..utils.indicator_merge import fetch_merged_indicators
 
 logger = logging.getLogger(__name__)
 
@@ -3293,18 +3294,18 @@ async def get_watchlist_signals(
 
     symbols = [a.symbol for a in pipeline_assets]
 
-    # Fetch latest indicators
+    # Fetch the latest row per scheduler group for these symbols only.  This
+    # preserves the complete envelope and avoids a sort over all identities.
     try:
-        ind_rows = await db.execute(
-            text("""
-                SELECT DISTINCT ON (symbol) symbol, indicators_json
-                FROM indicators
-                WHERE symbol = ANY(:symbols)
-                ORDER BY symbol, time DESC
-            """),
-            {"symbols": symbols},
+        merged = await fetch_merged_indicators(
+            db,
+            symbols,
+            include_stale=True,
         )
-        indicators_map = {r.symbol: r.indicators_json or {} for r in ind_rows.fetchall()}
+        indicators_map = {
+            symbol: snapshot.as_flat_dict()
+            for symbol, snapshot in merged.items()
+        }
     except Exception:
         indicators_map = {}
 

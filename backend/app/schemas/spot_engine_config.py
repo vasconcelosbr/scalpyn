@@ -25,6 +25,7 @@ class L3ProvenanceSourcePolicyConfig(BaseModel):
     window_seconds: Optional[int] = Field(None, gt=0)
     snapshot: Optional[bool] = None
     candle_policy: Optional[Literal["CLOSED_ONLY", "CURRENT_ALLOWED"]] = None
+    allowed_capture_contract_versions: List[str] = Field(default_factory=list)
 
 
 class L3ProvenanceSourcePoliciesConfig(BaseModel):
@@ -72,6 +73,8 @@ class LayerRuntimeContractConfig(BaseModel):
     profile_id: Optional[str] = None
     profile_version_id: Optional[str] = None
     profile_config_hash: Optional[str] = None
+    required_indicators: List[str] = Field(default_factory=list)
+    required_indicators_by_group: Dict[str, List[str]] = Field(default_factory=dict)
     default_timeframe: Literal["5m", "15m", "1h"]
     validity_margin_seconds: Optional[int] = Field(None, ge=0)
     profile_allowlist: List[str] = Field(default_factory=list)
@@ -101,9 +104,11 @@ class MultiLayerExecutionConfig(BaseModel):
     ] = "single_profile_per_symbol_v2"
     consolidation_valid_from: Optional[str] = None
     decision_feature_contract_version: Literal[
-        "multilayer_decision_context_v1", "multilayer_decision_context_v2"
+        "multilayer_decision_context_v1", "multilayer_decision_context_v2",
+        "multilayer_decision_context_v3"
     ] = "multilayer_decision_context_v1"
     decision_feature_valid_from: Optional[str] = None
+    calibration_run_id: Optional[str] = None
     layers: Dict[Literal["L1", "L2", "L3"], LayerRuntimeContractConfig] = Field(
         default_factory=lambda: {
             "L1": LayerRuntimeContractConfig(default_timeframe="1h"),

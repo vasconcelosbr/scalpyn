@@ -50,6 +50,33 @@ EXPECTED_N_FEATURES = 37
 
 _FULL_INDICATORS = {f"ind_{i}": float(i) for i in range(EXPECTED_N_FEATURES)}
 
+_PERSISTED_SHADOW_CONFIG = {
+    "shadow": {
+        "amount_usdt": 1000.0,
+        "timeout_candles": 1440,
+        "trailing_contract_version": "shadow_hwm_trailing_v1",
+        "ttt": {
+            "enabled": True,
+            "tp_pct": 1.0,
+            "timeout_minutes": 180,
+        },
+    }
+}
+
+_PERSISTED_ML_SHADOW_CONFIG = {
+    "shadow_capture_l1_enabled": True,
+    "shadow_capture_l1_sample_rate": 1.0,
+    "shadow_capture_l1_max_per_hour": 200,
+    "shadow_barrier_mode": "ATR_DYNAMIC",
+    "shadow_atr_timeframe": "5m",
+    "shadow_atr_multiplier_tp": 1.5,
+    "shadow_atr_multiplier_sl": 1.5,
+    "shadow_barrier_min_pct": 0.5,
+    "shadow_barrier_max_pct": 3.0,
+    "ml_fee_roundtrip_pct": 0.20,
+    "ml_active_barrier_contract_version": "shadow_atr_dynamic_v2",
+}
+
 
 # ─── Tests ────────────────────────────────────────────────────────────────────
 
@@ -71,14 +98,9 @@ async def test_l1_shadow_full_coverage():
     db_mock = _make_db_session_mock()
     # _skp_row for ml config (ml_fee + shadow_capture_l1_enabled etc.)
     ml_cfg = MagicMock()
-    ml_cfg.config_json = {
-        "shadow_capture_l1_enabled": True,
-        "shadow_capture_l1_sample_rate": 1.0,  # 100% → BTC_USDT always sampled
-        "shadow_capture_l1_max_per_hour": 200,
-        "ml_fee_roundtrip_pct": 0.20,
-    }
+    ml_cfg.config_json = dict(_PERSISTED_ML_SHADOW_CONFIG)
     se_cfg = MagicMock()
-    se_cfg.config_json = {}
+    se_cfg.config_json = _PERSISTED_SHADOW_CONFIG
 
     ml_res = MagicMock()
     ml_res.scalar_one_or_none.return_value = ml_cfg
@@ -152,14 +174,9 @@ async def test_l1_shadow_no_indicators():
 
     db_mock = _make_db_session_mock()
     ml_cfg = MagicMock()
-    ml_cfg.config_json = {
-        "shadow_capture_l1_enabled": True,
-        "shadow_capture_l1_sample_rate": 1.0,
-        "shadow_capture_l1_max_per_hour": 200,
-        "ml_fee_roundtrip_pct": 0.20,
-    }
+    ml_cfg.config_json = dict(_PERSISTED_ML_SHADOW_CONFIG)
     se_cfg = MagicMock()
-    se_cfg.config_json = {}
+    se_cfg.config_json = _PERSISTED_SHADOW_CONFIG
 
     ml_res = MagicMock()
     ml_res.scalar_one_or_none.return_value = ml_cfg
@@ -224,14 +241,9 @@ async def test_l1_shadow_provider_exception():
 
     db_mock = _make_db_session_mock()
     ml_cfg = MagicMock()
-    ml_cfg.config_json = {
-        "shadow_capture_l1_enabled": True,
-        "shadow_capture_l1_sample_rate": 1.0,
-        "shadow_capture_l1_max_per_hour": 200,
-        "ml_fee_roundtrip_pct": 0.20,
-    }
+    ml_cfg.config_json = dict(_PERSISTED_ML_SHADOW_CONFIG)
     se_cfg = MagicMock()
-    se_cfg.config_json = {}
+    se_cfg.config_json = _PERSISTED_SHADOW_CONFIG
 
     ml_res = MagicMock()
     ml_res.scalar_one_or_none.return_value = ml_cfg

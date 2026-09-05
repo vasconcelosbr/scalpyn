@@ -2085,20 +2085,22 @@ async def _evaluate_l3_decisions(
                         legacy_decision=decision,
                         indicators_snapshot=metrics.get("indicators_snapshot") or {},
                         gate_evaluation_hash=gate_v2.get("evaluation_envelope_hash"),
+                        layer_config=mtf_observation.get("l3_layer_config") or {},
                         now=evaluated_at,
                     )
-                    metrics["multilayer_decision_context_v2"] = (
+                    metrics["multilayer_decision_context_v3"] = (
                         build_multilayer_context(
                             l1=mtf_observation["l1"],
                             l2=mtf_observation["l2"],
                             l3_confirmation=l3_confirmation,
                             canonical_score=float(score) if score is not None else None,
+                            calibration_run_id=str(mtf_observation["calibration_run_id"]),
                             now=evaluated_at,
                         )
                     )
                 except Exception as exc:
-                    metrics["multilayer_decision_context_v2"] = {
-                        "contract_version": "multilayer_decision_context_v2",
+                    metrics["multilayer_decision_context_v3"] = {
+                        "contract_version": "multilayer_decision_context_v3",
                         "mode": "SHADOW",
                         "operational_effect": False,
                         "observational_decision": "WAIT",
@@ -2106,8 +2108,8 @@ async def _evaluate_l3_decisions(
                         "error_type": type(exc).__name__,
                     }
             else:
-                metrics["multilayer_decision_context_v2"] = {
-                    "contract_version": "multilayer_decision_context_v2",
+                metrics["multilayer_decision_context_v3"] = {
+                    "contract_version": "multilayer_decision_context_v3",
                     "mode": "SHADOW",
                     "operational_effect": False,
                     **mtf_observation,

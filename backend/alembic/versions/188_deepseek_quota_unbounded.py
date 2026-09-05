@@ -80,6 +80,9 @@ def _assert_expected_policies(rows: list[dict], *, reverse: bool) -> None:
 
 def _apply_policies(bind, *, reverse: bool) -> None:
     rows = _active_policy_rows(bind)
+    if not rows:
+        # Tenant-scoped production data is intentionally absent on a clean DB.
+        return
     _assert_expected_policies(rows, reverse=reverse)
     for row in rows:
         target = (
@@ -111,7 +114,8 @@ def _apply_active_keys(bind, *, reverse: bool) -> None:
          ORDER BY id
     """), {"provider": PROVIDER}).mappings().all()
     if not rows:
-        raise RuntimeError("ACTIVE_DEEPSEEK_PROVIDER_KEY_MISSING")
+        # A clean development database has no configured provider credentials.
+        return
     expected = KEY_MONTHLY_TOKEN_LIMIT if reverse else OLD_KEY_MONTHLY_TOKEN_LIMIT
     for row in rows:
         if int(row["monthly_token_limit"] or 0) != expected:

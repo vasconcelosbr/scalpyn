@@ -4,6 +4,7 @@ import pytest
 
 from app.schemas.layer_context import CandleIdentity, ProfileIdentity
 from app.services.mtf_observation_service import (
+    advance_l2_setup_state,
     build_l1_context,
     build_l2_context,
     build_l3_confirmation,
@@ -83,6 +84,8 @@ def test_context_chain_hashes_and_wait_semantics():
         "di_minus": 12,
         "ema21": 102,
         "ema50": 100,
+        "ema21_slope_pct": 0.2,
+        "ema50_slope_pct": 0.1,
         "higher_highs_5": True,
         "higher_lows_5": True,
     }
@@ -97,15 +100,22 @@ def test_context_chain_hashes_and_wait_semantics():
     )
     l2_profile = {
         "default_timeframe": "15m",
-        "mtf_semantics": {"max_extension_atr": 2.0},
+        "mtf_semantics": {
+            "max_extension_atr": 2.0,
+            "pullback_max_distance_atr": 1.0,
+            "breakout_min_distance_atr": 0.2,
+            "retest_tolerance_atr": 0.3,
+            "invalidation_atr": 0.5,
+            "setup_valid_candles": 3,
+        },
     }
     l2_values = {
-        "price": 101,
+        "price": 99.5,
         "atr": 2,
         "ema21": 100,
         "ema50": 99,
         "vwap": 100,
-        "vwap_reclaim_bool": True,
+        "vwap_reclaim_bool": False,
         "bb_upper": 103,
         "bb_lower": 97,
         "di_plus": 30,
@@ -113,6 +123,22 @@ def test_context_chain_hashes_and_wait_semantics():
         "higher_highs_5": True,
         "higher_lows_5": True,
     }
+    first_transition = advance_l2_setup_state(
+        values=l2_values,
+        candle_open_at=NOW - timedelta(minutes=30),
+        semantics=l2_profile["mtf_semantics"],
+        previous=None,
+    )
+    l2_values = {**l2_values, "price": 101, "vwap_reclaim_bool": True}
+    transition = advance_l2_setup_state(
+        values=l2_values,
+        candle_open_at=NOW - timedelta(minutes=15),
+        semantics=l2_profile["mtf_semantics"],
+        previous={
+            **first_transition,
+            "last_candle_open_at": first_transition["last_candle_open_at"],
+        },
+    )
     l2 = build_l2_context(
         symbol="BTC_USDT",
         profile=l2_profile,
@@ -122,6 +148,7 @@ def test_context_chain_hashes_and_wait_semantics():
         expires_at=NOW + timedelta(minutes=5),
         l1_context=l1,
         now=NOW,
+        state_transition=transition,
     )
     aggregate = build_multilayer_context(
         l1=l1,
@@ -130,9 +157,18 @@ def test_context_chain_hashes_and_wait_semantics():
             legacy_decision="ALLOW",
             indicators_snapshot={},
             gate_evaluation_hash="c" * 64,
+            layer_config={
+                "validity_margin_seconds": 30,
+                "source_policies": {"ohlcv": {
+                    "allowed_source_providers": ["gate.io"],
+                    "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                    "allowed_capture_contract_versions": ["gate_ohlcv_canonical_v1"],
+                }},
+            },
             now=NOW,
         ),
         canonical_score=70,
+        calibration_run_id="run-id",
         now=NOW,
     )
     assert aggregate["operational_effect"] is False
@@ -164,14 +200,17 @@ def test_shadow_contract_requires_exact_layers_closed_only_and_no_authority():
                 "allowed_source_providers": ["gate.io"],
                 "provider_policy_id": "spot_gate_closed_ohlcv_v1",
                 "candle_policy": "CLOSED_ONLY",
+                "allowed_capture_contract_versions": ["gate_ohlcv_canonical_v1"],
             }},
+            "required_indicators_by_group": {"structural": ["adx"]},
         }
     config = {
         "multilayer_contract": {
             "enabled": True,
             "activation_mode": "SHADOW",
             "operational_effect": False,
-            "decision_feature_contract_version": "multilayer_decision_context_v2",
+            "decision_feature_contract_version": "multilayer_decision_context_v3",
+            "calibration_run_id": "run-id",
             "layers": layers,
         }
     }
@@ -193,8 +232,10 @@ def _coverage_payload(*, source_timestamp: datetime, envelope_hash: str | None =
         "candle_policy": "CLOSED_ONLY",
         "candle_closed": True,
         "source_timestamp": source_timestamp.isoformat(),
+        "available_at": NOW.isoformat(),
         "config_hash": "c" * 64,
         "producer_version": "mtf_indicator_producer_v1",
+        "capture_contract_version": "gate_ohlcv_canonical_v1",
     }
     envelope["envelope_hash"] = envelope_hash or canonical_hash(envelope)
     return {"adx": envelope}
@@ -206,7 +247,9 @@ def test_activation_coverage_recomputes_hash_and_derives_expiry_from_contract():
         "source_policies": {"ohlcv": {
             "allowed_source_providers": ["gate.io"],
             "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "allowed_capture_contract_versions": ["gate_ohlcv_canonical_v1"],
         }},
+        "required_indicators_by_group": {"structural": ["adx"]},
     }
     evidence = StrategySettingsService._assert_coverage_envelope(
         _coverage_payload(source_timestamp=NOW - timedelta(minutes=15)),
@@ -238,7 +281,9 @@ def test_activation_coverage_rejects_expired_context():
         "source_policies": {"ohlcv": {
             "allowed_source_providers": ["gate.io"],
             "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "allowed_capture_contract_versions": ["gate_ohlcv_canonical_v1"],
         }},
+        "required_indicators_by_group": {"structural": ["adx"]},
     }
     with pytest.raises(StrategySettingsValidationError, match="CONTEXT_EXPIRED"):
         StrategySettingsService._assert_coverage_envelope(

@@ -21,10 +21,63 @@ from ..services.strategy_settings_service import (
     StrategySettingsValidationError,
     strategy_settings_service,
 )
+from ..services.mtf_calibration_service import (
+    approve_policy as approve_mtf_policy,
+    audit_policy_availability,
+    get_run as get_mtf_calibration_run,
+    run_calibration as run_mtf_calibration,
+)
 from .config import get_current_user_id
 
 
 router = APIRouter(prefix="/api/strategy-settings", tags=["Strategy Settings"])
+
+
+@router.get("/mtf-calibration/policy-proposal")
+async def get_mtf_policy_proposal(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    return await audit_policy_availability(db, user_id=user_id)
+
+
+@router.post("/mtf-calibration/policy/approve")
+async def approve_mtf_calibration_policy(
+    payload: Dict[str, Any],
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    try:
+        return await approve_mtf_policy(db, user_id=user_id, payload=payload)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+
+
+@router.post("/mtf-calibration/runs")
+async def execute_mtf_calibration(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    try:
+        return await run_mtf_calibration(db, user_id=user_id)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+
+
+@router.get("/mtf-calibration/runs/{run_id}")
+async def read_mtf_calibration_run(
+    run_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    try:
+        return await get_mtf_calibration_run(db, user_id=user_id, run_id=run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
 @router.get("/config")
@@ -90,6 +143,7 @@ async def activate_multilayer_shadow(
             db,
             user_id,
             layer_profile_ids=layer_ids,
+            calibration_run_id=UUID(str(payload["calibration_run_id"])),
             l3_source_identity=dict(payload.get("l3_source_identity") or {}),
             apply=apply,
         )
@@ -128,14 +182,25 @@ async def audit_multilayer_runtime(
          ORDER BY updated_at DESC LIMIT 1
     """), {"user_id": str(user_id)})).mappings().one_or_none()
     coverage = (await db.execute(text("""
-        SELECT timeframe, scheduler_group, count(DISTINCT symbol) AS symbols,
-               max(time) AS latest
-          FROM indicators
-         WHERE market_type = 'spot'
-           AND timeframe IN ('1h', '15m', '5m')
-           AND time > now() - interval '3 hours'
-         GROUP BY timeframe, scheduler_group
-         ORDER BY timeframe, scheduler_group
+        WITH active AS (
+          SELECT DISTINCT symbol FROM pool_coins
+           WHERE is_active IS TRUE AND market_type = 'spot'
+        ), requested(timeframe, scheduler_group) AS (
+          VALUES ('1h','structural'), ('15m','structural'),
+                 ('5m','structural'), ('5m','microstructure')
+        )
+        SELECT r.timeframe, r.scheduler_group,
+               count(latest.time) AS symbols, max(latest.time) AS latest
+          FROM requested r CROSS JOIN active a
+          LEFT JOIN LATERAL (
+            SELECT i.time FROM indicators i
+             WHERE i.symbol = a.symbol AND i.market_type = 'spot'
+               AND i.timeframe = r.timeframe
+               AND i.scheduler_group = r.scheduler_group
+             ORDER BY i.time DESC LIMIT 1
+          ) latest ON TRUE
+         GROUP BY r.timeframe, r.scheduler_group
+         ORDER BY r.timeframe, r.scheduler_group
     """))).mappings().all()
     active_symbols = await db.scalar(text("""
         SELECT count(*) FROM pool_coins
@@ -144,24 +209,41 @@ async def audit_multilayer_runtime(
     decisions = (await db.execute(text("""
         SELECT count(*) AS total,
                count(*) FILTER (
-                   WHERE metrics ? 'multilayer_decision_context_v2'
+                   WHERE metrics ? 'multilayer_decision_context_v3'
+                      OR metrics ? 'multilayer_decision_context_v2'
                ) AS with_mtf,
                count(*) FILTER (
-                   WHERE metrics->'multilayer_decision_context_v2'
+                   WHERE COALESCE(metrics->'multilayer_decision_context_v3',
+                                  metrics->'multilayer_decision_context_v2')
                          ->>'observational_decision' = 'PASS'
                ) AS mtf_pass,
                count(*) FILTER (
-                   WHERE metrics->'multilayer_decision_context_v2'
+                   WHERE COALESCE(metrics->'multilayer_decision_context_v3',
+                                  metrics->'multilayer_decision_context_v2')
                          ->>'observational_decision' = 'WAIT'
                ) AS mtf_wait,
                count(*) FILTER (
-                   WHERE metrics->'multilayer_decision_context_v2'
+                   WHERE COALESCE(metrics->'multilayer_decision_context_v3',
+                                  metrics->'multilayer_decision_context_v2')
                          ->>'observational_decision' = 'REJECT'
                ) AS mtf_reject
           FROM decisions_log
          WHERE user_id = :user_id
            AND created_at > now() - interval '24 hours'
     """), {"user_id": str(user_id)})).mappings().one()
+    calibration = (await db.execute(text("""
+        SELECT id, status, policy_version, dataset_hash, failure_reason,
+               started_at, completed_at
+          FROM mtf_calibration_runs
+         WHERE user_id = CAST(:user_id AS UUID)
+         ORDER BY created_at DESC LIMIT 1
+    """), {"user_id": str(user_id)})).mappings().one_or_none()
+    l2_states = (await db.execute(text("""
+        SELECT state, count(*) AS symbols
+          FROM mtf_l2_setup_states
+         WHERE user_id = CAST(:user_id AS UUID)
+         GROUP BY state ORDER BY state
+    """), {"user_id": str(user_id)})).mappings().all()
     contract = (
         (((config_row or {}).get("config_json") or {}).get("scanner") or {})
         .get("multilayer_contract")
@@ -176,7 +258,9 @@ async def audit_multilayer_runtime(
             "active_spot_symbols": int(active_symbols or 0),
             "coverage": [dict(row) for row in coverage],
             "decisions_24h": dict(decisions),
+            "l2_setup_states": [dict(row) for row in l2_states],
         },
+        "latest_calibration": dict(calibration) if calibration else None,
         "multilayer_contract": contract,
         "spot_engine_updated_at": (
             config_row["updated_at"].isoformat() if config_row else None

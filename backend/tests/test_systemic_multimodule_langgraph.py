@@ -473,12 +473,21 @@ def test_all_new_module_entrypoints_create_intelligence_run():
     frontend = Path(__file__).resolve().parents[2] / "frontend"
     pages = (
         "app/profiles/page.tsx", "app/ml-models/page.tsx",
-        "app/dashboard/shadow-portfolio/page.tsx", "app/settings/score/page.tsx",
-        "app/settings/risk/page.tsx", "app/settings/strategies/page.tsx",
-        "app/settings/social-score/page.tsx",
+        "app/settings/score/page.tsx", "app/settings/risk/page.tsx",
+        "app/settings/strategies/page.tsx", "app/settings/social-score/page.tsx",
     )
     for page in pages:
         assert "ModuleAIAnalysisAction" in (frontend / page).read_text(encoding="utf-8")
+    # Shadow Portfolio creates the run from the frozen detailed-report scope;
+    # the live root table must not create a reportless analysis run.
+    root = (frontend / "app/dashboard/shadow-portfolio/page.tsx").read_text(
+        encoding="utf-8"
+    )
+    report = (frontend / "components/shadow-portfolio/DetailedReportWorkspace.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert "ModuleAIAnalysisAction" not in root
+    assert "ModuleAIAnalysisAction" in report
 
 
 def test_no_live_write_or_order_tool_exists():

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable
@@ -142,16 +143,32 @@ class StrategySettingsService:
     ) -> Dict[str, Any]:
         """Validate a latest producer row before observation can be enabled."""
 
-        policy = ((layer_config.get("source_policies") or {}).get("ohlcv") or {})
-        allowed = {str(value) for value in policy.get("allowed_source_providers") or []}
-        expected_policy = str(policy.get("provider_policy_id") or "")
+        policies = layer_config.get("source_policies") or {}
         margin = layer_config.get("validity_margin_seconds")
         if margin is None:
             raise StrategySettingsValidationError(
                 f"{timeframe}_{symbol}_VALIDITY_MARGIN_CONFIG_REQUIRED"
             )
         duration_seconds = {"1h": 3600, "15m": 900, "5m": 300}[timeframe]
-        envelopes = [value for value in payload.values() if isinstance(value, dict)]
+        required_indicators = {
+            str(value)
+            for value in (
+                (layer_config.get("required_indicators_by_group") or {}).get(scheduler_group)
+                or []
+            )
+        }
+        envelopes = [
+            (name, payload.get(name)) for name in sorted(required_indicators)
+            if isinstance(payload.get(name), dict)
+        ]
+        missing_indicators = sorted(
+            name for name in required_indicators if not isinstance(payload.get(name), dict)
+        )
+        if missing_indicators:
+            raise StrategySettingsValidationError(
+                f"{timeframe}_{symbol}_{scheduler_group}_WARMUP_INCOMPLETE:"
+                + ",".join(missing_indicators)
+            )
         if not envelopes:
             raise StrategySettingsValidationError(
                 f"{timeframe}_{symbol}_{scheduler_group}_WARMUP_INCOMPLETE"
@@ -159,7 +176,20 @@ class StrategySettingsService:
         source_timestamps: set[datetime] = set()
         config_hashes: set[str] = set()
         producer_versions: set[str] = set()
-        for original in envelopes:
+        available_timestamps: set[datetime] = set()
+        for name, original in envelopes:
+            if scheduler_group == "microstructure" and name in {"taker_ratio", "taker_buy_volume", "taker_sell_volume", "volume_delta", "buy_pressure"}:
+                source_kind = "live_trade_flow"
+            elif scheduler_group == "microstructure" and name in {"spread_pct", "orderbook_depth_usdt", "bid_ask_imbalance", "orderbook_pressure"}:
+                source_kind = "live_order_book"
+            else:
+                source_kind = "ohlcv"
+            policy = policies.get(source_kind) or {}
+            allowed = {str(value) for value in policy.get("allowed_source_providers") or []}
+            expected_policy = str(policy.get("provider_policy_id") or "")
+            allowed_capture = {
+                str(value) for value in policy.get("allowed_capture_contract_versions") or []
+            }
             envelope = dict(original)
             expected_hash = envelope.pop("envelope_hash", None)
             if not expected_hash or expected_hash != canonical_hash(envelope):
@@ -186,6 +216,24 @@ class StrategySettingsService:
                 raise StrategySettingsValidationError(
                     f"{timeframe}_{symbol}_{scheduler_group}_PROVIDER_POLICY_REJECTED"
                 )
+            value = envelope.get("value")
+            try:
+                value_valid = isinstance(value, bool) or (
+                    value is not None and math.isfinite(float(value))
+                )
+            except (TypeError, ValueError):
+                value_valid = False
+            if not value_valid:
+                raise StrategySettingsValidationError(
+                    f"{timeframe}_{symbol}_{scheduler_group}_{name}_VALUE_UNAVAILABLE"
+                )
+            if source_kind == "ohlcv" and (
+                not allowed_capture
+                or str(envelope.get("capture_contract_version")) not in allowed_capture
+            ):
+                raise StrategySettingsValidationError(
+                    f"{timeframe}_{symbol}_{scheduler_group}_CAPTURE_CONTRACT_REJECTED"
+                )
             try:
                 source_timestamp = datetime.fromisoformat(
                     str(envelope["source_timestamp"]).replace("Z", "+00:00")
@@ -199,6 +247,23 @@ class StrategySettingsService:
             else:
                 source_timestamp = source_timestamp.astimezone(timezone.utc)
             source_timestamps.add(source_timestamp)
+            try:
+                available_at = datetime.fromisoformat(
+                    str(envelope["available_at"]).replace("Z", "+00:00")
+                )
+                available_at = (
+                    available_at.replace(tzinfo=timezone.utc)
+                    if available_at.tzinfo is None else available_at.astimezone(timezone.utc)
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise StrategySettingsValidationError(
+                    f"{timeframe}_{symbol}_{scheduler_group}_AVAILABLE_AT_INVALID"
+                ) from exc
+            if available_at > now:
+                raise StrategySettingsValidationError(
+                    f"{timeframe}_{symbol}_{scheduler_group}_NOT_YET_AVAILABLE"
+                )
+            available_timestamps.add(available_at)
             config_hashes.add(str(envelope.get("config_hash") or ""))
             producer_versions.add(str(envelope.get("producer_version") or ""))
         if len(source_timestamps) != 1 or len(config_hashes) != 1 or "" in config_hashes:
@@ -249,19 +314,27 @@ class StrategySettingsService:
         if not symbols:
             raise StrategySettingsValidationError("MTF_ACTIVE_SPOT_SYMBOLS_REQUIRED")
         rows = (await db.execute(text("""
-            SELECT DISTINCT ON (symbol, timeframe, scheduler_group)
-                   symbol, timeframe, scheduler_group, indicators_json
-              FROM indicators
-             WHERE market_type = 'spot'
-               AND symbol = ANY(CAST(:symbols AS TEXT[]))
-               AND timeframe IN ('1h', '15m', '5m')
-               AND scheduler_group IN ('structural', 'microstructure')
-             ORDER BY symbol, timeframe, scheduler_group, time DESC
+            WITH requested(timeframe, scheduler_group) AS (
+              VALUES ('1h','structural'), ('15m','structural'),
+                     ('5m','structural'), ('5m','microstructure')
+            )
+            SELECT s.symbol, r.timeframe, r.scheduler_group, latest.indicators_json
+              FROM unnest(CAST(:symbols AS TEXT[])) AS s(symbol)
+              CROSS JOIN requested r
+              LEFT JOIN LATERAL (
+                SELECT i.indicators_json
+                  FROM indicators i
+                 WHERE i.symbol = s.symbol AND i.market_type = 'spot'
+                   AND i.timeframe = r.timeframe
+                   AND i.scheduler_group = r.scheduler_group
+                 ORDER BY i.time DESC LIMIT 1
+              ) latest ON TRUE
         """), {"symbols": symbols})).mappings().all()
         by_identity = {
             (str(row["symbol"]), str(row["timeframe"]), str(row["scheduler_group"])):
             dict(row["indicators_json"] or {})
             for row in rows
+            if row["indicators_json"] is not None
         }
         requirements = (
             ("L1", "1h", "structural"),
@@ -802,6 +875,7 @@ class StrategySettingsService:
         user_id: UUID,
         *,
         layer_profile_ids: Dict[str, UUID],
+        calibration_run_id: UUID,
         l3_source_identity: Dict[str, Any],
         apply: bool = False,
     ) -> Dict[str, Any]:
@@ -810,6 +884,21 @@ class StrategySettingsService:
             raise StrategySettingsValidationError(
                 "layer_profile_ids must contain exactly L1 and L2"
             )
+        calibration_run = (await db.execute(text("""
+            SELECT id, status, approved_policy_hash, selected_profiles
+              FROM mtf_calibration_runs
+             WHERE id = CAST(:run_id AS UUID)
+               AND user_id = CAST(:user_id AS UUID)
+             FOR UPDATE
+        """), {
+            "run_id": str(calibration_run_id), "user_id": str(user_id),
+        })).mappings().one_or_none()
+        if calibration_run is None or calibration_run["status"] != "PASSED":
+            raise StrategySettingsValidationError("MTF_CALIBRATION_RUN_NOT_PASSED")
+        selected_profiles = dict(calibration_run["selected_profiles"] or {})
+        if set(selected_profiles) != {"L1", "L2"}:
+            raise StrategySettingsValidationError("MTF_CALIBRATION_PROFILE_SET_INVALID")
+
         rows = (await db.execute(select(Profile).where(
             Profile.user_id == user_id,
             Profile.id.in_(list(layer_profile_ids.values())),
@@ -823,6 +912,7 @@ class StrategySettingsService:
             config = dict(profile.config or {})
             mtf = config.get("mtf_layer") or {}
             calibration = config.get("calibration") or {}
+            calibrated_profile = dict(selected_profiles.get(layer) or {})
             if (
                 profile.profile_type != "MTF_LAYER"
                 or not profile.is_shadow_only
@@ -835,6 +925,8 @@ class StrategySettingsService:
                 or calibration.get("baseline_outperformed") is not True
                 or calibration.get("worst_fold_drawdown_not_worse") is not True
                 or calibration.get("min_samples") is None
+                or str(calibration.get("run_id") or "") != str(calibration_run_id)
+                or calibration.get("policy_hash") != calibration_run["approved_policy_hash"]
             ):
                 raise StrategySettingsValidationError(
                     f"{layer}_PROFILE_SHADOW_GATE_FAILED"
@@ -852,11 +944,46 @@ class StrategySettingsService:
                 raise StrategySettingsValidationError(
                     f"{layer}_PROFILE_VERSION_HASH_INVALID"
                 )
+            if calibrated_profile.get("thresholds_hash") != canonical_hash(
+                calibration.get("thresholds") or {}
+            ):
+                raise StrategySettingsValidationError(
+                    f"{layer}_PROFILE_NOT_EMITTED_BY_CALIBRATION_RUN"
+                )
+            required_indicators = set()
+            for section, list_key, name_key in (
+                ("filters", "conditions", "field"),
+                ("signals", "conditions", "field"),
+                ("entry_triggers", "conditions", "indicator"),
+                ("block_rules", "blocks", "indicator"),
+            ):
+                for condition in ((config.get(section) or {}).get(list_key) or []):
+                    name = condition.get(name_key) or condition.get("field")
+                    if name:
+                        required_indicators.add(str(name))
+            for rule in ((config.get("scoring") or {}).get("rules") or []):
+                name = rule.get("indicator") or rule.get("field")
+                if name:
+                    required_indicators.add(str(name))
+            required_indicators.update(
+                {
+                    "adx", "atr_pct", "di_plus", "di_minus", "ema21", "ema50",
+                    "ema21_slope_pct", "ema50_slope_pct", "higher_highs_5",
+                    "higher_lows_5",
+                }
+                if layer == "L1"
+                else {
+                    "price", "atr", "ema21", "ema50", "vwap",
+                    "vwap_reclaim_bool", "bb_upper", "bb_lower", "di_plus",
+                    "di_minus", "higher_highs_5", "higher_lows_5",
+                }
+            )
             bindings[layer] = {
                 "profile_id": str(profile_id),
                 "profile_version_id": str(version["id"]),
                 "profile_config_hash": config_hash,
                 "source_identity": config.get("source_identity") or {},
+                "required_indicators": sorted(required_indicators),
             }
 
         profiles = await self._profiles(db, user_id, lock=apply)
@@ -872,8 +999,9 @@ class StrategySettingsService:
             "enabled": True,
             "activation_mode": "SHADOW",
             "operational_effect": False,
-            "decision_feature_contract_version": "multilayer_decision_context_v2",
+            "decision_feature_contract_version": "multilayer_decision_context_v3",
             "decision_feature_valid_from": now,
+            "calibration_run_id": str(calibration_run_id),
         })
         expected_tf = {"L1": "1h", "L2": "15m"}
         for layer in ("L1", "L2"):
@@ -883,6 +1011,10 @@ class StrategySettingsService:
                 "profile_id": bindings[layer]["profile_id"],
                 "profile_version_id": bindings[layer]["profile_version_id"],
                 "profile_config_hash": bindings[layer]["profile_config_hash"],
+                "required_indicators": bindings[layer]["required_indicators"],
+                "required_indicators_by_group": {
+                    "structural": bindings[layer]["required_indicators"]
+                },
                 "default_timeframe": expected_tf[layer],
                 "validity_margin_seconds": source.get("validity_margin_seconds"),
                 "source_policies": {"ohlcv": {
@@ -890,18 +1022,33 @@ class StrategySettingsService:
                     "provider_policy_id": source.get("provider_policy_id"),
                     "timeframe": expected_tf[layer],
                     "candle_policy": source.get("candle_policy"),
+                    "allowed_capture_contract_versions": (
+                        source.get("allowed_capture_contract_versions") or []
+                    ),
                 }},
             })
-        contract["layers"]["L3"].update({
-            "observational_enabled": True,
-            "default_timeframe": "5m",
-            "validity_margin_seconds": l3_source_identity.get("validity_margin_seconds"),
-            "source_policies": {"ohlcv": {
+        l3_policies = deepcopy(l3_source_identity.get("source_policies") or {})
+        if not l3_policies:
+            l3_policies = {"ohlcv": {
                 "allowed_source_providers": l3_source_identity.get("allowed_source_providers") or [],
                 "provider_policy_id": l3_source_identity.get("provider_policy_id"),
                 "timeframe": "5m",
                 "candle_policy": l3_source_identity.get("candle_policy"),
-            }},
+                "allowed_capture_contract_versions": (
+                    l3_source_identity.get("allowed_capture_contract_versions") or []
+                ),
+            }}
+        contract["layers"]["L3"].update({
+            "observational_enabled": True,
+            "default_timeframe": "5m",
+            "validity_margin_seconds": l3_source_identity.get("validity_margin_seconds"),
+            "required_indicators": sorted({
+                str(value) for value in l3_source_identity.get("required_indicators") or []
+            }),
+            "required_indicators_by_group": deepcopy(
+                l3_source_identity.get("required_indicators_by_group") or {}
+            ),
+            "source_policies": l3_policies,
         })
         scanner["multilayer_contract"] = contract
         candidate["scanner"] = scanner
@@ -923,6 +1070,19 @@ class StrategySettingsService:
         if target is None:
             raise StrategySettingsValidationError("SPOT_ENGINE_CONFIG_REQUIRED")
         target.config_json = candidate
+        await db.execute(text("""
+            UPDATE mtf_calibration_runs
+               SET results_json = results_json || jsonb_build_object(
+                 'activated_bindings', CAST(:bindings AS JSONB),
+                 'shadow_activated_at', clock_timestamp()
+               )
+             WHERE id = CAST(:run_id AS UUID)
+               AND user_id = CAST(:user_id AS UUID)
+               AND status = 'PASSED'
+        """), {
+            "run_id": str(calibration_run_id), "user_id": str(user_id),
+            "bindings": json.dumps(bindings),
+        })
         db.add(ConfigAuditLog(
             config_id=target.id,
             changed_by=user_id,

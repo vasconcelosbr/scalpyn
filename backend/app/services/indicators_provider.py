@@ -28,10 +28,12 @@ from __future__ import annotations
 import logging
 import os
 import random
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
 from .indicator_constants import REQUIRED_CORE_INDICATORS  # noqa: F401 — re-exported
 from .indicator_validity import unwrap_envelope_value
+from .profile_runtime_config import canonical_hash
 from ..utils.indicator_merge import (
     MergedIndicators,
     fetch_merged_indicators,
@@ -40,6 +42,72 @@ from ..utils.indicator_merge import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def _iso(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc).isoformat()
+    return str(value)
+
+
+def _derived_snapshot_envelope(
+    merged: MergedIndicators, *, key: str, meta: Dict[str, Any], value: Any,
+) -> Dict[str, Any] | None:
+    dependency_times = meta.get("dependency_source_times") or {}
+    if not dependency_times:
+        return None
+    dependencies = []
+    for dependency, expected_at in dependency_times.items():
+        matches = [
+            candidate for candidate in merged.candidates
+            if candidate.get("indicator") == dependency
+            and _iso(candidate.get("source_timestamp")) == _iso(expected_at)
+            and isinstance(candidate.get("envelope"), dict)
+        ]
+        if not matches:
+            return None
+        selected = max(matches, key=lambda item: str(item.get("computed_at") or ""))
+        material = dict(selected.get("envelope") or {})
+        expected_hash = material.pop("envelope_hash", None)
+        if not expected_hash or expected_hash != canonical_hash(material):
+            return None
+        dependencies.append(selected)
+    identity_fields = (
+        "timeframe", "market_type", "source_provider", "provider_policy_id",
+        "candle_policy", "candle_closed", "config_hash", "capture_contract_version",
+    )
+    identities = {
+        tuple((candidate.get("envelope") or {}).get(field) for field in identity_fields)
+        for candidate in dependencies
+    }
+    source_times = {_iso(candidate.get("source_timestamp")) for candidate in dependencies}
+    if len(identities) != 1 or len(source_times) != 1:
+        return None
+    identity = dict(zip(identity_fields, next(iter(identities))))
+    dependency_hashes = {
+        str(candidate["indicator"]): (candidate.get("envelope") or {}).get("envelope_hash")
+        for candidate in dependencies
+    }
+    if any(not item for item in dependency_hashes.values()):
+        return None
+    envelope = {
+        "value": value, "status": "available", "source": "derived",
+        "confidence": min(
+            float((candidate.get("envelope") or {}).get("confidence") or 0)
+            for candidate in dependencies
+        ),
+        **identity,
+        "scheduler_group": meta.get("group"),
+        "source_timestamp": next(iter(source_times)),
+        "computed_at": max(_iso(candidate.get("computed_at")) or "" for candidate in dependencies),
+        "available_at": max(_iso(candidate.get("available_at")) or "" for candidate in dependencies),
+        "producer_version": "indicator_merge_derived_v1",
+        "dependency_hashes": dependency_hashes,
+    }
+    envelope["envelope_hash"] = canonical_hash(envelope)
+    return envelope
 
 
 # ── Required-core completeness rule ──────────────────────────────────────────
@@ -263,12 +331,42 @@ def build_indicators_snapshot(
     for key in sorted(keys_to_dump):
         meta = merged.meta.get(key) or {}
         ts = meta.get("timestamp")
+        candidates = [
+            candidate for candidate in merged.candidates
+            if candidate.get("indicator") == key
+            and candidate.get("group") == meta.get("group")
+            and candidate.get("timeframe") == meta.get("timeframe")
+            and candidate.get("actual") == merged.values.get(key)
+        ]
+        winner = max(
+            candidates,
+            key=lambda item: str(item.get("source_timestamp") or ""),
+            default={},
+        )
+        envelope = dict(winner.get("envelope") or {})
+        if not envelope:
+            envelope = _derived_snapshot_envelope(
+                merged, key=key, meta=meta, value=merged.values.get(key)
+            ) or {}
+            if envelope:
+                winner = {
+                    "source_timestamp": envelope.get("source_timestamp"),
+                    "available_at": envelope.get("available_at"),
+                    "source_provider": envelope.get("source_provider"),
+                    "provider_policy_id": envelope.get("provider_policy_id"),
+                    "candle_closed": envelope.get("candle_closed"),
+                    "config_hash": envelope.get("config_hash"),
+                    "producer_version": envelope.get("producer_version"),
+                }
         snapshot[key] = {
             "value": merged.values.get(key),
             "source_group": meta.get("group"),
             "ts": ts.isoformat() if ts is not None else None,
-            "timeframe": meta.get("timeframe"),
-            "observed_timeframes": meta.get("observed_timeframes") or [],
+            "timeframe": meta.get("timeframe") or envelope.get("timeframe"),
+            "observed_timeframes": (
+                meta.get("observed_timeframes")
+                or ([envelope.get("timeframe")] if envelope.get("timeframe") else [])
+            ),
             "timeframe_conflict": bool(meta.get("timeframe_conflict", False)),
             "stale": meta.get("stale", False),
             "oldest_source_at": (
@@ -283,5 +381,15 @@ def build_indicators_snapshot(
                 dependency: value.isoformat() if value is not None else None
                 for dependency, value in (meta.get("dependency_source_times") or {}).items()
             },
+            "source_timestamp": (
+                _iso(winner.get("source_timestamp")) if winner else None
+            ),
+            "available_at": _iso(winner.get("available_at")) if winner else None,
+            "source_provider": winner.get("source_provider"),
+            "provider_policy_id": winner.get("provider_policy_id"),
+            "candle_closed": winner.get("candle_closed"),
+            "config_hash": winner.get("config_hash"),
+            "producer_version": winner.get("producer_version"),
+            "envelope": envelope or None,
         }
     return snapshot

@@ -12,6 +12,7 @@ from ..tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 _TF_SECONDS = {"15m": 900, "1h": 3600}
+_CAPTURE_CONTRACT_VERSION = "spot_mtf_closed_ohlcv_v2"
 
 
 async def collect_timeframe(timeframe: str) -> dict:
@@ -20,9 +21,31 @@ async def collect_timeframe(timeframe: str) -> dict:
     from ..database import CeleryAsyncSessionLocal
     from ..services.market_data_service import market_data_service
     from ..services.pool_service import get_active_pool_symbols
+    from .compute_mtf_indicators import (
+        _load_governed_indicator_config,
+        required_warmup_candles,
+    )
 
     async with CeleryAsyncSessionLocal() as db:
+        contract_active = await db.scalar(text("""
+            SELECT EXISTS (
+              SELECT 1 FROM ohlcv_capture_contracts
+               WHERE capture_contract_version = :version
+                 AND mode = 'CANONICAL'
+                 AND canonical_read_enabled IS TRUE
+                 AND valid_from <= clock_timestamp()
+            )
+        """), {"version": _CAPTURE_CONTRACT_VERSION})
+        if not contract_active:
+            return {
+                "timeframe": timeframe,
+                "status": "CAPTURE_CONTRACT_NOT_YET_VALID",
+                "capture_contract_version": _CAPTURE_CONTRACT_VERSION,
+                "successful_symbols": 0,
+            }
         symbols = sorted(await get_active_pool_symbols(db, "spot"))
+        indicator_config, _ = await _load_governed_indicator_config(db)
+        fetch_limit = required_warmup_candles(indicator_config, timeframe)
         if db.in_transaction():
             await db.rollback()
 
@@ -33,12 +56,21 @@ async def collect_timeframe(timeframe: str) -> dict:
     for symbol in symbols:
         try:
             frame = await market_data_service.fetch_ohlcv(
-                symbol, timeframe, limit=500
+                symbol, timeframe, limit=fetch_limit
             )
             if frame is None or frame.empty:
                 failed += 1
                 continue
             exchange = str(frame.attrs.get("exchange") or "gate.io")
+            if exchange != "gate.io":
+                failed += 1
+                logger.warning(
+                    "[MTF-COLLECT-%s] source rejected symbol=%s source=%s",
+                    timeframe,
+                    symbol,
+                    exchange,
+                )
+                continue
             prepared = []
             for row in frame.to_dict("records"):
                 candle_time = pd.to_datetime(row["time"], utc=True).to_pydatetime()
@@ -73,12 +105,30 @@ async def collect_timeframe(timeframe: str) -> dict:
             await db.execute(text("""
                 INSERT INTO ohlcv
                     (time, symbol, exchange, timeframe, market_type,
-                     open, high, low, close, volume, quote_volume)
+                     open, high, low, close, volume, quote_volume,
+                     is_closed, ingested_at, capture_contract_version)
                 VALUES
                     (:time, :symbol, :exchange, :timeframe, :market_type,
-                     :open, :high, :low, :close, :volume, :quote_volume)
-                ON CONFLICT DO NOTHING
-            """), rows)
+                     :open, :high, :low, :close, :volume, :quote_volume,
+                     TRUE, clock_timestamp(), :capture_contract_version)
+                ON CONFLICT (time, symbol, timeframe) DO UPDATE SET
+                    exchange = EXCLUDED.exchange,
+                    market_type = EXCLUDED.market_type,
+                    open = EXCLUDED.open,
+                    high = EXCLUDED.high,
+                    low = EXCLUDED.low,
+                    close = EXCLUDED.close,
+                    volume = EXCLUDED.volume,
+                    quote_volume = EXCLUDED.quote_volume,
+                    is_closed = TRUE,
+                    ingested_at = EXCLUDED.ingested_at,
+                    capture_contract_version = EXCLUDED.capture_contract_version
+                WHERE ohlcv.capture_contract_version IS DISTINCT FROM
+                      EXCLUDED.capture_contract_version
+            """), [
+                {**row, "capture_contract_version": _CAPTURE_CONTRACT_VERSION}
+                for row in rows
+            ])
             persisted += len(rows)
         await db.commit()
     result = {
@@ -88,6 +138,8 @@ async def collect_timeframe(timeframe: str) -> dict:
         "failed_symbols": failed,
         "closed_rows_submitted": persisted,
         "open_candles_rejected": True,
+        "capture_contract_version": _CAPTURE_CONTRACT_VERSION,
+        "required_warmup_candles": fetch_limit,
     }
     logger.info("[MTF-COLLECT] %s", result)
     return result

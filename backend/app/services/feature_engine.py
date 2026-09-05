@@ -297,6 +297,8 @@ class FeatureEngine:
             "macd_hist_slope_3": None,
             "macd_hist_slope_5": None,
             "ema21_ema50_distance_pct": None,
+            "ema21_slope_pct": None,
+            "ema50_slope_pct": None,
             "di_plus_minus_diff": None,
             "adx_slope_3": None,
             "vwap_reclaim_bool": None,
@@ -340,14 +342,27 @@ class FeatureEngine:
             logger.debug("[FEATURE_ENGINE] directional MACD slopes failed: %s", exc)
 
         try:
+            periods = {
+                int(value) for value in (self.config.get("ema", {}).get("periods") or [])
+            }
+            if not {21, 50}.issubset(periods):
+                raise ValueError("EMA21_EMA50_PERIODS_CONFIG_REQUIRED")
             if len(close) >= 50:
-                ema21 = close.ewm(span=21, adjust=False).mean().iloc[-1]
-                ema50 = close.ewm(span=50, adjust=False).mean().iloc[-1]
+                ema21_series = close.ewm(span=21, adjust=False).mean()
+                ema50_series = close.ewm(span=50, adjust=False).mean()
+                ema21 = ema21_series.iloc[-1]
+                ema50 = ema50_series.iloc[-1]
                 if pd.notna(ema21) and pd.notna(ema50) and float(ema50) != 0.0:
                     result["ema21_ema50_distance_pct"] = round(
                         (float(ema21) - float(ema50)) / float(ema50) * 100.0,
                         6,
                     )
+                result["ema21_slope_pct"] = self._last_slope(
+                    ema21_series, 1, divisor=ema21_series.iloc[-2]
+                )
+                result["ema50_slope_pct"] = self._last_slope(
+                    ema50_series, 1, divisor=ema50_series.iloc[-2]
+                )
         except Exception as exc:
             logger.debug("[FEATURE_ENGINE] EMA21/EMA50 distance failed: %s", exc)
 

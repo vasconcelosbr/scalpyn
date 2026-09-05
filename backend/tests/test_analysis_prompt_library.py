@@ -264,7 +264,6 @@ def test_shared_selector_covers_every_existing_module_entrypoint():
     assert "selectedPromptVersionId" in component_source
     for relative_path in (
         "frontend/components/shadow-portfolio/DetailedReportWorkspace.tsx",
-        "frontend/components/shadow-portfolio/ShadowTradeDetailScreen.tsx",
         "frontend/app/intelligence-runs/page.tsx",
         "frontend/app/profiles/page.tsx",
         "frontend/app/ml-models/page.tsx",
@@ -280,7 +279,7 @@ def test_shadow_trade_detail_intelligence_run_is_scoped_to_open_trade():
     source = (
         REPO / "frontend/components/shadow-portfolio/ShadowTradeDetailScreen.tsx"
     ).read_text(encoding="utf-8")
-    assert 'originModule="shadow_portfolio"' in source
-    assert 'originView="shadow-portfolio-trade-detail"' in source
-    assert "entityIds={[data.id]}" in source
-    assert 'label="Análise por IA"' in source
+    assert "ModuleAIAnalysisAction" not in source
+    assert 'href="/dashboard/shadow-portfolio#detailed-report"' in source
+    assert "Materialize uma amostra canônica antes de criar a análise" in source
+    assert "Preparar análise por IA" in source

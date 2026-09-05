@@ -4,16 +4,18 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+import json
+import math
 from typing import Any, Mapping
 
 from sqlalchemy import text
 
 from ..schemas.layer_context import (
     CandleIdentity,
-    L1DecisionContextV2,
-    L2DecisionContextV1,
+    L1DecisionContextV3,
+    L2DecisionContextV2,
     LayerVerdictRecord,
-    MultilayerDecisionContextV2,
+    MultilayerDecisionContextV3,
     ProfileIdentity,
 )
 from .indicators_provider import get_timeframe_indicators
@@ -22,6 +24,10 @@ from .profile_engine import ProfileEngine
 from .profile_runtime_config import canonical_hash, canonical_profile_config_hash
 
 _TF_SECONDS = {"1h": 3600, "15m": 900, "5m": 300}
+_L2_STATES = {
+    "NONE", "PULLBACK_SEEN", "BREAKOUT_SEEN", "PULLBACK_RECLAIM",
+    "BREAKOUT_RETEST", "INVALIDATED",
+}
 
 
 def _utc(value: Any) -> datetime:
@@ -37,6 +43,15 @@ def _seal(payload: Mapping[str, Any]) -> dict[str, Any]:
     result.pop("context_hash", None)
     result["context_hash"] = canonical_hash(result)
     return result
+
+
+def _finite(value: Any) -> bool:
+    if isinstance(value, bool):
+        return True
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
 
 
 def verify_context_hash(payload: Mapping[str, Any]) -> None:
@@ -78,6 +93,9 @@ def _validate_indicator_identity(
     policies = layer_config.get("source_policies") or {}
     policy = policies.get("ohlcv") or {}
     allowed = {str(item) for item in policy.get("allowed_source_providers") or []}
+    allowed_capture = {
+        str(item) for item in policy.get("allowed_capture_contract_versions") or []
+    }
     policy_id = str(policy.get("provider_policy_id") or "")
     candidates_by_name = {
         str(candidate.get("indicator")): candidate
@@ -105,6 +123,12 @@ def _validate_indicator_identity(
         raise ValueError("SOURCE_PROVIDER_REJECTED")
     if any(str(candidate.get("provider_policy_id")) != policy_id for candidate in selected):
         raise ValueError("PROVIDER_POLICY_REJECTED")
+    if not allowed_capture or any(
+        str((candidate.get("envelope") or {}).get("capture_contract_version"))
+        not in allowed_capture
+        for candidate in selected
+    ):
+        raise ValueError("CAPTURE_CONTRACT_REJECTED")
     config_hashes = {candidate.get("config_hash") for candidate in selected}
     if None in config_hashes or len(config_hashes) != 1:
         raise ValueError("INDICATOR_CONFIG_IDENTITY_CONFLICT")
@@ -112,6 +136,13 @@ def _validate_indicator_identity(
     if len(source_times) != 1:
         raise ValueError("INDICATOR_CANDLE_IDENTITY_CONFLICT")
     source_timestamp = next(iter(source_times))
+    available_times = {_utc(candidate.get("available_at")) for candidate in selected}
+    if len(available_times) != 1:
+        raise ValueError("INDICATOR_AVAILABILITY_IDENTITY_CONFLICT")
+    if next(iter(available_times)) > now:
+        raise ValueError("INDICATOR_NOT_YET_AVAILABLE")
+    if source_timestamp + timedelta(seconds=_TF_SECONDS[timeframe]) > now:
+        raise ValueError("OPEN_CANDLE_REJECTED")
     margin = layer_config.get("validity_margin_seconds")
     if margin is None:
         raise ValueError("VALIDITY_MARGIN_CONFIG_REQUIRED")
@@ -123,6 +154,9 @@ def _validate_indicator_identity(
     values = {name: merged.values.get(name) for name in required}
     if any(value is None for value in values.values()):
         raise ValueError("INDICATOR_VALUE_UNAVAILABLE")
+    invalid_values = sorted(name for name, value in values.items() if not _finite(value))
+    if invalid_values:
+        raise ValueError("INDICATOR_VALUE_NONFINITE:" + ",".join(invalid_values))
     candle = CandleIdentity(
         symbol=str(selected[0].get("symbol") or "UNKNOWN"),
         market_type="spot",
@@ -150,13 +184,24 @@ def _profile_verdict(profile: Mapping[str, Any], *, symbol: str, timeframe: str,
 
 
 def _direction(values: Mapping[str, Any]) -> str:
-    votes = []
+    votes: list[int] = []
     if values.get("di_plus") is not None and values.get("di_minus") is not None:
-        votes.append(1 if float(values["di_plus"]) > float(values["di_minus"]) else -1)
+        delta = float(values["di_plus"]) - float(values["di_minus"])
+        votes.append(1 if delta > 0 else -1 if delta < 0 else 0)
     if values.get("ema21") is not None and values.get("ema50") is not None:
-        votes.append(1 if float(values["ema21"]) > float(values["ema50"]) else -1)
-    if values.get("higher_highs_5") is True or values.get("higher_lows_5") is True:
+        delta = float(values["ema21"]) - float(values["ema50"])
+        votes.append(1 if delta > 0 else -1 if delta < 0 else 0)
+    if values.get("ema21_slope_pct") is not None and values.get("ema50_slope_pct") is not None:
+        slow_slopes = (float(values["ema21_slope_pct"]), float(values["ema50_slope_pct"]))
+        votes.append(
+            1 if all(value > 0 for value in slow_slopes)
+            else -1 if all(value < 0 for value in slow_slopes)
+            else 0
+        )
+    if values.get("higher_highs_5") is True and values.get("higher_lows_5") is True:
         votes.append(1)
+    elif values.get("higher_highs_5") is False and values.get("higher_lows_5") is False:
+        votes.append(-1)
     return "UP" if sum(votes) > 0 else "DOWN" if sum(votes) < 0 else "NEUTRAL"
 
 
@@ -175,9 +220,10 @@ def build_l1_context(
     atr_pct = float(values["atr_pct"])
     structure = (
         "BULLISH" if values.get("higher_highs_5") and values.get("higher_lows_5")
-        else "BEARISH" if direction == "DOWN" else "NEUTRAL"
+        else "BEARISH" if values.get("higher_highs_5") is False and values.get("higher_lows_5") is False
+        else "NEUTRAL"
     )
-    payload = L1DecisionContextV2(
+    payload = L1DecisionContextV3(
         direction=direction,
         strength=max(0.0, min(1.0, adx / 100.0)),
         regime="TREND" if adx >= float(semantics["adx_strong_min"]) else "RANGE",
@@ -194,19 +240,150 @@ def build_l1_context(
         computed_at=now,
         expires_at=expires_at,
         indicators_hash=canonical_hash(values),
+        ema21_slope_pct=float(values["ema21_slope_pct"]),
+        ema50_slope_pct=float(values["ema50_slope_pct"]),
     ).model_dump(mode="json")
     return _seal(payload)
+
+
+def advance_l2_setup_state(
+    *, values: Mapping[str, Any], candle_open_at: datetime,
+    semantics: Mapping[str, Any], previous: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Advance the 15m setup automaton once per closed candle.
+
+    A terminal setup is emitted only after its precursor was persisted on an
+    earlier candle. Replaying the same material is idempotent; altered material
+    for the same candle is rejected.
+    """
+    required = (
+        "max_extension_atr", "pullback_max_distance_atr",
+        "breakout_min_distance_atr", "retest_tolerance_atr",
+        "invalidation_atr", "setup_valid_candles",
+    )
+    missing = [key for key in required if semantics.get(key) is None]
+    if missing:
+        raise ValueError("CONFIG_REQUIRED:" + ",".join(missing))
+    if int(semantics["setup_valid_candles"]) <= 0:
+        raise ValueError("CONFIG_INVALID:setup_valid_candles")
+
+    candle_open_at = _utc(candle_open_at)
+    indicators_hash = canonical_hash(dict(values))
+    before = str((previous or {}).get("state") or "NONE")
+    if before not in _L2_STATES:
+        raise ValueError("L2_STATE_VERSION_UNKNOWN")
+    if previous:
+        prior_material = {
+            "state": previous.get("state"),
+            "state_before": (previous.get("state_payload") or {}).get("state_before"),
+            "last_candle_open_at": _utc(previous.get("last_candle_open_at")).isoformat(),
+            "last_indicators_hash": previous.get("last_indicators_hash"),
+            "state_payload": dict(previous.get("state_payload") or {}),
+        }
+        if previous.get("state_hash") != canonical_hash(prior_material):
+            raise ValueError("L2_STATE_HASH_INVALID")
+    previous_open = (
+        _utc(previous["last_candle_open_at"])
+        if previous and previous.get("last_candle_open_at") else None
+    )
+    if previous_open and candle_open_at < previous_open:
+        raise ValueError("L2_STATE_STALE_REPLAY")
+    if previous_open and candle_open_at == previous_open:
+        if previous.get("last_indicators_hash") != indicators_hash:
+            raise ValueError("L2_STATE_REPLAY_CONFLICT")
+        material = {
+            "state": before,
+            "state_before": str((previous.get("state_payload") or {}).get("state_before") or before),
+            "last_candle_open_at": candle_open_at.isoformat(),
+            "last_indicators_hash": indicators_hash,
+            "state_payload": dict(previous.get("state_payload") or {}),
+        }
+        material["state_hash"] = canonical_hash(material)
+        return material
+
+    price = float(values["price"])
+    atr = float(values["atr"])
+    ema = float(values["ema21"])
+    vwap = float(values["vwap"])
+    upper = float(values["bb_upper"])
+    lower = float(values["bb_lower"])
+    if atr <= 0:
+        raise ValueError("INDICATOR_VALUE_INVALID:atr")
+    extension = abs(price - ema) / atr
+    direction = _direction(values)
+    previous_payload = dict((previous or {}).get("state_payload") or {})
+    remaining = int(previous_payload.get("remaining_candles") or 0)
+    if previous_open:
+        elapsed_seconds = (candle_open_at - previous_open).total_seconds()
+        if elapsed_seconds <= 0 or elapsed_seconds % _TF_SECONDS["15m"] != 0:
+            raise ValueError("L2_CANDLE_SEQUENCE_INVALID")
+        remaining -= int(elapsed_seconds // _TF_SECONDS["15m"])
+
+    invalidation = min(ema, vwap) - float(semantics["invalidation_atr"]) * atr
+    state_after = "NONE"
+    payload: dict[str, Any] = {
+        "state_before": before,
+        "remaining_candles": 0,
+        "support": lower,
+        "resistance": upper,
+        "invalidation": invalidation,
+        "extension_atr": extension,
+    }
+    if price < invalidation or extension > float(semantics["max_extension_atr"]):
+        state_after = "INVALIDATED"
+    elif before == "PULLBACK_SEEN" and remaining >= 0:
+        anchor = float(previous_payload["anchor"])
+        if price >= anchor and bool(values.get("vwap_reclaim_bool")) and direction != "DOWN":
+            state_after = "PULLBACK_RECLAIM"
+        else:
+            state_after = "PULLBACK_SEEN" if remaining > 0 else "NONE"
+            payload.update({"anchor": anchor, "remaining_candles": max(0, remaining)})
+    elif before == "BREAKOUT_SEEN" and remaining >= 0:
+        anchor = float(previous_payload["anchor"])
+        tolerance = float(semantics["retest_tolerance_atr"]) * atr
+        if anchor - tolerance <= price <= anchor + tolerance and direction != "DOWN":
+            state_after = "BREAKOUT_RETEST"
+        else:
+            state_after = "BREAKOUT_SEEN" if remaining > 0 else "NONE"
+            payload.update({"anchor": anchor, "remaining_candles": max(0, remaining)})
+    elif (
+        price <= ema
+        and abs(price - ema) / atr <= float(semantics["pullback_max_distance_atr"])
+        and direction != "DOWN"
+    ):
+        state_after = "PULLBACK_SEEN"
+        payload.update({
+            "anchor": ema,
+            "remaining_candles": int(semantics["setup_valid_candles"]),
+        })
+    elif (
+        price >= upper + float(semantics["breakout_min_distance_atr"]) * atr
+        and direction == "UP"
+    ):
+        state_after = "BREAKOUT_SEEN"
+        payload.update({
+            "anchor": upper,
+            "remaining_candles": int(semantics["setup_valid_candles"]),
+        })
+
+    material = {
+        "state": state_after,
+        "state_before": before,
+        "last_candle_open_at": candle_open_at.isoformat(),
+        "last_indicators_hash": indicators_hash,
+        "state_payload": payload,
+    }
+    material["state_hash"] = canonical_hash(material)
+    return material
 
 
 def build_l2_context(
     *, symbol: str, profile: Mapping[str, Any], profile_identity: ProfileIdentity,
     values: dict[str, Any], candle: CandleIdentity, expires_at: datetime,
     l1_context: Mapping[str, Any], now: datetime,
+    state_transition: Mapping[str, Any],
 ) -> dict[str, Any]:
     verify_context_hash(l1_context)
-    semantics = profile.get("mtf_semantics") or {}
-    if semantics.get("max_extension_atr") is None:
-        raise ValueError("CONFIG_REQUIRED:max_extension_atr")
     verdict, _ = _profile_verdict(profile, symbol=symbol, timeframe="15m", values=values)
     price = float(values["price"])
     atr = float(values["atr"])
@@ -214,22 +391,22 @@ def build_l2_context(
     vwap = float(values["vwap"])
     extension = abs(price - ema) / atr if atr > 0 else None
     direction = _direction(values)
-    if extension is None or extension > float(semantics["max_extension_atr"]):
-        setup = "INVALIDATED"
-        verdict = "REJECT"
-    elif bool(values.get("vwap_reclaim_bool")) and price >= ema:
-        setup = "PULLBACK_RECLAIM"
-    elif price >= float(values["bb_upper"]) and direction == "UP":
-        setup = "BREAKOUT_RETEST"
+    setup = str(state_transition["state"])
+    if setup in {"INVALIDATED", "NONE", "PULLBACK_SEEN", "BREAKOUT_SEEN"}:
+        setup_for_contract = "INVALIDATED" if setup == "INVALIDATED" else "NONE"
     else:
-        setup = "NONE"
-    payload = L2DecisionContextV1(
+        setup_for_contract = setup
+    if setup == "INVALIDATED":
+        verdict = "REJECT"
+    elif setup not in {"PULLBACK_RECLAIM", "BREAKOUT_RETEST"}:
+        verdict = "INSUFFICIENT_DATA"
+    payload = L2DecisionContextV2(
         local_direction=direction,
-        setup_state=setup,
+        setup_state=setup_for_contract,
         extension_atr=extension,
-        support=float(values["bb_lower"]),
-        resistance=float(values["bb_upper"]),
-        invalidation=min(ema, vwap),
+        support=float(state_transition["state_payload"]["support"]),
+        resistance=float(state_transition["state_payload"]["resistance"]),
+        invalidation=float(state_transition["state_payload"]["invalidation"]),
         validity="VALID",
         verdict=verdict,
         candle=candle,
@@ -238,13 +415,16 @@ def build_l2_context(
         computed_at=now,
         expires_at=expires_at,
         indicators_hash=canonical_hash(values),
+        state_before=str(state_transition["state_before"]),
+        state_after=setup,
+        state_hash=str(state_transition["state_hash"]),
     ).model_dump(mode="json")
     return _seal(payload)
 
 
 def build_multilayer_context(
     *, l1: Mapping[str, Any], l2: Mapping[str, Any], l3_confirmation: Mapping[str, Any],
-    canonical_score: float | None, now: datetime,
+    canonical_score: float | None, calibration_run_id: str, now: datetime,
 ) -> dict[str, Any]:
     verify_context_hash(l1)
     verify_context_hash(l2)
@@ -269,12 +449,12 @@ def build_multilayer_context(
             contract_version=(
                 str(l1["contract_version"]) if layer == "L1"
                 else str(l2["contract_version"]) if layer == "L2"
-                else "l3_confirmation_v1"
+                else str(l3_confirmation.get("contract_version") or "l3_confirmation_v2")
             ),
         )
         for layer, value in verdict_values.items()
     }
-    payload = MultilayerDecisionContextV2(
+    payload = MultilayerDecisionContextV3(
         l1_snapshot=dict(l1),
         l1_context_hash=str(l1["context_hash"]),
         l2_snapshot=dict(l2),
@@ -284,33 +464,94 @@ def build_multilayer_context(
         verdicts=verdicts,
         observational_decision=decision,
         computed_at=now,
+        calibration_run_id=calibration_run_id,
     ).model_dump(mode="json")
     return _seal(payload)
 
 
 def build_l3_confirmation(
     *, legacy_decision: str, indicators_snapshot: Mapping[str, Any],
-    gate_evaluation_hash: str | None, now: datetime,
+    gate_evaluation_hash: str | None, layer_config: Mapping[str, Any] | None,
+    now: datetime,
 ) -> dict[str, Any]:
     """Create a strict 5m confirmation from the actual persisted L3 inputs."""
-    invalid = []
+    invalid: list[str] = []
+    required_meta = {
+        "timeframe", "source_group", "ts", "source_timestamp", "available_at",
+        "source_provider", "provider_policy_id", "candle_closed", "config_hash",
+        "producer_version", "envelope",
+    }
+    policies = (layer_config or {}).get("source_policies") or {}
+    margin = (layer_config or {}).get("validity_margin_seconds")
+    if not layer_config or margin is None:
+        invalid.append("__layer_config__")
+    required_by_group = (layer_config or {}).get("required_indicators_by_group") or {}
+    for group, names in required_by_group.items():
+        for name in names or []:
+            item = indicators_snapshot.get(str(name))
+            if not isinstance(item, Mapping) or item.get("source_group") != group:
+                invalid.append(str(name))
     for name, item in indicators_snapshot.items():
         if not isinstance(item, Mapping):
             invalid.append(str(name))
             continue
+        if any(item.get(field) is None for field in required_meta):
+            invalid.append(str(name))
+            continue
         observed = set(item.get("observed_timeframes") or [])
         timeframe = item.get("timeframe")
+        if item.get("source_group") == "microstructure" and name in {"taker_ratio", "taker_buy_volume", "taker_sell_volume", "volume_delta", "buy_pressure"}:
+            source_kind = "live_trade_flow"
+        elif item.get("source_group") == "microstructure" and name in {"spread_pct", "orderbook_depth_usdt", "bid_ask_imbalance", "orderbook_pressure"}:
+            source_kind = "live_order_book"
+        else:
+            source_kind = "ohlcv"
+        policy = policies.get(source_kind) or {}
+        allowed = {str(value) for value in policy.get("allowed_source_providers") or []}
+        policy_id = str(policy.get("provider_policy_id") or "")
+        allowed_capture = {
+            str(value) for value in policy.get("allowed_capture_contract_versions") or []
+        }
         if item.get("timeframe_conflict") or item.get("stale"):
             invalid.append(str(name))
-        elif observed and observed != {"5m"}:
+        elif observed != {"5m"}:
             invalid.append(str(name))
-        elif timeframe and timeframe != "5m":
+        elif timeframe != "5m":
             invalid.append(str(name))
+        elif item.get("candle_closed") is not True:
+            invalid.append(str(name))
+        elif not allowed or str(item.get("source_provider")) not in allowed:
+            invalid.append(str(name))
+        elif not policy_id or str(item.get("provider_policy_id")) != policy_id:
+            invalid.append(str(name))
+        else:
+            try:
+                source_timestamp = _utc(item["source_timestamp"])
+                available_at = _utc(item["available_at"])
+                if available_at > now:
+                    raise ValueError("future availability")
+                if source_timestamp + timedelta(seconds=_TF_SECONDS["5m"]) > now:
+                    raise ValueError("open candle")
+                if now > source_timestamp + timedelta(
+                    seconds=_TF_SECONDS["5m"] + int(margin)
+                ):
+                    raise ValueError("expired")
+                envelope = dict(item["envelope"])
+                expected_hash = envelope.pop("envelope_hash", None)
+                if not expected_hash or expected_hash != canonical_hash(envelope):
+                    raise ValueError("hash")
+                if source_kind == "ohlcv" and (
+                    not allowed_capture
+                    or str(envelope.get("capture_contract_version")) not in allowed_capture
+                ):
+                    raise ValueError("capture contract")
+            except (KeyError, TypeError, ValueError):
+                invalid.append(str(name))
     verdict = "UNAVAILABLE" if invalid or not indicators_snapshot else (
         "PASS" if legacy_decision == "ALLOW" else "REJECT"
     )
     material = {
-        "contract_version": "l3_confirmation_v1",
+        "contract_version": "l3_confirmation_v2",
         "timeframe": "5m",
         "candle_policy": "CLOSED_ONLY",
         "verdict": verdict,
@@ -322,7 +563,7 @@ def build_l3_confirmation(
             else ["L3_INDICATORS_UNAVAILABLE"] if not indicators_snapshot
             else []
         ),
-        "invalid_indicators": sorted(invalid),
+        "invalid_indicators": sorted(set(invalid)),
         "computed_at": now.isoformat(),
     }
     return _seal(material)
@@ -354,6 +595,65 @@ async def _load_profile(db, *, profile_id: str, expected_version_id: str, expect
     )
 
 
+async def _load_l2_state(
+    db, *, user_id: Any, symbol: str, profile_version_id: str,
+) -> dict[str, Any] | None:
+    row = (await db.execute(text("""
+        SELECT state, state_payload, last_candle_open_at,
+               last_indicators_hash, state_hash
+          FROM mtf_l2_setup_states
+         WHERE user_id = CAST(:user_id AS UUID)
+           AND symbol = :symbol
+           AND profile_version_id = CAST(:profile_version_id AS UUID)
+         FOR UPDATE
+    """), {
+        "user_id": str(user_id), "symbol": symbol,
+        "profile_version_id": profile_version_id,
+    })).mappings().one_or_none()
+    return dict(row) if row else None
+
+
+async def _persist_l2_state(
+    db, *, user_id: Any, symbol: str, profile_version_id: str,
+    transition: Mapping[str, Any],
+) -> None:
+    material = {
+        "state": transition["state"],
+        "state_before": transition["state_before"],
+        "last_candle_open_at": transition["last_candle_open_at"],
+        "last_indicators_hash": transition["last_indicators_hash"],
+        "state_payload": transition["state_payload"],
+    }
+    if canonical_hash(material) != transition["state_hash"]:
+        raise ValueError("L2_STATE_HASH_INVALID")
+    await db.execute(text("""
+        INSERT INTO mtf_l2_setup_states (
+          user_id, symbol, profile_version_id, last_candle_open_at,
+          last_indicators_hash, state, state_payload, state_hash
+        ) VALUES (
+          CAST(:user_id AS UUID), :symbol, CAST(:profile_version_id AS UUID),
+          :last_candle_open_at, :last_indicators_hash, :state, CAST(:state_payload AS JSONB),
+          :state_hash
+        )
+        ON CONFLICT (user_id, symbol, profile_version_id) DO UPDATE SET
+          last_candle_open_at = EXCLUDED.last_candle_open_at,
+          last_indicators_hash = EXCLUDED.last_indicators_hash,
+          state = EXCLUDED.state,
+          state_payload = EXCLUDED.state_payload,
+          state_hash = EXCLUDED.state_hash,
+          updated_at = clock_timestamp()
+        WHERE mtf_l2_setup_states.last_candle_open_at <= EXCLUDED.last_candle_open_at
+    """), {
+        "user_id": str(user_id), "symbol": symbol,
+        "profile_version_id": profile_version_id,
+        "last_candle_open_at": _utc(transition["last_candle_open_at"]),
+        "last_indicators_hash": transition["last_indicators_hash"],
+        "state": transition["state"],
+        "state_payload": json.dumps(transition["state_payload"]),
+        "state_hash": transition["state_hash"],
+    })
+
+
 async def build_observations_for_assets(db, *, user_id: Any, assets: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """Return per-symbol MTF contexts; failures are explicit WAIT envelopes."""
     row = (await db.execute(text("""
@@ -371,34 +671,44 @@ async def build_observations_for_assets(db, *, user_id: Any, assets: list[dict[s
     except ValueError:
         return {}
     layers = contract["layers"]
-    l1_profile, l1_identity = await _load_profile(
-        db,
-        profile_id=layers["L1"]["profile_id"],
-        expected_version_id=layers["L1"]["profile_version_id"],
-        expected_hash=layers["L1"]["profile_config_hash"],
-    )
-    l2_profile, l2_identity = await _load_profile(
-        db,
-        profile_id=layers["L2"]["profile_id"],
-        expected_version_id=layers["L2"]["profile_version_id"],
-        expected_hash=layers["L2"]["profile_config_hash"],
-    )
     symbols = sorted({str(asset.get("symbol")) for asset in assets if asset.get("symbol")})
     now = datetime.now(timezone.utc)
-    l1_rows = await get_timeframe_indicators(
-        db, symbols, timeframe="1h", market_type="spot",
-        groups=["structural"], now=now, include_stale=True,
-    )
-    l2_rows = await get_timeframe_indicators(
-        db, symbols, timeframe="15m", market_type="spot",
-        groups=["structural"], now=now, include_stale=True,
-    )
+    try:
+        l1_profile, l1_identity = await _load_profile(
+            db,
+            profile_id=layers["L1"]["profile_id"],
+            expected_version_id=layers["L1"]["profile_version_id"],
+            expected_hash=layers["L1"]["profile_config_hash"],
+        )
+        l2_profile, l2_identity = await _load_profile(
+            db,
+            profile_id=layers["L2"]["profile_id"],
+            expected_version_id=layers["L2"]["profile_version_id"],
+            expected_hash=layers["L2"]["profile_config_hash"],
+        )
+        l1_rows = await get_timeframe_indicators(
+            db, symbols, timeframe="1h", market_type="spot",
+            groups=["structural"], now=now, include_stale=True,
+        )
+        l2_rows = await get_timeframe_indicators(
+            db, symbols, timeframe="15m", market_type="spot",
+            groups=["structural"], now=now, include_stale=True,
+        )
+    except Exception as exc:
+        return {
+            symbol: {
+                "error": type(exc).__name__, "reason": str(exc),
+                "observational_decision": "WAIT", "operational_effect": False,
+            }
+            for symbol in symbols
+        }
     output: dict[str, dict[str, Any]] = {}
     for asset in assets:
         symbol = str(asset.get("symbol") or "")
         try:
             l1_required = _required_indicator_names(l1_profile) | {
                 "adx", "atr_pct", "di_plus", "di_minus", "ema21", "ema50",
+                "ema21_slope_pct", "ema50_slope_pct",
                 "higher_highs_5", "higher_lows_5",
             }
             l1_values, l1_candle, l1_expiry = _validate_indicator_identity(
@@ -420,10 +730,26 @@ async def build_observations_for_assets(db, *, user_id: Any, assets: list[dict[s
                 timeframe="15m", layer_config=layers["L2"], now=now,
             )
             l2_candle.symbol = symbol
+            async with db.begin_nested():
+                prior_state = await _load_l2_state(
+                    db, user_id=user_id, symbol=symbol,
+                    profile_version_id=l2_identity.profile_version_id,
+                )
+                transition = advance_l2_setup_state(
+                    values=l2_values,
+                    candle_open_at=l2_candle.source_timestamp,
+                    semantics=l2_profile.get("mtf_semantics") or {},
+                    previous=prior_state,
+                )
+                await _persist_l2_state(
+                    db, user_id=user_id, symbol=symbol,
+                    profile_version_id=l2_identity.profile_version_id,
+                    transition=transition,
+                )
             l2 = build_l2_context(
                 symbol=symbol, profile=l2_profile, profile_identity=l2_identity,
                 values=l2_values, candle=l2_candle, expires_at=l2_expiry,
-                l1_context=l1, now=now,
+                l1_context=l1, now=now, state_transition=transition,
             )
             l3 = {
                 "contract_version": "l3_confirmation_v1",
@@ -431,7 +757,11 @@ async def build_observations_for_assets(db, *, user_id: Any, assets: list[dict[s
                 "verdict": "UNAVAILABLE",
                 "reason_codes": ["L3_PENDING_CANONICAL_EVALUATION"],
             }
-            output[symbol] = {"l1": l1, "l2": l2, "l3": l3}
+            output[symbol] = {
+                "l1": l1, "l2": l2, "l3": l3,
+                "l3_layer_config": dict(layers["L3"]),
+                "calibration_run_id": str(contract.get("calibration_run_id") or ""),
+            }
         except Exception as exc:
             output[symbol] = {
                 "error": type(exc).__name__,

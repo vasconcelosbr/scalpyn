@@ -131,6 +131,8 @@ _STRUCT_EXPLICIT: frozenset[str] = frozenset({
     "adx_acceleration",
     "adx_slope_3",
     "di_plus_minus_diff",
+    "ema21_slope_pct",
+    "ema50_slope_pct",
     # Slow EMAs
     "ema50",
     "ema200",

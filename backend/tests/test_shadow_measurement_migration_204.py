@@ -7,12 +7,14 @@ from alembic.script import ScriptDirectory
 BACKEND = Path(__file__).resolve().parents[1]
 
 
-def test_shadow_measurement_migration_is_the_only_head() -> None:
+def test_shadow_measurement_migration_remains_in_the_single_head_chain() -> None:
     config = Config(str(BACKEND / "alembic.ini"))
     config.set_main_option("script_location", str(BACKEND / "alembic"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["204_shadow_exit_measurement"]
+    assert scripts.get_heads() == ["217_indicator_identity_idx"]
+    revisions = {revision.revision for revision in scripts.walk_revisions()}
+    assert "204_shadow_exit_measurement" in revisions
 
 
 def test_shadow_measurement_migration_is_additive_and_reversible() -> None:

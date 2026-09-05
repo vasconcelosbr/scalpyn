@@ -12,6 +12,7 @@ from .config import get_current_user_id
 from ..services.config_service import config_service
 from ..services.score_engine import ScoreEngine
 from ..services.seed_service import DEFAULT_SCORE
+from ..utils.indicator_merge import fetch_merged_indicators
 
 logger = logging.getLogger(__name__)
 
@@ -52,16 +53,6 @@ async def get_watchlist(
 ):
     """Get all tracked symbols with latest score, indicators, and price data."""
     try:
-        # Get latest indicators
-        indicators_query = text("""
-            SELECT DISTINCT ON (symbol)
-                symbol, indicators_json, time
-            FROM indicators
-            ORDER BY symbol, time DESC
-        """)
-        indicators_result = await db.execute(indicators_query)
-        indicators_rows = indicators_result.fetchall()
-
         # Get market metadata
         metadata_query = text("""
             SELECT symbol, name, market_cap, volume_24h, price, price_change_24h, ranking
@@ -71,9 +62,15 @@ async def get_watchlist(
         metadata_result = await db.execute(metadata_query)
         metadata_rows = metadata_result.fetchall()
 
-        indicators_map = {}
-        for row in indicators_rows:
-            indicators_map[row.symbol] = row.indicators_json or {}
+        # Fetch only the active symbols and merge the latest row for each
+        # scheduler group.  A table-wide DISTINCT ON both spilled temporary
+        # files in production and returned a partial indicator envelope.
+        symbols = [row.symbol for row in metadata_rows]
+        merged = await fetch_merged_indicators(db, symbols, include_stale=True)
+        indicators_map = {
+            symbol: snapshot.as_flat_dict()
+            for symbol, snapshot in merged.items()
+        }
 
         score_engine = await _load_score_engine(db, user_id)
         watchlist = []
@@ -130,13 +127,8 @@ async def get_symbol_detail(
 ):
     """Get detailed indicators for a single symbol."""
     try:
-        indicators_query = text("""
-            SELECT indicators_json, time FROM indicators
-            WHERE symbol = :symbol
-            ORDER BY time DESC LIMIT 1
-        """)
-        result = await db.execute(indicators_query, {"symbol": symbol})
-        row = result.fetchone()
+        merged = await fetch_merged_indicators(db, [symbol], include_stale=True)
+        snapshot = merged.get(symbol)
 
         metadata_query = text("""
             SELECT symbol, name, market_cap, volume_24h, price, price_change_24h, ranking
@@ -148,7 +140,13 @@ async def get_symbol_detail(
         metadata_row = metadata_result.fetchone()
 
         score_engine = await _load_score_engine(db, user_id)
-        indicators = row.indicators_json if row else {}
+        indicators = snapshot.as_flat_dict() if snapshot else {}
+        source_times = [
+            meta.get("timestamp")
+            for meta in (snapshot.meta.values() if snapshot else [])
+            if meta.get("timestamp") is not None
+        ]
+        updated_at = max(source_times).isoformat() if source_times else None
         eval_data = _build_eval_data(metadata_row, indicators) if metadata_row else indicators
         score = score_engine.compute_score(eval_data)
         components = score.get("components", {})
@@ -167,7 +165,7 @@ async def get_symbol_detail(
                     "matched_rules": score.get("matched_rules", []),
                 },
             },
-            "updated_at": row.time.isoformat() if row else None,
+            "updated_at": updated_at,
         }
     except Exception as e:
         logger.warning(f"Symbol detail query failed: {e}")

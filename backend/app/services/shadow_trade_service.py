@@ -1756,12 +1756,15 @@ async def _create_from_decision(
     )
     if isinstance(_l3_contract_v3, dict):
         config_snap["l3_authorization_contract_v3"] = deepcopy(_l3_contract_v3)
-    _mtf_context = (decision.metrics or {}).get("multilayer_decision_context_v2")
+    _mtf_context = (
+        (decision.metrics or {}).get("multilayer_decision_context_v3")
+        or (decision.metrics or {}).get("multilayer_decision_context_v2")
+    )
     _mtf_verdicts = None
     _mtf_rejected_layer = None
     _mtf_rejected_rule = None
     if isinstance(_mtf_context, dict):
-        config_snap["multilayer_decision_context_v2"] = deepcopy(_mtf_context)
+        config_snap[str(_mtf_context.get("contract_version") or "multilayer_decision_context_v2")] = deepcopy(_mtf_context)
         if isinstance(_mtf_context.get("verdicts"), dict):
             _mtf_verdicts = deepcopy(_mtf_context["verdicts"])
             for _layer in ("L1", "L2", "L3"):

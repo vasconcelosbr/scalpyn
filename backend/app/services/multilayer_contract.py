@@ -13,7 +13,7 @@ from .profile_runtime_config import canonical_hash
 MULTILAYER_EXECUTION_CONTRACT_VERSION = "multilayer_profile_execution_contract_v2"
 MULTILAYER_PROVENANCE_POLICY_VERSION = "multilayer_provenance_resolver_v1"
 MULTILAYER_CONSOLIDATION_VERSION = "single_profile_per_symbol_v2"
-MULTILAYER_DECISION_CONTEXT_VERSION = "multilayer_decision_context_v2"
+MULTILAYER_DECISION_CONTEXT_VERSION = "multilayer_decision_context_v3"
 LAYERS = ("L1", "L2", "L3")
 LAYER_VERDICTS = {"PASS", "REJECT", "INSUFFICIENT_DATA", "UNAVAILABLE"}
 
@@ -62,6 +62,8 @@ def require_shadow_multilayer_config(scanner: Mapping[str, Any]) -> dict[str, An
         raise ValueError("MULTILAYER_OPERATIONAL_EFFECT_FORBIDDEN")
     if config.get("decision_feature_contract_version") != MULTILAYER_DECISION_CONTEXT_VERSION:
         raise ValueError("MULTILAYER_CONTEXT_VERSION_UNKNOWN")
+    if not config.get("calibration_run_id"):
+        raise ValueError("MULTILAYER_CALIBRATION_RUN_MISSING")
     layers = config.get("layers") or {}
     if set(layers) != set(LAYERS):
         raise ValueError("MULTILAYER_LAYER_CONFIG_INCOMPLETE")
@@ -74,12 +76,16 @@ def require_shadow_multilayer_config(scanner: Mapping[str, Any]) -> dict[str, An
             raise ValueError(f"{layer}_TIMEFRAME_MISMATCH")
         if item.get("validity_margin_seconds") is None:
             raise ValueError(f"{layer}_VALIDITY_MARGIN_CONFIG_REQUIRED")
+        if not item.get("required_indicators_by_group"):
+            raise ValueError(f"{layer}_REQUIRED_INDICATORS_MISSING")
         policies = item.get("source_policies") or {}
         ohlcv = policies.get("ohlcv") or {}
         if ohlcv.get("candle_policy") != "CLOSED_ONLY":
             raise ValueError(f"{layer}_CLOSED_ONLY_REQUIRED")
         if not ohlcv.get("allowed_source_providers") or not ohlcv.get("provider_policy_id"):
             raise ValueError(f"{layer}_SOURCE_POLICY_INCOMPLETE")
+        if not ohlcv.get("allowed_capture_contract_versions"):
+            raise ValueError(f"{layer}_CAPTURE_CONTRACT_POLICY_INCOMPLETE")
     for layer in ("L1", "L2"):
         item = layers[layer]
         for field in ("profile_id", "profile_version_id", "profile_config_hash"):

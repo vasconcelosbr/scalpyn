@@ -62,7 +62,11 @@ def _raise_existing(*, reverse: bool) -> None:
             SELECT id, request_token_limit, daily_token_limit, monthly_token_limit
               FROM ai_budget_policies
              WHERE provider=:provider AND model=:model AND module=:module AND is_active IS TRUE
-        """), spec).mappings().one()
+        """), spec).mappings().one_or_none()
+        # This is a production-data migration. A clean development database
+        # has no tenant-scoped seed rows and must still be able to reach head.
+        if row is None:
+            continue
         if int(row["request_token_limit"]) != spec["request_token_limit"]:
             raise RuntimeError(f"UNEXPECTED_REQUEST_TOKEN_LIMIT:{spec['model']}:{spec['module']}")
         new_daily = spec["request_token_limit"] * DAILY_MULTIPLIER
@@ -87,12 +91,18 @@ def _raise_existing(*, reverse: bool) -> None:
 def upgrade() -> None:
     _raise_existing(reverse=False)
     bind = op.get_bind()
+    tenant_exists = bind.execute(
+        sa.text("SELECT 1 FROM users WHERE id=CAST(:tenant_id AS UUID)"),
+        {"tenant_id": TENANT_ID},
+    ).scalar_one_or_none()
+    if tenant_exists is None:
+        return
     existing = bind.execute(sa.text("""
         SELECT id FROM ai_budget_policies
          WHERE provider=:provider AND model=:model AND module=:module
     """), NEW_SONNET_ROW).mappings().one_or_none()
     if existing is not None:
-        raise RuntimeError("SONNET_SHADOW_PORTFOLIO_BUDGET_ROW_ALREADY_EXISTS")
+        return
     daily = NEW_SONNET_ROW["request_token_limit"] * DAILY_MULTIPLIER
     monthly = daily * MONTHLY_MULTIPLIER
     bind.execute(sa.text("""

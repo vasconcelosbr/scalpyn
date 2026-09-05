@@ -71,6 +71,12 @@ class L1DecisionContextV2(BaseModel):
     context_hash: Optional[str] = None
 
 
+class L1DecisionContextV3(L1DecisionContextV2):
+    contract_version: Literal["l1_decision_context_v3"] = "l1_decision_context_v3"
+    ema21_slope_pct: float
+    ema50_slope_pct: float
+
+
 class L2DecisionContextV1(BaseModel):
     contract_version: Literal["l2_decision_context_v1"] = "l2_decision_context_v1"
     local_direction: Literal["UP", "DOWN", "NEUTRAL"]
@@ -93,6 +99,19 @@ class L2DecisionContextV1(BaseModel):
     context_hash: Optional[str] = None
 
 
+class L2DecisionContextV2(L2DecisionContextV1):
+    contract_version: Literal["l2_decision_context_v2"] = "l2_decision_context_v2"
+    state_before: Literal[
+        "NONE", "PULLBACK_SEEN", "BREAKOUT_SEEN", "PULLBACK_RECLAIM",
+        "BREAKOUT_RETEST", "INVALIDATED"
+    ]
+    state_after: Literal[
+        "NONE", "PULLBACK_SEEN", "BREAKOUT_SEEN", "PULLBACK_RECLAIM",
+        "BREAKOUT_RETEST", "INVALIDATED"
+    ]
+    state_hash: str = Field(min_length=64, max_length=64)
+
+
 class MultilayerDecisionContextV2(BaseModel):
     contract_version: Literal["multilayer_decision_context_v2"] = (
         "multilayer_decision_context_v2"
@@ -109,3 +128,10 @@ class MultilayerDecisionContextV2(BaseModel):
     observational_decision: Literal["PASS", "WAIT", "REJECT"]
     computed_at: datetime
     context_hash: Optional[str] = None
+
+
+class MultilayerDecisionContextV3(MultilayerDecisionContextV2):
+    contract_version: Literal["multilayer_decision_context_v3"] = (
+        "multilayer_decision_context_v3"
+    )
+    calibration_run_id: str = Field(min_length=1)
