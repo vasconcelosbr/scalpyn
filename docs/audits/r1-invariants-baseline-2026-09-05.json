@@ -1,0 +1,67 @@
+{
+  "computed_at": "2026-09-05T11:18:57.974486+00:00",
+  "invariants": [
+    {
+      "computed_at": "2026-09-05T11:18:57.974486+00:00",
+      "name": "active_config_profiles",
+      "population": "Runtime configuration records, not strategy profiles",
+      "predicate": "config_profiles WHERE is_active = true",
+      "query": "SELECT count(*) AS n,\n                   md5(string_agg(\n                       id::text || ':' || md5(jsonb_build_object(\n                           'config_type', config_type,\n                           'config_json', config_json\n                       )::text), ',' ORDER BY id\n                   )) AS fingerprint\n              FROM config_profiles\n             WHERE is_active = true",
+      "terminal_cutoff": null,
+      "value": {
+        "fingerprint": "e1083bebda45b701eca7f1d02adc9029",
+        "n": 21
+      }
+    },
+    {
+      "computed_at": "2026-09-05T11:18:57.974486+00:00",
+      "name": "baseline_score_engine_versions",
+      "population": "Governed score-engine baselines",
+      "predicate": "score_engine_versions WHERE status = 'BASELINE'",
+      "query": "SELECT count(*) AS n,\n                   md5(string_agg(\n                       id::text || ':' || md5(jsonb_build_object(\n                           'config_hash', config_hash,\n                           'rules', rules,\n                           'weights', weights,\n                           'thresholds', thresholds,\n                           'selected_rule_ids', selected_rule_ids,\n                           'status', status\n                       )::text), ',' ORDER BY id\n                   )) AS fingerprint\n              FROM score_engine_versions\n             WHERE status = 'BASELINE'",
+      "terminal_cutoff": null,
+      "value": {
+        "fingerprint": "379662e6de98f906b44cf9780e67b608",
+        "n": 5
+      }
+    },
+    {
+      "computed_at": "2026-09-05T11:18:57.974486+00:00",
+      "name": "active_strategy_profiles",
+      "population": "Active strategy profiles and their economic/runtime configuration",
+      "predicate": "profiles WHERE is_active = true",
+      "query": "SELECT count(*) AS n,\n                   md5(string_agg(\n                       id::text || ':' || md5(jsonb_build_object(\n                           'name', name,\n                           'config', config,\n                           'profile_role', profile_role,\n                           'pipeline_order', pipeline_order,\n                           'auto_pilot_enabled', auto_pilot_enabled,\n                           'auto_pilot_config', auto_pilot_config,\n                           'profile_type', profile_type,\n                           'profile_version', profile_version,\n                           'is_shadow_only', is_shadow_only,\n                           'live_trading_enabled', live_trading_enabled\n                       )::text), ',' ORDER BY id\n                   )) AS fingerprint\n              FROM profiles\n             WHERE is_active = true",
+      "terminal_cutoff": null,
+      "value": {
+        "fingerprint": "1f30d86916d15a5916f75e2ceebbb11d",
+        "n": 25
+      }
+    },
+    {
+      "computed_at": "2026-09-05T11:18:57.974486+00:00",
+      "name": "governed_profile_versions",
+      "population": "Active CHAMPION and governed SHADOW strategy-profile versions",
+      "predicate": "profile_versions WHERE (status = 'CHAMPION' AND is_active = true) OR status = 'SHADOW'",
+      "query": "SELECT count(*) AS n,\n                   md5(string_agg(\n                       id::text || ':' || md5(jsonb_build_object(\n                           'profile_id', profile_id,\n                           'version_number', version_number,\n                           'config', config,\n                           'is_active', is_active,\n                           'parent_version_id', parent_version_id,\n                           'config_hash', config_hash,\n                           'score_engine_version_id', score_engine_version_id,\n                           'status', status,\n                           'activated_at', activated_at,\n                           'deactivated_at', deactivated_at\n                       )::text), ',' ORDER BY id\n                   )) AS fingerprint\n              FROM profile_versions\n             WHERE (status = 'CHAMPION' AND is_active = true)\n                OR status = 'SHADOW'",
+      "terminal_cutoff": null,
+      "value": {
+        "fingerprint": "6c5df6a9c1e89a042c116ed63aeb0eda",
+        "n": 33
+      }
+    },
+    {
+      "computed_at": "2026-09-05T11:18:57.974486+00:00",
+      "name": "terminal_shadow_trades",
+      "population": "Trades whose terminal database transition completed before the cutoff; the hash covers identity, entry/barrier and realized-result fields",
+      "predicate": "shadow_trades WHERE status = 'COMPLETED' AND completed_at < '2026-09-05T11:00:00+00:00'",
+      "query": "SELECT count(*) AS n,\n                   md5(string_agg(\n                       id::text || ':' || md5(jsonb_build_object(\n                           'symbol', symbol,\n                           'direction', direction,\n                           'source', source,\n                           'amount_usdt', amount_usdt,\n                           'entry_price', entry_price,\n                           'entry_timestamp', entry_timestamp,\n                           'tp_price', tp_price,\n                           'sl_price', sl_price,\n                           'tp_pct', tp_pct,\n                           'sl_pct', sl_pct,\n                           'timeout_candles', timeout_candles,\n                           'exit_price', exit_price,\n                           'exit_price_nominal', exit_price_nominal,\n                           'exit_price_observed', exit_price_observed,\n                           'exit_price_semantics', exit_price_semantics,\n                           'exit_timestamp', exit_timestamp,\n                           'outcome', outcome,\n                           'pnl_pct', pnl_pct,\n                           'pnl_usdt', pnl_usdt,\n                           'holding_seconds', holding_seconds,\n                           'label_resolved_at', label_resolved_at,\n                           'completed_at', completed_at,\n                           'label_contract_version', label_contract_version,\n                           'barrier_contract_version', barrier_contract_version\n                       )::text), ',' ORDER BY id\n                   )) AS fingerprint\n              FROM shadow_trades\n             WHERE status = 'COMPLETED'\n               AND completed_at < '2026-09-05T11:00:00+00:00'",
+      "terminal_cutoff": "2026-09-05T11:00:00+00:00",
+      "value": {
+        "fingerprint": "fae01857c106616c3c726e685eefcf61",
+        "n": 331529
+      }
+    }
+  ],
+  "terminal_cutoff": "2026-09-05T11:00:00+00:00"
+}
+

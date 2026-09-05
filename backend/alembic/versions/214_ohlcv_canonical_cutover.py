@@ -28,10 +28,10 @@ CAPTURE_CONTRACT_VERSION = "gate_ohlcv_canonical_v1"
 
 
 def upgrade() -> None:
-    # Historical `ohlcv` rows (established since before this contract system
-    # existed) were only ever written from Gate's is_closed=true candles --
-    # DEFAULT TRUE is a factual backfill, not an assumption, and matches the
-    # invariant this CHECK now enforces going forward.
+    # Historical rows predate state/provenance capture. DEFAULT TRUE satisfies
+    # the new column and CHECK, but cannot prove that those candles were fetched
+    # only after Gate finalized them. Their contract remains explicitly legacy;
+    # see docs/runbooks/ohlcv-canonical-capture-contract.md.
     op.execute(sa.text("""
         ALTER TABLE ohlcv
         ADD COLUMN IF NOT EXISTS is_closed BOOLEAN NOT NULL DEFAULT TRUE

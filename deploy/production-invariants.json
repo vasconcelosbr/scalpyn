@@ -983,6 +983,48 @@
           ]
         }
       ]
+    },
+    {
+      "id": "r1-ohlcv-audit-contract",
+      "description": "R1 audit fingerprints name each protected population, freeze terminal Shadows by completed_at and document the ingested_at forensic boundary",
+      "files": [
+        {
+          "path": "backend/scripts/audit_r1_invariants.py",
+          "contains_all": [
+            "active_config_profiles",
+            "active_strategy_profiles",
+            "governed_profile_versions",
+            "completed_at <",
+            "--cutoff"
+          ]
+        },
+        {
+          "path": "backend/tests/test_audit_r1_invariants.py",
+          "contains_all": [
+            "test_r1_invariants_name_each_distinct_population",
+            "test_terminal_population_is_frozen_by_terminal_write_time",
+            "test_fixed_cutoff_requires_timezone_and_normalizes_to_utc"
+          ]
+        },
+        {
+          "path": "docs/runbooks/ohlcv-canonical-capture-contract.md",
+          "contains_all": [
+            "ingested_at forensic boundary",
+            "legacy_collect_market_data_untrusted",
+            "DEFERRED_BY_OPERATOR"
+          ]
+        },
+        {
+          "path": "docs/audits/r1-invariants-baseline-2026-09-05.json",
+          "contains_all": [
+            "active_config_profiles",
+            "active_strategy_profiles",
+            "governed_profile_versions",
+            "terminal_shadow_trades",
+            "2026-09-05T11:00:00+00:00"
+          ]
+        }
+      ]
     }
   ]
 }
