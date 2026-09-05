@@ -1,0 +1,34 @@
+{
+  "policy": {
+    "status": "APPROVED",
+    "config_profile_id": "8d770e10-bf06-4b51-8aac-4a116ebde3b3",
+    "config_hash": "8cc8b4d6af00740aa4704353b1dd5c7d81a825dd5f1f1b201d7fdb49d5caf618",
+    "policy_version": "mtf_spot_l1_1h_l2_15m_v1",
+    "approved_at": "2026-09-05T22:38:35.649796+00:00",
+    "approved_by": "8080110c-ee9d-4a2b-a53f-6bef86dd8867"
+  },
+  "calibration_run": {
+    "id": "ab595584-4cce-401d-a3cb-38616a3027d2",
+    "status": "DRAFT_INSUFFICIENT_DATA",
+    "failure_reason": "MIN_SAMPLES_NOT_MET",
+    "dataset_hash": "71e2991b73c9ccd9d9150c7ffaa049f064bdb25b2e297785ac8ddc5237015c71",
+    "dataset_manifest": {
+      "contract_version": "mtf_point_in_time_dataset_v1",
+      "requested_rows": 5750,
+      "source_rows": 5750,
+      "accepted_rows": 0,
+      "discard_reasons": {
+        "FEATURE_HASH_INVALID": 5613,
+        "FEATURE_CAPTURE_CONTRACT_INVALID": 137
+      }
+    },
+    "started_at": "2026-09-05T22:40:38.218645+00:00",
+    "completed_at": "2026-09-05T22:40:40.396601+00:00"
+  },
+  "activation_gate": {
+    "passed": false,
+    "activation_document_emitted": false,
+    "profiles_updated": false,
+    "contract_activated": false
+  }
+}
