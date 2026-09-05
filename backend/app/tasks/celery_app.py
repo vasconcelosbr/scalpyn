@@ -131,6 +131,7 @@ def _configured_task_modules() -> tuple[str, ...]:
     if queues == (QUEUE_RESEARCH_OHLCV,):
         return (
             "app.tasks.collect_research_ohlcv",
+            "app.tasks.collect_mtf_ohlcv",
             "app.tasks.sample_ohlcv_settlement_latency",
             "app.tasks.ohlcv_backfill",
         )

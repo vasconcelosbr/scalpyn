@@ -259,6 +259,14 @@ def test_mtf_collectors_use_the_isolated_research_queue():
         assert celery_app.conf.beat_schedule[schedule_name]["options"]["queue"] == "research_ohlcv"
 
 
+def test_isolated_research_worker_imports_mtf_collectors(monkeypatch):
+    from app.tasks import celery_app as celery_app_module
+
+    monkeypatch.setenv("WORKER_QUEUES", "research_ohlcv")
+
+    assert "app.tasks.collect_mtf_ohlcv" in celery_app_module._configured_task_modules()
+
+
 def test_discrete_semantics_are_fitted_without_reading_test_data():
     policy = {
         "candidate_quantiles": [0.5],
