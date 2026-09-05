@@ -52,6 +52,29 @@ Conclusão: a infraestrutura está apta a coletar, mas a janela point-in-time go
 
 Os testes de integração que dependem de API/PostgreSQL locais foram mantidos como pendência ambiental quando esses serviços não estavam disponíveis; não foram reclassificados como sucesso.
 
+## Publicação e reconciliação de produção
+
+Fonte canônica publicada: commit `503aa1abe9ebad9856f51565719df42e7bb38faf` em `origin/main`.
+
+| Superfície | Origem | Evidência literal |
+|---|---|---|
+| Guard de fonte | `[git/tool] verify_deploy_source.ps1` | `status: PASS`; commit `503aa1abe9ebad9856f51565719df42e7bb38faf` |
+| API Railway | `[deploy] Railway` | deployment `d68c3b3a-ccbf-4adc-af06-6f812cadd55f`; `SUCCESS`; mensagem `MTF pool watchlist chain fix 503aa1a` |
+| Workers e beat | `[deploy] Railway` | structural, compute, execution, micro e beat: `SUCCESS` com `commitHash=503aa1abe9ebad9856f51565719df42e7bb38faf`; research `4032fab5-fa47-45a0-b5ef-d2663a961c00`, `SUCCESS`, mensagem `MTF source parity 503aa1a` |
+| Schema | `[query produção] alembic_version` | `218_mtf_profile_activation_audit` |
+| Saúde API | `[http] /api/health` | `{"status":"ok","version":"0.2.0"}` |
+| Frontend Vercel | `[deploy] Vercel` | `dpl_APpAwtco5FQAUASLdzDGqfa9Tixw`; `READY`; alias `https://scalpyn.vercel.app` |
+| Interface autenticada | `[UI] navegador automatizado` | `NOT CONFIRMED`: inicialização falhou duas vezes com `failed to write kernel assets` |
+
+Reconciliação pós-deploy somente leitura:
+
+- `[query produção] profile_count=53`, sem aumento de profiles.
+- `[query produção] activation_audits=0`, `active_mtf_policies=0` e `mtf_runs=0`.
+- `[query produção] contrato = enabled:false, activation_mode:DRAFT, operational_effect:false`.
+- `[query produção]` IDs, versões e hashes de L1/L2 permaneceram inalterados; a watchlist L2 continua temporariamente vinculada ao L1 até existir política aprovada e run `PASSED`.
+
+Os logs também mostraram duas ocorrências operacionais não atribuídas a esta mudança: autenticação de WebSocket privado da Gate recusada por `RequestId should be not empty` e `l3_rejected_profile_consolidation` com `rejected_consolidated_insert_returned_none_without_active`. Elas não foram usadas como evidência de aceite e permanecem abertas para diagnóstico separado.
+
 ## Rollback
 
 1. Chamar `POST /api/profiles/mtf/activation/{audit_id}/rollback`.
@@ -74,3 +97,7 @@ Os testes de integração que dependem de API/PostgreSQL locais foram mantidos c
 | 72 | `[test] pytest` | `72 passed in 2.70s` |
 | 83 | `[test] npm test` | `tests 83; pass 83; fail 0` |
 | 44 | `[build] npm run build` | `Generating static pages ... (44/44)` |
+| 53 | `[query produção] profiles` | `profile_count: 53` após o deploy |
+| 0 ativações | `[query produção] mtf_profile_activation_audits` | `activation_audits: 0` |
+| 0 policies | `[query produção] config_profiles` | `active_mtf_policies: 0` após o deploy |
+| 0 runs | `[query produção] mtf_calibration_runs` | `mtf_runs: 0` após o deploy |
