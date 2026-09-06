@@ -1140,7 +1140,7 @@
           "path": "backend/app/services/mtf_profile_activation_service.py",
           "contains_all": [
             "UPDATE_EXISTING_MTF_AND_ACTIVATE_SHADOW_WITH_WAIVER",
-            "MTF_WAIVER_ECONOMIC_RULE_CHANGE_FORBIDDEN",
+            "WAIVER_ECONOMIC_RULE_CHANGE_FORBIDDEN",
             "DRAFT_INSUFFICIENT_DATA",
             "OBSERVATIONAL_ONLY"
           ]
