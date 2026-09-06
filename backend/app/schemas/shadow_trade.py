@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
+from .shadow_trailing_view import ShadowTrailingView
 
 
 class ShadowConsolidationProfile(BaseModel):
@@ -55,6 +56,7 @@ class ShadowTradeRead(BaseModel):
     current_price: Optional[float] = None
     exit_price: Optional[float] = None
     l3_exit: Optional[Dict[str, Any]] = None
+    trailing_view: Optional[ShadowTrailingView] = None
     tp_price: Optional[float] = None
     sl_price: Optional[float] = None
     amount_usdt: float

@@ -31,6 +31,7 @@ export interface ShadowConsolidation {
 }
 
 export interface ShadowTradeDetail {
+  trailing_view?: import('@/lib/shadowTrailingView').ShadowTrailingView | null;
   id: string;
   symbol: string;
   direction: string | null;

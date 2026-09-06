@@ -717,6 +717,9 @@ def _to_read(
 ) -> ShadowTradeRead:
     measurement_ready = measurement is not None and measurement.status == "READY"
     consolidation = consolidation_override or _consolidation_payload(row)
+    trailing_view = getattr(row, "trailing_view", None)
+    if trailing_view is not None:
+        current_price = trailing_view.observed.price
     return ShadowTradeRead(
         id=row.id,
         symbol=row.symbol,
@@ -725,6 +728,7 @@ def _to_read(
         current_price=current_price,
         exit_price=float(row.exit_price) if row.exit_price is not None else None,
         l3_exit=getattr(row, "l3_exit", None),
+        trailing_view=getattr(row, "trailing_view", None),
         tp_price=float(row.tp_price) if row.tp_price is not None else None,
         sl_price=float(row.sl_price) if row.sl_price is not None else None,
         amount_usdt=float(row.amount_usdt or 0.0),
@@ -790,6 +794,7 @@ def _to_detail(
     return ShadowTradeDetail(
         id=row.id,
         l3_exit=getattr(row, "l3_exit", None),
+        trailing_view=getattr(row, "trailing_view", None),
         symbol=row.symbol,
         direction=row.direction,
         entry_price=float(row.entry_price) if row.entry_price is not None else None,
@@ -959,6 +964,8 @@ async def list_shadow_trades(
 
         from ..services.shadow_l3_exit_service import attach_states
         await attach_states(db, rows, user_id)
+        from ..services.shadow_trailing_view import attach_trailing_views
+        await attach_trailing_views(db, rows, user_id)
 
         prices = await _fetch_latest_prices(db, [r.symbol for r in rows])
         measurements = await latest_measurement_by_trade_ids(db, [r.id for r in rows])
@@ -1852,6 +1859,8 @@ async def get_shadow_trade(
         ).get(row.id)
         from ..services.shadow_l3_exit_service import attach_states
         await attach_states(db, [row], user_id)
+        from ..services.shadow_trailing_view import attach_trailing_views
+        await attach_trailing_views(db, [row], user_id)
         return _to_detail(
             row,
             decision=decision,

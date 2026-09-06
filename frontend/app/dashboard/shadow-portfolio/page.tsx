@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { TrailingStatus } from '@/components/shadow-portfolio/TrailingStatus';
+import type { ShadowTrailingView } from '@/lib/shadowTrailingView';
 import {
   Activity,
   AlertTriangle,
@@ -81,6 +83,7 @@ interface ShadowTradeRead {
   current_price: number | null;
   exit_price?: number | null;
   l3_exit?: { state?: string; mode?: string; floor_price?: number; quality?: string; checked_at?: string; reason?: string } | null;
+  trailing_view?: ShadowTrailingView | null;
   tp_price: number | null;
   sl_price: number | null;
   amount_usdt: number;
@@ -1046,6 +1049,7 @@ function TradeTable({
                 <td style={{ padding: "10px 12px", fontWeight: 600 }}>{it.symbol}</td>
                 <td style={{ padding: "10px 12px", textAlign: "center" }}>
                   <Badge style={sStyle} />
+                  {isOpen && it.trailing_view && <TrailingStatus view={it.trailing_view} symbol={it.symbol} />}
                 </td>
                 <td style={{ padding: "10px 12px", textAlign: "right" }}>
                   {fmtPrice(it.entry_price)}
@@ -1075,8 +1079,8 @@ function TradeTable({
                 </td>
                 <td style={{ padding: "10px 12px", textAlign: "right", color: C.red }}>
                   {fmtPrice(it.sl_price)}
-                    {it.l3_exit && <div style={{ color: C.muted, fontSize: 11 }} title={`${it.l3_exit.reason ?? ""} · ${it.l3_exit.quality ?? ""} · ${it.l3_exit.checked_at ?? ""}`}>
-                      {it.l3_exit.mode === "OBSERVE" ? "Candidato: " : "Piso: "}{fmtPrice(it.l3_exit.floor_price ?? null)} · {it.l3_exit.state ?? "Aguardando"}
+                    {it.trailing_view?.floor.price != null && <div style={{ color: C.green, fontSize: 11 }}>
+                      Piso: {fmtPrice(it.trailing_view.floor.price)}
                     </div>}
                 </td>
                 <td style={{ padding: "10px 12px", textAlign: "center" }}>

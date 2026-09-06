@@ -9,6 +9,7 @@ import { buildShadowTradeExport, shadowTradeExportFilename } from "./shadowTrade
 import { TradeCandlestickChart } from "./TradeCandlestickChart";
 import type { ShadowTradeChartResponse, ShadowTradeDetail } from "./types";
 import styles from "./ShadowTradeDetailScreen.module.css";
+import { TrailingStatus } from './TrailingStatus';
 
 const CHART_CONTEXT_MINUTES = 30;
 const MACRO_KEYS = new Set([
@@ -279,6 +280,7 @@ export function ShadowTradeDetailScreen({ shadowId }: { shadowId: string }) {
             <div className={styles.titleRow}>
               <h1 className={styles.title}>{data.symbol}</h1>
               <span className={styles.badge}>{data.status}</span>
+              {data.trailing_view && <TrailingStatus view={data.trailing_view} symbol={data.symbol} />}
               <span className={`${styles.badge} ${data.outcome === "TP_HIT" || (data.outcome === "TRAILING_STOP" && (data.pnl_pct ?? 0) >= 0) ? styles.badgeTp : data.outcome === "SL_HIT" || data.outcome === "TRAILING_STOP" ? styles.badgeSl : ""}`}>{outcomeLabel(data)}</span>
             </div>
           </div>

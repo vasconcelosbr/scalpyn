@@ -1169,6 +1169,34 @@
           ]
         }
       ]
+    },
+    {
+      "id": "shadow-trailing-visibility-risk-persistence",
+      "files": [
+        {
+          "path": "backend/app/services/shadow_trailing_view.py",
+          "contains_all": [
+            "async def attach_trailing_views",
+            "LEGACY_STATE_NOT_RECORDED",
+            "floor_schedule"
+          ]
+        },
+        {
+          "path": "frontend/app/settings/risk/page.tsx",
+          "contains_all": [
+            "riskDraftReducer",
+            "sameRiskValues",
+            "Distância do trailing global"
+          ]
+        },
+        {
+          "path": "backend/tests/test_shadow_trailing_view.py",
+          "contains_all": [
+            "test_effective_floor_schedule_next_step_and_pending_floor",
+            "test_other_users_are_excluded_before_query"
+          ]
+        }
+      ]
     }
   ]
 }

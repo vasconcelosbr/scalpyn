@@ -1,46 +1,49 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useReducer } from "react";
 import { Save, RefreshCw } from "lucide-react";
 import { useConfig } from "@/hooks/useConfig";
 import { ShadowL3ExitPolicyForm } from "@/components/settings/ShadowL3ExitPolicyForm";
 import { ModuleAIAnalysisAction } from "@/components/ai/ModuleAIAnalysisAction";
+import { apiGet } from "@/lib/api";
+import { emptyRiskDraft, riskDraftReducer, sameRiskValues, type RiskValues } from "@/lib/riskFormState";
 
 export default function RiskSettingsPage() {
-  const { config, updateConfig, isLoading } = useConfig("risk");
-  const [form, setForm] = useState({
-    take_profit_pct: 1.5,
-    stop_loss_atr_multiplier: 1.5,
-    trailing_stop_enabled: false,
-    trailing_stop_distance_pct: 0.5,
-    max_positions: 5,
-    daily_loss_limit_pct: 3.0,
-    max_exposure_per_asset_pct: 20,
-    circuit_breaker_consecutive_losses: 3,
-    circuit_breaker_pause_minutes: 60,
-    default_order_type: "limit",
-    max_slippage_pct: 0.1,
-    capital_per_trade_pct: 10,
-    max_capital_in_use_pct: 80,
-  });
+  const { config, updateConfig, isLoading, error: loadError, mutate } = useConfig("risk");
+  const [draft, dispatch] = useReducer(riskDraftReducer, emptyRiskDraft);
+  const form = draft.values as Record<string, any>;
+  const [message, setMessage] = useState("");
+  const [saveError, setSaveError] = useState("");
   const [saving, setSaving] = useState(false);
   const assumedCapital = 100000;
 
   useEffect(() => {
-    if (config?.data && Object.keys(config.data).length > 0) {
-      setForm(prev => ({ ...prev, ...config.data }));
+    if (config && Object.keys(config).length > 0) {
+      dispatch({ type: 'load', values: config });
     }
   }, [config]);
 
   const handleSave = async () => {
+    const submitted = { ...draft.values };
+    if (Object.values(submitted).some(v => typeof v === 'number' && !Number.isFinite(v))) {
+      setSaveError('Preencha valores numéricos válidos antes de salvar.'); return;
+    }
     setSaving(true);
-    try { await updateConfig(form); } catch (e) { console.error(e); }
-    setSaving(false);
+    setSaveError(""); setMessage("");
+    try {
+      await updateConfig(submitted);
+      const response = await apiGet<{ data: RiskValues }>("/config/risk");
+      if (!sameRiskValues(submitted, response.data)) throw new Error('A leitura após salvar divergiu. Suas alterações continuam disponíveis; confira antes de tentar novamente.');
+      dispatch({ type: 'saved', submitted, persisted: response.data });
+      setMessage('Configuração salva e conferida.');
+    } catch (e) { setSaveError(e instanceof Error ? e.message : 'Não foi possível confirmar o salvamento.'); }
+    finally { setSaving(false); }
   };
 
-  const update = (key: string, value: any) => setForm(prev => ({ ...prev, [key]: value }));
+  const update = (key: string, value: any) => { setMessage(''); dispatch({ type: 'edit', key, value }); };
 
   if (isLoading) return <div className="p-8"><div className="skeleton h-8 w-64 mb-4" /><div className="skeleton h-96 w-full" /></div>;
+  if (!draft.loaded) return <div className="p-8" role="alert">{loadError ? 'Falha ao carregar a configuração salva.' : 'Configuração salva indisponível.'}<button className="btn ml-4" onClick={() => mutate()}>Tentar novamente</button></div>;
 
   const maxRiskPerTrade = assumedCapital * (form.capital_per_trade_pct / 100) * (form.stop_loss_atr_multiplier * 0.01);
   const circuitBreakerAmount = assumedCapital * (form.daily_loss_limit_pct / 100);
@@ -54,14 +57,17 @@ export default function RiskSettingsPage() {
         </div>
         <div className="flex items-center gap-2">
         <ModuleAIAnalysisAction originModule="global_risk" originView="settings-risk" compact />
-        <button onClick={handleSave} disabled={saving} className="btn btn-primary">
+        <button onClick={handleSave} disabled={saving || !draft.dirty || !!loadError} className="btn btn-primary">
           {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
           {saving ? "Saving..." : "Save Configuration"}
         </button>
         </div>
       </div>
 
-      <div className="card">
+      {draft.dirty && <p role="status" className="text-amber-300 text-sm">Alterações pendentes — clique em Save Configuration para salvar.</p>}
+      {message && <p role="status" className="text-emerald-300 text-sm">{message}</p>}
+      {(saveError || loadError) && <p role="alert" className="text-red-300 text-sm">{saveError || 'Falha ao atualizar a configuração. Suas edições foram preservadas.'}</p>}
+      <div className="card" inert={saving}>
         <div className="card-body p-6">
           <div className="grid grid-cols-1 md:grid-cols-5 gap-8">
             <div className="md:col-span-3 space-y-8">
@@ -69,17 +75,18 @@ export default function RiskSettingsPage() {
               <div className="flex items-center justify-between p-4 bg-[var(--bg-elevated)] border border-[var(--border-default)] rounded-[var(--radius-md)]">
                 <div>
                     <h4 className="font-semibold text-[14px] text-[var(--text-primary)]">Trailing Stop — Global Risk</h4>
-                    <p className="text-[12px] text-[var(--text-secondary)] mt-0.5">Controle global de risco. A política do shadow L3 está no bloco próprio abaixo.</p>
+                    <p className="text-[12px] text-[var(--text-secondary)] mt-0.5">Configuração global independente. Para acompanhar os shadows L3, use o bloco próprio abaixo.</p>
                 </div>
-                <div className={`toggle ${form.trailing_stop_enabled ? "active" : ""}`}
+                <button type="button" role="switch" aria-label="Trailing Stop — Global Risk" aria-checked={!!form.trailing_stop_enabled} className={`toggle ${form.trailing_stop_enabled ? "active" : ""}`}
                   onClick={() => update("trailing_stop_enabled", !form.trailing_stop_enabled)}>
                   <div className="knob" />
-                </div>
+                </button>
               </div>
 
               {/* Sliders */}
               {[
                 { key: "take_profit_pct", label: "Default Take Profit", suffix: "%", min: 0.1, max: 10, step: 0.1 },
+                { key: "trailing_stop_distance_pct", label: "Distância do trailing global", suffix: "%", min: 0.1, max: 100, step: 0.1 },
                 { key: "stop_loss_atr_multiplier", label: "Dynamic Stop Loss (ATR)", suffix: "x", min: 0.5, max: 5, step: 0.1 },
                 { key: "max_positions", label: "Max Concurrent Positions", suffix: "POS", min: 1, max: 20, step: 1 },
                 { key: "daily_loss_limit_pct", label: "Daily Loss Limit", suffix: "%", min: 0.5, max: 15, step: 0.5 },
