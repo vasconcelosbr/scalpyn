@@ -9,20 +9,24 @@ const quality: Record<string,string> = { VALID:'Válidos', STALE:'Desatualizados
 
 export function TrailingStatus({view:v, symbol}:{view:ShadowTrailingView;symbol:string}) {
   const [open,setOpen] = useState(false);
-  const [pinned,setPinned] = useState(false);
+  const pinned = useRef(false);
   const [position,setPosition] = useState({top:0,left:0});
   const anchor = useRef<HTMLButtonElement>(null), panel = useRef<HTMLDivElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const id = useId();
-  const close = () => { setOpen(false); setPinned(false); };
+  const close = () => { setOpen(false); pinned.current=false; };
   const show = () => {
     if(timer.current) clearTimeout(timer.current);
     const r = anchor.current?.getBoundingClientRect();
     const panelHeight = Math.min(600, window.innerHeight*.75);
-    if(r) setPosition({left:Math.max(12,Math.min(r.left,window.innerWidth-390)),top:Math.max(12,Math.min(r.bottom+8,window.innerHeight-panelHeight-12))});
+    if(r) {
+      const width = Math.min(370,window.innerWidth-24);
+      const left = r.right+8+width<=window.innerWidth-12 ? r.right+8 : r.left-width-8>=12 ? r.left-width-8 : 12;
+      setPosition({left,top:Math.max(12,Math.min(r.top,window.innerHeight-panelHeight-12))});
+    }
     setOpen(true);
   };
-  const leave = () => { if(!pinned) timer.current=setTimeout(()=>setOpen(false),180); };
+  const leave = () => { if(!pinned.current) timer.current=setTimeout(()=>{if(!pinned.current)setOpen(false);},180); };
   useEffect(()=>{
     if(!open) return;
     const outside=(e:PointerEvent)=>{ if(!anchor.current?.contains(e.target as Node) && !panel.current?.contains(e.target as Node)) close(); };
@@ -36,9 +40,9 @@ export function TrailingStatus({view:v, symbol}:{view:ShadowTrailingView;symbol:
   const protectedState=['ACTIVE','TIGHTENED','EXIT_PENDING'].includes(v.state) && v.mode!=='OBSERVE';
   return <>
     <button ref={anchor} type="button" aria-label={`${symbol}: ${trailingSummary(v)}`} aria-describedby={open?id:undefined} aria-expanded={open}
-      onMouseEnter={show} onMouseLeave={leave} onFocus={show} onBlur={()=>{if(!pinned)setOpen(false);}}
+      onMouseEnter={show} onMouseLeave={leave} onFocus={e=>{if(e.currentTarget.matches(':focus-visible'))show();}} onBlur={()=>{if(!pinned.current)setOpen(false);}}
       onKeyDown={e=>e.stopPropagation()}
-      onClick={e=>{e.stopPropagation();if(pinned)close();else{show();setPinned(true);}}}
+      onClick={e=>{e.stopPropagation();if(pinned.current)close();else{pinned.current=true;show();}}}
       className={`block mt-2 text-[10px] leading-4 rounded-md border px-2 py-1 max-w-52 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-400 ${protectedState?'border-emerald-500/40 text-emerald-300 bg-emerald-500/10':'border-slate-600 text-slate-300 bg-slate-800/60'}`}>
       {trailingSummary(v)}
     </button>
