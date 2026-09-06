@@ -1115,6 +1115,20 @@
             "Trailing Stop — Shadow L3",
             "OBSERVE"
           ]
+        },
+        {
+          "path": "backend/app/services/shadow_l3_exit_service.py",
+          "contains_all": [
+            "canonical_exchange",
+            "register_shadow"
+          ]
+        },
+        {
+          "path": "backend/tests/test_shadow_l3_persistence.py",
+          "contains_all": [
+            "test_recovery_sweep_uses_canonical_gate_candles",
+            "test_registration_is_idempotent_and_legacy_has_no_enrollment"
+          ]
         }
       ]
     }

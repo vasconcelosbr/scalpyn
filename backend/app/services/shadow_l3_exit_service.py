@@ -10,6 +10,20 @@ from ..schemas.shadow_l3_exit_policy import ShadowL3ExitPolicy, frozen_policy
 from .shadow_l3_exit_evaluator import advance
 
 
+def canonical_exchange(value):
+    name = (value or "gate.io").lower()
+    return "gate.io" if name in {"gate", "gateio", "gate.io"} else name
+
+
+async def register_shadow(db, shadow_id, user_id, snapshot):
+    if snapshot["config"]["mode"] == "LEGACY":
+        return
+    await db.execute(text("""
+        INSERT INTO shadow_l3_exit_states(shadow_id,user_id,policy_hash,policy)
+        VALUES(:id,:uid,:hash,CAST(:policy AS JSONB)) ON CONFLICT DO NOTHING
+    """), {"id":shadow_id,"uid":user_id,"hash":snapshot["hash"],"policy":json.dumps(snapshot)})
+
+
 async def load_frozen_policy(db, user_id):
     result = await db.execute(text("""
         SELECT config_json FROM config_profiles WHERE user_id=:uid
@@ -114,7 +128,7 @@ async def candle_evidence(db, shadow, candle, history, policy):
           sum(CASE WHEN occurred_at>=:entry THEN CASE WHEN side='buy' THEN amount ELSE -amount END ELSE 0 END) entry_delta,
           count(*) n, max(available_at) available_at
         FROM trades GROUP BY 1 ORDER BY 1
-    """), {"exchange": shadow.exchange or "gate.io", "symbol": shadow.symbol,
+    """), {"exchange": canonical_exchange(shadow.exchange), "symbol": shadow.symbol,
             "start": start, "end": end, "entry": shadow.entry_timestamp, "decision": decision_at})).mappings().all()
     buckets = [{k:float(v) if k in ("buy","sell","entry_delta","max_gap") else v
                 for k,v in row.items()} for row in data]
@@ -127,7 +141,7 @@ async def candle_evidence(db, shadow, candle, history, policy):
               AND timeframe=:tf AND is_closed IS TRUE
               AND time >= :start AND time + make_interval(mins=>:minutes) <= :end
               AND ingested_at <= :decision ORDER BY time
-        """), {"symbol":shadow.symbol,"exchange":shadow.exchange or "gate.io", "tf":policy.structure_timeframe,
+        """), {"symbol":shadow.symbol,"exchange":canonical_exchange(shadow.exchange), "tf":policy.structure_timeframe,
                 "start":start,"end":end,"decision":decision_at,"minutes":minutes})).mappings().all()
         structure = [{k:float(v) if k in ("open","high","low","close") else v for k,v in r.items()} for r in structure]
     evidence = build_evidence(buckets, history, structure, policy, shadow.entry_timestamp, end, decision_at)
@@ -158,10 +172,7 @@ async def advance_shadow(db, shadow):
         raise ValueError("Frozen shadow L3 policy hash mismatch")
     if policy.mode == "LEGACY":
         return None
-    await db.execute(text("""
-        INSERT INTO shadow_l3_exit_states(shadow_id,user_id,policy_hash,policy)
-        VALUES(:id,:uid,:hash,CAST(:policy AS JSONB)) ON CONFLICT DO NOTHING
-    """), {"id":shadow.id,"uid":shadow.user_id,"hash":snapshot["hash"],"policy":json.dumps(snapshot)})
+    await register_shadow(db, shadow.id, shadow.user_id, snapshot)
     row = (await db.execute(text("SELECT state FROM shadow_l3_exit_states WHERE shadow_id=:id FOR UPDATE"), {"id":shadow.id})).scalar_one()
     state = row or {}
     if state.get("observation_complete") or (state.get("outcome") and policy.mode != "OBSERVE"):
@@ -176,7 +187,7 @@ async def advance_shadow(db, shadow):
           AND timeframe='1m' AND is_closed IS TRUE AND ingested_at IS NOT NULL
           AND time >= :start AND time < date_trunc('minute',now())
         ORDER BY time
-    """), {"symbol":shadow.symbol,"exchange":shadow.exchange or "gate.io",
+    """), {"symbol":shadow.symbol,"exchange":canonical_exchange(shadow.exchange),
             "start":start-timedelta(seconds=lookback)})).mappings().all()
     candles = [{k:float(v) if k in ("open","high","low","close") else v for k,v in r.items()} for r in data]
     evaluated = 0

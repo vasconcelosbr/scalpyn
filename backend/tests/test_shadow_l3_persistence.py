@@ -152,7 +152,7 @@ async def test_authorized_apply_roundtrip_and_real_shadow_finalization(db):
     assert (await db.execute(text("SELECT count(*) FROM shadow_l3_policy_validations"))).scalar()==0
     entry=datetime(2026,1,1,tzinfo=timezone.utc)
     shadow=ShadowTrade(id=uuid4(),user_id=uid,symbol="UNI_USDT",source="L3",status="RUNNING",entry_price=100,
-                       entry_timestamp=entry,tp_price=102,sl_price=95,amount_usdt=100,exchange="gate.io",
+                       entry_timestamp=entry,tp_price=102,sl_price=95,amount_usdt=100,exchange="gate",
                        config_snapshot={"shadow_l3_exit_policy":frozen_policy(values)},timeout_candles=60,
                        eligible_for_training=True)
     db.add(shadow);await db.commit()
@@ -163,3 +163,38 @@ async def test_authorized_apply_roundtrip_and_real_shadow_finalization(db):
     assert shadow.status=="COMPLETED" and shadow.exit_price==102
     assert shadow.eligible_for_training is False
     assert await advance_shadow(db,shadow)==state
+
+
+@pytest.mark.asyncio
+async def test_registration_is_idempotent_and_legacy_has_no_enrollment(db):
+    from app.services.shadow_l3_exit_service import register_shadow
+    uid=uuid4();await db.execute(text("INSERT INTO users VALUES(:uid)"),{"uid":uid})
+    sid=uuid4();db.add(ShadowTrade(id=sid,user_id=uid,symbol="UNI_USDT",source="L3",status="PENDING",amount_usdt=100))
+    await db.commit()
+    await register_shadow(db,sid,uid,frozen_policy({"mode":"LEGACY"}))
+    assert (await db.execute(text("SELECT count(*) FROM shadow_l3_exit_states"))).scalar()==0
+    await register_shadow(db,sid,uid,frozen_policy({}))
+    await register_shadow(db,sid,uid,frozen_policy({}))
+    assert (await db.execute(text("SELECT count(*) FROM shadow_l3_exit_states"))).scalar()==1
+
+
+@pytest.mark.asyncio
+async def test_recovery_sweep_uses_canonical_gate_candles(db,monkeypatch):
+    from app.tasks.shadow_l3_continuation import _sweep
+    import app.database as database
+    import app.services.redis_client as redis_client
+    async def no_redis():return None
+    monkeypatch.setattr(redis_client,"get_async_redis",no_redis)
+    monkeypatch.setattr(database,"CeleryAsyncSessionLocal",async_sessionmaker(db.bind,expire_on_commit=False))
+    uid=uuid4();await db.execute(text("INSERT INTO users VALUES(:uid)"),{"uid":uid})
+    entry=datetime.now(timezone.utc).replace(second=0,microsecond=0)-timedelta(minutes=2)
+    shadow=ShadowTrade(id=uuid4(),user_id=uid,symbol="UNI_USDT",source="L3",status="RUNNING",entry_price=100,
+                       entry_timestamp=entry,tp_price=102,sl_price=95,amount_usdt=100,exchange="gate",
+                       config_snapshot={"shadow_l3_exit_policy":frozen_policy({})},timeout_candles=60)
+    db.add(shadow)
+    await db.execute(text("INSERT INTO ohlcv VALUES(:at,'UNI_USDT','gate.io','spot','1m',100,103,100,102,true,:at)"),{"at":entry})
+    await db.commit()
+    result=await _sweep()
+    assert result=={"processed":1,"errors":0}
+    assert (await db.execute(text("SELECT state->>'outcome' FROM shadow_l3_exit_states"))).scalar()=="TP_HIT"
+    assert (await db.execute(text("SELECT count(*) FROM shadow_l3_exit_decisions"))).scalar()==1

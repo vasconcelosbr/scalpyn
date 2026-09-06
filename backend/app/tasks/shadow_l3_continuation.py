@@ -24,24 +24,35 @@ async def _sweep():
         """))).scalars().all()
         policies = [ShadowL3ExitPolicy.model_validate(c) for c in configs] or [ShadowL3ExitPolicy()]
         batch_size = max(p.trade_batch_size for p in policies)
+        # Recover only the recent rollout overlap. Future enrollment is atomic
+        # with shadow creation, so discovery never scans historical JSONB.
+        await db.execute(text("""
+            WITH recent AS MATERIALIZED (
+              SELECT id,user_id,source,config_snapshot FROM shadow_trades
+              WHERE created_at >= now()-make_interval(secs=>:lookback)
+            ) INSERT INTO shadow_l3_exit_states(shadow_id,user_id,policy_hash,policy)
+            SELECT id,user_id,config_snapshot #>> '{shadow_l3_exit_policy,hash}',
+                   config_snapshot->'shadow_l3_exit_policy'
+            FROM recent WHERE source='L3' AND config_snapshot ? 'shadow_l3_exit_policy'
+              AND config_snapshot #>> '{shadow_l3_exit_policy,config,mode}' <> 'LEGACY'
+            ON CONFLICT DO NOTHING
+        """), {"lookback":max(p.replay_lookback_seconds for p in policies)})
         ids = (await db.execute(text("""
-            SELECT st.id,st.symbol FROM shadow_trades st
-            LEFT JOIN shadow_l3_exit_states es ON es.shadow_id=st.id
-            WHERE st.source='L3' AND st.config_snapshot ? 'shadow_l3_exit_policy'
-              AND st.config_snapshot #>> '{shadow_l3_exit_policy,config,mode}' <> 'LEGACY'
+            SELECT st.id,st.symbol FROM shadow_l3_exit_states es JOIN shadow_trades st ON st.id=es.shadow_id
+            WHERE st.source='L3'
+              AND es.policy #>> '{config,mode}' <> 'LEGACY'
               AND (es.state->>'outcome' IS NULL OR
-                   (st.config_snapshot #>> '{shadow_l3_exit_policy,config,mode}'='OBSERVE'
+                   (es.policy #>> '{config,mode}'='OBSERVE'
                     AND es.state->>'observation_complete' IS DISTINCT FROM 'true'))
             ORDER BY es.checked_at ASC NULLS FIRST,st.created_at ASC LIMIT :batch
         """), {"batch":batch_size})).all()
         if redis is not None:
             watched = (await db.execute(text("""
-                SELECT DISTINCT st.symbol FROM shadow_trades st
-                LEFT JOIN shadow_l3_exit_states es ON es.shadow_id=st.id
-                WHERE st.source='L3' AND st.config_snapshot ? 'shadow_l3_exit_policy'
-                  AND st.config_snapshot #>> '{shadow_l3_exit_policy,config,mode}' <> 'LEGACY'
+                SELECT DISTINCT st.symbol FROM shadow_l3_exit_states es JOIN shadow_trades st ON st.id=es.shadow_id
+                WHERE st.source='L3'
+                  AND es.policy #>> '{config,mode}' <> 'LEGACY'
                   AND (es.state->>'outcome' IS NULL OR
-                       (st.config_snapshot #>> '{shadow_l3_exit_policy,config,mode}'='OBSERVE'
+                       (es.policy #>> '{config,mode}'='OBSERVE'
                         AND es.state->>'observation_complete' IS DISTINCT FROM 'true'))
             """))).scalars().all()
             # Transaction makes replacement atomic for websocket readers.
@@ -80,16 +91,15 @@ async def _sweep():
             DELETE FROM shadow_l3_flow_trades WHERE ctid IN (
               SELECT f.ctid FROM shadow_l3_flow_trades f WHERE f.available_at < :cutoff
               AND NOT EXISTS (
-                SELECT 1 FROM shadow_trades st
-                LEFT JOIN shadow_l3_exit_states es ON es.shadow_id=st.id
-                WHERE st.source='L3' AND st.symbol=f.symbol AND COALESCE(st.exchange,'gate.io')=f.exchange AND f.market_type='spot'
-                  AND st.config_snapshot ? 'shadow_l3_exit_policy'
-                  AND st.config_snapshot #>> '{shadow_l3_exit_policy,config,mode}' <> 'LEGACY'
+                SELECT 1 FROM shadow_l3_exit_states es JOIN shadow_trades st ON st.id=es.shadow_id
+                WHERE st.source='L3' AND st.symbol=f.symbol AND CASE WHEN COALESCE(st.exchange,'gate.io') IN ('gate','gateio') THEN 'gate.io' ELSE COALESCE(st.exchange,'gate.io') END=f.exchange AND f.market_type='spot'
+                 
+                  AND es.policy #>> '{config,mode}' <> 'LEGACY'
                   AND (es.state->>'outcome' IS NULL OR
-                       (st.config_snapshot #>> '{shadow_l3_exit_policy,config,mode}'='OBSERVE'
+                       (es.policy #>> '{config,mode}'='OBSERVE'
                         AND es.state->>'observation_complete' IS DISTINCT FROM 'true'))
                   AND f.occurred_at >= st.entry_timestamp - make_interval(secs=>COALESCE(
-                    (st.config_snapshot #>> '{shadow_l3_exit_policy,config,warmup_seconds}')::double precision,0))
+                    (es.policy #>> '{config,warmup_seconds}')::double precision,0))
               ) LIMIT :batch
             )
         """), {"cutoff":cutoff,"batch":max(p.capture_batch_size for p in policies)})

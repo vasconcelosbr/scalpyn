@@ -1736,7 +1736,7 @@ async def _create_from_decision(
     )
     config_snap["feature_source_times"] = native_capture.source_times
     config_snap["feature_contract_errors"] = feature_errors
-    if source == SHADOW_SOURCE_L3:
+    if normalized_source == SHADOW_SOURCE_L3:
         from .shadow_l3_exit_service import load_frozen_policy
         config_snap["shadow_l3_exit_policy"] = await load_frozen_policy(db, decision.user_id)
     # Social Score is immutable decision-time context, not an ML feature in
@@ -1996,6 +1996,9 @@ async def _create_from_decision(
 
     row = res.fetchone()
     shadow_trade_id = row[0] if row is not None else None
+    if shadow_trade_id is not None and normalized_source == SHADOW_SOURCE_L3:
+        from .shadow_l3_exit_service import register_shadow
+        await register_shadow(db, shadow_trade_id, decision.user_id, config_snap["shadow_l3_exit_policy"])
     if shadow_trade_id is not None and isinstance(_l3_gate_v2, dict):
         try:
             from .l3_gate_evaluation_store import link_shadow_evaluation
