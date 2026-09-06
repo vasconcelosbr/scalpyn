@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { Save, RefreshCw } from "lucide-react";
 import { useConfig } from "@/hooks/useConfig";
+import { ShadowL3ExitPolicyForm } from "@/components/settings/ShadowL3ExitPolicyForm";
 import { ModuleAIAnalysisAction } from "@/components/ai/ModuleAIAnalysisAction";
 
 export default function RiskSettingsPage() {
@@ -67,8 +68,8 @@ export default function RiskSettingsPage() {
               {/* Circuit Breaker Toggle */}
               <div className="flex items-center justify-between p-4 bg-[var(--bg-elevated)] border border-[var(--border-default)] rounded-[var(--radius-md)]">
                 <div>
-                  <h4 className="font-semibold text-[14px] text-[var(--text-primary)]">Trailing Stop</h4>
-                  <p className="text-[12px] text-[var(--text-secondary)] mt-0.5">Enable trailing stop for open positions.</p>
+                    <h4 className="font-semibold text-[14px] text-[var(--text-primary)]">Trailing Stop — Global Risk</h4>
+                    <p className="text-[12px] text-[var(--text-secondary)] mt-0.5">Controle global de risco. A política do shadow L3 está no bloco próprio abaixo.</p>
                 </div>
                 <div className={`toggle ${form.trailing_stop_enabled ? "active" : ""}`}
                   onClick={() => update("trailing_stop_enabled", !form.trailing_stop_enabled)}>
@@ -148,6 +149,7 @@ export default function RiskSettingsPage() {
           </div>
         </div>
       </div>
+      <ShadowL3ExitPolicyForm />
     </div>
   );
 }

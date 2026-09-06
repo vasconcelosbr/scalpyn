@@ -103,6 +103,7 @@ _ALL_TASK_MODULES = (
         "app.tasks.orphan_tx_watchdog",
         "app.tasks.health_checks",
         "app.tasks.shadow_trade_monitor",
+        "app.tasks.shadow_l3_continuation",
         "app.tasks.shadow_timeout_analyzer",
         "app.tasks.ttt_analyzer",
         "app.tasks.autopilot",
@@ -241,6 +242,7 @@ TASK_ROUTES = {
     # Shadow labels are analytical/OHLCV work; isolate them on structural_compute
     # so neither live execution nor pipeline scans can starve label closure.
     "app.tasks.shadow_trade_monitor.run":           {"queue": QUEUE_STRUCTURAL_COMPUTE},
+    "app.tasks.shadow_l3_continuation.run":          {"queue": QUEUE_STRUCTURAL_COMPUTE},
     "app.tasks.shadow_trade_monitor.run_batch_sweep": {"queue": QUEUE_STRUCTURAL_COMPUTE},
     "app.tasks.entry_risk_capture.reconcile":       {"queue": QUEUE_STRUCTURAL_COMPUTE},
 
@@ -421,6 +423,7 @@ TASK_ANNOTATIONS = {
     "app.tasks.ohlcv_backfill.backfill_research":        {"time_limit": 3600, "soft_time_limit": 3500, "rate_limit": "1/h", "max_retries": 0},
     "app.tasks.ohlcv_backfill.get_status":               {"time_limit": 60, "soft_time_limit": 50, "rate_limit": "6/m", "max_retries": 3},
     "app.tasks.collect_research_ohlcv.collect_1m_shadow": {**_RESEARCH_OHLCV_GUARDS, "rate_limit": "180/h", **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.shadow_l3_continuation.run": {"time_limit": 120, "soft_time_limit": 100, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.collect_research_ohlcv.collect_5m_shadow": {**_RESEARCH_OHLCV_GUARDS, "rate_limit": "90/h", **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.collect_research_ohlcv.collect_30m_shadow": {**_RESEARCH_OHLCV_GUARDS, "rate_limit": "45/h", **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.collect_research_ohlcv.collect_15m":      {**_RESEARCH_OHLCV_GUARDS, "rate_limit": "8/h", **_NO_REQUEUE_ON_WORKER_LOSS},
@@ -827,6 +830,11 @@ celery_app.conf.beat_schedule = {
     "shadow_trade_monitor": {
         "task": "app.tasks.shadow_trade_monitor.run",
         "schedule": float(os.environ.get("SHADOW_MONITOR_INTERVAL_S", 300)),
+        "options": {"queue": QUEUE_STRUCTURAL_COMPUTE},
+    },
+    "shadow_l3_continuation": {
+        "task": "app.tasks.shadow_l3_continuation.run",
+        "schedule": 60.0,
         "options": {"queue": QUEUE_STRUCTURAL_COMPUTE},
     },
     # Bloco A.3 (2026-09-03) — hourly sweep for shadow_monitor_mode='BATCH'

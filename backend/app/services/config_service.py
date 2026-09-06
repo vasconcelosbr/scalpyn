@@ -36,6 +36,21 @@ def _make_redis_client():
 
 
 class ConfigService:
+    async def validate_shadow_l3_policy(self, db, payload, user_id, pool_id=None):
+        from sqlalchemy import text
+        from ..schemas.shadow_l3_exit_policy import ShadowL3ExitPolicy
+        if pool_id is not None:
+            raise ValueError("Shadow L3 policy is global per user, not pool-scoped")
+        policy = ShadowL3ExitPolicy.model_validate(payload)
+        if policy.mode == "APPLY":
+            approved = (await db.execute(text("""
+                SELECT 1 FROM shadow_l3_policy_validations
+                WHERE user_id=:uid AND policy_hash=:hash AND approved_at IS NOT NULL
+                  AND approved_by=:uid AND report->>'decision'='PASS'
+            """), {"uid": user_id, "hash": policy.digest()})).scalar_one_or_none()
+            if not approved:
+                raise ValueError("Application blocked: this exact policy requires validated evidence and operator approval")
+
     def __init__(self):
         self.redis = _make_redis_client()
         # Governed reconciliation runs under Celery's synchronous task wrapper,
@@ -78,6 +93,10 @@ class ConfigService:
         return {}
 
     async def update_config(self, db: AsyncSession, config_type: str, user_id: UUID, new_json: Dict[str, Any], changed_by: UUID, pool_id: Optional[UUID] = None, change_description: str = "") -> Dict[str, Any]:
+        if config_type == "shadow_l3_exit_policy":
+            await self.validate_shadow_l3_policy(db, new_json, user_id, pool_id)
+            from ..schemas.shadow_l3_exit_policy import ShadowL3ExitPolicy
+            new_json = ShadowL3ExitPolicy.model_validate(new_json).model_dump()
         query = select(ConfigProfile).where(
             ConfigProfile.user_id == user_id,
             ConfigProfile.pool_id == pool_id,

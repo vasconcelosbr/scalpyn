@@ -771,6 +771,11 @@ async def handle_spot_trades(result: list[dict]) -> None:
         logger.warning("spot.trades: Redis pipeline failed: %s", exc)
         return
 
+    try:
+        from ..services.shadow_l3_flow_capture import enqueue_trades
+        await enqueue_trades(redis, result)
+    except Exception:
+        logger.exception("[shadow-l3-flow] durable handoff failed; window must be treated as incomplete")
     # Metrics last so they only reflect successful buffer writes.
     for symbol, n in counts_by_symbol.items():
         incr_trades_received(symbol, n=n)

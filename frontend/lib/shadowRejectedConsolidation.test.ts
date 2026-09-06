@@ -21,8 +21,12 @@ test("active rejected rows are consolidated by the backend before pagination", (
     resolve(process.cwd(), "app/dashboard/shadow-portfolio/page.tsx"),
     "utf8",
   );
-  assert.match(page, /status: "OPEN"/);
-  assert.doesNotMatch(page, /Promise\.all\(\[\s*apiGet<ShadowTradeListResponse>/);
+  assert.match(page, /status: filter.status === "OPEN" \? "OPEN" : "COMPLETED"/);
+  // List + summary may refresh together. Never fetch PENDING and RUNNING lists
+  // separately: consolidation must happen once on the server before pagination.
+  const refresh = page.slice(page.indexOf("const refreshPortfolio"), page.indexOf("}, [filter, sourceTab, selectedProfileId]", page.indexOf("const refreshPortfolio")));
+  assert.equal((refresh.match(/apiGet<ShadowTradeListResponse>/g) ?? []).length, 1);
+  assert.doesNotMatch(refresh, /status: "(?:PENDING|RUNNING)"/);
   assert.match(page, /if \(source\) params\.set\("source", source\)/);
 });
 

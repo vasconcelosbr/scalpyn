@@ -94,7 +94,27 @@ async def get_config(
     user_id: UUID = Depends(get_current_user_id)
 ):
     config = await config_service.get_config(db, config_type, user_id, pool_id)
+    if config_type == "shadow_l3_exit_policy":
+        from ..schemas.shadow_l3_exit_policy import ShadowL3ExitPolicy
+        config = ShadowL3ExitPolicy.model_validate(config).model_dump()
     return {"config_type": config_type, "pool_id": pool_id, "data": config}
+
+
+@router.get("/shadow_l3_exit_policy/metadata")
+async def shadow_l3_policy_metadata(db: AsyncSession = Depends(get_db), user_id: UUID = Depends(get_current_user_id)):
+    from ..schemas.shadow_l3_exit_policy import ShadowL3ExitPolicy
+    from sqlalchemy import text
+    raw = await config_service.get_config(db, "shadow_l3_exit_policy", user_id)
+    policy = ShadowL3ExitPolicy.model_validate(raw)
+    spot = await config_service.get_config(db, "spot_engine", user_id)
+    approved = (await db.execute(text("""
+        SELECT approved_at FROM shadow_l3_policy_validations
+        WHERE user_id=:uid AND policy_hash=:hash AND approved_by=:uid
+          AND approved_at IS NOT NULL AND report->>'decision'='PASS'
+    """), {"uid":user_id,"hash":policy.digest()})).scalar_one_or_none()
+    return {"schema":ShadowL3ExitPolicy.model_json_schema(), "hash":policy.digest(),
+            "missing_parameters":policy.missing_parameters(), "approved":bool(approved),
+            "pre_tp":{"trailing":(spot.get("sell_flow") or {}).get("trailing"),"selling":spot.get("selling")}}
 
 @router.put("/{config_type}")
 async def update_config(
@@ -139,6 +159,14 @@ async def update_config(
                     detail="Social Score cannot be enabled without a fresh reconciled observation",
                 )
         payload = validated.model_dump()
+    elif config_type == "shadow_l3_exit_policy":
+        from ..schemas.shadow_l3_exit_policy import ShadowL3ExitPolicy
+        from pydantic import ValidationError
+        try:
+            payload = ShadowL3ExitPolicy.model_validate(payload).model_dump()
+            await config_service.validate_shadow_l3_policy(db, payload, user_id, pool_id)
+        except (ValueError, ValidationError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     elif config_type == "ai_provider_runtime":
         payload = AIProviderRuntimeConfig.model_validate(payload).model_dump(mode="json")
     elif config_type == "ai_analysis_chat_runtime":

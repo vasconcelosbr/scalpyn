@@ -1343,6 +1343,12 @@ async def _advance_shadow(
         # Sem candle 1m disponível ainda — deixa em PENDING, próximo tick.
         return "pending"
 
+    l3_policy = (shadow.config_snapshot or {}).get("shadow_l3_exit_policy") or {}
+    if shadow.source == "L3" and (l3_policy.get("config") or {}).get("mode") == "APPLY":
+        from ..services.shadow_l3_exit_service import advance_shadow
+        await advance_shadow(db, shadow)
+        return "completed" if shadow.status == "COMPLETED" else "running"
+
     # ── Shadow Instrumentation: barrier metadata (migration 071) ─────────
     # barrier_mode / tp_pct_applied / sl_pct_applied: setados uma vez na
     # primeira resolução de entry_price (fallback para shadows pré-071).

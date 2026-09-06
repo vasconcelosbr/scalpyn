@@ -53,6 +53,8 @@ class ShadowTradeRead(BaseModel):
     direction: Optional[str] = None
     entry_price: Optional[float] = None
     current_price: Optional[float] = None
+    exit_price: Optional[float] = None
+    l3_exit: Optional[Dict[str, Any]] = None
     tp_price: Optional[float] = None
     sl_price: Optional[float] = None
     amount_usdt: float

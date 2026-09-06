@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
   Activity,
@@ -41,7 +41,7 @@ const C = {
 
 // ── domain types (espelham backend/app/schemas/shadow_trade.py) ──────────────
 type ShadowStatus = "PENDING" | "RUNNING" | "COMPLETED" | "ERROR";
-type ShadowOutcome = "TP_HIT" | "SL_HIT" | "TRAILING_STOP" | "TIMEOUT" | null;
+type ShadowOutcome = "TP_HIT" | "SL_HIT" | "TRAILING_STOP" | "FLOW_STRUCTURE_EXIT" | "TIMEOUT" | null;
 
 interface ShadowConsolidationProfile {
   rank: number;
@@ -79,6 +79,8 @@ interface ShadowTradeRead {
   direction: string | null;
   entry_price: number | null;
   current_price: number | null;
+  exit_price?: number | null;
+  l3_exit?: { state?: string; mode?: string; floor_price?: number; quality?: string; checked_at?: string; reason?: string } | null;
   tp_price: number | null;
   sl_price: number | null;
   amount_usdt: number;
@@ -356,6 +358,8 @@ function outcomeStyle(outcome: ShadowOutcome): BadgeStyle | null {
       return { bg: `${C.green}22`, fg: C.green, border: `${C.green}55`, label: "TP" };
     case "SL_HIT":
       return { bg: `${C.red}22`, fg: C.red, border: `${C.red}55`, label: "SL" };
+    case "FLOW_STRUCTURE_EXIT":
+      return { bg: `${C.amber}22`, fg: C.amber, border: `${C.amber}55`, label: "Fluxo + estrutura" };
     case "TRAILING_STOP":
       return { bg: `${C.amber}22`, fg: C.amber, border: `${C.amber}55`, label: "Trailing" };
     case "TIMEOUT":
@@ -714,9 +718,9 @@ const COLS: {
   { key: "symbol", label: "Símbolo" },
   { key: "status", label: "Status", align: "center" },
   { key: "entry", label: "Entrada", align: "right", sortKey: "entry_price" },
-  { key: "current", label: "Preço Atual", align: "right", sortKey: "current_price" },
+  { key: "current", label: "Preço / Saída", align: "right", sortKey: "current_price" },
   { key: "tp", label: "TP", align: "right", sortKey: "tp_price" },
-  { key: "sl", label: "SL", align: "right", sortKey: "sl_price" },
+  { key: "sl", label: "SL inicial / Piso", align: "right", sortKey: "sl_price" },
   { key: "outcome", label: "Resultado", align: "center" },
   { key: "pnl_pct", label: "P&L %", align: "right", sortKey: "pnl_pct" },
   { key: "pnl_usdt", label: "P&L $", align: "right", sortKey: "pnl_usdt" },
@@ -739,7 +743,7 @@ function TradeTable({
 }) {
   // Tick a cada 30s para o "Holding" das operações em aberto avançar
   // visualmente sem precisar de refetch. P&L em aberto também usa esse
-  // re-render quando livePrices chegam (via parent).
+  // Re-render when the parent receives a fresh portfolio snapshot.
   const [nowTick, setNowTick] = useState<number>(() => Date.now());
   useEffect(() => {
     const id = window.setInterval(() => setNowTick(Date.now()), 30_000);
@@ -1064,13 +1068,16 @@ function TradeTable({
                       : undefined
                   }
                 >
-                  {fmtPrice(it.current_price)}
+                  {fmtPrice(isOpen ? it.current_price : (it.exit_price ?? null))}
                 </td>
                 <td style={{ padding: "10px 12px", textAlign: "right", color: C.green }}>
                   {fmtPrice(it.tp_price)}
                 </td>
                 <td style={{ padding: "10px 12px", textAlign: "right", color: C.red }}>
                   {fmtPrice(it.sl_price)}
+                    {it.l3_exit && <div style={{ color: C.muted, fontSize: 11 }} title={`${it.l3_exit.reason ?? ""} · ${it.l3_exit.quality ?? ""} · ${it.l3_exit.checked_at ?? ""}`}>
+                      {it.l3_exit.mode === "OBSERVE" ? "Candidato: " : "Piso: "}{fmtPrice(it.l3_exit.floor_price ?? null)} · {it.l3_exit.state ?? "Aguardando"}
+                    </div>}
                 </td>
                 <td style={{ padding: "10px 12px", textAlign: "center" }}>
                   {oStyle ? <Badge style={oStyle} /> : <span style={{ color: C.dim }}>—</span>}
@@ -2345,7 +2352,6 @@ export default function ShadowPortfolioPage() {
   const [errorList, setErrorList] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [livePrices, setLivePrices] = useState<Record<string, number>>({});
   const [sourceTab, setSourceTab] = useState<SourceTab>("L3");
   const [profiles, setProfiles] = useState<ProfileItem[]>([]);
   const [watchlistNames, setWatchlistNames] = useState<Record<string, string>>({});
@@ -2416,134 +2422,56 @@ export default function ShadowPortfolioPage() {
       .finally(() => setLoadingReport(false));
   }, [tick]);
 
-  const fetchList = useCallback(() => {
-    setLoadingList(true);
-    setErrorList(null);
-
-    const handleError = (err: unknown) => {
-      const msg =
-        err instanceof ApiError
-          ? err.toDescriptiveString()
-          : err instanceof Error
-          ? err.message
-          : "Erro desconhecido";
-      setErrorList(msg);
-      setList({
-        items: [],
-        total: 0,
-        page: filter.page,
-        page_size: filter.pageSize,
-      });
-    };
-
-    if (filter.status === "ALL") {
-      // Server-side pagination puro.
-      const qs = buildBaseQuery(filter, {}, sourceTab, selectedProfileId);
-      apiGet<ShadowTradeListResponse>(`/api/shadow-trades?${qs}`)
-        .then(setList)
-        .catch(handleError)
-        .finally(() => setLoadingList(false));
-      return;
-    }
-
-    if (filter.status === "OPEN") {
-      // OPEN é resolvido no backend antes da paginação. Isso é essencial para
-      // que PENDING/RUNNING do mesmo ativo não reapareçam como duas linhas.
-      const qsOpen = buildBaseQuery(filter, {
-        status: "OPEN",
-        page: 1,
-        page_size: MAX_LOCAL_FETCH,
-      }, sourceTab, selectedProfileId);
-      apiGet<ShadowTradeListResponse>(`/api/shadow-trades?${qsOpen}`)
-        .then(setList)
-        .catch(handleError)
-        .finally(() => setLoadingList(false));
-      return;
-    }
-
-    // Terminal outcomes: one COMPLETED fetch + local outcome filter.
-    const qsCompleted = buildBaseQuery(filter, {
-      status: "COMPLETED",
-      page: 1,
-      page_size: MAX_LOCAL_FETCH,
-    }, sourceTab, selectedProfileId);
-    apiGet<ShadowTradeListResponse>(`/api/shadow-trades?${qsCompleted}`)
-      .then((res) => setList(res))
-      .catch(handleError)
-      .finally(() => setLoadingList(false));
-  }, [filter, sourceTab, selectedProfileId]);
-
-  const fetchSummary = useCallback(() => {
-    setLoadingSummary(true);
-    const qs = buildSummaryQuery(filter, sourceTab, selectedProfileId);
-    apiGet<ShadowTradeSummary>(
-      qs ? `/api/shadow-trades/summary?${qs}` : `/api/shadow-trades/summary`
-    )
-      .then((res) => setSummary(res))
-      .catch(() => setSummary(null))
-      .finally(() => setLoadingSummary(false));
-  }, [filter, sourceTab, selectedProfileId]);
-
+  const refreshGeneration = useRef(0);
+  const [refreshSeconds, setRefreshSeconds] = useState<number | null>(null);
   useEffect(() => {
-    fetchList();
-    fetchSummary();
-  }, [fetchList, fetchSummary, tick]);
-
-  // Polling leve de preços correntes a cada 15s, só com símbolos visíveis,
-  // sem repaginar a lista. Pausa quando a aba do navegador está oculta.
+    apiGet<{ data: { ui_refresh_seconds: number } }>("/config/shadow_l3_exit_policy")
+      .then(res => setRefreshSeconds(res.data.ui_refresh_seconds))
+      .catch(() => setErrorList("Não foi possível carregar a cadência de atualização."));
+  }, []);
+  const refreshPortfolio = useCallback(async () => {
+    const generation = ++refreshGeneration.current;
+    setLoadingList(true); setLoadingSummary(true);
+    const override = filter.status === "ALL" ? {} : {
+      status: filter.status === "OPEN" ? "OPEN" : "COMPLETED", page: 1, page_size: MAX_LOCAL_FETCH,
+    };
+    const qs = buildBaseQuery(filter, override, sourceTab, selectedProfileId);
+    const summaryQs = buildSummaryQuery(filter, sourceTab, selectedProfileId);
+    try {
+      const [nextList, nextSummary] = await Promise.all([
+        apiGet<ShadowTradeListResponse>(`/api/shadow-trades?${qs}`),
+        apiGet<ShadowTradeSummary>(`/api/shadow-trades/summary?${summaryQs}`),
+      ]);
+      if (generation !== refreshGeneration.current) return;
+      setList(nextList); setSummary(nextSummary); setErrorList(null);
+    } catch (err) {
+      if (generation === refreshGeneration.current) setErrorList(err instanceof Error ? err.message : "Falha ao atualizar portfólio");
+    } finally {
+      if (generation === refreshGeneration.current) { setLoadingList(false); setLoadingSummary(false); }
+    }
+  }, [filter, sourceTab, selectedProfileId]);
   useEffect(() => {
-    const safeListItems = Array.isArray(list?.items) ? list.items : [];
-    if (!list || safeListItems.length === 0) return;
-    const symbols = Array.from(new Set(safeListItems.map((it) => it.symbol)));
-    if (symbols.length === 0) return;
+    void refreshPortfolio();
+    const visibleRefresh = () => { if (!document.hidden) void refreshPortfolio(); };
+    const timer = refreshSeconds ? window.setInterval(visibleRefresh, refreshSeconds * 1000) : undefined;
+    document.addEventListener("visibilitychange", visibleRefresh);
+    return () => { ++refreshGeneration.current; window.clearInterval(timer); document.removeEventListener("visibilitychange", visibleRefresh); };
+  }, [refreshPortfolio, refreshSeconds, tick]);
 
-    let cancelled = false;
-    const fetchPrices = () => {
-      if (typeof document !== "undefined" && document.hidden) return;
-      const qs = new URLSearchParams({ symbols: symbols.join(",") }).toString();
-      apiGet<{ prices: Record<string, number>; fetched_at: string }>(
-        `/api/shadow-trades/prices?${qs}`,
-      )
-        .then((res) => {
-          if (cancelled) return;
-          setLivePrices((prev) => ({ ...prev, ...res.prices }));
-        })
-        .catch(() => {
-          // silencioso — preços continuam exibindo o último valor conhecido
-        });
-    };
-    fetchPrices();
-    const interval = setInterval(fetchPrices, 15_000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [list]);
-
-  // Mescla livePrices em cima do current_price vindo do backend.
-  const itemsWithLivePrices = useMemo(() => {
-    if (!list) return [] as ShadowTradeRead[];
-    const safeItems = Array.isArray(list.items) ? list.items : [];
-    if (Object.keys(livePrices).length === 0) return safeItems;
-    return safeItems.map((it) => {
-      const live = livePrices[it.symbol];
-      if (live === undefined) return it;
-      return { ...it, current_price: live };
-    });
-  }, [list, livePrices]);
+  const snapshotItems = useMemo(() => Array.isArray(list?.items) ? list.items : [], [list]);
 
   // Quando status != ALL, paginamos client-side sobre o conjunto local
   // (já filtrado/agregado em fetchList). Ao mudar de aba zeramos a página.
   const filteredAll = useMemo(() => {
     if (!list) return [];
-    if (filter.status === "ALL") return itemsWithLivePrices;
+    if (filter.status === "ALL") return snapshotItems;
     if (filter.status === "OPEN") {
       // fetchList já mergeou PENDING+RUNNING e ordenou desc.
-      return itemsWithLivePrices;
+      return snapshotItems;
     }
-    // TP_HIT/SL_HIT/TIMEOUT — itemsWithLivePrices aqui é a janela COMPLETED.
-    return itemsWithLivePrices.filter((it) => it.outcome === filter.status);
-  }, [list, itemsWithLivePrices, filter.status]);
+    // TP_HIT/SL_HIT/TIMEOUT — snapshotItems aqui é a janela COMPLETED.
+    return snapshotItems.filter((it) => it.outcome === filter.status);
+  }, [list, snapshotItems, filter.status]);
 
   const isClientPaginated = filter.status !== "ALL";
   const clientTotal = filteredAll.length;

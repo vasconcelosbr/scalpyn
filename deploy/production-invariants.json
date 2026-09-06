@@ -1081,6 +1081,41 @@
           ]
         }
       ]
+    },
+    {
+      "id": "shadow-l3-continuation-observation",
+      "description": "Shadow-only causal continuation with immutable policies, operator approval and no fixed-label contamination",
+      "files": [
+        {
+          "path": "backend/app/services/shadow_l3_exit_evaluator.py",
+          "contains_all": [
+            "authorized_at_open",
+            "floor_schedule",
+            "NEXT_OPEN_AFTER_SIGNAL"
+          ]
+        },
+        {
+          "path": "backend/app/services/config_service.py",
+          "contains_all": [
+            "validate_shadow_l3_policy",
+            "operator approval"
+          ]
+        },
+        {
+          "path": "backend/tests/test_shadow_l3_continuation.py",
+          "contains_all": [
+            "test_current_candle_cannot_authorize_its_own_tp",
+            "test_prior_floor_wins_over_strong_flow_and_gap"
+          ]
+        },
+        {
+          "path": "frontend/components/settings/ShadowL3ExitPolicyForm.tsx",
+          "contains_all": [
+            "Trailing Stop — Shadow L3",
+            "OBSERVE"
+          ]
+        }
+      ]
     }
   ]
 }

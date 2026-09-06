@@ -723,6 +723,8 @@ def _to_read(
         direction=row.direction,
         entry_price=float(row.entry_price) if row.entry_price is not None else None,
         current_price=current_price,
+        exit_price=float(row.exit_price) if row.exit_price is not None else None,
+        l3_exit=getattr(row, "l3_exit", None),
         tp_price=float(row.tp_price) if row.tp_price is not None else None,
         sl_price=float(row.sl_price) if row.sl_price is not None else None,
         amount_usdt=float(row.amount_usdt or 0.0),
@@ -787,6 +789,7 @@ def _to_detail(
     consolidation = consolidation_override or _consolidation_payload(row)
     return ShadowTradeDetail(
         id=row.id,
+        l3_exit=getattr(row, "l3_exit", None),
         symbol=row.symbol,
         direction=row.direction,
         entry_price=float(row.entry_price) if row.entry_price is not None else None,
@@ -953,6 +956,9 @@ async def list_shadow_trades(
                 .limit(page_size)
             )
         rows = (await db.execute(page_q)).scalars().all()
+
+        from ..services.shadow_l3_exit_service import attach_states
+        await attach_states(db, rows, user_id)
 
         prices = await _fetch_latest_prices(db, [r.symbol for r in rows])
         measurements = await latest_measurement_by_trade_ids(db, [r.id for r in rows])
@@ -1844,6 +1850,8 @@ async def get_shadow_trade(
         consolidation_override = (
             await _active_projection_overrides(db, [row])
         ).get(row.id)
+        from ..services.shadow_l3_exit_service import attach_states
+        await attach_states(db, [row], user_id)
         return _to_detail(
             row,
             decision=decision,

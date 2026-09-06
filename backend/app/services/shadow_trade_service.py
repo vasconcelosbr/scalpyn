@@ -1736,6 +1736,9 @@ async def _create_from_decision(
     )
     config_snap["feature_source_times"] = native_capture.source_times
     config_snap["feature_contract_errors"] = feature_errors
+    if source == SHADOW_SOURCE_L3:
+        from .shadow_l3_exit_service import load_frozen_policy
+        config_snap["shadow_l3_exit_policy"] = await load_frozen_policy(db, decision.user_id)
     # Social Score is immutable decision-time context, not an ML feature in
     # the current contract. Preserve it in config_snapshot while keeping
     # features_snapshot limited to canonical technical indicators.
@@ -1952,6 +1955,7 @@ async def _create_from_decision(
                     "lineage_status": lineage_status,
                     "eligible_for_training": (
                         lineage_complete
+                        and (config_snap.get("shadow_l3_exit_policy", {}).get("config") or {}).get("mode") != "APPLY"
                         and not feature_errors
                         and authorization_contract_valid
                         and _profile_contract_valid
@@ -3674,6 +3678,8 @@ async def record_as_simulation(
       * decision_type 'ALLOW' para shadows aprovados; 'BLOCK' para L3_REJECTED
       * source = 'SHADOW'
     """
+    if ((shadow.config_snapshot or {}).get("shadow_l3_exit_policy", {}).get("config") or {}).get("mode") == "APPLY":
+        return None  # Managed policies never enter the fixed-barrier training population.
     outcome = (shadow.outcome or "").upper()
     if outcome == "TP_HIT":
         result = "WIN"

@@ -334,7 +334,15 @@ async def _collect_state_shadow_async(timeframe: str) -> dict[str, Any]:
 
 @celery_app.task(name="app.tasks.collect_research_ohlcv.collect_1m_shadow")
 def collect_1m_shadow() -> str:
-    return json.dumps(_run_async(_collect_state_shadow_async("1m")), default=str)
+    result = _run_async(_collect_state_shadow_async("1m"))
+    if result.get("inserted_closed_rows"):
+        from .task_dispatch import enqueue
+        try:
+            enqueue("app.tasks.shadow_l3_continuation.run", queue="structural_compute",
+                    dedup_key="shadow_l3_continuation", ttl_seconds=60)
+        except Exception:
+            logger.exception("[shadow-l3-continuation] dispatch failed; recovery sweep remains active")
+    return json.dumps(result, default=str)
 
 
 @celery_app.task(name="app.tasks.collect_research_ohlcv.collect_5m_shadow")
