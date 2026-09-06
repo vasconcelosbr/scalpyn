@@ -505,6 +505,34 @@ def test_activation_coverage_rejects_expired_context():
         )
 
 
+def test_shadow_waiver_allows_only_value_unavailable_as_observational_gap():
+    contract = {
+        "activation_mode": "SHADOW",
+        "operational_effect": False,
+        "statistical_gate": {
+            "status": "WAIVED_FOR_SHADOW",
+            "authorization_scope": "OBSERVATIONAL_ONLY",
+        },
+    }
+
+    assert StrategySettingsService._waiver_allows_value_unavailable(
+        contract,
+        "15m_STETH_USDT_structural_volume_spike_VALUE_UNAVAILABLE",
+    )
+    assert not StrategySettingsService._waiver_allows_value_unavailable(
+        contract,
+        "15m_STETH_USDT_structural_HASH_INVALID",
+    )
+    assert not StrategySettingsService._waiver_allows_value_unavailable(
+        {**contract, "operational_effect": True},
+        "15m_STETH_USDT_structural_volume_spike_VALUE_UNAVAILABLE",
+    )
+    assert not StrategySettingsService._waiver_allows_value_unavailable(
+        {**contract, "statistical_gate": {}},
+        "15m_STETH_USDT_structural_volume_spike_VALUE_UNAVAILABLE",
+    )
+
+
 def test_walk_forward_requires_governed_minimum_sample_config():
     with pytest.raises(MTFCalibrationConfigRequired, match="min_samples"):
         require_calibration_config({})

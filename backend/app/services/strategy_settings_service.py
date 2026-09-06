@@ -377,6 +377,7 @@ class StrategySettingsService:
         )
         now = datetime.now(timezone.utc)
         evidence: list[Dict[str, Any]] = []
+        unavailable: list[Dict[str, str]] = []
         missing: list[str] = []
         for symbol in symbols:
             for layer, timeframe, scheduler_group in requirements:
@@ -384,14 +385,26 @@ class StrategySettingsService:
                 if payload is None:
                     missing.append(f"{symbol}:{timeframe}:{scheduler_group}")
                     continue
-                evidence.append(self._assert_coverage_envelope(
-                    payload,
-                    symbol=symbol,
-                    timeframe=timeframe,
-                    scheduler_group=scheduler_group,
-                    layer_config=contract["layers"][layer],
-                    now=now,
-                ))
+                try:
+                    evidence.append(self._assert_coverage_envelope(
+                        payload,
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        scheduler_group=scheduler_group,
+                        layer_config=contract["layers"][layer],
+                        now=now,
+                    ))
+                except StrategySettingsValidationError as exc:
+                    reason = str(exc)
+                    if not self._waiver_allows_value_unavailable(contract, reason):
+                        raise
+                    unavailable.append({
+                        "symbol": symbol,
+                        "layer": layer,
+                        "timeframe": timeframe,
+                        "scheduler_group": scheduler_group,
+                        "reason": reason,
+                    })
         if missing:
             raise StrategySettingsValidationError(
                 "MTF_RUNTIME_COVERAGE_NOT_READY:" + ",".join(missing)
@@ -400,8 +413,31 @@ class StrategySettingsService:
             "active_spot_symbols": len(symbols),
             "required_rows": len(symbols) * len(requirements),
             "validated_rows": len(evidence),
+            "unavailable_rows": len(unavailable),
+            "unavailable": unavailable,
             "identities": evidence,
         }
+
+    @staticmethod
+    def _waiver_allows_value_unavailable(
+        contract: Dict[str, Any],
+        reason: str,
+    ) -> bool:
+        """Allow only explicit value gaps in observational waiver mode.
+
+        Missing rows, stale/open candles, provider/config/hash mismatches and all
+        other integrity failures remain hard activation blockers.  At runtime the
+        unavailable layer still resolves to WAIT and cannot authorize an order.
+        """
+
+        gate = contract.get("statistical_gate") or {}
+        return (
+            contract.get("activation_mode") == "SHADOW"
+            and contract.get("operational_effect") is False
+            and gate.get("status") == "WAIVED_FOR_SHADOW"
+            and gate.get("authorization_scope") == "OBSERVATIONAL_ONLY"
+            and reason.endswith("_VALUE_UNAVAILABLE")
+        )
 
     @staticmethod
     def _default_parts() -> Dict[str, Any]:
