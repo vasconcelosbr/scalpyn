@@ -29,6 +29,31 @@ def candidate_idempotency_key(change_set_id: UUID, profile_hash: str, score_hash
     return f"systemic-ai-candidate:{digest}"
 
 
+def profile_version_idempotency_key(
+    idempotency_namespace: str,
+    profile_id: UUID,
+    profile_hash: str,
+) -> str:
+    """Return a stable profile-version key within the varchar(160) contract.
+
+    Existing short keys keep their historical representation.  Longer namespaces
+    are reduced to a canonical digest so governed activation modes cannot fail at
+    the database boundary after the read-only preview has passed.
+    """
+
+    legacy_key = f"{idempotency_namespace}:{profile_id}:{profile_hash}"
+    if len(legacy_key) <= 160:
+        return legacy_key
+    digest = content_hash(
+        {
+            "idempotency_namespace": idempotency_namespace,
+            "profile_id": str(profile_id),
+            "profile_hash": profile_hash,
+        }
+    )
+    return f"profile-version:{digest}"
+
+
 def score_payload_from_profile(config: dict) -> dict:
     """Return the immutable scoring subset used by one profile version."""
     scoring = config.get("scoring") or {}
@@ -79,7 +104,11 @@ async def ensure_current_profile_version(
     })).scalar_one()
 
     status = "SHADOW" if is_shadow_only else "CHAMPION"
-    idempotency_key = f"{idempotency_namespace}:{profile_id}:{profile_hash}"
+    idempotency_key = profile_version_idempotency_key(
+        idempotency_namespace,
+        profile_id,
+        profile_hash,
+    )
     existing = (await db.execute(text("""
         SELECT id, config, config_hash
           FROM profile_versions

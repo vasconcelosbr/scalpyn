@@ -363,6 +363,36 @@ def test_candidate_idempotency_key_fits_database_contract():
     assert key == candidate_idempotency_key(change_set_id, "a" * 64, "b" * 64)
 
 
+def test_profile_version_idempotency_key_fits_database_contract():
+    from app.services.profile_versioning_v2 import profile_version_idempotency_key
+
+    profile_id = UUID("d44cddad-9370-49cf-b9f9-5ddd972704ea")
+    profile_hash = "a" * 64
+    short_key = profile_version_idempotency_key("baseline-v2", profile_id, profile_hash)
+    long_namespace = (
+        "mtf-activation:UPDATE_EXISTING_MTF_AND_ACTIVATE_SHADOW_WITH_WAIVER:"
+        "ab595584-4cce-401d-a3cb-38616a3027d2"
+    )
+    long_key = profile_version_idempotency_key(
+        long_namespace,
+        profile_id,
+        profile_hash,
+    )
+
+    assert short_key == f"baseline-v2:{profile_id}:{profile_hash}"
+    assert len(long_key) <= 160
+    assert long_key == profile_version_idempotency_key(
+        long_namespace,
+        profile_id,
+        profile_hash,
+    )
+    assert long_key != profile_version_idempotency_key(
+        f"{long_namespace}:different",
+        profile_id,
+        profile_hash,
+    )
+
+
 def test_staging_canary_email_passes_api_validation():
     from pydantic import EmailStr, TypeAdapter
 
