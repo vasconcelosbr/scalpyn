@@ -18,7 +18,8 @@ export function TrailingStatus({view:v, symbol}:{view:ShadowTrailingView;symbol:
   const show = () => {
     if(timer.current) clearTimeout(timer.current);
     const r = anchor.current?.getBoundingClientRect();
-    if(r) setPosition({left:Math.max(12,Math.min(r.left,window.innerWidth-390)),top:Math.max(12,Math.min(r.bottom+8,window.innerHeight-420))});
+    const panelHeight = Math.min(600, window.innerHeight*.75);
+    if(r) setPosition({left:Math.max(12,Math.min(r.left,window.innerWidth-390)),top:Math.max(12,Math.min(r.bottom+8,window.innerHeight-panelHeight-12))});
     setOpen(true);
   };
   const leave = () => { if(!pinned) timer.current=setTimeout(()=>setOpen(false),180); };
@@ -30,7 +31,7 @@ export function TrailingStatus({view:v, symbol}:{view:ShadowTrailingView;symbol:
     return ()=>{window.removeEventListener('pointerdown',outside);window.removeEventListener('keydown',escape);window.removeEventListener('resize',close);};
   },[open]);
   useEffect(()=>()=>{if(timer.current)clearTimeout(timer.current);},[]);
-  const level=(title:string,l:TrailingLevel)=> <div className="py-2 border-b border-white/10"><dt className="text-slate-400">{title}</dt><dd className="mt-1 font-mono text-slate-100">{price(l.price)}{l.pct!=null?` · ${trailingPercent(l.pct)}`:''}</dd>{l.at && <dd className="text-slate-500 mt-1">{time(l.at)}</dd>}</div>;
+  const level=(title:string,l:TrailingLevel)=> <div className="py-2 border-b border-white/10"><dt className="text-slate-400">{title}</dt><dd className="mt-1 font-mono text-slate-100">{price(l.price)}{l.pct!=null?` · ${trailingPercent(l.pct)}`:''}</dd>{l.at && l.price!=null && <dd className="text-slate-500 mt-1">{time(l.at)}</dd>}</div>;
   const regime=(title:string,r:TrailingRegime)=> <div className="py-2"><dt className="text-slate-400">{title}</dt><dd>{r.label ?? 'Direção não confirmada'}{r.original?` · ${r.original}`:''}</dd><dd className="text-slate-500">{quality[r.quality] ?? r.quality} · {r.source ?? 'Fonte indisponível'} {r.timeframe ?? ''} · {time(r.at)}</dd></div>;
   const protectedState=['ACTIVE','TIGHTENED','EXIT_PENDING'].includes(v.state) && v.mode!=='OBSERVE';
   return <>
@@ -43,7 +44,7 @@ export function TrailingStatus({view:v, symbol}:{view:ShadowTrailingView;symbol:
     </button>
     {open && createPortal(<div ref={panel} id={id} role="tooltip" onMouseEnter={()=>{if(timer.current)clearTimeout(timer.current);}} onMouseLeave={leave}
       onClick={e=>e.stopPropagation()} onKeyDown={e=>e.stopPropagation()}
-      style={{position:'fixed',...position,width:'min(370px, calc(100vw - 24px))',maxHeight:'min(600px, 75vh)',zIndex:10000,overflowY:'auto'}}
+      style={{position:'fixed',...position,width:'min(370px, calc(100vw - 24px))',maxHeight:'min(600px, 75vh)',zIndex:10000,overflowY:'auto',colorScheme:'dark'}}
       className="rounded-xl border border-slate-600 bg-slate-950 p-4 text-xs text-slate-200 shadow-2xl">
       <p className="font-semibold text-sm">{symbol} · {trailingSummary(v)}</p>
       <p className="text-slate-400 mt-1">{v.origin==='POST_TP'?'Continuação após TP':v.origin==='PRE_TP'?'Trailing anterior ao TP':'Gatilho conforme parâmetros do trade'}</p>
@@ -56,7 +57,7 @@ export function TrailingStatus({view:v, symbol}:{view:ShadowTrailingView;symbol:
         {level(v.state==='CLOSED'?'Último piso de proteção registrado':'Piso de proteção vigente',v.floor)}
         {v.distance_to_floor_pp!=null && <div className="py-2">Distância até o piso: {trailingPercent(v.distance_to_floor_pp,' p.p.')}</div>}
         {v.pending_floor.price!=null && level('Piso calculado para avaliação seguinte',v.pending_floor)}
-        {v.next_step.price!=null ? <>{level('Próximo degrau de lucro',v.next_step)}{level('Piso correspondente ao próximo degrau',v.next_step_floor)}<p className="text-slate-400 py-2">Continuação sem teto. O ATR pode elevar o piso antes; este degrau não é um alvo de saída.</p></> : level('Gatilho de preço para ativação',v.trigger)}
+        {v.next_step.price!=null ? <>{level('Próximo degrau de lucro',v.next_step)}{level('Piso correspondente ao próximo degrau',v.next_step_floor)}<p className="text-slate-400 py-2">Continuação sem teto. O ATR pode elevar o piso antes; este degrau não é um alvo de saída.</p></> : level(v.origin==='PRE_TP'?'TP para decidir continuação':'Gatilho de preço para ativação',v.trigger)}
         {v.remaining_pp!=null && <div className="py-2">{v.remaining_pp>0?`Faltam ${trailingPercent(v.remaining_pp,' p.p.')} até o gatilho`:'Gatilho de preço alcançado; verificar confirmação e avaliação'}</div>}
         {regime('Regime atual do ativo',v.asset_regime)}{regime('Regime atual do mercado',v.market_regime)}
       </dl>
