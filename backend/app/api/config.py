@@ -114,6 +114,7 @@ async def shadow_l3_policy_metadata(db: AsyncSession = Depends(get_db), user_id:
     """), {"uid":user_id,"hash":policy.digest()})).scalar_one_or_none()
     return {"schema":ShadowL3ExitPolicy.model_json_schema(), "hash":policy.digest(),
             "missing_parameters":policy.missing_parameters(), "approved":bool(approved),
+            "validation_status":"VALIDATED" if approved else "NOT_CALIBRATED",
             "pre_tp":{"trailing":(spot.get("sell_flow") or {}).get("trailing"),"selling":spot.get("selling")}}
 
 @router.put("/{config_type}")

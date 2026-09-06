@@ -6,7 +6,7 @@ import { apiGet } from "@/lib/api";
 
 type Values = Record<string, number | string | null>;
 type Property = { type?: string; minimum?: number; maximum?: number; exclusiveMinimum?: number; exclusiveMaximum?: number; anyOf?: Property[] };
-type Meta = { schema: { properties: Record<string, Property> }; missing_parameters: string[]; approved: boolean; pre_tp: unknown };
+type Meta = { schema: { properties: Record<string, Property> }; missing_parameters: string[]; approved: boolean; validation_status: string; pre_tp: unknown };
 const groups: [string, [string, string][]][] = [
   ["Fluxo e continuação", [
     ["flow_window_seconds", "Janela de fluxo (s)"], ["cvd_window_seconds", "Janela da inclinação do CVD (s)"],
@@ -67,10 +67,11 @@ export function ShadowL3ExitPolicyForm() {
       <select className="input mt-2 w-full" value={String(form.mode || "OBSERVE")} onChange={e => setForm({ ...form, mode: e.target.value })}>
         <option value="LEGACY">Legado — preservar comportamento atual</option>
         <option value="OBSERVE">Observação — calcular candidato sem alterar as saídas</option>
-        <option value="APPLY" disabled={!meta?.approved || missing.length > 0}>Aplicar em novos shadows — exige validação aprovada</option>
+        <option value="APPLY" disabled={missing.length > 0}>Aplicar em novos shadows — execução imediata</option>
       </select>
     </label>
-    <p className="text-sm text-[var(--text-secondary)]">{missing.length ? "Parâmetros ainda não definidos. A coleta pode prosseguir; a continuação não será autorizada." : "Parâmetros preenchidos. A aplicação depende de evidência validada e aprovação desta configuração exata."}</p>
+    <p className="text-sm text-[var(--text-secondary)]">{missing.length ? "Parâmetros ainda não definidos. A coleta pode prosseguir; a continuação não será autorizada." : "Parâmetros preenchidos. Selecione Aplicar e salve para executar nos novos shadows L3."}</p>
+    {meta?.validation_status === "NOT_CALIBRATED" && <p className="text-sm text-[var(--text-secondary)]">Configuração sem calibração empírica concluída. A ativação é registrada no histórico de configurações.</p>}
     <details className="text-sm"><summary className="cursor-pointer">Proteção efetiva antes do TP — somente leitura</summary>
       <pre className="mt-3 overflow-auto text-xs">{meta ? JSON.stringify(meta.pre_tp, null, 2) : "Carregando configuração de origem…"}</pre>
     </details>

@@ -19,11 +19,11 @@ trailing snapshot still controls pre-TP protection.
 6. Export evidence and replay complete candidate configurations. Choose a chronological
    development/validation boundary before selecting a candidate. Trades crossing the
    boundary are excluded. Missing horizons, fees or evidence remain missing, not zero.
-7. Have the operator review support, net outcomes, giveback, gap fills, premature exits,
-   holding times and missing-data cases. A report with `REVIEW_REQUIRED` is not approval.
-8. Only a validation row for the exact user/hash with report decision PASS and explicit
-   operator approval can enable APPLY via the config service. This release does not
-   create any such row. New config hashes invalidate the approval automatically.
+7. Review support, net outcomes, giveback, gap fills, premature exits, holding times
+   and missing-data cases. Reports preserve their empirical status.
+8. Per the subsequent operator instruction, a complete policy may be saved as APPLY
+   immediately through the authenticated config API. Calibration is not a prerequisite.
+   The config audit log records the actor and exact values. No PASS report is fabricated.
 
 No strategy calibration or production activation is implied by software tests. Synthetic
 test parameters are not suggested trading settings. Sample-size and acceptance criteria
@@ -84,7 +84,16 @@ Local evaluator, PostgreSQL persistence, restart, concurrent advancement, config
 legacy trailing and profile-merge regressions pass. The frontend production build passes.
 These checks do not establish production deployment or authenticated UI acceptance.
 
-Publication is held by the pre-existing L3 execution-contract finding documented in
-`shadow-l3-release-readiness.md`. No production migration, config write, or activation
-was performed by this implementation. A release exception or a separate contract repair
-is required before continuing the production workflow.
+The operator subsequently authorized publication despite the pre-existing L3 contract
+finding and requested immediate application. The finding remains documented separately;
+it has not been repaired by this feature. Economic parameters must still be complete,
+and temporal/data-quality checks and pre-existing trade snapshots remain enforced.
+
+## Initial operator-authorized candidate
+
+The operator requested immediate application and authorized preparation of an initial
+shadow configuration. `shadow-l3-initial-policy.json` is that complete candidate. It is
+NOT_CALIBRATED, not an empirically validated optimum, and is not a schema default.
+Deployment does not modify historical/open snapshots. The JSON is saved through the
+config service for the authenticated operator after publication and verified independently.
+All economic values remain editable in Global Risk Configuration.

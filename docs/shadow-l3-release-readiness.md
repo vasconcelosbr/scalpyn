@@ -1,10 +1,13 @@
 # Shadow L3: implementação e prontidão de publicação
 
-Status: IMPLEMENTADO LOCALMENTE; PUBLICAÇÃO BLOQUEADA; ATIVAÇÃO NÃO EXECUTADA.
+Status da revisão anterior: IMPLEMENTADO LOCALMENTE; PUBLICAÇÃO ENTÃO BLOQUEADA.
+
+Autorização posterior do operador: "aplicar em produção sem restrições para execução imediata após o deploy."
+A restrição de calibração prévia foi removida. A implantação e a configuração passam a ser verificadas no release;
+esta autorização não transforma evidência ausente em validação empírica.
 
 As alterações estão no checkout isolado `codex/shadow-l3-continuation`.
-A política inicial é OBSERVE, sem parâmetros econômicos preenchidos. A aprovação do
-hash exato é obrigatória para APPLY. Nenhuma ordem real nem resultado histórico foi alterado.
+A política inicial é OBSERVE, sem parâmetros econômicos preenchidos. O salvamento autenticado de uma configuração completa em APPLY autoriza a execução e gera auditoria. Nenhuma ordem real nem resultado histórico foi alterado.
 
 ## Validação local
 

@@ -137,3 +137,29 @@ async def test_concurrent_evaluation_is_serialized_and_idempotent(db):
     assert a==b
     assert (await db.execute(text("SELECT count(*) FROM shadow_l3_exit_decisions"))).scalar()==1
     assert (await db.execute(text("SELECT count(*) FROM shadow_l3_exit_states"))).scalar()==1
+
+
+@pytest.mark.asyncio
+async def test_authorized_apply_roundtrip_and_real_shadow_finalization(db):
+    from app.schemas.shadow_l3_exit_policy import ShadowL3ExitPolicy
+    uid=uuid4();await db.execute(text("INSERT INTO users VALUES(:uid)"),{"uid":uid});await db.commit()
+    values=json.loads((Path(__file__).parents[2]/"docs/shadow-l3-initial-policy.json").read_text())
+    policy=ShadowL3ExitPolicy.model_validate(values)
+    service=ConfigService();service.redis=None
+    await service.update_config(db,"shadow_l3_exit_policy",uid,values,uid)
+    fresh=await service.get_config(db,"shadow_l3_exit_policy",uid)
+    assert fresh["mode"]=="APPLY" and ShadowL3ExitPolicy.model_validate(fresh).digest()==policy.digest()
+    assert (await db.execute(text("SELECT count(*) FROM shadow_l3_policy_validations"))).scalar()==0
+    entry=datetime(2026,1,1,tzinfo=timezone.utc)
+    shadow=ShadowTrade(id=uuid4(),user_id=uid,symbol="UNI_USDT",source="L3",status="RUNNING",entry_price=100,
+                       entry_timestamp=entry,tp_price=102,sl_price=95,amount_usdt=100,exchange="gate.io",
+                       config_snapshot={"shadow_l3_exit_policy":frozen_policy(values)},timeout_candles=60,
+                       eligible_for_training=True)
+    db.add(shadow);await db.commit()
+    await db.execute(text("INSERT INTO ohlcv VALUES(:at,'UNI_USDT','gate.io','spot','1m',100,103,100,102,true,:at)"),{"at":entry})
+    await db.commit()
+    state=await advance_shadow(db,shadow);await db.commit()
+    assert state["outcome"]=="TP_HIT" and shadow.outcome=="TP_HIT"
+    assert shadow.status=="COMPLETED" and shadow.exit_price==102
+    assert shadow.eligible_for_training is False
+    assert await advance_shadow(db,shadow)==state

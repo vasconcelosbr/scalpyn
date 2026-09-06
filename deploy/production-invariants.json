@@ -1084,7 +1084,7 @@
     },
     {
       "id": "shadow-l3-continuation-observation",
-      "description": "Shadow-only causal continuation with immutable policies, operator approval and no fixed-label contamination",
+      "description": "Shadow-only causal continuation with immutable policies, audited activation and no fixed-label contamination",
       "files": [
         {
           "path": "backend/app/services/shadow_l3_exit_evaluator.py",
@@ -1098,13 +1098,14 @@
           "path": "backend/app/services/config_service.py",
           "contains_all": [
             "validate_shadow_l3_policy",
-            "operator approval"
+            "Empirical calibration is not an activation gate"
           ]
         },
         {
           "path": "backend/tests/test_shadow_l3_continuation.py",
           "contains_all": [
             "test_current_candle_cannot_authorize_its_own_tp",
+            "test_complete_apply_requires_no_empirical_approval_gate",
             "test_prior_floor_wins_over_strong_flow_and_gap"
           ]
         },

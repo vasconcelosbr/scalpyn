@@ -152,16 +152,12 @@ def test_cvd_and_price_evidence_are_aligned(policy):
     assert build_evidence(buckets,candles,candles,policy,T,end,end+timedelta(seconds=61))["quality"]=="INCOMPLETE_OR_STALE"
 
 
-def test_apply_needs_approved_exact_hash_even_with_complete_parameters(policy):
+def test_complete_apply_requires_no_empirical_approval_gate(policy):
     import asyncio
     from app.services.config_service import ConfigService
-    class Result:
-        def scalar_one_or_none(self):return None
     class DB:
-        async def execute(self,*args):return Result()
-    service=ConfigService()
-    with pytest.raises(ValueError,match="operator approval"):
-        asyncio.run(service.validate_shadow_l3_policy(DB(),{**policy.model_dump(),"mode":"APPLY"},"user"))
+        async def execute(self,*args):raise AssertionError("No approval lookup on activation")
+    asyncio.run(ConfigService().validate_shadow_l3_policy(DB(),{**policy.model_dump(),"mode":"APPLY"},"user"))
 
 
 def test_compacted_evidence_replay_equals_incremental(policy):
