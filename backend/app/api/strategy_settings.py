@@ -217,6 +217,17 @@ async def audit_multilayer_runtime(
                    WHERE COALESCE(metrics->'multilayer_decision_context_v4',
                                   metrics->'multilayer_decision_context_v3',
                                   metrics->'multilayer_decision_context_v2')
+                         ?& ARRAY[
+                             'l1_snapshot', 'l1_context_hash',
+                             'l2_snapshot', 'l2_context_hash',
+                             'l3_confirmation', 'verdicts',
+                             'observational_decision', 'computed_at'
+                         ]
+               ) AS complete_mtf,
+               count(*) FILTER (
+                   WHERE COALESCE(metrics->'multilayer_decision_context_v4',
+                                  metrics->'multilayer_decision_context_v3',
+                                  metrics->'multilayer_decision_context_v2')
                          ->>'observational_decision' = 'PASS'
                ) AS mtf_pass,
                count(*) FILTER (

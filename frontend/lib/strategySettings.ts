@@ -50,7 +50,14 @@ export interface MTFRuntimeAudit {
       symbols: number;
       latest: string | null;
     }>;
-    decisions_24h: Record<string, number>;
+    decisions_24h: {
+      total: number;
+      with_mtf: number;
+      complete_mtf: number;
+      mtf_pass: number;
+      mtf_wait: number;
+      mtf_reject: number;
+    };
     l2_setup_states: Array<{ state: string; symbols: number }>;
   };
   latest_calibration: {

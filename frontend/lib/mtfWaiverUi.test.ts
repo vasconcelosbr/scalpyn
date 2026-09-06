@@ -16,6 +16,7 @@ test("MTF waiver is explicit in audit UI and governed import flow", () => {
   assert.match(settings, /SHADOW NÃO CALIBRADO/);
   assert.match(settings, /thresholds permanecem não validados/);
   assert.match(settings, /não pode autorizar ordens/);
+  assert.match(settings, /Contextos completos \(24h\).*complete_mtf/);
   assert.match(
     importer,
     /UPDATE_EXISTING_MTF_AND_ACTIVATE_SHADOW_WITH_WAIVER/,
