@@ -1355,10 +1355,10 @@
         "retest_tolerance_atr": 0.3,
         "invalidation_atr": 1,
         "setup_valid_candles": 4,
-        "adx_impulse_min": 17.0445,
-        "volume_relative_min": 0.5205,
-        "bb_width_compression_max": 0.0137543,
-        "bb_width_expansion_min": 0.0241612
+        "adx_impulse_min": 17.6735,
+        "volume_relative_min": 0.5809999999999998,
+        "bb_width_compression_max": 0.012387800000000001,
+        "bb_width_expansion_min": 0.022793350000000004
       },
       "source_identity": {
         "candle_policy": "CLOSED_ONLY",
@@ -1473,15 +1473,17 @@
         "orderbook_depth_usdt"
       ]
     },
-    "validity_margin_seconds": 376,
+    "validity_margin_seconds": 584,
     "validity_evidence": {
-      "captured_at": "2026-09-06T12:12:57.745367+00:00",
-      "formula": "ceil(max(available_at-source_timestamp-300)) + scanner.scan_interval_seconds",
-      "measured_post_close_latency_seconds": 345.62543700000003,
+      "captured_at": "2026-09-06T13:02:20.420695+00:00",
+      "formula": "ceil(max(available_at-source_timestamp-300)) + max(scanner.scan_interval_seconds, runtime_pipeline_scan_interval_seconds)",
+      "measured_post_close_latency_seconds": 283.06800599999997,
       "scanner_scan_interval_seconds": 30,
+      "runtime_pipeline_scan_interval_seconds": 300,
+      "effective_scan_interval_seconds": 300,
       "active_symbols": 65,
       "required_rows": 130,
-      "identity_hash": "2ccb5e43cadfccda0d8a2888aaa24f983748154fbcb0098fa87aec7eeb14456f"
+      "identity_hash": "db2a0a9bc3059ee6e27911a0227fe1df480665a158744599e8c54cafdcd1c7e3"
     }
   },
   "provisional_semantics_evidence": {
@@ -1498,12 +1500,12 @@
     "discard_reasons": {
       "FEATURE_VALUE_INVALID": 1
     },
-    "population_hash": "f33a8a6c5cc4e7470ea11c0ea2e6eecfab722b189443666caf21c2e31ff78968",
+    "population_hash": "41d818957e7cbfaca61e11b4eb64e26d1412bbb2cdf89dbee5556c88d459c7a3",
     "derived_semantics": {
-      "adx_impulse_min": 17.0445,
-      "volume_relative_min": 0.5205,
-      "bb_width_compression_max": 0.0137543,
-      "bb_width_expansion_min": 0.0241612
+      "adx_impulse_min": 17.6735,
+      "volume_relative_min": 0.5809999999999998,
+      "bb_width_compression_max": 0.012387800000000001,
+      "bb_width_expansion_min": 0.022793350000000004
     }
   },
   "_documentation": {

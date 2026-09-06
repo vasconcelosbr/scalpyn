@@ -52,6 +52,15 @@ def _args() -> argparse.Namespace:
     parser.add_argument("--l2-profile-id", type=UUID, required=True)
     parser.add_argument("--l1-watchlist-id", type=UUID, required=True)
     parser.add_argument("--l2-watchlist-id", type=UUID, required=True)
+    parser.add_argument(
+        "--runtime-scan-interval-seconds",
+        type=int,
+        required=True,
+        help=(
+            "Observed production cadence of the consumer that reads MTF contexts. "
+            "This is explicit so the validity window cannot rely on a hidden constant."
+        ),
+    )
     parser.add_argument("--proposal", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args()
@@ -89,6 +98,23 @@ def _quantile(values: list[float], q: float) -> float:
     if lower == upper:
         return ordered[lower]
     return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
+
+
+def _validity_margin_seconds(
+    measured_post_close_latency_seconds: float,
+    configured_scan_interval_seconds: int,
+    runtime_scan_interval_seconds: int,
+) -> int:
+    """Cover measured producer latency plus one effective consumer cadence."""
+
+    if configured_scan_interval_seconds <= 0:
+        raise ValueError("MTF_L3_SCAN_INTERVAL_CONFIG_REQUIRED")
+    if runtime_scan_interval_seconds <= 0:
+        raise ValueError("MTF_L3_RUNTIME_SCAN_INTERVAL_REQUIRED")
+    return math.ceil(max(0.0, measured_post_close_latency_seconds)) + max(
+        configured_scan_interval_seconds,
+        runtime_scan_interval_seconds,
+    )
 
 
 def _validated_value(
@@ -363,9 +389,18 @@ async def _run(args: argparse.Namespace) -> None:
             ),
         )
         scan_interval = int(scanner.get("scan_interval_seconds") or 0)
-        if scan_interval <= 0:
-            raise SystemExit("MTF_L3_SCAN_INTERVAL_CONFIG_REQUIRED")
-        l3_margin = math.ceil(measured_margin) + scan_interval
+        try:
+            l3_margin = _validity_margin_seconds(
+                measured_margin,
+                scan_interval,
+                args.runtime_scan_interval_seconds,
+            )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        effective_scan_interval = max(
+            scan_interval,
+            args.runtime_scan_interval_seconds,
+        )
         l3_source_identity = {
             "source_policies": policies,
             "required_indicators": sorted({
@@ -375,9 +410,14 @@ async def _run(args: argparse.Namespace) -> None:
             "validity_margin_seconds": l3_margin,
             "validity_evidence": {
                 "captured_at": now.isoformat(),
-                "formula": "ceil(max(available_at-source_timestamp-300)) + scanner.scan_interval_seconds",
+                "formula": (
+                    "ceil(max(available_at-source_timestamp-300)) + "
+                    "max(scanner.scan_interval_seconds, runtime_pipeline_scan_interval_seconds)"
+                ),
                 "measured_post_close_latency_seconds": measured_margin,
                 "scanner_scan_interval_seconds": scan_interval,
+                "runtime_pipeline_scan_interval_seconds": args.runtime_scan_interval_seconds,
+                "effective_scan_interval_seconds": effective_scan_interval,
                 "active_symbols": len(symbols_by_group["structural"]),
                 "required_rows": len(l3_rows),
                 "identity_hash": canonical_hash(required_envelopes),
