@@ -228,6 +228,118 @@ def test_shadow_contract_requires_exact_layers_closed_only_and_no_authority():
         require_shadow_multilayer_config(config)
 
 
+def test_waived_shadow_contract_and_context_preserve_signed_disclosure():
+    gate_material = {
+        "status": "WAIVED_FOR_SHADOW",
+        "run_status": "DRAFT_INSUFFICIENT_DATA",
+        "failure_reason": "MIN_SAMPLES_NOT_MET",
+        "calibration_run_id": "run-id",
+        "policy_hash": "c" * 64,
+        "dataset_hash": "d" * 64,
+        "authorization_scope": "OBSERVATIONAL_ONLY",
+        "calibration_not_passed_acknowledged": True,
+        "thresholds_unvalidated_acknowledged": True,
+        "operational_effect_false_acknowledged": True,
+        "authorized_by": "user-id",
+        "authorized_at": NOW.isoformat(),
+    }
+    gate = {**gate_material, "authorization_hash": canonical_hash(gate_material)}
+    layers = {}
+    for layer, timeframe in {"L1": "1h", "L2": "15m", "L3": "5m"}.items():
+        layers[layer] = {
+            "observational_enabled": True,
+            "profile_id": layer if layer != "L3" else None,
+            "profile_version_id": layer + "v" if layer != "L3" else None,
+            "profile_config_hash": "b" * 64 if layer != "L3" else None,
+            "default_timeframe": timeframe,
+            "validity_margin_seconds": 30,
+            "source_policies": {"ohlcv": {
+                "allowed_source_providers": ["gate.io"],
+                "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                "candle_policy": "CLOSED_ONLY",
+                "allowed_capture_contract_versions": ["gate_ohlcv_canonical_v1"],
+            }},
+            "required_indicators_by_group": {"structural": ["adx"]},
+        }
+    config = {"multilayer_contract": {
+        "enabled": True,
+        "activation_mode": "SHADOW",
+        "operational_effect": False,
+        "decision_feature_contract_version": "multilayer_decision_context_v4",
+        "calibration_run_id": "run-id",
+        "statistical_gate": gate,
+        "layers": layers,
+    }}
+
+    assert require_shadow_multilayer_config(config)["statistical_gate"] == gate
+    tampered = {**config, "multilayer_contract": {
+        **config["multilayer_contract"],
+        "statistical_gate": {**gate, "dataset_hash": "e" * 64},
+    }}
+    with pytest.raises(ValueError, match="WAIVER_HASH_INVALID"):
+        require_shadow_multilayer_config(tampered)
+
+
+def test_l3_confirmation_validates_declared_inputs_not_auxiliary_snapshot_fields():
+    source_at = NOW - timedelta(minutes=5)
+    envelope = {
+        "value": 101.0,
+        "timeframe": "5m",
+        "market_type": "spot",
+        "scheduler_group": "microstructure",
+        "source_provider": "gate.io",
+        "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+        "candle_policy": "CLOSED_ONLY",
+        "candle_closed": True,
+        "source_timestamp": source_at.isoformat(),
+        "available_at": NOW.isoformat(),
+        "config_hash": "c" * 64,
+        "producer_version": "compute_5m_v2",
+        "capture_contract_version": "gate_ohlcv_canonical_v1",
+    }
+    envelope["envelope_hash"] = canonical_hash(envelope)
+    snapshot = {
+        "price": {
+            "value": 101.0,
+            "source_group": "microstructure",
+            "ts": NOW.isoformat(),
+            "timeframe": "5m",
+            "observed_timeframes": ["5m"],
+            "timeframe_conflict": False,
+            "stale": False,
+            "source_timestamp": source_at.isoformat(),
+            "available_at": NOW.isoformat(),
+            "source_provider": "gate.io",
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "candle_closed": True,
+            "config_hash": "c" * 64,
+            "producer_version": "compute_5m_v2",
+            "envelope": envelope,
+        },
+        "score": {"value": 88, "source_group": "decision_context"},
+    }
+    layer = {
+        "validity_margin_seconds": 60,
+        "required_indicators_by_group": {"microstructure": ["price"]},
+        "source_policies": {"ohlcv": {
+            "allowed_source_providers": ["gate.io"],
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+            "allowed_capture_contract_versions": ["gate_ohlcv_canonical_v1"],
+        }},
+    }
+
+    confirmation = build_l3_confirmation(
+        legacy_decision="ALLOW",
+        indicators_snapshot=snapshot,
+        gate_evaluation_hash="f" * 64,
+        layer_config=layer,
+        now=NOW,
+    )
+
+    assert confirmation["verdict"] == "PASS"
+    assert confirmation["invalid_indicators"] == []
+
+
 def _coverage_payload(*, source_timestamp: datetime, envelope_hash: str | None = None):
     envelope = {
         "value": 42,

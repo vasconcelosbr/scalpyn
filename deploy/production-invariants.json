@@ -1131,6 +1131,44 @@
           ]
         }
       ]
+    },
+    {
+      "id": "mtf-shadow-waiver-observational-only",
+      "description": "An insufficient-data calibration may be disclosed and human-waived only for non-operational SHADOW observation",
+      "files": [
+        {
+          "path": "backend/app/services/mtf_profile_activation_service.py",
+          "contains_all": [
+            "UPDATE_EXISTING_MTF_AND_ACTIVATE_SHADOW_WITH_WAIVER",
+            "MTF_WAIVER_ECONOMIC_RULE_CHANGE_FORBIDDEN",
+            "DRAFT_INSUFFICIENT_DATA",
+            "OBSERVATIONAL_ONLY"
+          ]
+        },
+        {
+          "path": "backend/app/services/multilayer_contract.py",
+          "contains_all": [
+            "multilayer_decision_context_v4",
+            "validate_waived_statistical_gate",
+            "MULTILAYER_WAIVER_HASH_INVALID"
+          ]
+        },
+        {
+          "path": "backend/tests/test_mtf_existing_profile_activation.py",
+          "contains_all": [
+            "test_waiver_document_discloses_failed_calibration_without_faking_passed",
+            "test_waiver_document_requires_all_human_acknowledgements",
+            "test_waiver_document_rejects_fake_passed_profile_disclosure"
+          ]
+        },
+        {
+          "path": "backend/tests/test_mtf_spot_observation.py",
+          "contains_all": [
+            "test_waived_shadow_contract_and_context_preserve_signed_disclosure",
+            "test_l3_confirmation_validates_declared_inputs_not_auxiliary_snapshot_fields"
+          ]
+        }
+      ]
     }
   ]
 }

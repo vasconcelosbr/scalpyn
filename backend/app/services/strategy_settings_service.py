@@ -38,6 +38,7 @@ from .l3_gate_runtime_policy import (
 from .multilayer_contract import (
     require_prepared_multilayer_config,
     require_shadow_multilayer_config,
+    validate_waived_statistical_gate,
 )
 from .profile_runtime_config import canonical_hash, canonical_profile_config_hash
 
@@ -909,16 +910,18 @@ class StrategySettingsService:
         layer_profile_ids: Dict[str, UUID],
         calibration_run_id: UUID,
         l3_source_identity: Dict[str, Any],
+        statistical_gate: Dict[str, Any] | None = None,
         apply: bool = False,
         commit: bool = True,
     ) -> Dict[str, Any]:
-        """Bind immutable calibrated profiles and enable observation only."""
+        """Bind immutable profiles and enable calibrated or waived observation."""
         if set(layer_profile_ids) != {"L1", "L2"}:
             raise StrategySettingsValidationError(
                 "layer_profile_ids must contain exactly L1 and L2"
             )
         calibration_run = (await db.execute(text("""
-            SELECT id, status, approved_policy_hash, selected_profiles
+            SELECT id, status, approved_policy_hash, dataset_hash,
+                   selected_profiles, failure_reason
               FROM mtf_calibration_runs
              WHERE id = CAST(:run_id AS UUID)
                AND user_id = CAST(:user_id AS UUID)
@@ -926,10 +929,27 @@ class StrategySettingsService:
         """), {
             "run_id": str(calibration_run_id), "user_id": str(user_id),
         })).mappings().one_or_none()
-        if calibration_run is None or calibration_run["status"] != "PASSED":
+        waiver_gate = None
+        if statistical_gate is not None:
+            try:
+                waiver_gate = validate_waived_statistical_gate(statistical_gate)
+            except ValueError as exc:
+                raise StrategySettingsValidationError(str(exc)) from exc
+        if calibration_run is None:
+            raise StrategySettingsValidationError("MTF_CALIBRATION_RUN_NOT_FOUND")
+        if waiver_gate:
+            if (
+                calibration_run["status"] != "DRAFT_INSUFFICIENT_DATA"
+                or calibration_run["failure_reason"] != "MIN_SAMPLES_NOT_MET"
+                or waiver_gate["calibration_run_id"] != str(calibration_run_id)
+                or waiver_gate["policy_hash"] != calibration_run["approved_policy_hash"]
+                or waiver_gate["dataset_hash"] != calibration_run["dataset_hash"]
+            ):
+                raise StrategySettingsValidationError("MTF_WAIVER_RUN_CONFLICT")
+        elif calibration_run["status"] != "PASSED":
             raise StrategySettingsValidationError("MTF_CALIBRATION_RUN_NOT_PASSED")
         selected_profiles = dict(calibration_run["selected_profiles"] or {})
-        if set(selected_profiles) != {"L1", "L2"}:
+        if not waiver_gate and set(selected_profiles) != {"L1", "L2"}:
             raise StrategySettingsValidationError("MTF_CALIBRATION_PROFILE_SET_INVALID")
 
         rows = (await db.execute(select(Profile).where(
@@ -953,10 +973,6 @@ class StrategySettingsService:
                 or not profile.is_active
                 or mtf.get("layer") != layer
                 or mtf.get("activation_mode") != "SHADOW"
-                or calibration.get("status") != "PASSED"
-                or calibration.get("method") != "WALK_FORWARD"
-                or calibration.get("baseline_outperformed") is not True
-                or calibration.get("worst_fold_drawdown_not_worse") is not True
                 or calibration.get("min_samples") is None
                 or str(calibration.get("run_id") or "") != str(calibration_run_id)
                 or calibration.get("policy_hash") != calibration_run["approved_policy_hash"]
@@ -977,12 +993,34 @@ class StrategySettingsService:
                 raise StrategySettingsValidationError(
                     f"{layer}_PROFILE_VERSION_HASH_INVALID"
                 )
-            if calibrated_profile.get("thresholds_hash") != canonical_hash(
-                calibration.get("thresholds") or {}
-            ):
-                raise StrategySettingsValidationError(
-                    f"{layer}_PROFILE_NOT_EMITTED_BY_CALIBRATION_RUN"
-                )
+            if waiver_gate:
+                if (
+                    calibration.get("status") != "DRAFT_INSUFFICIENT_DATA"
+                    or calibration.get("method") != "WALK_FORWARD"
+                    or calibration.get("activation_authority") != "HUMAN_WAIVER"
+                    or calibration.get("reason") != "MIN_SAMPLES_NOT_MET"
+                    or calibration.get("thresholds_emitted") is not False
+                    or calibration.get("dataset_hash") != calibration_run["dataset_hash"]
+                ):
+                    raise StrategySettingsValidationError(
+                        f"{layer}_PROFILE_WAIVER_GATE_FAILED"
+                    )
+            else:
+                if (
+                    calibration.get("status") != "PASSED"
+                    or calibration.get("method") != "WALK_FORWARD"
+                    or calibration.get("baseline_outperformed") is not True
+                    or calibration.get("worst_fold_drawdown_not_worse") is not True
+                ):
+                    raise StrategySettingsValidationError(
+                        f"{layer}_PROFILE_SHADOW_GATE_FAILED"
+                    )
+                if calibrated_profile.get("thresholds_hash") != canonical_hash(
+                    calibration.get("thresholds") or {}
+                ):
+                    raise StrategySettingsValidationError(
+                        f"{layer}_PROFILE_NOT_EMITTED_BY_CALIBRATION_RUN"
+                    )
             required_indicators = set()
             for section, list_key, name_key in (
                 ("filters", "conditions", "field"),
@@ -1033,9 +1071,13 @@ class StrategySettingsService:
             "enabled": True,
             "activation_mode": "SHADOW",
             "operational_effect": False,
-            "decision_feature_contract_version": "multilayer_decision_context_v3",
+            "decision_feature_contract_version": (
+                "multilayer_decision_context_v4"
+                if waiver_gate else "multilayer_decision_context_v3"
+            ),
             "decision_feature_valid_from": now,
             "calibration_run_id": str(calibration_run_id),
+            "statistical_gate": waiver_gate or {},
         })
         expected_tf = {"L1": "1h", "L2": "15m"}
         for layer in ("L1", "L2"):
@@ -1128,27 +1170,29 @@ class StrategySettingsService:
         if target is None:
             raise StrategySettingsValidationError("SPOT_ENGINE_CONFIG_REQUIRED")
         target.config_json = candidate
-        await db.execute(text("""
-            UPDATE mtf_calibration_runs
-               SET results_json = results_json || jsonb_build_object(
-                 'activated_bindings', CAST(:bindings AS JSONB),
-                 'shadow_activated_at', clock_timestamp()
-               )
-             WHERE id = CAST(:run_id AS UUID)
-               AND user_id = CAST(:user_id AS UUID)
-               AND status = 'PASSED'
-        """), {
-            "run_id": str(calibration_run_id), "user_id": str(user_id),
-            "bindings": json.dumps(bindings),
-        })
+        if not waiver_gate:
+            await db.execute(text("""
+                UPDATE mtf_calibration_runs
+                   SET results_json = results_json || jsonb_build_object(
+                     'activated_bindings', CAST(:bindings AS JSONB),
+                     'shadow_activated_at', clock_timestamp()
+                   )
+                 WHERE id = CAST(:run_id AS UUID)
+                   AND user_id = CAST(:user_id AS UUID)
+                   AND status = 'PASSED'
+            """), {
+                "run_id": str(calibration_run_id), "user_id": str(user_id),
+                "bindings": json.dumps(bindings),
+            })
         db.add(ConfigAuditLog(
             config_id=target.id,
             changed_by=user_id,
             previous_json=before_json,
             new_json=candidate,
             change_description=(
-                "[MTF_SPOT_SHADOW] activate observational contexts; "
-                "operational_effect=false"
+                "[MTF_SPOT_SHADOW] activate observational contexts"
+                + (" with human statistical waiver; " if waiver_gate else "; ")
+                + "operational_effect=false"
             ),
         ))
         if commit:

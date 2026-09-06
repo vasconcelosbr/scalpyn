@@ -9,6 +9,7 @@ import pytest
 from app.api import profiles as profiles_api
 from app.services.mtf_profile_activation_service import (
     IMPORT_MODE,
+    WAIVER_IMPORT_MODE,
     MTFActivationConflict,
     _validate_watchlist_chain,
     parse_activation_document,
@@ -91,6 +92,32 @@ def _document() -> dict:
     }
 
 
+def _waiver_document() -> dict:
+    document = _document()
+    document["import_mode"] = WAIVER_IMPORT_MODE
+    document["calibration"].pop("thresholds_hashes")
+    document["statistical_gate"] = {
+        "status": "WAIVED_FOR_SHADOW",
+        "authorization_scope": "OBSERVATIONAL_ONLY",
+        "calibration_not_passed_acknowledged": True,
+        "thresholds_unvalidated_acknowledged": True,
+        "operational_effect_false_acknowledged": True,
+    }
+    for layer in ("L1", "L2"):
+        document["profiles"][layer]["calibration"] = {
+            "status": "DRAFT_INSUFFICIENT_DATA",
+            "method": "WALK_FORWARD",
+            "activation_authority": "HUMAN_WAIVER",
+            "reason": "MIN_SAMPLES_NOT_MET",
+            "thresholds_emitted": False,
+            "min_samples": 5000,
+            "run_id": document["calibration"]["run_id"],
+            "policy_hash": document["calibration"]["policy_hash"],
+            "dataset_hash": document["calibration"]["dataset_hash"],
+        }
+    return document
+
+
 def test_governed_document_is_update_only_shadow_and_keeps_layer_identity():
     parsed = parse_activation_document(_document())
 
@@ -100,6 +127,34 @@ def test_governed_document_is_update_only_shadow_and_keeps_layer_identity():
     assert parsed["profiles"]["L1"]["config"]["mtf_layer"] == {
         "layer": "L1", "activation_mode": "SHADOW", "operational_effect": False,
     }
+
+
+def test_waiver_document_discloses_failed_calibration_without_faking_passed():
+    parsed = parse_activation_document(_waiver_document())
+
+    assert parsed["import_mode"] == WAIVER_IMPORT_MODE
+    assert parsed["statistical_gate"]["status"] == "WAIVED_FOR_SHADOW"
+    assert (
+        parsed["profiles"]["L1"]["config"]["calibration"]["status"]
+        == "DRAFT_INSUFFICIENT_DATA"
+    )
+    assert "thresholds_hashes" not in parsed["calibration"]
+
+
+def test_waiver_document_requires_all_human_acknowledgements():
+    document = _waiver_document()
+    document["statistical_gate"]["thresholds_unvalidated_acknowledged"] = False
+
+    with pytest.raises(ValueError, match="MTF_WAIVER_ACKNOWLEDGEMENTS_REQUIRED"):
+        parse_activation_document(document)
+
+
+def test_waiver_document_rejects_fake_passed_profile_disclosure():
+    document = _waiver_document()
+    document["profiles"]["L2"]["calibration"]["status"] = "PASSED"
+
+    with pytest.raises(ValueError, match="L2_WAIVER_CALIBRATION_DISCLOSURE_INVALID"):
+        parse_activation_document(document)
 
 
 @pytest.mark.parametrize(

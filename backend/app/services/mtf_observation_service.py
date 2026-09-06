@@ -16,6 +16,7 @@ from ..schemas.layer_context import (
     L2DecisionContextV3,
     LayerVerdictRecord,
     MultilayerDecisionContextV3,
+    MultilayerDecisionContextV4,
     ProfileIdentity,
 )
 from .indicators_provider import get_timeframe_indicators
@@ -473,6 +474,7 @@ def build_l2_context(
 def build_multilayer_context(
     *, l1: Mapping[str, Any], l2: Mapping[str, Any], l3_confirmation: Mapping[str, Any],
     canonical_score: float | None, calibration_run_id: str, now: datetime,
+    statistical_gate: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     verify_context_hash(l1)
     verify_context_hash(l2)
@@ -502,7 +504,11 @@ def build_multilayer_context(
         )
         for layer, value in verdict_values.items()
     }
-    payload = MultilayerDecisionContextV3(
+    payload_type = (
+        MultilayerDecisionContextV4
+        if statistical_gate else MultilayerDecisionContextV3
+    )
+    payload = payload_type(
         l1_snapshot=dict(l1),
         l1_context_hash=str(l1["context_hash"]),
         l2_snapshot=dict(l2),
@@ -513,6 +519,10 @@ def build_multilayer_context(
         observational_decision=decision,
         computed_at=now,
         calibration_run_id=calibration_run_id,
+        **(
+            {"statistical_gate": dict(statistical_gate)}
+            if statistical_gate else {}
+        ),
     ).model_dump(mode="json")
     return _seal(payload)
 
@@ -534,17 +544,22 @@ def build_l3_confirmation(
     if not layer_config or margin is None:
         invalid.append("__layer_config__")
     required_by_group = (layer_config or {}).get("required_indicators_by_group") or {}
+    required_inputs: list[tuple[str, str]] = []
     for group, names in required_by_group.items():
         for name in names or []:
+            required_inputs.append((str(group), str(name)))
             item = indicators_snapshot.get(str(name))
             if not isinstance(item, Mapping) or item.get("source_group") != group:
                 invalid.append(str(name))
-    for name, item in indicators_snapshot.items():
+    if not required_inputs:
+        invalid.append("__required_indicators__")
+    for expected_group, name in required_inputs:
+        item = indicators_snapshot.get(name)
         if not isinstance(item, Mapping):
-            invalid.append(str(name))
+            invalid.append(name)
             continue
         if any(item.get(field) is None for field in required_meta):
-            invalid.append(str(name))
+            invalid.append(name)
             continue
         observed = set(item.get("observed_timeframes") or [])
         timeframe = item.get("timeframe")
@@ -561,17 +576,19 @@ def build_l3_confirmation(
             str(value) for value in policy.get("allowed_capture_contract_versions") or []
         }
         if item.get("timeframe_conflict") or item.get("stale"):
-            invalid.append(str(name))
+            invalid.append(name)
         elif observed != {"5m"}:
-            invalid.append(str(name))
+            invalid.append(name)
         elif timeframe != "5m":
-            invalid.append(str(name))
+            invalid.append(name)
+        elif item.get("source_group") != expected_group:
+            invalid.append(name)
         elif item.get("candle_closed") is not True:
-            invalid.append(str(name))
+            invalid.append(name)
         elif not allowed or str(item.get("source_provider")) not in allowed:
-            invalid.append(str(name))
+            invalid.append(name)
         elif not policy_id or str(item.get("provider_policy_id")) != policy_id:
-            invalid.append(str(name))
+            invalid.append(name)
         else:
             try:
                 source_timestamp = _utc(item["source_timestamp"])
@@ -594,7 +611,7 @@ def build_l3_confirmation(
                 ):
                     raise ValueError("capture contract")
             except (KeyError, TypeError, ValueError):
-                invalid.append(str(name))
+                invalid.append(name)
     verdict = "UNAVAILABLE" if invalid or not indicators_snapshot else (
         "PASS" if legacy_decision == "ALLOW" else "REJECT"
     )
@@ -810,6 +827,10 @@ async def build_observations_for_assets(db, *, user_id: Any, assets: list[dict[s
                 "l1": l1, "l2": l2, "l3": l3,
                 "l3_layer_config": dict(layers["L3"]),
                 "calibration_run_id": str(contract.get("calibration_run_id") or ""),
+                "statistical_gate": dict(contract.get("statistical_gate") or {}),
+                "decision_context_version": contract.get(
+                    "decision_feature_contract_version"
+                ),
             }
         except Exception as exc:
             output[symbol] = {
@@ -817,5 +838,9 @@ async def build_observations_for_assets(db, *, user_id: Any, assets: list[dict[s
                 "reason": str(exc),
                 "observational_decision": "WAIT",
                 "operational_effect": False,
+                "statistical_gate": dict(contract.get("statistical_gate") or {}),
+                "decision_context_version": contract.get(
+                    "decision_feature_contract_version"
+                ),
             }
     return output

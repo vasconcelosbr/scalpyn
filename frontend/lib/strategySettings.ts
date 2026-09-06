@@ -59,10 +59,19 @@ export interface MTFRuntimeAudit {
     policy_version: string;
     dataset_hash: string | null;
     failure_reason: string | null;
+    dataset_manifest: Record<string, JsonValue> | null;
     started_at: string;
     completed_at: string | null;
   } | null;
   multilayer_contract: JsonObject | null;
+  statistical_gate: {
+    status: string;
+    run_status: string;
+    failure_reason: string;
+    authorization_scope: string;
+    authorized_at: string;
+    calibration_run_id: string;
+  } | null;
   spot_engine_updated_at: string | null;
 }
 
@@ -74,7 +83,7 @@ export const ENUM_OPTIONS: Record<string, string[]> = {
   "spot_engine.scanner.multilayer_contract.execution_contract_version": ["multilayer_profile_execution_contract_v2"],
   "spot_engine.scanner.multilayer_contract.provenance_policy_version": ["multilayer_provenance_resolver_v1"],
   "spot_engine.scanner.multilayer_contract.consolidation_rule_version": ["single_profile_per_symbol_v2"],
-  "spot_engine.scanner.multilayer_contract.decision_feature_contract_version": ["multilayer_decision_context_v1", "multilayer_decision_context_v2", "multilayer_decision_context_v3"],
+  "spot_engine.scanner.multilayer_contract.decision_feature_contract_version": ["multilayer_decision_context_v1", "multilayer_decision_context_v2", "multilayer_decision_context_v3", "multilayer_decision_context_v4"],
   "spot_engine.scanner.multilayer_contract.layers.L1.default_timeframe": ["5m", "15m", "1h"],
   "spot_engine.scanner.multilayer_contract.layers.L2.default_timeframe": ["5m", "15m", "1h"],
   "spot_engine.scanner.multilayer_contract.layers.L3.default_timeframe": ["5m", "15m", "1h"],

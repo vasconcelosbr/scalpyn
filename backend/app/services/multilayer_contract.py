@@ -14,6 +14,7 @@ MULTILAYER_EXECUTION_CONTRACT_VERSION = "multilayer_profile_execution_contract_v
 MULTILAYER_PROVENANCE_POLICY_VERSION = "multilayer_provenance_resolver_v1"
 MULTILAYER_CONSOLIDATION_VERSION = "single_profile_per_symbol_v2"
 MULTILAYER_DECISION_CONTEXT_VERSION = "multilayer_decision_context_v3"
+MULTILAYER_WAIVER_CONTEXT_VERSION = "multilayer_decision_context_v4"
 LAYERS = ("L1", "L2", "L3")
 LAYER_VERDICTS = {"PASS", "REJECT", "INSUFFICIENT_DATA", "UNAVAILABLE"}
 
@@ -60,10 +61,19 @@ def require_shadow_multilayer_config(scanner: Mapping[str, Any]) -> dict[str, An
         raise ValueError("MULTILAYER_SHADOW_NOT_ENABLED")
     if config.get("operational_effect") is not False:
         raise ValueError("MULTILAYER_OPERATIONAL_EFFECT_FORBIDDEN")
-    if config.get("decision_feature_contract_version") != MULTILAYER_DECISION_CONTEXT_VERSION:
+    context_version = config.get("decision_feature_contract_version")
+    if context_version not in {
+        MULTILAYER_DECISION_CONTEXT_VERSION,
+        MULTILAYER_WAIVER_CONTEXT_VERSION,
+    }:
         raise ValueError("MULTILAYER_CONTEXT_VERSION_UNKNOWN")
     if not config.get("calibration_run_id"):
         raise ValueError("MULTILAYER_CALIBRATION_RUN_MISSING")
+    if context_version == MULTILAYER_WAIVER_CONTEXT_VERSION:
+        gate = validate_waived_statistical_gate(config.get("statistical_gate"))
+        if gate["calibration_run_id"] != str(config["calibration_run_id"]):
+            raise ValueError("MULTILAYER_WAIVER_RUN_MISMATCH")
+        config["statistical_gate"] = gate
     layers = config.get("layers") or {}
     if set(layers) != set(LAYERS):
         raise ValueError("MULTILAYER_LAYER_CONFIG_INCOMPLETE")
@@ -92,6 +102,31 @@ def require_shadow_multilayer_config(scanner: Mapping[str, Any]) -> dict[str, An
             if not item.get(field):
                 raise ValueError(f"{layer}_{field.upper()}_MISSING")
     return config
+
+
+def validate_waived_statistical_gate(value: Any) -> dict[str, Any]:
+    gate = deepcopy(dict(value or {}))
+    required = {
+        "status": "WAIVED_FOR_SHADOW",
+        "run_status": "DRAFT_INSUFFICIENT_DATA",
+        "failure_reason": "MIN_SAMPLES_NOT_MET",
+        "authorization_scope": "OBSERVATIONAL_ONLY",
+        "calibration_not_passed_acknowledged": True,
+        "thresholds_unvalidated_acknowledged": True,
+        "operational_effect_false_acknowledged": True,
+    }
+    if any(gate.get(key) != expected for key, expected in required.items()):
+        raise ValueError("MULTILAYER_WAIVER_GATE_INVALID")
+    for field in (
+        "calibration_run_id", "policy_hash", "dataset_hash",
+        "authorized_by", "authorized_at", "authorization_hash",
+    ):
+        if not gate.get(field):
+            raise ValueError(f"MULTILAYER_WAIVER_{field.upper()}_MISSING")
+    material = {key: item for key, item in gate.items() if key != "authorization_hash"}
+    if gate["authorization_hash"] != canonical_hash(material):
+        raise ValueError("MULTILAYER_WAIVER_HASH_INVALID")
+    return gate
 
 
 def build_multilayer_execution_contract(

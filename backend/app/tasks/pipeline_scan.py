@@ -2152,6 +2152,15 @@ async def _evaluate_l3_decisions(
         )
         mtf_observation = mtf_observations.get(str(asset.get("symbol") or ""))
         if mtf_observation:
+            mtf_context_key = str(
+                mtf_observation.get("decision_context_version")
+                or "multilayer_decision_context_v3"
+            )
+            if mtf_context_key not in {
+                "multilayer_decision_context_v3",
+                "multilayer_decision_context_v4",
+            }:
+                mtf_context_key = "multilayer_decision_context_v3"
             if mtf_observation.get("l1") and mtf_observation.get("l2"):
                 try:
                     from ..services.mtf_observation_service import (
@@ -2165,33 +2174,38 @@ async def _evaluate_l3_decisions(
                         layer_config=mtf_observation.get("l3_layer_config") or {},
                         now=evaluated_at,
                     )
-                    metrics["multilayer_decision_context_v3"] = (
-                        build_multilayer_context(
+                    mtf_context = build_multilayer_context(
                             l1=mtf_observation["l1"],
                             l2=mtf_observation["l2"],
                             l3_confirmation=l3_confirmation,
                             canonical_score=float(score) if score is not None else None,
                             calibration_run_id=str(mtf_observation["calibration_run_id"]),
+                            statistical_gate=(
+                                mtf_observation.get("statistical_gate") or None
+                            ),
                             now=evaluated_at,
                         )
-                    )
+                    metrics[str(mtf_context["contract_version"])] = mtf_context
                 except Exception as exc:
-                    metrics["multilayer_decision_context_v3"] = {
-                        "contract_version": "multilayer_decision_context_v3",
+                    metrics[mtf_context_key] = {
+                        "contract_version": mtf_context_key,
                         "mode": "SHADOW",
                         "operational_effect": False,
                         "observational_decision": "WAIT",
                         "reason_codes": ["CONTEXT_BUILD_ERROR"],
                         "error_type": type(exc).__name__,
+                        "statistical_gate": (
+                            mtf_observation.get("statistical_gate") or {}
+                        ),
                     }
             else:
-                metrics["multilayer_decision_context_v3"] = {
-                    "contract_version": "multilayer_decision_context_v3",
+                metrics[mtf_context_key] = {
+                    "contract_version": mtf_context_key,
                     "mode": "SHADOW",
                     "operational_effect": False,
                     **mtf_observation,
                 }
-        # V3 is intentionally observational in this release.  Its source-aware
+        # MTF remains intentionally observational in this release. Its source-aware
         # decision is persisted beside the current deterministic authority and
         # can never change ``decision`` or ``l3_pass`` while mode=SHADOW.
         try:

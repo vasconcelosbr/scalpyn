@@ -144,3 +144,28 @@ class MultilayerDecisionContextV3(MultilayerDecisionContextV2):
         "multilayer_decision_context_v3"
     )
     calibration_run_id: str = Field(min_length=1)
+
+
+class WaivedStatisticalGateSnapshot(BaseModel):
+    status: Literal["WAIVED_FOR_SHADOW"] = "WAIVED_FOR_SHADOW"
+    run_status: Literal["DRAFT_INSUFFICIENT_DATA"]
+    failure_reason: Literal["MIN_SAMPLES_NOT_MET"]
+    calibration_run_id: str = Field(min_length=1)
+    policy_hash: str = Field(min_length=64, max_length=64)
+    dataset_hash: str = Field(min_length=64, max_length=64)
+    authorization_scope: Literal["OBSERVATIONAL_ONLY"] = "OBSERVATIONAL_ONLY"
+    calibration_not_passed_acknowledged: Literal[True]
+    thresholds_unvalidated_acknowledged: Literal[True]
+    operational_effect_false_acknowledged: Literal[True]
+    authorized_by: str = Field(min_length=1)
+    authorized_at: datetime
+    authorization_hash: str = Field(min_length=64, max_length=64)
+
+
+class MultilayerDecisionContextV4(MultilayerDecisionContextV3):
+    """Immutable MTF context that discloses an observational-only waiver."""
+
+    contract_version: Literal["multilayer_decision_context_v4"] = (
+        "multilayer_decision_context_v4"
+    )
+    statistical_gate: WaivedStatisticalGateSnapshot

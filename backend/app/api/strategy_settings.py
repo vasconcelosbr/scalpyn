@@ -209,21 +209,25 @@ async def audit_multilayer_runtime(
     decisions = (await db.execute(text("""
         SELECT count(*) AS total,
                count(*) FILTER (
-                   WHERE metrics ? 'multilayer_decision_context_v3'
+                   WHERE metrics ? 'multilayer_decision_context_v4'
+                      OR metrics ? 'multilayer_decision_context_v3'
                       OR metrics ? 'multilayer_decision_context_v2'
                ) AS with_mtf,
                count(*) FILTER (
-                   WHERE COALESCE(metrics->'multilayer_decision_context_v3',
+                   WHERE COALESCE(metrics->'multilayer_decision_context_v4',
+                                  metrics->'multilayer_decision_context_v3',
                                   metrics->'multilayer_decision_context_v2')
                          ->>'observational_decision' = 'PASS'
                ) AS mtf_pass,
                count(*) FILTER (
-                   WHERE COALESCE(metrics->'multilayer_decision_context_v3',
+                   WHERE COALESCE(metrics->'multilayer_decision_context_v4',
+                                  metrics->'multilayer_decision_context_v3',
                                   metrics->'multilayer_decision_context_v2')
                          ->>'observational_decision' = 'WAIT'
                ) AS mtf_wait,
                count(*) FILTER (
-                   WHERE COALESCE(metrics->'multilayer_decision_context_v3',
+                   WHERE COALESCE(metrics->'multilayer_decision_context_v4',
+                                  metrics->'multilayer_decision_context_v3',
                                   metrics->'multilayer_decision_context_v2')
                          ->>'observational_decision' = 'REJECT'
                ) AS mtf_reject
@@ -233,7 +237,7 @@ async def audit_multilayer_runtime(
     """), {"user_id": str(user_id)})).mappings().one()
     calibration = (await db.execute(text("""
         SELECT id, status, policy_version, dataset_hash, failure_reason,
-               started_at, completed_at
+               dataset_manifest, started_at, completed_at
           FROM mtf_calibration_runs
          WHERE user_id = CAST(:user_id AS UUID)
          ORDER BY created_at DESC LIMIT 1
@@ -247,6 +251,10 @@ async def audit_multilayer_runtime(
     contract = (
         (((config_row or {}).get("config_json") or {}).get("scanner") or {})
         .get("multilayer_contract")
+    )
+    statistical_gate = (
+        dict(contract.get("statistical_gate") or {})
+        if isinstance(contract, dict) else {}
     )
     return {
         "runtime": {
@@ -262,6 +270,7 @@ async def audit_multilayer_runtime(
         },
         "latest_calibration": dict(calibration) if calibration else None,
         "multilayer_contract": contract,
+        "statistical_gate": statistical_gate or None,
         "spot_engine_updated_at": (
             config_row["updated_at"].isoformat() if config_row else None
         ),

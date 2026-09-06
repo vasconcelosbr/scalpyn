@@ -12,7 +12,7 @@ Sell Pipeline (5 layers):
 """
 
 from pydantic import BaseModel, Field
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 
 class L3ProvenanceSourcePolicyConfig(BaseModel):
@@ -109,10 +109,11 @@ class MultiLayerExecutionConfig(BaseModel):
     consolidation_valid_from: Optional[str] = None
     decision_feature_contract_version: Literal[
         "multilayer_decision_context_v1", "multilayer_decision_context_v2",
-        "multilayer_decision_context_v3"
+        "multilayer_decision_context_v3", "multilayer_decision_context_v4"
     ] = "multilayer_decision_context_v1"
     decision_feature_valid_from: Optional[str] = None
     calibration_run_id: Optional[str] = None
+    statistical_gate: Dict[str, Any] = Field(default_factory=dict)
     layers: Dict[Literal["L1", "L2", "L3"], LayerRuntimeContractConfig] = Field(
         default_factory=lambda: {
             "L1": LayerRuntimeContractConfig(default_timeframe="1h"),

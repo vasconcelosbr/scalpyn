@@ -296,7 +296,10 @@ export function JsonImportBuilder({ onClose }: Props) {
     setRawJson(text);
     try {
       const rawPayload = JSON.parse(text) as ImportFilePayload & Record<string, unknown>;
-      if (rawPayload.import_mode === "UPDATE_EXISTING_MTF_AND_ACTIVATE_SHADOW") {
+      if (
+        rawPayload.import_mode === "UPDATE_EXISTING_MTF_AND_ACTIVATE_SHADOW"
+        || rawPayload.import_mode === "UPDATE_EXISTING_MTF_AND_ACTIVATE_SHADOW_WITH_WAIVER"
+      ) {
         const preview = await apiPost("/profiles/mtf/activation-preview", rawPayload);
         setParseError(null);
         setParsed([]);
@@ -397,6 +400,11 @@ export function JsonImportBuilder({ onClose }: Props) {
   // ── Import ──────────────────────────────────────────────────────────────────
   const handleImport = async () => {
     if (mtfActivationPayload) {
+      const waiver = mtfActivationPayload.import_mode
+        === "UPDATE_EXISTING_MTF_AND_ACTIVATE_SHADOW_WITH_WAIVER";
+      if (waiver && !confirm(
+        "Confirmar SHADOW NÃO CALIBRADO? A calibração não passou, os thresholds não são validados e o MTF permanecerá sem autorização para ordens reais."
+      )) return;
       setImporting(true);
       try {
         const res = await apiPost("/profiles/mtf/activate-existing", mtfActivationPayload);
@@ -1101,10 +1109,12 @@ export function JsonImportBuilder({ onClose }: Props) {
           )}
 
           {mtfServerPreview && (
-            <div className="bg-[var(--bg-secondary)] border border-[var(--color-profit)]/30 rounded-xl p-4">
-              <div className="flex items-center gap-2 text-[13px] font-semibold text-[var(--color-profit)] mb-3">
-                <CheckCircle2 className="w-4 h-4" /> Prévia validada sem gravação
+            <div className={`bg-[var(--bg-secondary)] rounded-xl p-4 ${mtfActivationPayload?.import_mode === "UPDATE_EXISTING_MTF_AND_ACTIVATE_SHADOW_WITH_WAIVER" ? "border border-amber-500/40" : "border border-[var(--color-profit)]/30"}`}>
+              <div className={`flex items-center gap-2 text-[13px] font-semibold mb-3 ${mtfActivationPayload?.import_mode === "UPDATE_EXISTING_MTF_AND_ACTIVATE_SHADOW_WITH_WAIVER" ? "text-amber-300" : "text-[var(--color-profit)]"}`}>
+                {mtfActivationPayload?.import_mode === "UPDATE_EXISTING_MTF_AND_ACTIVATE_SHADOW_WITH_WAIVER" ? <AlertTriangle className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
+                {mtfActivationPayload?.import_mode === "UPDATE_EXISTING_MTF_AND_ACTIVATE_SHADOW_WITH_WAIVER" ? "SHADOW NÃO CALIBRADO — prévia sem gravação" : "Prévia validada sem gravação"}
               </div>
+              {mtfActivationPayload?.import_mode === "UPDATE_EXISTING_MTF_AND_ACTIVATE_SHADOW_WITH_WAIVER" && <p className="mb-3 text-[11px] leading-relaxed text-amber-200">Amostra insuficiente e thresholds não validados. A autorização humana limita este contrato ao modo observacional; operational_effect permanecerá false.</p>}
               <pre className="text-[11px] font-mono text-[var(--text-secondary)] whitespace-pre-wrap max-h-80 overflow-auto">
                 {JSON.stringify(mtfServerPreview, null, 2)}
               </pre>
