@@ -353,6 +353,29 @@ async def test_rate_limit_counts_canonical_winners_after_grouping(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_monitor_mode_off_skips_rejected_consolidation(monkeypatch):
+    shared = SharedState()
+    user_id = uuid4()
+    rows = [candidate(user_id=user_id), candidate(user_id=user_id, profile_name="B")]
+    install_runtime(monkeypatch, shared)
+
+    async def disabled_config(_user_id):
+        return {
+            "shadow_monitor_mode_by_source": {"L3_REJECTED": "OFF"},
+        }
+
+    monkeypatch.setattr(
+        shadow_trade_service, "load_shadow_creation_config", disabled_config
+    )
+
+    result = await consolidate_l3_rejected_candidates(rows, scan_run_id="scan-off")
+
+    assert result == []
+    assert shared.created == 0
+    assert shared.suppressions == []
+
+
+@pytest.mark.asyncio
 async def test_concurrent_workers_create_only_one_rejected_owner(monkeypatch):
     shared = SharedState()
     user_id = uuid4()

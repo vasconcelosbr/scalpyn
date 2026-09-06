@@ -107,9 +107,25 @@ async def _sweep():
         return {"processed":processed,"errors":errors}
 
 
+async def _sweep_with_redis_cleanup():
+    """Run one Celery sweep without leaking a Redis client across event loops.
+
+    ``_run_async`` creates and closes a loop for every Celery invocation.  The
+    process-wide async Redis client therefore has to be closed while the loop
+    that used it is still alive; otherwise the next invocation inherits a
+    client whose transports belong to a closed loop.
+    """
+    from ..services.redis_client import reset_async_redis
+
+    try:
+        return await _sweep()
+    finally:
+        await reset_async_redis()
+
+
 @celery_app.task(name="app.tasks.shadow_l3_continuation.run")
 def run():
     from .shadow_trade_monitor import _run_async
-    result = _run_async(_sweep())
+    result = _run_async(_sweep_with_redis_cleanup())
     logger.info("[shadow-l3-continuation] %s", result)
     return result

@@ -444,6 +444,7 @@ async def consolidate_l3_rejected_candidates(
         _SyntheticDecision,
         _create_from_decision,
         _load_strategy_lab_features_by_symbol,
+        _resolve_shadow_monitor_mode,
         load_shadow_creation_config,
     )
 
@@ -467,6 +468,20 @@ async def consolidate_l3_rejected_candidates(
                 winner.user_id
             )
         user_config = config_by_user[user_key]
+        if (
+            _resolve_shadow_monitor_mode(
+                user_config, SHADOW_SOURCE_L3_REJECTED
+            )
+            == "OFF"
+        ):
+            logger.info(
+                "l3_rejected_profile_consolidation skipped: "
+                "shadow_monitor_mode=OFF event_id=%s symbol=%s direction=%s",
+                event_id,
+                symbol,
+                direction,
+            )
+            continue
 
         try:
             async with CeleryAsyncSessionLocal() as db:
