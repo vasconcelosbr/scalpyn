@@ -22,7 +22,7 @@ async def test_sweep_resets_async_redis_before_task_loop_closes(monkeypatch):
     result = await task_module._sweep_with_redis_cleanup()
 
     assert result == {"processed": 1, "errors": 0}
-    assert events == ["sweep", "reset"]
+    assert events == ["reset", "sweep", "reset"]
 
 
 @pytest.mark.asyncio
@@ -44,4 +44,4 @@ async def test_sweep_resets_async_redis_after_failure(monkeypatch):
     with pytest.raises(RuntimeError, match="boom"):
         await task_module._sweep_with_redis_cleanup()
 
-    assert events == ["sweep", "reset"]
+    assert events == ["reset", "sweep", "reset"]

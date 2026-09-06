@@ -117,6 +117,10 @@ async def _sweep_with_redis_cleanup():
     """
     from ..services.redis_client import reset_async_redis
 
+    # Other Celery tasks in the same forked worker can leave the process-wide
+    # async client attached to their already-closed event loop.  Clear that
+    # stale owner before this task asks ``_sweep`` for a client of its own.
+    await reset_async_redis()
     try:
         return await _sweep()
     finally:
