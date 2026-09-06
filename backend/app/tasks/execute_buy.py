@@ -473,115 +473,67 @@ async def _execute_buy_cycle_async() -> dict:
                     )
                     continue
 
-                # 6. Load entry-trigger + block config from the L3 pipeline watchlist profile
-                # Chain: Pool → POOL watchlist (source_pool_id) → L1 (source_watchlist_id) → L2 → L3
-                from ..models.pipeline_watchlist import PipelineWatchlist, PipelineWatchlistAsset
+                # 6. Resolve every current L3 candidate through the canonical
+                # POOL → L1 → L2 → L3 chain.  Open Shadow trades never feed
+                # this set and historical ``down`` rows are excluded.
                 from ..models.profile import Profile as UserProfile
+                from ..services.pipeline_live_candidates import (
+                    load_live_l3_candidates,
+                    resolve_spot_pipeline_chain,
+                )
 
-                signal_engine: Optional[SignalEngine] = None
-                block_engine:  Optional[BlockEngine]  = None
                 l3_symbols: Optional[set] = None  # restrict candidates to L3 assets
+                l3_signal_engines: dict[str, Optional[SignalEngine]] = {}
+                l3_block_engines: dict[str, Optional[BlockEngine]] = {}
 
-                # Task #232 round 19 — explicit ``level=`` constraints +
-                # deterministic ordering by ``created_at ASC, id ASC``
-                # so multi-watchlist tenants don't see ambiguous chain
-                # selection (and never spurious NO_L3_CHAIN). The model
-                # carries a ``level`` column ("POOL"/"L1"/"L2"/"L3");
-                # we anchor each hop to its expected level.
-                #
-                # Fix: real chain is Pool → POOL watchlist → L1 → L2 → L3.
-                # L1 references the POOL watchlist via source_watchlist_id,
-                # NOT the Pool directly via source_pool_id.
                 try:
-                    # Step 0 — find the POOL-level watchlist anchored to this pool
-                    pool_wl_res = await db.execute(
-                        select(PipelineWatchlist).where(
-                            PipelineWatchlist.source_pool_id == pool.id,
-                            PipelineWatchlist.user_id == user_id,
-                            PipelineWatchlist.level == "POOL",
-                        ).order_by(
-                            PipelineWatchlist.created_at.asc(),
-                            PipelineWatchlist.id.asc(),
-                        ).limit(1)
+                    chain = await resolve_spot_pipeline_chain(
+                        db,
+                        user_id=user_id,
+                        pool_id=pool.id,
                     )
-                    pool_wl = pool_wl_res.scalars().first()
-
-                    # Step 1 — find L1 anchored to the POOL watchlist
-                    l1_wl = None
-                    if pool_wl:
-                        l1_res = await db.execute(
-                            select(PipelineWatchlist).where(
-                                PipelineWatchlist.source_watchlist_id == pool_wl.id,
-                                PipelineWatchlist.user_id == user_id,
-                                PipelineWatchlist.level == "L1",
-                            ).order_by(
-                                PipelineWatchlist.created_at.asc(),
-                                PipelineWatchlist.id.asc(),
-                            ).limit(1)
+                    if chain is not None:
+                        live_candidates = await load_live_l3_candidates(
+                            db,
+                            user_id=user_id,
+                            l2_watchlist_id=chain.l2_watchlist.id,
                         )
-                        l1_wl = l1_res.scalars().first()
+                        l3_symbols = {candidate.symbol for candidate in live_candidates}
 
-                    if l1_wl:
-                        l2_res = await db.execute(
-                            select(PipelineWatchlist).where(
-                                PipelineWatchlist.source_watchlist_id == l1_wl.id,
-                                PipelineWatchlist.user_id == user_id,
-                                PipelineWatchlist.level == "L2",
-                            ).order_by(
-                                PipelineWatchlist.created_at.asc(),
-                                PipelineWatchlist.id.asc(),
-                            ).limit(1)
-                        )
-                        l2_wl = l2_res.scalars().first()
-
-                        if l2_wl:
-                            l3_res = await db.execute(
-                                select(PipelineWatchlist).where(
-                                    PipelineWatchlist.source_watchlist_id == l2_wl.id,
-                                    PipelineWatchlist.user_id == user_id,
-                                    PipelineWatchlist.level == "L3",
-                                ).order_by(
-                                    PipelineWatchlist.created_at.asc(),
-                                    PipelineWatchlist.id.asc(),
-                                ).limit(1)
-                            )
-                            l3_wl = l3_res.scalars().first()
-
-                            if l3_wl:
-                                # L3 candidate symbols
-                                l3_assets_res = await db.execute(
-                                    select(PipelineWatchlistAsset.symbol).where(
-                                        PipelineWatchlistAsset.watchlist_id == l3_wl.id
-                                    )
+                        profile_ids = {candidate.winner.profile_id for candidate in live_candidates}
+                        profiles = []
+                        if profile_ids:
+                            profiles = (await db.execute(
+                                select(UserProfile).where(
+                                    UserProfile.id.in_(profile_ids),
+                                    UserProfile.user_id == user_id,
+                                    UserProfile.is_active.is_(True),
                                 )
-                                l3_symbols = {r[0] for r in l3_assets_res.fetchall()}
+                            )).scalars().all()
+                        profile_by_id = {profile.id: profile for profile in profiles}
 
-                                # L3 profile → signals + block_rules
-                                if l3_wl.profile_id:
-                                    l3_prof_res = await db.execute(
-                                        select(UserProfile).where(UserProfile.id == l3_wl.profile_id)
-                                    )
-                                    l3_prof = l3_prof_res.scalars().first()
-                                    if l3_prof and l3_prof.config:
-                                        cfg = l3_prof.config
-                                        sig_cfg = cfg.get("entry_triggers") or cfg.get("signals")
-                                        blk_cfg = cfg.get("block_rules")
-                                        if sig_cfg:
-                                            signal_engine = SignalEngine(sig_cfg)
-                                        if blk_cfg:
-                                            block_engine = BlockEngine(blk_cfg)
+                        default_signal_engine: Optional[SignalEngine] = None
+                        default_block_engine: Optional[BlockEngine] = None
+                        signal_config = await config_service.get_config(db, "signal", user_id)
+                        block_config = await config_service.get_config(db, "block", user_id)
+                        if signal_config:
+                            default_signal_engine = SignalEngine(signal_config)
+                        if block_config:
+                            default_block_engine = BlockEngine(block_config)
+
+                        for candidate in live_candidates:
+                            profile = profile_by_id.get(candidate.winner.profile_id)
+                            config = profile.config if profile and isinstance(profile.config, dict) else {}
+                            signal_config = config.get("entry_triggers") or config.get("signals")
+                            block_config = config.get("block_rules")
+                            l3_signal_engines[candidate.symbol] = (
+                                SignalEngine(signal_config) if signal_config else default_signal_engine
+                            )
+                            l3_block_engines[candidate.symbol] = (
+                                BlockEngine(block_config) if block_config else default_block_engine
+                            )
                 except Exception as _pipeline_exc:
-                    logger.warning("Could not load L3 pipeline profile for user %s: %s", user_id, _pipeline_exc)
-
-                # Fallback: load from legacy ConfigProfile records if pipeline not found
-                if signal_engine is None:
-                    signal_config = await config_service.get_config(db, "signal", user_id)
-                    if signal_config:
-                        signal_engine = SignalEngine(signal_config)
-                if block_engine is None:
-                    block_config = await config_service.get_config(db, "block", user_id)
-                    if block_config:
-                        block_engine = BlockEngine(block_config)
+                    logger.warning("Could not load live L3 pipeline for user %s: %s", user_id, _pipeline_exc)
 
                 buys_this_cycle = 0
 
@@ -656,6 +608,8 @@ async def _execute_buy_cycle_async() -> dict:
 
                     from ..services.indicator_validity import unwrap_envelope_value
                     symbol         = row.symbol
+                    signal_engine = l3_signal_engines.get(symbol)
+                    block_engine = l3_block_engines.get(symbol)
                     indicators     = row.indicators_json or {}
                     candidate_market_cap = float(row.market_cap) if row.market_cap else None
                     # ``close`` is stored as an envelope (``{"value": v, ...}``);

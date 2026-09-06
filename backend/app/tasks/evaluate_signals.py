@@ -236,10 +236,12 @@ async def _evaluate_async():
                 # ``l3_symbols`` stays None and we degrade to the
                 # active+tradable universe (fresh tenants without an
                 # L3 profile keep working through the rolling deploy).
-                from ..models.pipeline_watchlist import (
-                    PipelineWatchlist, PipelineWatchlistAsset,
+                from ..services.pipeline_live_candidates import (
+                    load_live_l3_candidates,
+                    resolve_spot_pipeline_chain,
                 )
                 l3_symbols: set | None = None
+                pool_for_l3 = None
                 try:
                     pool_for_l3 = (await db.execute(
                         select(Pool).where(
@@ -248,40 +250,20 @@ async def _evaluate_async():
                         ).limit(1)
                     )).scalars().first()
                     if pool_for_l3 is not None:
-                        # Round 19 — explicit ``level=`` predicates +
-                        # deterministic ordering so multi-watchlist
-                        # tenants get stable chain selection.
-                        l1 = (await db.execute(select(PipelineWatchlist).where(
-                            PipelineWatchlist.source_pool_id == pool_for_l3.id,
-                            PipelineWatchlist.user_id == user.id,
-                            PipelineWatchlist.level == "L1",
-                        ).order_by(
-                            PipelineWatchlist.created_at.asc(),
-                            PipelineWatchlist.id.asc(),
-                        ).limit(1))).scalars().first()
-                        l2 = (await db.execute(select(PipelineWatchlist).where(
-                            PipelineWatchlist.source_watchlist_id == l1.id,
-                            PipelineWatchlist.user_id == user.id,
-                            PipelineWatchlist.level == "L2",
-                        ).order_by(
-                            PipelineWatchlist.created_at.asc(),
-                            PipelineWatchlist.id.asc(),
-                        ).limit(1))).scalars().first() if l1 else None
-                        l3 = (await db.execute(select(PipelineWatchlist).where(
-                            PipelineWatchlist.source_watchlist_id == l2.id,
-                            PipelineWatchlist.user_id == user.id,
-                            PipelineWatchlist.level == "L3",
-                        ).order_by(
-                            PipelineWatchlist.created_at.asc(),
-                            PipelineWatchlist.id.asc(),
-                        ).limit(1))).scalars().first() if l2 else None
-                        if l3 is not None:
-                            l3_rows = (await db.execute(
-                                select(PipelineWatchlistAsset.symbol).where(
-                                    PipelineWatchlistAsset.watchlist_id == l3.id
-                                )
-                            )).fetchall()
-                            l3_symbols = {r[0] for r in l3_rows}
+                        chain = await resolve_spot_pipeline_chain(
+                            db,
+                            user_id=user.id,
+                            pool_id=pool_for_l3.id,
+                        )
+                        if chain is not None:
+                            live_candidates = await load_live_l3_candidates(
+                                db,
+                                user_id=user.id,
+                                l2_watchlist_id=chain.l2_watchlist.id,
+                            )
+                            # All L3 profiles contribute.  ``load_live_l3_candidates``
+                            # also intersects L3 with the current POOL/L1/L2 rows.
+                            l3_symbols = {candidate.symbol for candidate in live_candidates}
                 except Exception as _l3_exc:
                     logger.warning(
                         "[evaluate_signals] L3 chain query failed for user %s: %s",

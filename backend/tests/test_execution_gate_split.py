@@ -216,15 +216,14 @@ def test_unified_execution_gate_includes_l3_in_both_paths() -> None:
         assert "reason=not_tradable" in code, (
             f"{mod.__name__}: missing reason=NOT_TRADABLE skip log."
         )
-        assert (
-            "pipelinewatchlist" in code or "pipeline_watchlist" in code
-        ), (
-            f"{mod.__name__}: must reference pipeline_watchlist for "
-            "L3 membership enforcement (Task #232 round 16)."
+        assert "pipeline_live_candidates" in code, (
+            f"{mod.__name__}: must use the shared canonical pipeline resolver."
         )
-        assert "pipelinewatchlistasset" in code or "pipeline_watchlist_asset" in code, (
-            f"{mod.__name__}: must read pipeline_watchlist_assets to "
-            "compute the L3 symbol set."
+        assert "resolve_spot_pipeline_chain" in code, (
+            f"{mod.__name__}: must resolve POOL to every linked L3."
+        )
+        assert "load_live_l3_candidates" in code, (
+            f"{mod.__name__}: must read current parent-intersected L3 candidates."
         )
         # Round 17 — STRICT L3: when the chain is missing the user's
         # cycle MUST be skipped (NO_L3_CHAIN), not degrade to

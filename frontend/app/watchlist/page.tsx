@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
-import Link from 'next/link';
 import { WatchlistTable } from '@/components/watchlist/WatchlistTable';
 import {
   WatchlistDecisionTable,
@@ -23,7 +22,6 @@ import {
   ArrowLeftRight,
   Clock,
   Crown,
-  ExternalLink,
   GitMerge,
   LockKeyhole,
   Users,
@@ -76,22 +74,18 @@ interface PipelineWatchlist {
 }
 
 interface L3ConsolidatedAsset {
-  shadow_id: string;
+  asset_id: string;
+  watchlist_id: string;
   symbol: string;
   direction: string | null;
-  status: string;
   profile_id: string | null;
   profile_name: string | null;
-  entry_price: number | null;
-  selected_at: string | null;
-  entry_timestamp: string | null;
-  candidate_count: number | null;
-  suppressed_count: number;
+  alpha_score: number | null;
+  current_price: number | null;
+  refreshed_at: string | null;
+  candidate_count: number;
+  candidate_profile_ids: string[];
   candidate_profile_names: string[];
-  suppressed_profile_names: string[];
-  selection_metrics: Record<string, number | null>;
-  consolidation_rule_version: string | null;
-  consolidation_enforced: boolean;
 }
 
 interface L3ConsolidatedResponse {
@@ -100,6 +94,7 @@ interface L3ConsolidatedResponse {
   level: 'L3';
   virtual: true;
   read_only: true;
+  semantic: 'LIVE_L3_CANDIDATES';
   items: L3ConsolidatedAsset[];
   total: number;
   as_of: string;
@@ -1120,6 +1115,10 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
       setApprovedItems(data.approved_items ?? []);
       setFuturesAssets(data.assets ?? []);
       setApprovedCols(data.profile_indicators ?? []);
+      // A manual refresh can fail briefly while the API deployment is being
+      // replaced.  Any later successful read proves recovery and must clear
+      // the stale banner even when the read was triggered silently by polling.
+      setRefreshError(null);
       if (!silent) setAssetsError(null);
       if (triggerParentRefresh && ((data.approved_items?.length ?? 0) > 0 || (data.assets?.length ?? 0) > 0)) {
         onRefreshed();
@@ -1503,7 +1502,7 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
             </span>
           </div>
           <p className="mt-0.5 truncate text-[11px] text-[#64748B]">
-            Dono canônico ativo por símbolo e direção, após a seleção entre profiles.
+            Somente criptos com condições favoráveis neste momento, consolidadas entre profiles.
           </p>
         </div>
         <span
@@ -1515,7 +1514,7 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
           data-testid="l3-consolidated-count"
         >
           <GitMerge size={10} />
-          {loading && !data ? 'carregando' : `${items.length} ativo${items.length !== 1 ? 's' : ''}`}
+          {loading && !data ? 'carregando' : `${items.length} favorável${items.length !== 1 ? 'is' : ''}`}
         </span>
         <div onClick={(event) => event.stopPropagation()}>
           <button
@@ -1536,7 +1535,7 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
           <div className="flex flex-col gap-2 border-b border-[#1E2433] bg-[#0D0E13] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-2 text-[11px] text-[#7D8494]">
               <GitMerge size={12} className="text-[#D6A84B]" />
-              Profiles contribuintes permanecem auditáveis; somente o vencedor acompanha o trade.
+              Atualiza com os indicadores: se a condição deixar de ser favorável, o ativo sai da lista.
             </div>
             <code className="w-fit rounded border border-[#1E2433] bg-[#08090D] px-2 py-1 text-[10px] text-[#94A3B8]">
               GET /api/watchlists/l3-consolidated/assets
@@ -1563,9 +1562,9 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
           ) : items.length === 0 ? (
             <div className="px-4 py-9 text-center">
               <Crown size={24} className="mx-auto mb-3 text-[#3A3324]" />
-              <p className="text-sm text-[#94A3B8]">Nenhum dono canônico L3 ativo.</p>
+              <p className="text-sm text-[#94A3B8]">Nenhum candidato L3 favorável agora.</p>
               <p className="mt-1 text-xs text-[#4B5563]">
-                O card será preenchido quando houver um shadow trade L3 pendente ou em acompanhamento.
+                Trades já abertos continuam sendo acompanhados exclusivamente no Shadow Portfolio.
               </p>
             </div>
           ) : (
@@ -1578,19 +1577,17 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
                     <th className="px-3 py-2.5 font-semibold">Profile vencedor</th>
                     <th className="px-3 py-2.5 font-semibold">Contribuição</th>
                     <th className="px-3 py-2.5 font-semibold">Score</th>
-                    <th className="px-3 py-2.5 font-semibold">Status</th>
-                    <th className="px-3 py-2.5 font-semibold">Selecionado</th>
-                    <th className="px-4 py-2.5 text-right font-semibold">Detalhes</th>
+                    <th className="px-3 py-2.5 font-semibold">Condição</th>
+                    <th className="px-4 py-2.5 text-right font-semibold">Atualizado</th>
                   </tr>
                 </thead>
                 <tbody>
                   {items.map((asset) => {
-                    const decisionScore = asset.selection_metrics?.decision_score;
-                    const contributors = asset.candidate_count ?? asset.candidate_profile_names.length;
-                    const selectedAt = asset.selected_at ? new Date(asset.selected_at) : null;
+                    const contributors = asset.candidate_count;
+                    const refreshedAt = asset.refreshed_at ? new Date(asset.refreshed_at) : null;
                     return (
                       <tr
-                        key={`${asset.symbol}-${asset.direction}-${asset.shadow_id}`}
+                        key={`${asset.symbol}-${asset.watchlist_id}-${asset.asset_id}`}
                         className="border-b border-[#161B29] text-xs transition-colors last:border-0 hover:bg-[#0F1117]"
                       >
                         <td className="px-4 py-3">
@@ -1601,7 +1598,7 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
                             <div>
                               <div className="font-mono text-sm font-semibold text-[#E2E8F0]">{asset.symbol}</div>
                               <div className="text-[9px] uppercase tracking-[0.1em] text-[#4B5563]">
-                                {asset.consolidation_enforced ? 'consolidação aplicada' : 'ativo L3 anterior'}
+                                oportunidade atual
                               </div>
                             </div>
                           </div>
@@ -1620,47 +1617,26 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
                           </div>
                         </td>
                         <td className="px-3 py-3">
-                          {asset.candidate_count == null && asset.candidate_profile_names.length === 0 ? (
-                            <span className="text-[#4B5563]">metadados legados</span>
-                          ) : (
-                            <div
-                              className="inline-flex items-center gap-2 text-[#94A3B8]"
-                              title={asset.candidate_profile_names.join(', ') || undefined}
-                            >
-                              <span className="inline-flex items-center gap-1">
-                                <Users size={11} />
-                                {contributors} profile{contributors !== 1 ? 's' : ''}
-                              </span>
-                              {asset.suppressed_count > 0 && (
-                                <span className="text-[#64748B]">· {asset.suppressed_count} suprimido{asset.suppressed_count !== 1 ? 's' : ''}</span>
-                              )}
-                            </div>
-                          )}
+                          <div
+                            className="inline-flex items-center gap-2 text-[#94A3B8]"
+                            title={asset.candidate_profile_names.join(', ') || undefined}
+                          >
+                            <span className="inline-flex items-center gap-1">
+                              <Users size={11} />
+                              {contributors} profile{contributors !== 1 ? 's' : ''}
+                            </span>
+                          </div>
                         </td>
                         <td className="px-3 py-3 font-mono tabular-nums text-[#E2E8F0]">
-                          {typeof decisionScore === 'number' ? decisionScore.toFixed(2) : '—'}
+                          {typeof asset.alpha_score === 'number' ? asset.alpha_score.toFixed(2) : '—'}
                         </td>
                         <td className="px-3 py-3">
-                          <span className={`rounded-full border px-2 py-1 text-[9px] font-bold uppercase tracking-[0.1em] ${
-                            asset.status === 'RUNNING'
-                              ? 'border-[#22B97A]/25 bg-[#22B97A]/10 text-[#34D399]'
-                              : 'border-[#FBBF24]/25 bg-[#FBBF24]/10 text-[#FBBF24]'
-                          }`}>
-                            {asset.status}
+                          <span className="rounded-full border border-[#22B97A]/25 bg-[#22B97A]/10 px-2 py-1 text-[9px] font-bold uppercase tracking-[0.1em] text-[#34D399]">
+                            Favorável agora
                           </span>
                         </td>
-                        <td className="px-3 py-3 text-[#64748B]" title={selectedAt?.toLocaleString()}>
-                          {asset.selected_at ? timeAgo(asset.selected_at) : '—'}
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          <Link
-                            href={`/dashboard/shadow-portfolio/${asset.shadow_id}`}
-                            onClick={(event) => event.stopPropagation()}
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-[#2A3448] px-2.5 py-1.5 text-[10px] font-semibold text-[#94A3B8] transition-colors hover:border-[#D6A84B]/35 hover:text-[#F2C66D]"
-                          >
-                            Abrir trade
-                            <ExternalLink size={10} />
-                          </Link>
+                        <td className="px-4 py-3 text-right text-[#64748B]" title={refreshedAt?.toLocaleString()}>
+                          {asset.refreshed_at ? timeAgo(asset.refreshed_at) : '—'}
                         </td>
                       </tr>
                     );

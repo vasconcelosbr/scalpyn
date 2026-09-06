@@ -31,8 +31,8 @@ from ..models.pipeline_watchlist import (
     PipelineWatchlistAsset,
     PipelineWatchlistRejection,
 )
-from ..models.shadow_trade import ShadowTrade
 from ..services.market_data_service import _is_etf_pair
+from ..services.pipeline_live_candidates import load_live_l3_candidates
 from ..services.watchlist_performance_ranking_service import (
     RankingConfigError,
     get_performance_rankings,
@@ -881,66 +881,6 @@ def _iso_utc(value: Optional[datetime]) -> Optional[str]:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _l3_consolidated_asset_to_dict(row: ShadowTrade) -> Dict[str, Any]:
-    """Serialize the active canonical owner shown by the virtual L3 card.
-
-    A legacy active L3 shadow can temporarily own a symbol/direction because
-    the consolidator deliberately refuses to create a competing trade. Such
-    rows remain visible and are explicitly marked as non-enforced instead of
-    being silently dropped from the operator surface.
-    """
-    snapshot = row.config_snapshot if isinstance(row.config_snapshot, dict) else {}
-    raw_consolidation = snapshot.get("consolidation")
-    consolidation = raw_consolidation if isinstance(raw_consolidation, dict) else {}
-
-    def _string_list(key: str) -> List[str]:
-        value = consolidation.get(key)
-        if not isinstance(value, list):
-            return []
-        return [str(item) for item in value if item is not None and str(item).strip()]
-
-    candidate_profile_names = _string_list("candidate_profile_names")
-    suppressed_profile_names = _string_list("suppressed_profile_names")
-    candidate_profile_ids = _string_list("candidate_profile_ids")
-    suppressed_profile_ids = _string_list("suppressed_profile_ids")
-    selection_rule = _string_list("selection_rule")
-    selection_metrics = consolidation.get("selection_metrics")
-    if not isinstance(selection_metrics, dict):
-        selection_metrics = {}
-
-    raw_candidate_count = consolidation.get("candidate_count")
-    try:
-        candidate_count = int(raw_candidate_count) if raw_candidate_count is not None else None
-    except (TypeError, ValueError):
-        candidate_count = None
-
-    primary_profile_id = consolidation.get("primary_profile_id")
-    primary_profile_name = consolidation.get("primary_profile_name")
-
-    return {
-        "shadow_id": str(row.id),
-        "symbol": row.symbol,
-        "direction": row.direction,
-        "status": row.status,
-        "profile_id": str(primary_profile_id or row.profile_id) if (primary_profile_id or row.profile_id) else None,
-        "profile_name": primary_profile_name or row.profile_name,
-        "entry_price": float(row.entry_price) if row.entry_price is not None else None,
-        "selected_at": _iso_utc(row.created_at),
-        "entry_timestamp": _iso_utc(row.entry_timestamp),
-        "candidate_count": candidate_count,
-        "suppressed_count": len(suppressed_profile_names),
-        "candidate_profile_ids": candidate_profile_ids,
-        "candidate_profile_names": candidate_profile_names,
-        "suppressed_profile_ids": suppressed_profile_ids,
-        "suppressed_profile_names": suppressed_profile_names,
-        "selection_rule": selection_rule,
-        "selection_metrics": selection_metrics,
-        "consolidation_event_id": consolidation.get("event_id"),
-        "consolidation_rule_version": consolidation.get("rule_version"),
-        "consolidation_enforced": bool(row.l3_consolidation_enforced),
-    }
-
-
 # ── CRUD ───────────────────────────────────────────────────────────────────────
 
 @router.get("/")
@@ -1041,40 +981,39 @@ async def list_l3_consolidated_assets(
     user_id: UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return the read-only virtual L3 watchlist for external/UI consumers.
-
-    The first active L3 shadow is the canonical owner used by the consolidation
-    guard. Rows are therefore ordered exactly like ``find_active_l3_shadow``
-    and de-duplicated by symbol/direction. Completed trades are historical and
-    intentionally do not belong to this current-state watchlist.
-    """
-    result = await db.execute(
-        select(ShadowTrade)
-        .where(
-            ShadowTrade.user_id == user_id,
-            ShadowTrade.source == "L3",
-            ShadowTrade.status.in_(("PENDING", "RUNNING")),
-        )
-        .order_by(ShadowTrade.created_at.asc(), ShadowTrade.id.asc())
-    )
-    rows = result.scalars().all()
-
+    """Return only live L3 opportunities; Shadow positions are not a source."""
+    candidates = await load_live_l3_candidates(db, user_id=user_id)
     items: List[Dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
-    for row in rows:
-        key = (str(row.symbol or "").upper(), str(row.direction or "").upper())
-        if key in seen:
-            continue
-        seen.add(key)
-        items.append(_l3_consolidated_asset_to_dict(row))
+    for candidate in candidates:
+        winner = candidate.winner
+        profile_ids = list(dict.fromkeys(str(item.profile_id) for item in candidate.contributors))
+        profile_names = list(dict.fromkeys(item.profile_name for item in candidate.contributors))
+        freshest = max(
+            (item.refreshed_at for item in candidate.contributors if item.refreshed_at is not None),
+            default=None,
+        )
+        items.append({
+            "asset_id": str(winner.asset_id),
+            "watchlist_id": str(winner.watchlist_id),
+            "symbol": candidate.symbol,
+            "direction": "SPOT",
+            "profile_id": str(winner.profile_id),
+            "profile_name": winner.profile_name,
+            "alpha_score": winner.alpha_score,
+            "current_price": winner.current_price,
+            "refreshed_at": _iso_utc(freshest),
+            "candidate_count": len(candidate.contributors),
+            "candidate_profile_ids": profile_ids,
+            "candidate_profile_names": profile_names,
+        })
 
-    items.sort(key=lambda item: (item["symbol"], item["direction"] or ""))
     return {
         "id": "l3-consolidated",
         "name": "L3 Consolidado",
         "level": "L3",
         "virtual": True,
         "read_only": True,
+        "semantic": "LIVE_L3_CANDIDATES",
         "items": items,
         "total": len(items),
         "as_of": _iso_utc(datetime.now(timezone.utc)),
@@ -1474,6 +1413,43 @@ async def _load_active_watchlist_assets(
         .order_by(PipelineWatchlistAsset.alpha_score.desc().nullslast())
     )
     return assets_result.scalars().all()
+
+
+async def _intersect_assets_with_active_parent(
+    wl: PipelineWatchlist,
+    assets: List[PipelineWatchlistAsset],
+    db: AsyncSession,
+    _visited: Optional[set[UUID]] = None,
+) -> List[PipelineWatchlistAsset]:
+    """Fail closed against the complete persisted parent chain."""
+    if not wl.source_watchlist_id or not assets:
+        return assets
+    visited = set(_visited or set())
+    if wl.id in visited:
+        return []
+    visited.add(wl.id)
+    parent = (await db.execute(
+        select(PipelineWatchlist).where(
+            PipelineWatchlist.id == wl.source_watchlist_id,
+            PipelineWatchlist.user_id == wl.user_id,
+        )
+    )).scalars().first()
+    if parent is None:
+        return []
+    expected_parent = {"L1": "POOL", "L2": "L1", "L3": "L2"}.get(
+        str(wl.level or "").upper()
+    )
+    if expected_parent and str(parent.level or "").upper() != expected_parent:
+        return []
+    parent_assets = await _load_active_watchlist_assets(parent.id, db)
+    parent_assets = await _intersect_assets_with_active_parent(
+        parent,
+        parent_assets,
+        db,
+        _visited=visited,
+    )
+    parent_symbols = {asset.symbol for asset in parent_assets}
+    return [asset for asset in assets if asset.symbol in parent_symbols]
 
 
 async def _replace_rejection_snapshot(
@@ -2453,6 +2429,11 @@ async def get_watchlist_assets(
                     )
         except Exception as e:
             logger.warning("[Pipeline] Auto-refresh snapshot failed for %s: %s", watchlist_id, e)
+
+    # The cascade persists child removals asynchronously.  Intersect on every
+    # read so the UI never exposes an asset after it has already left its
+    # immediate parent, even during that short convergence window.
+    assets = await _intersect_assets_with_active_parent(wl, assets, db)
 
     # Resolve dynamic columns from the profile's Score tab (selected_rule_ids).
     _global_rules_assets = await _load_user_score_rules(db, user_id)

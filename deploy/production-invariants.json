@@ -7,6 +7,52 @@
   },
   "required_features": [
     {
+      "id": "watchlist-live-candidate-chain",
+      "description": "Spot watchlists expose only current candidates from the complete POOL to L3 chain, while open Shadow trades remain independent historical position follow-up",
+      "files": [
+        {
+          "path": "backend/app/services/pipeline_live_candidates.py",
+          "contains_all": [
+            "resolve_spot_pipeline_chain",
+            "load_live_l3_candidates",
+            "Profile.is_active.is_(True)",
+            "pool_asset.symbol == PipelineWatchlistAsset.symbol"
+          ]
+        },
+        {
+          "path": "backend/app/api/watchlists.py",
+          "contains_all": [
+            "LIVE_L3_CANDIDATES",
+            "_intersect_assets_with_active_parent",
+            "load_live_l3_candidates"
+          ]
+        },
+        {
+          "path": "backend/tests/test_l3_consolidated_watchlist.py",
+          "contains_all": [
+            "test_l3_consolidated_assets_exposes_only_current_watchlist_candidates",
+            "test_child_snapshot_is_intersected_with_current_parent",
+            "test_live_candidate_module_does_not_read_shadow_trades"
+          ]
+        },
+        {
+          "path": "frontend/app/watchlist/page.tsx",
+          "contains_all": [
+            "Favorável agora",
+            "Trades já abertos continuam sendo acompanhados exclusivamente no Shadow Portfolio",
+            "setRefreshError(null)"
+          ]
+        },
+        {
+          "path": "frontend/lib/watchlistLiveCandidates.test.ts",
+          "contains_all": [
+            "L3 consolidated renders live opportunities instead of open Shadow trades",
+            "a successful watchlist read clears a transient refresh error"
+          ]
+        }
+      ]
+    },
+    {
       "id": "shadow-atr-trailing-exit-contract",
       "description": "Shadow ATR uses the configured point-in-time timeframe and armed HWM trailing exits preempt a lower static SL without contaminating fixed-barrier ML labels",
       "files": [
