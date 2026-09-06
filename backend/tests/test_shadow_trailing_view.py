@@ -92,3 +92,4 @@ async def test_other_users_are_excluded_before_query():
         async def execute(self,*args,**kwargs):
             raise AssertionError('No query for unauthorized rows')
     await attach_trailing_views(DB(),[trade()], 'other')
+    await attach_trailing_views(DB(),[trade(source='L1'),trade(direction='SHORT')], 'owner')

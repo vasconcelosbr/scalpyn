@@ -143,7 +143,7 @@ def asset_regime(raw, row, now):
         if env.get('config_user_id') and str(env['config_user_id']) != str(row.user_id):
             continue
         at, available = instant(env.get('source_timestamp')), instant(env.get('available_at'))
-        if not at or not available or available>now:
+        if not at or not available or available>now or at>now:
             continue
         val = number(env.get('value'))
         if val is not None:
@@ -164,7 +164,7 @@ def asset_regime(raw, row, now):
 
 
 async def attach_trailing_views(db, rows, user_id):
-    rows = [r for r in rows if r.user_id == user_id]
+    rows = [r for r in rows if r.user_id == user_id and r.source == 'L3' and str(r.direction).upper() != 'SHORT']
     if not rows:
         return
     now = datetime.now(timezone.utc)
@@ -183,7 +183,7 @@ async def attach_trailing_views(db, rows, user_id):
         ) q ON true
         LEFT JOIN LATERAL (
           SELECT candle_at FROM shadow_l3_exit_decisions WHERE shadow_id=s.id
-            AND state->>'continuation'='true' ORDER BY candle_at LIMIT 1
+            AND state->>'continuation'='true' AND available_at<=now() ORDER BY candle_at LIMIT 1
         ) a ON true
         LEFT JOIN LATERAL (
           SELECT indicators_json FROM indicators WHERE symbol=s.symbol AND market_type='spot'
