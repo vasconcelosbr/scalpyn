@@ -1187,6 +1187,8 @@
           "contains_all": [
             "UPDATE_EXISTING_MTF_AND_ACTIVATE_SHADOW_WITH_WAIVER",
             "WAIVER_ECONOMIC_RULE_CHANGE_FORBIDDEN",
+            "L1_SIGNALS_FORBIDDEN_USE_FILTERS_AND_BLOCK_RULES",
+            "L2_ENTRY_TRIGGERS_FORBIDDEN_USE_SIGNALS",
             "DRAFT_INSUFFICIENT_DATA",
             "OBSERVATIONAL_ONLY"
           ]
@@ -1204,7 +1206,23 @@
           "contains_all": [
             "test_waiver_document_discloses_failed_calibration_without_faking_passed",
             "test_waiver_document_requires_all_human_acknowledgements",
-            "test_waiver_document_rejects_fake_passed_profile_disclosure"
+            "test_waiver_document_rejects_fake_passed_profile_disclosure",
+            "test_governed_document_rejects_conditions_in_wrong_layer_section"
+          ]
+        },
+        {
+          "path": "frontend/components/profiles/ConditionBuilder.tsx",
+          "contains_all": [
+            "isProfileComparisonCondition",
+            "condition-right-${index}",
+            "Right comparison indicator"
+          ]
+        },
+        {
+          "path": "frontend/lib/profileConditionState.test.ts",
+          "contains_all": [
+            "comparison round trip preserves both indicator operands",
+            "profileConditionPrimaryIndicator"
           ]
         },
         {
