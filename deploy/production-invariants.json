@@ -1373,7 +1373,7 @@
           "contains_all": [
             "build_grouped_indicators_snapshot",
             "merged.candidates",
-            "never falls back to the flat winner"
+            "flat winner."
           ]
         },
         {
