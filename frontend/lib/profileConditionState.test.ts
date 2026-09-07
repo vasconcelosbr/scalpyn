@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  isProfileComparisonCondition,
   normalizeProfileRuleCondition,
+  profileConditionPrimaryIndicator,
   serializeProfileRuleCondition,
   updateProfileRuleCondition,
 } from "./profileConditionState";
@@ -60,4 +62,25 @@ test("normalization does not rewrite existing boolean or between values", () => 
   });
   assert.equal(booleanCondition.value, true);
   assert.equal(betweenCondition.value, 42);
+});
+
+test("comparison round trip preserves both indicator operands and compatibility field", () => {
+  const input = {
+    id: "cmp1",
+    type: "comparison",
+    field: "ema21",
+    left: "ema21",
+    operator: ">",
+    right: "ema50",
+    timeframe: "1h",
+    period: 21,
+    required: true,
+  };
+
+  const state = normalizeProfileRuleCondition(input, "fallback");
+
+  assert.equal(isProfileComparisonCondition(state), true);
+  assert.equal(profileConditionPrimaryIndicator(state), "ema21");
+  assert.deepEqual(serializeProfileRuleCondition(state), input);
+  assert.equal("value" in state, false);
 });

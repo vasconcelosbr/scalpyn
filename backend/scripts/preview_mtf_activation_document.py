@@ -5,11 +5,15 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 from pathlib import Path
 import sys
 from uuid import UUID
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+if os.environ.get("DATABASE_PUBLIC_URL"):
+    os.environ["DATABASE_URL"] = os.environ["DATABASE_PUBLIC_URL"]
 
 from app.database import AsyncSessionLocal  # noqa: E402
 from app.services.mtf_profile_activation_service import (  # noqa: E402

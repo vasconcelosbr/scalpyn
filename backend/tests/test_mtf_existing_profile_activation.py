@@ -17,6 +17,7 @@ from app.services.mtf_profile_activation_service import (
 from app.services.mtf_walk_forward import require_calibration_config
 from app.services.mtf_walk_forward import candidate_grid, fit_candidate
 from app.services.mtf_calibration_service import _profile_payloads
+from scripts.build_mtf_layer_role_repair_document import repair_layer_config
 
 
 def _profile(layer: str) -> dict:
@@ -182,6 +183,52 @@ def test_governed_document_rejects_duplicate_profile_identity():
     document["profiles"]["L2"]["profile_id"] = document["profiles"]["L1"]["profile_id"]
 
     with pytest.raises(ValueError, match="must be distinct"):
+        parse_activation_document(document)
+
+
+def test_layer_role_repair_removes_only_forbidden_sections():
+    l1 = _profile("L1")
+    l1["signals"]["conditions"] = [{"id": "s1", "value": 20}]
+    l1["entry_triggers"]["conditions"] = [{"id": "e1", "value": 21}]
+    l2 = _profile("L2")
+    l2["signals"]["conditions"] = [{"id": "s2", "value": 22}]
+    l2["entry_triggers"]["conditions"] = [{"id": "e2", "value": 23}]
+
+    repaired_l1 = repair_layer_config(l1, "L1")
+    repaired_l2 = repair_layer_config(l2, "L2")
+
+    assert repaired_l1["signals"]["conditions"] == []
+    assert repaired_l1["entry_triggers"]["conditions"] == []
+    assert repaired_l2["signals"] == l2["signals"]
+    assert repaired_l2["entry_triggers"]["conditions"] == []
+    assert repaired_l1["filters"] == l1["filters"]
+    assert repaired_l2["filters"] == l2["filters"]
+
+
+@pytest.mark.parametrize(
+    ("layer", "section", "message"),
+    [
+        ("L1", "signals", "L1_SIGNALS_FORBIDDEN"),
+        ("L1", "entry_triggers", "L1_ENTRY_TRIGGERS_FORBIDDEN"),
+        ("L2", "entry_triggers", "L2_ENTRY_TRIGGERS_FORBIDDEN"),
+    ],
+)
+def test_governed_document_rejects_conditions_in_wrong_layer_section(
+    layer, section, message,
+):
+    document = _document()
+    document["profiles"][layer][section]["conditions"] = [{
+        "id": "wrong_section",
+        "type": "threshold",
+        "indicator": "adx",
+        "field": "adx",
+        "operator": ">=",
+        "value": 20,
+        "timeframe": "1h" if layer == "L1" else "15m",
+        "period": 14,
+    }]
+
+    with pytest.raises(ValueError, match=message):
         parse_activation_document(document)
 
 

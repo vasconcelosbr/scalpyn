@@ -36,6 +36,10 @@ EXPECTED_NAMES = {"L1": "L1", "L2": "L2"}
 EXPECTED_ROLES = {"L1": "primary_filter", "L2": "score_engine"}
 EXPECTED_ORDERS = {"L1": "1", "L2": "2"}
 EXPECTED_TIMEFRAMES = {"L1": "1h", "L2": "15m"}
+WAIVER_ECONOMIC_SECTIONS = {
+    "L1": ("filters", "block_rules", "scoring"),
+    "L2": ("filters", "signals", "block_rules", "scoring"),
+}
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 logger = logging.getLogger(__name__)
 
@@ -82,6 +86,16 @@ def _profile_document_to_config(
     }
     if config["default_timeframe"] != EXPECTED_TIMEFRAMES[layer]:
         raise ValueError(f"{layer}_TIMEFRAME_MUST_BE_{EXPECTED_TIMEFRAMES[layer]}")
+    layer_conditions = {
+        "signals": (config["signals"] or {}).get("conditions") or [],
+        "entry_triggers": (config["entry_triggers"] or {}).get("conditions") or [],
+    }
+    if layer == "L1" and layer_conditions["signals"]:
+        raise ValueError("L1_SIGNALS_FORBIDDEN_USE_FILTERS_AND_BLOCK_RULES")
+    if layer == "L1" and layer_conditions["entry_triggers"]:
+        raise ValueError("L1_ENTRY_TRIGGERS_FORBIDDEN_USE_FILTERS_AND_BLOCK_RULES")
+    if layer == "L2" and layer_conditions["entry_triggers"]:
+        raise ValueError("L2_ENTRY_TRIGGERS_FORBIDDEN_USE_SIGNALS")
     source = config["source_identity"]
     if (
         source.get("candle_policy") != "CLOSED_ONLY"
@@ -329,7 +343,7 @@ async def _load_prerequisites(
                 profiles[parsed["profiles"][layer]["profile_id"]].config or {}
             )
             proposed_config = parsed["profiles"][layer]["config"]
-            for section in (*EXECUTION_SECTIONS, "scoring"):
+            for section in WAIVER_ECONOMIC_SECTIONS[layer]:
                 if canonical_hash(current_config.get(section) or {}) != canonical_hash(
                     proposed_config.get(section) or {}
                 ):

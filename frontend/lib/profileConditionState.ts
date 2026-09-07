@@ -10,6 +10,30 @@ export type ProfileRuleConditionState = Record<string, unknown> & {
   right?: string;
 };
 
+export function isProfileComparisonCondition(
+  condition: {
+    type?: ProfileRuleConditionType;
+    left?: string;
+    right?: string;
+  },
+): boolean {
+  return condition.type === "comparison" || Boolean(condition.left && condition.right);
+}
+
+export function profileConditionPrimaryIndicator(
+  condition: {
+    type?: ProfileRuleConditionType;
+    left?: string;
+    right?: string;
+    indicator?: string;
+    field?: string;
+  },
+): string {
+  return isProfileComparisonCondition(condition)
+    ? String(condition.left || condition.field || "price")
+    : String(condition.indicator || condition.field || "rsi");
+}
+
 /** Normalize editor state while retaining every source field verbatim. */
 export function normalizeProfileRuleCondition(
   rawValue: unknown,

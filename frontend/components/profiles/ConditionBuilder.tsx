@@ -10,6 +10,10 @@ import {
   optionsWithUnsupportedIndicator,
   type StrategyProfileSection,
 } from "@/lib/indicatorCatalog";
+import {
+  isProfileComparisonCondition,
+  profileConditionPrimaryIndicator,
+} from "@/lib/profileConditionState";
 
 export function numFmt(n: number | null): string {
   if (n === null) return "";
@@ -92,6 +96,10 @@ export interface ScoreRule {
 interface Condition {
   id: string;
   field: string;
+  type?: "threshold" | "boolean" | "comparison";
+  indicator?: string;
+  left?: string;
+  right?: string;
   operator: string;
   value: ConditionValue;
   min?: number;
@@ -180,7 +188,7 @@ export function ConditionBuilder({
     scoreRules.filter((rule) => rule.indicator === field);
 
   const getSelectedRule = (condition: Condition) =>
-    getRulesForField(condition.field).find((rule) => rule.id === condition.rule_id);
+    getRulesForField(profileConditionPrimaryIndicator(condition)).find((rule) => rule.id === condition.rule_id);
 
   const updateCondition = (index: number, updates: Partial<Condition>) => {
     onChange(conditions.map((condition, currentIndex) => (
@@ -214,12 +222,14 @@ export function ConditionBuilder({
   return (
     <div className="space-y-3">
       {conditions.map((condition, index) => {
-        const renderedFields = optionsWithUnsupportedIndicator(indicatorFields, condition.field);
+        const isComparison = isProfileComparisonCondition(condition);
+        const primaryIndicator = profileConditionPrimaryIndicator(condition);
+        const renderedFields = optionsWithUnsupportedIndicator(indicatorFields, primaryIndicator);
         const unsupportedField = renderedFields.find((field) => field.unsupported);
-        const fieldType = getFieldType(condition.field);
+        const fieldType = getFieldType(primaryIndicator);
         const isBetween = condition.operator === "between";
         const operators = fieldType === "boolean" ? BOOLEAN_OPERATORS : OPERATORS;
-        const availableRules = getRulesForField(condition.field);
+        const availableRules = getRulesForField(primaryIndicator);
         const selectedRule = getSelectedRule(condition);
         const ruleLocked = Boolean(showPoints && selectedRule);
         const points = Number(selectedRule?.points ?? condition.points ?? 0);
@@ -232,7 +242,7 @@ export function ConditionBuilder({
           >
             <select
               className="input flex-1 min-w-[140px]"
-              value={condition.field}
+              value={primaryIndicator}
               onChange={(event) => {
                 const newField = event.target.value;
                 const newType = getFieldType(newField);
@@ -245,6 +255,10 @@ export function ConditionBuilder({
                   category: undefined,
                   reference_window: undefined,
                 };
+
+                if (isComparison) {
+                  updates.left = newField;
+                }
 
                 if (firstRule) {
                   Object.assign(updates, applyScoreRule(firstRule));
@@ -369,7 +383,21 @@ export function ConditionBuilder({
               ))}
             </select>
 
-            {fieldType === "boolean" ? (
+            {isComparison && (
+              <select
+                className="input flex-1 min-w-[140px]"
+                value={condition.right || ""}
+                onChange={(event) => updateCondition(index, { right: event.target.value })}
+                data-testid={`condition-right-${index}`}
+                aria-label="Right comparison indicator"
+              >
+                {optionsWithUnsupportedIndicator(indicatorFields, condition.right || "").map((field) => (
+                  <option key={field.value} value={field.value}>{field.label}</option>
+                ))}
+              </select>
+            )}
+
+            {isComparison ? null : fieldType === "boolean" ? (
               <select
                 className="input w-24"
                 value={condition.value ? "true" : "false"}
@@ -458,7 +486,7 @@ export function ConditionBuilder({
               </div>
             )}
 
-            {!PROFILE_NO_TIMEFRAME_INDICATORS.has(condition.field) && (
+            {!PROFILE_NO_TIMEFRAME_INDICATORS.has(primaryIndicator) && (
               <select
                 className="input w-[72px] text-[11px]"
                 value={condition.timeframe || ""}
@@ -474,7 +502,7 @@ export function ConditionBuilder({
               </select>
             )}
 
-            {PROFILE_PERIOD_DEFAULTS[condition.field] !== undefined && (
+            {PROFILE_PERIOD_DEFAULTS[primaryIndicator] !== undefined && (
               <input
                 className="input w-20 text-[11px] font-mono"
                 type="number"
@@ -484,8 +512,8 @@ export function ConditionBuilder({
                   const value = parseInt(event.target.value, 10);
                   updateCondition(index, { period: Number.isNaN(value) ? undefined : value });
                 }}
-                placeholder={`P:${PROFILE_PERIOD_DEFAULTS[condition.field]}`}
-                title={`Period (default: ${PROFILE_PERIOD_DEFAULTS[condition.field]})`}
+                placeholder={`P:${PROFILE_PERIOD_DEFAULTS[primaryIndicator]}`}
+                title={`Period (default: ${PROFILE_PERIOD_DEFAULTS[primaryIndicator]})`}
                 data-testid={`condition-period-${index}`}
               />
             )}
