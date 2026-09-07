@@ -1073,6 +1073,44 @@ async def _fetch_market_data(
     return assets
 
 
+def _resolve_mtf_market_data_layer(
+    *,
+    effective_level: str,
+    profile_config: dict | None,
+    mtf_contract,
+) -> tuple[str | None, dict | None]:
+    """Resolve the exact timeframe payload required by one pipeline stage.
+
+    L1/L2 are bound to their governed MTF profiles.  L3 profiles remain the
+    existing strategy profiles, so their 5m observational inputs are selected
+    by the active L3 layer contract rather than by a profile ``mtf_layer`` tag.
+    """
+    if (
+        not mtf_contract.enabled
+        or mtf_contract.activation_mode != "SHADOW"
+    ):
+        return None, None
+    profile_layer = str(
+        ((profile_config or {}).get("mtf_layer") or {}).get("layer") or ""
+    ).upper()
+    target_layer = (
+        "L3"
+        if effective_level == "L3"
+        else profile_layer
+        if profile_layer in {"L1", "L2"} and profile_layer == effective_level
+        else None
+    )
+    if target_layer is None:
+        return None, None
+    layer_contract = mtf_contract.layers.get(target_layer)
+    if not layer_contract or not layer_contract.observational_enabled:
+        return None, None
+    return (
+        layer_contract.default_timeframe,
+        layer_contract.model_dump(mode="json"),
+    )
+
+
 # ─── core indicator completeness guard ───────────────────────────────────────
 
 def _filter_incomplete_indicators(assets: list) -> tuple[list, list]:
@@ -3758,23 +3796,12 @@ async def _run_pipeline_scan():
                         await _update_last_scanned(db, wl_id)
                         continue
 
-                    mtf_timeframe = None
-                    mtf_layer_config = None
-                    mtf_profile_layer = str(
-                        ((profile_config or {}).get("mtf_layer") or {}).get("layer")
-                        or ""
-                    ).upper()
                     mtf_contract = _current_spot_cfg.scanner.multilayer_contract
-                    if (
-                        mtf_profile_layer in {"L1", "L2"}
-                        and mtf_profile_layer == effective_level
-                        and mtf_contract.enabled
-                        and mtf_contract.activation_mode == "SHADOW"
-                    ):
-                        layer_contract = mtf_contract.layers.get(mtf_profile_layer)
-                        if layer_contract and layer_contract.observational_enabled:
-                            mtf_timeframe = layer_contract.default_timeframe
-                            mtf_layer_config = layer_contract.model_dump(mode="json")
+                    mtf_timeframe, mtf_layer_config = _resolve_mtf_market_data_layer(
+                        effective_level=effective_level,
+                        profile_config=profile_config,
+                        mtf_contract=mtf_contract,
+                    )
                     assets = await _fetch_market_data(
                         db,
                         symbols,

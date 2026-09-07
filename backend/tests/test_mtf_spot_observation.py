@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -22,7 +23,7 @@ from app.utils.indicator_merge import MergedIndicators
 from app.services.multilayer_contract import require_shadow_multilayer_config
 from app.services.profile_engine import ProfileEngine
 from app.services.profile_runtime_config import canonical_hash
-from app.tasks.pipeline_scan import _apply_level_filter
+from app.tasks.pipeline_scan import _apply_level_filter, _resolve_mtf_market_data_layer
 from app.services.strategy_settings_service import (
     StrategySettingsService,
     StrategySettingsValidationError,
@@ -909,6 +910,37 @@ def test_pipeline_mtf_filter_fails_closed_when_exact_snapshot_is_missing():
 
     assert passed == []
     assert filtered == []
+
+
+def test_l3_market_data_uses_governed_layer_without_profile_mtf_tag():
+    l3 = SimpleNamespace(
+        observational_enabled=True,
+        default_timeframe="5m",
+        model_dump=lambda mode: {
+            "observational_enabled": True,
+            "default_timeframe": "5m",
+            "required_indicators_by_group": {
+                "structural": ["adx"],
+                "microstructure": ["price"],
+            },
+        },
+    )
+    contract = SimpleNamespace(
+        enabled=True,
+        activation_mode="SHADOW",
+        layers={"L3": l3},
+    )
+
+    timeframe, layer = _resolve_mtf_market_data_layer(
+        effective_level="L3",
+        profile_config={"default_timeframe": "5m"},
+        mtf_contract=contract,
+    )
+
+    assert timeframe == "5m"
+    assert sorted(layer["required_indicators_by_group"]) == [
+        "microstructure", "structural",
+    ]
 
 
 def test_activation_coverage_rejects_expired_context():
