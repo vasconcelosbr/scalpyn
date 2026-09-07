@@ -1992,7 +1992,6 @@ async def _resolve_and_persist(
     profile_version = None
     if wl.profile_id:
         try:
-            from ..models.profile import Profile
             prof_res = await db.execute(select(Profile).where(
                 Profile.id == wl.profile_id,
                 Profile.user_id == user_id,

@@ -10,6 +10,7 @@ from app.api.watchlists import (
     _extract_profile_indicator_fields,
     _normalize_decision_snapshot,
     _passes_profile_filters,
+    _resolve_and_persist,
     _should_refresh_for_upstream_delta,
     _watchlist_requires_exact_upstream_sync,
     _uses_pipeline_filters,
@@ -20,6 +21,11 @@ from app.utils.pipeline_profile_filters import (
 )
 from app.services.score_engine import resolve_profile_scoring_rules
 from app.services.profile_engine import ProfileEngine
+
+
+def test_auto_refresh_uses_module_profile_without_local_binding_shadow():
+    assert "Profile" not in _resolve_and_persist.__code__.co_varnames
+    assert _resolve_and_persist.__globals__["Profile"] is not None
 
 
 def test_custom_watchlists_are_monitoring_boards():
