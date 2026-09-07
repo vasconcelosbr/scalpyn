@@ -780,7 +780,12 @@ async def fetch_timeframe_indicators(
               AND i.timeframe = :timeframe
               AND i.scheduler_group = grp.scheduler_group
             ORDER BY i.time DESC
-            LIMIT 1
+            -- Retain a short history per exact group.  Producers persist the
+            -- two 5m groups a few seconds apart, so the newest row in one
+            -- group can briefly be ahead of the other.  The MTF resolver uses
+            -- these candidates to select the newest candle common to every
+            -- required group instead of reporting a false identity gap.
+            LIMIT 3
         ) latest
     """), {
         "syms": symbols,

@@ -413,9 +413,10 @@ def build_grouped_indicators_snapshot(
     """
 
     grouped: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    matches_by_identity: Dict[tuple[str, str], list[dict[str, Any]]] = {}
+    source_sets: list[set[str]] = []
     for group, names in required_by_group.items():
         group_name = str(group)
-        grouped[group_name] = {}
         for raw_name in names:
             name = str(raw_name)
             matches = [
@@ -426,8 +427,33 @@ def build_grouped_indicators_snapshot(
                 and str(candidate.get("group")) == group_name
                 and str(candidate.get("market_type")) == market_type
             ]
+            matches_by_identity[(group_name, name)] = matches
+            if matches:
+                source_sets.append({
+                    _iso(item.get("source_timestamp"))
+                    for item in matches
+                    if item.get("source_timestamp") is not None
+                })
+
+    common_source_timestamp: str | None = None
+    if source_sets and len(source_sets) == len(matches_by_identity):
+        common = set.intersection(*source_sets)
+        if common:
+            common_source_timestamp = max(common)
+
+    for group, names in required_by_group.items():
+        group_name = str(group)
+        grouped[group_name] = {}
+        for raw_name in names:
+            name = str(raw_name)
+            matches = matches_by_identity.get((group_name, name), [])
             if not matches:
                 continue
+            if common_source_timestamp is not None:
+                matches = [
+                    item for item in matches
+                    if _iso(item.get("source_timestamp")) == common_source_timestamp
+                ]
             winner = max(
                 matches,
                 key=lambda item: (

@@ -453,6 +453,48 @@ def test_grouped_mtf_snapshot_resolves_homonymous_indicator_without_changing_leg
     assert grouped["microstructure"]["price"]["value"] == 222.0
 
 
+def test_grouped_mtf_snapshot_selects_latest_candle_common_to_all_groups():
+    merged = MergedIndicators()
+    common = NOW - timedelta(minutes=10)
+    structural_latest = NOW - timedelta(minutes=5)
+    micro_latest = NOW - timedelta(minutes=5, seconds=1)
+
+    for group, value, source_at in (
+        ("structural", 101.0, common),
+        ("structural", 102.0, structural_latest),
+        ("microstructure", 201.0, common),
+        ("microstructure", 202.0, micro_latest),
+    ):
+        merged.candidates.append({
+            "indicator": "price",
+            "actual": value,
+            "group": group,
+            "timeframe": "5m",
+            "market_type": "spot",
+            "source_timestamp": source_at,
+            "available_at": NOW,
+            "computed_at": NOW,
+            "stale": False,
+            "envelope": {},
+        })
+
+    grouped = build_grouped_indicators_snapshot(
+        merged,
+        required_by_group={
+            "structural": ["price"],
+            "microstructure": ["price"],
+        },
+        timeframe="5m",
+    )
+
+    assert grouped["structural"]["price"]["value"] == 101.0
+    assert grouped["microstructure"]["price"]["value"] == 201.0
+    assert {
+        grouped[group]["price"]["source_timestamp"]
+        for group in ("structural", "microstructure")
+    } == {common.isoformat()}
+
+
 def test_controlled_v5_replay_can_pass_without_operational_effect():
     source_at = NOW - timedelta(minutes=5)
     envelope = {

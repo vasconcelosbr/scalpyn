@@ -555,6 +555,7 @@ def _build_pipeline_asset(
     spread_pct=None,
     orderbook_depth_usdt=None,
     merged_indicators=None,
+    mtf_merged_indicators=None,
     price_source_at=None,
     score_source_at=None,
 ) -> dict:
@@ -578,6 +579,11 @@ def _build_pipeline_asset(
         "indicators": indicators,
         "_has_market_metadata": has_market_metadata,
         "_merged_indicators": merged_indicators,
+        # Exact-timeframe candidates used only by the observational MTF path.
+        # Keep this separate from the legacy flat merge: the legacy provider
+        # intentionally returns the newest row per scheduler group across all
+        # timeframes, while MTF must resolve (indicator, timeframe, group).
+        "_mtf_merged_indicators": mtf_merged_indicators,
         "_price_source_at": price_source_at,
         "_score_source_at": score_source_at,
         **{k: v for k, v in indicators.items() if isinstance(v, (int, float, bool, str))},
@@ -897,6 +903,7 @@ async def _fetch_market_data(
             get_timeframe_indicators,
         )
         _merged_by_sym = await get_merged_indicators(db, syms_list)
+        _mtf_merged_by_sym: dict = {}
         _mtf_values_by_sym: dict[str, dict] = {}
         _mtf_unavailable_by_sym: dict[str, str] = {}
         if mtf_timeframe and mtf_layer_config:
@@ -910,6 +917,20 @@ async def _fetch_market_data(
                 timeframe=mtf_timeframe,
                 market_type="spot",
                 groups=["structural"],
+            )
+            configured_groups = list(
+                (mtf_layer_config.get("required_indicators_by_group") or {}).keys()
+            ) or ["structural"]
+            _mtf_merged_by_sym = (
+                exact
+                if configured_groups == ["structural"]
+                else await get_timeframe_indicators(
+                    db,
+                    syms_list,
+                    timeframe=mtf_timeframe,
+                    market_type="spot",
+                    groups=configured_groups,
+                )
             )
             required = {
                 str(value)
@@ -1014,6 +1035,7 @@ async def _fetch_market_data(
             spread_pct=float(row.spread_pct) if row.spread_pct is not None else None,
             orderbook_depth_usdt=float(row.orderbook_depth_usdt) if row.orderbook_depth_usdt is not None else None,
             merged_indicators=_merged_by_sym.get(sym),
+            mtf_merged_indicators=_mtf_merged_by_sym.get(sym),
             price_source_at=row.price_source_at,
             score_source_at=score_row.score_source_at if score_row else None,
         )
@@ -1036,6 +1058,7 @@ async def _fetch_market_data(
             score_row=score_row,
             has_market_metadata=False,
             merged_indicators=_merged_by_sym.get(sym),
+            mtf_merged_indicators=_mtf_merged_by_sym.get(sym),
             score_source_at=score_row.score_source_at if score_row else None,
         )
         if mtf_timeframe:
@@ -2172,7 +2195,7 @@ async def _evaluate_l3_decisions(
                         build_grouped_indicators_snapshot,
                     )
                     l3_layer_config = mtf_observation.get("l3_layer_config") or {}
-                    merged_for_mtf = asset.get("_merged_indicators")
+                    merged_for_mtf = asset.get("_mtf_merged_indicators")
                     mtf_snapshot = (
                         build_grouped_indicators_snapshot(
                             merged_for_mtf,
