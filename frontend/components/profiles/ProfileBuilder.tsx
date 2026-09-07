@@ -518,7 +518,10 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
   const handleTest = async () => {
     setTesting(true);
     try {
-      const result = await apiPost("/profiles/test-config", { config });
+      const result = await apiPost("/profiles/test-config", {
+        config,
+        profile_role: profileRole,
+      });
       setTestResult(result);
     } catch (e: any) {
       alert(`Test failed: ${e.message}`);

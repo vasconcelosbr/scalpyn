@@ -7,6 +7,28 @@
   },
   "required_features": [
     {
+      "id": "profile-role-scoped-feature-identity",
+      "description": "POOL, L1 and L2 profiles can be adjusted under their own pipeline contracts while L3 feature identity remains fail closed and profile roles cannot drift from associated watchlist levels",
+      "files": [
+        {
+          "path": "backend/app/api/profiles.py",
+          "contains_all": [
+            "PROFILE_ROLE_SCOPED_FEATURE_IDENTITY_GUARD",
+            "PROFILE_ROLE_WATCHLIST_LAYER_MISMATCH",
+            "_requires_l3_feature_identity"
+          ]
+        },
+        {
+          "path": "backend/tests/test_profiles_config_validation.py",
+          "contains_all": [
+            "test_pool_filters_can_be_saved_without_l3_source_identity",
+            "test_same_missing_source_config_is_rejected_for_l3",
+            "test_profile_role_must_match_all_associated_watchlist_levels"
+          ]
+        }
+      ]
+    },
+    {
       "id": "watchlist-live-candidate-chain",
       "description": "Spot watchlists expose only current candidates from the complete POOL to L3 chain, while open Shadow trades remain independent historical position follow-up",
       "files": [

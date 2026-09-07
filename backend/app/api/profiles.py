@@ -320,6 +320,87 @@ _FUNNEL_ROLE_ORDER: Dict[str, str] = {
     "acquisition_queue": "3",
 }
 
+_FUNNEL_ROLE_LEVEL: Dict[str, str] = {
+    "universe_filter": "POOL",
+    "primary_filter": "L1",
+    "score_engine": "L2",
+    "acquisition_queue": "L3",
+}
+
+_NON_EXECUTION_PROFILE_ROLES = frozenset(
+    {"universe_filter", "primary_filter", "score_engine"}
+)
+
+
+def _normalize_profile_role(value: Any) -> Optional[str]:
+    """Normalize a known pipeline role without silently accepting typos."""
+    if value is None or not str(value).strip():
+        return None
+    role = str(value).strip().lower()
+    if role not in _FUNNEL_ROLE_ORDER:
+        raise ValueError(f"PROFILE_ROLE_UNSUPPORTED:{role}")
+    return role
+
+
+def _requires_l3_feature_identity(profile_role: Any) -> bool:
+    """Fail closed for L3 and unclassified profiles; upstream roles are scoped."""
+    try:
+        role = _normalize_profile_role(profile_role)
+    except ValueError:
+        return True
+    return role not in _NON_EXECUTION_PROFILE_ROLES
+
+
+def _validate_profile_config_for_role(
+    config: Dict[str, Any], profile_role: Any
+) -> Dict[str, Any]:
+    """PROFILE_ROLE_SCOPED_FEATURE_IDENTITY_GUARD."""
+    return _validate_profile_config(
+        config,
+        require_feature_identity=_requires_l3_feature_identity(profile_role),
+    )
+
+
+def _profile_role_matches_watchlist_levels(
+    profile_role: Any, watchlist_levels: List[str]
+) -> bool:
+    """Keep a profile attached only to the pipeline layer represented by its role."""
+    expected_level = _FUNNEL_ROLE_LEVEL.get(_normalize_profile_role(profile_role) or "")
+    actual_levels = {str(level).strip().upper() for level in watchlist_levels if level}
+    return not actual_levels or (expected_level is not None and actual_levels == {expected_level})
+
+
+async def _assert_profile_role_change_preserves_pipeline(
+    db: AsyncSession,
+    *,
+    user_id: UUID,
+    profile_id: UUID,
+    target_role: Any,
+) -> None:
+    levels = list(
+        (
+            await db.execute(
+                text(
+                    """
+                    SELECT DISTINCT UPPER(level) AS level
+                      FROM pipeline_watchlists
+                     WHERE user_id = :user_id
+                       AND profile_id = :profile_id
+                    """
+                ),
+                {"user_id": str(user_id), "profile_id": str(profile_id)},
+            )
+        ).scalars().all()
+    )
+    if not _profile_role_matches_watchlist_levels(target_role, levels):
+        expected_level = _FUNNEL_ROLE_LEVEL.get(
+            _normalize_profile_role(target_role) or ""
+        )
+        raise ValueError(
+            "PROFILE_ROLE_WATCHLIST_LAYER_MISMATCH:"
+            f"expected={expected_level or 'NONE'};actual={','.join(sorted(levels))}"
+        )
+
 
 def _normalize_import_scoring(
     scoring: Optional[Dict[str, Any]],
@@ -672,6 +753,9 @@ async def bulk_import_profiles(
                 next_config = _replace_execution_sections(
                     profile.config or {}, item
                 )
+                require_feature_identity = _requires_l3_feature_identity(
+                    getattr(profile, "profile_role", None)
+                )
                 activation = await activate_profile_config(
                     db,
                     profile=profile,
@@ -686,7 +770,7 @@ async def bulk_import_profiles(
                     expected_profile_config_hash=str(
                         item["expected_profile_config_hash"]
                     ),
-                    require_feature_identity=False,
+                    require_feature_identity=require_feature_identity,
                 )
                 results.append(
                     {
@@ -752,14 +836,13 @@ async def bulk_import_profiles(
                     "PROFILE_CONDITION_INVALID:"
                     + json.dumps(structural_errors, sort_keys=True)
                 )
-            validated_config = _validate_profile_config(
-                config_input, require_feature_identity=True
-            )
-
             funnel_role: Optional[str] = p.get("funnel_role")
-            profile_role    = funnel_role if funnel_role in _FUNNEL_ROLE_ORDER else None
-            pipeline_order  = _FUNNEL_ROLE_ORDER.get(funnel_role) if funnel_role else None  # type: ignore[arg-type]
+            profile_role = _normalize_profile_role(funnel_role)
+            pipeline_order = _FUNNEL_ROLE_ORDER.get(profile_role) if profile_role else None
             pipeline_label  = p.get("pipeline_label") or name
+            validated_config = _validate_profile_config_for_role(
+                config_input, profile_role
+            )
 
             profile = Profile(
                 user_id=user_id,
@@ -787,7 +870,7 @@ async def bulk_import_profiles(
                 changed_by=user_id,
                 change_source="api",
                 change_description="profile created via POST /profiles/bulk-import",
-                require_feature_identity=True,
+                require_feature_identity=_requires_l3_feature_identity(profile_role),
                 previous_config_override={},
             )
 
@@ -862,12 +945,15 @@ async def create_profile(
             f"Considere renomear para evitar ambiguidade."
         )
 
-    # Validate config structure
+    try:
+        target_role = _normalize_profile_role(payload.get("profile_role"))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    # Validate config structure according to its pipeline responsibility.
     config = payload.get("config", {})
     try:
-        validated_config = _validate_profile_config(
-            config, require_feature_identity=True
-        )
+        validated_config = _validate_profile_config_for_role(config, target_role)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
@@ -878,6 +964,9 @@ async def create_profile(
         is_active=payload.get("is_active", True),
         config=validated_config,
         profile_type=payload.get("profile_type", "STANDARD"),
+        profile_role=target_role,
+        pipeline_order=_FUNNEL_ROLE_ORDER.get(target_role, "99"),
+        pipeline_label=payload.get("pipeline_label") or name,
     )
 
     db.add(profile)
@@ -889,7 +978,7 @@ async def create_profile(
         changed_by=user_id,
         change_source="api",
         change_description="profile created via POST /profiles",
-        require_feature_identity=True,
+        require_feature_identity=_requires_l3_feature_identity(target_role),
         previous_config_override={},
     )
     await db.commit()
@@ -919,6 +1008,24 @@ async def update_profile(
     if profile.profile_type == "MTF_LAYER":
         raise HTTPException(status_code=409, detail="MTF_PROFILE_GOVERNED_FLOW_REQUIRED")
 
+    try:
+        target_role = _normalize_profile_role(
+            payload.get("profile_role", profile.profile_role)
+        )
+        current_role = _normalize_profile_role(profile.profile_role)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if target_role != current_role:
+        try:
+            await _assert_profile_role_change_preserves_pipeline(
+                db,
+                user_id=user_id,
+                profile_id=profile.id,
+                target_role=target_role,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     _config_changed = False
     _next_config: Optional[Dict[str, Any]] = None
 
@@ -941,24 +1048,24 @@ async def update_profile(
             candidate_config = payload.get("config", profile.config or {})
             try:
                 _validate_profile_config(
-                    candidate_config, require_feature_identity=True
+                    candidate_config,
+                    require_feature_identity=_requires_l3_feature_identity(target_role),
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=422, detail=str(exc))
         profile.is_active = payload["is_active"]
     if "config" in payload:
         try:
-            _next_config = _validate_profile_config(
-                payload["config"], require_feature_identity=True
+            _next_config = _validate_profile_config_for_role(
+                payload["config"], target_role
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
         _config_changed = True
     # Salvar papel do profile no pipeline
     if "profile_role" in payload:
-        profile.profile_role = payload["profile_role"]
-    if "pipeline_order" in payload:
-        profile.pipeline_order = str(payload["pipeline_order"]) if payload["pipeline_order"] is not None else "99"
+        profile.profile_role = target_role
+        profile.pipeline_order = _FUNNEL_ROLE_ORDER.get(target_role, "99")
 
     if _config_changed:
         await activate_profile_config(
@@ -968,7 +1075,7 @@ async def update_profile(
             changed_by=user_id,
             change_source="api",
             change_description="config updated via PUT /profiles/{id}",
-            require_feature_identity=True,
+            require_feature_identity=_requires_l3_feature_identity(target_role),
         )
 
     await db.commit()
@@ -1075,12 +1182,14 @@ async def test_profile_config(
     Useful for validating profile config before creating.
     """
     config = payload.get("config", {})
+    try:
+        profile_role = _normalize_profile_role(payload.get("profile_role"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     
     # Validate config
     try:
-        validated_config = _validate_profile_config(
-            config, require_feature_identity=True
-        )
+        validated_config = _validate_profile_config_for_role(config, profile_role)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     
@@ -1521,8 +1630,8 @@ async def run_preset_ia(
 
     # Salvar resultado no profile
     try:
-        preset_config = _validate_profile_config(
-            ia_result["config"], require_feature_identity=True
+        preset_config = _validate_profile_config_for_role(
+            ia_result["config"], profile.profile_role
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
@@ -1541,7 +1650,7 @@ async def run_preset_ia(
         changed_by=user_id,
         change_source="preset_ia",
         change_description="config updated via POST /profiles/{id}/preset-ia",
-        require_feature_identity=True,
+        require_feature_identity=_requires_l3_feature_identity(profile.profile_role),
     )
     await db.commit()
     await db.refresh(profile)
