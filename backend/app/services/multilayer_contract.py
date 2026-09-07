@@ -13,6 +13,7 @@ from .profile_runtime_config import canonical_hash
 
 MULTILAYER_EXECUTION_CONTRACT_VERSION = "multilayer_profile_execution_contract_v2"
 MULTILAYER_PROVENANCE_POLICY_VERSION = "multilayer_provenance_resolver_v2"
+MULTILAYER_LEGACY_PROVENANCE_POLICY_VERSION = "multilayer_provenance_resolver_v1"
 MULTILAYER_CONSOLIDATION_VERSION = "single_profile_per_symbol_v2"
 MULTILAYER_DECISION_CONTEXT_VERSION = "multilayer_decision_context_v3"
 MULTILAYER_WAIVER_CONTEXT_VERSION = "multilayer_decision_context_v5"
