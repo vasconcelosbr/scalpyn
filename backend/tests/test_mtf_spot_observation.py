@@ -4,6 +4,7 @@ import pytest
 
 from app.schemas.layer_context import CandleIdentity, ProfileIdentity
 from app.services.mtf_observation_service import (
+    _seal,
     advance_l2_setup_state,
     build_l1_context,
     build_l2_context,
@@ -11,6 +12,11 @@ from app.services.mtf_observation_service import (
     build_multilayer_context,
     verify_context_hash,
 )
+from app.services.indicators_provider import (
+    build_grouped_indicators_snapshot,
+    build_indicators_snapshot,
+)
+from app.utils.indicator_merge import MergedIndicators
 from app.services.multilayer_contract import require_shadow_multilayer_config
 from app.services.profile_engine import ProfileEngine
 from app.services.profile_runtime_config import canonical_hash
@@ -280,6 +286,64 @@ def test_waived_shadow_contract_and_context_preserve_signed_disclosure():
         require_shadow_multilayer_config(tampered)
 
 
+def test_v5_contract_requires_complete_hashed_validity_evidence():
+    gate_material = {
+        "status": "WAIVED_FOR_SHADOW", "run_status": "DRAFT_INSUFFICIENT_DATA",
+        "failure_reason": "MIN_SAMPLES_NOT_MET", "calibration_run_id": "run-id",
+        "policy_hash": "c" * 64, "dataset_hash": "d" * 64,
+        "authorization_scope": "OBSERVATIONAL_ONLY",
+        "calibration_not_passed_acknowledged": True,
+        "thresholds_unvalidated_acknowledged": True,
+        "operational_effect_false_acknowledged": True,
+        "authorized_by": "user-id", "authorized_at": NOW.isoformat(),
+    }
+    gate = {**gate_material, "authorization_hash": canonical_hash(gate_material)}
+
+    def evidence(margin: int):
+        material = {
+            "formula": "p99(open_to_available_seconds)+scan_interval_seconds",
+            "window_started_at": (NOW - timedelta(hours=24)).isoformat(),
+            "window_ended_at": NOW.isoformat(), "sample_count": 65,
+            "active_symbol_count": 65, "covered_symbol_count": 65,
+            "p99_open_to_available_seconds": float(margin - 30),
+            "scan_interval_seconds": 30, "validity_margin_seconds": margin,
+            "measured_at": NOW.isoformat(),
+        }
+        return {**material, "evidence_hash": canonical_hash(material)}
+
+    layers = {}
+    for layer, timeframe in {"L1": "1h", "L2": "15m", "L3": "5m"}.items():
+        margin = 90
+        layers[layer] = {
+            "observational_enabled": True,
+            "profile_id": layer if layer != "L3" else None,
+            "profile_version_id": layer + "v" if layer != "L3" else None,
+            "profile_config_hash": "b" * 64 if layer != "L3" else None,
+            "default_timeframe": timeframe, "validity_margin_seconds": margin,
+            "source_policies": {"ohlcv": {
+                "allowed_source_providers": ["gate.io"],
+                "provider_policy_id": "policy", "candle_policy": "CLOSED_ONLY",
+                "allowed_capture_contract_versions": ["capture"],
+            }},
+            "required_indicators_by_group": {"structural": ["adx"]},
+        }
+        if layer == "L3":
+            layers[layer]["validity_margin_seconds_by_group"] = {"structural": margin}
+            layers[layer]["validity_evidence_by_group"] = {"structural": evidence(margin)}
+        else:
+            layers[layer]["validity_evidence"] = evidence(margin)
+    config = {"multilayer_contract": {
+        "enabled": True, "activation_mode": "SHADOW", "operational_effect": False,
+        "provenance_policy_version": "multilayer_provenance_resolver_v2",
+        "decision_feature_contract_version": "multilayer_decision_context_v5",
+        "calibration_run_id": "run-id", "statistical_gate": gate, "layers": layers,
+    }}
+    assert require_shadow_multilayer_config(config)["layers"]["L1"]["validity_margin_seconds"] == 90
+    config["multilayer_contract"]["layers"]["L1"]["validity_evidence"]["sample_count"] = 64
+    with pytest.raises(ValueError, match="VALIDITY_EVIDENCE_HASH_INVALID"):
+        require_shadow_multilayer_config(config)
+
+
 def test_l3_confirmation_validates_declared_inputs_not_auxiliary_snapshot_fields():
     source_at = NOW - timedelta(minutes=5)
     envelope = {
@@ -294,6 +358,7 @@ def test_l3_confirmation_validates_declared_inputs_not_auxiliary_snapshot_fields
         "source_timestamp": source_at.isoformat(),
         "available_at": NOW.isoformat(),
         "config_hash": "c" * 64,
+        "config_profile_id": "config-id",
         "producer_version": "compute_5m_v2",
         "capture_contract_version": "gate_ohlcv_canonical_v1",
     }
@@ -313,6 +378,7 @@ def test_l3_confirmation_validates_declared_inputs_not_auxiliary_snapshot_fields
             "provider_policy_id": "spot_gate_closed_ohlcv_v1",
             "candle_closed": True,
             "config_hash": "c" * 64,
+            "config_profile_id": "config-id",
             "producer_version": "compute_5m_v2",
             "envelope": envelope,
         },
@@ -325,6 +391,9 @@ def test_l3_confirmation_validates_declared_inputs_not_auxiliary_snapshot_fields
             "allowed_source_providers": ["gate.io"],
             "provider_policy_id": "spot_gate_closed_ohlcv_v1",
             "allowed_capture_contract_versions": ["gate_ohlcv_canonical_v1"],
+            "allowed_producer_versions": ["compute_5m_v2"],
+            "indicator_config_profile_id": "config-id",
+            "indicator_config_hash": "c" * 64,
         }},
     }
 
@@ -338,6 +407,202 @@ def test_l3_confirmation_validates_declared_inputs_not_auxiliary_snapshot_fields
 
     assert confirmation["verdict"] == "PASS"
     assert confirmation["invalid_indicators"] == []
+
+
+def test_grouped_mtf_snapshot_resolves_homonymous_indicator_without_changing_legacy():
+    merged = MergedIndicators()
+    merged.values["price"] = 111.0
+    merged.meta["price"] = {
+        "group": "structural", "timeframe": "5m", "timestamp": NOW,
+    }
+    for group, value, source_at in (
+        ("structural", 111.0, NOW),
+        ("microstructure", 222.0, NOW - timedelta(seconds=1)),
+    ):
+        envelope = {
+            "value": value, "timeframe": "5m", "market_type": "spot",
+            "scheduler_group": group, "source_timestamp": source_at.isoformat(),
+            "available_at": NOW.isoformat(), "computed_at": NOW.isoformat(),
+            "source_provider": "gate.io", "provider_policy_id": "policy",
+            "candle_policy": "CLOSED_ONLY", "candle_closed": True,
+            "config_profile_id": "config-id", "config_hash": "c" * 64,
+            "producer_version": "producer", "capture_contract_version": "capture",
+        }
+        envelope["envelope_hash"] = canonical_hash(envelope)
+        merged.candidates.append({
+            "indicator": "price", "actual": value, "group": group,
+            "timeframe": "5m", "market_type": "spot", "stale": False,
+            "source_timestamp": source_at, "available_at": NOW,
+            "computed_at": NOW, "source_provider": "gate.io",
+            "provider_policy_id": "policy", "candle_closed": True,
+            "config_profile_id": "config-id", "config_hash": "c" * 64,
+            "producer_version": "producer", "envelope": envelope,
+        })
+
+    legacy = build_indicators_snapshot(merged, keys=["price"])
+    grouped = build_grouped_indicators_snapshot(
+        merged,
+        required_by_group={"structural": ["price"], "microstructure": ["price"]},
+        timeframe="5m",
+    )
+
+    assert legacy["price"]["value"] == 111.0
+    assert legacy["price"]["source_group"] == "structural"
+    assert grouped["structural"]["price"]["value"] == 111.0
+    assert grouped["microstructure"]["price"]["value"] == 222.0
+
+
+def test_controlled_v5_replay_can_pass_without_operational_effect():
+    source_at = NOW - timedelta(minutes=5)
+    envelope = {
+        "value": 101.0, "timeframe": "5m", "market_type": "spot",
+        "scheduler_group": "microstructure", "source_provider": "gate.io",
+        "provider_policy_id": "policy", "candle_policy": "CLOSED_ONLY",
+        "candle_closed": True, "source_timestamp": source_at.isoformat(),
+        "available_at": NOW.isoformat(), "config_profile_id": "config-id",
+        "config_hash": "c" * 64, "producer_version": "producer",
+        "capture_contract_version": "capture",
+    }
+    envelope["envelope_hash"] = canonical_hash(envelope)
+    grouped = {"microstructure": {"price": {
+        "value": 101.0, "source_group": "microstructure", "ts": NOW.isoformat(),
+        "timeframe": "5m", "observed_timeframes": ["5m"],
+        "timeframe_conflict": False, "stale": False,
+        "source_timestamp": source_at.isoformat(), "available_at": NOW.isoformat(),
+        "source_provider": "gate.io", "provider_policy_id": "policy",
+        "candle_closed": True, "config_profile_id": "config-id",
+        "config_hash": "c" * 64, "producer_version": "producer",
+        "fallback_used": False, "envelope": envelope,
+    }}}
+    l3 = build_l3_confirmation(
+        legacy_decision="ALLOW", indicators_snapshot={},
+        grouped_indicators_snapshot=grouped,
+        gate_evaluation_hash="f" * 64,
+        layer_config={
+            "validity_margin_seconds": 60,
+            "required_indicators_by_group": {"microstructure": ["price"]},
+            "source_policies": {"ohlcv": {
+                "allowed_source_providers": ["gate.io"],
+                "provider_policy_id": "policy",
+                "allowed_capture_contract_versions": ["capture"],
+                "allowed_producer_versions": ["producer"],
+                "indicator_config_profile_id": "config-id",
+                "indicator_config_hash": "c" * 64,
+            }},
+        }, now=NOW,
+    )
+    l1 = _seal({"contract_version": "l1_decision_context_v3", "verdict": "PASS"})
+    l2 = _seal({
+        "contract_version": "l2_decision_context_v3", "verdict": "PASS",
+        "l1_context_hash": l1["context_hash"],
+    })
+    gate_material = {
+        "status": "WAIVED_FOR_SHADOW", "run_status": "DRAFT_INSUFFICIENT_DATA",
+        "failure_reason": "MIN_SAMPLES_NOT_MET", "calibration_run_id": "run-id",
+        "policy_hash": "a" * 64, "dataset_hash": "b" * 64,
+        "authorization_scope": "OBSERVATIONAL_ONLY",
+        "calibration_not_passed_acknowledged": True,
+        "thresholds_unvalidated_acknowledged": True,
+        "operational_effect_false_acknowledged": True,
+        "authorized_by": "user", "authorized_at": NOW.isoformat(),
+    }
+    aggregate = build_multilayer_context(
+        l1=l1, l2=l2, l3_confirmation=l3, canonical_score=90,
+        calibration_run_id="run-id", now=NOW,
+        statistical_gate={
+            **gate_material, "authorization_hash": canonical_hash(gate_material),
+        },
+    )
+    assert aggregate["contract_version"] == "multilayer_decision_context_v5"
+    assert aggregate["observational_decision"] == "PASS"
+    assert aggregate["operational_effect"] is False
+
+
+def test_explicit_empty_grouped_snapshot_never_falls_back_to_legacy_flat_snapshot():
+    source_at = NOW - timedelta(minutes=5)
+    envelope = {
+        "value": 101.0, "timeframe": "5m", "market_type": "spot",
+        "scheduler_group": "microstructure", "source_provider": "gate.io",
+        "provider_policy_id": "policy", "candle_policy": "CLOSED_ONLY",
+        "candle_closed": True, "source_timestamp": source_at.isoformat(),
+        "available_at": NOW.isoformat(), "config_profile_id": "config-id",
+        "config_hash": "c" * 64, "producer_version": "producer",
+        "capture_contract_version": "capture",
+    }
+    envelope["envelope_hash"] = canonical_hash(envelope)
+    legacy = {"price": {
+        "value": 101.0, "source_group": "microstructure", "ts": NOW.isoformat(),
+        "timeframe": "5m", "observed_timeframes": ["5m"],
+        "timeframe_conflict": False, "stale": False,
+        "source_timestamp": source_at.isoformat(), "available_at": NOW.isoformat(),
+        "source_provider": "gate.io", "provider_policy_id": "policy",
+        "candle_closed": True, "config_profile_id": "config-id",
+        "config_hash": "c" * 64, "producer_version": "producer",
+        "fallback_used": False, "envelope": envelope,
+    }}
+    confirmation = build_l3_confirmation(
+        legacy_decision="ALLOW", indicators_snapshot=legacy,
+        grouped_indicators_snapshot={}, gate_evaluation_hash="f" * 64,
+        layer_config={
+            "validity_margin_seconds": 60,
+            "required_indicators_by_group": {"microstructure": ["price"]},
+            "source_policies": {"ohlcv": {
+                "allowed_source_providers": ["gate.io"],
+                "provider_policy_id": "policy",
+                "allowed_capture_contract_versions": ["capture"],
+                "allowed_producer_versions": ["producer"],
+                "indicator_config_profile_id": "config-id",
+                "indicator_config_hash": "c" * 64,
+            }},
+        }, now=NOW,
+    )
+
+    assert confirmation["verdict"] == "UNAVAILABLE"
+    assert confirmation["reason_codes"] == ["L3_TEMPORAL_IDENTITY_UNAVAILABLE"]
+    assert confirmation["invalid_indicators"] == ["price"]
+
+
+def test_l3_rejects_envelope_metadata_that_disagrees_with_selected_candidate():
+    source_at = NOW - timedelta(minutes=5)
+    envelope = {
+        "value": 101.0, "timeframe": "5m", "market_type": "spot",
+        "scheduler_group": "microstructure", "source_provider": "wrong-provider",
+        "provider_policy_id": "policy", "candle_policy": "CLOSED_ONLY",
+        "candle_closed": True, "source_timestamp": source_at.isoformat(),
+        "available_at": NOW.isoformat(), "config_profile_id": "config-id",
+        "config_hash": "c" * 64, "producer_version": "producer",
+        "capture_contract_version": "capture",
+    }
+    envelope["envelope_hash"] = canonical_hash(envelope)
+    grouped = {"microstructure": {"price": {
+        "value": 101.0, "source_group": "microstructure", "ts": NOW.isoformat(),
+        "timeframe": "5m", "observed_timeframes": ["5m"],
+        "timeframe_conflict": False, "stale": False,
+        "source_timestamp": source_at.isoformat(), "available_at": NOW.isoformat(),
+        "source_provider": "gate.io", "provider_policy_id": "policy",
+        "candle_closed": True, "config_profile_id": "config-id",
+        "config_hash": "c" * 64, "producer_version": "producer",
+        "fallback_used": False, "envelope": envelope,
+    }}}
+    confirmation = build_l3_confirmation(
+        legacy_decision="ALLOW", indicators_snapshot={},
+        grouped_indicators_snapshot=grouped, gate_evaluation_hash="f" * 64,
+        layer_config={
+            "validity_margin_seconds": 60,
+            "required_indicators_by_group": {"microstructure": ["price"]},
+            "source_policies": {"ohlcv": {
+                "allowed_source_providers": ["gate.io"],
+                "provider_policy_id": "policy",
+                "allowed_capture_contract_versions": ["capture"],
+                "allowed_producer_versions": ["producer"],
+                "indicator_config_profile_id": "config-id",
+                "indicator_config_hash": "c" * 64,
+            }},
+        }, now=NOW,
+    )
+
+    assert confirmation["verdict"] == "UNAVAILABLE"
+    assert confirmation["invalid_indicators"] == ["price"]
 
 
 def _coverage_payload(*, source_timestamp: datetime, envelope_hash: str | None = None):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 from uuid import UUID
 
@@ -21,6 +22,7 @@ from ..services.strategy_settings_service import (
     StrategySettingsValidationError,
     strategy_settings_service,
 )
+from ..services.profile_runtime_config import canonical_hash
 from ..services.mtf_calibration_service import (
     approve_policy as approve_mtf_policy,
     audit_policy_availability,
@@ -169,6 +171,31 @@ async def disable_multilayer_shadow(
         ) from exc
 
 
+@router.post("/multilayer-shadow/refresh-validity")
+async def refresh_multilayer_shadow_validity(
+    payload: Dict[str, Any],
+    apply: bool = False,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    try:
+        return await strategy_settings_service.refresh_multilayer_validity(
+            db,
+            user_id,
+            window_started_at=datetime.fromisoformat(
+                str(payload["window_started_at"]).replace("Z", "+00:00")
+            ),
+            window_ended_at=datetime.fromisoformat(
+                str(payload["window_ended_at"]).replace("Z", "+00:00")
+            ),
+            apply=apply,
+        )
+    except (KeyError, TypeError, ValueError, StrategySettingsValidationError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+
+
 @router.get("/multilayer-runtime/audit")
 async def audit_multilayer_runtime(
     db: AsyncSession = Depends(get_db),
@@ -183,14 +210,18 @@ async def audit_multilayer_runtime(
     """), {"user_id": str(user_id)})).mappings().one_or_none()
     coverage = (await db.execute(text("""
         WITH active AS (
-          SELECT DISTINCT symbol FROM pool_coins
-           WHERE is_active IS TRUE AND market_type = 'spot'
+          SELECT DISTINCT pc.symbol FROM pool_coins pc
+          JOIN pools p ON p.id = pc.pool_id
+           WHERE p.user_id = CAST(:user_id AS UUID)
+             AND p.is_active IS TRUE AND p.market_type = 'spot'
+             AND pc.is_active IS TRUE AND pc.market_type = 'spot'
         ), requested(timeframe, scheduler_group) AS (
           VALUES ('1h','structural'), ('15m','structural'),
                  ('5m','structural'), ('5m','microstructure')
         )
         SELECT r.timeframe, r.scheduler_group,
-               count(latest.time) AS symbols, max(latest.time) AS latest
+               count(latest.time) AS symbols, max(latest.time) AS latest,
+               min(latest.time) AS oldest
           FROM requested r CROSS JOIN active a
           LEFT JOIN LATERAL (
             SELECT i.time FROM indicators i
@@ -201,20 +232,25 @@ async def audit_multilayer_runtime(
           ) latest ON TRUE
          GROUP BY r.timeframe, r.scheduler_group
          ORDER BY r.timeframe, r.scheduler_group
-    """))).mappings().all()
+    """), {"user_id": str(user_id)})).mappings().all()
     active_symbols = await db.scalar(text("""
-        SELECT count(*) FROM pool_coins
-         WHERE is_active IS TRUE AND market_type = 'spot'
-    """))
+        SELECT count(DISTINCT pc.symbol) FROM pool_coins pc
+        JOIN pools p ON p.id = pc.pool_id
+         WHERE p.user_id = CAST(:user_id AS UUID)
+           AND p.is_active IS TRUE AND p.market_type = 'spot'
+           AND pc.is_active IS TRUE AND pc.market_type = 'spot'
+    """), {"user_id": str(user_id)})
     decisions = (await db.execute(text("""
         SELECT count(*) AS total,
                count(*) FILTER (
-                   WHERE metrics ? 'multilayer_decision_context_v4'
+                   WHERE metrics ? 'multilayer_decision_context_v5'
+                      OR metrics ? 'multilayer_decision_context_v4'
                       OR metrics ? 'multilayer_decision_context_v3'
                       OR metrics ? 'multilayer_decision_context_v2'
                ) AS with_mtf,
                count(*) FILTER (
-                   WHERE COALESCE(metrics->'multilayer_decision_context_v4',
+                   WHERE COALESCE(metrics->'multilayer_decision_context_v5',
+                                  metrics->'multilayer_decision_context_v4',
                                   metrics->'multilayer_decision_context_v3',
                                   metrics->'multilayer_decision_context_v2')
                          ?& ARRAY[
@@ -225,19 +261,22 @@ async def audit_multilayer_runtime(
                          ]
                ) AS complete_mtf,
                count(*) FILTER (
-                   WHERE COALESCE(metrics->'multilayer_decision_context_v4',
+                   WHERE COALESCE(metrics->'multilayer_decision_context_v5',
+                                  metrics->'multilayer_decision_context_v4',
                                   metrics->'multilayer_decision_context_v3',
                                   metrics->'multilayer_decision_context_v2')
                          ->>'observational_decision' = 'PASS'
                ) AS mtf_pass,
                count(*) FILTER (
-                   WHERE COALESCE(metrics->'multilayer_decision_context_v4',
+                   WHERE COALESCE(metrics->'multilayer_decision_context_v5',
+                                  metrics->'multilayer_decision_context_v4',
                                   metrics->'multilayer_decision_context_v3',
                                   metrics->'multilayer_decision_context_v2')
                          ->>'observational_decision' = 'WAIT'
                ) AS mtf_wait,
                count(*) FILTER (
-                   WHERE COALESCE(metrics->'multilayer_decision_context_v4',
+                   WHERE COALESCE(metrics->'multilayer_decision_context_v5',
+                                  metrics->'multilayer_decision_context_v4',
                                   metrics->'multilayer_decision_context_v3',
                                   metrics->'multilayer_decision_context_v2')
                          ->>'observational_decision' = 'REJECT'
@@ -267,17 +306,219 @@ async def audit_multilayer_runtime(
         dict(contract.get("statistical_gate") or {})
         if isinstance(contract, dict) else {}
     )
+    actual_producers = (await db.execute(text("""
+        WITH active AS (
+          SELECT DISTINCT pc.symbol FROM pool_coins pc
+          JOIN pools p ON p.id = pc.pool_id
+           WHERE p.user_id = CAST(:user_id AS UUID)
+             AND p.is_active IS TRUE AND p.market_type = 'spot'
+             AND pc.is_active IS TRUE AND pc.market_type = 'spot'
+        ), requested(timeframe, scheduler_group) AS (
+          VALUES ('1h','structural'), ('15m','structural'),
+                 ('5m','structural'), ('5m','microstructure')
+        ), latest AS (
+          SELECT a.symbol, r.timeframe, r.scheduler_group,
+                 snapshot.indicators_json
+            FROM active a CROSS JOIN requested r
+            LEFT JOIN LATERAL (
+              SELECT i.indicators_json FROM indicators i
+               WHERE i.symbol = a.symbol AND i.market_type = 'spot'
+                 AND i.timeframe = r.timeframe
+                 AND i.scheduler_group = r.scheduler_group
+               ORDER BY i.time DESC LIMIT 1
+            ) snapshot ON TRUE
+        )
+        SELECT timeframe, scheduler_group,
+               array_remove(array_agg(DISTINCT entry.value->>'producer_version'), NULL)
+                 AS producer_versions
+          FROM latest
+          LEFT JOIN LATERAL jsonb_each(latest.indicators_json) entry ON TRUE
+         GROUP BY timeframe, scheduler_group
+         ORDER BY timeframe, scheduler_group
+    """), {"user_id": str(user_id)})).mappings().all()
+    context_rows = (await db.execute(text("""
+        SELECT id, symbol, created_at,
+               COALESCE(metrics->'multilayer_decision_context_v5',
+                        metrics->'multilayer_decision_context_v4',
+                        metrics->'multilayer_decision_context_v3',
+                        metrics->'multilayer_decision_context_v2') AS context
+          FROM decisions_log
+         WHERE user_id = :user_id
+           AND created_at > now() - interval '24 hours'
+           AND (metrics ? 'multilayer_decision_context_v5'
+             OR metrics ? 'multilayer_decision_context_v4'
+             OR metrics ? 'multilayer_decision_context_v3'
+             OR metrics ? 'multilayer_decision_context_v2')
+         ORDER BY created_at DESC
+    """), {"user_id": str(user_id)})).mappings().all()
+
+    hash_validation = {"checked": 0, "valid": 0, "invalid": 0}
+    v5_hash_validation = {"checked": 0, "valid": 0, "invalid": 0}
+    reason_counts: Dict[str, int] = {}
+    v5_reason_counts: Dict[str, int] = {}
+    verdict_counts: Dict[str, Dict[str, int]] = {
+        layer: {} for layer in ("L1", "L2", "L3", "MTF")
+    }
+    v5_complete = 0
+    last_complete_context = None
+    for row in context_rows:
+        context_value = dict(row["context"] or {})
+        version = str(context_value.get("contract_version") or "")
+        complete = all(
+            key in context_value for key in (
+                "l1_snapshot", "l1_context_hash", "l2_snapshot",
+                "l2_context_hash", "l3_confirmation", "verdicts",
+                "observational_decision", "computed_at",
+            )
+        )
+        if complete:
+            if version == "multilayer_decision_context_v5":
+                v5_complete += 1
+            valid_hashes = True
+            for payload in (
+                context_value,
+                context_value.get("l1_snapshot") or {},
+                context_value.get("l2_snapshot") or {},
+                context_value.get("l3_confirmation") or {},
+            ):
+                material = dict(payload)
+                expected_hash = material.pop("context_hash", None)
+                hash_validation["checked"] += 1
+                if version == "multilayer_decision_context_v5":
+                    v5_hash_validation["checked"] += 1
+                if expected_hash and expected_hash == canonical_hash(material):
+                    hash_validation["valid"] += 1
+                    if version == "multilayer_decision_context_v5":
+                        v5_hash_validation["valid"] += 1
+                else:
+                    valid_hashes = False
+                    hash_validation["invalid"] += 1
+                    if version == "multilayer_decision_context_v5":
+                        v5_hash_validation["invalid"] += 1
+            if last_complete_context is None:
+                last_complete_context = {
+                    "decision_id": str(row["id"]),
+                    "symbol": str(row["symbol"]),
+                    "created_at": row["created_at"].isoformat(),
+                    "contract_version": version,
+                    "observational_decision": context_value.get("observational_decision"),
+                    "context_hash": context_value.get("context_hash"),
+                    "hashes_valid": valid_hashes,
+                }
+        for layer in ("L1", "L2", "L3"):
+            snapshot = (
+                context_value.get("l1_snapshot") if layer == "L1"
+                else context_value.get("l2_snapshot") if layer == "L2"
+                else context_value.get("l3_confirmation")
+            ) or {}
+            verdict = str(snapshot.get("verdict") or "UNAVAILABLE")
+            verdict_counts[layer][verdict] = verdict_counts[layer].get(verdict, 0) + 1
+            for reason in snapshot.get("reason_codes") or []:
+                reason_counts[str(reason)] = reason_counts.get(str(reason), 0) + 1
+                if version == "multilayer_decision_context_v5":
+                    v5_reason_counts[str(reason)] = v5_reason_counts.get(str(reason), 0) + 1
+        mtf_verdict = str(context_value.get("observational_decision") or "WAIT")
+        verdict_counts["MTF"][mtf_verdict] = verdict_counts["MTF"].get(mtf_verdict, 0) + 1
+        if context_value.get("reason"):
+            reason = str(context_value["reason"])
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            if version == "multilayer_decision_context_v5":
+                v5_reason_counts[reason] = v5_reason_counts.get(reason, 0) + 1
+        for reason in context_value.get("reason_codes") or []:
+            reason_counts[str(reason)] = reason_counts.get(str(reason), 0) + 1
+            if version == "multilayer_decision_context_v5":
+                v5_reason_counts[str(reason)] = v5_reason_counts.get(str(reason), 0) + 1
+
+    now = datetime.now(timezone.utc)
+    coverage_rows = [dict(row) for row in coverage]
+    identity_health: Dict[str, Dict[str, Any]] = {}
+    timeframe_seconds = {"1h": 3600, "15m": 900, "5m": 300}
+    layer_for_identity = {
+        ("1h", "structural"): "L1",
+        ("15m", "structural"): "L2",
+        ("5m", "structural"): "L3",
+        ("5m", "microstructure"): "L3",
+    }
+    for item in coverage_rows:
+        timeframe = str(item["timeframe"])
+        group = str(item["scheduler_group"])
+        layer = layer_for_identity[(timeframe, group)]
+        layer_config = ((contract or {}).get("layers") or {}).get(layer) or {}
+        margin = (
+            (layer_config.get("validity_margin_seconds_by_group") or {}).get(group)
+            or layer_config.get("validity_margin_seconds")
+        )
+        oldest = item.get("oldest")
+        latest = item.get("latest")
+        fresh = bool(
+            oldest and margin is not None
+            and now <= oldest + timedelta(
+                seconds=timeframe_seconds[timeframe] + int(margin)
+            )
+        )
+        identity_health[f"{timeframe}:{group}"] = {
+            "layer": layer,
+            "timeframe": timeframe,
+            "scheduler_group": group,
+            "covered_symbols": int(item.get("symbols") or 0),
+            "active_symbols": int(active_symbols or 0),
+            "coverage_complete": int(item.get("symbols") or 0) == int(active_symbols or 0),
+            "fresh": fresh,
+            "latest_source_at": latest.isoformat() if latest else None,
+            "oldest_source_at": oldest.isoformat() if oldest else None,
+            "latest_age_seconds": (now - latest).total_seconds() if latest else None,
+            "oldest_age_seconds": (now - oldest).total_seconds() if oldest else None,
+            "validity_margin_seconds": margin,
+        }
+    layer_health = {
+        layer: {
+            "status": "HEALTHY" if all(
+                item["coverage_complete"] and item["fresh"]
+                for item in identity_health.values() if item["layer"] == layer
+            ) else "DEGRADED"
+        }
+        for layer in ("L1", "L2", "L3")
+    }
+    technically_functional = bool(
+        contract
+        and contract.get("enabled") is True
+        and contract.get("activation_mode") == "SHADOW"
+        and contract.get("operational_effect") is False
+        and contract.get("decision_feature_contract_version") == "multilayer_decision_context_v5"
+        and all(item["status"] == "HEALTHY" for item in layer_health.values())
+        and v5_complete > 0
+        and v5_hash_validation["invalid"] == 0
+        and v5_reason_counts.get("L3_TEMPORAL_IDENTITY_UNAVAILABLE", 0) == 0
+        and v5_reason_counts.get("CONTEXT_EXPIRED", 0) == 0
+    )
+    statistical_status = (
+        "APPROVED" if calibration and calibration.get("status") == "PASSED"
+        else "NOT_APPROVED"
+    )
     return {
         "runtime": {
             "producer_versions": {
-                "1h": "mtf_indicator_producer_v1",
-                "15m": "mtf_indicator_producer_v1",
-                "5m": "compute_5m_v2 + compute_structural_5m_v2",
+                f"{row['timeframe']}:{row['scheduler_group']}": (
+                    row["producer_versions"] or []
+                ) for row in actual_producers
             },
             "active_spot_symbols": int(active_symbols or 0),
-            "coverage": [dict(row) for row in coverage],
+            "coverage": coverage_rows,
+            "identity_health": identity_health,
+            "layer_health": layer_health,
             "decisions_24h": dict(decisions),
             "l2_setup_states": [dict(row) for row in l2_states],
+            "verdict_counts_24h": verdict_counts,
+            "reason_counts_24h": reason_counts,
+            "v5_reason_counts_24h": v5_reason_counts,
+            "hash_validation_24h": hash_validation,
+            "v5_hash_validation_24h": v5_hash_validation,
+            "last_complete_context": last_complete_context,
+            "v5_complete_contexts_24h": v5_complete,
+            "technical_status": (
+                "SHADOW_FUNCTIONAL" if technically_functional else "SHADOW_DEGRADED"
+            ),
+            "statistical_status": statistical_status,
         },
         "latest_calibration": dict(calibration) if calibration else None,
         "multilayer_contract": contract,

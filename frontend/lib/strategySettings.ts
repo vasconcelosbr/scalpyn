@@ -42,14 +42,30 @@ export interface StrategySettingsValidation {
 
 export interface MTFRuntimeAudit {
   runtime: {
-    producer_versions: Record<string, string>;
+    producer_versions: Record<string, string[]>;
     active_spot_symbols: number;
     coverage: Array<{
       timeframe: string;
       scheduler_group: string;
       symbols: number;
       latest: string | null;
+      oldest: string | null;
     }>;
+    identity_health: Record<string, {
+      layer: string;
+      timeframe: string;
+      scheduler_group: string;
+      covered_symbols: number;
+      active_symbols: number;
+      coverage_complete: boolean;
+      fresh: boolean;
+      latest_source_at: string | null;
+      oldest_source_at: string | null;
+      latest_age_seconds: number | null;
+      oldest_age_seconds: number | null;
+      validity_margin_seconds: number | null;
+    }>;
+    layer_health: Record<string, { status: "HEALTHY" | "DEGRADED" }>;
     decisions_24h: {
       total: number;
       with_mtf: number;
@@ -59,6 +75,15 @@ export interface MTFRuntimeAudit {
       mtf_reject: number;
     };
     l2_setup_states: Array<{ state: string; symbols: number }>;
+    verdict_counts_24h: Record<string, Record<string, number>>;
+    reason_counts_24h: Record<string, number>;
+    v5_reason_counts_24h: Record<string, number>;
+    hash_validation_24h: { checked: number; valid: number; invalid: number };
+    v5_hash_validation_24h: { checked: number; valid: number; invalid: number };
+    last_complete_context: Record<string, JsonValue> | null;
+    v5_complete_contexts_24h: number;
+    technical_status: "SHADOW_FUNCTIONAL" | "SHADOW_DEGRADED";
+    statistical_status: "APPROVED" | "NOT_APPROVED";
   };
   latest_calibration: {
     id: string;
@@ -88,9 +113,9 @@ export const ENUM_OPTIONS: Record<string, string[]> = {
   "spot_engine.scanner.universe_source": ["dynamic", "watchlist", "custom"],
   "spot_engine.scanner.l3_profile_consolidation_rule_version": ["single_profile_per_symbol_v1"],
   "spot_engine.scanner.multilayer_contract.execution_contract_version": ["multilayer_profile_execution_contract_v2"],
-  "spot_engine.scanner.multilayer_contract.provenance_policy_version": ["multilayer_provenance_resolver_v1"],
+  "spot_engine.scanner.multilayer_contract.provenance_policy_version": ["multilayer_provenance_resolver_v1", "multilayer_provenance_resolver_v2"],
   "spot_engine.scanner.multilayer_contract.consolidation_rule_version": ["single_profile_per_symbol_v2"],
-  "spot_engine.scanner.multilayer_contract.decision_feature_contract_version": ["multilayer_decision_context_v1", "multilayer_decision_context_v2", "multilayer_decision_context_v3", "multilayer_decision_context_v4"],
+  "spot_engine.scanner.multilayer_contract.decision_feature_contract_version": ["multilayer_decision_context_v1", "multilayer_decision_context_v2", "multilayer_decision_context_v3", "multilayer_decision_context_v4", "multilayer_decision_context_v5"],
   "spot_engine.scanner.multilayer_contract.layers.L1.default_timeframe": ["5m", "15m", "1h"],
   "spot_engine.scanner.multilayer_contract.layers.L2.default_timeframe": ["5m", "15m", "1h"],
   "spot_engine.scanner.multilayer_contract.layers.L3.default_timeframe": ["5m", "15m", "1h"],

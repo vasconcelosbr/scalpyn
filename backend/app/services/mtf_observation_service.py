@@ -17,6 +17,7 @@ from ..schemas.layer_context import (
     LayerVerdictRecord,
     MultilayerDecisionContextV3,
     MultilayerDecisionContextV4,
+    MultilayerDecisionContextV5,
     ProfileIdentity,
 )
 from .indicators_provider import get_timeframe_indicators
@@ -29,6 +30,28 @@ _L2_STATES = {
     "NONE", "PULLBACK_SEEN", "BREAKOUT_SEEN", "PULLBACK_RECLAIM",
     "BREAKOUT_RETEST", "INVALIDATED",
 }
+
+
+def _layer_margin_seconds(layer_config: Mapping[str, Any], group: str) -> int:
+    by_group = layer_config.get("validity_margin_seconds_by_group") or {}
+    margin = by_group.get(group, layer_config.get("validity_margin_seconds"))
+    if margin is None:
+        raise ValueError("VALIDITY_MARGIN_CONFIG_REQUIRED")
+    return int(margin)
+
+
+def _l3_source_kind(group: str, name: str) -> str:
+    if group == "microstructure" and name in {
+        "taker_ratio", "taker_buy_volume", "taker_sell_volume",
+        "volume_delta", "buy_pressure",
+    }:
+        return "live_trade_flow"
+    if group == "microstructure" and name in {
+        "spread_pct", "orderbook_depth_usdt", "bid_ask_imbalance",
+        "orderbook_pressure",
+    }:
+        return "live_order_book"
+    return "ohlcv"
 
 
 def _utc(value: Any) -> datetime:
@@ -417,7 +440,10 @@ def build_l2_context(
     state_transition: Mapping[str, Any],
 ) -> dict[str, Any]:
     verify_context_hash(l1_context)
-    verdict, _ = _profile_verdict(profile, symbol=symbol, timeframe="15m", values=values)
+    profile_verdict, _ = _profile_verdict(
+        profile, symbol=symbol, timeframe="15m", values=values
+    )
+    verdict = profile_verdict
     price = float(values["price"])
     atr = float(values["atr"])
     ema = float(values["ema21"])
@@ -437,6 +463,9 @@ def build_l2_context(
     volume_relative = float(values["volume_spike"])
     bb_width = float(values["bb_width"])
     semantics = profile.get("mtf_semantics") or {}
+    reason_codes = [f"L2_{setup}"]
+    if profile_verdict == "REJECT":
+        reason_codes.append("L2_PROFILE_REJECT")
     payload = L2DecisionContextV3(
         local_direction=direction,
         setup_state=setup_for_contract,
@@ -446,6 +475,7 @@ def build_l2_context(
         invalidation=float(state_transition["state_payload"]["invalidation"]),
         validity="VALID",
         verdict=verdict,
+        reason_codes=reason_codes,
         candle=candle,
         profile=profile_identity,
         l1_context_hash=str(l1_context["context_hash"]),
@@ -499,13 +529,13 @@ def build_multilayer_context(
             contract_version=(
                 str(l1["contract_version"]) if layer == "L1"
                 else str(l2["contract_version"]) if layer == "L2"
-                else str(l3_confirmation.get("contract_version") or "l3_confirmation_v2")
+                else str(l3_confirmation.get("contract_version") or "l3_confirmation_v3")
             ),
         )
         for layer, value in verdict_values.items()
     }
     payload_type = (
-        MultilayerDecisionContextV4
+        MultilayerDecisionContextV5
         if statistical_gate else MultilayerDecisionContextV3
     )
     payload = payload_type(
@@ -529,6 +559,7 @@ def build_multilayer_context(
 
 def build_l3_confirmation(
     *, legacy_decision: str, indicators_snapshot: Mapping[str, Any],
+    grouped_indicators_snapshot: Mapping[str, Any] | None = None,
     gate_evaluation_hash: str | None, layer_config: Mapping[str, Any] | None,
     now: datetime,
 ) -> dict[str, Any]:
@@ -544,17 +575,30 @@ def build_l3_confirmation(
     if not layer_config or margin is None:
         invalid.append("__layer_config__")
     required_by_group = (layer_config or {}).get("required_indicators_by_group") or {}
+    grouped_snapshot = (
+        grouped_indicators_snapshot
+        if grouped_indicators_snapshot is not None
+        else {
+            str(group): {
+                str(name): indicators_snapshot.get(str(name))
+                for name in names or []
+                if isinstance(indicators_snapshot.get(str(name)), Mapping)
+                and indicators_snapshot[str(name)].get("source_group") == group
+            }
+            for group, names in required_by_group.items()
+        }
+    )
     required_inputs: list[tuple[str, str]] = []
     for group, names in required_by_group.items():
         for name in names or []:
             required_inputs.append((str(group), str(name)))
-            item = indicators_snapshot.get(str(name))
-            if not isinstance(item, Mapping) or item.get("source_group") != group:
+            item = (grouped_snapshot.get(str(group)) or {}).get(str(name))
+            if not isinstance(item, Mapping):
                 invalid.append(str(name))
     if not required_inputs:
         invalid.append("__required_indicators__")
     for expected_group, name in required_inputs:
-        item = indicators_snapshot.get(name)
+        item = (grouped_snapshot.get(expected_group) or {}).get(name)
         if not isinstance(item, Mapping):
             invalid.append(name)
             continue
@@ -563,18 +607,21 @@ def build_l3_confirmation(
             continue
         observed = set(item.get("observed_timeframes") or [])
         timeframe = item.get("timeframe")
-        if item.get("source_group") == "microstructure" and name in {"taker_ratio", "taker_buy_volume", "taker_sell_volume", "volume_delta", "buy_pressure"}:
-            source_kind = "live_trade_flow"
-        elif item.get("source_group") == "microstructure" and name in {"spread_pct", "orderbook_depth_usdt", "bid_ask_imbalance", "orderbook_pressure"}:
-            source_kind = "live_order_book"
-        else:
-            source_kind = "ohlcv"
+        source_kind = _l3_source_kind(expected_group, name)
         policy = policies.get(source_kind) or {}
         allowed = {str(value) for value in policy.get("allowed_source_providers") or []}
         policy_id = str(policy.get("provider_policy_id") or "")
         allowed_capture = {
             str(value) for value in policy.get("allowed_capture_contract_versions") or []
         }
+        allowed_producers = {
+            str(value) for value in policy.get("allowed_producer_versions") or []
+        }
+        expected_config_profile_id = str(
+            policy.get("indicator_config_profile_id") or ""
+        )
+        expected_config_hash = str(policy.get("indicator_config_hash") or "")
+        expected_policy_group = str(policy.get("scheduler_group") or "")
         if item.get("timeframe_conflict") or item.get("stale"):
             invalid.append(name)
         elif observed != {"5m"}:
@@ -583,11 +630,25 @@ def build_l3_confirmation(
             invalid.append(name)
         elif item.get("source_group") != expected_group:
             invalid.append(name)
+        elif item.get("fallback_used"):
+            invalid.append(name)
         elif item.get("candle_closed") is not True:
             invalid.append(name)
         elif not allowed or str(item.get("source_provider")) not in allowed:
             invalid.append(name)
         elif not policy_id or str(item.get("provider_policy_id")) != policy_id:
+            invalid.append(name)
+        elif expected_policy_group and expected_policy_group != expected_group:
+            invalid.append(name)
+        elif not allowed_producers or str(item.get("producer_version")) not in allowed_producers:
+            invalid.append(name)
+        elif not expected_config_profile_id or str(
+            item.get("config_profile_id")
+            or (item.get("envelope") or {}).get("config_profile_id")
+            or ""
+        ) != expected_config_profile_id:
+            invalid.append(name)
+        elif not expected_config_hash or str(item.get("config_hash") or "") != expected_config_hash:
             invalid.append(name)
         else:
             try:
@@ -598,34 +659,81 @@ def build_l3_confirmation(
                 if source_timestamp + timedelta(seconds=_TF_SECONDS["5m"]) > now:
                     raise ValueError("open candle")
                 if now > source_timestamp + timedelta(
-                    seconds=_TF_SECONDS["5m"] + int(margin)
+                    seconds=(
+                        _TF_SECONDS["5m"]
+                        + _layer_margin_seconds(layer_config or {}, expected_group)
+                    )
                 ):
                     raise ValueError("expired")
                 envelope = dict(item["envelope"])
                 expected_hash = envelope.pop("envelope_hash", None)
                 if not expected_hash or expected_hash != canonical_hash(envelope):
                     raise ValueError("hash")
-                if source_kind == "ohlcv" and (
+                if (
                     not allowed_capture
                     or str(envelope.get("capture_contract_version")) not in allowed_capture
                 ):
                     raise ValueError("capture contract")
+                if envelope.get("timeframe") != "5m":
+                    raise ValueError("timeframe")
+                if envelope.get("market_type") != "spot":
+                    raise ValueError("market")
+                if envelope.get("scheduler_group") != expected_group:
+                    raise ValueError("group")
+                if envelope.get("candle_policy") != "CLOSED_ONLY":
+                    raise ValueError("candle policy")
+                if envelope.get("candle_closed") is not True:
+                    raise ValueError("candle closed")
+                if str(envelope.get("source_provider") or "") != str(
+                    item.get("source_provider") or ""
+                ):
+                    raise ValueError("provider identity")
+                if str(envelope.get("provider_policy_id") or "") != policy_id:
+                    raise ValueError("provider policy identity")
+                if str(envelope.get("producer_version") or "") != str(
+                    item.get("producer_version") or ""
+                ):
+                    raise ValueError("producer identity")
+                if str(envelope.get("config_profile_id") or "") != expected_config_profile_id:
+                    raise ValueError("config profile identity")
+                if str(envelope.get("config_hash") or "") != expected_config_hash:
+                    raise ValueError("config hash identity")
+                if _utc(envelope.get("source_timestamp")) != source_timestamp:
+                    raise ValueError("source timestamp identity")
+                if _utc(envelope.get("available_at")) != available_at:
+                    raise ValueError("availability identity")
             except (KeyError, TypeError, ValueError):
                 invalid.append(name)
-    verdict = "UNAVAILABLE" if invalid or not indicators_snapshot else (
+    source_times_by_group = {
+        group: {
+            str(item.get("source_timestamp"))
+            for item in (grouped_snapshot.get(group) or {}).values()
+            if isinstance(item, Mapping)
+        }
+        for group in required_by_group
+    }
+    if any(times and len(times) != 1 for times in source_times_by_group.values()):
+        invalid.append("__group_candle_identity__")
+    cross_group_times = {
+        next(iter(times)) for times in source_times_by_group.values() if len(times) == 1
+    }
+    if len(cross_group_times) > 1:
+        invalid.append("__cross_group_candle_identity__")
+    verdict = "UNAVAILABLE" if invalid or not grouped_snapshot else (
         "PASS" if legacy_decision == "ALLOW" else "REJECT"
     )
     material = {
-        "contract_version": "l3_confirmation_v2",
+        "contract_version": "l3_confirmation_v3",
         "timeframe": "5m",
         "candle_policy": "CLOSED_ONLY",
         "verdict": verdict,
         "legacy_decision": legacy_decision,
         "gate_evaluation_hash": gate_evaluation_hash,
-        "indicators_snapshot_hash": canonical_hash(indicators_snapshot),
+        "indicators_snapshot_hash": canonical_hash(grouped_snapshot),
+        "resolved_inputs_by_group": deepcopy(dict(grouped_snapshot)),
         "reason_codes": (
             ["L3_TEMPORAL_IDENTITY_UNAVAILABLE"] if invalid
-            else ["L3_INDICATORS_UNAVAILABLE"] if not indicators_snapshot
+            else ["L3_INDICATORS_UNAVAILABLE"] if not grouped_snapshot
             else []
         ),
         "invalid_indicators": sorted(set(invalid)),

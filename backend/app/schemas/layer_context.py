@@ -169,3 +169,11 @@ class MultilayerDecisionContextV4(MultilayerDecisionContextV3):
         "multilayer_decision_context_v4"
     )
     statistical_gate: WaivedStatisticalGateSnapshot
+
+
+class MultilayerDecisionContextV5(MultilayerDecisionContextV4):
+    """Group-qualified L3 provenance with governed temporal margins."""
+
+    contract_version: Literal["multilayer_decision_context_v5"] = (
+        "multilayer_decision_context_v5"
+    )

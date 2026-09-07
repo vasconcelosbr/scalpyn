@@ -1363,6 +1363,45 @@
           ]
         }
       ]
+    },
+    {
+      "id": "mtf-shadow-v5-group-qualified-provenance",
+      "description": "MTF shadow resolves L3 inputs by indicator, timeframe and scheduler group while preserving the legacy flat snapshot and order isolation",
+      "files": [
+        {
+          "path": "backend/app/services/indicators_provider.py",
+          "contains_all": [
+            "build_grouped_indicators_snapshot",
+            "merged.candidates",
+            "never falls back to the flat winner"
+          ]
+        },
+        {
+          "path": "backend/app/services/mtf_observation_service.py",
+          "contains_all": [
+            "l3_confirmation_v3",
+            "resolved_inputs_by_group",
+            "L3_TEMPORAL_IDENTITY_UNAVAILABLE",
+            "operational_effect"
+          ]
+        },
+        {
+          "path": "backend/app/services/multilayer_contract.py",
+          "contains_all": [
+            "multilayer_decision_context_v5",
+            "multilayer_provenance_resolver_v2",
+            "VALIDITY_EVIDENCE_HASH_INVALID"
+          ]
+        },
+        {
+          "path": "backend/tests/test_mtf_spot_observation.py",
+          "contains_all": [
+            "test_grouped_mtf_snapshot_resolves_homonymous_indicator_without_changing_legacy",
+            "test_controlled_v5_replay_can_pass_without_operational_effect",
+            "test_v5_contract_requires_complete_hashed_validity_evidence"
+          ]
+        }
+      ]
     }
   ]
 }

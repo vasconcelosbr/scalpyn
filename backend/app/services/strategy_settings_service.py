@@ -131,6 +131,44 @@ def _flatten_diff(before: Any, after: Any, path: str = "") -> list[Dict[str, Any
     return []
 
 
+def _utc_datetime(value: Any) -> datetime:
+    parsed = (
+        value
+        if isinstance(value, datetime)
+        else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    )
+    return (
+        parsed.replace(tzinfo=timezone.utc)
+        if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+    )
+
+
+def _percentile(values: list[float], fraction: float) -> float:
+    ordered = sorted(values)
+    if not ordered:
+        raise StrategySettingsValidationError("VALIDITY_MEASUREMENT_SAMPLES_REQUIRED")
+    position = (len(ordered) - 1) * fraction
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return ordered[lower]
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
+
+
+def _mtf_source_kind(group: str, name: str) -> str:
+    if group == "microstructure" and name in {
+        "taker_ratio", "taker_buy_volume", "taker_sell_volume",
+        "volume_delta", "buy_pressure",
+    }:
+        return "live_trade_flow"
+    if group == "microstructure" and name in {
+        "spread_pct", "orderbook_depth_usdt", "bid_ask_imbalance",
+        "orderbook_pressure",
+    }:
+        return "live_order_book"
+    return "ohlcv"
+
+
 class StrategySettingsService:
     @staticmethod
     def _assert_coverage_envelope(
@@ -145,7 +183,12 @@ class StrategySettingsService:
         """Validate a latest producer row before observation can be enabled."""
 
         policies = layer_config.get("source_policies") or {}
-        margin = layer_config.get("validity_margin_seconds")
+        margin = (
+            (layer_config.get("validity_margin_seconds_by_group") or {}).get(
+                scheduler_group
+            )
+            or layer_config.get("validity_margin_seconds")
+        )
         if margin is None:
             raise StrategySettingsValidationError(
                 f"{timeframe}_{symbol}_VALIDITY_MARGIN_CONFIG_REQUIRED"
@@ -1245,6 +1288,220 @@ class StrategySettingsService:
             "multilayer_contract": validated,
             "coverage": coverage,
         }
+
+    async def refresh_multilayer_validity(
+        self,
+        db: AsyncSession,
+        user_id: UUID,
+        *,
+        window_started_at: datetime,
+        window_ended_at: datetime,
+        apply: bool = False,
+    ) -> Dict[str, Any]:
+        """Measure and atomically publish v5 MTF freshness evidence.
+
+        The caller supplies the complete measurement window.  No duration,
+        percentile fallback, or safety constant is inferred by the runtime.
+        """
+
+        started = _utc_datetime(window_started_at)
+        ended = _utc_datetime(window_ended_at)
+        if started >= ended or ended > datetime.now(timezone.utc):
+            raise StrategySettingsValidationError("VALIDITY_MEASUREMENT_WINDOW_INVALID")
+        profiles = await self._profiles(db, user_id, lock=apply)
+        target = profiles.get("spot_engine")
+        if target is None:
+            raise StrategySettingsValidationError("SPOT_ENGINE_CONFIG_REQUIRED")
+        before_json = deepcopy(dict(target.config_json or {}))
+        scanner = deepcopy(before_json.get("scanner") or {})
+        current_contract = require_shadow_multilayer_config(scanner)
+        if current_contract.get("operational_effect") is not False:
+            raise StrategySettingsValidationError("MULTILAYER_OPERATIONAL_EFFECT_FORBIDDEN")
+        scan_interval = int(scanner.get("scan_interval_seconds") or 0)
+        if scan_interval <= 0:
+            raise StrategySettingsValidationError("MTF_SCAN_INTERVAL_CONFIG_REQUIRED")
+
+        symbols = [str(row.symbol) for row in (await db.execute(text("""
+            SELECT DISTINCT pc.symbol
+              FROM pool_coins pc
+              JOIN pools p ON p.id = pc.pool_id
+             WHERE p.user_id = :user_id
+               AND p.is_active IS TRUE AND p.market_type = 'spot'
+               AND pc.is_active IS TRUE AND pc.market_type = 'spot'
+             ORDER BY pc.symbol
+        """), {"user_id": str(user_id)})).fetchall()]
+        if not symbols:
+            raise StrategySettingsValidationError("MTF_ACTIVE_SPOT_SYMBOLS_REQUIRED")
+        requirements = {
+            ("L1", "1h", "structural"),
+            ("L2", "15m", "structural"),
+            ("L3", "5m", "structural"),
+            ("L3", "5m", "microstructure"),
+        }
+        samples: Dict[tuple[str, str, str], list[float]] = {
+            identity: [] for identity in requirements
+        }
+        covered: Dict[tuple[str, str, str], set[str]] = {
+            identity: set() for identity in requirements
+        }
+        for layer, timeframe, group in sorted(requirements):
+            identity = (layer, timeframe, group)
+            layer_config = current_contract["layers"][layer]
+            required = sorted({
+                str(name) for name in (
+                    (layer_config.get("required_indicators_by_group") or {}).get(group)
+                    or []
+                )
+            })
+            if not required:
+                raise StrategySettingsValidationError(
+                    f"CONFIG_REQUIRED:{layer}:{timeframe}:{group}:REQUIRED_INDICATORS"
+                )
+            representative = required[0]
+            rows = (await db.execute(text("""
+                SELECT i.symbol, i.indicators_json -> :indicator AS envelope
+                  FROM indicators i
+                 WHERE i.symbol = ANY(CAST(:symbols AS TEXT[]))
+                   AND i.market_type = 'spot'
+                   AND i.timeframe = :timeframe
+                   AND i.scheduler_group = :scheduler_group
+                   AND i.time >= :started AND i.time < :ended
+                 ORDER BY i.symbol, i.time
+            """), {
+                "symbols": symbols, "timeframe": timeframe,
+                "scheduler_group": group, "indicator": representative,
+                "started": started, "ended": ended,
+            })).mappings().all()
+            policy = (layer_config.get("source_policies") or {}).get(
+                _mtf_source_kind(group, representative)
+            ) or {}
+            allowed_providers = {
+                str(value) for value in policy.get("allowed_source_providers") or []
+            }
+            allowed_producers = {
+                str(value) for value in policy.get("allowed_producer_versions") or []
+            }
+            allowed_capture = {
+                str(value) for value in policy.get("allowed_capture_contract_versions") or []
+            }
+            expected_group = str(policy.get("scheduler_group") or "")
+            for row in rows:
+                if not isinstance(row["envelope"], dict):
+                    continue
+                original = dict(row["envelope"])
+                expected_hash = original.pop("envelope_hash", None)
+                if (
+                    not expected_hash
+                    or expected_hash != canonical_hash(original)
+                    or original.get("timeframe") != timeframe
+                    or original.get("market_type") != "spot"
+                    or original.get("scheduler_group") != group
+                    or (expected_group and expected_group != group)
+                    or original.get("candle_policy") != "CLOSED_ONLY"
+                    or original.get("candle_closed") is not True
+                    or str(original.get("source_provider")) not in allowed_providers
+                    or str(original.get("provider_policy_id") or "")
+                       != str(policy.get("provider_policy_id") or "")
+                    or str(original.get("producer_version") or "") not in allowed_producers
+                    or str(original.get("config_profile_id") or "")
+                       != str(policy.get("indicator_config_profile_id") or "")
+                    or str(original.get("config_hash") or "")
+                       != str(policy.get("indicator_config_hash") or "")
+                    or str(original.get("capture_contract_version") or "")
+                       not in allowed_capture
+                ):
+                    continue
+                try:
+                    source_timestamp = _utc_datetime(original["source_timestamp"])
+                    available_at = _utc_datetime(original["available_at"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                latency = (available_at - source_timestamp).total_seconds()
+                if latency < 0:
+                    continue
+                samples[identity].append(latency)
+                covered[identity].add(str(row["symbol"]))
+
+        measured_at = datetime.now(timezone.utc).isoformat()
+        evidence: Dict[str, Dict[str, Any]] = {}
+        for layer, timeframe, group in sorted(requirements):
+            identity = (layer, timeframe, group)
+            if covered[identity] != set(symbols):
+                missing = sorted(set(symbols) - covered[identity])
+                raise StrategySettingsValidationError(
+                    f"CONFIG_REQUIRED:{layer}:{timeframe}:{group}:MISSING_SYMBOLS:"
+                    + ",".join(missing)
+                )
+            p99 = _percentile(samples[identity], 0.99)
+            margin = math.ceil(p99) + scan_interval
+            material = {
+                "formula": "p99(open_to_available_seconds)+scan_interval_seconds",
+                "window_started_at": started.isoformat(),
+                "window_ended_at": ended.isoformat(),
+                "sample_count": len(samples[identity]),
+                "active_symbol_count": len(symbols),
+                "covered_symbol_count": len(covered[identity]),
+                "p99_open_to_available_seconds": p99,
+                "scan_interval_seconds": scan_interval,
+                "validity_margin_seconds": margin,
+                "measured_at": measured_at,
+            }
+            evidence[f"{layer}:{timeframe}:{group}"] = {
+                **material,
+                "evidence_hash": canonical_hash(material),
+            }
+
+        candidate = deepcopy(before_json)
+        candidate_scanner = deepcopy(candidate.get("scanner") or {})
+        contract = deepcopy(candidate_scanner.get("multilayer_contract") or {})
+        contract["provenance_policy_version"] = "multilayer_provenance_resolver_v2"
+        contract["decision_feature_contract_version"] = "multilayer_decision_context_v5"
+        contract["decision_feature_valid_from"] = measured_at
+        for layer, timeframe, group in requirements:
+            item = contract["layers"][layer]
+            measured = evidence[f"{layer}:{timeframe}:{group}"]
+            if layer == "L3":
+                item.setdefault("validity_margin_seconds_by_group", {})[group] = measured[
+                    "validity_margin_seconds"
+                ]
+                item.setdefault("validity_evidence_by_group", {})[group] = measured
+            else:
+                item["validity_margin_seconds"] = measured["validity_margin_seconds"]
+                item["validity_evidence"] = measured
+        contract["layers"]["L3"]["validity_margin_seconds"] = max(
+            contract["layers"]["L3"]["validity_margin_seconds_by_group"].values()
+        )
+        candidate_scanner["multilayer_contract"] = contract
+        candidate["scanner"] = candidate_scanner
+        SpotEngineConfig.from_config_json(candidate)
+        validated = require_shadow_multilayer_config(candidate_scanner)
+        coverage = await self._assert_multilayer_runtime_ready(db, user_id, validated)
+        result = {
+            "changed": candidate != before_json,
+            "applied": False,
+            "contract_hash": _canonical_hash(validated),
+            "previous_contract_hash": _canonical_hash(current_contract),
+            "multilayer_contract": validated,
+            "validity_evidence": evidence,
+            "coverage": coverage,
+        }
+        if not apply:
+            await db.rollback()
+            return result
+        target.config_json = candidate
+        db.add(ConfigAuditLog(
+            config_id=target.id,
+            changed_by=user_id,
+            previous_json=before_json,
+            new_json=candidate,
+            change_description=(
+                "[MTF_SHADOW_V5] group-qualified provenance and measured p99 "
+                "validity margins; operational_effect=false"
+            ),
+        ))
+        await db.commit()
+        await config_service.invalidate_cache("spot_engine", user_id, None, strict=True)
+        return {**result, "applied": True}
 
     async def disable_multilayer_shadow(
         self,

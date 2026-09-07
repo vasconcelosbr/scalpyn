@@ -393,3 +393,67 @@ def build_indicators_snapshot(
             "envelope": envelope or None,
         }
     return snapshot
+
+
+def build_grouped_indicators_snapshot(
+    merged: MergedIndicators,
+    *,
+    required_by_group: Dict[str, Iterable[str]],
+    timeframe: str,
+    market_type: str = "spot",
+) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    """Resolve MTF inputs by their full temporal identity.
+
+    The legacy snapshot above deliberately keeps its historical flat
+    latest-winner semantics.  MTF cannot use that projection because the same
+    indicator name may legitimately exist in more than one scheduler group.
+    This additive snapshot therefore selects from ``merged.candidates`` by
+    ``(indicator, timeframe, group, market_type)`` and never falls back to the
+    flat winner.
+    """
+
+    grouped: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for group, names in required_by_group.items():
+        group_name = str(group)
+        grouped[group_name] = {}
+        for raw_name in names:
+            name = str(raw_name)
+            matches = [
+                candidate
+                for candidate in merged.candidates
+                if str(candidate.get("indicator")) == name
+                and str(candidate.get("timeframe")) == timeframe
+                and str(candidate.get("group")) == group_name
+                and str(candidate.get("market_type")) == market_type
+            ]
+            if not matches:
+                continue
+            winner = max(
+                matches,
+                key=lambda item: (
+                    str(item.get("source_timestamp") or ""),
+                    str(item.get("available_at") or ""),
+                    str(item.get("computed_at") or ""),
+                ),
+            )
+            envelope = dict(winner.get("envelope") or {})
+            grouped[group_name][name] = {
+                "value": winner.get("actual"),
+                "source_group": group_name,
+                "ts": _iso(winner.get("computed_at")),
+                "timeframe": timeframe,
+                "observed_timeframes": [timeframe],
+                "timeframe_conflict": False,
+                "stale": bool(winner.get("stale", False)),
+                "source_timestamp": _iso(winner.get("source_timestamp")),
+                "available_at": _iso(winner.get("available_at")),
+                "source_provider": winner.get("source_provider"),
+                "provider_policy_id": winner.get("provider_policy_id"),
+                "candle_closed": winner.get("candle_closed"),
+                "config_profile_id": winner.get("config_profile_id"),
+                "config_hash": winner.get("config_hash"),
+                "producer_version": winner.get("producer_version"),
+                "fallback_used": bool(winner.get("fallback_used", False)),
+                "envelope": envelope or None,
+            }
+    return grouped

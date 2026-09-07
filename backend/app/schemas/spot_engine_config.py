@@ -49,6 +49,22 @@ class L3ProvenanceSourcePoliciesConfig(BaseModel):
     )
 
 
+class ValidityMarginEvidenceConfig(BaseModel):
+    """Measured evidence for a configured context-validity margin."""
+
+    formula: Literal["p99(open_to_available_seconds)+scan_interval_seconds"]
+    window_started_at: str
+    window_ended_at: str
+    sample_count: int = Field(ge=1)
+    active_symbol_count: int = Field(ge=1)
+    covered_symbol_count: int = Field(ge=1)
+    p99_open_to_available_seconds: float = Field(ge=0)
+    scan_interval_seconds: int = Field(ge=1)
+    validity_margin_seconds: int = Field(ge=1)
+    measured_at: str
+    evidence_hash: str = Field(min_length=64, max_length=64)
+
+
 class L3ProvenanceResolverConfig(BaseModel):
     """Canary control for resolving legacy L3 conditions at decision time."""
 
@@ -81,6 +97,11 @@ class LayerRuntimeContractConfig(BaseModel):
     required_indicators_by_group: Dict[str, List[str]] = Field(default_factory=dict)
     default_timeframe: Literal["5m", "15m", "1h"]
     validity_margin_seconds: Optional[int] = Field(None, ge=0)
+    validity_margin_seconds_by_group: Dict[str, int] = Field(default_factory=dict)
+    validity_evidence: Optional[ValidityMarginEvidenceConfig] = None
+    validity_evidence_by_group: Dict[str, ValidityMarginEvidenceConfig] = Field(
+        default_factory=dict
+    )
     profile_allowlist: List[str] = Field(default_factory=list)
     outside_allowlist_policy: Literal["REPORT_ONLY", "REJECT_CONFIGURATION"] = (
         "REPORT_ONLY"
@@ -101,7 +122,7 @@ class MultiLayerExecutionConfig(BaseModel):
     ] = "multilayer_profile_execution_contract_v2"
     execution_contract_valid_from: Optional[str] = None
     provenance_policy_version: Literal[
-        "multilayer_provenance_resolver_v1"
+        "multilayer_provenance_resolver_v1", "multilayer_provenance_resolver_v2"
     ] = "multilayer_provenance_resolver_v1"
     consolidation_rule_version: Literal[
         "single_profile_per_symbol_v2"
@@ -109,7 +130,8 @@ class MultiLayerExecutionConfig(BaseModel):
     consolidation_valid_from: Optional[str] = None
     decision_feature_contract_version: Literal[
         "multilayer_decision_context_v1", "multilayer_decision_context_v2",
-        "multilayer_decision_context_v3", "multilayer_decision_context_v4"
+        "multilayer_decision_context_v3", "multilayer_decision_context_v4",
+        "multilayer_decision_context_v5"
     ] = "multilayer_decision_context_v1"
     decision_feature_valid_from: Optional[str] = None
     calibration_run_id: Optional[str] = None

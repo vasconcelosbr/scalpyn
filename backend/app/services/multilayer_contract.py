@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime
+import math
 from typing import Any, Mapping
 
 from .profile_execution_contract import EXECUTION_SECTIONS
@@ -11,10 +12,11 @@ from .profile_runtime_config import canonical_hash
 
 
 MULTILAYER_EXECUTION_CONTRACT_VERSION = "multilayer_profile_execution_contract_v2"
-MULTILAYER_PROVENANCE_POLICY_VERSION = "multilayer_provenance_resolver_v1"
+MULTILAYER_PROVENANCE_POLICY_VERSION = "multilayer_provenance_resolver_v2"
 MULTILAYER_CONSOLIDATION_VERSION = "single_profile_per_symbol_v2"
 MULTILAYER_DECISION_CONTEXT_VERSION = "multilayer_decision_context_v3"
-MULTILAYER_WAIVER_CONTEXT_VERSION = "multilayer_decision_context_v4"
+MULTILAYER_WAIVER_CONTEXT_VERSION = "multilayer_decision_context_v5"
+MULTILAYER_LEGACY_WAIVER_CONTEXT_VERSION = "multilayer_decision_context_v4"
 LAYERS = ("L1", "L2", "L3")
 LAYER_VERDICTS = {"PASS", "REJECT", "INSUFFICIENT_DATA", "UNAVAILABLE"}
 
@@ -65,15 +67,22 @@ def require_shadow_multilayer_config(scanner: Mapping[str, Any]) -> dict[str, An
     if context_version not in {
         MULTILAYER_DECISION_CONTEXT_VERSION,
         MULTILAYER_WAIVER_CONTEXT_VERSION,
+        MULTILAYER_LEGACY_WAIVER_CONTEXT_VERSION,
     }:
         raise ValueError("MULTILAYER_CONTEXT_VERSION_UNKNOWN")
     if not config.get("calibration_run_id"):
         raise ValueError("MULTILAYER_CALIBRATION_RUN_MISSING")
-    if context_version == MULTILAYER_WAIVER_CONTEXT_VERSION:
+    if context_version in {
+        MULTILAYER_WAIVER_CONTEXT_VERSION,
+        MULTILAYER_LEGACY_WAIVER_CONTEXT_VERSION,
+    }:
         gate = validate_waived_statistical_gate(config.get("statistical_gate"))
         if gate["calibration_run_id"] != str(config["calibration_run_id"]):
             raise ValueError("MULTILAYER_WAIVER_RUN_MISMATCH")
         config["statistical_gate"] = gate
+    if context_version == MULTILAYER_WAIVER_CONTEXT_VERSION:
+        if config.get("provenance_policy_version") != MULTILAYER_PROVENANCE_POLICY_VERSION:
+            raise ValueError("MULTILAYER_PROVENANCE_POLICY_VERSION_INVALID")
     layers = config.get("layers") or {}
     if set(layers) != set(LAYERS):
         raise ValueError("MULTILAYER_LAYER_CONFIG_INCOMPLETE")
@@ -96,12 +105,49 @@ def require_shadow_multilayer_config(scanner: Mapping[str, Any]) -> dict[str, An
             raise ValueError(f"{layer}_SOURCE_POLICY_INCOMPLETE")
         if not ohlcv.get("allowed_capture_contract_versions"):
             raise ValueError(f"{layer}_CAPTURE_CONTRACT_POLICY_INCOMPLETE")
+        if context_version == MULTILAYER_WAIVER_CONTEXT_VERSION:
+            if layer == "L3":
+                evidence_by_group = item.get("validity_evidence_by_group") or {}
+                margins_by_group = item.get("validity_margin_seconds_by_group") or {}
+                required_groups = set(item.get("required_indicators_by_group") or {})
+                if set(evidence_by_group) != required_groups or set(margins_by_group) != required_groups:
+                    raise ValueError("L3_VALIDITY_EVIDENCE_INCOMPLETE")
+                for group in required_groups:
+                    _validate_validity_evidence(
+                        evidence_by_group[group], expected_margin=margins_by_group[group]
+                    )
+            else:
+                _validate_validity_evidence(
+                    item.get("validity_evidence"),
+                    expected_margin=item.get("validity_margin_seconds"),
+                )
     for layer in ("L1", "L2"):
         item = layers[layer]
         for field in ("profile_id", "profile_version_id", "profile_config_hash"):
             if not item.get(field):
                 raise ValueError(f"{layer}_{field.upper()}_MISSING")
     return config
+
+
+def _validate_validity_evidence(
+    value: Any, *, expected_margin: Any,
+) -> dict[str, Any]:
+    evidence = deepcopy(dict(value or {}))
+    expected_hash = evidence.pop("evidence_hash", None)
+    if not expected_hash or expected_hash != canonical_hash(evidence):
+        raise ValueError("VALIDITY_EVIDENCE_HASH_INVALID")
+    if evidence.get("formula") != "p99(open_to_available_seconds)+scan_interval_seconds":
+        raise ValueError("VALIDITY_EVIDENCE_FORMULA_INVALID")
+    if evidence.get("covered_symbol_count") != evidence.get("active_symbol_count"):
+        raise ValueError("VALIDITY_EVIDENCE_SYMBOL_COVERAGE_INCOMPLETE")
+    if int(evidence.get("validity_margin_seconds") or -1) != int(expected_margin):
+        raise ValueError("VALIDITY_EVIDENCE_MARGIN_MISMATCH")
+    expected = math.ceil(float(evidence.get("p99_open_to_available_seconds"))) + int(
+        evidence.get("scan_interval_seconds")
+    )
+    if expected != int(expected_margin):
+        raise ValueError("VALIDITY_EVIDENCE_CALCULATION_INVALID")
+    return {**evidence, "evidence_hash": expected_hash}
 
 
 def validate_waived_statistical_gate(value: Any) -> dict[str, Any]:

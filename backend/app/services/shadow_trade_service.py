@@ -1797,7 +1797,8 @@ async def _create_from_decision(
     if isinstance(_l3_contract_v3, dict):
         config_snap["l3_authorization_contract_v3"] = deepcopy(_l3_contract_v3)
     _mtf_context = (
-        (decision.metrics or {}).get("multilayer_decision_context_v4")
+        (decision.metrics or {}).get("multilayer_decision_context_v5")
+        or (decision.metrics or {}).get("multilayer_decision_context_v4")
         or (decision.metrics or {}).get("multilayer_decision_context_v3")
         or (decision.metrics or {}).get("multilayer_decision_context_v2")
     )

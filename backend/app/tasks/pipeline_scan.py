@@ -2159,6 +2159,7 @@ async def _evaluate_l3_decisions(
             if mtf_context_key not in {
                 "multilayer_decision_context_v3",
                 "multilayer_decision_context_v4",
+                "multilayer_decision_context_v5",
             }:
                 mtf_context_key = "multilayer_decision_context_v3"
             if mtf_observation.get("l1") and mtf_observation.get("l2"):
@@ -2167,11 +2168,29 @@ async def _evaluate_l3_decisions(
                         build_l3_confirmation,
                         build_multilayer_context,
                     )
+                    from ..services.indicators_provider import (
+                        build_grouped_indicators_snapshot,
+                    )
+                    l3_layer_config = mtf_observation.get("l3_layer_config") or {}
+                    merged_for_mtf = asset.get("_merged_indicators")
+                    mtf_snapshot = (
+                        build_grouped_indicators_snapshot(
+                            merged_for_mtf,
+                            required_by_group=(
+                                l3_layer_config.get("required_indicators_by_group") or {}
+                            ),
+                            timeframe="5m",
+                            market_type="spot",
+                        )
+                        if merged_for_mtf is not None else {}
+                    )
+                    metrics["mtf_indicators_snapshot"] = mtf_snapshot
                     l3_confirmation = build_l3_confirmation(
                         legacy_decision=decision,
                         indicators_snapshot=metrics.get("indicators_snapshot") or {},
+                        grouped_indicators_snapshot=mtf_snapshot,
                         gate_evaluation_hash=gate_v2.get("evaluation_envelope_hash"),
-                        layer_config=mtf_observation.get("l3_layer_config") or {},
+                        layer_config=l3_layer_config,
                         now=evaluated_at,
                     )
                     mtf_context = build_multilayer_context(
