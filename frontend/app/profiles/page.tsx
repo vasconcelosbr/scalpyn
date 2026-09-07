@@ -132,6 +132,10 @@ export default function ProfilesPage() {
       <ProfileBuilder
         profile={editingProfile}
         onSave={handleSave}
+        onProfileStatusChanged={(updatedProfile) => {
+          setEditingProfile(updatedProfile);
+          fetchProfiles();
+        }}
         onCancel={() => {
           setShowBuilder(false);
           setEditingProfile(null);

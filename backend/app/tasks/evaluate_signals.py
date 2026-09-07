@@ -241,6 +241,7 @@ async def _evaluate_async():
                     resolve_spot_pipeline_chain,
                 )
                 l3_symbols: set | None = None
+                l3_profile_ids_by_symbol: dict[str, object] = {}
                 pool_for_l3 = None
                 try:
                     pool_for_l3 = (await db.execute(
@@ -264,6 +265,10 @@ async def _evaluate_async():
                             # All L3 profiles contribute.  ``load_live_l3_candidates``
                             # also intersects L3 with the current POOL/L1/L2 rows.
                             l3_symbols = {candidate.symbol for candidate in live_candidates}
+                            l3_profile_ids_by_symbol = {
+                                candidate.symbol: candidate.winner.profile_id
+                                for candidate in live_candidates
+                            }
                 except Exception as _l3_exc:
                     logger.warning(
                         "[evaluate_signals] L3 chain query failed for user %s: %s",
@@ -516,6 +521,39 @@ async def _evaluate_async():
                     # to promote a 0-point evaluation to APPROVED even when
                     # signal flags align (defensive net — there is no
                     # threshold check on this code path, unlike execute_buy).
+                    # Revalidate the exact winning profile at the decision
+                    # boundary.  The row lock serializes this APPROVED write
+                    # with the dedicated profile-status transaction.
+                    from ..models.profile import Profile as UserProfile
+
+                    _selected_profile_id = l3_profile_ids_by_symbol.get(symbol)
+                    _active_profile_id = None
+                    if _selected_profile_id is not None:
+                        _active_profile_id = await db.scalar(
+                            select(UserProfile.id)
+                            .where(
+                                UserProfile.id == _selected_profile_id,
+                                UserProfile.user_id == user.id,
+                                UserProfile.is_active.is_(True),
+                            )
+                            .with_for_update()
+                        )
+                    if _active_profile_id is None:
+                        await _safe_record_decision(
+                            db=db,
+                            trace_id=get_trace(),
+                            user_id=str(user.id),
+                            pool_id=pool_id_for_ctx,
+                            symbol=symbol,
+                            market_type="spot",
+                            exchange="gate",
+                            status="SKIPPED",
+                            stage="L3",
+                            reason="PROFILE_INACTIVE",
+                            blocking_rule="ProfileStatusGate",
+                        )
+                        continue
+
                     if alpha_score > 0:
                         await _safe_record_decision(
                             db=db,
@@ -545,7 +583,36 @@ async def _evaluate_async():
                     pool = pools_result.scalars().first()
                     pool_mode = pool.mode if pool else "paper"
 
-                    # 5. Execute trade
+                    # ``_safe_record_decision`` commits its isolated audit and
+                    # therefore releases the first lock.  Lock again at the
+                    # actual order boundary so a profile disabled in between
+                    # cannot create a late trade.
+                    _active_profile_id = await db.scalar(
+                        select(UserProfile.id)
+                        .where(
+                            UserProfile.id == _selected_profile_id,
+                            UserProfile.user_id == user.id,
+                            UserProfile.is_active.is_(True),
+                        )
+                        .with_for_update()
+                    )
+                    if _active_profile_id is None:
+                        await _safe_record_decision(
+                            db=db,
+                            trace_id=get_trace(),
+                            user_id=str(user.id),
+                            pool_id=str(pool.id) if pool else None,
+                            symbol=symbol,
+                            market_type="spot",
+                            exchange="gate",
+                            status="SKIPPED",
+                            stage="EXECUTION",
+                            reason="PROFILE_INACTIVE",
+                            blocking_rule="ProfileStatusGate",
+                        )
+                        continue
+
+                    # 5. Execute trade while the active-profile row remains locked.
                     trade_result = await execution_engine.execute_trade(
                         db=db,
                         user_id=user.id,

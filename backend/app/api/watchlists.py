@@ -31,6 +31,7 @@ from ..models.pipeline_watchlist import (
     PipelineWatchlistAsset,
     PipelineWatchlistRejection,
 )
+from ..models.profile import Profile
 from ..services.market_data_service import _is_etf_pair
 from ..services.pipeline_live_candidates import load_live_l3_candidates
 from ..services.watchlist_performance_ranking_service import (
@@ -226,6 +227,55 @@ def _normalize_and_validate_watchlist_sources(
         return None, source_watchlist_id
 
     return source_pool_id, source_watchlist_id
+
+
+_WATCHLIST_LEVEL_ROLE = {
+    "POOL": "universe_filter",
+    "L1": "primary_filter",
+    "L2": "score_engine",
+    "L3": "acquisition_queue",
+}
+
+
+async def _validate_assignable_profile(
+    db: AsyncSession,
+    *,
+    user_id: UUID,
+    profile_id: Optional[UUID],
+    level: str,
+) -> Optional[Profile]:
+    """Reject inactive, foreign, missing, or layer-incompatible assignments."""
+    if profile_id is None:
+        return None
+    profile = (
+        await db.execute(
+            select(Profile).where(Profile.id == profile_id, Profile.user_id == user_id)
+        )
+    ).scalars().first()
+    if profile is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "PROFILE_NOT_FOUND", "profile_id": str(profile_id)},
+        )
+    if not profile.is_active:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "PROFILE_INACTIVE_NOT_ASSOCIABLE", "profile_id": str(profile_id)},
+        )
+    normalized_level = normalize_watchlist_level(level)
+    expected_role = _WATCHLIST_LEVEL_ROLE.get(normalized_level)
+    actual_role = str(profile.profile_role or "").strip().lower() or None
+    if expected_role and actual_role != expected_role:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "PROFILE_WATCHLIST_LAYER_MISMATCH",
+                "profile_id": str(profile_id),
+                "expected_role": expected_role,
+                "actual_role": actual_role,
+            },
+        )
+    return profile
 
 
 def _passes_profile_filters(
@@ -1057,6 +1107,10 @@ async def create_watchlist(
     raw_mode = payload.get("market_mode", "spot")
     market_mode = "futures" if str(raw_mode).lower() == "futures" else "spot"
 
+    profile_id = _to_uuid(payload.get("profile_id"))
+    await _validate_assignable_profile(
+        db, user_id=user_id, profile_id=profile_id, level=level
+    )
     wl = PipelineWatchlist(
         user_id=user_id,
         name=name,
@@ -1064,7 +1118,7 @@ async def create_watchlist(
         market_mode=market_mode,
         source_pool_id=source_pool_id,
         source_watchlist_id=source_watchlist_id,
-        profile_id=_to_uuid(payload.get("profile_id")),
+        profile_id=profile_id,
         auto_refresh=payload.get("auto_refresh", True),
         filters_json=filters,
     )
@@ -1123,8 +1177,16 @@ async def update_watchlist(
     wl.level = next_level
     wl.source_pool_id = next_source_pool_id
     wl.source_watchlist_id = next_source_watchlist_id
-    if "profile_id" in payload:
-        wl.profile_id = _to_uuid(payload["profile_id"])
+    next_profile_id = _to_uuid(payload["profile_id"]) if "profile_id" in payload else wl.profile_id
+    if (
+        "profile_id" in payload
+        or "level" in payload
+        or ("auto_refresh" in payload and bool(payload["auto_refresh"]))
+    ):
+        await _validate_assignable_profile(
+            db, user_id=user_id, profile_id=next_profile_id, level=next_level
+        )
+    wl.profile_id = next_profile_id
     if "auto_refresh" in payload:
         wl.auto_refresh = bool(payload["auto_refresh"])
     if "filters_json" in payload:
@@ -1294,10 +1356,12 @@ async def _load_watchlist_profile_config(
     if not wl.profile_id:
         return None
 
-    from ..models.profile import Profile
-
     prof_result = await db.execute(
-        select(Profile).where(Profile.id == wl.profile_id)
+        select(Profile).where(
+            Profile.id == wl.profile_id,
+            Profile.user_id == wl.user_id,
+            Profile.is_active.is_(True),
+        )
     )
     prof = prof_result.scalars().first()
     return prof.config if prof else None
@@ -1709,6 +1773,21 @@ async def _resolve_and_persist_bg(watchlist_id_str: str, user_id_str: str) -> No
             )
 
 
+async def _clear_disabled_watchlist_snapshot(
+    db: AsyncSession, watchlist_id: UUID
+) -> None:
+    """Remove current opportunity state while preserving decisions and trades."""
+    await db.execute(
+        text("DELETE FROM pipeline_watchlist_assets WHERE watchlist_id = :wid"),
+        {"wid": str(watchlist_id)},
+    )
+    await db.execute(
+        text("DELETE FROM pipeline_watchlist_rejections WHERE watchlist_id = :wid"),
+        {"wid": str(watchlist_id)},
+    )
+    await db.commit()
+
+
 async def _resolve_and_persist(
     wl: PipelineWatchlist,
     user_id: UUID,
@@ -1718,6 +1797,22 @@ async def _resolve_and_persist(
     Resolve pipeline, apply filters, upsert pipeline_watchlist_assets,
     detect level transitions, and return enriched asset list.
     """
+    if not wl.auto_refresh or not wl.profile_id:
+        await _clear_disabled_watchlist_snapshot(db, wl.id)
+        return []
+    active_profile = (
+        await db.execute(
+            select(Profile.id).where(
+                Profile.id == wl.profile_id,
+                Profile.user_id == user_id,
+                Profile.is_active.is_(True),
+            )
+        )
+    ).scalar_one_or_none()
+    if active_profile is None:
+        await _clear_disabled_watchlist_snapshot(db, wl.id)
+        return []
+
     base_symbols = await _get_base_symbols(wl, user_id, db)
     if not base_symbols:
         # No upstream symbols — mark all existing active assets as 'down'
@@ -1898,12 +1993,18 @@ async def _resolve_and_persist(
     if wl.profile_id:
         try:
             from ..models.profile import Profile
-            prof_res = await db.execute(select(Profile).where(Profile.id == wl.profile_id))
+            prof_res = await db.execute(select(Profile).where(
+                Profile.id == wl.profile_id,
+                Profile.user_id == user_id,
+                Profile.is_active.is_(True),
+            ))
             prof = prof_res.scalars().first()
-            if prof:
-                profile_config_full = prof.config
-                profile_name = prof.name
-                profile_version = prof.profile_version
+            if not prof:
+                await _clear_disabled_watchlist_snapshot(db, wl.id)
+                return []
+            profile_config_full = prof.config
+            profile_name = prof.name
+            profile_version = prof.profile_version
         except Exception as e:
             logger.debug("Failed to load profile %s: %s", wl.profile_id, e)
 
@@ -2194,6 +2295,22 @@ async def _resolve_and_persist(
             _rsnap["alpha_score"] = live_score_map.get(_rsym)
             _rrow["analysis_snapshot"] = _rsnap
 
+    # Serialize this write boundary with the dedicated status endpoint.  A
+    # completed inactivation can never be followed by a late opportunity or
+    # ALLOW decision from an already-running on-demand refresh.
+    active_profile_id = await db.scalar(
+        select(Profile.id)
+        .where(
+            Profile.id == wl.profile_id,
+            Profile.user_id == user_id,
+            Profile.is_active.is_(True),
+        )
+        .with_for_update()
+    )
+    if active_profile_id is None:
+        await _clear_disabled_watchlist_snapshot(db, wl.id)
+        return []
+
     await _replace_rejection_snapshot(wl, rejected_rows, db)
 
     # Detect level transitions & upsert
@@ -2390,6 +2507,19 @@ async def get_watchlist_assets(
         raise HTTPException(status_code=404, detail="Watchlist not found")
 
     profile_config = await _load_watchlist_profile_config(wl, db)
+    if not wl.auto_refresh or not wl.profile_id or profile_config is None:
+        return {
+            "assets": [],
+            "approved_items": [],
+            "total": 0,
+            "profile_indicators": [],
+            "show_score": (wl.level or "").upper() in {"L2", "L3"},
+            "market_mode": getattr(wl, "market_mode", "spot") or "spot",
+            "is_futures": (getattr(wl, "market_mode", "spot") or "spot") == "futures",
+            "unavailable_reason": (
+                "WATCHLIST_DISABLED" if not wl.auto_refresh else "PROFILE_INACTIVE_OR_MISSING"
+            ),
+        }
     effective_level = effective_pipeline_level(
         wl.level,
         source_pool_id=wl.source_pool_id,
@@ -3243,7 +3373,6 @@ async def get_watchlist_signals(
     5. Return all assets with their signal status; triggered=True assets appear first
     """
     from ..services.signal_engine import SignalEngine
-    from ..models.profile import Profile
 
     wl_result = await db.execute(
         select(PipelineWatchlist).where(
@@ -3254,6 +3383,32 @@ async def get_watchlist_signals(
     wl = wl_result.scalars().first()
     if not wl:
         raise HTTPException(status_code=404, detail="Watchlist not found")
+
+    active_profile = None
+    if wl.profile_id:
+        active_profile = (
+            await db.execute(
+                select(Profile).where(
+                    Profile.id == wl.profile_id,
+                    Profile.user_id == user_id,
+                    Profile.is_active.is_(True),
+                )
+            )
+        ).scalars().first()
+    if not wl.auto_refresh or active_profile is None:
+        return {
+            "watchlist": wl.name,
+            "watchlist_id": str(watchlist_id),
+            "level": wl.level,
+            "profile": None,
+            "profile_id": None,
+            "total_assets": 0,
+            "signals_count": 0,
+            "signals": [],
+            "unavailable_reason": (
+                "WATCHLIST_DISABLED" if not wl.auto_refresh else "PROFILE_INACTIVE_OR_MISSING"
+            ),
+        }
 
     # Load pipeline assets
     assets_result = await db.execute(
@@ -3295,16 +3450,12 @@ async def get_watchlist_signals(
     profile_id_str = None
     signal_engine: Optional[SignalEngine] = None
 
-    if wl.profile_id:
-        prof_res = await db.execute(select(Profile).where(Profile.id == wl.profile_id))
-        prof = prof_res.scalars().first()
-        if prof:
-            profile_name = prof.name
-            profile_id_str = str(prof.id)
-            cfg = prof.config or {}
-            sig_cfg = cfg.get("entry_triggers") or cfg.get("signals")
-            if sig_cfg and sig_cfg.get("conditions"):
-                signal_engine = SignalEngine(sig_cfg)
+    profile_name = active_profile.name
+    profile_id_str = str(active_profile.id)
+    cfg = active_profile.config or {}
+    sig_cfg = cfg.get("entry_triggers") or cfg.get("signals")
+    if sig_cfg and sig_cfg.get("conditions"):
+        signal_engine = SignalEngine(sig_cfg)
 
     # Evaluate each asset
     triggered_signals = []

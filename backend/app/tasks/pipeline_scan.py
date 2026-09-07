@@ -3016,6 +3016,22 @@ async def _replace_rejection_snapshot(
 
 # ─── DB upsert ────────────────────────────────────────────────────────────────
 
+async def _watchlist_profile_is_active(db, watchlist_id: str) -> bool:
+    """Runtime gate shared by every write boundary of a watchlist scan."""
+    from sqlalchemy import text
+
+    return bool(await db.scalar(text("""
+        SELECT p.id
+          FROM pipeline_watchlists pw
+          JOIN profiles p ON p.id = pw.profile_id
+         WHERE pw.id = CAST(:watchlist_id AS UUID)
+           AND pw.auto_refresh IS TRUE
+           AND p.is_active IS TRUE
+           AND p.user_id = pw.user_id
+         FOR UPDATE OF p
+    """), {"watchlist_id": watchlist_id}))
+
+
 async def _upsert_assets(
     db,
     watchlist_id: str,
@@ -3034,6 +3050,18 @@ async def _upsert_assets(
     from sqlalchemy import text
 
     now = datetime.now(timezone.utc)
+
+    if not await _watchlist_profile_is_active(db, watchlist_id):
+        await db.execute(
+            text("DELETE FROM pipeline_watchlist_assets WHERE watchlist_id = CAST(:wid AS UUID)"),
+            {"wid": watchlist_id},
+        )
+        await db.execute(
+            text("DELETE FROM pipeline_watchlist_rejections WHERE watchlist_id = CAST(:wid AS UUID)"),
+            {"wid": watchlist_id},
+        )
+        await db.commit()
+        return
 
     if assets:
         # Task #273: sort by symbol before per-row UPSERT — multiple
@@ -3344,6 +3372,7 @@ async def _run_pipeline_scan():
     from ..models.pipeline_watchlist import PipelineWatchlist
     from ..models.pool import PoolCoin
     from ..models.config_profile import ConfigProfile
+    from ..models.profile import Profile
     from ..schemas.spot_engine_config import SpotEngineConfig
     from sqlalchemy import select, text
     from ..utils.symbol_filters import filter_real_assets
@@ -3401,7 +3430,13 @@ async def _run_pipeline_scan():
 
         # Load all pipeline watchlists with auto_refresh=true
         wl_rows = (await db.execute(
-            select(PipelineWatchlist).where(PipelineWatchlist.auto_refresh == True)
+            select(PipelineWatchlist)
+            .join(Profile, Profile.id == PipelineWatchlist.profile_id)
+            .where(
+                PipelineWatchlist.auto_refresh == True,
+                Profile.is_active.is_(True),
+                Profile.user_id == PipelineWatchlist.user_id,
+            )
         )).scalars().all()
 
         if not wl_rows:
@@ -5242,7 +5277,10 @@ async def _run_pipeline_scan():
                             "_asset": _fa,
                         })
                     _all_block_candidates = _all_block_decisions + _filter_rejected_block
-                    if _all_block_candidates:
+                    if (
+                        _all_block_candidates
+                        and await _watchlist_profile_is_active(db, wl_id)
+                    ):
                         try:
                             if _wl_rejected_consolidation_enabled:
                                 from ..services.l3_rejected_trade_consolidation import (
@@ -5305,7 +5343,7 @@ async def _run_pipeline_scan():
 
                     # ── L3_SIMULATED shadows — fora de if decision_payloads ───────────────
                     # Controlado por ML config: shadow_capture_l3_simulated_enabled.
-                    if decisions:
+                    if decisions and await _watchlist_profile_is_active(db, wl_id):
                         try:
                             from ..services.shadow_trade_service import (
                                 create_l3_simulated_shadows,

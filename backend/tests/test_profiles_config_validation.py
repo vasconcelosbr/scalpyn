@@ -208,7 +208,6 @@ async def test_update_pool_profile_accepts_indicator_edits_without_l3_identity(m
         profile.id,
         {
             "config": config,
-            "is_active": True,
             "profile_role": "universe_filter",
         },
         db=session,
@@ -243,7 +242,6 @@ async def test_update_l3_profile_still_rejects_missing_source_identity(monkeypat
                         ],
                     },
                 },
-                "is_active": True,
                 "profile_role": "acquisition_queue",
             },
             db=session,

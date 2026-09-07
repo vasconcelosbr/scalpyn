@@ -2830,7 +2830,7 @@ def _validate_profile_score_strategy_semantics(
             for change in materialized_change_scope
         )
         basis = (
-            "PROFILE_DEACTIVATION_NOT_GLOBALLY_ENFORCED_BY_WATCHLIST_CONSUMERS"
+            "PROFILE_DEACTIVATION_ENFORCED_BY_ALL_LIVE_WATCHLIST_CONSUMERS"
             if pure_deactivation
             else "PROFILE_ACTIVATION_OR_MIXED_STATUS_CHANGE_NOT_PROVEN"
         )
@@ -2849,7 +2849,7 @@ def _validate_profile_score_strategy_semantics(
                 "profile_strategy_bindings_hash"
             ),
             "binding_authority": "EVIDENCE_ONLY_NOT_AUTHORIZATION",
-            "vetoes": [basis],
+            "vetoes": [] if pure_deactivation else [basis],
             "validation_mode": basis,
             "scope_basis": basis,
         }
@@ -4870,7 +4870,6 @@ async def approve_and_execute(
             if row is None or not isinstance(row.get("is_active"), bool):
                 raise ValueError("Bulk profile candidate is incomplete")
             resource.is_active = row["is_active"]
-            resource.profile_version = now
             resource.updated_at = now
         result = {
             "status": "EXECUTED",
@@ -5542,7 +5541,6 @@ async def rollback(
             if row is None or not isinstance(row.get("is_active"), bool):
                 raise ValueError("Bulk profile rollback snapshot is incomplete")
             resource.is_active = row["is_active"]
-            resource.profile_version = now
             resource.updated_at = now
     elif payload.get("operation_type") == "UPDATE_PROFILE_CONFIG_SET":
         profile_ids = [UUID(str(item)) for item in payload.get("profile_ids") or []]

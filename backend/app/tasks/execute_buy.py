@@ -485,6 +485,7 @@ async def _execute_buy_cycle_async() -> dict:
                 l3_symbols: Optional[set] = None  # restrict candidates to L3 assets
                 l3_signal_engines: dict[str, Optional[SignalEngine]] = {}
                 l3_block_engines: dict[str, Optional[BlockEngine]] = {}
+                l3_profile_ids_by_symbol: dict[str, Any] = {}
 
                 try:
                     chain = await resolve_spot_pipeline_chain(
@@ -523,6 +524,9 @@ async def _execute_buy_cycle_async() -> dict:
 
                         for candidate in live_candidates:
                             profile = profile_by_id.get(candidate.winner.profile_id)
+                            if profile is None:
+                                continue
+                            l3_profile_ids_by_symbol[candidate.symbol] = profile.id
                             config = profile.config if profile and isinstance(profile.config, dict) else {}
                             signal_config = config.get("entry_triggers") or config.get("signals")
                             block_config = config.get("block_rules")
@@ -853,6 +857,36 @@ async def _execute_buy_cycle_async() -> dict:
                     # the threshold guard at line ~567). An APPROVED row
                     # implies non-zero evidence of a setup; a flat zero
                     # is by definition no evidence.
+                    # Linearization point for profile inactivation.  The row
+                    # lock is shared with the dedicated status endpoint: if
+                    # inactivation won the race this returns no row; if this
+                    # execution won, inactivation waits until this transaction
+                    # completes and can never return while a late order remains.
+                    _selected_profile_id = l3_profile_ids_by_symbol.get(symbol)
+                    _active_profile_id = None
+                    if _selected_profile_id is not None:
+                        _active_profile_id = await db.scalar(
+                            select(UserProfile.id)
+                            .where(
+                                UserProfile.id == _selected_profile_id,
+                                UserProfile.user_id == user_id,
+                                UserProfile.is_active.is_(True),
+                            )
+                            .with_for_update()
+                        )
+                    if _active_profile_id is None:
+                        await safe_record_decision(
+                            db=db, trace_id=get_trace(),
+                            user_id=str(user_id),
+                            pool_id=str(pool.id) if pool else None,
+                            symbol=symbol, market_type="spot", exchange="gate",
+                            status="SKIPPED", stage="L3",
+                            reason="PROFILE_INACTIVE",
+                            blocking_rule="ProfileStatusGate",
+                        )
+                        stats["skipped"] += 1
+                        continue
+
                     _latency_l3_ms = round((time.monotonic() - _t_l3_start) * 1000)
                     if alpha_score > 0:
                         await safe_record_decision(

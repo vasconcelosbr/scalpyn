@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import func, select
 
 from ..models.backoffice import DecisionLog, L3AuthorizationOutbox
+from ..models.profile import Profile
 from .l3_authorization_contract_v3 import (
     canonical_hash,
     contract_authorizes_shadow_capture,
@@ -83,6 +84,18 @@ def _authorized_for_shadow(decision: DecisionLog, contract: dict) -> bool:
         contract,
         legacy_decision=decision.decision,
     )
+
+
+async def _profile_is_active(db, *, user_id: Any, profile_id: Any) -> bool:
+    if not profile_id:
+        return False
+    return bool(await db.scalar(
+        select(Profile.id).where(
+            Profile.id == profile_id,
+            Profile.user_id == user_id,
+            Profile.is_active.is_(True),
+        )
+    ))
 
 
 def _not_created_result(contract: dict, *, required: bool) -> str:
@@ -236,13 +249,27 @@ async def _process_direct(event_id: Any) -> str:
             )
             if required and _authorized_for_shadow(decision, contract):
                 _validate_lineage(decision, event, contract)
+                lineage = _lineage(event, contract)
+                if not await _profile_is_active(
+                    db,
+                    user_id=decision.user_id,
+                    profile_id=lineage.profile_id,
+                ):
+                    processing_result = "PROFILE_INACTIVE"
+                    payload = dict(event.payload or {})
+                    payload["processing_result"] = processing_result
+                    event.payload = payload
+                    event.status = "PROCESSED"
+                    event.processed_at = datetime.now(timezone.utc)
+                    event.last_error = None
+                    return processing_result
                 config = await load_shadow_creation_config(decision.user_id)
                 trade_id = await _create_from_decision(
                     db,
                     decision,
                     "L3_AUTHORIZATION_OUTBOX_V3",
                     config,
-                    lineage=_lineage(event, contract),
+                    lineage=lineage,
                 )
                 if trade_id is not None:
                     processing_result = "CREATED_OR_RECONCILED"
@@ -298,6 +325,30 @@ async def _process_consolidation(scan_run_id: str) -> tuple[int, str]:
     candidates_by_policy: dict[tuple[str, str], list[Any]] = {}
     candidate_events: dict[str, list[tuple[Any, Any]]] = {}
     immediate_results: dict[Any, str] = {}
+    profile_ids_by_user: dict[Any, set[Any]] = {}
+    lineage_by_event: dict[Any, Any] = {}
+    for event, decision in rows:
+        contract = _contract(decision, event)
+        if (event.payload or {}).get("consolidation_required") and _authorized_for_shadow(decision, contract):
+            _validate_lineage(decision, event, contract)
+            lineage = _lineage(event, contract)
+            lineage_by_event[event.id] = lineage
+            profile_ids_by_user.setdefault(decision.user_id, set()).add(lineage.profile_id)
+
+    active_profile_ids: set[str] = set()
+    if profile_ids_by_user:
+        from ..database import CeleryAsyncSessionLocal
+        async with CeleryAsyncSessionLocal() as db:
+            for user_id, profile_ids in profile_ids_by_user.items():
+                rows_active = (await db.execute(
+                    select(Profile.id).where(
+                        Profile.user_id == user_id,
+                        Profile.id.in_(profile_ids),
+                        Profile.is_active.is_(True),
+                    )
+                )).scalars().all()
+                active_profile_ids.update(str(profile_id) for profile_id in rows_active)
+
     for event, decision in rows:
         contract = _contract(decision, event)
         payload = event.payload or {}
@@ -309,8 +360,10 @@ async def _process_consolidation(scan_run_id: str) -> tuple[int, str]:
                 contract, required=True
             )
             continue
-        _validate_lineage(decision, event, contract)
-        lineage = _lineage(event, contract)
+        lineage = lineage_by_event[event.id]
+        if str(lineage.profile_id) not in active_profile_ids:
+            immediate_results[event.id] = "PROFILE_INACTIVE"
+            continue
         candidate = candidate_from_decision(
             user_id=decision.user_id,
             decision_id=decision.id,

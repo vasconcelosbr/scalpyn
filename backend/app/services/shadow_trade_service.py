@@ -1500,6 +1500,43 @@ async def _create_from_decision(
         source if source in _VALID_SHADOW_SOURCES else SHADOW_SOURCE_L3
     )
 
+    # New L3-family shadows are authorized only while their immutable entry
+    # profile remains operationally active.  The row lock serializes this
+    # final insert boundary with the dedicated profile status endpoint.  Open
+    # shadows never call this creation function and continue to be monitored.
+    if normalized_source in {
+        SHADOW_SOURCE_L3,
+        SHADOW_SOURCE_L3_REJECTED,
+        SHADOW_SOURCE_L3_SIMULATED,
+        SHADOW_SOURCE_L3_LAB,
+    }:
+        if not _lin_profile_id:
+            logger.warning(
+                "[shadow] creation skipped: PROFILE_ID_REQUIRED source=%s symbol=%s",
+                normalized_source,
+                decision.symbol,
+            )
+            return None
+        from ..models.profile import Profile
+
+        active_profile_id = await db.scalar(
+            select(Profile.id)
+            .where(
+                Profile.id == _lin_profile_id,
+                Profile.user_id == decision.user_id,
+                Profile.is_active.is_(True),
+            )
+            .with_for_update()
+        )
+        if active_profile_id is None:
+            logger.info(
+                "[shadow] creation skipped: PROFILE_INACTIVE profile_id=%s source=%s symbol=%s",
+                _lin_profile_id,
+                normalized_source,
+                decision.symbol,
+            )
+            return None
+
     # Contract-v3 L3 rows have exactly one authorized writer: the outbox
     # consumer (direct or consolidation). Historical decisions without v3 keep
     # their legacy safety-net behavior, but a new v3 decision can never bypass

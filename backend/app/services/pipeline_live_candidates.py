@@ -72,7 +72,13 @@ async def resolve_spot_pipeline_chain(
         clauses.extend(getattr(PipelineWatchlist, key) == value for key, value in where.items())
         return (await db.execute(
             select(PipelineWatchlist)
+            .join(Profile, Profile.id == PipelineWatchlist.profile_id)
             .where(*clauses)
+            .where(
+                PipelineWatchlist.auto_refresh.is_(True),
+                Profile.user_id == user_id,
+                Profile.is_active.is_(True),
+            )
             .order_by(PipelineWatchlist.created_at.asc(), PipelineWatchlist.id.asc())
             .limit(1)
         )).scalars().first()
@@ -89,12 +95,16 @@ async def resolve_spot_pipeline_chain(
 
     l3_rows = await db.execute(
         select(PipelineWatchlist)
+        .join(Profile, Profile.id == PipelineWatchlist.profile_id)
         .where(
             PipelineWatchlist.user_id == user_id,
             PipelineWatchlist.level == "L3",
             PipelineWatchlist.market_mode == "spot",
             PipelineWatchlist.source_watchlist_id == l2_watchlist.id,
             PipelineWatchlist.profile_id.is_not(None),
+            PipelineWatchlist.auto_refresh.is_(True),
+            Profile.user_id == user_id,
+            Profile.is_active.is_(True),
         )
         .order_by(PipelineWatchlist.created_at.asc(), PipelineWatchlist.id.asc())
     )
@@ -130,6 +140,9 @@ async def load_live_l3_candidates(
     l1_asset = aliased(PipelineWatchlistAsset)
     pool_watchlist = aliased(PipelineWatchlist)
     pool_asset = aliased(PipelineWatchlistAsset)
+    l2_profile = aliased(Profile)
+    l1_profile = aliased(Profile)
+    pool_profile = aliased(Profile)
     statement = (
         select(
             PipelineWatchlistAsset.id.label("asset_id"),
@@ -164,6 +177,14 @@ async def load_live_l3_candidates(
             ),
         )
         .join(
+            l2_profile,
+            and_(
+                l2_profile.id == l2_watchlist.profile_id,
+                l2_profile.user_id == user_id,
+                l2_profile.is_active.is_(True),
+            ),
+        )
+        .join(
             l1_watchlist,
             and_(
                 l1_watchlist.id == l2_watchlist.source_watchlist_id,
@@ -178,6 +199,14 @@ async def load_live_l3_candidates(
                 l1_asset.watchlist_id == l1_watchlist.id,
                 l1_asset.symbol == PipelineWatchlistAsset.symbol,
                 _active_asset(l1_asset),
+            ),
+        )
+        .join(
+            l1_profile,
+            and_(
+                l1_profile.id == l1_watchlist.profile_id,
+                l1_profile.user_id == user_id,
+                l1_profile.is_active.is_(True),
             ),
         )
         .join(
@@ -197,11 +226,23 @@ async def load_live_l3_candidates(
                 _active_asset(pool_asset),
             ),
         )
+        .join(
+            pool_profile,
+            and_(
+                pool_profile.id == pool_watchlist.profile_id,
+                pool_profile.user_id == user_id,
+                pool_profile.is_active.is_(True),
+            ),
+        )
         .where(
             PipelineWatchlist.user_id == user_id,
             PipelineWatchlist.level == "L3",
             PipelineWatchlist.market_mode == "spot",
             PipelineWatchlist.profile_id.is_not(None),
+            PipelineWatchlist.auto_refresh.is_(True),
+            l2_watchlist.auto_refresh.is_(True),
+            l1_watchlist.auto_refresh.is_(True),
+            pool_watchlist.auto_refresh.is_(True),
             Profile.user_id == user_id,
             Profile.is_active.is_(True),
             _active_asset(PipelineWatchlistAsset),

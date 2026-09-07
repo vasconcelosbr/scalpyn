@@ -33,6 +33,7 @@ interface Profile {
   id: string;
   name: string;
   description?: string;
+  is_active?: boolean;
   profile_role?: string | null;
   config?: {
     filters?:        { conditions?: unknown[] };
@@ -350,6 +351,19 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const selectedProfile = profiles.find((p) => p.id === profileId) ?? null;
+  const expectedProfileRole: Record<string, string> = {
+    POOL: 'universe_filter',
+    L1: 'primary_filter',
+    L2: 'score_engine',
+    L3: 'acquisition_queue',
+  };
+  const profileOptions = profiles.filter((candidate) => (
+    candidate.id === profileId
+    || (
+      candidate.is_active !== false
+      && (!expectedProfileRole[level] || candidate.profile_role === expectedProfileRole[level])
+    )
+  ));
 
   function handleLevelChange(newLevel: string) {
     setLevel(newLevel);
@@ -522,9 +536,9 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
               data-testid="watchlist-profile-select"
             >
               <option value="">— Selecione um Profile —</option>
-              {profiles.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}{p.profile_role ? ` · ${ROLE_LABEL[p.profile_role] ?? p.profile_role}` : ''}
+              {profileOptions.map((p) => (
+                <option key={p.id} value={p.id} disabled={p.is_active === false}>
+                  {p.name}{p.profile_role ? ` · ${ROLE_LABEL[p.profile_role] ?? p.profile_role}` : ''}{p.is_active === false ? ' · INATIVO (associado)' : ''}
                 </option>
               ))}
             </select>
@@ -532,7 +546,7 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
             {/* Profile preview */}
             {selectedProfile && <ProfilePreview profile={selectedProfile} />}
 
-            {profiles.length === 0 && (
+            {profileOptions.length === 0 && (
               <p className="text-[11px] text-[#F87171] mt-1.5">
                 Nenhum profile encontrado. Crie um em /profiles antes de configurar a watchlist.
               </p>

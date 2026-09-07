@@ -2455,7 +2455,7 @@ def test_candidate_validator_keeps_legacy_disable_schema_safe_but_policy_blocked
     assert check["decision"] == "PASS"
 
 
-def test_profile_deactivation_vetoes_until_watchlist_consumers_honor_is_active():
+def test_profile_deactivation_passes_after_watchlist_consumers_honor_is_active():
     plan, policies, profiles = _candidate_validation_fixture()
     _install_executable_policy_semantics(policies)
     profile = profiles[0]
@@ -2485,12 +2485,9 @@ def test_profile_deactivation_vetoes_until_watchlist_consumers_honor_is_active()
 
     result = service._candidate_validation_result(plan, policies, profiles)
 
-    # pipeline_scan resolves referenced watchlist profile_ids without filtering
-    # Profile.is_active, so false cannot yet prove a global authority reduction.
-    assert result["decision"] == "VETO"
-    assert result["strategy_validation"] == "VETO"
+    assert result["strategy_validation"] == "PASS"
     assert result["policy_semantic_evidence"]["strategy"]["basis"] == (
-        "PROFILE_DEACTIVATION_NOT_GLOBALLY_ENFORCED_BY_WATCHLIST_CONSUMERS"
+        "PROFILE_DEACTIVATION_ENFORCED_BY_ALL_LIVE_WATCHLIST_CONSUMERS"
     )
 
 

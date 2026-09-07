@@ -27,6 +27,11 @@ from ..services.profile_execution_contract import (
 )
 from ..services.seed_service import DEFAULT_SCORE
 from ..services.profile_runtime_config import canonical_hash
+from ..services.profile_status_service import (
+    ProfileStatusConflict,
+    apply_profile_status,
+    preview_profile_status,
+)
 from ..services.mtf_profile_activation_service import (
     MTFActivationConflict,
     activate_existing_mtf_profiles,
@@ -234,6 +239,57 @@ async def get_profile(
         raise HTTPException(status_code=404, detail="Profile not found")
     
     return _profile_to_dict(profile)
+
+
+def _status_http_error(exc: ProfileStatusConflict) -> HTTPException:
+    if exc.code == "PROFILE_NOT_FOUND":
+        return HTTPException(status_code=404, detail=exc.detail)
+    if exc.code in {
+        "PROFILE_STATUS_REASON_REQUIRED",
+        "PROFILE_STATUS_BOOLEAN_REQUIRED",
+        "EXPECTED_UPDATED_AT_REQUIRED",
+        "EXPECTED_UPDATED_AT_INVALID",
+        "EXPECTED_UPDATED_AT_TIMEZONE_REQUIRED",
+        "PROFILE_REACTIVATION_INVALID_CONFIG",
+    }:
+        return HTTPException(status_code=422, detail=exc.detail)
+    return HTTPException(status_code=409, detail=exc.detail)
+
+
+@router.post("/{profile_id}/status-preview")
+async def profile_status_preview(
+    profile_id: UUID,
+    payload: Dict[str, Any],
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """Validate a status-only transition and report its operational impact."""
+    try:
+        return await preview_profile_status(
+            db, profile_id=profile_id, user_id=user_id, payload=payload
+        )
+    except ProfileStatusConflict as exc:
+        await db.rollback()
+        raise _status_http_error(exc) from exc
+
+
+@router.patch("/{profile_id}/status")
+async def change_profile_status(
+    profile_id: UUID,
+    payload: Dict[str, Any],
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """Atomically activate/deactivate a profile without versioning its rules."""
+    try:
+        result = await apply_profile_status(
+            db, profile_id=profile_id, user_id=user_id, payload=payload
+        )
+    except ProfileStatusConflict as exc:
+        await db.rollback()
+        raise _status_http_error(exc) from exc
+    result["profile"] = _profile_to_dict(result["profile"])
+    return result
 
 
 async def _latest_profile_runtime_contract(
@@ -1005,6 +1061,12 @@ async def update_profile(
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
 
+    if "is_active" in payload:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "PROFILE_STATUS_ENDPOINT_REQUIRED"},
+        )
+
     if profile.profile_type == "MTF_LAYER":
         raise HTTPException(status_code=409, detail="MTF_PROFILE_GOVERNED_FLOW_REQUIRED")
 
@@ -1043,17 +1105,6 @@ async def update_profile(
         profile.name = new_name
     if "description" in payload:
         profile.description = payload["description"]
-    if "is_active" in payload:
-        if payload["is_active"]:
-            candidate_config = payload.get("config", profile.config or {})
-            try:
-                _validate_profile_config(
-                    candidate_config,
-                    require_feature_identity=_requires_l3_feature_identity(target_role),
-                )
-            except ValueError as exc:
-                raise HTTPException(status_code=422, detail=str(exc))
-        profile.is_active = payload["is_active"]
     if "config" in payload:
         try:
             _next_config = _validate_profile_config_for_role(
@@ -1235,8 +1286,14 @@ async def assign_profile_to_watchlist(
         # Verify profile exists and belongs to user
         query = select(Profile).where(Profile.id == profile_id, Profile.user_id == user_id)
         result = await db.execute(query)
-        if not result.scalars().first():
+        assigned_profile = result.scalars().first()
+        if not assigned_profile:
             raise HTTPException(status_code=404, detail="Profile not found")
+        if not assigned_profile.is_active:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "PROFILE_INACTIVE_NOT_ASSOCIABLE"},
+            )
     
     # Check if assignment already exists
     existing_query = select(WatchlistProfile).where(

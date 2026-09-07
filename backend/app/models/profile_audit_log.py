@@ -1,6 +1,6 @@
-"""ProfileAuditLog — immutable append-only log of every profiles.config change."""
+"""Immutable append-only audit of profile configuration and status changes."""
 
-from sqlalchemy import Column, String, Text, ForeignKey, Index
+from sqlalchemy import Boolean, Column, String, Text, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.types import TIMESTAMP
 import uuid
@@ -27,6 +27,13 @@ class ProfileAuditLog(Base):
 
     previous_profile_version = Column(TIMESTAMP(timezone=True), nullable=True)
     new_profile_version      = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    # Status-only operations are deliberately separate from configuration
+    # versioning.  These nullable fields keep older config audit rows valid
+    # while recording the exact operational transition and human reason.
+    previous_is_active = Column(Boolean, nullable=True)
+    new_is_active      = Column(Boolean, nullable=True)
+    status_reason      = Column(Text, nullable=True)
 
     created_at = Column(
         TIMESTAMP(timezone=True),

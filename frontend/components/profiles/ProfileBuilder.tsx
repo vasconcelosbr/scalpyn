@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { ArrowLeft, Save, Play, ShieldOff, Zap, Plus, Trash2, Target } from "lucide-react";
-import { apiPost } from "@/lib/api";
+import { useEffect, useState, useMemo } from "react";
+import { AlertTriangle, ArrowLeft, Loader2, Power, PowerOff, Save, Play, ShieldOff, Zap, Plus, Trash2, Target } from "lucide-react";
+import { apiPatch, apiPost } from "@/lib/api";
 import { ConditionBuilder, NumericInput, type ScoreRule } from "./ConditionBuilder";
 import { WeightSliders } from "./WeightSliders";
 import PresetIAButton from "./PresetIAButton";
@@ -29,6 +29,34 @@ interface ProfileBuilderProps {
   profile?: any;
   onSave: (data: any) => void;
   onCancel: () => void;
+  onProfileStatusChanged?: (profile: any) => void;
+}
+
+interface ProfileStatusWatchlist {
+  id: string;
+  name: string;
+  level: string;
+  auto_refresh: boolean;
+}
+
+interface ProfileStatusPreview {
+  allowed: boolean;
+  idempotent: boolean;
+  watchlists: ProfileStatusWatchlist[];
+  blockers: ProfileStatusWatchlist[];
+  open_trades_preserved: boolean;
+}
+
+interface ProfileStatusResult {
+  profile: {
+    id: string;
+    is_active: boolean;
+    updated_at: string;
+  };
+}
+
+function statusErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
 }
 
 interface Condition {
@@ -449,7 +477,7 @@ function ScoreEngineConfigPanel({
   );
 }
 
-export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProps) {
+export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChanged }: ProfileBuilderProps) {
   const { config: globalScoreConfig } = useConfig("score");
   const [name, setName]                     = useState(profile?.name || "");
   const [description, setDescription]       = useState(profile?.description || "");
@@ -459,6 +487,15 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
   const [testResult, setTestResult]         = useState<any>(null);
   const [testing, setTesting]               = useState(false);
   const [saving, setSaving]                 = useState(false);
+  const [profileStatus, setProfileStatus]   = useState(() => ({
+    is_active: profile?.is_active !== false,
+    updated_at: profile?.updated_at || null,
+  }));
+  const [statusDialogOpen, setStatusDialogOpen] = useState(false);
+  const [statusPreview, setStatusPreview]   = useState<ProfileStatusPreview | null>(null);
+  const [statusReason, setStatusReason]     = useState("");
+  const [statusLoading, setStatusLoading]   = useState(false);
+  const [statusError, setStatusError]       = useState<string | null>(null);
   const [scoringEnabled, setScoringEnabled] = useState(
     profile?.config?.scoring?.enabled !== false
   );
@@ -476,6 +513,13 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
     })),
     [globalScoreConfig]
   );
+
+  useEffect(() => {
+    setProfileStatus({
+      is_active: profile?.is_active !== false,
+      updated_at: profile?.updated_at || null,
+    });
+  }, [profile?.is_active, profile?.updated_at]);
 
   const handleSave = async () => {
     if (profile?.profile_type === "MTF_LAYER") {
@@ -505,7 +549,6 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
       name,
       description,
       config,
-      is_active: profile?.is_active ?? true,
       profile_role: profileRole,
       pipeline_order: profileRole
         ? { universe_filter: 0, primary_filter: 1, score_engine: 2, acquisition_queue: 3 }[profileRole] ?? 99
@@ -513,6 +556,60 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
     };
     onSave(profileData);
     setSaving(false);
+  };
+
+  const openStatusDialog = async () => {
+    if (!profile?.id || !profileStatus.updated_at) return;
+    setStatusDialogOpen(true);
+    setStatusPreview(null);
+    setStatusReason("");
+    setStatusError(null);
+    setStatusLoading(true);
+    try {
+      const preview = await apiPost<ProfileStatusPreview>(`/profiles/${profile.id}/status-preview`, {
+        is_active: !profileStatus.is_active,
+        reason: "Prévia solicitada pela interface",
+        expected_updated_at: profileStatus.updated_at,
+      });
+      setStatusPreview(preview);
+    } catch (error: unknown) {
+      setStatusError(statusErrorMessage(error, "Não foi possível verificar o impacto da alteração."));
+    } finally {
+      setStatusLoading(false);
+    }
+  };
+
+  const closeStatusDialog = () => {
+    if (statusLoading) return;
+    setStatusDialogOpen(false);
+    setStatusPreview(null);
+    setStatusReason("");
+    setStatusError(null);
+  };
+
+  const applyStatusChange = async () => {
+    if (!profile?.id || !profileStatus.updated_at || !statusReason.trim() || statusPreview?.allowed !== true) return;
+    setStatusLoading(true);
+    setStatusError(null);
+    try {
+      const result = await apiPatch<ProfileStatusResult>(`/profiles/${profile.id}/status`, {
+        is_active: !profileStatus.is_active,
+        reason: statusReason.trim(),
+        expected_updated_at: profileStatus.updated_at,
+      });
+      setProfileStatus({
+        is_active: result.profile.is_active,
+        updated_at: result.profile.updated_at,
+      });
+      onProfileStatusChanged?.(result.profile);
+      setStatusDialogOpen(false);
+      setStatusPreview(null);
+      setStatusReason("");
+    } catch (error: unknown) {
+      setStatusError(statusErrorMessage(error, "Não foi possível alterar o estado do profile."));
+    } finally {
+      setStatusLoading(false);
+    }
   };
 
   const handleTest = async () => {
@@ -881,11 +978,40 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
           <ArrowLeft className="w-4 h-4" />
         </button>
         <div className="flex-1">
-          <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">
-            {profile ? "Edit Profile" : "Create Profile"}
-          </h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">
+              {profile ? "Edit Profile" : "Create Profile"}
+            </h1>
+            {profile?.id && (
+              <span
+                data-testid="profile-status-badge"
+                className={`rounded-full border px-2.5 py-1 text-[10px] font-bold tracking-[0.14em] ${
+                  profileStatus.is_active
+                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+                    : "border-slate-500/40 bg-slate-500/10 text-slate-300"
+                }`}
+              >
+                {profileStatus.is_active ? "ATIVO" : "INATIVO"}
+              </span>
+            )}
+          </div>
           <p className="text-[var(--text-secondary)] text-[13px]">Define your strategy configuration</p>
         </div>
+        {profile?.id && (
+          <button
+            type="button"
+            data-testid="profile-status-action"
+            onClick={openStatusDialog}
+            className={`btn border ${
+              profileStatus.is_active
+                ? "border-amber-500/40 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20"
+                : "border-emerald-500/40 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20"
+            }`}
+          >
+            {profileStatus.is_active ? <PowerOff className="mr-2 h-4 w-4" /> : <Power className="mr-2 h-4 w-4" />}
+            {profileStatus.is_active ? "Inativar profile" : "Reativar profile"}
+          </button>
+        )}
         {profile?.id && (
           <PresetIAButton
             profileId={profile.id}
@@ -903,6 +1029,100 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
           {saving ? "Saving..." : "Save Profile"}
         </button>
       </div>
+
+      {statusDialogOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm" data-testid="profile-status-dialog">
+          <div className="w-full max-w-xl overflow-hidden rounded-2xl border border-white/10 bg-[#10131d] shadow-2xl shadow-black/60">
+            <div className="border-b border-white/10 px-6 py-5">
+              <div className="flex items-start gap-3">
+                <div className={`rounded-xl p-2.5 ${profileStatus.is_active ? "bg-amber-500/10 text-amber-300" : "bg-emerald-500/10 text-emerald-300"}`}>
+                  {profileStatus.is_active ? <PowerOff className="h-5 w-5" /> : <Power className="h-5 w-5" />}
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-white">
+                    {profileStatus.is_active ? "Inativar profile" : "Reativar profile"}
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-400">
+                    {profile?.name} · {(profileRole || profile?.profile_role || "sem camada").toString().toUpperCase()}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-4 px-6 py-5">
+              {statusLoading && !statusPreview ? (
+                <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-4 text-sm text-slate-300">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Verificando associações e contrato…
+                </div>
+              ) : null}
+
+              {statusError && (
+                <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">{statusError}</div>
+              )}
+
+              {statusPreview && (
+                <>
+                  <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 text-sm text-slate-300">
+                    {profileStatus.is_active
+                      ? "Novos candidatos, sinais, shadows e ordens deste profile serão interrompidos."
+                      : "As regras, a versão e o vínculo atuais serão validados novamente antes da reativação."}
+                    <p className="mt-2 text-emerald-300">Trades e shadows já abertos continuarão sendo acompanhados normalmente.</p>
+                  </div>
+
+                  <div>
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Watchlists impactadas</p>
+                    {statusPreview.watchlists?.length ? (
+                      <div className="max-h-36 space-y-2 overflow-y-auto">
+                        {statusPreview.watchlists.map((watchlist: any) => (
+                          <div key={watchlist.id} className="flex items-center justify-between rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm">
+                            <span className="text-slate-200">{watchlist.name}</span>
+                            <span className="rounded-md bg-white/5 px-2 py-1 text-[10px] font-bold text-slate-400">{watchlist.level}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-slate-500">Nenhuma associação atual.</p>
+                    )}
+                  </div>
+
+                  {statusPreview.blockers?.length > 0 && (
+                    <div className="flex gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100">
+                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                      <p>Este profile alimenta uma camada upstream. Associe um substituto ou desabilite corretamente o contrato antes de inativá-lo.</p>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Justificativa obrigatória</label>
+                    <textarea
+                      value={statusReason}
+                      onChange={(event) => setStatusReason(event.target.value)}
+                      rows={3}
+                      data-testid="profile-status-reason"
+                      placeholder="Descreva o motivo operacional desta alteração"
+                      className="w-full resize-none rounded-xl border border-white/10 bg-black/25 px-3 py-3 text-sm text-white outline-none transition focus:border-blue-500/60"
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-3 border-t border-white/10 bg-black/15 px-6 py-4">
+              <button type="button" className="btn btn-secondary" onClick={closeStatusDialog} disabled={statusLoading}>Cancelar</button>
+              <button
+                type="button"
+                data-testid="confirm-profile-status"
+                onClick={applyStatusChange}
+                disabled={statusLoading || !statusReason.trim() || statusPreview?.allowed !== true}
+                className={`btn ${profileStatus.is_active ? "bg-amber-500 text-black hover:bg-amber-400" : "bg-emerald-500 text-black hover:bg-emerald-400"} disabled:cursor-not-allowed disabled:opacity-40`}
+              >
+                {statusLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {profileStatus.is_active ? "Confirmar inativação" : "Confirmar reativação"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Basic Info + Watchlist */}
       <div className="card">

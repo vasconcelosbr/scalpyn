@@ -16,6 +16,7 @@ interface Profile {
   config?: any
   auto_pilot_enabled?: boolean
   auto_pilot_config?: any
+  updated_at?: string
 }
 
 export default function ProfileEditPage() {
@@ -175,6 +176,7 @@ export default function ProfileEditPage() {
         <ProfileBuilder
           profile={profile}
           onSave={handleSave}
+          onProfileStatusChanged={setProfile}
           onCancel={() => router.push('/profiles')}
         />
       )}

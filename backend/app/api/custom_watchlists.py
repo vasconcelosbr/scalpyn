@@ -647,8 +647,14 @@ async def assign_profile_to_watchlist(
             Profile.user_id == user_id
         )
         profile_result = await db.execute(profile_query)
-        if not profile_result.scalars().first():
+        assigned_profile = profile_result.scalars().first()
+        if not assigned_profile:
             raise HTTPException(status_code=404, detail="Profile not found")
+        if not assigned_profile.is_active:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "PROFILE_INACTIVE_NOT_ASSOCIABLE"},
+            )
     
     # Check existing assignment for this type
     assignment_query = select(WatchlistProfile).where(

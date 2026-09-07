@@ -7,6 +7,86 @@
   },
   "required_features": [
     {
+      "id": "profile-status-ui-safe-deactivation",
+      "description": "Profile activation is a dedicated audited status operation; inactive profiles cannot feed live watchlists, new Shadows or orders, while existing positions keep their immutable monitoring path",
+      "files": [
+        {
+          "path": "backend/app/services/profile_status_service.py",
+          "contains_all": [
+            "PROFILE_STATUS_REASON_REQUIRED",
+            "PROFILE_UPSTREAM_DEACTIVATION_BLOCKED",
+            "PROFILE_STATUS_CONFIG_MUTATION_DETECTED",
+            "previous_is_active=previous_active",
+            "open_trades_preserved"
+          ]
+        },
+        {
+          "path": "backend/app/api/profiles.py",
+          "contains_all": [
+            "/{profile_id}/status-preview",
+            "/{profile_id}/status",
+            "PROFILE_STATUS_ENDPOINT_REQUIRED"
+          ]
+        },
+        {
+          "path": "backend/app/services/shadow_trade_service.py",
+          "contains_all": [
+            "PROFILE_ID_REQUIRED",
+            "PROFILE_INACTIVE",
+            "Profile.is_active.is_(True)",
+            ".with_for_update()"
+          ]
+        },
+        {
+          "path": "backend/app/tasks/pipeline_scan.py",
+          "contains_all": [
+            "_watchlist_profile_is_active",
+            "Profile.is_active.is_(True)",
+            "FOR UPDATE OF p",
+            "DELETE FROM pipeline_watchlist_assets"
+          ]
+        },
+        {
+          "path": "backend/app/tasks/execute_buy.py",
+          "contains_all": [
+            "ProfileStatusGate",
+            "PROFILE_INACTIVE",
+            "UserProfile.is_active.is_(True)",
+            ".with_for_update()"
+          ]
+        },
+        {
+          "path": "backend/app/tasks/evaluate_signals.py",
+          "contains_all": [
+            "l3_profile_ids_by_symbol",
+            "ProfileStatusGate",
+            "PROFILE_INACTIVE",
+            "UserProfile.is_active.is_(True)",
+            ".with_for_update()"
+          ]
+        },
+        {
+          "path": "backend/tests/test_profile_status_contract.py",
+          "contains_all": [
+            "test_common_save_cannot_change_status",
+            "test_l3_deactivation_preserves_config_version_and_association",
+            "test_upstream_deactivation_is_blocked_without_mutation",
+            "test_open_shadow_monitor_does_not_depend_on_profile_active_state"
+          ]
+        },
+        {
+          "path": "frontend/components/profiles/ProfileBuilder.tsx",
+          "contains_all": [
+            "profile-status-badge",
+            "Inativar profile",
+            "Reativar profile",
+            "Justificativa obrigatória",
+            "Trades e shadows já abertos continuarão sendo acompanhados normalmente"
+          ]
+        }
+      ]
+    },
+    {
       "id": "profile-role-scoped-feature-identity",
       "description": "POOL, L1 and L2 profiles can be adjusted under their own pipeline contracts while L3 feature identity remains fail closed and profile roles cannot drift from associated watchlist levels",
       "files": [
