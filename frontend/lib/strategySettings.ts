@@ -78,10 +78,23 @@ export interface MTFRuntimeAudit {
     verdict_counts_24h: Record<string, Record<string, number>>;
     reason_counts_24h: Record<string, number>;
     v5_reason_counts_24h: Record<string, number>;
+    v5_reason_counts_current_contract: Record<string, number>;
     hash_validation_24h: { checked: number; valid: number; invalid: number };
     v5_hash_validation_24h: { checked: number; valid: number; invalid: number };
+    v5_hash_validation_current_contract: { checked: number; valid: number; invalid: number };
     last_complete_context: Record<string, JsonValue> | null;
+    last_complete_context_current_contract: Record<string, JsonValue> | null;
     v5_complete_contexts_24h: number;
+    v5_complete_contexts_current_contract: number;
+    current_contract_window_started_at: string | null;
+    current_contract_window_elapsed_seconds: number | null;
+    controlled_replay: {
+      synthetic_controlled_replay: boolean;
+      status: "PASS" | "FAILED";
+      operational_effect: false;
+      executed_at: string;
+      [key: string]: JsonValue;
+    };
     technical_status: "SHADOW_FUNCTIONAL" | "SHADOW_DEGRADED";
     statistical_status: "APPROVED" | "NOT_APPROVED";
   };

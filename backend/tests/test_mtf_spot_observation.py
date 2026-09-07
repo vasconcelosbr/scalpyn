@@ -9,6 +9,7 @@ from app.services.mtf_observation_service import (
     build_l1_context,
     build_l2_context,
     build_l3_confirmation,
+    build_controlled_v5_replay,
     build_multilayer_context,
     verify_context_hash,
 )
@@ -516,6 +517,59 @@ def test_controlled_v5_replay_can_pass_without_operational_effect():
     assert aggregate["contract_version"] == "multilayer_decision_context_v5"
     assert aggregate["observational_decision"] == "PASS"
     assert aggregate["operational_effect"] is False
+
+
+def test_contract_driven_controlled_replay_is_synthetic_and_non_operational():
+    gate_material = {
+        "status": "WAIVED_FOR_SHADOW",
+        "run_status": "DRAFT_INSUFFICIENT_DATA",
+        "failure_reason": "MIN_SAMPLES_NOT_MET",
+        "calibration_run_id": "run-id",
+        "policy_hash": "a" * 64,
+        "dataset_hash": "b" * 64,
+        "authorization_scope": "OBSERVATIONAL_ONLY",
+        "calibration_not_passed_acknowledged": True,
+        "thresholds_unvalidated_acknowledged": True,
+        "operational_effect_false_acknowledged": True,
+        "authorized_by": "user",
+        "authorized_at": NOW.isoformat(),
+    }
+    contract = {
+        "decision_feature_contract_version": "multilayer_decision_context_v5",
+        "provenance_policy_version": "multilayer_provenance_resolver_v2",
+        "operational_effect": False,
+        "calibration_run_id": "run-id",
+        "statistical_gate": {
+            **gate_material,
+            "authorization_hash": canonical_hash(gate_material),
+        },
+        "layers": {"L3": {
+            "validity_margin_seconds": 60,
+            "validity_margin_seconds_by_group": {"microstructure": 60},
+            "required_indicators_by_group": {"microstructure": ["price"]},
+            "source_policies": {"ohlcv": {
+                "allowed_source_providers": ["gate.io"],
+                "provider_policy_id": "policy",
+                "allowed_capture_contract_versions": ["capture"],
+                "allowed_producer_versions": ["producer"],
+                "indicator_config_profile_id": "config-id",
+                "indicator_config_hash": "c" * 64,
+            }},
+        }},
+    }
+
+    replay = build_controlled_v5_replay(contract=contract, now=NOW)
+
+    assert replay["synthetic_controlled_replay"] is True
+    assert replay["status"] == "PASS"
+    assert replay["layer_verdicts"] == {"L1": "PASS", "L2": "PASS", "L3": "PASS"}
+    assert replay["hashes_valid"] is True
+    assert replay["operational_effect"] is False
+
+    with pytest.raises(ValueError, match="OPERATIONAL_EFFECT_FORBIDDEN"):
+        build_controlled_v5_replay(
+            contract={**contract, "operational_effect": True}, now=NOW
+        )
 
 
 def test_explicit_empty_grouped_snapshot_never_falls_back_to_legacy_flat_snapshot():

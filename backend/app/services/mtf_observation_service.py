@@ -742,6 +742,130 @@ def build_l3_confirmation(
     return _seal(material)
 
 
+def build_controlled_v5_replay(
+    *, contract: Mapping[str, Any], now: datetime,
+) -> dict[str, Any]:
+    """Exercise the governed v5 identity chain without order authority.
+
+    The fixture is synthetic and contract-derived: it uses the configured
+    groups, providers, producer versions, capture contracts and hashes.  It is
+    intentionally isolated from profiles and orders and exists only to prove
+    that a fully valid L1 -> L2 -> L3 sequence can traverse the v5 contracts.
+    """
+
+    if contract.get("decision_feature_contract_version") != (
+        "multilayer_decision_context_v5"
+    ):
+        raise ValueError("CONTROLLED_REPLAY_REQUIRES_V5")
+    if contract.get("operational_effect") is not False:
+        raise ValueError("CONTROLLED_REPLAY_OPERATIONAL_EFFECT_FORBIDDEN")
+    l3_layer = (contract.get("layers") or {}).get("L3") or {}
+    required_by_group = l3_layer.get("required_indicators_by_group") or {}
+    if not required_by_group:
+        raise ValueError("CONTROLLED_REPLAY_L3_INPUTS_REQUIRED")
+    source_timestamp = now - timedelta(seconds=_TF_SECONDS["5m"])
+    grouped: dict[str, dict[str, dict[str, Any]]] = {}
+    for group, names in required_by_group.items():
+        grouped[str(group)] = {}
+        for name in names or []:
+            source_kind = _l3_source_kind(str(group), str(name))
+            policy = (l3_layer.get("source_policies") or {}).get(source_kind) or {}
+            providers = policy.get("allowed_source_providers") or []
+            producers = policy.get("allowed_producer_versions") or []
+            captures = policy.get("allowed_capture_contract_versions") or []
+            if not providers or not producers or not captures:
+                raise ValueError(
+                    f"CONTROLLED_REPLAY_SOURCE_POLICY_INCOMPLETE:{source_kind}"
+                )
+            material = {
+                "value": 1.0,
+                "status": "available",
+                "timeframe": "5m",
+                "market_type": "spot",
+                "scheduler_group": str(group),
+                "source_provider": str(providers[0]),
+                "provider_policy_id": str(policy.get("provider_policy_id") or ""),
+                "candle_policy": "CLOSED_ONLY",
+                "candle_closed": True,
+                "source_timestamp": source_timestamp.isoformat(),
+                "available_at": now.isoformat(),
+                "config_profile_id": str(
+                    policy.get("indicator_config_profile_id") or ""
+                ),
+                "config_hash": str(policy.get("indicator_config_hash") or ""),
+                "producer_version": str(producers[0]),
+                "capture_contract_version": str(captures[0]),
+            }
+            envelope = {**material, "envelope_hash": canonical_hash(material)}
+            grouped[str(group)][str(name)] = {
+                "value": 1.0,
+                "source_group": str(group),
+                "ts": now.isoformat(),
+                "timeframe": "5m",
+                "observed_timeframes": ["5m"],
+                "timeframe_conflict": False,
+                "stale": False,
+                "source_timestamp": source_timestamp.isoformat(),
+                "available_at": now.isoformat(),
+                "source_provider": str(providers[0]),
+                "provider_policy_id": str(policy.get("provider_policy_id") or ""),
+                "candle_closed": True,
+                "config_profile_id": str(
+                    policy.get("indicator_config_profile_id") or ""
+                ),
+                "config_hash": str(policy.get("indicator_config_hash") or ""),
+                "producer_version": str(producers[0]),
+                "fallback_used": False,
+                "envelope": envelope,
+            }
+    l3 = build_l3_confirmation(
+        legacy_decision="ALLOW",
+        indicators_snapshot={},
+        grouped_indicators_snapshot=grouped,
+        gate_evaluation_hash=canonical_hash({"fixture": "controlled_v5_replay"}),
+        layer_config=l3_layer,
+        now=now,
+    )
+    l1 = _seal({
+        "contract_version": "l1_decision_context_v3",
+        "verdict": "PASS",
+        "reason_codes": ["CONTROLLED_REPLAY"],
+        "computed_at": now.isoformat(),
+    })
+    l2 = _seal({
+        "contract_version": "l2_decision_context_v3",
+        "verdict": "PASS",
+        "setup_state": "PULLBACK_RECLAIM",
+        "reason_codes": ["PULLBACK_RECLAIM", "CONTROLLED_REPLAY"],
+        "l1_context_hash": l1["context_hash"],
+        "computed_at": now.isoformat(),
+    })
+    aggregate = build_multilayer_context(
+        l1=l1,
+        l2=l2,
+        l3_confirmation=l3,
+        canonical_score=1.0,
+        calibration_run_id=str(contract.get("calibration_run_id") or ""),
+        statistical_gate=contract.get("statistical_gate") or None,
+        now=now,
+    )
+    verify_context_hash(aggregate)
+    return {
+        "synthetic_controlled_replay": True,
+        "status": aggregate["observational_decision"],
+        "contract_version": aggregate["contract_version"],
+        "l3_contract_version": l3["contract_version"],
+        "provenance_policy_version": contract.get("provenance_policy_version"),
+        "layer_verdicts": {
+            "L1": l1["verdict"], "L2": l2["verdict"], "L3": l3["verdict"],
+        },
+        "context_hash": aggregate["context_hash"],
+        "hashes_valid": True,
+        "operational_effect": aggregate["operational_effect"],
+        "executed_at": now.isoformat(),
+    }
+
+
 async def _load_profile(db, *, profile_id: str, expected_version_id: str, expected_hash: str) -> tuple[dict[str, Any], ProfileIdentity]:
     row = (await db.execute(text("""
         SELECT p.config, p.profile_type, p.is_shadow_only, p.live_trading_enabled,

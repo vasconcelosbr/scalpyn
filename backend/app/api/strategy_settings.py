@@ -23,6 +23,7 @@ from ..services.strategy_settings_service import (
     strategy_settings_service,
 )
 from ..services.profile_runtime_config import canonical_hash
+from ..services.mtf_observation_service import build_controlled_v5_replay
 from ..services.mtf_calibration_service import (
     approve_policy as approve_mtf_policy,
     audit_policy_availability,
@@ -354,16 +355,41 @@ async def audit_multilayer_runtime(
 
     hash_validation = {"checked": 0, "valid": 0, "invalid": 0}
     v5_hash_validation = {"checked": 0, "valid": 0, "invalid": 0}
+    current_v5_hash_validation = {"checked": 0, "valid": 0, "invalid": 0}
     reason_counts: Dict[str, int] = {}
     v5_reason_counts: Dict[str, int] = {}
+    current_v5_reason_counts: Dict[str, int] = {}
     verdict_counts: Dict[str, Dict[str, int]] = {
         layer: {} for layer in ("L1", "L2", "L3", "MTF")
     }
     v5_complete = 0
+    current_v5_complete = 0
     last_complete_context = None
+    current_last_complete_context = None
+    decision_feature_valid_from = None
+    try:
+        if isinstance(contract, dict) and contract.get("decision_feature_valid_from"):
+            decision_feature_valid_from = datetime.fromisoformat(
+                str(contract["decision_feature_valid_from"]).replace("Z", "+00:00")
+            )
+            if decision_feature_valid_from.tzinfo is None:
+                decision_feature_valid_from = decision_feature_valid_from.replace(
+                    tzinfo=timezone.utc
+                )
+            else:
+                decision_feature_valid_from = decision_feature_valid_from.astimezone(
+                    timezone.utc
+                )
+    except (TypeError, ValueError):
+        decision_feature_valid_from = None
     for row in context_rows:
         context_value = dict(row["context"] or {})
         version = str(context_value.get("contract_version") or "")
+        in_current_v5_window = bool(
+            version == "multilayer_decision_context_v5"
+            and decision_feature_valid_from is not None
+            and row["created_at"] >= decision_feature_valid_from
+        )
         complete = all(
             key in context_value for key in (
                 "l1_snapshot", "l1_context_hash", "l2_snapshot",
@@ -374,6 +400,8 @@ async def audit_multilayer_runtime(
         if complete:
             if version == "multilayer_decision_context_v5":
                 v5_complete += 1
+                if in_current_v5_window:
+                    current_v5_complete += 1
             valid_hashes = True
             for payload in (
                 context_value,
@@ -386,15 +414,21 @@ async def audit_multilayer_runtime(
                 hash_validation["checked"] += 1
                 if version == "multilayer_decision_context_v5":
                     v5_hash_validation["checked"] += 1
+                    if in_current_v5_window:
+                        current_v5_hash_validation["checked"] += 1
                 if expected_hash and expected_hash == canonical_hash(material):
                     hash_validation["valid"] += 1
                     if version == "multilayer_decision_context_v5":
                         v5_hash_validation["valid"] += 1
+                        if in_current_v5_window:
+                            current_v5_hash_validation["valid"] += 1
                 else:
                     valid_hashes = False
                     hash_validation["invalid"] += 1
                     if version == "multilayer_decision_context_v5":
                         v5_hash_validation["invalid"] += 1
+                        if in_current_v5_window:
+                            current_v5_hash_validation["invalid"] += 1
             if last_complete_context is None:
                 last_complete_context = {
                     "decision_id": str(row["id"]),
@@ -402,6 +436,18 @@ async def audit_multilayer_runtime(
                     "created_at": row["created_at"].isoformat(),
                     "contract_version": version,
                     "observational_decision": context_value.get("observational_decision"),
+                    "context_hash": context_value.get("context_hash"),
+                    "hashes_valid": valid_hashes,
+                }
+            if in_current_v5_window and current_last_complete_context is None:
+                current_last_complete_context = {
+                    "decision_id": str(row["id"]),
+                    "symbol": str(row["symbol"]),
+                    "created_at": row["created_at"].isoformat(),
+                    "contract_version": version,
+                    "observational_decision": context_value.get(
+                        "observational_decision"
+                    ),
                     "context_hash": context_value.get("context_hash"),
                     "hashes_valid": valid_hashes,
                 }
@@ -417,6 +463,10 @@ async def audit_multilayer_runtime(
                 reason_counts[str(reason)] = reason_counts.get(str(reason), 0) + 1
                 if version == "multilayer_decision_context_v5":
                     v5_reason_counts[str(reason)] = v5_reason_counts.get(str(reason), 0) + 1
+                    if in_current_v5_window:
+                        current_v5_reason_counts[str(reason)] = (
+                            current_v5_reason_counts.get(str(reason), 0) + 1
+                        )
         mtf_verdict = str(context_value.get("observational_decision") or "WAIT")
         verdict_counts["MTF"][mtf_verdict] = verdict_counts["MTF"].get(mtf_verdict, 0) + 1
         if context_value.get("reason"):
@@ -424,10 +474,18 @@ async def audit_multilayer_runtime(
             reason_counts[reason] = reason_counts.get(reason, 0) + 1
             if version == "multilayer_decision_context_v5":
                 v5_reason_counts[reason] = v5_reason_counts.get(reason, 0) + 1
+                if in_current_v5_window:
+                    current_v5_reason_counts[reason] = (
+                        current_v5_reason_counts.get(reason, 0) + 1
+                    )
         for reason in context_value.get("reason_codes") or []:
             reason_counts[str(reason)] = reason_counts.get(str(reason), 0) + 1
             if version == "multilayer_decision_context_v5":
                 v5_reason_counts[str(reason)] = v5_reason_counts.get(str(reason), 0) + 1
+                if in_current_v5_window:
+                    current_v5_reason_counts[str(reason)] = (
+                        current_v5_reason_counts.get(str(reason), 0) + 1
+                    )
 
     now = datetime.now(timezone.utc)
     coverage_rows = [dict(row) for row in coverage]
@@ -479,6 +537,18 @@ async def audit_multilayer_runtime(
         }
         for layer in ("L1", "L2", "L3")
     }
+    try:
+        controlled_replay = build_controlled_v5_replay(
+            contract=contract or {}, now=now
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        controlled_replay = {
+            "synthetic_controlled_replay": True,
+            "status": "FAILED",
+            "error_code": str(exc),
+            "operational_effect": False,
+            "executed_at": now.isoformat(),
+        }
     technically_functional = bool(
         contract
         and contract.get("enabled") is True
@@ -486,10 +556,12 @@ async def audit_multilayer_runtime(
         and contract.get("operational_effect") is False
         and contract.get("decision_feature_contract_version") == "multilayer_decision_context_v5"
         and all(item["status"] == "HEALTHY" for item in layer_health.values())
-        and v5_complete > 0
-        and v5_hash_validation["invalid"] == 0
-        and v5_reason_counts.get("L3_TEMPORAL_IDENTITY_UNAVAILABLE", 0) == 0
-        and v5_reason_counts.get("CONTEXT_EXPIRED", 0) == 0
+        and decision_feature_valid_from is not None
+        and controlled_replay.get("status") == "PASS"
+        and controlled_replay.get("operational_effect") is False
+        and current_v5_hash_validation["invalid"] == 0
+        and current_v5_reason_counts.get("L3_TEMPORAL_IDENTITY_UNAVAILABLE", 0) == 0
+        and current_v5_reason_counts.get("CONTEXT_EXPIRED", 0) == 0
     )
     statistical_status = (
         "APPROVED" if calibration and calibration.get("status") == "PASSED"
@@ -511,10 +583,23 @@ async def audit_multilayer_runtime(
             "verdict_counts_24h": verdict_counts,
             "reason_counts_24h": reason_counts,
             "v5_reason_counts_24h": v5_reason_counts,
+            "v5_reason_counts_current_contract": current_v5_reason_counts,
             "hash_validation_24h": hash_validation,
             "v5_hash_validation_24h": v5_hash_validation,
+            "v5_hash_validation_current_contract": current_v5_hash_validation,
             "last_complete_context": last_complete_context,
+            "last_complete_context_current_contract": current_last_complete_context,
             "v5_complete_contexts_24h": v5_complete,
+            "v5_complete_contexts_current_contract": current_v5_complete,
+            "current_contract_window_started_at": (
+                decision_feature_valid_from.isoformat()
+                if decision_feature_valid_from else None
+            ),
+            "current_contract_window_elapsed_seconds": (
+                (now - decision_feature_valid_from).total_seconds()
+                if decision_feature_valid_from else None
+            ),
+            "controlled_replay": controlled_replay,
             "technical_status": (
                 "SHADOW_FUNCTIONAL" if technically_functional else "SHADOW_DEGRADED"
             ),
