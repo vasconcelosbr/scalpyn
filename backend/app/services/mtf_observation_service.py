@@ -127,13 +127,24 @@ def _validate_indicator_identity(
     allowed_producer_versions = {
         str(item) for item in policy.get("allowed_producer_versions") or []
     }
-    candidates_by_name = {
-        str(candidate.get("indicator")): candidate
-        for candidate in merged.candidates
-        if candidate.get("timeframe") == timeframe
-        and candidate.get("market_type") == "spot"
-        and candidate.get("group") == expected_group
-    }
+    candidates_by_name: dict[str, dict[str, Any]] = {}
+    for candidate in merged.candidates:
+        if (
+            candidate.get("timeframe") != timeframe
+            or candidate.get("market_type") != "spot"
+            or candidate.get("group") != expected_group
+        ):
+            continue
+        name = str(candidate.get("indicator"))
+        current = candidates_by_name.get(name)
+        if current is None or (
+            _utc(candidate.get("source_timestamp")),
+            _utc(candidate.get("available_at")),
+        ) > (
+            _utc(current.get("source_timestamp")),
+            _utc(current.get("available_at")),
+        ):
+            candidates_by_name[name] = candidate
     missing = sorted(name for name in required if name not in candidates_by_name)
     if missing:
         raise ValueError("INDICATOR_INPUTS_UNAVAILABLE:" + ",".join(missing))

@@ -4,6 +4,7 @@ import pytest
 
 from app.schemas.layer_context import CandleIdentity, ProfileIdentity
 from app.services.mtf_observation_service import (
+    _validate_indicator_identity,
     _seal,
     advance_l2_setup_state,
     build_l1_context,
@@ -493,6 +494,71 @@ def test_grouped_mtf_snapshot_selects_latest_candle_common_to_all_groups():
         grouped[group]["price"]["source_timestamp"]
         for group in ("structural", "microstructure")
     } == {common.isoformat()}
+
+
+def test_temporal_identity_uses_latest_candidate_when_history_is_retained():
+    merged = MergedIndicators()
+    latest_source = NOW - timedelta(minutes=20)
+    old_source = NOW - timedelta(hours=2)
+    for value, source_at in ((30.0, latest_source), (10.0, old_source)):
+        envelope = {
+            "value": value,
+            "timeframe": "15m",
+            "market_type": "spot",
+            "scheduler_group": "structural",
+            "source_timestamp": source_at.isoformat(),
+            "available_at": (source_at + timedelta(minutes=16)).isoformat(),
+            "computed_at": (source_at + timedelta(minutes=16)).isoformat(),
+            "source_provider": "gate.io",
+            "provider_policy_id": "policy",
+            "candle_policy": "CLOSED_ONLY",
+            "candle_closed": True,
+            "config_profile_id": "config-id",
+            "config_hash": "c" * 64,
+            "producer_version": "producer",
+            "capture_contract_version": "capture",
+        }
+        envelope["envelope_hash"] = canonical_hash(envelope)
+        merged.candidates.append({
+            "indicator": "adx",
+            "actual": value,
+            "group": "structural",
+            "timeframe": "15m",
+            "market_type": "spot",
+            "source_timestamp": source_at,
+            "available_at": source_at + timedelta(minutes=16),
+            "computed_at": source_at + timedelta(minutes=16),
+            "source_provider": "gate.io",
+            "provider_policy_id": "policy",
+            "candle_closed": True,
+            "config_hash": "c" * 64,
+            "producer_version": "producer",
+            "fallback_used": False,
+            "envelope": envelope,
+        })
+    merged.values["adx"] = 30.0
+
+    values, candle, _expires_at = _validate_indicator_identity(
+        merged,
+        required={"adx"},
+        timeframe="15m",
+        layer_config={
+            "validity_margin_seconds": 1309,
+            "source_policies": {"ohlcv": {
+                "allowed_source_providers": ["gate.io"],
+                "provider_policy_id": "policy",
+                "scheduler_group": "structural",
+                "allowed_capture_contract_versions": ["capture"],
+                "allowed_producer_versions": ["producer"],
+                "indicator_config_profile_id": "config-id",
+                "indicator_config_hash": "c" * 64,
+            }},
+        },
+        now=NOW,
+    )
+
+    assert values == {"adx": 30.0}
+    assert candle.source_timestamp == latest_source
 
 
 def test_controlled_v5_replay_can_pass_without_operational_effect():
