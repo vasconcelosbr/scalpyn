@@ -471,7 +471,15 @@
           "contains_all": [
             "canonical_analysis_ready",
             "Análise bloqueada antes do provedor",
-            "disabled={analysisBusy || !canonicalAnalysisReady}"
+            "{canonicalAnalysisReady && (",
+            "reportRunId={run.id}"
+          ]
+        },
+        {
+          "path": "frontend/lib/shadowPortfolioAnalysisScope.test.ts",
+          "contains_all": [
+            "detailed report AI actions fail closed on incomplete canonical data",
+            "assert.doesNotMatch(detailedReport, /disabled=\\{analysisBusy \\|\\| !canonicalAnalysisReady\\}/)"
           ]
         }
       ]
