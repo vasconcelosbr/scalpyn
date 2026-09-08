@@ -13,10 +13,10 @@ test("MTF waiver is explicit in audit UI and governed import flow", () => {
     "utf8",
   );
 
-  assert.match(settings, /SHADOW NÃO CALIBRADO/);
+  assert.match(settings, /ESTATISTICAMENTE NÃO APROVADO/);
   assert.match(settings, /thresholds permanecem não validados/);
   assert.match(settings, /não pode autorizar ordens/);
-  assert.match(settings, /Contextos completos \(24h\).*complete_mtf/);
+  assert.match(settings, /Contextos completos desde o contrato atual.*v5_complete_contexts_current_contract/);
   assert.match(
     importer,
     /UPDATE_EXISTING_MTF_AND_ACTIVATE_SHADOW_WITH_WAIVER/,

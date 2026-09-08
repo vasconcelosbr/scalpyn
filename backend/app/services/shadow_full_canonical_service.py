@@ -18,7 +18,12 @@ from ..models.shadow_trade_analysis import ShadowTradeReportItem, ShadowTradeRep
 from ..models.systemic_ai import AIAnalysisShardRecord, AIDatasetSnapshotItemRecord
 
 
-CONTRACT_VERSION = "shadow-portfolio-full-canonical-v1"
+CONTRACT_VERSION = "shadow-portfolio-full-canonical-v2"
+PROVIDER_PROJECTION_CONTRACT_VERSION = "shadow-provider-analysis-projection-v1"
+SUPPORTED_CONTRACT_VERSIONS = frozenset({
+    "shadow-portfolio-full-canonical-v1",
+    CONTRACT_VERSION,
+})
 BREAKOUT_WINDOWS = ("5m", "15m", "30m", "1h")
 PRICE_POSITION_INDICATORS = (
     "vwap_distance_pct",
@@ -54,7 +59,7 @@ REQUIRED_TRADE_FIELDS = (
     "id", "user_id", "symbol", "entry_price", "entry_timestamp", "event_id", "snapshot_id",
     "profile_id", "profile_version_id", "score_engine_version_id", "exchange", "timeframe",
     "feature_schema_version", "feature_extractor_version", "capture_contract_version",
-    "label_contract_version", "barrier_contract_version", "feature_source_at",
+    "label_contract_version", "barrier_contract_version",
     "features_captured_at", "feature_hash", "profile_config_hash", "score_engine_config_hash",
     "lineage_status", "watchlist_id", "watchlist_name", "watchlist_level",
     "lineage_confidence", "lineage_source", "lineage_resolved_at",
@@ -64,7 +69,37 @@ REQUIRED_SNAPSHOTS = ("configuration", "entry_features", "rules", "entry_risk")
 REQUIRED_COMPLETED_TRADE_FIELDS = (
     "exit_price", "exit_timestamp", "outcome", "label_resolved_at",
 )
-REQUIRED_COMPLETED_SNAPSHOTS = ("exit_features", "exit_metrics")
+OPTIONAL_COMPLETED_SNAPSHOTS = ("exit_features", "exit_metrics")
+PROVIDER_TRADE_FIELDS = frozenset({
+    "id", "symbol", "strategy", "direction", "amount_usdt", "entry_price",
+    "entry_timestamp", "tp_price", "sl_price", "tp_pct", "sl_pct",
+    "timeout_candles", "exit_price", "exit_timestamp", "outcome", "pnl_pct",
+    "pnl_usdt", "holding_seconds", "status", "source", "rejected_by_layer",
+    "rejected_by_rule", "profile_id", "profile_version_id", "exchange", "timeframe",
+    "features_coverage", "oldest_indicator_age_s", "market_data_confidence",
+    "lineage_status", "eligible_for_training", "btc_change_1h_pct",
+    "n_concurrent_signals", "mae_pct", "mfe_pct", "closure_path", "final_return_pct",
+    "net_return_pct", "fee_roundtrip_pct_applied", "tp_pct_applied", "sl_pct_applied",
+    "atr_pct_at_entry", "elapsed_minutes", "profile_name", "strategy_type",
+    "profile_status_at_entry", "final_priority_score", "ml_probability",
+    "threshold_used", "score_status", "gate_action", "watchlist_name",
+    "watchlist_level", "lineage_confidence", "entry_risk_capture_status",
+})
+PROVIDER_CONFIG_SCALAR_FIELDS = frozenset({
+    "amount_usdt", "tp_pct", "sl_pct", "timeout_candles", "barrier_mode",
+    "barrier_effective_ratio", "barrier_configured_ratio", "entry_price_mode",
+    "entry_quality", "shadow_monitor_mode", "ttt_enabled", "ttt_tp_pct",
+    "ttt_timeout_minutes", "final_score", "technical_score",
+})
+PROVIDER_FEATURE_FIELDS = frozenset({
+    "price", "rsi", "adx", "atr", "atr_pct", "di_plus", "di_minus", "plus_di",
+    "minus_di", "ema5", "ema9", "ema21", "ema50", "ema200", "vwap",
+    "macd", "macd_signal", "macd_hist", "macd_histogram", "bb_upper", "bb_middle",
+    "bb_lower", "bb_width", "bollinger_width", "volume", "volume_ratio",
+    "volume_relative", "volume_spike", "obv", "mfi", "taker_buy_ratio",
+    "buy_sell_ratio", "orderbook_imbalance", "spread_pct", "depth_usdt",
+    *PRICE_POSITION_INDICATORS,
+})
 
 
 class ShadowCanonicalContractError(RuntimeError):
@@ -182,15 +217,88 @@ def _required_missing(payload: dict[str, Any]) -> list[str]:
         for field in REQUIRED_COMPLETED_TRADE_FIELDS:
             if trade.get(field) is None:
                 missing.append(f"trade.{field}")
-        for name in REQUIRED_COMPLETED_SNAPSHOTS:
-            if not isinstance(snapshots.get(name), dict) or not snapshots[name]:
-                missing.append(f"snapshots.{name}")
-        for snapshot_name in ("entry_features", "exit_features"):
-            features = snapshots.get(snapshot_name) or {}
-            for indicator in PRICE_POSITION_INDICATORS:
-                if features.get(indicator) is None:
-                    missing.append(f"snapshots.{snapshot_name}.{indicator}")
     return missing
+
+
+def _snapshot_availability(payload: dict[str, Any]) -> dict[str, Any]:
+    """Describe optional historical evidence without pretending it exists.
+
+    Entry evidence remains fail-closed.  Exit analytical snapshots were not
+    captured by every historical writer, even though the terminal outcome and
+    its immutable label are available.  Version 2 keeps those trades in a
+    report-wide entry audit, but makes every absent exit field explicit so the
+    provider cannot infer or fabricate it.
+    """
+
+    trade = payload["trade"]
+    snapshots = payload["snapshots"]
+    completed = trade.get("status") == "COMPLETED" or trade.get("outcome") is not None
+    availability: dict[str, Any] = {}
+    source_at = trade.get("feature_source_at")
+    source_times = snapshots.get("feature_source_times")
+    source_at_available = source_at is not None
+    source_times_available = isinstance(source_times, dict) and bool(source_times)
+    temporal_status = (
+        "AVAILABLE" if source_at_available and source_times_available
+        else "PARTIAL" if source_at_available or source_times_available
+        else "UNAVAILABLE"
+    )
+    availability["entry_temporal_lineage"] = {
+        "status": temporal_status,
+        "reason_codes": (
+            [] if temporal_status == "AVAILABLE"
+            else ["HISTORICAL_FEATURE_SOURCE_TIMESTAMP_UNAVAILABLE"]
+        ),
+        "unavailable_paths": [
+            path
+            for path, present in (
+                ("trade.feature_source_at", source_at_available),
+                ("snapshots.feature_source_times", source_times_available),
+            )
+            if not present
+        ],
+    }
+    entry_features = snapshots.get("entry_features") or {}
+    unavailable_entry_indicators = [
+        indicator
+        for indicator in PRICE_POSITION_INDICATORS
+        if entry_features.get(indicator) is None
+    ]
+    availability["entry_feature_indicators"] = {
+        "status": (
+            "AVAILABLE" if not unavailable_entry_indicators
+            else "UNAVAILABLE" if len(unavailable_entry_indicators) == len(PRICE_POSITION_INDICATORS)
+            else "PARTIAL"
+        ),
+        "unavailable_fields": unavailable_entry_indicators,
+        "reason_codes": (
+            [] if not unavailable_entry_indicators
+            else ["HISTORICAL_ENTRY_INDICATOR_UNAVAILABLE"]
+        ),
+    }
+    if completed:
+        for name in OPTIONAL_COMPLETED_SNAPSHOTS:
+            snapshot = snapshots.get(name)
+            available = isinstance(snapshot, dict) and bool(snapshot)
+            availability[name] = {
+                "status": "AVAILABLE" if available else "UNAVAILABLE",
+                "reason_codes": [] if available else ["HISTORICAL_EXIT_CAPTURE_UNAVAILABLE"],
+            }
+        exit_features = snapshots.get("exit_features") or {}
+        unavailable_indicators = [
+            indicator
+            for indicator in PRICE_POSITION_INDICATORS
+            if exit_features.get(indicator) is None
+        ]
+        availability["exit_feature_indicators"] = {
+            "status": "AVAILABLE" if not unavailable_indicators else "PARTIAL",
+            "unavailable_fields": unavailable_indicators,
+            "reason_codes": (
+                [] if not unavailable_indicators
+                else ["HISTORICAL_EXIT_INDICATOR_UNAVAILABLE"]
+            ),
+        }
+    return availability
 
 
 def canonical_trade_payload(report_run_id: UUID, position: int, row: ShadowTrade) -> dict[str, Any]:
@@ -218,31 +326,329 @@ def canonical_trade_payload(report_run_id: UUID, position: int, row: ShadowTrade
             "exit": {"breakout_distance_pct": _materialize_breakouts(exit_features)},
         },
     }
+    payload["evidence_availability"] = _snapshot_availability(payload)
     missing = _required_missing(payload)
     if missing:
         raise ShadowCanonicalContractError(
             "REQUIRED_FIELD_MISSING",
             details={"shadow_trade_id": str(row.id), "report_position": position, "paths": missing},
         )
-    payload["null_reasons"] = {
-        path: "SOURCE_VALUE_NULL"
-        for path, value in _leaf_paths({"trade": trade, "snapshots": snapshots})
-        if value is None
-    }
+    # Version 1 emitted one reason per null leaf, recursively including verbose
+    # configuration arrays.  Besides duplicating information already encoded
+    # as JSON null, that made provider requests grow quadratically with nested
+    # audit envelopes.  V2 records reasons only for evidence whose absence has
+    # an explicit governed meaning.
+    payload["null_reasons"] = {}
+    for snapshot_name, availability in payload["evidence_availability"].items():
+        if availability.get("status") == "UNAVAILABLE":
+            payload["null_reasons"][f"snapshots.{snapshot_name}"] = (
+                availability["reason_codes"][0]
+            )
+        for field in availability.get("unavailable_fields") or []:
+            feature_scope = (
+                "entry_features" if snapshot_name == "entry_feature_indicators"
+                else "exit_features"
+            )
+            payload["null_reasons"][f"snapshots.{feature_scope}.{field}"] = (
+                availability["reason_codes"][0]
+            )
+        for path in availability.get("unavailable_paths") or []:
+            payload["null_reasons"][path] = availability["reason_codes"][0]
     return payload
 
 
-def _shard_payload(dataset_snapshot_id: UUID, shard_index: int, items: Iterable[CanonicalItem]) -> dict[str, Any]:
+def _compact_feature_evaluations(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    allowed = (
+        "rule_id", "section", "indicator", "operator", "actual", "expected",
+        "result", "status", "required",
+    )
+    return [
+        {key: item.get(key) for key in allowed if key in item}
+        for item in value
+        if isinstance(item, dict)
+    ]
+
+
+def _authorization_projection(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    included = {
+        "contract_version", "valid", "authorization_status", "final_decision",
+        "technical_decision", "contract_technical_decision", "legacy_decision",
+        "decision_drift", "operational_effect",
+    }
+    projected = {
+        key: value[key]
+        for key in sorted(included)
+        if key in value and (
+            value[key] is None or isinstance(value[key], (bool, int, float, str))
+        )
+    }
+    evaluations = _compact_feature_evaluations(value.get("feature_evaluations"))
+    projected["feature_evaluation_count"] = len(evaluations)
+    projected["failed_feature_evaluations"] = [
+        item for item in evaluations
+        if item.get("result") is False or str(item.get("status") or "").upper() in {"FAIL", "REJECT"}
+    ]
+    projected["feature_evaluations_hash"] = canonical_hash(value.get("feature_evaluations"))
+    projected["source_document_hash"] = canonical_hash(value)
+    return projected
+
+
+def _gate_projection(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    included = {
+        "contract_version", "base_eligible", "would_authorize",
+        "technical_would_authorize", "contract_would_authorize", "shadow_decision",
+        "contract_shadow_decision", "operational_decision", "legacy_decision",
+        "decision_drift", "promotion_status", "operational_effect", "score",
+    }
+    projected = {
+        key: value[key]
+        for key in sorted(included)
+        if key in value and (
+            value[key] is None or isinstance(value[key], (bool, int, float, str))
+        )
+    }
+    projected["source_document_hash"] = canonical_hash(value)
+    return projected
+
+
+def _scalar_summary(value: Any, *, depth: int = 2) -> Any:
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, dict):
+        projected: dict[str, Any] = {}
+        omitted: dict[str, Any] = {}
+        for key in sorted(value):
+            child = value[key]
+            if child is None or isinstance(child, (bool, int, float, str)):
+                projected[key] = child
+            elif depth > 0 and isinstance(child, dict):
+                projected[key] = _scalar_summary(child, depth=depth - 1)
+            elif isinstance(child, list) and len(child) <= 12 and all(
+                item is None or isinstance(item, (bool, int, float, str)) for item in child
+            ):
+                projected[key] = child
+            else:
+                omitted[key] = child
+        if omitted:
+            projected["omitted_field_names"] = sorted(omitted)
+            projected["omitted_fields_hash"] = canonical_hash(omitted)
+        return projected
+    return {"source_document_hash": canonical_hash(value)}
+
+
+def _feature_projection(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {"source_document_hash": canonical_hash(value), "value_status": "UNAVAILABLE"}
+    projected = {
+        key: child
+        for key, child in sorted(value.items())
+        if key in PROVIDER_FEATURE_FIELDS
+        and child is not None
+        and isinstance(child, (bool, int, float, str))
+    }
+    projected["source_document_hash"] = canonical_hash(value)
+    projected["source_field_count"] = len(value)
+    projected["provider_field_count"] = len(projected) - 2
+    return projected
+
+
+def _feature_reference(value: Any) -> dict[str, Any]:
     return {
-        "input_contract_version": CONTRACT_VERSION,
-        "dataset_snapshot_id": str(dataset_snapshot_id),
-        "shard_index": shard_index,
-        "items": [{
+        "status": "AVAILABLE" if isinstance(value, dict) and bool(value) else "UNAVAILABLE",
+        "source_field_count": len(value) if isinstance(value, dict) else 0,
+    }
+
+
+def _rules_projection(value: Any) -> dict[str, Any]:
+    return {
+        "source_document_hash": canonical_hash(value),
+        "rules_summary": _scalar_summary(value, depth=3),
+    }
+
+
+def _risk_projection(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {"source_document_hash": canonical_hash(value), "status": "UNAVAILABLE"}
+    projected: dict[str, Any] = {"source_document_hash": canonical_hash(value)}
+    for key in ("schema_version", "captured_at"):
+        if key in value:
+            projected[key] = value[key]
+    status = value.get("contract_status")
+    if isinstance(status, dict):
+        projected["contract_status"] = {
+            key: status[key]
+            for key in (
+                "status", "entry_risk_contract_valid", "reconstructible", "reason_codes"
+            )
+            if key in status
+        }
+    return projected
+
+
+def _availability_projection(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {"status": "UNAVAILABLE"}
+    projected: dict[str, Any] = {}
+    for key, item in sorted(value.items()):
+        if not isinstance(item, dict):
+            continue
+        unavailable = list(item.get("unavailable_fields") or item.get("unavailable_paths") or [])
+        entry: dict[str, Any] = {
+            "status": item.get("status"),
+            "reason_codes": item.get("reason_codes") or [],
+            "unavailable_count": len(unavailable),
+        }
+        projected[key] = entry
+    return projected
+
+
+def _source_times_projection(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or not value:
+        return {
+            "status": "UNAVAILABLE",
+            "source_count": 0,
+        }
+    timestamps = sorted(str(item) for item in value.values() if item is not None)
+    return {
+        "status": "AVAILABLE" if timestamps else "UNAVAILABLE",
+        "source_count": len(value),
+        "oldest_source_at": timestamps[0] if timestamps else None,
+        "newest_source_at": timestamps[-1] if timestamps else None,
+    }
+
+
+def _configuration_projection(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {
+            "source_document_hash": canonical_hash(value),
+            "value_status": "UNAVAILABLE",
+        }
+    projected = {
+        key: child
+        for key, child in sorted(value.items())
+        if key in PROVIDER_CONFIG_SCALAR_FIELDS
+        if child is None or isinstance(child, (bool, int, float, str))
+    }
+    authorization = _authorization_projection(value.get("l3_authorization_contract_v3"))
+    if authorization is not None:
+        projected["l3_authorization_contract_v3"] = authorization
+    gate = _gate_projection(value.get("l3_gate_v2"))
+    if gate is not None:
+        projected["l3_gate_v2"] = gate
+    projected["source_document_hash"] = canonical_hash(value)
+    return projected
+
+
+def _provider_trade_projection(payload: dict[str, Any]) -> dict[str, Any]:
+    source_snapshots = dict(payload.get("snapshots") or {})
+    source_trade = dict(payload.get("trade") or {})
+    trade = {
+        key: source_trade[key]
+        for key in sorted(PROVIDER_TRADE_FIELDS)
+        if key in source_trade and source_trade[key] is not None
+    }
+    snapshots = {
+        "configuration": _configuration_projection(source_snapshots.get("configuration")),
+        "entry_features": _feature_projection(source_snapshots.get("entry_features")),
+        "exit_features": _feature_reference(source_snapshots.get("exit_features")),
+        "exit_metrics": _scalar_summary(source_snapshots.get("exit_metrics"), depth=0),
+        "entry_risk": _risk_projection(source_snapshots.get("entry_risk")),
+        "feature_source_times": _source_times_projection(
+            source_snapshots.get("feature_source_times")
+        ),
+        "reason_codes": source_snapshots.get("reason_codes") or [],
+    }
+    return {
+        "input_contract_version": payload.get("input_contract_version"),
+        "provider_projection_contract_version": PROVIDER_PROJECTION_CONTRACT_VERSION,
+        "report_run_id": payload.get("report_run_id"),
+        "report_position": payload.get("report_position"),
+        "trade": trade,
+        "snapshots": snapshots,
+        "evidence_availability": _availability_projection(
+            payload.get("evidence_availability")
+        ),
+        "canonical_payload_hash": canonical_hash(payload),
+    }
+
+
+def _shard_payload_for_items(
+    dataset_snapshot_id: UUID,
+    shard_index: int,
+    items: Iterable[CanonicalItem | AIDatasetSnapshotItemRecord],
+    *,
+    projection_cache: dict[str, tuple[dict[str, Any], str, dict[str, Any]]] | None = None,
+) -> dict[str, Any]:
+    item_list = list(items)
+    is_v2 = bool(item_list) and all(
+        dict(item.payload if isinstance(item, CanonicalItem) else item.canonical_json).get(
+            "input_contract_version"
+        ) == CONTRACT_VERSION
+        for item in item_list
+    )
+    output_items = []
+    rules_catalog: dict[str, dict[str, Any]] = {}
+    for item in item_list:
+        canonical = dict(
+            item.payload if isinstance(item, CanonicalItem) else item.canonical_json
+        )
+        if is_v2:
+            cached = projection_cache.get(item.item_hash) if projection_cache is not None else None
+            if cached is None:
+                provider_trade = _provider_trade_projection(canonical)
+                rules = (canonical.get("snapshots") or {}).get("rules")
+                rules_hash = canonical_hash(rules)
+                rules_projection = _rules_projection(rules)
+                provider_trade["rules_catalog_ref"] = rules_hash
+                cached = (provider_trade, rules_hash, rules_projection)
+                if projection_cache is not None:
+                    projection_cache[item.item_hash] = cached
+            provider_trade, rules_hash, rules_projection = cached
+            rules_catalog.setdefault(rules_hash, rules_projection)
+        else:
+            provider_trade = canonical
+        output_items.append({
             "shadow_trade_id": str(item.shadow_trade_id),
             "item_hash": item.item_hash,
-            "canonical_trade": item.payload,
-        } for item in items],
+            "canonical_trade": provider_trade,
+        })
+    payload = {
+        "input_contract_version": CONTRACT_VERSION if is_v2 else (
+            item_list[0].canonical_json.get("input_contract_version")
+            if item_list and isinstance(item_list[0], AIDatasetSnapshotItemRecord)
+            else item_list[0].payload.get("input_contract_version") if item_list else CONTRACT_VERSION
+        ),
+        "dataset_snapshot_id": str(dataset_snapshot_id),
+        "shard_index": shard_index,
+        "items": output_items,
     }
+    if is_v2:
+        payload["provider_projection_contract_version"] = (
+            PROVIDER_PROJECTION_CONTRACT_VERSION
+        )
+        payload["rules_catalog"] = rules_catalog
+    return payload
+
+
+def _shard_payload(
+    dataset_snapshot_id: UUID,
+    shard_index: int,
+    items: Iterable[CanonicalItem],
+    *,
+    projection_cache: dict[str, tuple[dict[str, Any], str, dict[str, Any]]] | None = None,
+) -> dict[str, Any]:
+    return _shard_payload_for_items(
+        dataset_snapshot_id,
+        shard_index,
+        items,
+        projection_cache=projection_cache,
+    )
 
 
 def plan_shards(
@@ -252,9 +658,12 @@ def plan_shards(
         raise ShadowCanonicalContractError("SHARD_CONTEXT_EXCEEDED")
     groups: list[list[CanonicalItem]] = []
     current: list[CanonicalItem] = []
+    projection_cache: dict[str, tuple[dict[str, Any], str, dict[str, Any]]] = {}
     for item in items:
         candidate = [*current, item]
-        encoded = canonical_json(_shard_payload(dataset_snapshot_id, len(groups), candidate)).encode("utf-8")
+        encoded = canonical_json(_shard_payload(
+            dataset_snapshot_id, len(groups), candidate, projection_cache=projection_cache,
+        )).encode("utf-8")
         estimate = _estimated_tokens(len(encoded))
         if estimate > max_input_tokens:
             if not current:
@@ -264,7 +673,9 @@ def plan_shards(
                 )
             groups.append(current)
             current = [item]
-            encoded = canonical_json(_shard_payload(dataset_snapshot_id, len(groups), current)).encode("utf-8")
+            encoded = canonical_json(_shard_payload(
+                dataset_snapshot_id, len(groups), current, projection_cache=projection_cache,
+            )).encode("utf-8")
             estimate = _estimated_tokens(len(encoded))
             if estimate > max_input_tokens:
                 raise ShadowCanonicalContractError(
@@ -278,7 +689,9 @@ def plan_shards(
 
     plans: list[ShardPlan] = []
     for index, group in enumerate(groups):
-        payload = _shard_payload(dataset_snapshot_id, index, group)
+        payload = _shard_payload(
+            dataset_snapshot_id, index, group, projection_cache=projection_cache,
+        )
         encoded = canonical_json(payload).encode("utf-8")
         plans.append(ShardPlan(
             record_id=uuid4(), shard_index=index, items=tuple(group),
@@ -349,6 +762,10 @@ async def capture_report(
         max_input_tokens=max_shard_input_tokens,
     )
     item_hashes = [item.item_hash for item in item_tuple]
+    optional_missingness: dict[str, int] = {}
+    for item in item_tuple:
+        for path in item.payload.get("null_reasons") or {}:
+            optional_missingness[path] = optional_missingness.get(path, 0) + 1
     dataset_hash = canonical_hash({
         "input_contract_version": CONTRACT_VERSION,
         "report_run_id": str(report_run_id),
@@ -376,6 +793,7 @@ async def capture_report(
             "estimated_input_tokens": shard.estimated_input_tokens,
         } for shard in shards],
         "missing_required_fields": [],
+        "optional_missingness_by_path": optional_missingness,
     }
     return CapturedShadowDataset(
         report_run_id=report_run_id, captured_at=captured_at, items=item_tuple,
@@ -425,16 +843,7 @@ async def load_canonical_items(
 
 
 def provider_shard_payload(dataset_snapshot_id: UUID, shard: AIAnalysisShardRecord, items: list[AIDatasetSnapshotItemRecord]) -> dict[str, Any]:
-    payload = {
-        "input_contract_version": CONTRACT_VERSION,
-        "dataset_snapshot_id": str(dataset_snapshot_id),
-        "shard_index": shard.shard_index,
-        "items": [{
-            "shadow_trade_id": str(item.shadow_trade_id),
-            "item_hash": item.item_hash,
-            "canonical_trade": dict(item.canonical_json),
-        } for item in items],
-    }
+    payload = _shard_payload_for_items(dataset_snapshot_id, shard.shard_index, items)
     if canonical_hash(payload) != shard.payload_hash:
         raise ShadowCanonicalContractError("DATASET_RECONCILIATION_FAILED")
     return payload

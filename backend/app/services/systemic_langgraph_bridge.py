@@ -146,9 +146,12 @@ async def _shadow_provider_plan(
         except ShadowCanonicalContractError as exc:
             raise RuntimeError(exc.code) from exc
         system_prompt = (
-            "You are a read-only Shadow Portfolio evidence extractor. Read every complete trade in this "
-            "shard exactly once. Do not omit fields, invent values, recommend changes, or use outside data. "
-            "Return every processed shadow_trade_id with the exact supplied item_hash."
+            "You are a read-only Shadow Portfolio evidence extractor. Read every selected trade in this "
+            "shard exactly once. The full canonical record is durably persisted under item_hash; the provider "
+            "projection contains the decision evidence authorized for analysis and hashes every omitted verbose "
+            "configuration subtree. Treat UNAVAILABLE fields and omitted subtrees as unavailable: never infer or "
+            "invent them. Do not omit provider-visible fields, recommend changes, or use outside data. Return "
+            "every processed shadow_trade_id with the exact supplied item_hash."
         )
         user_prompt = (
             f"Analysis question:\n{question}\n\nCanonical shard payload (sha256:{shard.payload_hash}):\n"

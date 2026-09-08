@@ -464,6 +464,9 @@ class ModuleAIAnalysisService:
                 "ordered_item_hashes": tuple(shadow_capture.manifest["ordered_item_hashes"]),
                 "shard_plan": tuple(shadow_capture.manifest["shard_plan"]),
                 "missing_required_fields": (),
+                "optional_missingness_by_path": shadow_capture.manifest.get(
+                    "optional_missingness_by_path", {}
+                ),
             }
         context_manifest = AnalysisContextManifest(
             modules_requested=(origin_module,), modules_consulted=(origin_module, *dependencies),

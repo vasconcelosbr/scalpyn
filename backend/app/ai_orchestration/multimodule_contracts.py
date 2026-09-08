@@ -40,6 +40,7 @@ class AnalysisContextManifest(BaseModel):
     ordered_item_hashes: tuple[str, ...] = ()
     shard_plan: tuple[dict[str, Any], ...] = ()
     missing_required_fields: tuple[dict[str, Any], ...] = ()
+    optional_missingness_by_path: dict[str, int] = Field(default_factory=dict)
 
 
 class StructuredRecommendation(BaseModel):

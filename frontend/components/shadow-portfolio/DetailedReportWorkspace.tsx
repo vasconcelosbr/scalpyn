@@ -615,14 +615,13 @@ export default function DetailedReportWorkspace() {
             <div className="flex flex-wrap items-center gap-2">
               <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 font-mono text-xs text-[#d2d8e5]">{run.total_trades} trades</span>
               <button className={buttonClass} onClick={() => fetchDownload(`/api/shadow-trade-reports/runs/${run.id}/export`, `shadow-report-${run.id}.json`)}><Download size={14} /> JSON consolidado</button>
-              <button className={`${buttonClass} border-[#4f7bf7]/40 text-[#9db2ff]`} onClick={() => analyze("REPORT", run.id)} disabled={analysisBusy || !canonicalAnalysisReady} title={!canonicalAnalysisReady ? "Relatório sem todos os campos canônicos obrigatórios" : undefined}><Sparkles size={14} /> Analisar seleção</button>
               {canonicalAnalysisReady && (
                 <ModuleAIAnalysisAction
                   originModule="shadow_portfolio"
                   originView="shadow-portfolio-detailed-report"
                   entityIds={[]}
                   reportRunId={run.id}
-                  label={`Análise por IA (${run.total_trades} trades)`}
+                  label="Analisar seleção"
                   compact
                 />
               )}

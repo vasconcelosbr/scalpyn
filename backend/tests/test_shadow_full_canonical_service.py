@@ -7,11 +7,12 @@ import uuid
 
 import pytest
 
-from app.ai_orchestration.hashing import canonical_hash
+from app.ai_orchestration.hashing import canonical_hash, canonical_json
 from app.models.shadow_trade import ShadowTrade
 from app.models.systemic_ai import AIAnalysisShardRecord, AIDatasetSnapshotItemRecord
 from app.services.shadow_full_canonical_service import (
     CONTRACT_VERSION,
+    PROVIDER_PROJECTION_CONTRACT_VERSION,
     PRICE_POSITION_INDICATORS,
     CanonicalItem,
     ShadowCanonicalContractError,
@@ -58,9 +59,13 @@ def _trade() -> ShadowTrade:
     )
 
 
-def _item(position: int, padding: int = 0) -> CanonicalItem:
+def _item(
+    position: int,
+    padding: int = 0,
+    contract_version: str = "shadow-portfolio-full-canonical-v1",
+) -> CanonicalItem:
     payload = {
-        "input_contract_version": CONTRACT_VERSION,
+        "input_contract_version": contract_version,
         "report_position": position,
         "trade": {"id": str(uuid.uuid4()), "padding": "x" * padding},
     }
@@ -83,13 +88,61 @@ def test_complete_payload_keeps_all_entry_exit_indicators_and_risk_components():
     assert set(payload["virtual_indicators"]["entry"]["breakout_distance_pct"]) == {"5m", "15m", "30m", "1h"}
 
 
-def test_missing_required_indicator_blocks_capture():
+def test_missing_historical_entry_indicator_is_explicit_without_fabrication():
     trade = _trade()
     trade.features_snapshot = {**trade.features_snapshot, "ema21_distance_pct": None}
-    with pytest.raises(ShadowCanonicalContractError) as exc_info:
-        canonical_trade_payload(uuid.uuid4(), 0, trade)
-    assert exc_info.value.code == "REQUIRED_FIELD_MISSING"
-    assert "snapshots.entry_features.ema21_distance_pct" in exc_info.value.details["paths"]
+    payload = canonical_trade_payload(uuid.uuid4(), 0, trade)
+
+    assert payload["evidence_availability"]["entry_feature_indicators"]["status"] == "PARTIAL"
+    assert payload["null_reasons"]["snapshots.entry_features.ema21_distance_pct"] == (
+        "HISTORICAL_ENTRY_INDICATOR_UNAVAILABLE"
+    )
+
+
+def test_missing_historical_exit_capture_is_explicit_but_does_not_block_entry_audit():
+    trade = _trade()
+    trade.features_snapshot_exit = None
+    trade.exit_metrics_json = None
+
+    payload = canonical_trade_payload(uuid.uuid4(), 0, trade)
+
+    assert payload["evidence_availability"]["exit_features"] == {
+        "status": "UNAVAILABLE",
+        "reason_codes": ["HISTORICAL_EXIT_CAPTURE_UNAVAILABLE"],
+    }
+    assert payload["evidence_availability"]["exit_metrics"] == {
+        "status": "UNAVAILABLE",
+        "reason_codes": ["HISTORICAL_EXIT_CAPTURE_UNAVAILABLE"],
+    }
+    assert payload["evidence_availability"]["exit_feature_indicators"]["status"] == "PARTIAL"
+    assert payload["null_reasons"]["snapshots.exit_features"] == (
+        "HISTORICAL_EXIT_CAPTURE_UNAVAILABLE"
+    )
+    assert payload["null_reasons"]["snapshots.exit_metrics"] == (
+        "HISTORICAL_EXIT_CAPTURE_UNAVAILABLE"
+    )
+
+
+def test_missing_historical_temporal_lineage_is_explicit_without_fabrication():
+    trade = _trade()
+    trade.feature_source_at = None
+    trade.feature_source_times = {}
+
+    payload = canonical_trade_payload(uuid.uuid4(), 0, trade)
+
+    assert payload["trade"]["feature_source_at"] is None
+    assert payload["snapshots"]["feature_source_times"] == {}
+    assert payload["evidence_availability"]["entry_temporal_lineage"] == {
+        "status": "UNAVAILABLE",
+        "reason_codes": ["HISTORICAL_FEATURE_SOURCE_TIMESTAMP_UNAVAILABLE"],
+        "unavailable_paths": [
+            "trade.feature_source_at",
+            "snapshots.feature_source_times",
+        ],
+    }
+    assert payload["null_reasons"]["trade.feature_source_at"] == (
+        "HISTORICAL_FEATURE_SOURCE_TIMESTAMP_UNAVAILABLE"
+    )
 
 
 def test_reconstructible_partial_risk_snapshot_with_reasons_is_complete_evidence():
@@ -299,6 +352,72 @@ def test_provider_payload_supplies_exact_persisted_item_hash_and_reconciles_once
     }]
     assert canonical_hash(payload) == shard.payload_hash
     reconcile_shard_results(expected_items=[persisted], shards=[shard])
+
+
+def test_v2_provider_projection_keeps_decision_evidence_and_hashes_verbose_subtrees():
+    dataset_id = uuid.uuid4()
+    trade = _trade()
+    trade.config_snapshot = {
+        "final_score": 80,
+        "l3_authorization_contract_v3": {
+            "contract_version": "l3-authorization-v3",
+            "final_decision": "REJECT",
+            "feature_registry": [{"verbose_marker": "must-not-reach-provider"}],
+            "feature_evaluations": [{
+                "condition_id": "rsi-min",
+                "indicator": "rsi",
+                "actual": 61.2,
+                "expected": 55,
+                "operator": ">=",
+                "result": False,
+                "status": "REJECT",
+                "source_timestamp": "omitted-verbose-provenance",
+            }],
+        },
+        "feature_source_times": {"rsi": "2026-09-08T12:00:00Z"},
+    }
+    canonical = canonical_trade_payload(uuid.uuid4(), 0, trade)
+    encoded = canonical_json(canonical).encode()
+    item = CanonicalItem(
+        record_id=uuid.uuid4(), shadow_trade_id=trade.id, report_position=0,
+        payload=canonical, item_hash=canonical_hash(canonical), payload_bytes=len(encoded),
+        estimated_tokens=1,
+    )
+    plan = plan_shards(
+        dataset_snapshot_id=dataset_id,
+        items=(item,),
+        max_input_tokens=100_000,
+    )[0]
+    persisted = AIDatasetSnapshotItemRecord(
+        id=item.record_id, tenant_id=trade.user_id, dataset_snapshot_id=dataset_id,
+        report_run_id=uuid.uuid4(), shadow_trade_id=trade.id, report_position=0,
+        canonical_json=canonical, item_hash=item.item_hash,
+        payload_bytes=item.payload_bytes, estimated_tokens=item.estimated_tokens,
+    )
+    shard = AIAnalysisShardRecord(
+        id=plan.record_id, tenant_id=trade.user_id, ai_request_id=uuid.uuid4(),
+        dataset_snapshot_id=dataset_id, shard_index=0, status="PLANNED", item_count=1,
+        item_ids=[str(item.record_id)], item_hashes=[item.item_hash],
+        payload_hash=plan.payload_hash, payload_bytes=plan.payload_bytes,
+        estimated_input_tokens=plan.estimated_input_tokens,
+    )
+
+    payload = provider_shard_payload(dataset_id, shard, [persisted])
+    serialized = canonical_json(payload)
+    provider_trade = payload["items"][0]["canonical_trade"]
+    projected_auth = provider_trade["snapshots"]["configuration"][
+        "l3_authorization_contract_v3"
+    ]
+
+    assert payload["provider_projection_contract_version"] == PROVIDER_PROJECTION_CONTRACT_VERSION
+    assert provider_trade["canonical_payload_hash"] == item.item_hash
+    assert projected_auth["final_decision"] == "REJECT"
+    assert projected_auth["failed_feature_evaluations"][0]["actual"] == 61.2
+    assert projected_auth["source_document_hash"] == canonical_hash(
+        trade.config_snapshot["l3_authorization_contract_v3"]
+    )
+    assert "must-not-reach-provider" not in serialized
+    assert "omitted-verbose-provenance" not in serialized
 
 
 def test_provider_payload_and_reconciliation_fail_on_hash_divergence_or_duplicate():

@@ -22,14 +22,15 @@ test("shadow analysis entry points require the canonical detailed-report flow", 
   assert.doesNotMatch(tradeDetail, /<ModuleAIAnalysisAction/);
   assert.match(tradeDetail, /href="\/dashboard\/shadow-portfolio#detailed-report"/);
   assert.match(detailedReport, /reportRunId=\{run\.id\}/);
-  assert.match(detailedReport, /Análise por IA \(\$\{run\.total_trades\} trades\)/);
+  assert.match(detailedReport, /label="Analisar seleção"/);
+  assert.doesNotMatch(detailedReport, /analyze\("REPORT", run\.id\)/);
 });
 
 test("detailed report AI actions fail closed on incomplete canonical data", () => {
   assert.match(detailedReport, /canonical_analysis_ready !== false/);
-  assert.match(detailedReport, /disabled=\{analysisBusy \|\| !canonicalAnalysisReady\}/);
   assert.match(detailedReport, /\{canonicalAnalysisReady && \(/);
   assert.match(detailedReport, /Análise bloqueada antes do provedor/);
+  assert.doesNotMatch(detailedReport, /disabled=\{analysisBusy \|\| !canonicalAnalysisReady\}/);
 });
 
 test("detailed report outcome controls expose selected state and stale-result guidance", () => {

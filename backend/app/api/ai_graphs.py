@@ -24,6 +24,7 @@ from ..models.systemic_ai import (
 )
 from ..services.ai_graph_service import AIGraphRunService, GraphAccessError
 from ..services.analysis_chat_service import AnalysisChatError, AnalysisChatService
+from ..services.shadow_full_canonical_service import SUPPORTED_CONTRACT_VERSIONS
 from .config import get_current_user_id
 
 
@@ -62,7 +63,7 @@ def _coverage_payload(request=None, dataset=None) -> dict[str, Any]:
     canonical = bool(
         is_shadow
         and dataset
-        and dataset.contract_version == "shadow-portfolio-full-canonical-v1"
+        and dataset.contract_version in SUPPORTED_CONTRACT_VERSIONS
         and manifest.get("legacy_incomplete") is False
     )
     return {

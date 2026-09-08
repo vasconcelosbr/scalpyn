@@ -41,6 +41,7 @@ from ..schemas.analysis_chat import (
     AnalysisChatRuntimeConfig,
 )
 from .ai_graph_service import AIGraphRunService
+from .shadow_full_canonical_service import SUPPORTED_CONTRACT_VERSIONS
 
 
 def _now() -> datetime:
@@ -385,7 +386,7 @@ class AnalysisChatService:
         manifest = dict((dataset.context_manifest if dataset else {}) or {})
         if (
             dataset is None
-            or dataset.contract_version != "shadow-portfolio-full-canonical-v1"
+            or dataset.contract_version not in SUPPORTED_CONTRACT_VERSIONS
             or manifest.get("coverage_status") != "RECONCILED_COMPLETE"
             or manifest.get("legacy_incomplete") is not False
         ):
