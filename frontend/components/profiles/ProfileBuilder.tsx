@@ -15,7 +15,10 @@ import {
   indicatorOptionsForSection,
   optionsWithUnsupportedIndicator,
 } from "@/lib/indicatorCatalog";
-import { normalizeProfileRuleCondition } from "@/lib/profileConditionState";
+import {
+  normalizeProfileRuleCondition,
+  serializeProfileEditorConfig,
+} from "@/lib/profileConditionState";
 import { formatPreflightIssue, validateExecutionSections } from "@/lib/profileImportPreflight";
 import {
   blockThresholdIndicatorOptions,
@@ -181,8 +184,8 @@ function createRuleCondition(type: RuleConditionType = "threshold"): RuleConditi
   };
 }
 
-function normalizeRuleCondition(raw: any): RuleCondition {
-  return normalizeProfileRuleCondition(raw) as RuleCondition;
+function normalizeRuleCondition(raw: any, fallbackId?: string): RuleCondition {
+  return normalizeProfileRuleCondition(raw, fallbackId) as RuleCondition;
 }
 
 function hasBreakoutWithoutReference(value: any): boolean {
@@ -195,8 +198,8 @@ function hasBreakoutWithoutReference(value: any): boolean {
   return Object.values(value).some(hasBreakoutWithoutReference);
 }
 
-function normalizeBlockRule(raw: any): BlockRule {
-  const id = raw?.id || `block_${Date.now()}`;
+function normalizeBlockRule(raw: any, blockIndex = 0): BlockRule {
+  const id = raw?.id || `block_loaded_${blockIndex}`;
   const base = {
     ...(raw || {}),
     id,
@@ -211,7 +214,9 @@ function normalizeBlockRule(raw: any): BlockRule {
   if (Array.isArray(raw?.conditions) && raw.conditions.length > 0) {
     return {
       ...base,
-      conditions: raw.conditions.map(normalizeRuleCondition),
+      conditions: raw.conditions.map((condition: any, conditionIndex: number) => (
+        normalizeRuleCondition(condition, `cond_loaded_block_${blockIndex}_${conditionIndex}`)
+      )),
     };
   }
 
@@ -221,14 +226,14 @@ function normalizeBlockRule(raw: any): BlockRule {
       logic: "OR",
       conditions: [
         {
-          id: `${id}_min`,
+          id: `cond_loaded_block_${blockIndex}_min`,
           type: "threshold",
           indicator: raw?.indicator || "rsi",
           operator: "<",
           value: raw?.min ?? 0,
         },
         {
-          id: `${id}_max`,
+          id: `cond_loaded_block_${blockIndex}_max`,
           type: "threshold",
           indicator: raw?.indicator || "rsi",
           operator: ">",
@@ -245,7 +250,7 @@ function normalizeBlockRule(raw: any): BlockRule {
         ...base,
         conditions: [
           {
-            id: `${id}_cmp`,
+            id: `cond_loaded_block_${blockIndex}_cmp`,
             type: "comparison",
             left: match[1],
             operator: match[2] === "=" ? "==" : match[2],
@@ -261,7 +266,7 @@ function normalizeBlockRule(raw: any): BlockRule {
     conditions: [
       normalizeRuleCondition({
         ...(raw || {}),
-        id: `${id}_legacy`,
+        id: `cond_loaded_block_${blockIndex}_legacy`,
         type: raw?.type === "comparison" ? "comparison" : undefined,
         indicator: raw?.indicator,
         operator: raw?.operator,
@@ -273,8 +278,8 @@ function normalizeBlockRule(raw: any): BlockRule {
   };
 }
 
-function normalizeEntryTrigger(raw: any): EntryTrigger {
-  const normalized = normalizeRuleCondition(raw);
+function normalizeEntryTrigger(raw: any, triggerIndex = 0): EntryTrigger {
+  const normalized = normalizeRuleCondition(raw, `cond_loaded_entry_${triggerIndex}`);
   return {
     ...normalized,
     id: raw?.id || normalized.id,
@@ -548,7 +553,7 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
     const profileData = {
       name,
       description,
-      config,
+      config: serializeProfileEditorConfig(config),
       profile_role: profileRole,
       pipeline_order: profileRole
         ? { universe_filter: 0, primary_filter: 1, score_engine: 2, acquisition_queue: 3 }[profileRole] ?? 99

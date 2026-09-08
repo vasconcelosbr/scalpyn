@@ -5,6 +5,7 @@ import {
   isProfileComparisonCondition,
   normalizeProfileRuleCondition,
   profileConditionPrimaryIndicator,
+  serializeProfileEditorConfig,
   serializeProfileRuleCondition,
   updateProfileRuleCondition,
 } from "./profileConditionState";
@@ -83,4 +84,80 @@ test("comparison round trip preserves both indicator operands and compatibility 
   assert.equal(profileConditionPrimaryIndicator(state), "ema21");
   assert.deepEqual(serializeProfileRuleCondition(state), input);
   assert.equal("value" in state, false);
+});
+
+test("loaded editor identity is not persisted and missing boolean value stays missing", () => {
+  const state = normalizeProfileRuleCondition({
+    type: "boolean",
+    indicator: "ema9_gt_ema21",
+    operator: "is_false",
+  }, "cond_loaded_block_0_0");
+
+  assert.equal(state.id, "cond_loaded_block_0_0");
+  assert.equal("value" in state, false);
+  assert.deepEqual(serializeProfileRuleCondition(state), {
+    type: "boolean",
+    indicator: "ema9_gt_ema21",
+    operator: "is_false",
+  });
+});
+
+test("new and persisted condition identities remain stable", () => {
+  const created = normalizeProfileRuleCondition({
+    id: "cond_1788904023177",
+    type: "threshold",
+    indicator: "rsi",
+    operator: ">",
+    value: 60,
+  });
+  const persisted = normalizeProfileRuleCondition({
+    id: "contract-rule-1",
+    type: "threshold",
+    indicator: "adx",
+    operator: ">=",
+    value: 20,
+  });
+
+  assert.equal(serializeProfileRuleCondition(created).id, "cond_1788904023177");
+  assert.equal(serializeProfileRuleCondition(persisted).id, "contract-rule-1");
+});
+
+test("profile save removes only editor identities across every execution section", () => {
+  const config = {
+    filters: { conditions: [{ id: "cond_loaded_filter_0", field: "rsi", operator: ">", value: 50 }] },
+    signals: { conditions: [{ id: "canonical-signal", field: "adx", operator: ">", value: 20 }] },
+    block_rules: {
+      blocks: [{
+        id: "block_loaded_0",
+        name: "legacy block",
+        conditions: [{
+          id: "cond_loaded_block_0_0",
+          type: "boolean",
+          indicator: "ema9_gt_ema21",
+          operator: "is_false",
+        }],
+      }],
+    },
+    entry_triggers: {
+      conditions: [{ id: "cond_1788904023177", indicator: "volume_spike", operator: ">=", value: 1 }],
+    },
+  };
+
+  assert.deepEqual(serializeProfileEditorConfig(config), {
+    filters: { conditions: [{ field: "rsi", operator: ">", value: 50 }] },
+    signals: { conditions: [{ id: "canonical-signal", field: "adx", operator: ">", value: 20 }] },
+    block_rules: {
+      blocks: [{
+        name: "legacy block",
+        conditions: [{
+          type: "boolean",
+          indicator: "ema9_gt_ema21",
+          operator: "is_false",
+        }],
+      }],
+    },
+    entry_triggers: {
+      conditions: [{ id: "cond_1788904023177", indicator: "volume_spike", operator: ">=", value: 1 }],
+    },
+  });
 });

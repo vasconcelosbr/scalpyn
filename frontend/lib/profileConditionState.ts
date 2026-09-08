@@ -62,16 +62,17 @@ export function normalizeProfileRuleCondition(
       ? "boolean"
       : "threshold";
 
-  return {
+  const normalized: ProfileRuleConditionState = {
     ...raw,
     id: String(raw.id || fallbackId),
     type: inferredType,
     indicator,
     operator: String(raw.operator || (inferredType === "boolean" ? "is_true" : "<")),
-    value: inferredType === "boolean"
-      ? raw.value !== undefined ? raw.value : raw.operator === "is_false" ? false : true
-      : raw.value !== undefined ? raw.value : raw.operator === "between" ? undefined : 60,
   };
+  if (Object.prototype.hasOwnProperty.call(raw, "value")) {
+    normalized.value = raw.value;
+  }
+  return normalized;
 }
 
 export function updateProfileRuleCondition<T extends Record<string, unknown>>(
@@ -82,5 +83,51 @@ export function updateProfileRuleCondition<T extends Record<string, unknown>>(
 }
 
 export function serializeProfileRuleCondition<T extends Record<string, unknown>>(condition: T): T {
-  return { ...condition };
+  const serialized = { ...condition };
+  if (
+    typeof serialized.id === "string"
+    && serialized.id.startsWith("cond_loaded_")
+  ) {
+    delete serialized.id;
+  }
+  return serialized;
+}
+
+/** Remove identities created only so React can address legacy list items. */
+export function serializeProfileEditorConfig<T extends Record<string, any>>(config: T): T {
+  const serializeConditions = (conditions: Array<Record<string, unknown>> = []) => (
+    conditions.map((condition) => serializeProfileRuleCondition(condition))
+  );
+  const serialized = {
+    ...config,
+    filters: {
+      ...(config.filters || {}),
+      conditions: serializeConditions(config.filters?.conditions),
+    },
+    signals: {
+      ...(config.signals || {}),
+      conditions: serializeConditions(config.signals?.conditions),
+    },
+    block_rules: {
+      ...(config.block_rules || {}),
+      blocks: (config.block_rules?.blocks || []).map((block: Record<string, any>) => {
+        const serializedBlock: Record<string, any> = {
+          ...block,
+          conditions: serializeConditions(block.conditions),
+        };
+        if (
+          typeof serializedBlock.id === "string"
+          && serializedBlock.id.startsWith("block_loaded_")
+        ) {
+          delete serializedBlock.id;
+        }
+        return serializedBlock;
+      }),
+    },
+    entry_triggers: {
+      ...(config.entry_triggers || {}),
+      conditions: serializeConditions(config.entry_triggers?.conditions),
+    },
+  };
+  return serialized as T;
 }
