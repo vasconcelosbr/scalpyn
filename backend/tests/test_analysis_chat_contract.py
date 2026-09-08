@@ -1296,9 +1296,22 @@ def test_checkpoint_contract_rejects_secrets_and_accepts_chat_ids():
         "conversation_id": str(uuid.uuid4()),
         "message_id": str(uuid.uuid4()),
         "selected_evidence_refs": [{"evidence_id": str(uuid.uuid4())}],
+        "context_manifest": {
+            "coverage_by_path": {
+                "snapshots.configuration.l3_authorization_contract_v3.mode": 347,
+            },
+        },
     })
     with pytest.raises(ValueError, match="forbidden key"):
         assert_checkpoint_safe({"conversation_id": "x", "provider_key": "secret"})
+    with pytest.raises(ValueError, match="forbidden key"):
+        assert_checkpoint_safe({
+            "context_manifest": {
+                "coverage_by_path": {
+                    "canonical.path": {"provider_api_key": "secret"},
+                },
+            },
+        })
 
 
 def test_chat_output_requires_parent_and_evidence_contract():

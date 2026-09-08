@@ -92,9 +92,13 @@ def assert_checkpoint_safe(value: Any, *, path: str = "state") -> None:
             assert_checkpoint_safe(item, path=f"{path}[{index}]")
         return
     if isinstance(value, dict):
+        keys_are_canonical_paths = path.endswith(".coverage_by_path")
         for key, item in value.items():
             normalized = str(key).lower()
-            if any(fragment in normalized for fragment in SECRET_KEY_FRAGMENTS):
+            if (
+                not keys_are_canonical_paths
+                and any(fragment in normalized for fragment in SECRET_KEY_FRAGMENTS)
+            ):
                 raise ValueError(f"checkpoint state contains forbidden key at {path}.{key}")
             assert_checkpoint_safe(item, path=f"{path}.{key}")
         return
