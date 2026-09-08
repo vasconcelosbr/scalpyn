@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   isProfileComparisonCondition,
   normalizeProfileRuleCondition,
+  profileConditionManualUpdates,
   profileConditionPrimaryIndicator,
   serializeProfileEditorConfig,
   serializeProfileRuleCondition,
@@ -160,4 +161,15 @@ test("profile save removes only editor identities across every execution section
       conditions: [{ id: "cond_1788904023177", indicator: "volume_spike", operator: ">=", value: 1 }],
     },
   });
+});
+
+test("manual filter edits do not inject score metadata", () => {
+  assert.deepEqual(
+    profileConditionManualUpdates({ value: 800001 }, false),
+    { value: 800001 },
+  );
+  assert.deepEqual(
+    profileConditionManualUpdates({ value: 800001 }, true),
+    { value: 800001, rule_id: undefined, points: 0, category: undefined },
+  );
 });

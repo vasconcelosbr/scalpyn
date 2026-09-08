@@ -12,6 +12,7 @@ import {
 } from "@/lib/indicatorCatalog";
 import {
   isProfileComparisonCondition,
+  profileConditionManualUpdates,
   profileConditionPrimaryIndicator,
 } from "@/lib/profileConditionState";
 
@@ -208,9 +209,11 @@ export function ConditionBuilder({
         min: defaultRule?.operator === "between" ? defaultRule.min : undefined,
         max: defaultRule?.operator === "between" ? defaultRule.max : undefined,
         required: false,
-        rule_id: defaultRule?.id,
-        points: Number(defaultRule?.points ?? 0),
-        category: defaultRule?.category,
+        ...(showPoints ? {
+          rule_id: defaultRule?.id,
+          points: Number(defaultRule?.points ?? 0),
+          category: defaultRule?.category,
+        } : {}),
       },
     ]);
   };
@@ -248,13 +251,10 @@ export function ConditionBuilder({
                 const newType = getFieldType(newField);
                 const fieldRules = getRulesForField(newField);
                 const firstRule = showPoints ? fieldRules[0] : undefined;
-                const updates: Partial<Condition> = {
+                const updates: Partial<Condition> = profileConditionManualUpdates({
                   field: newField,
-                  rule_id: undefined,
-                  points: 0,
-                  category: undefined,
                   reference_window: undefined,
-                };
+                }, showPoints);
 
                 if (isComparison) {
                   updates.left = newField;
@@ -358,12 +358,9 @@ export function ConditionBuilder({
               value={condition.operator}
               onChange={(event) => {
                 const operator = event.target.value;
-                const updates: Partial<Condition> = {
+                const updates: Partial<Condition> = profileConditionManualUpdates({
                   operator,
-                  rule_id: undefined,
-                  points: 0,
-                  category: undefined,
-                };
+                }, showPoints);
                 if (operator === "between") {
                   updates.min = undefined;
                   updates.max = undefined;
@@ -401,12 +398,9 @@ export function ConditionBuilder({
               <select
                 className="input w-24"
                 value={condition.value ? "true" : "false"}
-                onChange={(event) => updateCondition(index, {
+                onChange={(event) => updateCondition(index, profileConditionManualUpdates({
                   value: event.target.value === "true",
-                  rule_id: undefined,
-                  points: 0,
-                  category: undefined,
-                })}
+                }, showPoints))}
                 disabled={ruleLocked}
                 data-testid={`condition-value-${index}`}
               >
@@ -418,12 +412,9 @@ export function ConditionBuilder({
                 className="input w-32"
                 type="text"
                 value={(condition.value as string) || ""}
-                onChange={(event) => updateCondition(index, {
+                onChange={(event) => updateCondition(index, profileConditionManualUpdates({
                   value: event.target.value,
-                  rule_id: undefined,
-                  points: 0,
-                  category: undefined,
-                })}
+                }, showPoints))}
                 disabled={ruleLocked}
                 placeholder="Valor"
                 data-testid={`condition-value-${index}`}
@@ -433,12 +424,9 @@ export function ConditionBuilder({
                 <NumericInput
                   className="input w-20"
                   value={typeof condition.min === "number" ? condition.min : null}
-                  onChange={(v) => updateCondition(index, {
+                  onChange={(v) => updateCondition(index, profileConditionManualUpdates({
                     min: v ?? undefined,
-                    rule_id: undefined,
-                    points: 0,
-                    category: undefined,
-                  })}
+                  }, showPoints))}
                   disabled={ruleLocked}
                   placeholder="Min"
                   data-testid={`condition-min-${index}`}
@@ -447,12 +435,9 @@ export function ConditionBuilder({
                 <NumericInput
                   className="input w-20"
                   value={typeof condition.max === "number" ? condition.max : null}
-                  onChange={(v) => updateCondition(index, {
+                  onChange={(v) => updateCondition(index, profileConditionManualUpdates({
                     max: v ?? undefined,
-                    rule_id: undefined,
-                    points: 0,
-                    category: undefined,
-                  })}
+                  }, showPoints))}
                   disabled={ruleLocked}
                   placeholder="Max"
                   data-testid={`condition-max-${index}`}
@@ -462,12 +447,9 @@ export function ConditionBuilder({
               <NumericInput
                 className="input w-28"
                 value={typeof condition.value === "number" ? condition.value : numParse(String(condition.value ?? "")) ?? null}
-                onChange={(v) => updateCondition(index, {
+                onChange={(v) => updateCondition(index, profileConditionManualUpdates({
                   value: v,
-                  rule_id: undefined,
-                  points: 0,
-                  category: undefined,
-                })}
+                }, showPoints))}
                 disabled={ruleLocked}
                 data-testid={`condition-value-${index}`}
               />

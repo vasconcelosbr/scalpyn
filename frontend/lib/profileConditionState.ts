@@ -82,6 +82,19 @@ export function updateProfileRuleCondition<T extends Record<string, unknown>>(
   return { ...condition, ...updates };
 }
 
+export function profileConditionManualUpdates<T extends Record<string, unknown>>(
+  updates: T,
+  showPoints: boolean,
+): T & { rule_id?: undefined; points?: number; category?: undefined } {
+  if (!showPoints) return { ...updates };
+  return {
+    ...updates,
+    rule_id: undefined,
+    points: 0,
+    category: undefined,
+  };
+}
+
 export function serializeProfileRuleCondition<T extends Record<string, unknown>>(condition: T): T {
   const serialized = { ...condition };
   if (
