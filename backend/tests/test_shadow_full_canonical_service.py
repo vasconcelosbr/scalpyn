@@ -603,6 +603,87 @@ def test_provider_payload_and_reconciliation_fail_on_hash_divergence_or_duplicat
 
 
 @pytest.mark.asyncio
+async def test_shadow_provider_plan_carries_question_into_synthesis_context():
+    from app.services.systemic_langgraph_bridge import _shadow_provider_plan
+
+    canonical_item = _item(0)
+    tenant_id = uuid.uuid4()
+    dataset_id = uuid.uuid4()
+    request_id = uuid.uuid4()
+    persisted = AIDatasetSnapshotItemRecord(
+        id=canonical_item.record_id,
+        tenant_id=tenant_id,
+        dataset_snapshot_id=dataset_id,
+        report_run_id=uuid.uuid4(),
+        shadow_trade_id=canonical_item.shadow_trade_id,
+        report_position=0,
+        canonical_json=canonical_item.payload,
+        item_hash=canonical_item.item_hash,
+        payload_bytes=canonical_item.payload_bytes,
+        estimated_tokens=canonical_item.estimated_tokens,
+    )
+    shard_plan = plan_shards(
+        dataset_snapshot_id=dataset_id,
+        items=(canonical_item,),
+        max_input_tokens=100_000,
+    )[0]
+    shard = AIAnalysisShardRecord(
+        id=shard_plan.record_id,
+        tenant_id=tenant_id,
+        ai_request_id=request_id,
+        dataset_snapshot_id=dataset_id,
+        shard_index=shard_plan.shard_index,
+        status="PLANNED",
+        item_count=1,
+        item_ids=[str(persisted.id)],
+        item_hashes=[persisted.item_hash],
+        payload_hash=shard_plan.payload_hash,
+        payload_bytes=shard_plan.payload_bytes,
+        estimated_input_tokens=shard_plan.estimated_input_tokens,
+    )
+
+    class _Rows:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def scalars(self):
+            return self.rows
+
+    class _DB:
+        def __init__(self):
+            self.results = [_Rows([persisted]), _Rows([shard])]
+
+        async def execute(self, _query):
+            return self.results.pop(0)
+
+    question = "Diagnostique a causa raiz da seleção"
+    plan = await _shadow_provider_plan(
+        _DB(),
+        request=SimpleNamespace(id=request_id, tenant_id=tenant_id),
+        dataset=SimpleNamespace(id=dataset_id, row_count=1, context_manifest={}),
+        question=question,
+        provider="deepseek",
+        shard_max_output_tokens=256,
+        synthesis_max_output_tokens=256,
+        request_token_limit=1_000_000,
+        prompt=SimpleNamespace(
+            system_template="System {question}",
+            user_template="Evidence {evidence}",
+            output_schema_json={
+                "type": "object",
+                "required": ["answer"],
+                "properties": {"answer": {"type": "string"}},
+                "additionalProperties": False,
+            },
+        ),
+        bundle=SimpleNamespace(bundle_json={}),
+        tool_evidence_rows=[],
+    )
+
+    assert plan["synthesis_base"]["question"] == question
+
+
+@pytest.mark.asyncio
 async def test_completed_shard_resume_is_idempotent_and_does_not_repeat_provider_call(monkeypatch):
     from app.ai_orchestration.runtime import ProviderResponse
     from app.services.systemic_langgraph_bridge import (

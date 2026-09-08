@@ -293,6 +293,7 @@ async def _shadow_provider_plan(
     )
     persisted_dataset_manifest = dict(dataset.context_manifest or {})
     synthesis_base = {
+        "question": question,
         "dataset_manifest": _compact_shadow_dataset_manifest(persisted_dataset_manifest),
         "configuration_bundle": bundle.bundle_json,
         "deterministic_tool_evidence": typed_evidence,
