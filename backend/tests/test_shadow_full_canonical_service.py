@@ -326,6 +326,69 @@ def test_anthropic_canonical_shard_schema_has_no_free_form_objects():
     assert_explicit_objects(schema)
 
 
+def test_synthesis_manifest_keeps_auditable_hashes_without_row_level_indexes():
+    from app.services.systemic_langgraph_bridge import _compact_shadow_dataset_manifest
+
+    manifest = {
+        "input_contract_version": CONTRACT_VERSION,
+        "source_item_count": 2,
+        "processed_item_count": 0,
+        "coverage_status": "CAPTURED_COMPLETE",
+        "dataset_hash": "d" * 64,
+        "coverage_by_path": {"trade.id": {"present": 2, "null": 0}},
+        "ordered_item_hashes": ["a" * 64, "b" * 64],
+        "optional_missingness_by_path": {"trade.entry_risk_captured_at": 1},
+        "shard_plan": [{
+            "shard_index": 0,
+            "item_count": 2,
+            "item_ids": ["id-1", "id-2"],
+            "item_hashes": ["a" * 64, "b" * 64],
+            "payload_hash": "c" * 64,
+            "payload_bytes": 100,
+            "estimated_input_tokens": 84,
+        }],
+    }
+
+    compact = _compact_shadow_dataset_manifest(manifest)
+
+    assert compact["source_item_count"] == 2
+    assert compact["coverage_path_count"] == 1
+    assert compact["ordered_item_count"] == 2
+    assert compact["coverage_by_path_hash"] == canonical_hash(manifest["coverage_by_path"])
+    assert compact["ordered_item_hashes_hash"] == canonical_hash(manifest["ordered_item_hashes"])
+    assert "coverage_by_path" not in compact
+    assert "ordered_item_hashes" not in compact
+    assert "item_ids" not in compact["shard_plan"][0]
+    assert "item_hashes" not in compact["shard_plan"][0]
+
+
+def test_synthesis_hashes_verbose_duplicate_ledgers_but_keeps_their_shape():
+    from app.services.systemic_langgraph_bridge import (
+        _compact_shadow_tool_evidence,
+        _provider_decision_context,
+    )
+
+    large_data = {"indicator_buckets": [{"indicator": "rsi", "lift": 1.2}] * 100}
+    evidence = SimpleNamespace(
+        id=uuid.uuid4(), module_key="shadow_portfolio",
+        tool_name="shadow.get_indicator_lift",
+        output_json={
+            "contract_version": "v1", "tool": "shadow.get_indicator_lift",
+            "data": large_data, "quality": "COMPLETE",
+        },
+        quality="COMPLETE", freshness_json=None,
+    )
+
+    compact = _compact_shadow_tool_evidence(_provider_decision_context({}, [evidence]))
+    output = compact["typed_tool_evidence"][0]["output"]
+
+    assert output["data"]["provider_detail_status"] == "LEDGER_ONLY"
+    assert output["data"]["collection_counts"] == {"indicator_buckets": 100}
+    assert output["data"]["source_document_hash"] == canonical_hash(large_data)
+    assert output["source_output_hash"] == canonical_hash(evidence.output_json)
+    assert "indicator_buckets" not in output["data"]
+
+
 def test_sharding_is_deterministic_and_keeps_each_trade_whole_once():
     dataset_id = uuid.uuid4()
     items = tuple(_item(index, padding=800) for index in range(5))

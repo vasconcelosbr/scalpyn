@@ -19,7 +19,7 @@ from ..models.systemic_ai import AIAnalysisShardRecord, AIDatasetSnapshotItemRec
 
 
 CONTRACT_VERSION = "shadow-portfolio-full-canonical-v2"
-PROVIDER_PROJECTION_CONTRACT_VERSION = "shadow-provider-analysis-projection-v1"
+PROVIDER_PROJECTION_CONTRACT_VERSION = "shadow-provider-analysis-projection-v2"
 SUPPORTED_CONTRACT_VERSIONS = frozenset({
     "shadow-portfolio-full-canonical-v1",
     CONTRACT_VERSION,
@@ -75,15 +75,15 @@ PROVIDER_TRADE_FIELDS = frozenset({
     "entry_timestamp", "tp_price", "sl_price", "tp_pct", "sl_pct",
     "timeout_candles", "exit_price", "exit_timestamp", "outcome", "pnl_pct",
     "pnl_usdt", "holding_seconds", "status", "source", "rejected_by_layer",
-    "rejected_by_rule", "profile_id", "profile_version_id", "exchange", "timeframe",
+    "rejected_by_rule",
     "features_coverage", "oldest_indicator_age_s", "market_data_confidence",
-    "lineage_status", "eligible_for_training", "btc_change_1h_pct",
+    "eligible_for_training", "btc_change_1h_pct",
     "n_concurrent_signals", "mae_pct", "mfe_pct", "closure_path", "final_return_pct",
     "net_return_pct", "fee_roundtrip_pct_applied", "tp_pct_applied", "sl_pct_applied",
     "atr_pct_at_entry", "elapsed_minutes", "profile_name", "strategy_type",
     "profile_status_at_entry", "final_priority_score", "ml_probability",
     "threshold_used", "score_status", "gate_action", "watchlist_name",
-    "watchlist_level", "lineage_confidence", "entry_risk_capture_status",
+    "watchlist_level",
 })
 PROVIDER_CONFIG_SCALAR_FIELDS = frozenset({
     "amount_usdt", "tp_pct", "sl_pct", "timeout_candles", "barrier_mode",
@@ -525,17 +525,24 @@ def _risk_projection(value: Any) -> dict[str, Any]:
 def _availability_projection(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {"status": "UNAVAILABLE"}
-    projected: dict[str, Any] = {}
+    projected: dict[str, Any] = {
+        "source_document_hash": canonical_hash(value),
+        "available_count": 0,
+    }
     for key, item in sorted(value.items()):
         if not isinstance(item, dict):
             continue
         unavailable = list(item.get("unavailable_fields") or item.get("unavailable_paths") or [])
-        entry: dict[str, Any] = {
-            "status": item.get("status"),
-            "reason_codes": item.get("reason_codes") or [],
+        status = str(item.get("status") or "UNAVAILABLE").upper()
+        reason_codes = item.get("reason_codes") or []
+        if status == "AVAILABLE" and not unavailable and not reason_codes:
+            projected["available_count"] += 1
+            continue
+        projected[key] = {
+            "status": status,
+            "reason_codes": reason_codes,
             "unavailable_count": len(unavailable),
         }
-        projected[key] = entry
     return projected
 
 
@@ -596,9 +603,6 @@ def _provider_trade_projection(payload: dict[str, Any]) -> dict[str, Any]:
         "reason_codes": source_snapshots.get("reason_codes") or [],
     }
     return {
-        "input_contract_version": payload.get("input_contract_version"),
-        "provider_projection_contract_version": PROVIDER_PROJECTION_CONTRACT_VERSION,
-        "report_run_id": payload.get("report_run_id"),
         "report_position": payload.get("report_position"),
         "trade": trade,
         "snapshots": snapshots,

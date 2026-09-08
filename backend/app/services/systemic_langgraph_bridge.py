@@ -26,6 +26,7 @@ from ..ai_orchestration.errors import (
     ProviderBlockedError,
     ProviderTransportError,
 )
+from ..ai_orchestration.hashing import canonical_hash
 from ..ai_orchestration.provider_adapters import (
     AnthropicSDKTextAdapter, CopilotProviderTransport, anthropic_output_config,
     default_adapter_registry,
@@ -106,6 +107,102 @@ def _shadow_synthesis_schema(base: dict[str, Any], shard_count: int) -> dict[str
     return schema
 
 
+def _compact_shadow_dataset_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Project the persisted manifest without resending its row-level indexes.
+
+    The complete manifest remains attached to the dataset snapshot.  Synthesis
+    needs its contract, counts, hashes and missingness summary, not hundreds of
+    ordered row hashes or every leaf-level coverage counter a second time.
+    """
+
+    shard_plan = []
+    for shard in manifest.get("shard_plan") or []:
+        if not isinstance(shard, dict):
+            continue
+        shard_plan.append({
+            key: shard.get(key)
+            for key in (
+                "shard_index", "item_count", "payload_hash", "payload_bytes",
+                "estimated_input_tokens",
+            )
+            if key in shard
+        } | {
+            "item_ids_hash": canonical_hash(shard.get("item_ids") or []),
+            "item_hashes_hash": canonical_hash(shard.get("item_hashes") or []),
+        })
+    compact = {
+        key: manifest.get(key)
+        for key in (
+            "input_contract_version", "capture_at", "report_run_id",
+            "source_item_count", "processed_item_count", "coverage_status",
+            "shard_count", "dataset_hash", "legacy_incomplete",
+            "missing_required_fields", "optional_missingness_by_path",
+        )
+        if key in manifest
+    }
+    coverage_by_path = manifest.get("coverage_by_path") or {}
+    ordered_item_hashes = manifest.get("ordered_item_hashes") or []
+    compact.update({
+        "coverage_path_count": len(coverage_by_path) if isinstance(coverage_by_path, dict) else 0,
+        "coverage_by_path_hash": canonical_hash(coverage_by_path),
+        "ordered_item_count": len(ordered_item_hashes) if isinstance(ordered_item_hashes, list) else 0,
+        "ordered_item_hashes_hash": canonical_hash(ordered_item_hashes),
+        "shard_plan": shard_plan,
+        "source_document_hash": canonical_hash(manifest),
+    })
+    return compact
+
+
+_SHADOW_LEDGER_ONLY_SYNTHESIS_TOOLS = frozenset({
+    "shadow.get_indicator_lift",
+    "strategy_profiles.get_profile",
+})
+
+
+def _compact_shadow_tool_evidence(serialized: str) -> dict[str, Any]:
+    """Replace duplicated large collections with auditable ledger references."""
+
+    context = json.loads(serialized)
+    for evidence in context.get("typed_tool_evidence") or []:
+        if (
+            not isinstance(evidence, dict)
+            or evidence.get("tool") not in _SHADOW_LEDGER_ONLY_SYNTHESIS_TOOLS
+        ):
+            continue
+        output = evidence.get("output")
+        if not isinstance(output, dict):
+            continue
+        source_data = output.get("data")
+        if isinstance(source_data, list):
+            shape = {"type": "list", "item_count": len(source_data)}
+        elif isinstance(source_data, dict):
+            shape = {
+                "type": "object",
+                "field_names": sorted(source_data),
+                "collection_counts": {
+                    key: len(value)
+                    for key, value in source_data.items()
+                    if isinstance(value, (list, dict))
+                },
+            }
+        else:
+            shape = {"type": type(source_data).__name__}
+        compact_output = {
+            key: output[key]
+            for key in ("contract_version", "tool", "quality", "freshness", "missingness")
+            if key in output
+        }
+        compact_output["data"] = {
+            "provider_detail_status": "LEDGER_ONLY",
+            "reason_code": "VERBOSE_EVIDENCE_HASHED",
+            "source_document_hash": canonical_hash(source_data),
+            **shape,
+        }
+        compact_output["source_output_hash"] = canonical_hash(output)
+        evidence["output"] = compact_output
+    return context
+
+
 async def _shadow_provider_plan(
     db: AsyncSession,
     *,
@@ -149,12 +246,15 @@ async def _shadow_provider_plan(
             "You are a read-only Shadow Portfolio evidence extractor. Read every selected trade in this "
             "shard exactly once. The full canonical record is durably persisted under item_hash; the provider "
             "projection contains the decision evidence authorized for analysis and hashes every omitted verbose "
-            "configuration subtree. Treat UNAVAILABLE fields and omitted subtrees as unavailable: never infer or "
+            "configuration subtree. Resolve rules_catalog_ref against its shard catalog. Treat UNAVAILABLE fields "
+            "and omitted subtrees as unavailable: never infer or "
             "invent them. Do not omit provider-visible fields, recommend changes, or use outside data. Return "
             "every processed shadow_trade_id with the exact supplied item_hash."
         )
         user_prompt = (
-            f"Analysis question:\n{question}\n\nCanonical shard payload (sha256:{shard.payload_hash}):\n"
+            "Analysis focus: extract evidence about L3 entry quality, outcome and causal patterns for later "
+            f"report-wide synthesis. Full analysis instruction hash: {canonical_hash(question)}.\n\n"
+            f"Canonical shard payload (sha256:{shard.payload_hash}):\n"
             + json.dumps(raw_payload, ensure_ascii=False, default=str, separators=(",", ":"))
         )
         estimated_input = _estimated_provider_input_tokens(
@@ -171,12 +271,14 @@ async def _shadow_provider_plan(
             "user_prompt": user_prompt,
         })
 
-    typed_evidence = _provider_decision_context({}, tool_evidence_rows)
+    typed_evidence = _compact_shadow_tool_evidence(
+        _provider_decision_context({}, tool_evidence_rows)
+    )
+    persisted_dataset_manifest = dict(dataset.context_manifest or {})
     synthesis_base = {
-        "question": question,
-        "dataset_manifest": dataset.context_manifest,
+        "dataset_manifest": _compact_shadow_dataset_manifest(persisted_dataset_manifest),
         "configuration_bundle": bundle.bundle_json,
-        "deterministic_tool_evidence": json.loads(typed_evidence),
+        "deterministic_tool_evidence": typed_evidence,
         "shard_evidence": [],
     }
     values = {
@@ -212,6 +314,7 @@ async def _shadow_provider_plan(
         "total_max_output": total_max_output,
         "synthesis_max_output_tokens": synthesis_max_output_tokens,
         "synthesis_schema": synthesis_schema,
+        "persisted_dataset_manifest": persisted_dataset_manifest,
     }
 
 
@@ -394,7 +497,11 @@ async def _execute_shadow_provider_plan(
         )
     for shard in plan["shards"]:
         shard.status = "RECONCILED"
-    manifest = dict(plan["synthesis_base"]["dataset_manifest"] or {})
+    manifest = dict(
+        plan.get("persisted_dataset_manifest")
+        or plan["synthesis_base"]["dataset_manifest"]
+        or {}
+    )
     manifest["processed_item_count"] = len(plan["items"])
     manifest["coverage_status"] = "RECONCILED_COMPLETE"
     plan["dataset_manifest"] = manifest
