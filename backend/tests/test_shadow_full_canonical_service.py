@@ -145,6 +145,31 @@ def test_missing_historical_temporal_lineage_is_explicit_without_fabrication():
     )
 
 
+def test_missing_historical_risk_metadata_is_explicit_without_blocking_report():
+    trade = _trade()
+    trade.entry_risk_captured_at = None
+    trade.entry_risk_features_json = {
+        "contract_status": {
+            "entry_risk_contract_valid": True,
+            "reason_codes": [],
+        }
+    }
+
+    payload = canonical_trade_payload(uuid.uuid4(), 0, trade)
+
+    assert payload["evidence_availability"]["entry_risk_contract"] == {
+        "status": "PARTIAL",
+        "reason_codes": ["HISTORICAL_ENTRY_RISK_METADATA_UNAVAILABLE"],
+        "unavailable_paths": [
+            "trade.entry_risk_captured_at",
+            "snapshots.entry_risk.contract_status.status",
+        ],
+    }
+    assert payload["null_reasons"]["trade.entry_risk_captured_at"] == (
+        "HISTORICAL_ENTRY_RISK_METADATA_UNAVAILABLE"
+    )
+
+
 def test_reconstructible_partial_risk_snapshot_with_reasons_is_complete_evidence():
     trade = _trade()
     trade.entry_risk_capture_status = "PARTIAL"
@@ -165,7 +190,7 @@ def test_reconstructible_partial_risk_snapshot_with_reasons_is_complete_evidence
 
 
 @pytest.mark.parametrize("status", ["PENDING", "ERROR", "INVALID", "NOT_AVAILABLE"])
-def test_non_terminal_risk_snapshot_blocks_capture(status: str):
+def test_non_terminal_risk_snapshot_is_preserved_as_unavailable_evidence(status: str):
     trade = _trade()
     trade.entry_risk_capture_status = status
     trade.entry_risk_features_json = {
@@ -177,10 +202,30 @@ def test_non_terminal_risk_snapshot_blocks_capture(status: str):
         }
     }
 
+    payload = canonical_trade_payload(uuid.uuid4(), 0, trade)
+
+    assert payload["snapshots"]["entry_risk"]["contract_status"]["status"] == status
+    assert payload["evidence_availability"]["entry_risk_contract"]["status"] == "UNAVAILABLE"
+    assert payload["evidence_availability"]["entry_risk_contract"]["reason_codes"] == [
+        "ENTRY_RISK_CAPTURE_NOT_TERMINAL"
+    ]
+
+
+def test_contradictory_entry_risk_status_still_blocks_capture():
+    trade = _trade()
+    trade.entry_risk_capture_status = "VALID"
+    trade.entry_risk_features_json = {
+        "contract_status": {
+            "status": "PENDING",
+            "entry_risk_contract_valid": False,
+            "reason_codes": ["PENDING_RISK_CAPTURE"],
+        }
+    }
+
     with pytest.raises(ShadowCanonicalContractError) as exc_info:
         canonical_trade_payload(uuid.uuid4(), 0, trade)
 
-    assert "snapshots.entry_risk.contract_status.status" in exc_info.value.details["paths"]
+    assert "trade.entry_risk_capture_status" in exc_info.value.details["paths"]
 
 
 @pytest.mark.parametrize(

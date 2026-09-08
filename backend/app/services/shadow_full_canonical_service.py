@@ -63,7 +63,7 @@ REQUIRED_TRADE_FIELDS = (
     "features_captured_at", "feature_hash", "profile_config_hash", "score_engine_config_hash",
     "lineage_status", "watchlist_id", "watchlist_name", "watchlist_level",
     "lineage_confidence", "lineage_source", "lineage_resolved_at",
-    "entry_risk_capture_status", "entry_risk_captured_at",
+    "entry_risk_capture_status",
 )
 REQUIRED_SNAPSHOTS = ("configuration", "entry_features", "rules", "entry_risk")
 REQUIRED_COMPLETED_TRADE_FIELDS = (
@@ -203,9 +203,11 @@ def _required_missing(payload: dict[str, Any]) -> list[str]:
     capture_status = str(trade.get("entry_risk_capture_status") or "").upper()
     if not isinstance(contract_valid, bool):
         missing.append("snapshots.entry_risk.contract_status.entry_risk_contract_valid")
-    if terminal_status not in {"VALID", "PARTIAL"}:
-        missing.append("snapshots.entry_risk.contract_status.status")
-    if capture_status != terminal_status:
+    # Some historical writers persisted an incomplete/non-terminal entry-risk
+    # envelope.  For read-only root-cause analysis that state is itself
+    # evidence and must remain visible; it is never upgraded to VALID.  We fail
+    # closed only when the two persisted status identities contradict.
+    if terminal_status and capture_status != terminal_status:
         missing.append("trade.entry_risk_capture_status")
     if terminal_status == "PARTIAL":
         if risk_status.get("reconstructible") is not True:
@@ -234,6 +236,35 @@ def _snapshot_availability(payload: dict[str, Any]) -> dict[str, Any]:
     snapshots = payload["snapshots"]
     completed = trade.get("status") == "COMPLETED" or trade.get("outcome") is not None
     availability: dict[str, Any] = {}
+    entry_risk = snapshots.get("entry_risk") or {}
+    risk_status = entry_risk.get("contract_status") or {}
+    terminal_risk_status = str(risk_status.get("status") or "").upper()
+    unavailable_risk_paths = [
+        path
+        for path, present in (
+            ("trade.entry_risk_captured_at", trade.get("entry_risk_captured_at") is not None),
+            (
+                "snapshots.entry_risk.contract_status.status",
+                terminal_risk_status in {"VALID", "PARTIAL"},
+            ),
+        )
+        if not present
+    ]
+    risk_is_terminal = terminal_risk_status in {"VALID", "PARTIAL"}
+    if terminal_risk_status and not risk_is_terminal:
+        risk_availability_status = "UNAVAILABLE"
+        risk_reason_codes = ["ENTRY_RISK_CAPTURE_NOT_TERMINAL"]
+    elif unavailable_risk_paths:
+        risk_availability_status = "PARTIAL"
+        risk_reason_codes = ["HISTORICAL_ENTRY_RISK_METADATA_UNAVAILABLE"]
+    else:
+        risk_availability_status = "AVAILABLE"
+        risk_reason_codes = []
+    availability["entry_risk_contract"] = {
+        "status": risk_availability_status,
+        "reason_codes": risk_reason_codes,
+        "unavailable_paths": unavailable_risk_paths,
+    }
     source_at = trade.get("feature_source_at")
     source_times = snapshots.get("feature_source_times")
     source_at_available = source_at is not None
