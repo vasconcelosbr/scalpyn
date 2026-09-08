@@ -335,7 +335,7 @@
     },
     {
       "id": "shadow-portfolio-full-canonical-ai-contract",
-      "description": "Shadow Portfolio AI is report-backed, complete, sharded without splitting trades, reconciled by hash, and has no summarized fallback",
+      "description": "Shadow Portfolio AI is report-backed, records historical unavailability without fabrication, shards without splitting trades, reconciles by hash, and has no summarized fallback",
       "files": [
         {
           "path": "backend/app/services/shadow_full_canonical_service.py",
@@ -364,7 +364,17 @@
             "_execute_shadow_provider_plan",
             "referenced_shards",
             "SHARD_CONTEXT_EXCEEDED",
-            "DATASET_RECONCILIATION_FAILED"
+            "DATASET_RECONCILIATION_FAILED",
+            "schema_error_path=shard_response.schema_error_path",
+            "repair_attempts=shard_response.repair_attempts"
+          ]
+        },
+        {
+          "path": "backend/app/ai_orchestration/provider_adapters/http_adapter.py",
+          "contains_all": [
+            "PROVIDER_OUTPUT_SCHEMA_INVALID",
+            "schema_retry",
+            "repair_raw_response_ref"
           ]
         },
         {
@@ -389,8 +399,15 @@
           "contains_all": [
             "test_provider_payload_supplies_exact_persisted_item_hash_and_reconciles_once",
             "test_sharding_is_deterministic_and_keeps_each_trade_whole_once",
-            "test_missing_required_indicator_blocks_capture",
-            "test_safety_net_lineage_repair_is_exact_audited_and_reversible"
+            "test_missing_historical_entry_indicator_is_explicit_without_fabrication",
+            "test_safety_net_lineage_repair_is_exact_audited_and_reversible",
+            "test_failed_shard_preserves_provider_validation_diagnostics"
+          ]
+        },
+        {
+          "path": "backend/tests/test_http_provider_adapter.py",
+          "contains_all": [
+            "test_schema_repair_uses_clean_deepseek_context_and_final_response_ref"
           ]
         },
         {
