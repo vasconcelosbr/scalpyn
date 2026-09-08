@@ -16,6 +16,7 @@ from .config import get_current_user_id
 from ..services.profile_engine import ProfileEngine
 from ..services.score_engine import hydrate_profile_scoring
 from ..services.config_service import config_service
+from ..services.l3_authorization_contract_v3 import validate_profile_contract
 from ..services.profile_config_validation import validate_profile_config
 from ..services.profile_indicator_contract import validate_profile_execution_structure
 from ..services.profile_execution_contract import (
@@ -415,6 +416,60 @@ def _validate_profile_config_for_role(
         config,
         require_feature_identity=_requires_l3_feature_identity(profile_role),
     )
+
+
+def _feature_identity_error_keys(errors: List[Dict[str, Any]]) -> set[tuple[str, str]]:
+    return {
+        (str(error.get("path") or ""), str(error.get("code") or ""))
+        for error in errors
+    }
+
+
+def _validate_profile_config_for_editor_update(
+    config: Dict[str, Any],
+    *,
+    current_config: Dict[str, Any],
+    profile_role: Any,
+) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """Allow tuning a legacy L3 profile without widening its identity debt.
+
+    ``PROFILE_EDITOR_LEGACY_IDENTITY_UPDATE_COMPATIBILITY``
+
+    Existing L3 profiles predate the provenance fields enforced by contract v3.
+    A threshold-only edit must not become impossible merely because the same
+    missing identities already existed. The runtime contract remains
+    fail-closed: this compatibility path only accepts a candidate whose
+    identity-error set is equal to or smaller than the current persisted set.
+    New profiles, imports, reactivation and profiles that are already valid
+    continue through the strict validator.
+    """
+    if not _requires_l3_feature_identity(profile_role):
+        return _validate_profile_config(config), []
+
+    candidate = _validate_profile_config(config)
+    candidate_errors = validate_profile_contract(candidate)
+    if not candidate_errors:
+        return candidate, []
+
+    current = _validate_profile_config(current_config)
+    current_errors = validate_profile_contract(current)
+    current_keys = _feature_identity_error_keys(current_errors)
+    candidate_keys = _feature_identity_error_keys(candidate_errors)
+    introduced = candidate_keys - current_keys
+    if not current_errors or introduced:
+        errors = candidate_errors if not current_errors else [
+            error
+            for error in candidate_errors
+            if (
+                str(error.get("path") or ""),
+                str(error.get("code") or ""),
+            ) in introduced
+        ]
+        raise ValueError(
+            "L3_FEATURE_IDENTITY_INVALID:"
+            + json.dumps(errors, sort_keys=True)
+        )
+    return candidate, candidate_errors
 
 
 def _profile_role_matches_watchlist_levels(
@@ -1090,6 +1145,7 @@ async def update_profile(
 
     _config_changed = False
     _next_config: Optional[Dict[str, Any]] = None
+    _legacy_identity_warnings: List[Dict[str, Any]] = []
 
     rename_warnings: List[str] = []
     if "name" in payload and payload["name"] != profile.name:
@@ -1107,8 +1163,12 @@ async def update_profile(
         profile.description = payload["description"]
     if "config" in payload:
         try:
-            _next_config = _validate_profile_config_for_role(
-                payload["config"], target_role
+            _next_config, _legacy_identity_warnings = (
+                _validate_profile_config_for_editor_update(
+                    payload["config"],
+                    current_config=profile.config or {},
+                    profile_role=target_role,
+                )
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
@@ -1126,15 +1186,29 @@ async def update_profile(
             changed_by=user_id,
             change_source="api",
             change_description="config updated via PUT /profiles/{id}",
-            require_feature_identity=_requires_l3_feature_identity(target_role),
+            require_feature_identity=(
+                _requires_l3_feature_identity(target_role)
+                and not _legacy_identity_warnings
+            ),
         )
 
     await db.commit()
     await db.refresh(profile)
 
     result = _profile_to_dict(profile)
+    if _legacy_identity_warnings:
+        result["warnings"] = [
+            {
+                "code": "L3_FEATURE_IDENTITY_PENDING",
+                "message": (
+                    "Parâmetros salvos sem ampliar as lacunas de identidade "
+                    "já existentes; o contrato canônico permanece fail-closed."
+                ),
+                "errors": _legacy_identity_warnings,
+            }
+        ]
     if rename_warnings:
-        result["warnings"] = rename_warnings
+        result.setdefault("warnings", []).extend(rename_warnings)
     return result
 
 

@@ -58,7 +58,13 @@ export default function ProfileEditPage() {
   const handleSave = async (profileData: any) => {
     setSaving(true)
     try {
-      await apiPut(`/profiles/${profileId}`, profileData)
+      const updated: any = await apiPut(`/profiles/${profileId}`, profileData)
+      const identityWarning = updated?.warnings?.find?.(
+        (warning: any) => warning?.code === 'L3_FEATURE_IDENTITY_PENDING'
+      )
+      if (identityWarning?.message) {
+        alert(`Profile salvo.\n\n${identityWarning.message}`)
+      }
       router.push('/profiles')
     } catch (e: any) {
       alert(`Erro ao salvar: ${e.message}`)

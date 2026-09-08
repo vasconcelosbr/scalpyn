@@ -220,12 +220,119 @@ async def test_update_pool_profile_accepts_indicator_edits_without_l3_identity(m
 
 
 @pytest.mark.asyncio
-async def test_update_l3_profile_still_rejects_missing_source_identity(monkeypatch):
+async def test_update_l3_legacy_profile_allows_parameter_change_without_widening_identity_debt(monkeypatch):
     profile = _profile_with_role("acquisition_queue")
+    profile.config = {
+        "default_timeframe": "5m",
+        "filters": {
+            "logic": "AND",
+            "conditions": [
+                {"field": "volume_24h", "operator": ">=", "value": 1_000_000}
+            ],
+        },
+    }
+    session = _ProfileSession(profile)
+    activation_calls = []
+
+    async def _activate(_db, **kwargs):
+        activation_calls.append(kwargs)
+        kwargs["profile"].config = kwargs["config"]
+        return {}
+
+    monkeypatch.setattr(profiles_api, "activate_profile_config", _activate)
+
+    result = await profiles_api.update_profile(
+        profile.id,
+        {
+            "config": {
+                "default_timeframe": "5m",
+                "filters": {
+                    "logic": "AND",
+                    "conditions": [
+                        {"field": "volume_24h", "operator": ">=", "value": 2_000_000}
+                    ],
+                },
+            },
+            "profile_role": "acquisition_queue",
+        },
+        db=session,
+        user_id=profile.user_id,
+    )
+
+    assert result["config"]["filters"]["conditions"][0]["value"] == 2_000_000
+    assert result["warnings"][0]["code"] == "L3_FEATURE_IDENTITY_PENDING"
+    assert activation_calls[0]["require_feature_identity"] is False
+    assert session.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_update_l3_legacy_profile_rejects_new_identity_debt(monkeypatch):
+    profile = _profile_with_role("acquisition_queue")
+    profile.config = {
+        "default_timeframe": "5m",
+        "filters": {
+            "logic": "AND",
+            "conditions": [
+                {"field": "volume_24h", "operator": ">=", "value": 1_000_000}
+            ],
+        },
+    }
     session = _ProfileSession(profile)
 
     async def _unexpected_activate(_db, **_kwargs):
-        raise AssertionError("invalid L3 config must not be activated")
+        raise AssertionError("new L3 identity debt must not be activated")
+
+    monkeypatch.setattr(profiles_api, "activate_profile_config", _unexpected_activate)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await profiles_api.update_profile(
+            profile.id,
+            {
+                "config": {
+                    "default_timeframe": "5m",
+                    "filters": {
+                        "logic": "AND",
+                        "conditions": [
+                            {"field": "volume_24h", "operator": ">=", "value": 2_000_000},
+                            {"field": "spread_pct", "operator": "<=", "value": 0.5},
+                        ],
+                    },
+                },
+                "profile_role": "acquisition_queue",
+            },
+            db=session,
+            user_id=profile.user_id,
+        )
+
+    assert exc_info.value.status_code == 422
+    assert "filters.conditions[1]" in str(exc_info.value.detail)
+    assert "SOURCE_REQUIRED" in str(exc_info.value.detail)
+    assert session.commits == 0
+
+
+@pytest.mark.asyncio
+async def test_update_valid_l3_profile_cannot_remove_feature_identity(monkeypatch):
+    profile = _profile_with_role("acquisition_queue")
+    profile.config = {
+        "default_timeframe": "5m",
+        "filters": {
+            "logic": "AND",
+            "conditions": [
+                {
+                    "field": "volume_24h",
+                    "operator": ">=",
+                    "value": 1_000_000,
+                    "source": "decision_context",
+                    "source_provider": "market_metadata",
+                    "provider_policy_id": "spot_decision_context_v1",
+                }
+            ],
+        },
+    }
+    session = _ProfileSession(profile)
+
+    async def _unexpected_activate(_db, **_kwargs):
+        raise AssertionError("valid L3 identity must never be removable")
 
     monkeypatch.setattr(profiles_api, "activate_profile_config", _unexpected_activate)
 
