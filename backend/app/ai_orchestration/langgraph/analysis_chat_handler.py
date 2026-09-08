@@ -2548,6 +2548,7 @@ class AnalysisChatGraphNodeHandler:
                         ),
                         max_output_tokens=invocation.shadow_shard_max_output_tokens,
                         output_schema=shard_output_schema,
+                        thinking_mode="disabled",
                     )
                 except Exception:
                     return ProviderResponse(

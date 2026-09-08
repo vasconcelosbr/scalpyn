@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import json
 import logging
 import os
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Literal
 from uuid import UUID
 
 from jsonschema import ValidationError, validate
@@ -389,6 +389,7 @@ async def _execute_shadow_provider_plan(
                 request_id=shard.provider_request_ref,
                 max_output_tokens=shard_max_output_tokens,
                 output_schema=shard_output_schema,
+                thinking_mode="disabled",
             )
         except AIOrchestrationError as exc:
             shard.status = "FAILED"
@@ -745,12 +746,14 @@ class SystemicLangGraphBridge:
         *, provider: str, model: str, system_prompt: str, user_prompt: str,
         api_key: str, request_id: str, max_output_tokens: int,
         output_schema: dict[str, Any] | None = None,
+        thinking_mode: Literal["enabled", "disabled"] | None = None,
     ) -> ProviderResponse:
         adapter = default_adapter_registry().get(provider)
         return await adapter.execute(
             provider=provider, model=model, system_prompt=system_prompt,
             user_prompt=user_prompt, tools=[], api_key=api_key, request_id=request_id,
             max_output_tokens=max_output_tokens, output_schema=output_schema,
+            thinking_mode=thinking_mode,
         )
 
     @staticmethod

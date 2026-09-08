@@ -2748,6 +2748,8 @@ async def test_canonical_shadow_chat_reuses_every_complete_shard_and_reconciles_
 
     assert len(calls) == 3
     assert [call["request_id"].split(":")[-1] for call in calls[:2]] == ["0", "1"]
+    assert [call["thinking_mode"] for call in calls[:2]] == ["disabled", "disabled"]
+    assert calls[2].get("thinking_mode") is None
     assert "complete canonical trade" in calls[0]["user_prompt"]
     assert "complete canonical trade" in calls[1]["user_prompt"]
     assert calls[2]["output_schema"]["properties"]["referenced_shards"]

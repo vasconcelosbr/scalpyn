@@ -707,6 +707,7 @@ async def test_completed_shard_resume_is_idempotent_and_does_not_repeat_provider
 
     assert len(calls) == 1
     assert calls[0]["request_id"].endswith(":synthesis")
+    assert calls[0].get("thinking_mode") is None
     assert response.tokens_input == 24
     assert response.tokens_output == 12
     assert shard.status == "RECONCILED"

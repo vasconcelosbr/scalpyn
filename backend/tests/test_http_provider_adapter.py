@@ -209,6 +209,24 @@ async def test_deepseek_uses_full_provider_output_and_has_no_read_timeout(monkey
 
 
 @pytest.mark.asyncio
+async def test_deepseek_can_disable_thinking_for_deterministic_extraction(monkeypatch):
+    client = _FakeClient([
+        _FakeResponse(_deepseek_payload('{"answer": "complete"}')),
+    ])
+    monkeypatch.setattr("httpx.AsyncClient", lambda **_kwargs: client)
+
+    response = await HTTPProviderAdapter().execute(
+        provider="deepseek", model="deepseek-v4-pro",
+        system_prompt="system", user_prompt="user", tools=[], api_key="key",
+        request_id="req-deepseek-extraction", max_output_tokens=8192,
+        output_schema=_SCHEMA, thinking_mode="disabled",
+    )
+
+    assert response.terminal_error_code is None
+    assert client.calls[0]["json"]["thinking"] == {"type": "disabled"}
+
+
+@pytest.mark.asyncio
 async def test_recovers_from_transport_error_on_retry(monkeypatch):
     monkeypatch.setattr("asyncio.sleep", AsyncMock())
     adapter, client = _adapter(monkeypatch, [

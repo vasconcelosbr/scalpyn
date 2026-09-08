@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 import json
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from jsonschema import (
@@ -204,7 +204,9 @@ class HTTPProviderAdapter:
     async def execute(self, *, provider: str, model: str, system_prompt: str, user_prompt: str,
                       tools: list[dict], api_key: str, request_id: str,
                       max_output_tokens: int,
-                      output_schema: dict[str, Any] | None = None) -> ProviderResponse:
+                      output_schema: dict[str, Any] | None = None,
+                      thinking_mode: Literal["enabled", "disabled"] | None = None,
+                      ) -> ProviderResponse:
         # A full DeepSeek V4 analysis may legitimately run beyond the generic
         # 180-second read timeout. Keep the connect timeout (an unreachable
         # endpoint must still fail), but do not interrupt an in-flight V4
@@ -219,7 +221,7 @@ class HTTPProviderAdapter:
                 try:
                     response = await self._post(
                         client, provider, model, system_prompt, user_prompt, api_key,
-                        request_id, max_output_tokens, output_schema,
+                        request_id, max_output_tokens, output_schema, thinking_mode,
                     )
                 except httpx.TransportError as exc:
                     # Connection/timeout failures never reach a response object,
@@ -239,7 +241,7 @@ class HTTPProviderAdapter:
                 if response.is_success:
                     return await self._decode_with_repair(
                         client, provider, model, system_prompt, user_prompt, api_key,
-                        request_id, max_output_tokens, output_schema, response,
+                        request_id, max_output_tokens, output_schema, response, thinking_mode,
                     )
                 retry_after = int(response.headers.get("retry-after", "0") or 0) or None
                 policy = classify_provider_status(response.status_code, retry_after_seconds=retry_after)
@@ -261,7 +263,7 @@ class HTTPProviderAdapter:
 
     async def _post(
         self, client, provider, model, system, user, api_key, request_id,
-        max_output_tokens, output_schema=None, prior_attempt=None,
+        max_output_tokens, output_schema=None, thinking_mode=None, prior_attempt=None,
     ):
         headers = {"x-scalpyn-ai-request-id": request_id}
         if provider in ("openai", "deepseek"):
@@ -284,9 +286,11 @@ class HTTPProviderAdapter:
             }
             if provider == "deepseek":
                 # V4 defaults to thinking mode today, but make the analytical
-                # contract explicit so a provider-default change cannot reduce
-                # the depth of an Intelligence Run.
-                payload["thinking"] = {"type": "enabled"}
+                # contract explicit so a provider-default change cannot alter
+                # the governed behavior. Canonical shard reconciliation opts
+                # out because it is a deterministic extraction task; the final
+                # analytical synthesis keeps thinking enabled by default.
+                payload["thinking"] = {"type": thinking_mode or "enabled"}
             return await client.post(
                 url,
                 headers={**headers, "Authorization": f"Bearer {api_key}"},
@@ -377,7 +381,7 @@ class HTTPProviderAdapter:
 
     async def _decode_with_repair(
         self, client, provider, model, system_prompt, user_prompt, api_key,
-        request_id, max_output_tokens, output_schema, http_response,
+        request_id, max_output_tokens, output_schema, http_response, thinking_mode,
     ) -> ProviderResponse:
         """Decode a successful HTTP response, giving the model one bounded
         chance to self-correct when the content fails JSON/schema validation.
@@ -404,7 +408,7 @@ class HTTPProviderAdapter:
             repair_attempts += 1
             repair_http_response = await self._post(
                 client, provider, model, system_prompt, user_prompt, api_key, request_id,
-                max_output_tokens, output_schema,
+                max_output_tokens, output_schema, thinking_mode,
                 prior_attempt={
                     "raw_text": prior_raw_text,
                     "correction": _correction_instruction(response.terminal_error_code, output_schema),
