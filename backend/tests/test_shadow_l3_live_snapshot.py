@@ -37,6 +37,8 @@ from app.services.shadow_trade_service import (  # noqa: E402
     _SyntheticDecision,
     _flatten_analysis_snapshot,
     _lineage_from_current_l3_snapshot,
+    _require_canonical_l3_lineage,
+    _resolve_current_l3_lineage_from_snapshot,
     _resolve_decision_with_fallback,
 )
 
@@ -142,6 +144,84 @@ def test_live_l3_safety_net_fails_closed_without_rules():
             "profile_version": datetime.now(timezone.utc),
             "rules_snapshot": {},
         })
+
+
+def test_current_l3_lineage_resolves_exact_profile_and_version():
+    profile_id = uuid4()
+    version = datetime.now(timezone.utc)
+    decision = type("Decision", (), {
+        "symbol": "BTC_USDT",
+        "profile_id": profile_id,
+        "profile_version": version,
+    })()
+    exact = {
+        "symbol": "BTC_USDT",
+        "watchlist_id": uuid4(),
+        "watchlist_name": "L3 BTC",
+        "watchlist_level": "L3",
+        "source_watchlist_id": uuid4(),
+        "profile_id": profile_id,
+        "profile_name": "Profile BTC",
+        "profile_version": version.isoformat(),
+        "rules_snapshot": {"signals": {"conditions": []}},
+    }
+    other = dict(exact, profile_id=uuid4(), watchlist_id=uuid4())
+
+    lineage = _resolve_current_l3_lineage_from_snapshot(
+        decision, [other, exact]
+    )
+
+    assert lineage.watchlist_id == str(exact["watchlist_id"])
+    assert lineage.profile_id == str(profile_id)
+    assert lineage.rules_snapshot == exact["rules_snapshot"]
+
+
+def test_current_l3_lineage_fails_closed_on_ambiguity():
+    profile_id = uuid4()
+    version = datetime.now(timezone.utc)
+    decision = type("Decision", (), {
+        "symbol": "ETH_USDT",
+        "profile_id": profile_id,
+        "profile_version": version,
+    })()
+    item = {
+        "symbol": "ETH_USDT",
+        "watchlist_id": uuid4(),
+        "watchlist_name": "L3 ETH",
+        "watchlist_level": "L3",
+        "source_watchlist_id": None,
+        "profile_id": profile_id,
+        "profile_name": "Profile ETH",
+        "profile_version": version,
+        "rules_snapshot": {"signals": {"conditions": []}},
+    }
+
+    with pytest.raises(ValueError, match="current_l3_lineage_not_unique"):
+        _resolve_current_l3_lineage_from_snapshot(
+            decision, [item, dict(item, watchlist_id=uuid4())]
+        )
+
+
+def test_canonical_l3_lineage_rejects_wrong_level():
+    lineage = type("Lineage", (), {
+        "watchlist_id": str(uuid4()),
+        "watchlist_name": "L2",
+        "watchlist_level": "L2",
+        "profile_id": str(uuid4()),
+        "profile_name": "Profile",
+        "profile_version": datetime.now(timezone.utc),
+        "rules_snapshot": {"filters": {"conditions": []}},
+        "lineage_confidence": "EXACT",
+        "lineage_source": "test",
+        "lineage_resolved_at": datetime.now(timezone.utc),
+    })()
+    decision = type("Decision", (), {
+        "profile_id": None,
+        "profile_version": None,
+    })()
+
+    with pytest.raises(ValueError, match="watchlist_level:L3"):
+        _require_canonical_l3_lineage(decision, lineage)
 
 
 # ── _resolve_decision_with_fallback ──────────────────────────────────────────

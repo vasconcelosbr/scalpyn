@@ -1500,6 +1500,15 @@ async def _create_from_decision(
         source if source in _VALID_SHADOW_SOURCES else SHADOW_SOURCE_L3
     )
 
+    # Canonical L3 is reportable/analyzable only when its immutable watchlist
+    # and profile identity is captured at the write boundary.  The two legacy
+    # safety-net callers used to omit this envelope, creating rows that could
+    # never satisfy the governed Shadow report contract.  Fail closed before
+    # any market lookup or INSERT; safe callers contain the failure and never
+    # affect live execution.
+    if normalized_source == SHADOW_SOURCE_L3:
+        _require_canonical_l3_lineage(decision, lineage)
+
     # New L3-family shadows are authorized only while their immutable entry
     # profile remains operationally active.  The row lock serializes this
     # final insert boundary with the dedicated profile status endpoint.  Open
@@ -2119,8 +2128,13 @@ async def safe_create_from_symbol_skip(
                         user_id, symbol, lookback_minutes, skip_reason,
                     )
                     return
+                lineage = await _resolve_current_l3_lineage(own_db, decision)
                 created_id = await _create_from_decision(
-                    own_db, decision, skip_reason, user_config
+                    own_db,
+                    decision,
+                    skip_reason,
+                    user_config,
+                    lineage=lineage,
                 )
                 if created_id is not None:
                     logger.info(
@@ -2183,6 +2197,9 @@ async def safe_bulk_create_from_user_skip(
                     {"uid": user_id, "cutoff": cutoff},
                 )
                 ids = [r.id for r in rows.fetchall()]
+                current_l3 = await get_currently_approved_l3(
+                    own_db, user_id, direction="SPOT"
+                )
                 # Determinismo: ordena IDs antes de iterar para evitar
                 # deadlock 40P01 entre workers concorrentes (gotcha #251/#273).
                 for did in sorted(ids):
@@ -2193,8 +2210,15 @@ async def safe_bulk_create_from_user_skip(
                     if decision is None:
                         continue
                     try:
+                        lineage = _resolve_current_l3_lineage_from_snapshot(
+                            decision, current_l3
+                        )
                         new_id = await _create_from_decision(
-                            own_db, decision, skip_reason, user_config
+                            own_db,
+                            decision,
+                            skip_reason,
+                            user_config,
+                            lineage=lineage,
                         )
                         if new_id is not None:
                             created_count += 1
@@ -2290,6 +2314,7 @@ async def _get_currently_approved(
          WHERE pw.user_id = :uid
            AND {watchlist_predicate}
            AND LOWER(pw.market_mode) = :market_mode
+           AND p.is_active IS TRUE
            AND (pwa.level_direction IS NULL OR pwa.level_direction = 'up')
          ORDER BY pwa.symbol ASC
         """
@@ -2383,6 +2408,111 @@ def _lineage_from_current_l3_snapshot(
         lineage_confidence="EXACT",
         lineage_source="shadow_monitor_current_l3_snapshot",
     )
+
+
+def _temporal_identity(value: Any) -> Optional[str]:
+    """Normalize timestamps solely for exact profile-version comparison."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        normalized = value
+        if normalized.tzinfo is None:
+            normalized = normalized.replace(tzinfo=timezone.utc)
+        return normalized.astimezone(timezone.utc).isoformat()
+    if isinstance(value, str):
+        try:
+            normalized = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if normalized.tzinfo is None:
+            normalized = normalized.replace(tzinfo=timezone.utc)
+        return normalized.astimezone(timezone.utc).isoformat()
+    return None
+
+
+def _require_canonical_l3_lineage(decision: Any, lineage: Optional[Any]) -> None:
+    """Reject a canonical L3 write whose immutable lineage is incomplete."""
+    required = (
+        "watchlist_id",
+        "watchlist_name",
+        "profile_id",
+        "profile_name",
+        "profile_version",
+        "lineage_confidence",
+        "lineage_source",
+        "lineage_resolved_at",
+    )
+    missing = [
+        field for field in required
+        if lineage is None or getattr(lineage, field, None) is None
+    ]
+    watchlist_level = (
+        str(getattr(lineage, "watchlist_level", "") or "").upper()
+        if lineage is not None else ""
+    )
+    if watchlist_level != "L3":
+        missing.append("watchlist_level:L3")
+    rules_snapshot = getattr(lineage, "rules_snapshot", None) if lineage else None
+    if not isinstance(rules_snapshot, dict) or not rules_snapshot:
+        missing.append("rules_snapshot")
+
+    decision_profile_id = getattr(decision, "profile_id", None)
+    lineage_profile_id = getattr(lineage, "profile_id", None) if lineage else None
+    if (
+        decision_profile_id is not None
+        and lineage_profile_id is not None
+        and str(decision_profile_id) != str(lineage_profile_id)
+    ):
+        missing.append("profile_id:mismatch")
+
+    decision_version = _temporal_identity(getattr(decision, "profile_version", None))
+    lineage_version = _temporal_identity(
+        getattr(lineage, "profile_version", None) if lineage else None
+    )
+    if decision_version is not None and decision_version != lineage_version:
+        missing.append("profile_version:mismatch")
+
+    if missing:
+        raise ValueError(
+            "canonical_l3_lineage_required:" + ",".join(sorted(set(missing)))
+        )
+
+
+def _resolve_current_l3_lineage_from_snapshot(
+    decision: Any,
+    current_l3: List[Dict[str, Any]],
+):
+    """Resolve exactly one current L3 row for the decision identity."""
+    decision_profile_id = getattr(decision, "profile_id", None)
+    decision_version = _temporal_identity(getattr(decision, "profile_version", None))
+    if decision_profile_id is None or decision_version is None:
+        raise ValueError("current_l3_lineage_identity_unavailable")
+
+    matches = [
+        item for item in current_l3
+        if item.get("symbol") == getattr(decision, "symbol", None)
+        and str(item.get("profile_id") or "") == str(decision_profile_id)
+        and _temporal_identity(item.get("profile_version")) == decision_version
+        and str(item.get("watchlist_level") or "").upper() == "L3"
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            "current_l3_lineage_not_unique:"
+            f"symbol={getattr(decision, 'symbol', None)}:matches={len(matches)}"
+        )
+    lineage = _lineage_from_current_l3_snapshot(matches[0])
+    _require_canonical_l3_lineage(decision, lineage)
+    return lineage
+
+
+async def _resolve_current_l3_lineage(
+    db: AsyncSession,
+    decision: Any,
+):
+    current_l3 = await get_currently_approved_l3(
+        db, decision.user_id, direction="SPOT"
+    )
+    return _resolve_current_l3_lineage_from_snapshot(decision, current_l3)
 
 
 def _flatten_analysis_snapshot(
