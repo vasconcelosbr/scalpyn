@@ -138,6 +138,14 @@ def test_shadow_canonical_capture_and_provider_have_separate_fail_closed_gates()
             shadow_full_canonical_capture_enabled=True,
             shadow_full_canonical_provider_enabled=True,
         )
+    enabled = AIProviderRuntimeConfig(
+        shadow_full_canonical_capture_enabled=True,
+        shadow_full_canonical_provider_enabled=True,
+        shadow_shard_max_items=90,
+        shadow_shard_max_output_tokens=4096,
+        shadow_synthesis_max_output_tokens=8192,
+    )
+    assert enabled.shadow_shard_max_items == 90
 
 
 def test_failed_node_is_preserved_outside_node_transaction():

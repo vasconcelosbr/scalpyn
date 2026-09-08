@@ -372,6 +372,7 @@ class ModuleAIAnalysisService:
         if origin_module == "shadow_portfolio" and not max_shard_input_tokens:
             raise RuntimeError("SHARD_CONTEXT_LIMIT_REQUIRED")
         shadow_provider_enabled = True
+        shadow_shard_max_items: int | None = None
 
         approval = await db.get(AIModelApprovalRecord, model_approval_id)
         now = datetime.now(timezone.utc)
@@ -399,6 +400,11 @@ class ModuleAIAnalysisService:
             shadow_provider_enabled = (
                 runtime_values.get("shadow_full_canonical_provider_enabled") is True
             )
+            configured_max_items = runtime_values.get("shadow_shard_max_items")
+            if shadow_provider_enabled:
+                if not isinstance(configured_max_items, int) or configured_max_items <= 0:
+                    raise RuntimeError("SHADOW_CANONICAL_PROVIDER_LIMITS_REQUIRED")
+                shadow_shard_max_items = configured_max_items
 
         dataset_snapshot_id = uuid4()
         shadow_capture = None
@@ -409,6 +415,7 @@ class ModuleAIAnalysisService:
                 report_run_id=report_run_id,
                 dataset_snapshot_id=dataset_snapshot_id,
                 max_shard_input_tokens=int(max_shard_input_tokens),
+                max_shard_items=shadow_shard_max_items,
                 captured_at=now,
             )
             rows = [item.payload for item in shadow_capture.items]

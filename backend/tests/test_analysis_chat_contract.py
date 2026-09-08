@@ -2673,8 +2673,8 @@ async def test_canonical_shadow_chat_reuses_every_complete_shard_and_reconciles_
             return ProviderResponse(
                 output={
                     "processed_items": [{
-                        "shadow_trade_id": str(trade_ids[call_index]),
-                        "item_hash": hashes[call_index],
+                        "id": str(trade_ids[call_index]),
+                        "hash": hashes[call_index],
                     }],
                     "evidence": [{
                         "shadow_trade_id": str(trade_ids[call_index]),

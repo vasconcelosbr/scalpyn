@@ -68,6 +68,7 @@ from ...services.systemic_langgraph_bridge import (
     SystemicLangGraphBridge,
     _SHADOW_SHARD_OUTPUT_SCHEMA,
     _estimated_provider_input_tokens,
+    _shadow_shard_output_schema,
     _shadow_synthesis_schema,
 )
 from ..hashing import canonical_hash
@@ -2532,6 +2533,8 @@ class AnalysisChatGraphNodeHandler:
             shard_evidence: list[dict[str, Any]] = []
             provider_executor = SystemicLangGraphBridge.execute_json_provider
             for planned in canonical_shadow_shards:
+                expected = dict(planned["expected_items"])
+                shard_output_schema = _shadow_shard_output_schema(len(expected))
                 try:
                     shard_response = await provider_executor(
                         provider=invocation.provider,
@@ -2544,7 +2547,7 @@ class AnalysisChatGraphNodeHandler:
                             f"{planned['shard_index']}"
                         ),
                         max_output_tokens=invocation.shadow_shard_max_output_tokens,
-                        output_schema=_SHADOW_SHARD_OUTPUT_SCHEMA,
+                        output_schema=shard_output_schema,
                     )
                 except Exception:
                     return ProviderResponse(
@@ -2566,7 +2569,7 @@ class AnalysisChatGraphNodeHandler:
                 try:
                     validate_json_schema(
                         shard_response.output,
-                        _SHADOW_SHARD_OUTPUT_SCHEMA,
+                        shard_output_schema,
                     )
                 except ValidationError:
                     return ProviderResponse(
@@ -2575,12 +2578,18 @@ class AnalysisChatGraphNodeHandler:
                         tokens_output=tokens_output,
                         terminal_error_code="SHARD_FAILED",
                     )
-                expected = dict(planned["expected_items"])
                 processed = shard_response.output.get("processed_items") or []
                 seen: dict[str, str] = {}
+                if not isinstance(processed, list):
+                    return ProviderResponse(
+                        output={},
+                        tokens_input=tokens_input,
+                        tokens_output=tokens_output,
+                        terminal_error_code="DATASET_RECONCILIATION_FAILED",
+                    )
                 for item in processed:
-                    trade_id = str((item or {}).get("shadow_trade_id") or "")
-                    item_hash = str((item or {}).get("item_hash") or "")
+                    trade_id = str((item or {}).get("id") or "")
+                    item_hash = str((item or {}).get("hash") or "")
                     if (
                         not trade_id
                         or trade_id in seen

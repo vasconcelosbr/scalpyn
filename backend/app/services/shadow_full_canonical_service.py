@@ -688,13 +688,19 @@ def _shard_payload(
 
 def plan_shards(
     *, dataset_snapshot_id: UUID, items: tuple[CanonicalItem, ...], max_input_tokens: int,
+    max_items_per_shard: int | None = None,
 ) -> tuple[ShardPlan, ...]:
     if max_input_tokens <= 0:
         raise ShadowCanonicalContractError("SHARD_CONTEXT_EXCEEDED")
+    if max_items_per_shard is not None and max_items_per_shard <= 0:
+        raise ShadowCanonicalContractError("SHARD_ITEM_LIMIT_REQUIRED")
     groups: list[list[CanonicalItem]] = []
     current: list[CanonicalItem] = []
     projection_cache: dict[str, tuple[dict[str, Any], str, dict[str, Any]]] = {}
     for item in items:
+        if max_items_per_shard is not None and len(current) >= max_items_per_shard:
+            groups.append(current)
+            current = []
         candidate = [*current, item]
         encoded = canonical_json(_shard_payload(
             dataset_snapshot_id, len(groups), candidate, projection_cache=projection_cache,
@@ -743,6 +749,7 @@ async def capture_report(
     report_run_id: UUID,
     dataset_snapshot_id: UUID,
     max_shard_input_tokens: int,
+    max_shard_items: int | None = None,
     captured_at: datetime,
 ) -> CapturedShadowDataset:
     report = (await db.execute(
@@ -795,6 +802,7 @@ async def capture_report(
         dataset_snapshot_id=dataset_snapshot_id,
         items=item_tuple,
         max_input_tokens=max_shard_input_tokens,
+        max_items_per_shard=max_shard_items,
     )
     item_hashes = [item.item_hash for item in item_tuple]
     optional_missingness: dict[str, int] = {}
@@ -814,6 +822,7 @@ async def capture_report(
         "processed_item_count": 0,
         "coverage_status": "CAPTURED_COMPLETE",
         "shard_count": len(shards),
+        "shard_item_limit": max_shard_items,
         "dataset_hash": dataset_hash,
         "legacy_incomplete": False,
         "coverage_by_path": coverage,
@@ -896,8 +905,8 @@ def reconcile_shard_results(
         if not isinstance(processed, list):
             raise ShadowCanonicalContractError("DATASET_RECONCILIATION_FAILED")
         for item in processed:
-            item_id = str((item or {}).get("shadow_trade_id") or "")
-            item_hash = str((item or {}).get("item_hash") or "")
+            item_id = str((item or {}).get("id") or "")
+            item_hash = str((item or {}).get("hash") or "")
             if not item_id or item_id in seen or expected.get(item_id) != item_hash:
                 raise ShadowCanonicalContractError("DATASET_RECONCILIATION_FAILED")
             seen[item_id] = item_hash

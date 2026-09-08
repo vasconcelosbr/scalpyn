@@ -547,6 +547,10 @@ async def graph_capabilities(
             runtime_config
             and (runtime_config.config_json or {}).get("shadow_full_canonical_provider_enabled") is True
         ),
+        "shadow_shard_max_items": int(
+            ((runtime_config.config_json or {}).get("shadow_shard_max_items") or 0)
+            if runtime_config else 0
+        ),
         "shadow_shard_max_output_tokens": int(
             ((runtime_config.config_json or {}).get("shadow_shard_max_output_tokens") or 0)
             if runtime_config else 0

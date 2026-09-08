@@ -103,6 +103,7 @@ type Capabilities = {
   normal_analysis_provider_enabled: boolean;
   shadow_full_canonical_capture_enabled: boolean;
   shadow_full_canonical_provider_enabled: boolean;
+  shadow_shard_max_items: number;
   shadow_shard_max_output_tokens: number;
   shadow_synthesis_max_output_tokens: number;
   strict_msgpack: boolean;
@@ -431,6 +432,7 @@ export default function IntelligenceRunsPage() {
           normal_analysis_provider_enabled: nextValue,
           shadow_full_canonical_capture_enabled: capabilities.shadow_full_canonical_capture_enabled,
           shadow_full_canonical_provider_enabled: capabilities.shadow_full_canonical_provider_enabled,
+          shadow_shard_max_items: capabilities.shadow_shard_max_items,
           shadow_shard_max_output_tokens: capabilities.shadow_shard_max_output_tokens,
           shadow_synthesis_max_output_tokens: capabilities.shadow_synthesis_max_output_tokens,
         },

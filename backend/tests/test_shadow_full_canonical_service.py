@@ -400,6 +400,34 @@ def test_sharding_is_deterministic_and_keeps_each_trade_whole_once():
     assert len(seen) == len(set(seen))
 
 
+def test_sharding_respects_governed_item_limit_for_output_capacity():
+    dataset_id = uuid.uuid4()
+    items = tuple(_item(index) for index in range(5))
+
+    plan = plan_shards(
+        dataset_snapshot_id=dataset_id,
+        items=items,
+        max_input_tokens=100_000,
+        max_items_per_shard=2,
+    )
+
+    assert [len(shard.items) for shard in plan] == [2, 2, 1]
+    assert [item.shadow_trade_id for shard in plan for item in shard.items] == [
+        item.shadow_trade_id for item in items
+    ]
+
+
+def test_sharding_rejects_invalid_governed_item_limit():
+    with pytest.raises(ShadowCanonicalContractError) as exc_info:
+        plan_shards(
+            dataset_snapshot_id=uuid.uuid4(),
+            items=(_item(0),),
+            max_input_tokens=100_000,
+            max_items_per_shard=0,
+        )
+    assert exc_info.value.code == "SHARD_ITEM_LIMIT_REQUIRED"
+
+
 def test_single_trade_larger_than_context_fails_closed():
     with pytest.raises(ShadowCanonicalContractError) as exc_info:
         plan_shards(
@@ -443,10 +471,7 @@ def test_provider_payload_supplies_exact_persisted_item_hash_and_reconciles_once
         payload_bytes=plan.payload_bytes,
         estimated_input_tokens=plan.estimated_input_tokens,
         result_json={
-            "processed_items": [{
-                "shadow_trade_id": str(persisted.shadow_trade_id),
-                "item_hash": persisted.item_hash,
-            }],
+            "processed_items": [{"id": str(persisted.shadow_trade_id), "hash": persisted.item_hash}],
             "evidence": [],
             "warnings": [],
         },
@@ -568,10 +593,7 @@ def test_provider_payload_and_reconciliation_fail_on_hash_divergence_or_duplicat
 
     persisted.canonical_json = canonical_item.payload
     shard.result_json = {
-        "processed_items": [
-            {"shadow_trade_id": str(persisted.shadow_trade_id), "item_hash": persisted.item_hash},
-            {"shadow_trade_id": str(persisted.shadow_trade_id), "item_hash": persisted.item_hash},
-        ],
+        "processed_items": [{"id": str(persisted.shadow_trade_id), "hash": "wrong-hash"}],
         "evidence": [],
         "warnings": [],
     }
@@ -603,10 +625,7 @@ async def test_completed_shard_resume_is_idempotent_and_does_not_repeat_provider
         estimated_tokens=canonical_item.estimated_tokens,
     )
     shard_result = {
-        "processed_items": [{
-            "shadow_trade_id": str(persisted.shadow_trade_id),
-            "item_hash": persisted.item_hash,
-        }],
+        "processed_items": [{"id": str(persisted.shadow_trade_id), "hash": persisted.item_hash}],
         "evidence": [],
         "warnings": [],
     }

@@ -62,10 +62,10 @@ _SHADOW_SHARD_OUTPUT_SCHEMA = {
             "type": "array",
             "items": {
                 "type": "object",
-                "required": ["shadow_trade_id", "item_hash"],
+                "required": ["id", "hash"],
                 "properties": {
-                    "shadow_trade_id": {"type": "string"},
-                    "item_hash": {"type": "string"},
+                    "id": {"type": "string"},
+                    "hash": {"type": "string"},
                 },
                 "additionalProperties": False,
             },
@@ -77,16 +77,31 @@ _SHADOW_SHARD_OUTPUT_SCHEMA = {
                 "required": ["shadow_trade_id", "finding", "source_paths"],
                 "properties": {
                     "shadow_trade_id": {"type": "string"},
-                    "finding": {"type": "string"},
-                    "source_paths": {"type": "array", "items": {"type": "string"}},
+                    "finding": {"type": "string", "maxLength": 160},
+                    "source_paths": {
+                        "type": "array", "maxItems": 4,
+                        "items": {"type": "string", "maxLength": 100},
+                    },
                 },
                 "additionalProperties": False,
             },
+            "maxItems": 4,
         },
-        "warnings": {"type": "array", "items": {"type": "string"}},
+        "warnings": {
+            "type": "array", "maxItems": 4,
+            "items": {"type": "string", "maxLength": 160},
+        },
     },
     "additionalProperties": False,
 }
+
+
+def _shadow_shard_output_schema(item_count: int) -> dict[str, Any]:
+    schema = copy.deepcopy(_SHADOW_SHARD_OUTPUT_SCHEMA)
+    processed = schema["properties"]["processed_items"]
+    processed["minItems"] = item_count
+    processed["maxItems"] = item_count
+    return schema
 
 
 def _shadow_synthesis_schema(base: dict[str, Any], shard_count: int) -> dict[str, Any]:
@@ -135,7 +150,7 @@ def _compact_shadow_dataset_manifest(manifest: dict[str, Any]) -> dict[str, Any]
         for key in (
             "input_contract_version", "capture_at", "report_run_id",
             "source_item_count", "processed_item_count", "coverage_status",
-            "shard_count", "dataset_hash", "legacy_incomplete",
+            "shard_count", "shard_item_limit", "dataset_hash", "legacy_incomplete",
             "missing_required_fields", "optional_missingness_by_path",
         )
         if key in manifest
@@ -230,7 +245,7 @@ async def _shadow_provider_plan(
     by_record_id = {str(item.id): item for item in items}
     shard_prompts: list[dict[str, Any]] = []
     shard_schema_bytes = len(json.dumps(
-        _SHADOW_SHARD_OUTPUT_SCHEMA,
+        _shadow_shard_output_schema(max((shard.item_count for shard in shards), default=1)),
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode("utf-8")) + 512
@@ -246,10 +261,12 @@ async def _shadow_provider_plan(
             "You are a read-only Shadow Portfolio evidence extractor. Read every selected trade in this "
             "shard exactly once. The full canonical record is durably persisted under item_hash; the provider "
             "projection contains the decision evidence authorized for analysis and hashes every omitted verbose "
-            "configuration subtree. Resolve rules_catalog_ref against its shard catalog. Treat UNAVAILABLE fields "
-            "and omitted subtrees as unavailable: never infer or "
-            "invent them. Do not omit provider-visible fields, recommend changes, or use outside data. Return "
-            "every processed shadow_trade_id with the exact supplied item_hash."
+            "configuration subtree. Resolve rules_catalog_ref against its shard catalog. Read every provider-visible "
+            "field, but treat UNAVAILABLE fields and omitted subtrees as unavailable: never infer or invent them. "
+            "Do not recommend changes or use outside data. Return "
+            "processed_items as one compact JSON array with exactly one {id,hash} object for every processed "
+            "shadow_trade_id and exact supplied item_hash. Keep evidence concise and limited to the strongest causal "
+            "exemplars; processing every item does not require restating every field or emitting one finding per item."
         )
         user_prompt = (
             "Analysis focus: extract evidence about L3 entry quality, outcome and causal patterns for later "
@@ -335,9 +352,10 @@ async def _execute_shadow_provider_plan(
     provider_executor = SystemicLangGraphBridge.execute_json_provider
     for planned in plan["shard_prompts"]:
         shard: AIAnalysisShardRecord = planned["record"]
+        shard_output_schema = _shadow_shard_output_schema(shard.item_count)
         if shard.status == "COMPLETED" and isinstance(shard.result_json, dict):
             try:
-                validate(shard.result_json, _SHADOW_SHARD_OUTPUT_SCHEMA)
+                validate(shard.result_json, shard_output_schema)
             except ValidationError:
                 return ProviderResponse(
                     output={}, tokens_input=tokens_input, tokens_output=tokens_output,
@@ -370,7 +388,7 @@ async def _execute_shadow_provider_plan(
                 api_key=api_key,
                 request_id=shard.provider_request_ref,
                 max_output_tokens=shard_max_output_tokens,
-                output_schema=_SHADOW_SHARD_OUTPUT_SCHEMA,
+                output_schema=shard_output_schema,
             )
         except AIOrchestrationError as exc:
             shard.status = "FAILED"
@@ -417,7 +435,7 @@ async def _execute_shadow_provider_plan(
                 raw_response_ref=shard_response.raw_response_ref,
             )
         try:
-            validate(shard_response.output, _SHADOW_SHARD_OUTPUT_SCHEMA)
+            validate(shard_response.output, shard_output_schema)
         except ValidationError:
             shard.status = "FAILED"
             shard.error_code = "SHARD_FAILED"
@@ -974,7 +992,10 @@ class SystemicLangGraphBridge:
             shadow_runtime = dict((runtime_config.config_json if runtime_config else {}) or {})
             if shadow_runtime.get("shadow_full_canonical_provider_enabled") is not True:
                 raise RuntimeError("SHADOW_FULL_CANONICAL_DISABLED")
-            for field in ("shadow_shard_max_output_tokens", "shadow_synthesis_max_output_tokens"):
+            for field in (
+                "shadow_shard_max_items", "shadow_shard_max_output_tokens",
+                "shadow_synthesis_max_output_tokens",
+            ):
                 if not isinstance(shadow_runtime.get(field), int) or int(shadow_runtime[field]) <= 0:
                     raise RuntimeError("SHADOW_CANONICAL_PROVIDER_LIMITS_REQUIRED")
         now = datetime.now(timezone.utc)
