@@ -406,13 +406,33 @@ class HTTPProviderAdapter:
         while response.terminal_error_code in _CONTENT_REPAIR_ERROR_CODES and repair_attempts_left > 0:
             repair_attempts_left -= 1
             repair_attempts += 1
+            correction = _correction_instruction(
+                response.terminal_error_code,
+                output_schema,
+            )
+            # A schema-invalid object is already valid JSON. Replaying that
+            # object as an assistant turn can anchor deterministic providers
+            # to the same wrong shape. Give schema failures a clean context
+            # with the canonical correction appended to the original user
+            # prompt. Invalid JSON still benefits from seeing the malformed
+            # attempt that it must repair.
+            schema_retry = (
+                response.terminal_error_code == "PROVIDER_OUTPUT_SCHEMA_INVALID"
+            )
             repair_http_response = await self._post(
-                client, provider, model, system_prompt, user_prompt, api_key, request_id,
+                client,
+                provider,
+                model,
+                system_prompt,
+                f"{user_prompt}\n\n{correction}" if schema_retry else user_prompt,
+                api_key,
+                request_id,
                 max_output_tokens, output_schema, thinking_mode,
-                prior_attempt={
-                    "raw_text": prior_raw_text,
-                    "correction": _correction_instruction(response.terminal_error_code, output_schema),
-                },
+                prior_attempt=(
+                    None
+                    if schema_retry
+                    else {"raw_text": prior_raw_text, "correction": correction}
+                ),
             )
             if not repair_http_response.is_success:
                 # The original attempt already succeeded at the transport
@@ -420,8 +440,15 @@ class HTTPProviderAdapter:
                 # failure from the repair call.
                 break
             repair_payload = repair_http_response.json()
+            repair_raw_response_ref = (
+                repair_http_response.headers.get("request-id")
+                or repair_http_response.headers.get("x-request-id")
+            )
             response = self._decode(
-                provider, repair_payload, raw_response_ref=raw_response_ref, output_schema=output_schema,
+                provider,
+                repair_payload,
+                raw_response_ref=repair_raw_response_ref,
+                output_schema=output_schema,
             )
             total_tokens_input += response.tokens_input
             total_tokens_output += response.tokens_output

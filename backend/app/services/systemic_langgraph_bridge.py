@@ -428,24 +428,38 @@ async def _execute_shadow_provider_plan(
         shard.completed_at = datetime.now(timezone.utc)
         if shard_response.terminal_error_code is not None:
             shard.status = "FAILED"
-            shard.error_code = "SHARD_FAILED"
-            shard.error_safe_message = "Provider returned an incomplete canonical shard result"
+            shard.error_code = shard_response.terminal_error_code
+            shard.error_safe_message = (
+                "Provider returned an incomplete canonical shard result: "
+                f"{shard_response.terminal_error_code}"
+            )
             await db.flush()
             return ProviderResponse(
                 output={}, tokens_input=tokens_input, tokens_output=tokens_output,
                 terminal_error_code="SHARD_FAILED",
                 raw_response_ref=shard_response.raw_response_ref,
+                stop_reason=shard_response.stop_reason,
+                schema_error_path=shard_response.schema_error_path,
+                schema_validator=shard_response.schema_validator,
+                repair_attempts=shard_response.repair_attempts,
             )
         try:
             validate(shard_response.output, shard_output_schema)
-        except ValidationError:
+        except ValidationError as exc:
             shard.status = "FAILED"
-            shard.error_code = "SHARD_FAILED"
+            shard.error_code = "PROVIDER_OUTPUT_SCHEMA_INVALID"
             shard.error_safe_message = "Provider shard result failed the canonical schema"
             await db.flush()
             return ProviderResponse(
                 output={}, tokens_input=tokens_input, tokens_output=tokens_output,
                 terminal_error_code="SHARD_FAILED",
+                raw_response_ref=shard_response.raw_response_ref,
+                stop_reason=shard_response.stop_reason,
+                schema_error_path=tuple(str(part) for part in exc.absolute_path)[:8],
+                schema_validator=(
+                    str(exc.validator) if exc.validator is not None else None
+                ),
+                repair_attempts=shard_response.repair_attempts,
             )
         shard.status = "COMPLETED"
         shard.result_json = shard_response.output

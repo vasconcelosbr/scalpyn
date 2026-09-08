@@ -792,3 +792,79 @@ async def test_completed_shard_resume_is_idempotent_and_does_not_repeat_provider
     assert response.tokens_input == 24
     assert response.tokens_output == 12
     assert shard.status == "RECONCILED"
+
+
+@pytest.mark.asyncio
+async def test_failed_shard_preserves_provider_validation_diagnostics(monkeypatch):
+    from app.ai_orchestration.runtime import ProviderResponse
+    from app.services.systemic_langgraph_bridge import (
+        SystemicLangGraphBridge,
+        _execute_shadow_provider_plan,
+    )
+
+    shard = AIAnalysisShardRecord(
+        id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
+        ai_request_id=uuid.uuid4(),
+        dataset_snapshot_id=uuid.uuid4(),
+        shard_index=0,
+        status="PLANNED",
+        item_count=1,
+        item_ids=[str(uuid.uuid4())],
+        item_hashes=["a" * 64],
+        payload_hash="b" * 64,
+        payload_bytes=100,
+        estimated_input_tokens=50,
+        attempt=0,
+    )
+
+    async def _provider(**_kwargs):
+        return ProviderResponse(
+            output={"processed_items": []},
+            tokens_input=101,
+            tokens_output=17,
+            raw_response_ref="provider-response-ref",
+            stop_reason="stop",
+            terminal_error_code="PROVIDER_OUTPUT_SCHEMA_INVALID",
+            schema_error_path=("processed_items",),
+            schema_validator="minItems",
+            repair_attempts=1,
+        )
+
+    monkeypatch.setattr(
+        SystemicLangGraphBridge,
+        "execute_json_provider",
+        staticmethod(_provider),
+    )
+
+    class _DB:
+        async def flush(self):
+            return None
+
+    response = await _execute_shadow_provider_plan(
+        _DB(),
+        plan={
+            "items": [],
+            "shards": [shard],
+            "shard_prompts": [{
+                "record": shard,
+                "system_prompt": "system",
+                "user_prompt": "user",
+            }],
+        },
+        request=SimpleNamespace(id=shard.ai_request_id),
+        provider="deepseek",
+        model="deepseek-v4-pro",
+        api_key="key",
+        shard_max_output_tokens=8192,
+        prompt=SimpleNamespace(system_template="", user_template=""),
+    )
+
+    assert response.terminal_error_code == "SHARD_FAILED"
+    assert response.raw_response_ref == "provider-response-ref"
+    assert response.stop_reason == "stop"
+    assert response.schema_error_path == ("processed_items",)
+    assert response.schema_validator == "minItems"
+    assert response.repair_attempts == 1
+    assert shard.status == "FAILED"
+    assert shard.error_code == "PROVIDER_OUTPUT_SCHEMA_INVALID"

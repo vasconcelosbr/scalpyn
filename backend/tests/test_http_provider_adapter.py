@@ -16,11 +16,11 @@ _SCHEMA = {
 
 
 class _FakeResponse:
-    def __init__(self, payload, *, status_code=200):
+    def __init__(self, payload, *, status_code=200, headers=None):
         self._payload = payload
         self.status_code = status_code
         self.is_success = 200 <= status_code < 300
-        self.headers = {}
+        self.headers = headers or {}
 
     def json(self):
         return self._payload
@@ -112,7 +112,47 @@ async def test_repairs_schema_invalid_output_on_second_attempt(monkeypatch):
     assert response.tokens_output == 38
     assert len(client.calls) == 2
     repair_messages = client.calls[1]["json"]["messages"]
-    assert "did not satisfy the required schema" in repair_messages[2]["content"]
+    assert len(repair_messages) == 1
+    assert repair_messages[0]["content"].startswith("user")
+    assert "did not satisfy the required schema" in repair_messages[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_schema_repair_uses_clean_deepseek_context_and_final_response_ref(monkeypatch):
+    client = _FakeClient([
+        _FakeResponse(
+            _deepseek_payload('{"wrong_field": "oops"}'),
+            headers={"x-request-id": "initial-ref"},
+        ),
+        _FakeResponse(
+            _deepseek_payload('{"answer": "fixed"}'),
+            headers={"x-request-id": "repair-ref"},
+        ),
+    ])
+    monkeypatch.setattr("httpx.AsyncClient", lambda **_kwargs: client)
+
+    response = await HTTPProviderAdapter().execute(
+        provider="deepseek",
+        model="deepseek-v4-pro",
+        system_prompt="system",
+        user_prompt="user",
+        tools=[],
+        api_key="key",
+        request_id="req-clean-schema-retry",
+        max_output_tokens=1024,
+        output_schema=_SCHEMA,
+        thinking_mode="disabled",
+    )
+
+    assert response.terminal_error_code is None
+    assert response.repair_attempts == 1
+    assert response.raw_response_ref == "repair-ref"
+    repair_messages = client.calls[1]["json"]["messages"]
+    assert len(repair_messages) == 2
+    assert repair_messages[0]["role"] == "system"
+    assert repair_messages[1]["role"] == "user"
+    assert "did not satisfy the required schema" in repair_messages[1]["content"]
+    assert all(message["role"] != "assistant" for message in repair_messages)
 
 
 @pytest.mark.asyncio
