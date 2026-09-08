@@ -191,6 +191,22 @@ def test_safety_net_lineage_repair_is_exact_audited_and_reversible():
     assert "def downgrade()" in migration
 
 
+def test_historical_lineage_repair_does_not_depend_on_current_profile_status():
+    migration = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "223_shadow_l3_historical_lineage.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'down_revision = "222_shadow_l3_lineage_retry"' in migration
+    assert "pv.config_hash = st.profile_config_hash" in migration
+    assert "HAVING count(*) = 1" in migration
+    assert "p.is_active" not in migration
+    assert "DROP TABLE shadow_canonical_lineage_repair_audit" not in migration
+    assert "DELETE FROM shadow_canonical_lineage_repair_audit" in migration
+
+
 def test_anthropic_canonical_shard_schema_has_no_free_form_objects():
     from app.ai_orchestration.provider_adapters import anthropic_output_config
     from app.services.systemic_langgraph_bridge import _SHADOW_SHARD_OUTPUT_SCHEMA

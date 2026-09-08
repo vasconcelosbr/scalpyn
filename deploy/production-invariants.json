@@ -432,6 +432,16 @@
           ]
         },
         {
+          "path": "backend/alembic/versions/223_shadow_l3_historical_lineage.py",
+          "contains_all": [
+            "migration_223_shadow_l3_historical_lineage",
+            "shadow_canonical_lineage_repair_audit",
+            "single_candidate_safety_net",
+            "JOIN_PROFILE_UNIQUE",
+            "profile_config_hash"
+          ]
+        },
+        {
           "path": "frontend/app/intelligence-runs/page.tsx",
           "contains_all": [
             "Dados completos",
