@@ -339,4 +339,150 @@ test("MTF profiles select their layer policies and standard profiles select L3 p
     profileSourcePoliciesForEditor(spotEngine, "STANDARD", "acquisition_queue").decision_context?.provider_policy_id,
     "standard",
   );
+  assert.deepEqual(
+    profileSourcePoliciesForEditor(spotEngine, "MTF_LAYER", "unknown_role"),
+    {},
+  );
+});
+
+test("standard profiles merge resolver policies with the materialized L3 source contract", () => {
+  const policies = profileSourcePoliciesForEditor({
+    scanner: {
+      l3_v3_provenance_resolver: {
+        source_policies: {
+          decision_context: { provider_policy_id: "resolver-decision" },
+        },
+      },
+      multilayer_contract: {
+        layers: {
+          L3: {
+            source_policies: {
+              ohlcv: { provider_policy_id: "layer-ohlcv" },
+            },
+          },
+        },
+      },
+    },
+  }, "STANDARD", "acquisition_queue");
+
+  assert.equal(policies.ohlcv?.provider_policy_id, "layer-ohlcv");
+  assert.equal(policies.decision_context?.provider_policy_id, "resolver-decision");
+});
+
+test("standard L3 editor uses the materialized L3 policy and its governed validity margin", () => {
+  const spotEngine = {
+    scanner: {
+      l3_v3_provenance_resolver: { enabled: false },
+      l3_global_block_range_compiler: {
+        source_policies: { ohlcv: { allowed_source_providers: [] } },
+      },
+      multilayer_contract: {
+        layers: {
+          L3: {
+            default_timeframe: "5m",
+            validity_margin_seconds: 741,
+            validity_margin_seconds_by_group: { structural: 717, microstructure: 741 },
+            source_policies: {
+              ohlcv: {
+                allowed_source_providers: ["gate.io"],
+                provider_policy_id: "spot_gate_closed_ohlcv_v1",
+                timeframe: "5m",
+                candle_policy: "CLOSED_ONLY",
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+
+  const policies = profileSourcePoliciesForEditor(
+    spotEngine,
+    "STANDARD",
+    "acquisition_queue",
+  );
+  assert.equal(policies.ohlcv?.provider_policy_id, "spot_gate_closed_ohlcv_v1");
+  assert.equal(policies.ohlcv?.max_age_seconds, 717);
+
+  const prepared = prepareProfileEntryTriggerIdentities({
+    default_timeframe: "5m",
+    entry_triggers: {
+      conditions: [{
+        id: "entry-rsi", type: "threshold", indicator: "rsi",
+        operator: ">=", value: 52, required: true, enabled: true,
+      }],
+    },
+  }, policies);
+  assert.deepEqual(prepared.issues, []);
+  const condition = prepared.config.entry_triggers.conditions[0] as Record<string, any>;
+  assert.equal(
+    condition.max_age_seconds,
+    717,
+  );
+});
+
+test("editing a legacy profile does not require identity for untouched Entry Triggers", () => {
+  const currentConfig = {
+    default_timeframe: "5m",
+    entry_triggers: {
+      conditions: [
+        {
+          id: "legacy-rsi", type: "threshold", indicator: "rsi",
+          operator: ">=", value: 55, required: true, enabled: true,
+        },
+        {
+          id: "legacy-taker", type: "threshold", indicator: "taker_ratio",
+          operator: ">=", value: 0.53, required: true, enabled: true,
+        },
+      ],
+    },
+  };
+  const candidate = {
+    ...currentConfig,
+    entry_triggers: {
+      conditions: [
+        { ...currentConfig.entry_triggers.conditions[0], value: 52 },
+        currentConfig.entry_triggers.conditions[1],
+        {
+          id: "entry-new", type: "comparison", left: "price",
+          operator: ">", right: "ema9", required: true, enabled: true,
+        },
+      ],
+    },
+  };
+
+  const prepared = prepareProfileEntryTriggerIdentities(
+    candidate,
+    { ohlcv: SOURCE_POLICIES.ohlcv },
+    currentConfig,
+  );
+
+  assert.deepEqual(prepared.issues, []);
+  assert.equal("source" in prepared.config.entry_triggers.conditions[0], false);
+  assert.equal("source" in prepared.config.entry_triggers.conditions[1], false);
+  const added = prepared.config.entry_triggers.conditions[2] as Record<string, any>;
+  assert.equal(added.source, "ohlcv");
+  assert.equal(
+    added.resolved_operands.right.source_provider,
+    "gate.io",
+  );
+});
+
+test("a newly added live Entry Trigger still fails closed without a configured live policy", () => {
+  const prepared = prepareProfileEntryTriggerIdentities({
+    default_timeframe: "5m",
+    entry_triggers: {
+      conditions: [{
+        id: "entry-new", type: "threshold", indicator: "volume_delta",
+        operator: ">", value: 0, required: true, enabled: true,
+      }],
+    },
+  }, { ohlcv: SOURCE_POLICIES.ohlcv }, { entry_triggers: { conditions: [] } });
+
+  assert.deepEqual(prepared.issues, [
+    "entry_triggers.conditions[0].source_provider",
+    "entry_triggers.conditions[0].provider_policy_id",
+    "entry_triggers.conditions[0].max_age_seconds",
+    "entry_triggers.conditions[0].window_seconds",
+  ]);
 });

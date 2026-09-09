@@ -8,6 +8,7 @@ from app.api.profiles import (
     _profile_role_matches_watchlist_levels,
     _requires_l3_feature_identity,
     _validate_profile_config,
+    _validate_profile_config_for_editor_update,
     _validate_profile_config_for_role,
 )
 
@@ -360,6 +361,76 @@ async def test_update_l3_legacy_profile_allows_parameter_change_without_widening
     assert result["warnings"][0]["code"] == "L3_FEATURE_IDENTITY_PENDING"
     assert activation_calls[0]["require_feature_identity"] is False
     assert session.commits == 1
+
+
+def test_legacy_entry_triggers_can_be_reordered_or_removed_without_index_debt():
+    current = {
+        "default_timeframe": "5m",
+        "entry_triggers": {
+            "logic": "AND",
+            "conditions": [
+                {"indicator": "rsi", "operator": ">=", "value": 55, "required": True},
+                {
+                    "indicator": "taker_ratio",
+                    "operator": ">=",
+                    "value": 0.53,
+                    "required": True,
+                },
+            ],
+        },
+    }
+    candidate = {
+        "default_timeframe": "5m",
+        "entry_triggers": {
+            "logic": "AND",
+            "conditions": [
+                {
+                    "indicator": "taker_ratio",
+                    "operator": ">=",
+                    "value": 0.52,
+                    "required": True,
+                }
+            ],
+        },
+    }
+
+    validated, warnings = _validate_profile_config_for_editor_update(
+        candidate,
+        current_config=current,
+        profile_role="acquisition_queue",
+    )
+
+    assert validated["entry_triggers"]["conditions"][0]["value"] == 0.52
+    assert warnings == [{"path": "entry_triggers.conditions[0]", "code": "SOURCE_REQUIRED"}]
+
+
+def test_duplicate_new_legacy_entry_trigger_still_counts_as_new_identity_debt():
+    current = {
+        "default_timeframe": "5m",
+        "entry_triggers": {
+            "logic": "AND",
+            "conditions": [
+                {"indicator": "rsi", "operator": ">=", "value": 55, "required": True}
+            ],
+        },
+    }
+    candidate = {
+        "default_timeframe": "5m",
+        "entry_triggers": {
+            "logic": "AND",
+            "conditions": [
+                {"indicator": "rsi", "operator": ">=", "value": 52, "required": True},
+                {"indicator": "rsi", "operator": "<=", "value": 72, "required": True},
+            ],
+        },
+    }
+
+    with pytest.raises(ValueError, match="L3_FEATURE_IDENTITY_INVALID.*conditions\\[1\\]"):
+        _validate_profile_config_for_editor_update(
+            candidate,
+            current_config=current,
+            profile_role="acquisition_queue",
+        )
 
 
 @pytest.mark.asyncio

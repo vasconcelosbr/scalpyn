@@ -421,6 +421,7 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                 profile.profile_type,
                 profile.profile_role,
               ),
+              profile.config,
             )
           : { config: cfg, issues: [] };
         if (configForSave.issues.length > 0) {

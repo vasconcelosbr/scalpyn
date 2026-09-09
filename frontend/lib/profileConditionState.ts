@@ -242,16 +242,62 @@ export function profileSourcePoliciesForEditor(
   profileRole: unknown,
 ): ProfileSourcePolicies {
   const scanner = spotEngineConfig?.scanner || {};
+  const levelByRole: Record<string, string> = {
+    primary_filter: "L1",
+    score_engine: "L2",
+    acquisition_queue: "L3",
+  };
+  const level = levelByRole[String(profileRole || "")];
+  if (profileType === "MTF_LAYER" && !level) return {};
+  const layer = scanner?.multilayer_contract?.layers?.[level || "L3"] || {};
+  const layerPolicies = layer?.source_policies || {};
+  const validityMargins = layer?.validity_margin_seconds_by_group || {};
+  const sourceGroup: Partial<Record<ProfileFeatureSource, string>> = {
+    ohlcv: "structural",
+    live_trade_flow: "microstructure",
+    live_order_book: "microstructure",
+  };
+  const withLayerValidity = (rawPolicies: Record<string, any>): ProfileSourcePolicies => (
+    Object.fromEntries(
+      Object.entries(rawPolicies).map(([source, rawPolicy]) => {
+        const policy = rawPolicy && typeof rawPolicy === "object"
+          ? rawPolicy as ProfileSourcePolicy
+          : {};
+        const group = sourceGroup[source as ProfileFeatureSource];
+        const layerMaxAge = (group && validityMargins[group] != null)
+          ? validityMargins[group]
+          : layer?.validity_margin_seconds;
+        return [source, {
+          ...policy,
+          ...(policy.max_age_seconds == null && layerMaxAge != null
+            ? { max_age_seconds: layerMaxAge }
+            : {}),
+          ...(source === "ohlcv" && !policy.timeframe && layer?.default_timeframe
+            ? { timeframe: layer.default_timeframe }
+            : {}),
+        }];
+      }),
+    ) as ProfileSourcePolicies
+  );
+  const policiesWithLayerValidity = withLayerValidity(layerPolicies);
   if (profileType === "MTF_LAYER") {
-    const levelByRole: Record<string, string> = {
-      primary_filter: "L1",
-      score_engine: "L2",
-      acquisition_queue: "L3",
-    };
-    const level = levelByRole[String(profileRole || "")];
-    return scanner?.multilayer_contract?.layers?.[level]?.source_policies || {};
+    return policiesWithLayerValidity;
   }
-  return scanner?.l3_v3_provenance_resolver?.source_policies || {};
+  const resolverPolicies = scanner?.l3_v3_provenance_resolver?.source_policies || {};
+  const configuredOnly = (rawPolicies: Record<string, any>) => Object.fromEntries(
+    Object.entries(rawPolicies).filter(([, policy]: [string, any]) => Boolean(
+      policy?.provider_policy_id
+      || policy?.source_provider
+      || (Array.isArray(policy?.allowed_source_providers)
+        && policy.allowed_source_providers.length > 0),
+    )),
+  );
+  const compilerPolicies = scanner?.l3_global_block_range_compiler?.source_policies || {};
+  return withLayerValidity({
+    ...configuredOnly(compilerPolicies),
+    ...layerPolicies,
+    ...configuredOnly(resolverPolicies),
+  });
 }
 
 /**
@@ -261,12 +307,43 @@ export function profileSourcePoliciesForEditor(
 export function prepareProfileEntryTriggerIdentities<T extends Record<string, any>>(
   config: T,
   policies: ProfileSourcePolicies,
+  currentConfig?: Record<string, any> | null,
 ): PreparedProfileEditorConfig<T> {
   const issues: string[] = [];
   const defaultTimeframe = String(config.default_timeframe || "");
+  const featureKey = (condition: Record<string, any>) => JSON.stringify(
+    isProfileComparisonCondition(condition)
+      ? {
+          type: "comparison",
+          left: condition.left || "price",
+          right: condition.operator === "between" ? null : (condition.right || "ema9"),
+          between: condition.operator === "between",
+          timeframe: condition.timeframe || null,
+          period: condition.period ?? null,
+          reference_window: condition.reference_window ?? null,
+        }
+      : {
+          type: condition.type || "threshold",
+          indicator: condition.indicator || condition.field || "rsi",
+          timeframe: condition.timeframe || null,
+          period: condition.period ?? null,
+          reference_window: condition.reference_window ?? null,
+        },
+  );
+  const currentFeatureCounts = new Map<string, number>();
+  for (const condition of currentConfig?.entry_triggers?.conditions || []) {
+    const key = featureKey(condition);
+    currentFeatureCounts.set(key, (currentFeatureCounts.get(key) || 0) + 1);
+  }
   const conditions = (config.entry_triggers?.conditions || []).map(
     (raw: Record<string, any>, index: number) => {
       const condition = { ...raw };
+      const key = featureKey(condition);
+      const matchingCurrentCount = currentFeatureCounts.get(key) || 0;
+      if (matchingCurrentCount > 0) {
+        currentFeatureCounts.set(key, matchingCurrentCount - 1);
+        return condition;
+      }
       const path = `entry_triggers.conditions[${index}]`;
       if (isProfileComparisonCondition(condition)) {
         const operands = condition.resolved_operands || {};

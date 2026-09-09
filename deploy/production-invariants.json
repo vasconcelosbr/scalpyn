@@ -1513,7 +1513,9 @@
       "description": "Editor preserves governed feature identity and blocks writes with incomplete policy",
       "files": [
         { "path": "frontend/lib/profileConditionState.ts", "contains_all": ["prepareProfileEntryTriggerIdentities", "profileSourcePoliciesForEditor"] },
-        { "path": "frontend/lib/profileConditionState.test.ts", "contains_all": ["new Entry Trigger receives governed OHLCV identity before save", "editor reports incomplete governed policies instead of sending an invalid write"] }
+        { "path": "frontend/lib/profileConditionState.test.ts", "contains_all": ["new Entry Trigger receives governed OHLCV identity before save", "editing a legacy profile does not require identity for untouched Entry Triggers", "a newly added live Entry Trigger still fails closed without a configured live policy"] },
+        { "path": "backend/app/api/profiles.py", "contains_all": ["_legacy_entry_trigger_error_debt", "remaining_entry_debt"] },
+        { "path": "backend/tests/test_profiles_config_validation.py", "contains_all": ["test_legacy_entry_triggers_can_be_reordered_or_removed_without_index_debt", "test_duplicate_new_legacy_entry_trigger_still_counts_as_new_identity_debt"] }
       ]
     }
   ]

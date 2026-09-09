@@ -9,6 +9,7 @@ import logging
 import json
 import re
 from copy import deepcopy
+from collections import Counter
 
 from ..database import get_db
 from ..models.profile import Profile, WatchlistProfile
@@ -450,6 +451,60 @@ def _feature_identity_error_keys(errors: List[Dict[str, Any]]) -> set[tuple[str,
     }
 
 
+_ENTRY_TRIGGER_ERROR_PATH = re.compile(r"^entry_triggers\.conditions\[(\d+)\]$")
+
+
+def _entry_trigger_feature_key(condition: Dict[str, Any]) -> str:
+    """Address legacy Entry Trigger debt by feature, not mutable array index."""
+    is_comparison = condition.get("type") == "comparison" or (
+        "left" in condition and "right" in condition
+    )
+    if is_comparison:
+        identity = {
+            "type": "comparison",
+            "left": condition.get("left") or "price",
+            "right": (
+                None
+                if condition.get("operator") == "between"
+                else condition.get("right") or "ema9"
+            ),
+            "between": condition.get("operator") == "between",
+            "timeframe": condition.get("timeframe"),
+            "period": condition.get("period"),
+            "reference_window": condition.get("reference_window"),
+        }
+    else:
+        identity = {
+            "type": condition.get("type") or "threshold",
+            "indicator": condition.get("indicator") or condition.get("field") or "rsi",
+            "timeframe": condition.get("timeframe"),
+            "period": condition.get("period"),
+            "reference_window": condition.get("reference_window"),
+        }
+    return json.dumps(identity, sort_keys=True, separators=(",", ":"))
+
+
+def _legacy_entry_trigger_error_debt(
+    config: Dict[str, Any], errors: List[Dict[str, Any]]
+) -> Counter[tuple[str, str]]:
+    conditions = ((config.get("entry_triggers") or {}).get("conditions") or [])
+    debt: Counter[tuple[str, str]] = Counter()
+    for error in errors:
+        match = _ENTRY_TRIGGER_ERROR_PATH.fullmatch(str(error.get("path") or ""))
+        if not match:
+            continue
+        index = int(match.group(1))
+        if index >= len(conditions) or not isinstance(conditions[index], dict):
+            continue
+        debt[
+            (
+                _entry_trigger_feature_key(conditions[index]),
+                str(error.get("code") or ""),
+            )
+        ] += 1
+    return debt
+
+
 def _validate_profile_config_for_editor_update(
     config: Dict[str, Any],
     *,
@@ -478,18 +533,36 @@ def _validate_profile_config_for_editor_update(
 
     current = _validate_profile_config(current_config)
     current_errors = validate_profile_contract(current)
-    current_keys = _feature_identity_error_keys(current_errors)
-    candidate_keys = _feature_identity_error_keys(candidate_errors)
-    introduced = candidate_keys - current_keys
-    if not current_errors or introduced:
-        errors = candidate_errors if not current_errors else [
-            error
-            for error in candidate_errors
-            if (
-                str(error.get("path") or ""),
-                str(error.get("code") or ""),
-            ) in introduced
-        ]
+    current_keys = _feature_identity_error_keys([
+        error
+        for error in current_errors
+        if not _ENTRY_TRIGGER_ERROR_PATH.fullmatch(str(error.get("path") or ""))
+    ])
+    remaining_entry_debt = _legacy_entry_trigger_error_debt(current, current_errors)
+    introduced_errors: List[Dict[str, Any]] = []
+    for error in candidate_errors:
+        path = str(error.get("path") or "")
+        match = _ENTRY_TRIGGER_ERROR_PATH.fullmatch(path)
+        if not match:
+            if (path, str(error.get("code") or "")) not in current_keys:
+                introduced_errors.append(error)
+            continue
+        index = int(match.group(1))
+        conditions = ((candidate.get("entry_triggers") or {}).get("conditions") or [])
+        if index >= len(conditions) or not isinstance(conditions[index], dict):
+            introduced_errors.append(error)
+            continue
+        debt_key = (
+            _entry_trigger_feature_key(conditions[index]),
+            str(error.get("code") or ""),
+        )
+        if remaining_entry_debt[debt_key] > 0:
+            remaining_entry_debt[debt_key] -= 1
+        else:
+            introduced_errors.append(error)
+
+    if not current_errors or introduced_errors:
+        errors = candidate_errors if not current_errors else introduced_errors
         raise ValueError(
             "L3_FEATURE_IDENTITY_INVALID:"
             + json.dumps(errors, sort_keys=True)

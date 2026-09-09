@@ -558,6 +558,7 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
       const prepared = prepareProfileEntryTriggerIdentities(
         config,
         profileSourcePoliciesForEditor(spotEngineConfig, profile?.profile_type, profileRole),
+        normalizeProfileConfig(profile?.config),
       );
       if (prepared.issues.length > 0) {
         alert(
