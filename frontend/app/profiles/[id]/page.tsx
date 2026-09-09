@@ -17,6 +17,9 @@ interface Profile {
   auto_pilot_enabled?: boolean
   auto_pilot_config?: any
   updated_at?: string
+  profile_type?: string
+  expected_profile_version_id?: string | null
+  expected_profile_config_hash?: string | null
 }
 
 export default function ProfileEditPage() {
@@ -64,6 +67,8 @@ export default function ProfileEditPage() {
       )
       if (identityWarning?.message) {
         alert(`Profile salvo.\n\n${identityWarning.message}`)
+      } else if (profile?.profile_type === 'MTF_LAYER') {
+        alert('Profile MTF salvo com auditoria e nova versão imutável Shadow.')
       }
       router.push('/profiles')
     } catch (e: any) {

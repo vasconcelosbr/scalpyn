@@ -30,7 +30,7 @@ import {
 
 interface ProfileBuilderProps {
   profile?: any;
-  onSave: (data: any) => void;
+  onSave: (data: any) => Promise<void> | void;
   onCancel: () => void;
   onProfileStatusChanged?: (profile: any) => void;
 }
@@ -483,6 +483,7 @@ function ScoreEngineConfigPanel({
 }
 
 export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChanged }: ProfileBuilderProps) {
+  const isMtfProfile = profile?.profile_type === "MTF_LAYER";
   const { config: globalScoreConfig } = useConfig("score");
   const [name, setName]                     = useState(profile?.name || "");
   const [description, setDescription]       = useState(profile?.description || "");
@@ -527,10 +528,6 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
   }, [profile?.is_active, profile?.updated_at]);
 
   const handleSave = async () => {
-    if (profile?.profile_type === "MTF_LAYER") {
-      alert("Profiles MTF só podem ser alterados pelo fluxo governado de importação e ativação.");
-      return;
-    }
     if (!name.trim()) { alert("Profile name is required"); return; }
     const structuralIssues = validateExecutionSections(config, "config", true);
     if (structuralIssues.length > 0) {
@@ -558,9 +555,16 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
       pipeline_order: profileRole
         ? { universe_filter: 0, primary_filter: 1, score_engine: 2, acquisition_queue: 3 }[profileRole] ?? 99
         : 99,
+      ...(profile?.id ? {
+        expected_profile_version_id: profile.expected_profile_version_id,
+        expected_profile_config_hash: profile.expected_profile_config_hash,
+      } : {}),
     };
-    onSave(profileData);
-    setSaving(false);
+    try {
+      await onSave(profileData);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const openStatusDialog = async () => {
@@ -1035,6 +1039,16 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
         </button>
       </div>
 
+      {isMtfProfile && (
+        <div
+          data-testid="mtf-governed-editor-notice"
+          className="rounded-xl border border-violet-400/25 bg-violet-400/[0.08] px-4 py-3 text-sm text-violet-100"
+        >
+          Edição manual governada: ao salvar, o sistema valida o contrato atual,
+          registra a auditoria e cria uma nova versão imutável Shadow.
+        </div>
+      )}
+
       {statusDialogOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm" data-testid="profile-status-dialog">
           <div className="w-full max-w-xl overflow-hidden rounded-2xl border border-white/10 bg-[#10131d] shadow-2xl shadow-black/60">
@@ -1140,6 +1154,7 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
                 placeholder="e.g., High Volume Momentum"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
+                readOnly={isMtfProfile}
                 data-testid="profile-name-input"
               />
             </div>
@@ -1173,7 +1188,11 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
           </div>
 
           <div className="pt-2">
-            <ProfileRoleSelector value={profileRole} onChange={(role) => setProfileRole(role)} />
+            <ProfileRoleSelector
+              value={profileRole}
+              onChange={(role) => setProfileRole(role)}
+              disabled={isMtfProfile}
+            />
           </div>
         </div>
       </div>

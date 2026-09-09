@@ -220,6 +220,103 @@ async def test_update_pool_profile_accepts_indicator_edits_without_l3_identity(m
 
 
 @pytest.mark.asyncio
+async def test_update_mtf_profile_uses_governed_editor_contract(monkeypatch):
+    profile = _profile_with_role("primary_filter")
+    profile.profile_type = "MTF_LAYER"
+    profile.is_shadow_only = True
+    session = _ProfileSession(profile)
+    activation_calls = []
+    expected_version_id = uuid4()
+    expected_hash = "a" * 64
+
+    async def _activate(_db, **kwargs):
+        activation_calls.append(kwargs)
+        kwargs["profile"].config = kwargs["config"]
+        return {
+            "profile_version_id": str(uuid4()),
+            "profile_config_hash": "b" * 64,
+        }
+
+    monkeypatch.setattr(profiles_api, "activate_profile_config", _activate)
+
+    result = await profiles_api.update_profile(
+        profile.id,
+        {
+            "name": profile.name,
+            "config": {
+                "default_timeframe": "1h",
+                "filters": {"logic": "AND", "conditions": []},
+            },
+            "profile_role": "primary_filter",
+            "expected_profile_version_id": str(expected_version_id),
+            "expected_profile_config_hash": expected_hash,
+        },
+        db=session,
+        user_id=profile.user_id,
+    )
+
+    call = activation_calls[0]
+    assert call["expected_profile_version_id"] == expected_version_id
+    assert call["expected_profile_config_hash"] == expected_hash
+    assert call["require_feature_identity"] is True
+    assert call["change_source"] == "profile_ui_editor"
+    assert result["profile_config_hash"] == "b" * 64
+    assert session.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_update_mtf_profile_rejects_missing_editor_contract(monkeypatch):
+    profile = _profile_with_role("score_engine")
+    profile.profile_type = "MTF_LAYER"
+    profile.is_shadow_only = True
+    session = _ProfileSession(profile)
+
+    async def _unexpected_activate(_db, **_kwargs):
+        raise AssertionError("MTF write without an immutable contract must fail closed")
+
+    monkeypatch.setattr(profiles_api, "activate_profile_config", _unexpected_activate)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await profiles_api.update_profile(
+            profile.id,
+            {
+                "config": {
+                    "default_timeframe": "15m",
+                    "signals": {"logic": "AND", "conditions": []},
+                },
+                "profile_role": "score_engine",
+            },
+            db=session,
+            user_id=profile.user_id,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == {"code": "MTF_PROFILE_EDITOR_CONTRACT_REQUIRED"}
+    assert session.commits == 0
+
+
+def test_profile_update_contract_is_exposed_to_the_editor():
+    profile = _profile_with_role("primary_filter")
+    version_id = uuid4()
+    config_hash = "c" * 64
+
+    result = profiles_api._profile_to_dict_with_update_contract(
+        profile,
+        {
+            profile.id: {
+                "contract": {
+                    "profile_version_id": str(version_id),
+                    "profile_projection_hash": config_hash,
+                }
+            }
+        },
+    )
+
+    assert result["expected_profile_version_id"] == str(version_id)
+    assert result["expected_profile_config_hash"] == config_hash
+
+
+@pytest.mark.asyncio
 async def test_update_l3_legacy_profile_allows_parameter_change_without_widening_identity_debt(monkeypatch):
     profile = _profile_with_role("acquisition_queue")
     profile.config = {

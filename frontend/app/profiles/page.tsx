@@ -17,6 +17,9 @@ interface Profile {
   config: ProfileConfig;
   created_at: string;
   updated_at: string;
+  profile_type?: string;
+  expected_profile_version_id?: string | null;
+  expected_profile_config_hash?: string | null;
 }
 
 interface ProfileConfig {
@@ -108,6 +111,8 @@ export default function ProfilesPage() {
         );
         if (identityWarning?.message) {
           alert(`Profile salvo.\n\n${identityWarning.message}`);
+        } else if (editingProfile.profile_type === "MTF_LAYER") {
+          alert("Profile MTF salvo com auditoria e nova versão imutável Shadow.");
         }
       } else {
         await apiPost("/profiles", profileData);

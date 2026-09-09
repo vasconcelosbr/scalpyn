@@ -93,6 +93,20 @@ def _profile_to_dict(profile: Profile) -> Dict[str, Any]:
     }
 
 
+def _profile_to_dict_with_update_contract(
+    profile: Profile, snapshots: Dict[UUID, Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Expose the immutable version/hash required by governed editor writes."""
+    result = _profile_to_dict(profile)
+    metadata = snapshots.get(profile.id)
+    contract = metadata.get("contract", {}) if metadata else {}
+    result["expected_profile_version_id"] = contract.get("profile_version_id")
+    result["expected_profile_config_hash"] = contract.get(
+        "profile_projection_hash"
+    )
+    return result
+
+
 # ============================================================================
 # PROFILE CRUD
 # ============================================================================
@@ -106,7 +120,15 @@ async def get_profiles(
     query = select(Profile).where(Profile.user_id == user_id).order_by(Profile.created_at.desc())
     result = await db.execute(query)
     profiles = result.scalars().all()
-    return {"profiles": [_profile_to_dict(p) for p in profiles]}
+    snapshots = await load_profile_execution_snapshots(
+        db, [profile.id for profile in profiles], user_id=user_id
+    )
+    return {
+        "profiles": [
+            _profile_to_dict_with_update_contract(profile, snapshots)
+            for profile in profiles
+        ]
+    }
 
 
 @router.get("/execution-contract/audit")
@@ -239,7 +261,10 @@ async def get_profile(
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
     
-    return _profile_to_dict(profile)
+    snapshots = await load_profile_execution_snapshots(
+        db, [profile.id], user_id=user_id
+    )
+    return _profile_to_dict_with_update_contract(profile, snapshots)
 
 
 def _status_http_error(exc: ProfileStatusConflict) -> HTTPException:
@@ -1122,8 +1147,7 @@ async def update_profile(
             detail={"code": "PROFILE_STATUS_ENDPOINT_REQUIRED"},
         )
 
-    if profile.profile_type == "MTF_LAYER":
-        raise HTTPException(status_code=409, detail="MTF_PROFILE_GOVERNED_FLOW_REQUIRED")
+    is_mtf_profile = str(profile.profile_type or "STANDARD").upper() == "MTF_LAYER"
 
     try:
         target_role = _normalize_profile_role(
@@ -1133,6 +1157,11 @@ async def update_profile(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if target_role != current_role:
+        if is_mtf_profile:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "MTF_PROFILE_ROLE_IMMUTABLE"},
+            )
         try:
             await _assert_profile_role_change_preserves_pipeline(
                 db,
@@ -1146,9 +1175,41 @@ async def update_profile(
     _config_changed = False
     _next_config: Optional[Dict[str, Any]] = None
     _legacy_identity_warnings: List[Dict[str, Any]] = []
+    _activation_result: Dict[str, Any] = {}
+    expected_profile_version_id: Optional[UUID] = None
+    expected_profile_config_hash: Optional[str] = None
+
+    if "config" in payload:
+        raw_expected_version = payload.get("expected_profile_version_id")
+        raw_expected_hash = payload.get("expected_profile_config_hash")
+        if is_mtf_profile and (not raw_expected_version or not raw_expected_hash):
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "MTF_PROFILE_EDITOR_CONTRACT_REQUIRED"},
+            )
+        if raw_expected_version:
+            try:
+                expected_profile_version_id = UUID(str(raw_expected_version))
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"code": "EXPECTED_PROFILE_VERSION_INVALID"},
+                ) from exc
+        if raw_expected_hash:
+            expected_profile_config_hash = str(raw_expected_hash)
+            if not re.fullmatch(r"[0-9a-f]{64}", expected_profile_config_hash):
+                raise HTTPException(
+                    status_code=422,
+                    detail={"code": "EXPECTED_PROFILE_CONFIG_HASH_INVALID"},
+                )
 
     rename_warnings: List[str] = []
     if "name" in payload and payload["name"] != profile.name:
+        if is_mtf_profile:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "MTF_PROFILE_NAME_IMMUTABLE"},
+            )
         new_name = payload["name"]
         duplicates = await _find_duplicate_names(db, user_id, new_name, exclude_profile_id=profile_id)
         if duplicates:
@@ -1179,23 +1240,33 @@ async def update_profile(
         profile.pipeline_order = _FUNNEL_ROLE_ORDER.get(target_role, "99")
 
     if _config_changed:
-        await activate_profile_config(
-            db,
-            profile=profile,
-            config=_next_config or {},
-            changed_by=user_id,
-            change_source="api",
-            change_description="config updated via PUT /profiles/{id}",
-            require_feature_identity=(
-                _requires_l3_feature_identity(target_role)
-                and not _legacy_identity_warnings
-            ),
-        )
+        try:
+            _activation_result = await activate_profile_config(
+                db,
+                profile=profile,
+                config=_next_config or {},
+                changed_by=user_id,
+                change_source="profile_ui_editor",
+                change_description="config updated via governed profile editor",
+                expected_profile_version_id=expected_profile_version_id,
+                expected_profile_config_hash=expected_profile_config_hash,
+                require_feature_identity=(
+                    is_mtf_profile
+                    or (
+                        _requires_l3_feature_identity(target_role)
+                        and not _legacy_identity_warnings
+                    )
+                ),
+            )
+        except ProfileContractConflict as exc:
+            await db.rollback()
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     await db.commit()
     await db.refresh(profile)
 
     result = _profile_to_dict(profile)
+    result.update(_activation_result)
     if _legacy_identity_warnings:
         result["warnings"] = [
             {
