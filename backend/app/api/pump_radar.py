@@ -243,15 +243,20 @@ async def get_chart(run_id: UUID, event_id: UUID, selected_at: datetime | None =
     context_start = event.start_at - timedelta(hours=8)
     natural_end = (event.end_at or event.confirmed_market_at) + timedelta(hours=2)
     cutoff = selected_at if hide_future and selected_at else natural_end
+    availability_filter = (
+        PumpRadarOHLCV.available_at.is_(None) | (PumpRadarOHLCV.available_at <= cutoff)
+        if hide_future and selected_at
+        else True
+    )
     result: dict[str, list[dict[str, Any]]] = {}
     for timeframe in ("1h", "15m", "5m"):
         rows = (await db.execute(select(PumpRadarOHLCV).where(
             PumpRadarOHLCV.symbol == event.symbol, PumpRadarOHLCV.timeframe == timeframe,
             PumpRadarOHLCV.open_time >= context_start, PumpRadarOHLCV.close_time <= min(natural_end, cutoff),
             PumpRadarOHLCV.is_closed.is_(True),
-            # Known availability is enforced; absent availability is retained
-            # only as visibly reconstructed history.
-            (PumpRadarOHLCV.available_at.is_(None) | (PumpRadarOHLCV.available_at <= cutoff)),
+            # The explicit timeline view is point-in-time strict. The initial
+            # event overview may include candles reconstructed after the event.
+            availability_filter,
         ).order_by(PumpRadarOHLCV.open_time))).scalars().all()
         result[timeframe] = [{
             "time": _iso(row.open_time), "close_time": _iso(row.close_time),
