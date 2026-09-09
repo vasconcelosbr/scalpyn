@@ -28,6 +28,7 @@ class PumpRadarConfig(BaseModel):
     merge_gap_minutes: int = Field(default=30, ge=0, le=180)
     gap_break_candles: int = Field(default=1, ge=1, le=12)
     backfill_days: int = Field(default=180, ge=1, le=730)
+    universe_max_assets: int = Field(default=100, ge=1, le=2000)
     volume_filter_enabled: bool = False
     liquidity_filter_enabled: bool = False
     atr_filter_enabled: bool = False

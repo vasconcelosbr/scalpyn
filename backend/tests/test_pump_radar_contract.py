@@ -16,6 +16,7 @@ from app.models.pump_radar import (
 )
 from app.schemas.pump_radar import PumpRadarConfig
 from app.tasks.celery_app import QUEUE_PUMP_RADAR, TASK_ROUTES
+from app.tasks.pump_radar import _select_universe
 
 
 def test_config_is_observation_only_and_digest_is_stable() -> None:
@@ -30,6 +31,22 @@ def test_config_is_observation_only_and_digest_is_stable() -> None:
 def test_config_rejects_noncanonical_percentiles() -> None:
     with pytest.raises(ValidationError):
         PumpRadarConfig.model_validate({"range_percentiles": [10, 50, 90]})
+
+
+def test_universe_is_bounded_by_quote_volume_with_stable_ties() -> None:
+    tickers = [
+        {"currency_pair": "CCC_USDT", "quote_volume": "10"},
+        {"currency_pair": "BBB_USDT", "quote_volume": "20"},
+        {"currency_pair": "AAA_USDT", "quote_volume": "20"},
+        {"currency_pair": "DDD_USDT", "quote_volume": None},
+    ]
+    selected = _select_universe(tickers, PumpRadarConfig().universe_max_assets)
+    assert [item["currency_pair"] for item in selected] == [
+        "AAA_USDT", "BBB_USDT", "CCC_USDT", "DDD_USDT"
+    ]
+    assert [item["currency_pair"] for item in _select_universe(tickers, 2)] == [
+        "AAA_USDT", "BBB_USDT"
+    ]
 
 
 def test_all_tables_are_additive_and_isolated_from_operational_ohlcv() -> None:

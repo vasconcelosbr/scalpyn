@@ -9,7 +9,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
@@ -173,8 +173,14 @@ async def cancel_run(run_id: UUID, db: AsyncSession = Depends(get_db), user_id: 
     run = await _owned_run(db, run_id, user_id)
     if run.status in {"COMPLETED", "FAILED", "CANCELLED", "PARTIAL"}:
         return _envelope(_run_payload(run))
-    run.cancel_requested_at = datetime.now(timezone.utc)
+    cancelled_at = datetime.now(timezone.utc)
+    run.cancel_requested_at = cancelled_at
     run.status = "CANCELLING"
+    await db.execute(
+        update(PumpRadarRunAsset)
+        .where(PumpRadarRunAsset.run_id == run_id, PumpRadarRunAsset.status == "QUEUED")
+        .values(status="CANCELLED", finished_at=cancelled_at)
+    )
     await db.commit()
     return _envelope(_run_payload(run))
 

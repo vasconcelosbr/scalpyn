@@ -44,6 +44,32 @@ def _utc(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
+def _select_universe(tickers: list[dict], limit: int) -> list[dict]:
+    def rank(item: dict) -> tuple[Decimal, str]:
+        try:
+            quote_volume = Decimal(str(item.get("quote_volume") or 0))
+        except Exception:
+            quote_volume = Decimal(0)
+        return (-quote_volume, str(item.get("currency_pair") or ""))
+
+    eligible = [item for item in tickers if item.get("currency_pair")]
+    return sorted(eligible, key=rank)[:limit]
+
+
+async def _cancel_asset_if_requested(db, run_id: UUID, symbol: str) -> bool:
+    run = await db.get(PumpRadarRun, run_id)
+    if run is None or run.cancel_requested_at is None:
+        return False
+    await db.execute(
+        update(PumpRadarRunAsset)
+        .where(PumpRadarRunAsset.run_id == run_id, PumpRadarRunAsset.symbol == symbol)
+        .values(status="CANCELLED", finished_at=datetime.now(timezone.utc))
+    )
+    await _refresh_run(db, run_id)
+    await db.commit()
+    return True
+
+
 async def _fetch_range(symbol: str, timeframe: str, start: datetime, end: datetime, *, historical: bool) -> list[dict]:
     step = TIMEFRAME_SECONDS[timeframe]
     cursor = int(_utc(start).timestamp())
@@ -115,10 +141,13 @@ async def _inventory(run_id: UUID) -> dict:
             return {"status": "cancelled"}
         run.status = "RUNNING"
         run.started_at = run.started_at or datetime.now(timezone.utc)
+        config = PumpRadarConfig.model_validate(run.config_snapshot)
         await db.commit()
 
     tickers = await market_data_service.fetch_all_tickers()
-    symbols = sorted({str(item.get("currency_pair")) for item in tickers if item.get("currency_pair")})
+    selected_tickers = _select_universe(tickers, config.universe_max_assets)
+    symbols = [str(item["currency_pair"]) for item in selected_tickers]
+    selected_symbols = set(symbols)
     async with CeleryAsyncSessionLocal() as db:
         run = await db.get(PumpRadarRun, run_id)
         if run is None:
@@ -128,9 +157,16 @@ async def _inventory(run_id: UUID) -> dict:
                 "symbol": item.get("currency_pair"),
                 "quote_volume": item.get("quote_volume"),
                 "last": item.get("last"),
+                "selected": item.get("currency_pair") in selected_symbols,
             }
-            for item in tickers if item.get("currency_pair") in symbols
+            for item in tickers if item.get("currency_pair")
         ]
+        run.provenance = {
+            **(run.provenance or {}),
+            "eligible_assets": len(tickers),
+            "selected_assets": len(symbols),
+            "selection": "quote_volume_desc",
+        }
         run.total_assets = len(symbols)
         if not symbols:
             run.status = "FAILED"
@@ -168,9 +204,7 @@ async def _backfill_asset(run_id: UUID, symbol: str) -> dict:
         asset = (await db.execute(select(PumpRadarRunAsset).where(PumpRadarRunAsset.run_id == run_id, PumpRadarRunAsset.symbol == symbol))).scalar_one_or_none()
         if run is None or asset is None:
             return {"status": "missing"}
-        if run.cancel_requested_at:
-            asset.status = "CANCELLED"
-            await db.commit()
+        if await _cancel_asset_if_requested(db, run_id, symbol):
             return {"status": "cancelled"}
         asset.status = "CAPTURING"
         asset.started_at = asset.started_at or datetime.now(timezone.utc)
@@ -244,6 +278,8 @@ async def _detect_asset(run_id: UUID, symbol: str) -> dict:
         run = await db.get(PumpRadarRun, run_id)
         if run is None:
             return {"status": "missing"}
+        if await _cancel_asset_if_requested(db, run_id, symbol):
+            return {"status": "cancelled"}
         config = PumpRadarConfig.model_validate(run.config_snapshot)
         rows = (await db.execute(select(PumpRadarOHLCV).where(PumpRadarOHLCV.symbol == symbol, PumpRadarOHLCV.timeframe == config.detector_timeframe, PumpRadarOHLCV.open_time >= run.date_from, PumpRadarOHLCV.open_time <= run.date_to).order_by(PumpRadarOHLCV.open_time))).scalars().all()
         candles = [RadarCandle(open_time=row.open_time, close_time=row.close_time, open=Decimal(row.open), high=Decimal(row.high), low=Decimal(row.low), close=Decimal(row.close), volume_base=Decimal(row.volume_base), available_at=row.available_at, is_closed=row.is_closed) for row in rows]
@@ -309,6 +345,8 @@ async def _associate_asset(run_id: UUID, symbol: str) -> dict:
     from ..database import CeleryAsyncSessionLocal
 
     async with CeleryAsyncSessionLocal() as db:
+        if await _cancel_asset_if_requested(db, run_id, symbol):
+            return {"status": "cancelled"}
         events = (await db.execute(select(PumpRadarEvent).where(PumpRadarEvent.run_id == run_id, PumpRadarEvent.symbol == symbol).order_by(PumpRadarEvent.start_at))).scalars().all()
         links = 0
         for event in events:
@@ -362,7 +400,7 @@ async def _refresh_run(db, run_id: UUID) -> None:
     total = sum(counts.values())
     values = {"processed_assets": completed + failed + cancelled, "failed_assets": failed}
     if total and completed + failed + cancelled == total:
-        values["status"] = "PARTIAL" if failed else ("CANCELLED" if cancelled == total else "COMPLETED")
+        values["status"] = "CANCELLED" if cancelled else ("PARTIAL" if failed else "COMPLETED")
         values["finished_at"] = datetime.now(timezone.utc)
     await db.execute(update(PumpRadarRun).where(PumpRadarRun.id == run_id).values(**values))
 
@@ -402,6 +440,8 @@ async def _snapshots(run_id: UUID, symbol: str) -> dict:
     from ..database import CeleryAsyncSessionLocal
 
     async with CeleryAsyncSessionLocal() as db:
+        if await _cancel_asset_if_requested(db, run_id, symbol):
+            return {"status": "cancelled"}
         pairs = (await db.execute(
             select(PumpRadarEvent, PumpRadarEventLink, ShadowTrade)
             .join(PumpRadarEventLink, PumpRadarEventLink.event_id == PumpRadarEvent.id)
