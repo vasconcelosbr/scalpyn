@@ -1464,13 +1464,13 @@
           "contains_all": [
             "pump_radar_v1",
             "minimum_rise_pct",
-            "profile_mutation_allowed"
+            "operational_profile_mutation_enabled"
           ]
         },
         {
           "path": "backend/app/services/pump_radar_detector.py",
           "contains_all": [
-            "def point_in_time_candles",
+            "def candles_available_at",
             "DECISION_SNAPSHOT",
             "FEATURE_ENGINE_RECONSTRUCTION"
           ]
@@ -1478,9 +1478,15 @@
         {
           "path": "backend/tests/test_pump_radar_contract.py",
           "contains_all": [
-            "test_chart_query_requires_closed_and_available_candles",
-            "test_hypotheses_cannot_mutate_profiles",
-            "test_migration_uses_an_isolated_ohlcv_table"
+            "test_public_contract_has_no_profile_apply_or_promote_endpoint",
+            "test_all_tables_are_additive_and_isolated_from_operational_ohlcv"
+          ]
+        },
+        {
+          "path": "backend/tests/test_pump_radar_detector.py",
+          "contains_all": [
+            "test_selected_1235_cannot_see_1235_to_1240_close",
+            "test_snapshot_priority_is_fail_closed"
           ]
         },
         {
