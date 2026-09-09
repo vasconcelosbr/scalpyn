@@ -51,6 +51,9 @@ async def get_feature_flags() -> Dict[str, Any]:
         "exit_metrics_capture": bool(settings.ENABLE_EXIT_METRICS_CAPTURE),
         "decision_snapshots": bool(settings.ENABLE_DECISION_SNAPSHOTS),
         "signal_timeline": bool(settings.ENABLE_SIGNAL_TIMELINE),
+        "pump_radar_capture": bool(settings.PUMP_RADAR_CAPTURE_ENABLED),
+        "pump_radar_analysis": bool(settings.PUMP_RADAR_ANALYSIS_ENABLED),
+        "pump_radar_ui": bool(settings.PUMP_RADAR_UI_ENABLED),
     }
 
 _GONE_DETAIL = (
@@ -93,8 +96,14 @@ async def get_config(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id)
 ):
+    if config_type == "pump_radar":
+        config_type = "pump_radar_v1"
     config = await config_service.get_config(db, config_type, user_id, pool_id)
-    if config_type == "shadow_l3_exit_policy":
+    if config_type in {"pump_radar", "pump_radar_v1"}:
+        from ..schemas.pump_radar import PumpRadarConfig
+        config = PumpRadarConfig.model_validate(config or {}).model_dump(mode="json")
+        config_type = "pump_radar_v1"
+    elif config_type == "shadow_l3_exit_policy":
         from ..schemas.shadow_l3_exit_policy import ShadowL3ExitPolicy
         config = ShadowL3ExitPolicy.model_validate(config).model_dump()
     return {"config_type": config_type, "pool_id": pool_id, "data": config}
@@ -175,6 +184,12 @@ async def update_config(
         # the persisted config canonical and makes runtime flag updates
         # reversible through this endpoint.
         payload = AnalysisChatRuntimeConfig.model_validate(payload).model_dump(mode="json")
+    elif config_type in {"pump_radar", "pump_radar_v1"}:
+        from ..schemas.pump_radar import PumpRadarConfig
+        if pool_id is not None:
+            raise HTTPException(status_code=422, detail="Pump Radar config is global per user")
+        payload = PumpRadarConfig.model_validate(payload).model_dump(mode="json")
+        config_type = "pump_radar_v1"
     elif config_type == "entry_risk_observation":
         # v1 is observation-only by construction.  Literal[False] rejects an
         # attempted operational activation instead of silently accepting it.

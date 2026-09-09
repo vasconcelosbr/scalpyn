@@ -39,6 +39,7 @@ from .api import (
     system,
     metrics as metrics_api,
     social_intelligence,
+    pump_radar,
 )
 
 
@@ -434,6 +435,7 @@ app.include_router(live_log_stream.router)
 app.include_router(ml.router)
 app.include_router(crypto_ev.router)
 app.include_router(social_intelligence.router)
+app.include_router(pump_radar.router)
 
 # Notifications
 app.include_router(notifications.router)

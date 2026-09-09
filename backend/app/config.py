@@ -59,6 +59,11 @@ class Settings(BaseSettings):
     ENABLE_DECISION_SNAPSHOTS: bool = False
     ENABLE_SIGNAL_TIMELINE: bool = False
 
+    # Pump Radar progressive rollout. All stages ship dark by default.
+    PUMP_RADAR_CAPTURE_ENABLED: bool = False
+    PUMP_RADAR_ANALYSIS_ENABLED: bool = False
+    PUMP_RADAR_UI_ENABLED: bool = False
+
     @field_validator("DATABASE_URL", mode="before")
     @classmethod
     def fix_db_url(cls, v: str) -> str:

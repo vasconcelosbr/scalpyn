@@ -26,6 +26,7 @@ import {
   TestTube2,
   Radio,
   Workflow,
+  Radar,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -33,6 +34,7 @@ export interface NavItem {
   name: string;
   href: string;
   icon: LucideIcon;
+  featureFlag?: "pump_radar_ui";
 }
 
 export interface NavSection {
@@ -65,6 +67,7 @@ export const BACKOFFICE_ITEMS: NavItem[] = [
   { name: "Performance", href: "/dashboard/performance", icon: Activity },
   { name: "Ranking de Watchlists", href: "/dashboard/watchlist-performance", icon: BarChart2 },
   { name: "Shadow Portfolio", href: "/dashboard/shadow-portfolio", icon: TestTube2 },
+  { name: "Radar de Pumps", href: "/dashboard/pump-radar", icon: Radar, featureFlag: "pump_radar_ui" },
   { name: "Centro Operacional", href: "/dashboard/operations", icon: Monitor },
   { name: "Operations", href: "/backoffice", icon: Monitor },
   { name: "Asset Trace", href: "/assets", icon: Search },

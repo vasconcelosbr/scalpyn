@@ -70,10 +70,12 @@ QUEUE_STRUCTURAL_COMPUTE = "structural_compute"
 QUEUE_EXECUTION = "execution"
 QUEUE_AI_ORCHESTRATION = "ai_orchestration"
 QUEUE_RESEARCH_OHLCV = "research_ohlcv"
+QUEUE_PUMP_RADAR = "pump_radar"
 
 ALL_QUEUES = (
     QUEUE_MICROSTRUCTURE, QUEUE_STRUCTURAL, QUEUE_STRUCTURAL_COMPUTE,
     QUEUE_EXECUTION, QUEUE_AI_ORCHESTRATION, QUEUE_RESEARCH_OHLCV,
+    QUEUE_PUMP_RADAR,
 )
 
 _ALL_TASK_MODULES = (
@@ -116,6 +118,7 @@ _ALL_TASK_MODULES = (
         "app.tasks.ai_orchestration",
         "app.tasks.governed_cache_reconciliation",
         "app.tasks.entry_risk_capture",
+        "app.tasks.pump_radar",
 )
 
 
@@ -136,6 +139,8 @@ def _configured_task_modules() -> tuple[str, ...]:
             "app.tasks.sample_ohlcv_settlement_latency",
             "app.tasks.ohlcv_backfill",
         )
+    if queues == (QUEUE_PUMP_RADAR,):
+        return ("app.tasks.pump_radar",)
     return _ALL_TASK_MODULES
 
 
@@ -210,6 +215,15 @@ TASK_ROUTES = {
     "app.tasks.ohlcv_backfill.backfill":                 {"queue": QUEUE_RESEARCH_OHLCV},
     "app.tasks.ohlcv_backfill.backfill_research":        {"queue": QUEUE_RESEARCH_OHLCV},
     "app.tasks.ohlcv_backfill.get_status":               {"queue": QUEUE_STRUCTURAL},
+    # Pump Radar has an isolated, non-trading queue and writes only its own
+    # additive research tables.
+    "app.tasks.pump_radar.inventory":                    {"queue": QUEUE_PUMP_RADAR},
+    "app.tasks.pump_radar.backfill_asset":               {"queue": QUEUE_PUMP_RADAR},
+    "app.tasks.pump_radar.detect_asset":                 {"queue": QUEUE_PUMP_RADAR},
+    "app.tasks.pump_radar.associate_asset":              {"queue": QUEUE_PUMP_RADAR},
+    "app.tasks.pump_radar.snapshots":                    {"queue": QUEUE_PUMP_RADAR},
+    "app.tasks.pump_radar.build_controls":               {"queue": QUEUE_PUMP_RADAR},
+    "app.tasks.pump_radar.statistics":                   {"queue": QUEUE_PUMP_RADAR},
 
     # Decision Log Enricher (Module 1)
     "app.tasks.decision_log_enricher.enrich":            {"queue": QUEUE_STRUCTURAL},
@@ -432,6 +446,13 @@ TASK_ANNOTATIONS = {
     "app.tasks.collect_research_ohlcv.enforce_retention": {**_RESEARCH_OHLCV_GUARDS, "rate_limit": "1/h", **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.collect_research_ohlcv.capture_readiness": {**_RESEARCH_OHLCV_GUARDS, "rate_limit": "8/h", **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.sample_ohlcv_settlement_latency.sample_settlement_latency": {**_RESEARCH_OHLCV_GUARDS, "time_limit": 60, "soft_time_limit": 45, "rate_limit": "400/h", **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.pump_radar.inventory": {"time_limit": 300, "soft_time_limit": 270, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.pump_radar.backfill_asset": {"time_limit": 3600, "soft_time_limit": 3540, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.pump_radar.detect_asset": {"time_limit": 900, "soft_time_limit": 840, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.pump_radar.associate_asset": {"time_limit": 900, "soft_time_limit": 840, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.pump_radar.snapshots": {"time_limit": 900, "soft_time_limit": 840, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.pump_radar.build_controls": {"time_limit": 900, "soft_time_limit": 840, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.pump_radar.statistics": {"time_limit": 600, "soft_time_limit": 540, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
 
     # Decision Log Enricher (Module 1)
     "app.tasks.decision_log_enricher.enrich":            {**_STRUCTURAL_GUARDS, "rate_limit": "6/m"},

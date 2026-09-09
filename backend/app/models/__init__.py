@@ -79,6 +79,18 @@ from .profile_intelligence_autopilot import (
     ProfileIntelligenceAutopilotCompensation,
     ProfileIntelligenceAutopilotAudit,
 )
+from .pump_radar import (
+    PumpRadarControl,
+    PumpRadarEvent,
+    PumpRadarEventLink,
+    PumpRadarHypothesis,
+    PumpRadarIndicatorSnapshot,
+    PumpRadarIndicatorValue,
+    PumpRadarOHLCV,
+    PumpRadarRangeResult,
+    PumpRadarRun,
+    PumpRadarRunAsset,
+)
 
 __all__ = [
     "User",
@@ -166,4 +178,14 @@ __all__ = [
     "ProfileIntelligenceAutopilotReport",
     "ProfileIntelligenceAutopilotCompensation",
     "ProfileIntelligenceAutopilotAudit",
+    "PumpRadarOHLCV",
+    "PumpRadarRun",
+    "PumpRadarRunAsset",
+    "PumpRadarEvent",
+    "PumpRadarEventLink",
+    "PumpRadarIndicatorSnapshot",
+    "PumpRadarIndicatorValue",
+    "PumpRadarControl",
+    "PumpRadarRangeResult",
+    "PumpRadarHypothesis",
 ]

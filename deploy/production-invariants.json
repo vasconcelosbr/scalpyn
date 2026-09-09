@@ -1454,6 +1454,44 @@
           ]
         }
       ]
+    },
+    {
+      "id": "pump-radar-v1-point-in-time",
+      "description": "Pump Radar v1 keeps research candles isolated, blocks future-candle leakage and cannot mutate trading profiles",
+      "files": [
+        {
+          "path": "backend/app/schemas/pump_radar.py",
+          "contains_all": [
+            "pump_radar_v1",
+            "minimum_rise_pct",
+            "profile_mutation_allowed"
+          ]
+        },
+        {
+          "path": "backend/app/services/pump_radar_detector.py",
+          "contains_all": [
+            "def point_in_time_candles",
+            "DECISION_SNAPSHOT",
+            "FEATURE_ENGINE_RECONSTRUCTION"
+          ]
+        },
+        {
+          "path": "backend/tests/test_pump_radar_contract.py",
+          "contains_all": [
+            "test_chart_query_requires_closed_and_available_candles",
+            "test_hypotheses_cannot_mutate_profiles",
+            "test_migration_uses_an_isolated_ohlcv_table"
+          ]
+        },
+        {
+          "path": "frontend/app/dashboard/pump-radar/page.tsx",
+          "contains_all": [
+            "Radar de Pumps",
+            "Somente dados disponíveis no instante",
+            "Ocultar futuro"
+          ]
+        }
+      ]
     }
   ]
 }

@@ -9,10 +9,12 @@ import {
   BACKOFFICE_ITEMS,
   CONFIG_ITEMS,
 } from './navItems';
+import { useFeatureFlags } from './useFeatureFlags';
 
 export function Sidebar() {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
+  const featureFlags = useFeatureFlags();
 
   const NavItem = ({ item }: { item: any }) => {
     const isActive = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href));
@@ -49,7 +51,7 @@ export function Sidebar() {
         {!collapsed && <div className="nav-group-label mt-2">Back Office</div>}
         {collapsed && <div className="h-4 border-b border-[var(--border-subtle)] mx-4 mb-2"></div>}
         <div className="flex flex-col">
-          {BACKOFFICE_ITEMS.map((item) => <NavItem key={item.name} item={item} />)}
+          {BACKOFFICE_ITEMS.filter((item) => !item.featureFlag || featureFlags[item.featureFlag]).map((item) => <NavItem key={item.name} item={item} />)}
         </div>
 
         {!collapsed && <div className="nav-group-label mt-2">Configuration</div>}

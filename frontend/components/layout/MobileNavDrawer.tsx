@@ -7,12 +7,14 @@ import { useAppStore } from "@/stores/useAppStore";
 import { useAuthStore } from "@/stores/useAuthStore";
 import { NAV_SECTIONS } from "./navItems";
 import { LogOut, X } from "lucide-react";
+import { useFeatureFlags } from "./useFeatureFlags";
 
 export function MobileNavDrawer() {
   const pathname = usePathname();
   const router = useRouter();
   const { mobileNavOpen, closeMobileNav } = useAppStore();
   const { user, logout } = useAuthStore();
+  const featureFlags = useFeatureFlags();
 
   useEffect(() => {
     if (mobileNavOpen) {
@@ -104,7 +106,7 @@ export function MobileNavDrawer() {
               >
                 {section.label}
               </div>
-              {section.items.map((item) => {
+              {section.items.filter((item) => !item.featureFlag || featureFlags[item.featureFlag]).map((item) => {
                 const isActive =
                   pathname === item.href ||
                   (item.href !== "/" && pathname.startsWith(item.href));
