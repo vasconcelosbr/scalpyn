@@ -1493,10 +1493,27 @@
           "path": "frontend/app/dashboard/pump-radar/page.tsx",
           "contains_all": [
             "Radar de Pumps",
-            "Somente dados disponíveis no instante",
+            "Somente candles fechados no instante",
             "Ocultar futuro"
           ]
         }
+      ]
+    },
+    {
+      "id": "pump-radar-user-universe-and-reconstruction",
+      "description": "Radar never expands outside user pool/pipeline and reconstructs closed candles without requiring Shadow",
+      "files": [
+        { "path": "backend/app/services/pump_radar_research.py", "contains_all": ["user_pool_pipeline_v1", "load_user_universe", "close_time <= at"] },
+        { "path": "backend/tests/test_pump_radar_research.py", "contains_all": ["test_event_without_shadow_still_persists_reconstructed_snapshots", "test_1235_never_consumes_1235_to_1240_candle"] },
+        { "path": "backend/tests/test_pump_radar_contract.py", "contains_all": ["test_exchange_outsiders_never_enter_user_universe"] }
+      ]
+    },
+    {
+      "id": "profile-entry-trigger-feature-identity",
+      "description": "Editor preserves governed feature identity and blocks writes with incomplete policy",
+      "files": [
+        { "path": "frontend/lib/profileConditionState.ts", "contains_all": ["prepareProfileEntryTriggerIdentities", "profileSourcePoliciesForEditor"] },
+        { "path": "frontend/lib/profileConditionState.test.ts", "contains_all": ["new Entry Trigger receives governed OHLCV identity before save", "editor reports incomplete governed policies instead of sending an invalid write"] }
       ]
     }
   ]
