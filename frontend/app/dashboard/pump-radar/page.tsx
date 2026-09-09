@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarDays, ChevronLeft, ChevronRight, Download, EyeOff, FileSearch,
   ListFilter, Pause, Play, RefreshCw, Search, Settings2, ShieldAlert,
@@ -12,11 +12,11 @@ import styles from "./pump-radar.module.css";
 
 type Envelope<T> = { schema: string; timezone: string; generated_at: string; provenance: Record<string, unknown>; data: T };
 type Capabilities = { market: string; capture_enabled: boolean; analysis_enabled: boolean; ui_enabled: boolean; timeframes: string[]; exports: string[]; profile_mutation: false };
-type Run = { id: string; status: string; mode: string; date_from: string | null; date_to: string | null; config_hash: string; total_assets: number; processed_assets: number; failed_assets: number; event_count: number; quality_badge: string; requested_at: string; summary?: { pumps_identified: number; with_shadow_entry: number; without_entry: number; shadow_links: number; median_delay_seconds: number | null } };
+type Run = { id: string; status: string; universe_compatible: boolean; mode: string; date_from: string | null; date_to: string | null; config_hash: string; total_assets: number; processed_assets: number; failed_assets: number; event_count: number; quality_badge: string; requested_at: string; summary?: { pumps_identified: number; with_shadow_entry: number; without_entry: number; shadow_links: number; median_delay_seconds: number | null } };
 type AssetEvent = { event_id: string; symbol: string; rise_pct: number; start_at: string; confirmed_market_at: string; detected_at: string | null; peak_at: string; end_at: string | null; reconstruction_status: string; quality_status: string; shadow_links: number; shadow_entries: number };
 type EventLink = { id: string; shadow_trade_id: string | null; decision_id: number | null; link_kind: string; is_primary: boolean; approval_at: string | null; simulation_created_at: string | null; entry_at: string | null; exit_at: string | null; delay_seconds: number | null; realized_pnl_pct: number | null; profile_id: string | null; profile_version_id: string | null; profile_config_hash: string | null; provenance: Record<string, unknown> };
 type EventDetail = AssetEvent & { id: string; start_price: number; peak_price: number; end_price: number | null; retracement_pct: number | null; is_incomplete: boolean; provenance: Record<string, unknown>; links: EventLink[] };
-type ChartData = { event_id: string; symbol: string; selected_at: string; hide_future: boolean; candles: Record<"1h" | "15m" | "5m", RadarCandle[]>; markers: RadarMarker[] };
+type ChartData = { event_id: string; symbol: string; selected_at: string; hide_future: boolean; reconstruction_status: string; candles: Record<"1h" | "15m" | "5m", RadarCandle[]>; markers: RadarMarker[] };
 type Comparison = { event_id: string; symbol: string; snapshot_at: string; indicator_id: string; layer: string; timeframe: string; state: string; value: number | string | null; rule: unknown; source: string; version: string | null; numerator: number | null; denominator: number | null; coverage: number | null; provenance: unknown };
 type RangeRow = { id: string; indicator_id: string; layer: string; timeframe: string; range_key: string; lower_bound: number | null; upper_bound: number | null; pump_numerator: number; pump_denominator: number; control_numerator: number; control_denominator: number; coverage: number | null; validation_status: string; confidence_interval: unknown };
 type RadarConfig = { minimum_rise_pct: number; maximum_window_minutes: number; retracement_pct: number; no_new_high_minutes: number; maximum_duration_minutes: number; merge_gap_minutes: number; backfill_days: number; universe_max_assets: number; volume_filter_enabled: boolean; liquidity_filter_enabled: boolean; atr_filter_enabled: boolean; [key: string]: unknown };
@@ -56,19 +56,18 @@ export default function PumpRadarPage() {
   const [busy, setBusy] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const eventRequest = useRef(0);
 
   const loadEvent = useCallback(async (runId: string, eventId: string, point?: string | null, conceal = true) => {
-    const detail = await apiGet<Envelope<EventDetail>>(`/pump-radar/runs/${runId}/events/${eventId}`);
-    const at = point ?? detail.data.start_at;
-    setEvent(detail.data);
-    setSelectedAt(at);
-    const [chartResponse, comparisonResponse, rangeResponse] = await Promise.all([
-      apiGet<Envelope<ChartData>>(`/pump-radar/runs/${runId}/events/${eventId}/chart?hide_future=${conceal}${conceal ? `&selected_at=${encodeURIComponent(at)}` : ""}`),
+    const request = ++eventRequest.current;
+    const [detail, comparisonResponse] = await Promise.all([
+      apiGet<Envelope<EventDetail>>(`/pump-radar/runs/${runId}/events/${eventId}`),
       apiGet<Envelope<Comparison[]>>(`/pump-radar/runs/${runId}/comparisons?event_id=${eventId}`),
-      apiGet<Envelope<RangeRow[]>>(`/pump-radar/runs/${runId}/ranges?timeframe=${rangeTf}`),
     ]);
-    setChart(chartResponse.data); setComparisons(comparisonResponse.data); setRanges(rangeResponse.data);
-  }, [rangeTf]);
+    if (request !== eventRequest.current) return;
+    setChart(null); setEvent(detail.data); setSelectedAt(point ?? detail.data.start_at);
+    setHideFuture(conceal); setComparisons(comparisonResponse.data);
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -81,11 +80,16 @@ export default function PumpRadarPage() {
       setCapabilities(caps.data); setConfig(configResponse.data);
       const latest = runs.data[0] ?? null;
       if (!latest) { setRun(null); setEvents([]); setEvent(null); return; }
+      if (!latest.universe_compatible) {
+        ++eventRequest.current;
+        setRun(latest); setEvents([]); setEvent(null); setChart(null); setComparisons([]); setRanges([]);
+        return;
+      }
       const [runResponse, assetResponse] = await Promise.all([
         apiGet<Envelope<Run>>(`/pump-radar/runs/${latest.id}`),
         apiGet<Envelope<{ items: AssetEvent[] }>>(`/pump-radar/runs/${latest.id}/assets?limit=100`),
       ]);
-      setRun(runResponse.data); setEvents(assetResponse.data.items);
+      setEvent(null); setChart(null); setRun(runResponse.data); setEvents(assetResponse.data.items);
       const first = assetResponse.data.items[0];
       if (first) await loadEvent(latest.id, first.event_id, null, true);
       else { setEvent(null); setChart(null); setComparisons([]); setRanges([]); }
@@ -101,13 +105,23 @@ export default function PumpRadarPage() {
     return () => window.clearInterval(timer);
   }, [load, run]);
 
-  const refetchChart = useCallback(async (at: string | null, conceal: boolean) => {
+  useEffect(() => {
     if (!run || !event) return;
-    const response = await apiGet<Envelope<ChartData>>(`/pump-radar/runs/${run.id}/events/${event.id}/chart?hide_future=${conceal}${conceal && at ? `&selected_at=${encodeURIComponent(at)}` : ""}`);
-    setChart(response.data);
-  }, [event, run]);
+    let current = true;
+    void apiGet<Envelope<ChartData>>(`/pump-radar/runs/${run.id}/events/${event.id}/chart?hide_future=${hideFuture}${hideFuture && selectedAt ? `&selected_at=${encodeURIComponent(selectedAt)}` : ""}`)
+      .then((response) => { if (current) setChart(response.data); })
+      .catch(() => { if (current) { setChart(null); setError("Falha ao carregar os candles deste instante."); } });
+    return () => { current = false; };
+  }, [run, event, selectedAt, hideFuture]);
 
-  useEffect(() => { if (event) void refetchChart(selectedAt, hideFuture); }, [event, hideFuture, refetchChart, selectedAt]);
+  useEffect(() => {
+    if (!run?.universe_compatible) return;
+    let current = true;
+    void apiGet<Envelope<RangeRow[]>>(`/pump-radar/runs/${run.id}/ranges?timeframe=${rangeTf}`)
+      .then((response) => { if (current) setRanges(response.data); })
+      .catch(() => { if (current) { setRanges([]); setError("Falha ao carregar as faixas comparativas."); } });
+    return () => { current = false; };
+  }, [run?.id, run?.status, run?.universe_compatible, rangeTf]);
 
   useEffect(() => {
     if (!playing || !event || !selectedAt) return;
@@ -118,17 +132,18 @@ export default function PumpRadarPage() {
         const next = Math.min(+new Date(current) + 5 * 60_000, end);
         if (next >= end) setPlaying(false);
         const iso = new Date(next).toISOString();
-        void refetchChart(iso, true);
         return iso;
       });
     }, 900);
     return () => window.clearInterval(timer);
-  }, [event, playing, refetchChart, selectedAt]);
+  }, [event, playing, selectedAt]);
 
   async function selectEvent(item: AssetEvent) {
     if (!run) return;
     setBusy(true); setPlaying(false);
-    try { await loadEvent(run.id, item.event_id, null, true); } finally { setBusy(false); }
+    try { await loadEvent(run.id, item.event_id, null, true); }
+    catch { setError("Falha ao carregar o evento selecionado."); }
+    finally { setBusy(false); }
   }
   async function createRun(mode: "incremental" | "backfill") {
     setBusy(true); setError(null);
@@ -153,9 +168,9 @@ export default function PumpRadarPage() {
   }
 
   const filteredEvents = useMemo(() => events.filter((item) => item.symbol.toLowerCase().includes(search.toLowerCase())), [events, search]);
-  const summary = run?.summary ?? EMPTY_SUMMARY;
+  const summary = run?.universe_compatible ? run.summary ?? EMPTY_SUMMARY : EMPTY_SUMMARY;
   const primaryLink = event?.links.find((link) => link.is_primary) ?? event?.links[0] ?? null;
-  const timelineStart = event ? +new Date(event.start_at) : 0;
+  const timelineStart = event ? +new Date(event.start_at) - 30 * 60_000 : 0;
   const timelineEnd = event ? +new Date(event.end_at ?? event.peak_at) : 0;
   const selectedOffset = event && selectedAt ? Math.max(0, Math.round((+new Date(selectedAt) - timelineStart) / 60_000)) : 0;
   const maxOffset = event ? Math.max(5, Math.round((timelineEnd - timelineStart) / 60_000)) : 5;
@@ -165,7 +180,8 @@ export default function PumpRadarPage() {
     for (const row of filtered) { const key = `${row.layer}|${row.timeframe}|${row.indicator_id}`; byKey.set(key, [...(byKey.get(key) ?? []), row]); }
     const anchorValue = (items: Comparison[], anchor: string | null | undefined) => {
       if (!anchor) return null;
-      return [...items].filter((item) => +new Date(item.snapshot_at) <= +new Date(anchor)).sort((a, b) => +new Date(b.snapshot_at) - +new Date(a.snapshot_at))[0]?.value ?? null;
+      const priority = (source: string) => source === "DECISION_SNAPSHOT" ? 0 : source === "EVALUATION_ENVELOPE" ? 1 : 2;
+      return [...items].filter((item) => item.state !== "UNAVAILABLE" && +new Date(item.snapshot_at) === +new Date(anchor)).sort((a, b) => priority(a.source) - priority(b.source))[0]?.value ?? null;
     };
     return [...byKey.entries()].map(([key, items]) => {
       const [rowLayer, timeframe, indicator] = key.split("|");
@@ -213,7 +229,7 @@ export default function PumpRadarPage() {
       {configOpen && config && <section className={`${styles.panel} ${styles.configPanel}`}>
         <div className="mb-3 flex items-center justify-between"><div><h2 className="text-[13px]">Detector exploratório</h2><p className="text-[9px] text-[#7e91ad]">Configuração versionada em pump_radar_v1. Não altera profiles operacionais.</p></div><button className={styles.primary} onClick={saveConfig} disabled={busy}>Salvar</button></div>
         <div className={styles.configGrid}>
-          {([ ["minimum_rise_pct", "Alta mínima (%)"], ["maximum_window_minutes", "Janela máxima (min)"], ["retracement_pct", "Retração de término (%)"], ["no_new_high_minutes", "Sem nova máxima (min)"], ["maximum_duration_minutes", "Duração máxima (min)"], ["merge_gap_minutes", "Fusão entre eventos (min)"], ["backfill_days", "Backfill (dias)"], ["universe_max_assets", "Máximo de ativos"] ] as const).map(([key, label]) => <div className={styles.field} key={key}><label>{label}</label><input type="number" value={config[key] as number} onChange={(e) => setConfig({ ...config, [key]: Number(e.target.value) })} /></div>)}
+          {([ ["minimum_rise_pct", "Alta mínima (%)"], ["maximum_window_minutes", "Janela máxima (min)"], ["retracement_pct", "Retração de término (%)"], ["no_new_high_minutes", "Sem nova máxima (min)"], ["maximum_duration_minutes", "Duração máxima (min)"], ["merge_gap_minutes", "Fusão entre eventos (min)"], ["backfill_days", "Backfill (dias)"], ["universe_max_assets", "Máximo de ativos do pool"], ["context_candles", "Candles de contexto por TF"] ] as const).map(([key, label]) => <div className={styles.field} key={key}><label>{label}</label><input type="number" value={config[key] as number} onChange={(e) => setConfig({ ...config, [key]: Number(e.target.value) })} /></div>)}
           {([ ["volume_filter_enabled", "Filtro de volume"], ["liquidity_filter_enabled", "Filtro de liquidez"], ["atr_filter_enabled", "Filtro de ATR"] ] as const).map(([key, label]) => <label className="flex h-8 items-center gap-2 self-end rounded-md border border-[#273c59] bg-[#0a1524] px-3 text-[9px] text-[#8da0bc]" key={key}><input type="checkbox" checked={Boolean(config[key])} onChange={(e) => setConfig({ ...config, [key]: e.target.checked })} />{label}</label>)}
         </div>
       </section>}
@@ -224,13 +240,15 @@ export default function PumpRadarPage() {
 
       {!run && <div className={styles.notice}><div className="flex flex-wrap items-center justify-between gap-3"><div><div className="font-semibold text-[#c9d7e9]">Nenhuma execução disponível</div><div className="mt-1 text-[10px]">A tela não usa dados de demonstração. Inicie uma captura quando a flag operacional estiver habilitada.</div></div><div className="flex gap-2"><button className={styles.control} disabled={!capabilities?.capture_enabled || busy} onClick={() => createRun("incremental")}>Executar hoje</button><button className={styles.primary} disabled={!capabilities?.capture_enabled || busy} onClick={() => createRun("backfill")}>Backfill configurado</button></div></div></div>}
 
-      {run && <>
+      {run && <div className={`${styles.notice} mb-3`}><div className="flex flex-wrap items-center justify-between gap-3"><span>{run.universe_compatible ? "Universo: pool + listas L1/L2/L3 deste usuário, congelado na execução. A composição histórica do pool não é comprovada." : "Execução antiga fora do contrato do pool. Seus resultados foram preservados, mas não são apresentados como análise do seu universo. Inicie uma nova execução."}</span><div className="flex gap-2"><button className={styles.control} disabled={!capabilities?.capture_enabled || busy || ["RUNNING", "QUEUED"].includes(run.status)} onClick={() => createRun("incremental")}>Executar hoje no pool</button><button className={styles.primary} disabled={!capabilities?.capture_enabled || busy || ["RUNNING", "QUEUED"].includes(run.status)} onClick={() => createRun("backfill")}>Backfill do pool</button></div></div></div>}
+
+      {run?.universe_compatible && <>
         <div className={`${styles.mainGrid} ${collapsed ? styles.mainGridCollapsed : ""}`}>
           {collapsed ? <aside className={`${styles.panel} ${styles.collapsedRail}`}><button className={styles.ghost} onClick={() => setCollapsed(false)} title="Abrir ranking"><ChevronRight size={15} /></button></aside> : <aside className={`${styles.panel} ${styles.rankPanel} ${mobileRankOpen ? styles.rankOpen : ""}`}>
             <div className={styles.panelHeader}><strong className="text-[12px]">TOP pumps do dia</strong><div className={styles.segmented}>{["5min", "15min", "1h"].map((item) => <button key={item} onClick={() => setContextTf(item)} className={`${styles.segment} ${contextTf === item ? styles.segmentActive : ""}`}>{item}</button>)}</div><button onClick={() => { setCollapsed(true); setMobileRankOpen(false); }} className="text-[#7589a6]" title="Recolher ranking"><ChevronLeft size={14} /></button></div>
             <label className={styles.search}><Search size={13} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar ativo…" /></label>
             <div className={styles.rankHead}><span>#</span><span>Ativo</span><span>Pump</span><span>Shadow</span></div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-1">
+            <div className={`${styles.rankList} px-1`}>
               {filteredEvents.map((item, index) => <button key={item.event_id} onClick={() => { void selectEvent(item); setMobileRankOpen(false); }} className={`${styles.rankRow} ${event?.id === item.event_id ? styles.rankSelected : ""} w-full text-left`}><span>{index + 1}</span><span className="truncate">{item.symbol.replace("_", "/")}</span><span className={styles.positive}>{percent(item.rise_pct)}</span><span>{item.shadow_entries ? `${item.shadow_entries} entrada${item.shadow_entries > 1 ? "s" : ""}` : item.shadow_links ? `${item.shadow_links} vínculo${item.shadow_links > 1 ? "s" : ""}` : "Sem entrada"}</span></button>)}
               {!filteredEvents.length && <div className="p-5 text-center text-[10px] text-[#71839e]">Nenhum evento real corresponde ao filtro.</div>}
             </div>
@@ -241,15 +259,15 @@ export default function PumpRadarPage() {
           <section className={`${styles.panel} ${styles.charts}`}>
             <div className={styles.chartHeader}><div><div className="text-[16px] font-bold">{event?.symbol.replace("_", "/") ?? "Selecione um evento"}</div><div className="mt-0.5 text-[9px] text-[#7487a4]">{event ? `Evento ${compactId(event.id)} • ${localTime(event.start_at)}–${localTime(event.end_at)}` : "Sem dados disponíveis"}</div></div><div className="flex flex-wrap items-center gap-3"><div className={styles.segmented}>{["1h", "15min", "5min"].map((item) => <span key={item} className={`${styles.segment} ${item === "5min" ? styles.segmentActive : ""} grid place-items-center`}>{item}</span>)}</div><label className="flex items-center gap-2 text-[9px] text-[#8799b5]"><input type="checkbox" checked={syncViews} onChange={(e) => setSyncViews(e.target.checked)} />Sincronizar visões</label><label className="flex items-center gap-2 text-[9px] text-[#8799b5]"><input type="checkbox" checked={hideFuture} onChange={(e) => setHideFuture(e.target.checked)} /><EyeOff size={12} />Ocultar futuro</label></div></div>
             <div className={styles.miniGrid}><PumpRadarChart candles={chart?.candles["1h"] ?? []} title="1h · Contexto" subtitle="Candles fechados e médias móveis" compact showMarkers={false} /><PumpRadarChart candles={chart?.candles["15m"] ?? []} title="15min · Formação" subtitle="Janela point-in-time sincronizada" compact showMarkers={false} /></div>
-            <div className={styles.mainChart}><PumpRadarChart candles={chart?.candles["5m"] ?? []} markers={markers} title="5min · Pump e aprovações shadow" subtitle={event?.reconstruction_status === "RECONSTRUCTED" ? "RECONSTRUÍDO · disponibilidade histórica não comprovada" : "Gate Spot · somente candles fechados disponíveis no instante"} showVolume highlightStart={event?.start_at} highlightEnd={event?.end_at} /></div>
-            <div className={styles.timeline}><button className={styles.play} onClick={() => { setHideFuture(true); setPlaying((value) => !value); }} disabled={!event}>{playing ? <Pause size={16} /> : <Play size={16} />}</button><div><input className={styles.range} type="range" min={0} max={maxOffset} step={5} value={selectedOffset} disabled={!event} onChange={(e) => { const iso = new Date(timelineStart + Number(e.target.value) * 60_000).toISOString(); setSelectedAt(iso); setHideFuture(true); void refetchChart(iso, true); }} /><div className="text-[9px] text-[#7990af]">Instante selecionado: <span className="font-mono font-semibold text-[#c1d1e6]">{localTime(selectedAt)}</span></div></div><div className="flex items-center gap-1 text-[8px] text-[#7488a6]"><EyeOff size={11} />Somente dados disponíveis no instante</div></div>
-            <div className={styles.shortcuts}>{shortcutTimes.map(([label, time]) => <button className={styles.shortcut} key={`${label}-${time}`} onClick={() => { setSelectedAt(time); setHideFuture(true); void refetchChart(time, true); }}>{label}</button>)}</div>
+            <div className={styles.mainChart}><PumpRadarChart candles={chart?.candles["5m"] ?? []} markers={markers} title="5min · Pump e aprovações shadow" subtitle={chart?.reconstruction_status === "RECONSTRUCTED" ? "RECONSTRUÍDO · disponibilidade histórica não comprovada" : "Gate Spot · somente candles fechados disponíveis no instante"} showVolume highlightStart={event?.start_at} highlightEnd={event?.end_at} /></div>
+            <div className={styles.timeline}><button className={styles.play} onClick={() => { setHideFuture(true); setPlaying((value) => !value); }} disabled={!event}>{playing ? <Pause size={16} /> : <Play size={16} />}</button><div><input className={styles.range} type="range" min={0} max={maxOffset} step={5} value={selectedOffset} disabled={!event} onChange={(e) => { const iso = new Date(timelineStart + Number(e.target.value) * 60_000).toISOString(); setSelectedAt(iso); setHideFuture(true);  }} /><div className="text-[9px] text-[#7990af]">Instante selecionado: <span className="font-mono font-semibold text-[#c1d1e6]">{localTime(selectedAt)}</span></div></div><div className="flex items-center gap-1 text-[8px] text-[#7488a6]"><EyeOff size={11} />Somente candles fechados no instante</div></div>
+            <div className={styles.shortcuts}>{shortcutTimes.map(([label, time]) => <button className={styles.shortcut} key={`${label}-${time}`} onClick={() => { setSelectedAt(time); setHideFuture(true);  }}>{label}</button>)}</div>
           </section>
         </div>
 
         <div className={styles.bottomGrid}>
-          <section className={styles.panel}><div className={styles.panelHeader}><div><strong className="text-[12px]">Comparativo dos indicadores</strong><div className="text-[9px] text-[#7f92ae]">Início do pump × aprovação/profile selecionado</div></div><div className={styles.segmented}>{["TODAS", "POOL", "L1", "L2", "L3"].map((item) => <button className={`${styles.segment} ${layer === item ? styles.segmentActive : ""}`} onClick={() => setLayer(item)} key={item}>{item}</button>)}</div></div><div className={styles.tableWrap}>{rows.length ? <table className={styles.table}><thead><tr><th>Camada / indicador</th><th>TF</th><th>Antes</th><th>Início</th><th>Aprovação</th><th>Entrada</th><th>Variação</th><th>Regra</th><th>Proveniência</th></tr></thead><tbody>{rows.map((row) => <tr key={`${row.layer}-${row.timeframe}-${row.indicator}`} style={{ "--layer-color": LAYER_COLORS[row.layer] ?? "#6e7f98" } as React.CSSProperties}><td className={styles.layer}><span className="mr-2 font-semibold" style={{ color: LAYER_COLORS[row.layer] }}>{row.layer}</span>{row.indicator}</td><td className={styles.mono}>{row.timeframe}</td><td className={styles.mono}>{valueText(row.before)}</td><td className={styles.mono}>{valueText(row.start)}</td><td className={styles.mono}>{valueText(row.approval)}</td><td className={styles.mono}>{valueText(row.entry)}</td><td className={`${styles.mono} ${row.change != null ? "text-[#55d9a9]" : ""}`}>{row.change == null ? "—" : valueText(row.change)}</td><td>{row.sample.rule ? "Configurada" : "—"}</td><td title={JSON.stringify(row.sample.provenance)}>{row.sample.source} · {row.sample.version ?? "versão ausente"}</td></tr>)}</tbody></table> : <div className={styles.empty}>Não há snapshots point-in-time suficientes para comparar este evento.</div>}</div><div className="px-3 py-2 text-[8px] text-[#6f839f]">Estados ausentes permanecem UNAVAILABLE; nenhum profile atual substitui versão histórica.</div></section>
-          <section className={styles.panel}><div className={styles.panelHeader}><div><strong className="text-[12px]">TOP indicadores no início</strong><div className="text-[9px] text-[#7f92ae]">Pumps × controles pareados</div></div></div><div className="px-3 pt-2"><div className={styles.segmented}>{[["1h", "1h"], ["15min", "15m"], ["5min", "5m"], ["Combinado", "combined"]].map(([label, key]) => <button className={`${styles.segment} ${rangeTf === key ? styles.segmentActive : ""}`} onClick={async () => { setRangeTf(key); if (run) setRanges((await apiGet<Envelope<RangeRow[]>>(`/pump-radar/runs/${run.id}/ranges?timeframe=${key}`)).data); }} key={key}>{label}</button>)}</div></div><div className={styles.ranges}>{ranges.length ? <><div className={`${styles.rangeRow} text-[#7e91ad]`}><span>Indicador / TF</span><span>Faixa recorrente</span><span>Pump</span><span>Controle</span></div>{ranges.map((row) => { const pump = row.pump_denominator ? row.pump_numerator / row.pump_denominator * 100 : 0; const control = row.control_denominator ? row.control_numerator / row.control_denominator * 100 : 0; return <div className={styles.rangeRow} key={row.id} title={`Cobertura ${row.coverage ?? "indisponível"}; IC ${JSON.stringify(row.confidence_interval)}`}><span>{row.indicator_id} · <span className={styles.mono}>{row.timeframe}</span></span><span className={styles.mono}>{valueText(row.lower_bound)}–{valueText(row.upper_bound)}</span><span><b className="text-[#55d9a9]">{pump.toFixed(0)}%</b><span className="ml-1 text-[#627896]">{row.pump_numerator}/{row.pump_denominator}</span><span className={styles.bar}><span style={{ width: `${Math.min(100, pump)}%` }} /></span></span><span><b>{control.toFixed(0)}%</b><span className="ml-1 text-[#627896]">{row.control_numerator}/{row.control_denominator}</span><span className={styles.bar}><span style={{ width: `${Math.min(100, control)}%`, background: "#8fa3c2" }} /></span></span></div>; })}</> : <div className={styles.empty}>Faixas não publicadas: amostra e controles ainda insuficientes.</div>}<div className="mt-2 flex items-center justify-between gap-2 text-[8px] text-[#7387a4]"><span>Faixas hipotéticas · validar no período posterior</span><button className={styles.ghost} disabled={!ranges.length}><ListFilter size={12} />Comparar eventos</button></div></div></section>
+          <section className={styles.panel}><div className={styles.panelHeader}><div><strong className="text-[12px]">Comparativo dos indicadores</strong><div className="text-[9px] text-[#7f92ae]">Início do pump × aprovação/profile selecionado</div></div><div className={styles.segmented}>{["TODAS", "POOL", "L1", "L2", "L3"].map((item) => <button className={`${styles.segment} ${layer === item ? styles.segmentActive : ""}`} onClick={() => setLayer(item)} key={item}>{item}</button>)}</div></div><div className={styles.tableWrap}>{rows.length ? <table className={styles.table}><thead><tr><th>Camada / indicador</th><th>TF</th><th>Antes</th><th>Início</th><th>Aprovação</th><th>Entrada</th><th>Variação</th><th>Regra</th><th>Proveniência</th></tr></thead><tbody>{rows.map((row) => <tr key={`${row.layer}-${row.timeframe}-${row.indicator}`} style={{ "--layer-color": LAYER_COLORS[row.layer] ?? "#6e7f98" } as React.CSSProperties}><td className={styles.layer}><span className="mr-2 font-semibold" style={{ color: LAYER_COLORS[row.layer] }}>{row.layer}</span>{row.indicator}</td><td className={styles.mono}>{row.timeframe}</td><td className={styles.mono}>{valueText(row.before)}</td><td className={styles.mono}>{valueText(row.start)}</td><td className={styles.mono}>{valueText(row.approval)}</td><td className={styles.mono}>{valueText(row.entry)}</td><td className={`${styles.mono} ${row.change != null ? "text-[#55d9a9]" : ""}`}>{row.change == null ? "—" : valueText(row.change)}</td><td>{row.sample.rule ? "Configurada" : "—"}</td><td title={JSON.stringify(row.sample.provenance)}>{row.sample.source} · {row.sample.version ?? "versão ausente"}</td></tr>)}</tbody></table> : <div className={styles.empty}>Não há snapshots point-in-time suficientes para comparar este evento.</div>}</div><div className="px-3 py-2 text-[8px] text-[#6f839f]">RECONSTRUÍDO usa candles fechados e a configuração de indicadores congelada nesta execução; não comprova avaliação histórica. Book e fluxo ausentes ficam indisponíveis.</div></section>
+          <section className={styles.panel}><div className={styles.panelHeader}><div><strong className="text-[12px]">TOP indicadores no início</strong><div className="text-[9px] text-[#7f92ae]">Pumps × controles pareados</div></div></div><div className="px-3 pt-2"><div className={styles.segmented}>{[["1h", "1h"], ["15min", "15m"], ["5min", "5m"], ["Combinado", "combined"]].map(([label, key]) => <button className={`${styles.segment} ${rangeTf === key ? styles.segmentActive : ""}`} onClick={() => setRangeTf(key)} key={key}>{label}</button>)}</div></div><div className={styles.ranges}>{ranges.length ? <><div className={`${styles.rangeRow} text-[#7e91ad]`}><span>Indicador / TF</span><span>Faixa recorrente</span><span>Pump</span><span>Controle</span></div>{ranges.map((row) => { const pump = row.pump_denominator ? row.pump_numerator / row.pump_denominator * 100 : 0; const control = row.control_denominator ? row.control_numerator / row.control_denominator * 100 : 0; return <div className={styles.rangeRow} key={row.id} title={`Cobertura ${row.coverage ?? "indisponível"}; IC ${JSON.stringify(row.confidence_interval)}`}><span>{row.indicator_id} · <span className={styles.mono}>{row.timeframe}</span></span><span className={styles.mono}>{valueText(row.lower_bound)}–{valueText(row.upper_bound)}</span><span><b className="text-[#55d9a9]">{pump.toFixed(0)}%</b><span className="ml-1 text-[#627896]">{row.pump_numerator}/{row.pump_denominator}</span><span className={styles.bar}><span style={{ width: `${Math.min(100, pump)}%` }} /></span></span><span><b>{control.toFixed(0)}%</b><span className="ml-1 text-[#627896]">{row.control_numerator}/{row.control_denominator}</span><span className={styles.bar}><span style={{ width: `${Math.min(100, control)}%`, background: "#8fa3c2" }} /></span></span></div>; })}</> : <div className={styles.empty}>Faixas não publicadas: amostra e controles ainda insuficientes.</div>}<div className="mt-2 flex items-center justify-between gap-2 text-[8px] text-[#7387a4]"><span>Faixas hipotéticas · validar no período posterior</span><button className={styles.ghost} disabled={!ranges.length}><ListFilter size={12} />Comparar eventos</button></div></div></section>
         </div>
       </>}
     </div>

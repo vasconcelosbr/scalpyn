@@ -40,13 +40,26 @@ def test_universe_is_bounded_by_quote_volume_with_stable_ties() -> None:
         {"currency_pair": "AAA_USDT", "quote_volume": "20"},
         {"currency_pair": "DDD_USDT", "quote_volume": None},
     ]
-    selected = _select_universe(tickers, PumpRadarConfig().universe_max_assets)
+    members = [{"symbol": item["currency_pair"]} for item in tickers]
+    selected = _select_universe(tickers, PumpRadarConfig().universe_max_assets, members)
     assert [item["currency_pair"] for item in selected] == [
         "AAA_USDT", "BBB_USDT", "CCC_USDT", "DDD_USDT"
     ]
-    assert [item["currency_pair"] for item in _select_universe(tickers, 2)] == [
+    assert [item["currency_pair"] for item in _select_universe(tickers, 2, members)] == [
         "AAA_USDT", "BBB_USDT"
     ]
+
+
+def test_exchange_outsiders_never_enter_user_universe():
+    tickers = [{"currency_pair": "OUT_USDT", "quote_volume": "999999"},
+               {"currency_pair": "IN_USDT", "quote_volume": "1"}]
+    assert _select_universe(tickers, 100, [{"symbol": "IN/USDT"}]) == [tickers[1]]
+    assert _select_universe(tickers, 100, []) == []
+
+
+def test_config_requires_all_native_context_timeframes():
+    with pytest.raises(ValidationError):
+        PumpRadarConfig(capture_timeframes=["5m"])
 
 
 def test_all_tables_are_additive_and_isolated_from_operational_ohlcv() -> None:

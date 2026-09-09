@@ -22,6 +22,7 @@
 .segment { min-width: 50px; height: 25px; padding: 0 10px; border-radius: 5px; color: #899bb6; font-size: 10px; }
 .segmentActive { background: linear-gradient(#318cff, #1473e3); color: white; box-shadow: 0 0 0 1px #4299ff inset; }
 .rankPanel { display: flex; min-height: 510px; flex-direction: column; }
+.rankList { min-height: 0; max-height: 310px; flex: 1; overflow-y: auto; }
 .search { height: 32px; margin: 8px 9px; border: 1px solid #263b59; border-radius: 7px; display: flex; align-items: center; gap: 7px; padding: 0 9px; color: #7286a4; }
 .search input { min-width: 0; width: 100%; background: transparent; outline: none; color: #c8d5e8; font-size: 10px; }
 .rankHead, .rankRow { display: grid; grid-template-columns: 24px minmax(76px, 1fr) 68px 84px; align-items: center; gap: 5px; min-height: 31px; padding: 0 8px; font-size: 10px; }

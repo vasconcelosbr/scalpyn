@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
+import json
+from statistics import median
 from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import Any
@@ -27,6 +30,7 @@ from ..models.pump_radar import (
 )
 from ..schemas.pump_radar import PumpRadarConfig, PumpRadarHypothesisCreate, PumpRadarRunCreate
 from ..services.config_service import config_service
+from ..services.pump_radar_research import UNIVERSE_SOURCE, load_user_universe
 from ..tasks.celery_app import QUEUE_PUMP_RADAR
 from ..tasks.task_dispatch import enqueue
 from .config import get_current_user_id
@@ -78,6 +82,8 @@ def _quality_badge(run: PumpRadarRun | None, event_count: int = 0) -> str:
         return "DADOS INSUFICIENTES"
     if run.status == "PARTIAL" or run.failed_assets:
         return "COBERTURA PARCIAL"
+    if (run.provenance or {}).get("universe_source") != UNIVERSE_SOURCE:
+        return "COBERTURA PARCIAL"
     return "DADOS REAIS"
 
 
@@ -91,6 +97,7 @@ def _run_payload(run: PumpRadarRun, event_count: int = 0) -> dict[str, Any]:
         "requested_at": _iso(run.requested_at), "started_at": _iso(run.started_at),
         "finished_at": _iso(run.finished_at), "cancel_requested_at": _iso(run.cancel_requested_at),
         "error_message": run.error_message, "quality_badge": _quality_badge(run, event_count),
+        "universe_compatible": (run.provenance or {}).get("universe_source") == UNIVERSE_SOURCE,
         "provenance": run.provenance,
     }
 
@@ -120,16 +127,29 @@ async def create_run(payload: PumpRadarRunCreate, db: AsyncSession = Depends(get
     _require_capture()
     raw_config = await config_service.get_config(db, "pump_radar_v1", user_id)
     config = PumpRadarConfig.model_validate(raw_config or {})
+    universe = await load_user_universe(db, user_id)
+    if not universe:
+        raise HTTPException(status_code=409, detail="PUMP_RADAR_USER_UNIVERSE_EMPTY")
+    indicators_config = await config_service.get_config(db, "indicators", user_id)
     now = datetime.now(timezone.utc)
     if payload.mode == "backfill":
         start = datetime.combine(payload.date_from, time.min, tzinfo=timezone.utc) if payload.date_from else now - timedelta(days=config.backfill_days)
     else:
         start = datetime.combine(payload.date_from, time.min, tzinfo=timezone.utc) if payload.date_from else now.replace(hour=0, minute=0, second=0, microsecond=0)
     end = datetime.combine(payload.date_to, time.max, tzinfo=timezone.utc) if payload.date_to else now
+    end = min(end, now)
+    if start >= end:
+        raise HTTPException(status_code=422, detail="PUMP_RADAR_DATE_RANGE_INVALID")
     run = PumpRadarRun(
         user_id=user_id, status="QUEUED", mode=payload.mode, date_from=start, date_to=end,
         config_snapshot=config.model_dump(mode="json"), config_hash=config.digest(), timezone=config.timezone,
-        provenance={"requested_by": str(user_id), "queue": QUEUE_PUMP_RADAR},
+        universe_snapshot=universe,
+        provenance={"requested_by": str(user_id), "queue": QUEUE_PUMP_RADAR,
+                    "universe_source": UNIVERSE_SOURCE, "universe_observed_at": now.isoformat(),
+                    "historical_membership_proven": False,
+                    "indicators_config": indicators_config,
+                    "indicators_config_hash": hashlib.sha256(json.dumps(indicators_config, sort_keys=True, default=str).encode()).hexdigest(),
+                    "indicators_config_observed_at": now.isoformat()},
     )
     db.add(run)
     await db.commit()
@@ -157,9 +177,9 @@ async def get_run(run_id: UUID, db: AsyncSession = Depends(get_db), user_id: UUI
     run = await _owned_run(db, run_id, user_id)
     event_count = (await db.execute(select(func.count()).select_from(PumpRadarEvent).where(PumpRadarEvent.run_id == run_id))).scalar_one()
     shadow_count = (await db.execute(select(func.count()).select_from(PumpRadarEventLink).join(PumpRadarEvent).where(PumpRadarEvent.run_id == run_id, PumpRadarEventLink.user_id == user_id))).scalar_one()
-    primary_count = (await db.execute(select(func.count()).select_from(PumpRadarEventLink).join(PumpRadarEvent).where(PumpRadarEvent.run_id == run_id, PumpRadarEventLink.user_id == user_id, PumpRadarEventLink.is_primary.is_(True)))).scalar_one()
+    primary_count = (await db.execute(select(func.count(func.distinct(PumpRadarEventLink.event_id))).select_from(PumpRadarEventLink).join(PumpRadarEvent).where(PumpRadarEvent.run_id == run_id, PumpRadarEventLink.user_id == user_id, PumpRadarEventLink.entry_at.is_not(None)))).scalar_one()
     delays = (await db.execute(select(PumpRadarEventLink.delay_seconds).join(PumpRadarEvent).where(PumpRadarEvent.run_id == run_id, PumpRadarEventLink.user_id == user_id, PumpRadarEventLink.delay_seconds.is_not(None)))).scalars().all()
-    median_delay = sorted(delays)[len(delays) // 2] if delays else None
+    median_delay = median(delays) if delays else None
     coverage_row = (await db.execute(select(func.min(PumpRadarRunAsset.coverage), func.avg(PumpRadarRunAsset.coverage)).where(PumpRadarRunAsset.run_id == run_id))).one()
     payload = _run_payload(run, event_count)
     if payload["quality_badge"] == "DADOS REAIS" and coverage_row[0] is not None and float(coverage_row[0]) < 1:
@@ -242,27 +262,26 @@ async def get_chart(run_id: UUID, event_id: UUID, selected_at: datetime | None =
     event = await _owned_event(db, run_id, event_id, user_id)
     context_start = event.start_at - timedelta(hours=8)
     natural_end = (event.end_at or event.confirmed_market_at) + timedelta(hours=2)
-    cutoff = selected_at if hide_future and selected_at else natural_end
-    availability_filter = (
-        PumpRadarOHLCV.available_at.is_(None) | (PumpRadarOHLCV.available_at <= cutoff)
-        if hide_future and selected_at
-        else True
-    )
+    cutoff = (selected_at or event.start_at) if hide_future else natural_end
+    if cutoff.tzinfo is None:
+        cutoff = cutoff.replace(tzinfo=timezone.utc)
+    # Display reconstructed closed market history, including later REST capture.
+    # It is labelled below; ingestion is never claimed as historical availability.
     result: dict[str, list[dict[str, Any]]] = {}
     for timeframe in ("1h", "15m", "5m"):
         rows = (await db.execute(select(PumpRadarOHLCV).where(
             PumpRadarOHLCV.symbol == event.symbol, PumpRadarOHLCV.timeframe == timeframe,
             PumpRadarOHLCV.open_time >= context_start, PumpRadarOHLCV.close_time <= min(natural_end, cutoff),
-            PumpRadarOHLCV.is_closed.is_(True),
-            # The explicit timeline view is point-in-time strict. The initial
-            # event overview may include candles reconstructed after the event.
-            availability_filter,
+            PumpRadarOHLCV.is_closed.is_(True), PumpRadarOHLCV.quality_status == "VALID",
+            # Historical REST capture is a labeled market-time reconstruction,
+            # not evidence that a decision consumed this candle at that instant.
         ).order_by(PumpRadarOHLCV.open_time))).scalars().all()
         result[timeframe] = [{
             "time": _iso(row.open_time), "close_time": _iso(row.close_time),
             "available_at": _iso(row.available_at), "open": _number(row.open), "high": _number(row.high),
             "low": _number(row.low), "close": _number(row.close), "volume": _number(row.volume_base),
             "quality_status": row.quality_status, "contract_version": row.contract_version,
+            "reconstruction_status": "RECORDED" if (row.provenance or {}).get("historical_availability_proven") is True and row.available_at is not None and row.available_at <= cutoff else "RECONSTRUCTED",
         } for row in rows]
     links = (await db.execute(select(PumpRadarEventLink).where(PumpRadarEventLink.event_id == event_id, PumpRadarEventLink.user_id == user_id))).scalars().all()
     markers = [
@@ -276,7 +295,10 @@ async def get_chart(run_id: UUID, event_id: UUID, selected_at: datetime | None =
             {"kind": "ENTRY", "at": _iso(link.entry_at), "link_id": str(link.id)},
             {"kind": "EXIT", "at": _iso(link.exit_at), "link_id": str(link.id), "pnl_pct": _number(link.realized_pnl_pct)},
         ])
-    return _envelope({"event_id": str(event.id), "symbol": event.symbol, "selected_at": _iso(cutoff), "hide_future": hide_future, "candles": result, "markers": [marker for marker in markers if marker.get("at")]}, provenance={"source": "pump_radar_ohlcv", "point_in_time": True, "reconstructed_history_possible": True})
+    return _envelope({"event_id": str(event.id), "symbol": event.symbol, "selected_at": _iso(cutoff), "hide_future": hide_future, "candles": result,
+        "reconstruction_status": "RECONSTRUCTED" if any(c["reconstruction_status"] == "RECONSTRUCTED" for candles in result.values() for c in candles) else "RECORDED",
+        "markers": [marker for marker in markers if marker.get("at") and (not hide_future or datetime.fromisoformat(marker["at"]) <= cutoff)]},
+        provenance={"source": "pump_radar_ohlcv", "point_in_time_basis": "market_close", "historical_availability_proven": False})
 
 
 @router.get("/runs/{run_id}/events/{event_id}/snapshots")

@@ -29,6 +29,8 @@ class PumpRadarConfig(BaseModel):
     gap_break_candles: int = Field(default=1, ge=1, le=12)
     backfill_days: int = Field(default=180, ge=1, le=730)
     universe_max_assets: int = Field(default=100, ge=1, le=2000)
+    universe_source: Literal["user_pool_pipeline_v1"] = "user_pool_pipeline_v1"
+    context_candles: int = Field(default=300, ge=24, le=2000)
     volume_filter_enabled: bool = False
     liquidity_filter_enabled: bool = False
     atr_filter_enabled: bool = False
@@ -48,6 +50,8 @@ class PumpRadarConfig(BaseModel):
             raise ValueError("range_percentiles must be exactly P10/P25/P50/P75/P90")
         if len(set(self.capture_timeframes)) != len(self.capture_timeframes):
             raise ValueError("capture_timeframes cannot contain duplicates")
+        if set(self.capture_timeframes) != {"5m", "15m", "1h"}:
+            raise ValueError("Radar requires native 5m, 15m and 1h coverage")
         return self
 
     def digest(self) -> str:
