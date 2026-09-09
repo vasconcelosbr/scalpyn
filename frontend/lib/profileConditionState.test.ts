@@ -4,12 +4,41 @@ import test from "node:test";
 import {
   isProfileComparisonCondition,
   normalizeProfileRuleCondition,
+  prepareProfileEntryTriggerIdentities,
   profileConditionManualUpdates,
   profileConditionPrimaryIndicator,
+  profileSourcePoliciesForEditor,
   serializeProfileEditorConfig,
   serializeProfileRuleCondition,
   updateProfileRuleCondition,
+  withoutProfileFeatureIdentity,
 } from "./profileConditionState";
+
+const SOURCE_POLICIES = {
+  ohlcv: {
+    allowed_source_providers: ["gate.io"],
+    provider_policy_id: "spot_gate_closed_ohlcv_v1",
+    max_age_seconds: 360,
+    candle_policy: "CLOSED_ONLY",
+  },
+  live_trade_flow: {
+    allowed_source_providers: ["gate_trades_ws_spot"],
+    provider_policy_id: "spot_gate_trade_flow_v1",
+    max_age_seconds: 30,
+    window_seconds: 60,
+  },
+  live_order_book: {
+    allowed_source_providers: ["gate_orderbook_ws_spot"],
+    provider_policy_id: "spot_gate_order_book_v1",
+    max_age_seconds: 15,
+    snapshot: true,
+  },
+  decision_context: {
+    allowed_source_providers: ["market_metadata", "robust_score"],
+    provider_policy_id: "spot_decision_context_v1",
+    max_age_seconds: 90,
+  },
+};
 
 const IDS = [
   "adx_acceleration", "adx_slope_3", "macd_hist_slope_3", "macd_hist_slope_5",
@@ -171,5 +200,143 @@ test("manual filter edits do not inject score metadata", () => {
   assert.deepEqual(
     profileConditionManualUpdates({ value: 800001 }, true),
     { value: 800001, rule_id: undefined, points: 0, category: undefined },
+  );
+});
+
+test("changing an Entry Trigger feature drops stale identity but keeps its timeframe choice", () => {
+  const condition = withoutProfileFeatureIdentity({
+    id: "entry-1", indicator: "rsi", operator: ">", value: 50,
+    source: "ohlcv", source_provider: "gate.io", provider_policy_id: "ohlcv-v1",
+    max_age_seconds: 360, timeframe: "15m", candle_policy: "CLOSED_ONLY",
+    period: 14, resolved_operands: { left: { indicator: "rsi" } },
+  });
+
+  assert.equal(condition.timeframe, "15m");
+  assert.equal("source" in condition, false);
+  assert.equal("source_provider" in condition, false);
+  assert.equal("provider_policy_id" in condition, false);
+  assert.equal("period" in condition, false);
+  assert.equal("resolved_operands" in condition, false);
+});
+
+test("new Entry Trigger receives governed OHLCV identity before save", () => {
+  const prepared = prepareProfileEntryTriggerIdentities({
+    default_timeframe: "5m",
+    entry_triggers: {
+      conditions: [{
+        id: "entry-new", type: "threshold", indicator: "rsi",
+        operator: "between", min: 52, max: 72, required: true, enabled: true,
+      }],
+    },
+  }, SOURCE_POLICIES);
+
+  assert.deepEqual(prepared.issues, []);
+  assert.deepEqual(
+    prepared.config.entry_triggers.conditions[0],
+    {
+      id: "entry-new", type: "threshold", indicator: "rsi",
+      operator: "between", min: 52, max: 72, required: true, enabled: true,
+      source: "ohlcv", source_provider: "gate.io",
+      provider_policy_id: "spot_gate_closed_ohlcv_v1",
+      max_age_seconds: 360, timeframe: "5m", candle_policy: "CLOSED_ONLY",
+      period: 14,
+    },
+  );
+});
+
+test("comparison Entry Trigger receives an independently resolved identity per operand", () => {
+  const prepared = prepareProfileEntryTriggerIdentities({
+    default_timeframe: "5m",
+    entry_triggers: {
+      conditions: [{
+        id: "entry-comparison", type: "comparison", left: "price",
+        operator: ">", right: "ema9", required: false, enabled: true,
+      }],
+    },
+  }, SOURCE_POLICIES);
+
+  assert.deepEqual(prepared.issues, []);
+  const condition = prepared.config.entry_triggers.conditions[0] as Record<string, any>;
+  assert.equal(condition.source, "ohlcv");
+  assert.equal(condition.timeframe, "5m");
+  assert.deepEqual(condition.resolved_operands.left, {
+    indicator: "price", source: "ohlcv", source_provider: "gate.io",
+    provider_policy_id: "spot_gate_closed_ohlcv_v1", max_age_seconds: 360,
+    timeframe: "5m", candle_policy: "CLOSED_ONLY",
+  });
+  assert.deepEqual(condition.resolved_operands.right, {
+    indicator: "ema9", source: "ohlcv", source_provider: "gate.io",
+    provider_policy_id: "spot_gate_closed_ohlcv_v1", max_age_seconds: 360,
+    timeframe: "5m", candle_policy: "CLOSED_ONLY", period: 9,
+  });
+});
+
+test("live Entry Trigger identity comes from the configured source policy", () => {
+  const prepared = prepareProfileEntryTriggerIdentities({
+    default_timeframe: "5m",
+    entry_triggers: {
+      conditions: [{
+        id: "entry-flow", type: "threshold", indicator: "volume_delta",
+        operator: ">", value: 0, required: true, enabled: true,
+      }],
+    },
+  }, SOURCE_POLICIES);
+
+  assert.deepEqual(prepared.issues, []);
+  assert.deepEqual(
+    prepared.config.entry_triggers.conditions[0],
+    {
+      id: "entry-flow", type: "threshold", indicator: "volume_delta",
+      operator: ">", value: 0, required: true, enabled: true,
+      source: "live_trade_flow", source_provider: "gate_trades_ws_spot",
+      provider_policy_id: "spot_gate_trade_flow_v1", max_age_seconds: 30,
+      window_seconds: 60,
+    },
+  );
+});
+
+test("editor reports incomplete governed policies instead of sending an invalid write", () => {
+  const prepared = prepareProfileEntryTriggerIdentities({
+    default_timeframe: "5m",
+    entry_triggers: {
+      conditions: [{
+        id: "entry-new", type: "threshold", indicator: "rsi",
+        operator: ">", value: 50, required: true, enabled: true,
+      }],
+    },
+  }, {});
+
+  assert.deepEqual(prepared.issues, [
+    "entry_triggers.conditions[0].source_provider",
+    "entry_triggers.conditions[0].provider_policy_id",
+    "entry_triggers.conditions[0].max_age_seconds",
+    "entry_triggers.conditions[0].candle_policy",
+  ]);
+});
+
+test("MTF profiles select their layer policies and standard profiles select L3 policies", () => {
+  const spotEngine = {
+    scanner: {
+      l3_v3_provenance_resolver: { source_policies: { decision_context: { provider_policy_id: "standard" } } },
+      multilayer_contract: {
+        layers: {
+          L1: { source_policies: { ohlcv: { provider_policy_id: "l1" } } },
+          L2: { source_policies: { ohlcv: { provider_policy_id: "l2" } } },
+        },
+      },
+    },
+  };
+
+  assert.equal(
+    profileSourcePoliciesForEditor(spotEngine, "MTF_LAYER", "primary_filter").ohlcv?.provider_policy_id,
+    "l1",
+  );
+  assert.equal(
+    profileSourcePoliciesForEditor(spotEngine, "MTF_LAYER", "score_engine").ohlcv?.provider_policy_id,
+    "l2",
+  );
+  assert.equal(
+    profileSourcePoliciesForEditor(spotEngine, "STANDARD", "acquisition_queue").decision_context?.provider_policy_id,
+    "standard",
   );
 });

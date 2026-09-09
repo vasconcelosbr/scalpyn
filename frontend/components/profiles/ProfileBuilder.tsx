@@ -17,7 +17,10 @@ import {
 } from "@/lib/indicatorCatalog";
 import {
   normalizeProfileRuleCondition,
+  prepareProfileEntryTriggerIdentities,
+  profileSourcePoliciesForEditor,
   serializeProfileEditorConfig,
+  withoutProfileFeatureIdentity,
 } from "@/lib/profileConditionState";
 import { formatPreflightIssue, validateExecutionSections } from "@/lib/profileImportPreflight";
 import {
@@ -485,6 +488,7 @@ function ScoreEngineConfigPanel({
 export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChanged }: ProfileBuilderProps) {
   const isMtfProfile = profile?.profile_type === "MTF_LAYER";
   const { config: globalScoreConfig } = useConfig("score");
+  const { config: spotEngineConfig } = useConfig("spot_engine");
   const [name, setName]                     = useState(profile?.name || "");
   const [description, setDescription]       = useState(profile?.description || "");
   const [config, setConfig]                 = useState<any>(() => normalizeProfileConfig(profile?.config));
@@ -546,11 +550,30 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
       alert("Breakout Distance % exige uma janela de referência (5m, 15m, 30m ou 1h).");
       return;
     }
+    const requiresEntryFeatureIdentity = isMtfProfile || ![
+      "universe_filter", "primary_filter", "score_engine",
+    ].includes(String(profileRole || ""));
+    let configForSave = config;
+    if (requiresEntryFeatureIdentity) {
+      const prepared = prepareProfileEntryTriggerIdentities(
+        config,
+        profileSourcePoliciesForEditor(spotEngineConfig, profile?.profile_type, profileRole),
+      );
+      if (prepared.issues.length > 0) {
+        alert(
+          "Não foi possível identificar a fonte governada de todos os Entry Triggers. "
+          + "Revise as políticas de proveniência do Spot Engine antes de salvar:\n"
+          + prepared.issues.slice(0, 8).join("\n"),
+        );
+        return;
+      }
+      configForSave = prepared.config;
+    }
     setSaving(true);
     const profileData = {
       name,
       description,
-      config: serializeProfileEditorConfig(config),
+      config: serializeProfileEditorConfig(configForSave),
       profile_role: profileRole,
       pipeline_order: profileRole
         ? { universe_filter: 0, primary_filter: 1, score_engine: 2, acquisition_queue: 3 }[profileRole] ?? 99
@@ -808,7 +831,16 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
       entry_triggers: {
         ...c.entry_triggers,
         conditions: (c.entry_triggers?.conditions || []).map((t: EntryTrigger) =>
-          t.id === id ? { ...t, [field]: value } : t
+          t.id === id
+            ? {
+                ...(
+                  ["type", "indicator", "left", "right"].includes(field)
+                    ? withoutProfileFeatureIdentity(t as unknown as Record<string, unknown>)
+                    : t
+                ),
+                [field]: value,
+              }
+            : t
         ),
       },
     }));

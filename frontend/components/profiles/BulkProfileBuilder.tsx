@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ArrowLeft, Save, Plus, Trash2, Check, AlertTriangle, Play } from "lucide-react";
 import { apiPut } from "@/lib/api";
+import { useConfig } from "@/hooks/useConfig";
 import { ConditionBuilder, NumericInput } from "./ConditionBuilder";
 import {
   BREAKOUT_REFERENCE_WINDOWS,
@@ -11,7 +12,12 @@ import {
   indicatorOptionsForSection,
   optionsWithUnsupportedIndicator,
 } from "@/lib/indicatorCatalog";
-import { normalizeProfileRuleCondition } from "@/lib/profileConditionState";
+import {
+  normalizeProfileRuleCondition,
+  prepareProfileEntryTriggerIdentities,
+  profileSourcePoliciesForEditor,
+  withoutProfileFeatureIdentity,
+} from "@/lib/profileConditionState";
 import { formatPreflightIssue, validateExecutionSections } from "@/lib/profileImportPreflight";
 import {
   blockThresholdIndicatorOptions,
@@ -58,6 +64,8 @@ interface Profile {
   id: string;
   name: string;
   config: any;
+  profile_type?: string;
+  profile_role?: string | null;
 }
 
 interface BulkProfileBuilderProps {
@@ -157,6 +165,7 @@ const DEFAULT_CONFIG = {
 
 // ─────────────────────────────────────────────────────────────────────────────
 export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBuilderProps) {
+  const { config: spotEngineConfig } = useConfig("spot_engine");
   const [activeTab, setActiveTab]   = useState<ActiveTab>("filters");
   const [config, setConfig]         = useState<typeof DEFAULT_CONFIG>(DEFAULT_CONFIG);
   const [overwrite, setOverwrite]   = useState(false);
@@ -187,13 +196,35 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
 
   const updateTrigger = (id: string, field: string, value: any) =>
     updateEntryTriggers(
-      config.entry_triggers.conditions.map((t) => (t.id === id ? { ...t, [field]: value } : t))
+      config.entry_triggers.conditions.map((t) => (
+        t.id === id
+          ? {
+              ...(
+                ["type", "indicator", "left", "right"].includes(field)
+                  ? withoutProfileFeatureIdentity(t as unknown as Record<string, unknown>)
+                  : t
+              ),
+              [field]: value,
+            } as EntryTrigger
+          : t
+      ))
     );
 
   // Atomic multi-field update — avoids closure-over-stale-state when changing type
   const replaceTrigger = (id: string, patch: Partial<EntryTrigger>) =>
     updateEntryTriggers(
-      config.entry_triggers.conditions.map((t) => (t.id === id ? { ...t, ...patch } : t))
+      config.entry_triggers.conditions.map((t) => (
+        t.id === id
+          ? {
+              ...(
+                ["type", "indicator", "left", "right"].some((key) => key in patch)
+                  ? withoutProfileFeatureIdentity(t as unknown as Record<string, unknown>)
+                  : t
+              ),
+              ...patch,
+            } as EntryTrigger
+          : t
+      ))
     );
 
   // ── Block Rule helpers ─────────────────────────────────────────────────────
@@ -379,7 +410,25 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
           });
         }
 
-        await apiPut(`/profiles/${profile.id}`, { ...profile, config: cfg });
+        const requiresEntryFeatureIdentity = profile.profile_type === "MTF_LAYER" || ![
+          "universe_filter", "primary_filter", "score_engine",
+        ].includes(String(profile.profile_role || ""));
+        const configForSave = requiresEntryFeatureIdentity
+          ? prepareProfileEntryTriggerIdentities(
+              cfg,
+              profileSourcePoliciesForEditor(
+                spotEngineConfig,
+                profile.profile_type,
+                profile.profile_role,
+              ),
+            )
+          : { config: cfg, issues: [] };
+        if (configForSave.issues.length > 0) {
+          throw new Error(
+            `Identidade de fonte incompleta: ${configForSave.issues.join(", ")}`,
+          );
+        }
+        await apiPut(`/profiles/${profile.id}`, { ...profile, config: configForSave.config });
         ok++;
       } catch (err) {
         console.error("Failed to update profile", profile.name, err);

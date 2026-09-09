@@ -1,6 +1,28 @@
 import { STRATEGY_PROFILE_INDICATOR_MAP } from "./indicatorCatalog";
 
 export type ProfileRuleConditionType = "threshold" | "boolean" | "comparison";
+export type ProfileFeatureSource =
+  | "ohlcv"
+  | "live_trade_flow"
+  | "live_order_book"
+  | "decision_context";
+
+export type ProfileSourcePolicy = Record<string, unknown> & {
+  allowed_source_providers?: unknown[];
+  provider_policy_id?: unknown;
+  max_age_seconds?: unknown;
+  timeframe?: unknown;
+  window_seconds?: unknown;
+  snapshot?: unknown;
+  candle_policy?: unknown;
+};
+
+export type ProfileSourcePolicies = Partial<Record<ProfileFeatureSource, ProfileSourcePolicy>>;
+
+export interface PreparedProfileEditorConfig<T> {
+  config: T;
+  issues: string[];
+}
 export type ProfileRuleConditionState = Record<string, unknown> & {
   id: string;
   type: ProfileRuleConditionType;
@@ -80,6 +102,214 @@ export function updateProfileRuleCondition<T extends Record<string, unknown>>(
   updates: Partial<T>,
 ): T {
   return { ...condition, ...updates };
+}
+
+/** Remove identity that belongs to a feature before changing its indicator. */
+export function withoutProfileFeatureIdentity<T extends Record<string, unknown>>(
+  condition: T,
+): T {
+  const next = { ...condition };
+  for (const key of [
+    "source", "source_provider", "provider_policy_id", "max_age_seconds",
+    "window_seconds", "snapshot", "candle_policy", "resolved_operands", "period",
+  ]) {
+    delete next[key];
+  }
+  return next;
+}
+
+const LIVE_TRADE_FLOW_INDICATORS = new Set([
+  "taker_ratio", "volume_delta", "buy_pressure",
+  "taker_buy_volume", "taker_sell_volume",
+]);
+const LIVE_ORDER_BOOK_INDICATORS = new Set([
+  "orderbook_pressure", "bid_ask_imbalance", "orderbook_depth_usdt",
+  "spread_pct", "spread",
+]);
+const DECISION_CONTEXT_INDICATORS = new Set([
+  "price", "change_24h", "market_cap", "volume_24h",
+  "alpha_score", "score", "liquidity_score", "momentum_score",
+]);
+const SCORE_INDICATORS = new Set([
+  "alpha_score", "score", "liquidity_score", "momentum_score",
+]);
+
+function inferredFeatureSource(
+  indicator: string,
+  comparisonOperand = false,
+): ProfileFeatureSource {
+  if (LIVE_TRADE_FLOW_INDICATORS.has(indicator)) return "live_trade_flow";
+  if (LIVE_ORDER_BOOK_INDICATORS.has(indicator)) return "live_order_book";
+  if (DECISION_CONTEXT_INDICATORS.has(indicator) && !(comparisonOperand && indicator === "price")) {
+    return "decision_context";
+  }
+  return "ohlcv";
+}
+
+function configuredProvider(
+  indicator: string,
+  existing: Record<string, unknown>,
+  policy: ProfileSourcePolicy,
+): string | undefined {
+  const allowed = (policy.allowed_source_providers || [])
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  const current = String(existing.source_provider || "").trim();
+  if (current && (allowed.length === 0 || allowed.includes(current))) return current;
+  if (SCORE_INDICATORS.has(indicator) && allowed.includes("robust_score")) return "robust_score";
+  if (allowed.includes("market_metadata")) return "market_metadata";
+  return allowed[0];
+}
+
+function conditionIdentity(
+  indicator: string,
+  condition: Record<string, any>,
+  existing: Record<string, any>,
+  policies: ProfileSourcePolicies,
+  defaultTimeframe: string,
+  path: string,
+  issues: string[],
+  comparisonOperand = false,
+): Record<string, any> {
+  const existingMatches = !existing.indicator || existing.indicator === indicator;
+  const source = (
+    existingMatches && typeof existing.source === "string" && existing.source.trim()
+      ? existing.source.trim()
+      : inferredFeatureSource(indicator, comparisonOperand)
+  ) as ProfileFeatureSource;
+  const policy = policies[source] || {};
+  const reference: Record<string, any> = {
+    ...(existingMatches ? existing : {}),
+    indicator,
+    source,
+  };
+  reference.source_provider = configuredProvider(indicator, reference, policy);
+  reference.provider_policy_id = reference.provider_policy_id || policy.provider_policy_id;
+  reference.max_age_seconds = reference.max_age_seconds ?? policy.max_age_seconds;
+
+  if (source === "ohlcv") {
+    const catalog = STRATEGY_PROFILE_INDICATOR_MAP.get(indicator);
+    const configuredPeriod = condition.period ?? catalog?.fixedPeriod ?? catalog?.defaultPeriod;
+    if (configuredPeriod !== undefined) reference.period = configuredPeriod;
+    reference.timeframe = condition.timeframe || reference.timeframe || policy.timeframe || defaultTimeframe;
+    reference.candle_policy = reference.candle_policy || policy.candle_policy;
+    delete reference.window_seconds;
+    delete reference.snapshot;
+  } else if (source === "live_trade_flow") {
+    reference.window_seconds = reference.window_seconds ?? policy.window_seconds;
+    delete reference.period;
+    delete reference.timeframe;
+    delete reference.snapshot;
+    delete reference.candle_policy;
+  } else if (source === "live_order_book") {
+    reference.snapshot = reference.snapshot ?? policy.snapshot;
+    reference.window_seconds = reference.window_seconds ?? policy.window_seconds;
+    delete reference.period;
+    delete reference.timeframe;
+    delete reference.candle_policy;
+  } else {
+    delete reference.period;
+    delete reference.timeframe;
+    delete reference.window_seconds;
+    delete reference.snapshot;
+    delete reference.candle_policy;
+  }
+
+  if (!reference.source_provider) issues.push(`${path}.source_provider`);
+  if (!reference.provider_policy_id) issues.push(`${path}.provider_policy_id`);
+  if (condition.required === true && reference.max_age_seconds == null) {
+    issues.push(`${path}.max_age_seconds`);
+  }
+  if (source === "ohlcv") {
+    if (!reference.timeframe) issues.push(`${path}.timeframe`);
+    if (!reference.candle_policy) issues.push(`${path}.candle_policy`);
+  } else if (source === "live_trade_flow" && reference.window_seconds == null) {
+    issues.push(`${path}.window_seconds`);
+  } else if (
+    source === "live_order_book"
+    && reference.snapshot !== true
+    && reference.window_seconds == null
+  ) {
+    issues.push(`${path}.snapshot_or_window_seconds`);
+  }
+  return reference;
+}
+
+/** Return the governed source policies applicable to the profile being edited. */
+export function profileSourcePoliciesForEditor(
+  spotEngineConfig: Record<string, any> | null | undefined,
+  profileType: unknown,
+  profileRole: unknown,
+): ProfileSourcePolicies {
+  const scanner = spotEngineConfig?.scanner || {};
+  if (profileType === "MTF_LAYER") {
+    const levelByRole: Record<string, string> = {
+      primary_filter: "L1",
+      score_engine: "L2",
+      acquisition_queue: "L3",
+    };
+    const level = levelByRole[String(profileRole || "")];
+    return scanner?.multilayer_contract?.layers?.[level]?.source_policies || {};
+  }
+  return scanner?.l3_v3_provenance_resolver?.source_policies || {};
+}
+
+/**
+ * Complete hidden feature identity for Entry Triggers from governed DB config.
+ * Existing identity is retained when it still addresses the same indicator.
+ */
+export function prepareProfileEntryTriggerIdentities<T extends Record<string, any>>(
+  config: T,
+  policies: ProfileSourcePolicies,
+): PreparedProfileEditorConfig<T> {
+  const issues: string[] = [];
+  const defaultTimeframe = String(config.default_timeframe || "");
+  const conditions = (config.entry_triggers?.conditions || []).map(
+    (raw: Record<string, any>, index: number) => {
+      const condition = { ...raw };
+      const path = `entry_triggers.conditions[${index}]`;
+      if (isProfileComparisonCondition(condition)) {
+        const operands = condition.resolved_operands || {};
+        const left = String(condition.left || "price");
+        const right = String(condition.right || "ema9");
+        const resolvedOperands: Record<string, any> = {
+          left: conditionIdentity(
+            left, condition, operands.left || {}, policies, defaultTimeframe,
+            `${path}.resolved_operands.left`, issues, true,
+          ),
+        };
+        if (condition.operator !== "between") {
+          resolvedOperands.right = conditionIdentity(
+            right, condition, operands.right || {}, policies, defaultTimeframe,
+            `${path}.resolved_operands.right`, issues, true,
+          );
+        }
+        condition.resolved_operands = resolvedOperands;
+        const leftIdentity = resolvedOperands.left;
+        for (const key of [
+          "source", "source_provider", "provider_policy_id", "max_age_seconds",
+          "timeframe", "window_seconds", "snapshot", "candle_policy",
+        ]) {
+          if (leftIdentity[key] === undefined) delete condition[key];
+          else condition[key] = leftIdentity[key];
+        }
+        return condition;
+      }
+
+      const indicator = String(condition.indicator || condition.field || "rsi");
+      const identity = conditionIdentity(
+        indicator, condition, condition, policies, defaultTimeframe, path, issues,
+      );
+      return identity;
+    },
+  );
+  return {
+    config: {
+      ...config,
+      entry_triggers: { ...(config.entry_triggers || {}), conditions },
+    },
+    issues: [...new Set(issues)],
+  } as PreparedProfileEditorConfig<T>;
 }
 
 export function profileConditionManualUpdates<T extends Record<string, unknown>>(
