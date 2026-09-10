@@ -21,6 +21,11 @@ import {
   type IndicatorCategory,
   type StrategyProfileSection,
 } from "@/lib/indicatorCatalog";
+import {
+  prepareProfileBlockRuleIdentities,
+  prepareProfileEntryTriggerIdentities,
+  profileSourcePoliciesForEditor,
+} from "@/lib/profileConditionState";
 
 const SECTION_LABELS: Record<StrategyProfileSection, string> = {
   filters: "F", signals: "S", block_rules: "B", entry_triggers: "E",
@@ -103,6 +108,7 @@ interface ExistingProfileRef {
   signals?: JsonObject;
   block_rules?: JsonObject;
   entry_triggers?: JsonObject;
+  profile_type?: string | null;
   expected_profile_version_id?: string | null;
   expected_profile_config_hash?: string | null;
 }
@@ -274,6 +280,7 @@ export function JsonImportBuilder({ onClose }: Props) {
   const [scoringAssignments, setScoringAssignments] = useState<ScoringAssignment[]>([]);
   const [existingProfiles, setExistingProfiles] = useState<ExistingProfileRef[]>([]);
   const { config: globalScoreConfig } = useConfig("score");
+  const { config: spotEngineConfig } = useConfig("spot_engine");
   const globalRules: { id: string; indicator?: string; operator?: string; points?: number; category?: string }[] =
     Array.isArray(globalScoreConfig?.scoring_rules) ? globalScoreConfig.scoring_rules : [];
   const globalRuleIds = new Set(globalRules.map((r) => String(r.id)));
@@ -289,6 +296,7 @@ export function JsonImportBuilder({ onClose }: Props) {
             id: String(p.id),
             name: String(p.name ?? ""),
             profile_role: (p.profile_role as string | null) ?? null,
+            profile_type: (p.profile_type as string | null) ?? "STANDARD",
             is_active: p.is_active !== false,
             selected_rule_ids: Array.isArray(rawIds) ? rawIds.map(String) : [],
             filters: config?.filters as JsonObject | undefined,
@@ -500,10 +508,47 @@ export function JsonImportBuilder({ onClose }: Props) {
     }
     setImporting(true);
     try {
-      const profilesPayload = eligibleProfiles.map((p) => ({
-        ...p.raw,
-        name: p.editedName || p.raw.name,
-      }));
+      // Entry Triggers and Block Rules carry hidden governed-source identity
+      // (source/source_provider/provider_policy_id/...) that a hand-written
+      // or AI-adjusted JSON has no way to know about — the visual editor
+      // derives it silently before every save. Do the same here so a new
+      // condition round-tripped through Export/Import doesn't 422 with
+      // L3_FEATURE_IDENTITY_INVALID for something the editor would have
+      // filled in automatically.
+      const identityIssues: string[] = [];
+      const profilesPayload = eligibleProfiles.map((p) => {
+        const raw = { ...p.raw, name: p.editedName || p.raw.name };
+        if (!updateIndicatorsOnly) return raw;
+        const existing = existingProfiles.find(
+          (ep) => ep.id === String(raw.profile_id || raw.id || "")
+        );
+        const policies = profileSourcePoliciesForEditor(
+          spotEngineConfig, existing?.profile_type ?? "STANDARD", existing?.profile_role,
+        );
+        const currentConfig = {
+          filters: existing?.filters,
+          signals: existing?.signals,
+          block_rules: existing?.block_rules,
+          entry_triggers: existing?.entry_triggers,
+        };
+        const withTriggers = prepareProfileEntryTriggerIdentities(raw, policies, currentConfig);
+        const withBlocks = prepareProfileBlockRuleIdentities(withTriggers.config, policies, currentConfig);
+        const label = raw.name || raw.profile_id || raw.id || "profile";
+        identityIssues.push(
+          ...withTriggers.issues.map((issue) => `${label}: ${issue}`),
+          ...withBlocks.issues.map((issue) => `${label}: ${issue}`),
+        );
+        return withBlocks.config;
+      });
+      if (identityIssues.length > 0) {
+        alert(
+          "Não foi possível identificar a fonte governada de Entry Triggers/Block Rules novos. "
+          + "Revise as políticas de proveniência do Spot Engine antes de importar:\n"
+          + identityIssues.slice(0, 8).join("\n"),
+        );
+        setImporting(false);
+        return;
+      }
       const res = await apiPost("/profiles/bulk-import", applyToActiveProfiles
         ? {
             apply_to_active_profiles: true,
@@ -805,6 +850,14 @@ export function JsonImportBuilder({ onClose }: Props) {
                 partir dos profiles atuais. <strong>Scoring não é tocado neste modo</strong> — use a aba Scoring do
                 profile ou <code className="font-mono text-[var(--accent-primary)]">scoring_assignments</code> (mais
                 abaixo) para isso.
+              </p>
+              <p className="text-[12px] text-[var(--text-secondary)] mb-2">
+                Não precisa incluir <code className="font-mono text-[var(--accent-primary)]">source</code>/
+                <code className="font-mono text-[var(--accent-primary)]">source_provider</code>/
+                <code className="font-mono text-[var(--accent-primary)]">provider_policy_id</code> nas condições —
+                isso é preenchido automaticamente a partir da configuração governada do Spot Engine antes do envio
+                (mesmo mecanismo do editor visual). Só entra em condições genuinamente novas; condições já existentes
+                no profile mantêm sua identidade atual.
               </p>
               <pre className="text-[11px] text-[var(--text-secondary)] font-mono overflow-x-auto leading-relaxed bg-[var(--bg-tertiary)] rounded-lg p-3">{`{
   "update_indicators_only": true,

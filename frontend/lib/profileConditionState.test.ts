@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   isProfileComparisonCondition,
   normalizeProfileRuleCondition,
+  prepareProfileBlockRuleIdentities,
   prepareProfileEntryTriggerIdentities,
   profileConditionManualUpdates,
   profileConditionPrimaryIndicator,
@@ -485,4 +486,199 @@ test("a newly added live Entry Trigger still fails closed without a configured l
     "entry_triggers.conditions[0].max_age_seconds",
     "entry_triggers.conditions[0].window_seconds",
   ]);
+});
+
+test("new Block Rule condition receives governed OHLCV identity before save", () => {
+  const prepared = prepareProfileBlockRuleIdentities({
+    default_timeframe: "5m",
+    block_rules: {
+      blocks: [{
+        id: "block-new", name: "RSI guard", enabled: true, logic: "AND",
+        conditions: [{
+          id: "cond-new", type: "threshold", indicator: "rsi",
+          operator: ">=", value: 75, period: 14,
+        }],
+      }],
+    },
+  }, SOURCE_POLICIES);
+
+  assert.deepEqual(prepared.issues, []);
+  assert.deepEqual(
+    prepared.config.block_rules.blocks[0].conditions[0],
+    {
+      id: "cond-new", type: "threshold", indicator: "rsi",
+      operator: ">=", value: 75, period: 14,
+      source: "ohlcv", source_provider: "gate.io",
+      provider_policy_id: "spot_gate_closed_ohlcv_v1",
+      max_age_seconds: 360, timeframe: "5m", candle_policy: "CLOSED_ONLY",
+    },
+  );
+});
+
+test("comparison Block Rule condition receives an independently resolved identity per operand", () => {
+  const prepared = prepareProfileBlockRuleIdentities({
+    default_timeframe: "5m",
+    block_rules: {
+      blocks: [{
+        id: "block-cmp", name: "EMA cross", enabled: true, logic: "AND",
+        conditions: [{
+          id: "cond-cmp", type: "comparison", left: "price",
+          operator: "<", right: "ema50",
+        }],
+      }],
+    },
+  }, SOURCE_POLICIES);
+
+  assert.deepEqual(prepared.issues, []);
+  const condition = prepared.config.block_rules.blocks[0].conditions[0] as Record<string, any>;
+  assert.equal(condition.source, "ohlcv");
+  assert.equal(condition.timeframe, "5m");
+  assert.deepEqual(condition.resolved_operands.left, {
+    indicator: "price", source: "ohlcv", source_provider: "gate.io",
+    provider_policy_id: "spot_gate_closed_ohlcv_v1", max_age_seconds: 360,
+    timeframe: "5m", candle_policy: "CLOSED_ONLY",
+  });
+});
+
+test("adding new blocks to a legacy L3 profile does not require identity for the untouched blocks", () => {
+  // Reproduces the production failure: an L3 profile whose existing blocks
+  // predate the source contract (no identity fields at all) gets two brand
+  // new blocks appended by a JSON round trip. Only the new blocks' new
+  // conditions should receive materialized identity; the untouched legacy
+  // ones must stay exactly as they are so the backend's non-regression
+  // check (positional for block_rules) still recognizes them as unchanged.
+  const legacyBlock = (name: string, indicator: string) => ({
+    name, enabled: true, logic: "AND",
+    conditions: [{ type: "threshold", indicator, operator: ">=", value: 1 }],
+  });
+  const currentConfig = {
+    default_timeframe: "5m",
+    block_rules: {
+      blocks: [
+        legacyBlock("Spread Guard", "spread_pct"),
+        legacyBlock("Volume Guard", "macd_histogram"),
+      ],
+    },
+  };
+  const candidate = {
+    ...currentConfig,
+    block_rules: {
+      blocks: [
+        ...currentConfig.block_rules.blocks,
+        {
+          name: "MACD Momentum Decay", enabled: true, logic: "AND",
+          conditions: [
+            { type: "threshold", indicator: "macd_histogram", operator: ">", value: 0, period: 12 },
+            { type: "threshold", indicator: "macd_hist_slope_3", operator: "<", value: 0 },
+          ],
+        },
+      ],
+    },
+  };
+
+  const prepared = prepareProfileBlockRuleIdentities(
+    candidate,
+    { ohlcv: SOURCE_POLICIES.ohlcv },
+    currentConfig,
+  );
+
+  assert.deepEqual(prepared.issues, []);
+  // Untouched legacy blocks keep zero identity fields.
+  assert.equal("source" in prepared.config.block_rules.blocks[0].conditions[0], false);
+  assert.equal("source" in prepared.config.block_rules.blocks[1].conditions[0], false);
+  // The brand-new block's conditions are fully identified.
+  const newBlockConditions = prepared.config.block_rules.blocks[2].conditions as Record<string, any>[];
+  assert.equal(newBlockConditions[0].source, "ohlcv");
+  assert.equal(newBlockConditions[0].source_provider, "gate.io");
+  assert.equal(newBlockConditions[1].source, "ohlcv");
+});
+
+test("a newly added Block Rule condition still fails closed without a configured policy", () => {
+  const prepared = prepareProfileBlockRuleIdentities({
+    default_timeframe: "5m",
+    block_rules: {
+      blocks: [{
+        name: "New guard", enabled: true, logic: "AND",
+        conditions: [{ type: "threshold", indicator: "rsi", operator: ">", value: 50, required: true }],
+      }],
+    },
+  }, {}, { block_rules: { blocks: [] } });
+
+  assert.deepEqual(prepared.issues, [
+    "block_rules.blocks[0].conditions[0].source_provider",
+    "block_rules.blocks[0].conditions[0].provider_policy_id",
+    "block_rules.blocks[0].conditions[0].max_age_seconds",
+    "block_rules.blocks[0].conditions[0].candle_policy",
+  ]);
+});
+
+test("reproduces the live L3_HIGH_VOLUME_PUMP_CHASE_V1 production fix with the real governed policy", () => {
+  // Values queried read-only from the live spot_engine config
+  // (scanner.multilayer_contract.layers.L3), 2026-09-10.
+  const spotEngine = {
+    scanner: {
+      multilayer_contract: {
+        layers: {
+          L3: {
+            default_timeframe: "5m",
+            validity_margin_seconds_by_group: { structural: 717, microstructure: 741 },
+            source_policies: {
+              ohlcv: {
+                allowed_source_providers: ["gate.io"],
+                provider_policy_id: "spot_gate_closed_ohlcv_v1",
+                timeframe: "5m",
+                candle_policy: "CLOSED_ONLY",
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+  const policies = profileSourcePoliciesForEditor(spotEngine, "STANDARD", "acquisition_queue");
+
+  const currentConfig = {
+    default_timeframe: "5m",
+    block_rules: {
+      blocks: [{
+        name: "existing legacy block", enabled: true, logic: "AND",
+        conditions: [{ type: "threshold", indicator: "orderbook_depth_usdt", operator: ">=", value: 1 }],
+      }],
+    },
+  };
+  const candidate = {
+    ...currentConfig,
+    block_rules: {
+      blocks: [
+        ...currentConfig.block_rules.blocks,
+        {
+          name: "MACD Momentum Decay", enabled: true, logic: "AND", timeframe: "5m",
+          conditions: [
+            { type: "threshold", indicator: "macd_histogram", operator: ">", value: 0, period: 12 },
+            { type: "threshold", indicator: "macd_hist_slope_3", operator: "<", value: 0 },
+          ],
+        },
+        {
+          name: "Extensao EMA21 VWAP com perda de velocidade", enabled: true, logic: "AND", timeframe: "5m",
+          conditions: [
+            { type: "threshold", indicator: "ema21_distance_pct", operator: ">", value: 1.5 },
+            { type: "threshold", indicator: "vwap_distance_pct", operator: ">", value: 2.0 },
+          ],
+        },
+      ],
+    },
+  };
+
+  const prepared = prepareProfileBlockRuleIdentities(candidate, policies, currentConfig);
+
+  assert.deepEqual(prepared.issues, []);
+  for (const block of prepared.config.block_rules.blocks.slice(1)) {
+    for (const condition of block.conditions as Record<string, any>[]) {
+      assert.equal(condition.source, "ohlcv");
+      assert.equal(condition.source_provider, "gate.io");
+      assert.equal(condition.provider_policy_id, "spot_gate_closed_ohlcv_v1");
+      assert.equal(condition.candle_policy, "CLOSED_ONLY");
+      assert.equal(condition.max_age_seconds, 717);
+    }
+  }
 });

@@ -300,18 +300,9 @@ export function profileSourcePoliciesForEditor(
   });
 }
 
-/**
- * Complete hidden feature identity for Entry Triggers from governed DB config.
- * Existing identity is retained when it still addresses the same indicator.
- */
-export function prepareProfileEntryTriggerIdentities<T extends Record<string, any>>(
-  config: T,
-  policies: ProfileSourcePolicies,
-  currentConfig?: Record<string, any> | null,
-): PreparedProfileEditorConfig<T> {
-  const issues: string[] = [];
-  const defaultTimeframe = String(config.default_timeframe || "");
-  const featureKey = (condition: Record<string, any>) => JSON.stringify(
+/** Address legacy debt by feature (indicator/timeframe/period), not array index. */
+function _conditionFeatureKey(condition: Record<string, any>): string {
+  return JSON.stringify(
     isProfileComparisonCondition(condition)
       ? {
           type: "comparison",
@@ -330,60 +321,137 @@ export function prepareProfileEntryTriggerIdentities<T extends Record<string, an
           reference_window: condition.reference_window ?? null,
         },
   );
+}
+
+/**
+ * Complete hidden feature identity for one flat condition list from governed
+ * DB config. A condition already addressing the same feature (indicator,
+ * timeframe, period) as one in `currentFeatureCounts` keeps its existing
+ * identity untouched; anything new gets a freshly derived one, consuming one
+ * count from the shared pool so debt isn't double-forgiven across sections.
+ */
+function _materializeConditionIdentities(
+  conditions: Record<string, any>[],
+  currentFeatureCounts: Map<string, number>,
+  policies: ProfileSourcePolicies,
+  defaultTimeframe: string,
+  pathPrefix: string,
+  issues: string[],
+): Record<string, any>[] {
+  return conditions.map((raw, index) => {
+    const condition = { ...raw };
+    const key = _conditionFeatureKey(condition);
+    const matchingCurrentCount = currentFeatureCounts.get(key) || 0;
+    if (matchingCurrentCount > 0) {
+      currentFeatureCounts.set(key, matchingCurrentCount - 1);
+      return condition;
+    }
+    const path = `${pathPrefix}[${index}]`;
+    if (isProfileComparisonCondition(condition)) {
+      const operands = condition.resolved_operands || {};
+      const left = String(condition.left || "price");
+      const right = String(condition.right || "ema9");
+      const resolvedOperands: Record<string, any> = {
+        left: conditionIdentity(
+          left, condition, operands.left || {}, policies, defaultTimeframe,
+          `${path}.resolved_operands.left`, issues, true,
+        ),
+      };
+      if (condition.operator !== "between") {
+        resolvedOperands.right = conditionIdentity(
+          right, condition, operands.right || {}, policies, defaultTimeframe,
+          `${path}.resolved_operands.right`, issues, true,
+        );
+      }
+      condition.resolved_operands = resolvedOperands;
+      const leftIdentity = resolvedOperands.left;
+      for (const key of [
+        "source", "source_provider", "provider_policy_id", "max_age_seconds",
+        "timeframe", "window_seconds", "snapshot", "candle_policy",
+      ]) {
+        if (leftIdentity[key] === undefined) delete condition[key];
+        else condition[key] = leftIdentity[key];
+      }
+      return condition;
+    }
+
+    const indicator = String(condition.indicator || condition.field || "rsi");
+    return conditionIdentity(
+      indicator, condition, condition, policies, defaultTimeframe, path, issues,
+    );
+  });
+}
+
+/**
+ * Complete hidden feature identity for Entry Triggers from governed DB config.
+ * Existing identity is retained when it still addresses the same indicator.
+ */
+export function prepareProfileEntryTriggerIdentities<T extends Record<string, any>>(
+  config: T,
+  policies: ProfileSourcePolicies,
+  currentConfig?: Record<string, any> | null,
+): PreparedProfileEditorConfig<T> {
+  const issues: string[] = [];
+  const defaultTimeframe = String(config.default_timeframe || "");
   const currentFeatureCounts = new Map<string, number>();
   for (const condition of currentConfig?.entry_triggers?.conditions || []) {
-    const key = featureKey(condition);
+    const key = _conditionFeatureKey(condition);
     currentFeatureCounts.set(key, (currentFeatureCounts.get(key) || 0) + 1);
   }
-  const conditions = (config.entry_triggers?.conditions || []).map(
-    (raw: Record<string, any>, index: number) => {
-      const condition = { ...raw };
-      const key = featureKey(condition);
-      const matchingCurrentCount = currentFeatureCounts.get(key) || 0;
-      if (matchingCurrentCount > 0) {
-        currentFeatureCounts.set(key, matchingCurrentCount - 1);
-        return condition;
-      }
-      const path = `entry_triggers.conditions[${index}]`;
-      if (isProfileComparisonCondition(condition)) {
-        const operands = condition.resolved_operands || {};
-        const left = String(condition.left || "price");
-        const right = String(condition.right || "ema9");
-        const resolvedOperands: Record<string, any> = {
-          left: conditionIdentity(
-            left, condition, operands.left || {}, policies, defaultTimeframe,
-            `${path}.resolved_operands.left`, issues, true,
-          ),
-        };
-        if (condition.operator !== "between") {
-          resolvedOperands.right = conditionIdentity(
-            right, condition, operands.right || {}, policies, defaultTimeframe,
-            `${path}.resolved_operands.right`, issues, true,
-          );
-        }
-        condition.resolved_operands = resolvedOperands;
-        const leftIdentity = resolvedOperands.left;
-        for (const key of [
-          "source", "source_provider", "provider_policy_id", "max_age_seconds",
-          "timeframe", "window_seconds", "snapshot", "candle_policy",
-        ]) {
-          if (leftIdentity[key] === undefined) delete condition[key];
-          else condition[key] = leftIdentity[key];
-        }
-        return condition;
-      }
-
-      const indicator = String(condition.indicator || condition.field || "rsi");
-      const identity = conditionIdentity(
-        indicator, condition, condition, policies, defaultTimeframe, path, issues,
-      );
-      return identity;
-    },
+  const conditions = _materializeConditionIdentities(
+    config.entry_triggers?.conditions || [],
+    currentFeatureCounts,
+    policies,
+    defaultTimeframe,
+    "entry_triggers.conditions",
+    issues,
   );
   return {
     config: {
       ...config,
       entry_triggers: { ...(config.entry_triggers || {}), conditions },
+    },
+    issues: [...new Set(issues)],
+  } as PreparedProfileEditorConfig<T>;
+}
+
+/**
+ * Complete hidden feature identity for Block Rules from governed DB config,
+ * mirroring prepareProfileEntryTriggerIdentities. Existing debt is matched
+ * by feature across the whole block_rules tree (not block position), since
+ * blocks can be reordered or renamed without changing what they evaluate.
+ */
+export function prepareProfileBlockRuleIdentities<T extends Record<string, any>>(
+  config: T,
+  policies: ProfileSourcePolicies,
+  currentConfig?: Record<string, any> | null,
+): PreparedProfileEditorConfig<T> {
+  const issues: string[] = [];
+  const defaultTimeframe = String(config.default_timeframe || "");
+  const currentFeatureCounts = new Map<string, number>();
+  for (const block of currentConfig?.block_rules?.blocks || []) {
+    for (const condition of block?.conditions || []) {
+      const key = _conditionFeatureKey(condition);
+      currentFeatureCounts.set(key, (currentFeatureCounts.get(key) || 0) + 1);
+    }
+  }
+  const blocks = (config.block_rules?.blocks || []).map(
+    (block: Record<string, any>, blockIndex: number) => ({
+      ...block,
+      conditions: _materializeConditionIdentities(
+        block.conditions || [],
+        currentFeatureCounts,
+        policies,
+        defaultTimeframe,
+        `block_rules.blocks[${blockIndex}].conditions`,
+        issues,
+      ),
+    }),
+  );
+  return {
+    config: {
+      ...config,
+      block_rules: { ...(config.block_rules || {}), blocks },
     },
     issues: [...new Set(issues)],
   } as PreparedProfileEditorConfig<T>;
