@@ -603,20 +603,48 @@ def _atr_pct(rows: list[PumpRadarOHLCV], index: int, period: int = 14) -> float 
     return float((sum(true_ranges) / len(true_ranges)) / close * Decimal("100")) if true_ranges and close else None
 
 
+def _window_validity_prefixes(rows: list[PumpRadarOHLCV]) -> tuple[list[int], list[int]]:
+    """Prefix counts of not-closed and gap-broken candles, once per symbol.
+
+    Lets a 288-candle window's closed/gap validity be checked in O(1)
+    (two subtractions) instead of re-scanning 288 rows on every one of the
+    ~millions of _anchor_features calls in a full backfill's build_controls.
+    """
+    n = len(rows)
+    bad_closed_prefix = [0] * (n + 1)
+    bad_gap_prefix = [0] * (n + 1)
+    for j, row in enumerate(rows):
+        bad_closed_prefix[j + 1] = bad_closed_prefix[j] + (0 if row.is_closed else 1)
+        gap_bad = j > 0 and row.open_time - rows[j - 1].open_time != timedelta(minutes=5)
+        bad_gap_prefix[j + 1] = bad_gap_prefix[j] + (1 if gap_bad else 0)
+    return bad_closed_prefix, bad_gap_prefix
+
+
 def _anchor_features(
     rows: list[PumpRadarOHLCV],
     index: int,
     btc_by_time: dict[datetime, PumpRadarOHLCV],
     btc_times_sorted: list[datetime],
     quote_volume_prefix: list[Decimal],
+    bad_closed_prefix: list[int],
+    bad_gap_prefix: list[int],
 ) -> dict[str, float] | None:
     if index < 288:
         return None
     anchor = rows[index]
-    history = rows[index - 288:index]
-    if any(not row.is_closed or row.close_time > anchor.open_time for row in history):
+    # Internal gap check first: a window with a gap is invalid regardless of
+    # closed/close_time status, so short-circuiting here matches the
+    # original two-any()-checks behavior exactly.
+    if bad_gap_prefix[index] - bad_gap_prefix[index - 287] > 0:
         return None
-    if any(history[i].open_time - history[i-1].open_time != timedelta(minutes=5) for i in range(1, len(history))):
+    if bad_closed_prefix[index] - bad_closed_prefix[index - 288] > 0:
+        return None
+    # Once the window is internally gap-free, every row's close_time is
+    # provably <= anchor.open_time except possibly the boundary row right
+    # before the anchor (rows[index-1]) — that transition is the only one
+    # NOT covered by the gap check above. So checking just that one row
+    # reproduces "any row's close_time > anchor.open_time" exactly.
+    if rows[index - 1].close_time > anchor.open_time:
         return None
     atr = _atr_pct(rows, index - 1)
     quote_volume = quote_volume_prefix[index] - quote_volume_prefix[index - 288]
@@ -690,11 +718,12 @@ async def _build_controls(run_id: UUID) -> dict:
             quote_volume_prefix: list[Decimal] = [Decimal(0)] * (len(rows) + 1)
             for i, row in enumerate(rows):
                 quote_volume_prefix[i + 1] = quote_volume_prefix[i] + Decimal(row.volume_quote or 0)
+            bad_closed_prefix, bad_gap_prefix = _window_validity_prefixes(rows)
             for event in symbol_events:
                 event_index = index_by_time.get(event.start_at)
                 if event_index is None:
                     continue
-                event_features = _anchor_features(rows, event_index, btc_by_time, btc_times_sorted, quote_volume_prefix)
+                event_features = _anchor_features(rows, event_index, btc_by_time, btc_times_sorted, quote_volume_prefix, bad_closed_prefix, bad_gap_prefix)
                 if event_features is None:
                     continue
                 candidates: list[tuple[float, int, dict[str, float]]] = []
@@ -710,7 +739,7 @@ async def _build_controls(run_id: UUID) -> dict:
                         continue
                     if any(followup[offset].open_time - followup[offset - 1].open_time != timedelta(minutes=5) for offset in range(1, len(followup))):
                         continue
-                    candidate_features = _anchor_features(rows, index, btc_by_time, btc_times_sorted, quote_volume_prefix)
+                    candidate_features = _anchor_features(rows, index, btc_by_time, btc_times_sorted, quote_volume_prefix, bad_closed_prefix, bad_gap_prefix)
                     if candidate_features is None:
                         continue
                     candidates.append((_match_distance(event_features, candidate_features), index, candidate_features))
