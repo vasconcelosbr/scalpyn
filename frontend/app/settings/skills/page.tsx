@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { Sparkles, Plus, Edit2, Trash2, ChevronDown, X, AlertTriangle, RefreshCw } from "lucide-react";
+import { formatDate } from "@/lib/datetime";
 
 const API_BASE = "/api/ai-skills";
 
@@ -188,7 +189,7 @@ export default function AiSkillsPage() {
 
   const fmtDate = (iso: string | null) => {
     if (!iso) return "—";
-    return new Date(iso).toLocaleDateString("pt-BR", { day: "2-digit", month: "short", year: "numeric" });
+    return formatDate(iso, { day: "2-digit", month: "short", year: "numeric" });
   };
 
   return (

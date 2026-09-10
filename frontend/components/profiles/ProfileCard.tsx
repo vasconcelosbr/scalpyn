@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Settings2, Trash2, Play, Copy, Bot } from "lucide-react";
+import { formatDate } from "@/lib/datetime";
 
 interface ProfileCardProps {
   profile: {
@@ -141,7 +142,7 @@ export function ProfileCard({
         <div className="text-[11px] text-[var(--text-tertiary)] mt-4">
           Updated{" "}
           {profile.updated_at
-            ? new Date(profile.updated_at).toLocaleDateString()
+            ? formatDate(profile.updated_at)
             : "—"}
         </div>
       </div>

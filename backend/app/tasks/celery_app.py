@@ -57,11 +57,12 @@ are actually used; ``max_retries`` here is the upper bound.
 import os
 
 from celery import Celery
-from celery.signals import before_task_publish
+from celery.signals import after_setup_logger, after_setup_task_logger, before_task_publish
 from celery.schedules import crontab
 from kombu import Exchange, Queue
 
 from ..config import settings
+from ..logging_config import install_brazil_time_logging
 
 # ── Queue names (single source of truth) ─────────────────────────────────────
 QUEUE_MICROSTRUCTURE = "microstructure"
@@ -336,6 +337,14 @@ def reject_unrouted_task_publish(
     """Fail closed if routing resolves to the non-consumed sentinel queue."""
     if exchange == _NO_DEFAULT_QUEUE_NAME or routing_key == _NO_DEFAULT_QUEUE_NAME:
         raise RuntimeError(f"CELERY_TASK_ROUTE_REQUIRED: {sender or 'unknown'}")
+
+
+@after_setup_logger.connect
+@after_setup_task_logger.connect
+def _use_brazil_time_in_logs(**_kwargs) -> None:
+    """Display-only: log lines print America/Sao_Paulo wall-clock time.
+    Does not touch conf.timezone/enable_utc — task scheduling/ETA stays UTC."""
+    install_brazil_time_logging()
 
 # ── Per-task cost guards (invariant: no unbounded work) ──────────────────────
 # Microstructure: short, predictable, must fit inside the 5-min tick.

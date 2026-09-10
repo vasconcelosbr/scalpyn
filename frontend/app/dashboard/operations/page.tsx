@@ -36,6 +36,7 @@ import {
   YAxis,
 } from "recharts";
 import { apiGet } from "@/lib/api";
+import { formatDate, formatDateTime, formatTime } from "@/lib/datetime";
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
 const C = {
@@ -314,7 +315,7 @@ function fmtPctSigned(v: number | null | undefined, digits = 2): string {
 }
 function fmtTime(iso: string | null | undefined): string {
   if (!iso) return "—";
-  return new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return formatTime(iso, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 function fmtMs(v: number | null | undefined, digits = 0): string {
   if (v == null || Number.isNaN(v)) return "—";
@@ -887,7 +888,7 @@ function IngestRateChart({ data }: { data: OhlcvRateResp | null }) {
   const chartData = useMemo(
     () =>
       (data?.buckets ?? []).map((b) => ({
-        label: new Date(b.bucket).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
+        label: formatTime(b.bucket, { hour: "2-digit", minute: "2-digit" }),
         candles: b.candles,
       })),
     [data],
@@ -990,7 +991,7 @@ function TradePerformancePanel({ data }: { data: TradesResp | null }) {
   const curve = useMemo(
     () =>
       (data?.cumulative_pnl ?? []).map((p) => ({
-        label: new Date(p.time).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" }),
+        label: formatDate(p.time, { day: "2-digit", month: "2-digit" }),
         value: p.cumulative_pnl_pct,
       })),
     [data],
@@ -1119,7 +1120,7 @@ function MLDatasetPanel({ data }: { data: MlResp | null }) {
                     <td className="py-2 px-2 tabular-nums" style={{ color: C.textSecondary }}>{r.time_to_result ?? "—"}</td>
                     <td className="py-2 px-2 tabular-nums" style={{ color: C.textSecondary }}>{r.entry_price.toFixed(4)}</td>
                     <td className="py-2 px-2 tabular-nums" style={{ color: C.textSecondary }}>{r.exit_price?.toFixed(4) ?? "—"}</td>
-                    <td className="py-2 px-2" style={{ color: C.textTertiary }}>{new Date(r.timestamp_entry).toLocaleString("pt-BR")}</td>
+                    <td className="py-2 px-2" style={{ color: C.textTertiary }}>{formatDateTime(r.timestamp_entry)}</td>
                   </tr>
                 );
               })}

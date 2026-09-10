@@ -19,6 +19,7 @@ import {
   Upload,
 } from "lucide-react";
 import { apiGet, apiPost } from "@/lib/api";
+import { formatDateTime } from "@/lib/datetime";
 import { ModuleAIAnalysisAction } from "@/components/ai/ModuleAIAnalysisAction";
 import {
   SHADOW_REPORT_OUTCOMES,
@@ -643,7 +644,7 @@ export default function DetailedReportWorkspace() {
               <tbody className="divide-y divide-white/[0.055]">
                 {(trades?.items ?? []).map((trade) => (
                   <tr key={trade.id} className="text-xs text-[#b9c1d1] hover:bg-white/[0.025]">
-                    <td className="whitespace-nowrap px-4 py-3 font-mono text-[11px] text-[#8993a8]">{trade.event_at ? new Date(trade.event_at).toLocaleString("pt-BR") : "—"}</td>
+                    <td className="whitespace-nowrap px-4 py-3 font-mono text-[11px] text-[#8993a8]">{trade.event_at ? formatDateTime(trade.event_at) : "—"}</td>
                     <td className="px-4 py-3 font-semibold text-[#edf0f7]">{trade.symbol}</td>
                     <td className="max-w-[230px] px-4 py-3"><div className="truncate text-[#d2d8e5]">{trade.profile_name ?? "Sem profile"}</div><div className="truncate text-[10px] text-[#687287]">{trade.watchlist_name ?? SOURCE_LABEL[trade.source]}</div></td>
                     <td className="px-4 py-3"><span className={`rounded-md border px-2 py-1 font-semibold ${trade.outcome === "TP_HIT" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" : trade.outcome === "SL_HIT" ? "border-rose-500/30 bg-rose-500/10 text-rose-300" : "border-sky-500/30 bg-sky-500/10 text-sky-300"}`}>{OUTCOME_LABEL[trade.outcome]}</span></td>

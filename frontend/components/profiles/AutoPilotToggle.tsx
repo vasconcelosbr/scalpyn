@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { Brain, ChevronDown, ChevronUp, Clock } from 'lucide-react'
+import { formatDateTime } from '@/lib/datetime'
 
 interface Props {
   profileId: string
@@ -61,7 +62,7 @@ export default function AutoPilotToggle({ profileId, enabled, lastRun, onToggle 
         </span>
         {lastRun && (
           <span style={{ fontSize: 10, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>
-            {new Date(lastRun).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+            {formatDateTime(lastRun, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
           </span>
         )}
         <button onClick={() => setExpanded(!expanded)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, display: 'flex' }}>

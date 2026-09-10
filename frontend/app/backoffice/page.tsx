@@ -6,6 +6,7 @@ import {
   Zap, Target, Radio, XCircle, Info,
 } from "lucide-react";
 import { apiGet } from "@/lib/api";
+import { formatTime } from "@/lib/datetime";
 
 /* ── Types ── */
 interface IntegrityData {
@@ -149,7 +150,7 @@ function AlertCard({ alert }: { alert: Alert }) {
           {alert.message}
         </p>
         <span style={{ fontSize: "11px", color: "var(--text-tertiary)", fontFamily: "var(--font-mono)" }}>
-          {new Date(alert.created_at).toLocaleTimeString("en", { hour: "2-digit", minute: "2-digit" })}
+          {formatTime(alert.created_at, { hour: "2-digit", minute: "2-digit" })}
         </span>
       </div>
       <span
@@ -420,7 +421,7 @@ export default function BackofficePage() {
                         </td>
                         <td>
                           <span style={{ fontFamily: "var(--font-mono)", fontSize: "12px", color: "var(--text-secondary)" }}>
-                            {new Date(d.created_at).toLocaleTimeString("en", { hour: "2-digit", minute: "2-digit" })}
+                            {formatTime(d.created_at, { hour: "2-digit", minute: "2-digit" })}
                           </span>
                         </td>
                       </tr>

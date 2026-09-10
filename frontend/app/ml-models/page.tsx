@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { apiGet } from "@/lib/api";
 import { buildModelDatasetAudit, type AuditWindow } from "@/lib/mlModelAudit";
+import { formatDateTime } from "@/lib/datetime";
 import { Brain, CheckCircle, Archive, ChevronDown, ChevronRight, ShieldCheck } from "lucide-react";
 import { ModuleAIAnalysisAction } from "@/components/ai/ModuleAIAnalysisAction";
 
@@ -91,7 +92,7 @@ function fmtPct(v: number | null): string {
 
 function fmtDateTime(s: string | null): string {
   if (!s) return "—";
-  return new Date(s).toLocaleString("pt-BR", {
+  return formatDateTime(s, {
     day: "2-digit", month: "short", year: "numeric",
     hour: "2-digit", minute: "2-digit",
   });

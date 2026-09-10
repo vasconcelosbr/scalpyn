@@ -11,6 +11,7 @@ import {
 } from "lightweight-charts";
 
 import type { ShadowTradeChartResponse } from "./types";
+import { chartTickMarkFormatter, chartTimeFormatter, formatTime } from "@/lib/datetime";
 
 const COLORS = {
   bg: "#090c12",
@@ -38,12 +39,7 @@ function containingCandleTime(
 }
 
 function exactTime(value: string): string {
-  return new Intl.DateTimeFormat("pt-BR", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).format(new Date(value));
+  return formatTime(value, { hour12: false });
 }
 
 export function TradeCandlestickChart({ data }: { data: ShadowTradeChartResponse }) {
@@ -84,12 +80,14 @@ export function TradeCandlestickChart({ data }: { data: ShadowTradeChartResponse
         borderColor: COLORS.border,
         scaleMargins: { top: 0.12, bottom: 0.12 },
       },
+      localization: { timeFormatter: chartTimeFormatter },
       timeScale: {
         borderColor: COLORS.border,
         timeVisible: true,
         secondsVisible: true,
         rightOffset: 3,
         barSpacing: 9,
+        tickMarkFormatter: chartTickMarkFormatter,
       },
       crosshair: {
         vertLine: { color: "rgba(90, 134, 255, 0.55)", labelBackgroundColor: COLORS.blue },

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { apiGet, apiFetch } from "@/lib/api";
+import { formatDate } from "@/lib/datetime";
 import { Users, ShieldAlert } from "lucide-react";
 
 interface User {
@@ -164,7 +165,7 @@ export default function AdminPage() {
                         </span>
                       </td>
                       <td style={{ padding: "10px 14px", color: "var(--text-tertiary)", fontSize: 12 }}>
-                        {new Date(user.created_at).toLocaleDateString()}
+                        {formatDate(user.created_at)}
                       </td>
                       <td style={{ padding: "10px 14px" }}>
                         <select

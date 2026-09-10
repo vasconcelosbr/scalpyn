@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { Search, Filter, ChevronDown, ChevronRight, CheckCircle, XCircle } from "lucide-react";
 import { apiGet } from "@/lib/api";
+import { formatDateTime } from "@/lib/datetime";
 
 interface AssetTrace {
   id: string;
@@ -262,7 +263,7 @@ function TraceRow({ item, expanded, onToggle }: { item: AssetTrace; expanded: bo
         </td>
         <td>{item.strategy}</td>
         <td className="text-[var(--text-secondary)]">
-          {new Date(item.created_at).toLocaleString("en", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+          {formatDateTime(item.created_at, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
         </td>
       </tr>
       {expanded && (

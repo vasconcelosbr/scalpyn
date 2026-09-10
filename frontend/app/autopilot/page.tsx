@@ -13,6 +13,7 @@ import {
   Shield,
 } from "lucide-react";
 import { apiGet, apiPost } from "@/lib/api";
+import { formatDateTime } from "@/lib/datetime";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -71,7 +72,7 @@ interface ProfileVersion {
 
 function fmtDate(iso: string | null) {
   if (!iso) return "—";
-  return new Date(iso).toLocaleString("pt-BR", {
+  return formatDateTime(iso, {
     day: "2-digit", month: "2-digit", year: "2-digit",
     hour: "2-digit", minute: "2-digit",
   });

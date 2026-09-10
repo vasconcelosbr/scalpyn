@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Plus, Layers, Trash2, Briefcase } from "lucide-react";
 import { apiGet, apiPost, apiDelete, apiFetch } from "@/lib/api";
+import { formatDate } from "@/lib/datetime";
 
 interface Profile {
   id: string;
@@ -248,7 +249,7 @@ export default function PoolsPage() {
                   </div>
                 )}
                 <div className="text-[12px] text-[var(--text-tertiary)]">
-                  Created {pool.created_at ? new Date(pool.created_at).toLocaleDateString() : "—"}
+                  Created {pool.created_at ? formatDate(pool.created_at) : "—"}
                 </div>
               </div>
               <div className="border-t border-[var(--border-default)] p-3 flex justify-between">

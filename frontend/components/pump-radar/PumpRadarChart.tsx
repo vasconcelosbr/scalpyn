@@ -12,6 +12,7 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts";
 import { Expand, Minimize2 } from "lucide-react";
+import { chartTickMarkFormatter, chartTimeFormatter } from "@/lib/datetime";
 
 export type RadarCandle = {
   time: string;
@@ -120,7 +121,8 @@ export function PumpRadarChart({
       layout: { background: { type: ColorType.Solid, color: COLORS.background }, textColor: COLORS.text, attributionLogo: false, fontFamily: '"JetBrains Mono", monospace' },
       grid: { vertLines: { color: COLORS.grid }, horzLines: { color: COLORS.grid } },
       rightPriceScale: { borderColor: COLORS.border, scaleMargins: { top: .08, bottom: showVolume ? .26 : .10 } },
-      timeScale: { borderColor: COLORS.border, timeVisible: true, secondsVisible: false, rightOffset: 2, barSpacing: compact ? 6 : 8 },
+      localization: { timeFormatter: chartTimeFormatter },
+      timeScale: { borderColor: COLORS.border, timeVisible: true, secondsVisible: false, rightOffset: 2, barSpacing: compact ? 6 : 8, tickMarkFormatter: chartTickMarkFormatter },
       crosshair: { vertLine: { color: "rgba(49,135,255,.45)", labelBackgroundColor: COLORS.blue }, horzLine: { color: "rgba(49,135,255,.32)", labelBackgroundColor: COLORS.blue } },
       handleScroll: true,
       handleScale: true,

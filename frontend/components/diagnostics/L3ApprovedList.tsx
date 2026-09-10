@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import { CheckCircle2, Inbox, WalletCards } from "lucide-react";
 import { apiGet } from "@/lib/api";
+import { formatTime } from "@/lib/datetime";
 
 /**
  * One row from ``GET /api/diagnostics/l3-queue`` — the L3-approved
@@ -389,7 +390,7 @@ function clamp(n: number): number {
 function fmtTime(iso?: string | null): string {
   if (!iso) return "—";
   try {
-    return new Date(iso).toLocaleTimeString();
+    return formatTime(iso);
   } catch {
     return "—";
   }

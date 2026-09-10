@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useTradingConfig } from '@/hooks/useTradingConfig';
 import { EngineStatusBar } from '@/components/trading-desk/shared/EngineStatusBar';
 import { apiGet } from '@/lib/api';
+import { formatDateTime } from '@/lib/datetime';
 import { ConfigSection } from '@/components/trading-desk/shared/ConfigSection';
 import { SliderWithValue } from '@/components/trading-desk/shared/SliderWithValue';
 import { SaveConfigBar } from '@/components/trading-desk/shared/SaveConfigBar';
@@ -685,7 +686,7 @@ export default function FuturesTradingPage() {
                         }}
                       >
                         <td style={{ padding: '8px 10px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
-                          {item.decided_at ? new Date(item.decided_at).toLocaleString() : '—'}
+                          {item.decided_at ? formatDateTime(item.decided_at) : '—'}
                         </td>
                         <td style={{ padding: '8px 10px', color: 'var(--text-primary)', fontWeight: 500 }}>
                           {item.symbol}

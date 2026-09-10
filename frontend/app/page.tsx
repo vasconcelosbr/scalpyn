@@ -13,6 +13,7 @@ import {
 } from "recharts";
 import { formatCurrency } from "@/lib/utils";
 import { apiGet } from "@/lib/api";
+import { formatDate } from "@/lib/datetime";
 
 // ── Skeleton loader ────────────────────────────────────────────────────────────
 function MetricSkeleton() {
@@ -48,7 +49,7 @@ function ChartTooltip({ active, payload, label }: any) {
       }}
     >
       <p style={{ fontSize: "11px", color: "var(--text-tertiary)", marginBottom: "4px" }}>
-        {label ? new Date(label).toLocaleDateString("en", { month: "short", day: "numeric" }) : ""}
+        {label ? formatDate(label, { month: "short", day: "numeric" }) : ""}
       </p>
       <p
         style={{
@@ -87,7 +88,7 @@ export default function Home() {
 
   useEffect(() => {
     setDateLabel(
-      new Date().toLocaleDateString("en", {
+      formatDate(new Date(), {
         weekday: "long",
         month: "long",
         day: "numeric",
@@ -196,7 +197,7 @@ export default function Home() {
                     tick={{ fill: "#555B6E", fontSize: 10, fontFamily: "JetBrains Mono" }}
                     tickFormatter={(v) =>
                       v
-                        ? new Date(v).toLocaleDateString("en", {
+                        ? formatDate(v, {
                             month: "short",
                             day: "numeric",
                           })

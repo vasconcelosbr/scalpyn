@@ -8,6 +8,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import { apiGet, apiPost, apiPut } from "@/lib/api";
+import { formatDateTime, formatTime } from "@/lib/datetime";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -322,7 +323,7 @@ interface AutopilotStatus {
 
 function fmtDate(iso: string | null | undefined) {
   if (!iso) return "—";
-  return new Date(iso).toLocaleString("pt-BR", {
+  return formatDateTime(iso, {
     day: "2-digit", month: "2-digit", year: "2-digit",
     hour: "2-digit", minute: "2-digit",
   });
@@ -3017,11 +3018,11 @@ export default function ProfileIntelligencePage() {
                   </div>
                   <div className="flex justify-between text-[12px]">
                     <span className="text-[var(--text-tertiary)]">Último heartbeat</span>
-                    <span className="text-[var(--text-primary)]">{liveStatus.last_heartbeat_at ? new Date(liveStatus.last_heartbeat_at).toLocaleTimeString() : "—"}</span>
+                    <span className="text-[var(--text-primary)]">{liveStatus.last_heartbeat_at ? formatTime(liveStatus.last_heartbeat_at) : "—"}</span>
                   </div>
                   <div className="flex justify-between text-[12px]">
                     <span className="text-[var(--text-tertiary)]">Próximo ciclo</span>
-                    <span className="text-[var(--text-primary)]">{liveStatus.next_cycle_at ? new Date(liveStatus.next_cycle_at).toLocaleTimeString() : "—"}</span>
+                    <span className="text-[var(--text-primary)]">{liveStatus.next_cycle_at ? formatTime(liveStatus.next_cycle_at) : "—"}</span>
                   </div>
                   <div className="flex justify-between text-[12px]">
                     <span className="text-[var(--text-tertiary)]">Worker</span>
@@ -3082,7 +3083,7 @@ export default function ProfileIntelligencePage() {
                   {liveAiReview.next_review_at && (
                     <div className="flex justify-between text-[12px]">
                       <span className="text-[var(--text-tertiary)]">Próxima revisão</span>
-                      <span className="text-[var(--text-primary)]">{new Date(liveAiReview.next_review_at).toLocaleTimeString()}</span>
+                      <span className="text-[var(--text-primary)]">{formatTime(liveAiReview.next_review_at)}</span>
                     </div>
                   )}
 
@@ -3095,7 +3096,7 @@ export default function ProfileIntelligencePage() {
                         ["Aba/visão", liveAiReview.analysis_context.dataset?.portfolio_view],
                         ["Sources", liveAiReview.analysis_context.dataset?.sources?.join(", ")],
                         ["Janela", `${liveAiReview.analysis_context.window?.window_hours}h`],
-                        ["Período", `${liveAiReview.analysis_context.window?.window_start ? new Date(liveAiReview.analysis_context.window.window_start).toLocaleString() : "—"} → ${liveAiReview.analysis_context.window?.window_end ? new Date(liveAiReview.analysis_context.window.window_end).toLocaleString() : "—"}`],
+                        ["Período", `${liveAiReview.analysis_context.window?.window_start ? formatDateTime(liveAiReview.analysis_context.window.window_start) : "—"} → ${liveAiReview.analysis_context.window?.window_end ? formatDateTime(liveAiReview.analysis_context.window.window_end) : "—"}`],
                         ["Filtro", "COMPLETED + pnl_pct IS NOT NULL + profile_id IS NOT NULL"],
                         ["Trades analisados", liveAiReview.analysis_context.sample?.trades_count],
                         ["Profiles", liveAiReview.analysis_context.sample?.profiles_count],
@@ -3277,7 +3278,7 @@ export default function ProfileIntelligencePage() {
                 {liveActivity.map((ev, i) => (
                   <div key={i} className="flex items-start gap-2 text-[11px] py-1.5 border-b border-[var(--border-subtle)]">
                     <span className={`shrink-0 font-mono w-16 truncate ${ev.severity === "error" ? "text-red-400" : ev.severity === "warn" ? "text-yellow-400" : "text-[var(--text-tertiary)]"}`}>
-                      {ev.created_at ? new Date(ev.created_at).toLocaleTimeString() : "—"}
+                      {ev.created_at ? formatTime(ev.created_at) : "—"}
                     </span>
                     <span className="px-1 py-0.5 rounded text-[10px] bg-[var(--bg-input)] text-[var(--text-secondary)] shrink-0">{ev.event_type}</span>
                     <span className="text-[var(--text-primary)] truncate">{ev.message}</span>

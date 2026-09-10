@@ -8,6 +8,7 @@ import {
   type LogFilter,
   type StreamStatus,
 } from "@/hooks/useLiveLogStream";
+import { formatTime } from "@/lib/datetime";
 
 interface LiveLogStreamProps {
   /** Hook handle — passed in by the page so the same stream instance
@@ -383,7 +384,7 @@ const STATUS_PALETTE: Record<string, Palette> = {
 function fmtTime(iso?: string | null): string {
   if (!iso) return "—:—:—";
   try {
-    return new Date(iso).toLocaleTimeString();
+    return formatTime(iso);
   } catch {
     return "—:—:—";
   }

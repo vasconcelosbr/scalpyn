@@ -10,6 +10,7 @@ import {
 } from '@/components/watchlist/RejectedAssetTable';
 import { apiFetch } from '@/lib/api';
 import { useWebSocket, getCurrentUserId } from '@/hooks/useWebSocket';
+import { formatDateTime } from '@/lib/datetime';
 import {
   Plus,
   RefreshCw,
@@ -1275,7 +1276,7 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
                 ? 'text-amber-400'
                 : 'text-emerald-500'
             }`}
-            title={wl.last_scanned_at ? `Last scan: ${new Date(wl.last_scanned_at).toLocaleString()}` : 'Never scanned'}
+            title={wl.last_scanned_at ? `Last scan: ${formatDateTime(wl.last_scanned_at)}` : 'Never scanned'}
           >
             <Clock size={10} />
             {wl.last_scanned_at ? timeAgo(wl.last_scanned_at) : 'pending'}
@@ -1649,7 +1650,7 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
                             Favorável agora
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-right text-[#64748B]" title={refreshedAt?.toLocaleString()}>
+                        <td className="px-4 py-3 text-right text-[#64748B]" title={refreshedAt ? formatDateTime(refreshedAt) : undefined}>
                           {asset.refreshed_at ? timeAgo(asset.refreshed_at) : '—'}
                         </td>
                       </tr>

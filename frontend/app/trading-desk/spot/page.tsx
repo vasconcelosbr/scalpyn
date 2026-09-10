@@ -8,6 +8,7 @@ import { ConfigSection } from '@/components/trading-desk/shared/ConfigSection';
 import { SliderWithValue } from '@/components/trading-desk/shared/SliderWithValue';
 import { SaveConfigBar } from '@/components/trading-desk/shared/SaveConfigBar';
 import { apiGet } from '@/lib/api';
+import { formatDateTime, formatTime } from '@/lib/datetime';
 
 // ─── Inline Toggle ────────────────────────────────────────────────────────────
 
@@ -357,7 +358,7 @@ export default function SpotTradingPage() {
               Últimas 100 tentativas de compra
               {auditLastUpdated && (
                 <span style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginLeft: '8px' }}>
-                  · atualizado {auditLastUpdated.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                  · atualizado {formatTime(auditLastUpdated, { hour: '2-digit', minute: '2-digit' })}
                 </span>
               )}
             </p>
@@ -416,7 +417,7 @@ export default function SpotTradingPage() {
                         }}
                       >
                         <td style={{ padding: '8px 10px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
-                          {item.decided_at ? new Date(item.decided_at).toLocaleString() : '—'}
+                          {item.decided_at ? formatDateTime(item.decided_at) : '—'}
                         </td>
                         <td style={{ padding: '8px 10px', color: 'var(--text-primary)', fontWeight: 500 }}>
                           {item.symbol}
