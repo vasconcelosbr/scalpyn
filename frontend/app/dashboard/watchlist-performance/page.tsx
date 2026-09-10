@@ -11,6 +11,7 @@ import {
   type WatchlistPriority,
 } from "@/lib/watchlistPerformance";
 import { VersionIntelligence } from "@/components/watchlist/VersionIntelligence";
+import { formatTime } from "@/lib/datetime";
 
 const C = {
   surface: "#10121A", elevated: "#161824", border: "rgba(255,255,255,0.08)", text: "#E6E8EE",
@@ -236,7 +237,7 @@ export default function WatchlistPerformanceDashboard() {
         </div>
         <footer className="flex items-center justify-between px-5 py-3 text-[10px]" style={{ color: C.dim }}>
           <span>{filtered.length} de {rows.length} watchlists</span>
-          <span>Atualizado {lastUpdated ? lastUpdated.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—"}</span>
+          <span>Atualizado {lastUpdated ? formatTime(lastUpdated, { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—"}</span>
         </footer>
       </section>
     </div>

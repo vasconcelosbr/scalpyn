@@ -10,6 +10,7 @@ import {
   CheckCircle2, XCircle, AlertCircle,
   RefreshCw, Trash2, Plus, Zap,
 } from 'lucide-react'
+import { formatDateTime } from '@/lib/datetime'
 
 interface ProviderStatus {
   provider: string
@@ -233,7 +234,7 @@ function ProviderCard({ status, onRefresh }: { status: ProviderStatus; onRefresh
               )}
               {status.last_tested_at && (
                 <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                  testado {new Date(status.last_tested_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                  testado {formatDateTime(status.last_tested_at, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
                 </span>
               )}
             </div>

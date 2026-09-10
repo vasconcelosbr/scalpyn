@@ -14,6 +14,7 @@ import { RULE_COLORS, fmtPts, sortScoreRules } from "./PipelineAssetTable";
 import { scoreBand, scorePct, SCORE_TOOLTIP, RULES_TOOLTIP } from "@/lib/scoreBand";
 import { summarizeScoreRules, fmtConfidence } from "@/lib/scoreRulesSummary";
 import { watchlistDecisionRowKey } from "@/lib/watchlistDecisionIdentity";
+import { formatDateTime } from "@/lib/datetime";
 
 const DECISION_SUMMARY_INDICATOR_LIMIT = 3;
 
@@ -567,7 +568,7 @@ export function WatchlistDecisionTable({
                           {item.status}
                         </span>
                       </td>
-                      <td className="px-3 py-2.5 text-[#64748B]">{item.timestamp ? new Date(item.timestamp).toLocaleString() : "—"}</td>
+                      <td className="px-3 py-2.5 text-[#64748B]">{item.timestamp ? formatDateTime(item.timestamp) : "—"}</td>
                     </tr>
                     {isExpanded && (
                       <tr className="border-b border-[#1A2035] bg-[#06080E]">

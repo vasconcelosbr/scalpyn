@@ -106,6 +106,11 @@ function utcCalendarDate(value: string): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+// Intentionally NOT switched to the GMT-3 display timezone (@/lib/datetime):
+// these render server-computed UTC calendar-day buckets. Displaying them in
+// GMT-3 without also re-bucketing the backend aggregation by GMT-3 day would
+// misalign the label from the data it represents (a UTC day spans
+// 21:00-20:59 in GMT-3, not midnight-to-midnight).
 export function displayDate(value: string): string {
   const parsed = utcCalendarDate(value);
   if (!parsed) return "DATA INDISPONÍVEL";

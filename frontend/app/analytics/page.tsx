@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { apiGet } from "@/lib/api";
+import { formatDate } from "@/lib/datetime";
 
 function fmtC(v: number) { return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(v); }
 
@@ -25,7 +26,7 @@ export default function AnalyticsPage() {
   }, [days]);
 
   const dailyPnl = capital.filter((d) => d.pnl !== undefined).map((d) => ({
-    time: d.time ? new Date(d.time).toLocaleDateString("en", { month: "short", day: "numeric" }) : "",
+    time: d.time ? formatDate(d.time, { month: "short", day: "numeric" }) : "",
     pnl: d.pnl,
     symbol: d.symbol,
   }));
@@ -85,7 +86,7 @@ export default function AnalyticsPage() {
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="4 4" stroke="rgba(255,255,255,0.04)" vertical={false} />
-                <XAxis dataKey="time" axisLine={false} tickLine={false} tick={{ fill: "#555B6E", fontSize: 11, fontFamily: "JetBrains Mono" }} tickFormatter={(v) => v ? new Date(v).toLocaleDateString("en", { month: "short", day: "numeric" }) : ""} />
+                <XAxis dataKey="time" axisLine={false} tickLine={false} tick={{ fill: "#555B6E", fontSize: 11, fontFamily: "JetBrains Mono" }} tickFormatter={(v) => v ? formatDate(v, { month: "short", day: "numeric" }) : ""} />
                 <YAxis axisLine={false} tickLine={false} tick={{ fill: "#555B6E", fontSize: 11, fontFamily: "JetBrains Mono" }} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />
                 <Tooltip contentStyle={{ backgroundColor: "#1A1B25", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px", fontFamily: "JetBrains Mono", color: "#8B92A5" }} formatter={(v) => [fmtC(v as number), "Capital"]} />
                 <Area type="monotone" dataKey="value" stroke="#34D399" strokeWidth={2} fill="url(#gradCap)" />

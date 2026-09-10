@@ -17,6 +17,7 @@ import {
 
 import { apiGet } from "@/lib/api";
 import { DecisionCreatedMessage, DecisionItem, useWebSocket } from "@/hooks/useWebSocket";
+import { formatDateTime, formatTime } from "@/lib/datetime";
 
 interface DecisionsResponse {
   items: DecisionItem[];
@@ -635,7 +636,7 @@ function ApprovedSnapshotView({ scope = "l3" }: { scope?: SnapshotScope }) {
     }));
   };
 
-  const formatTimestamp = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : "—");
+  const formatTimestamp = (iso: string | null) => (iso ? formatDateTime(iso) : "—");
 
   return (
     <div className="space-y-6">
@@ -700,7 +701,7 @@ function ApprovedSnapshotView({ scope = "l3" }: { scope?: SnapshotScope }) {
           <div className="ml-auto flex items-center gap-1.5 text-[11px] text-[var(--text-tertiary)]">
             <Clock className="h-3.5 w-3.5" />
             <span>Auto-refresh every 30s</span>
-            {asOf && <span className="font-mono">· as of {new Date(asOf).toLocaleTimeString()}</span>}
+            {asOf && <span className="font-mono">· as of {formatTime(asOf)}</span>}
           </div>
         </div>
       </div>
@@ -954,7 +955,7 @@ function DecisionRow({
         className={`cursor-pointer transition-colors ${highlighted ? "bg-[rgba(79,123,247,0.08)]" : ""}`}
       >
         <td>{expanded ? <ChevronDown className="h-3.5 w-3.5 text-[var(--text-tertiary)]" /> : <ChevronRight className="h-3.5 w-3.5 text-[var(--text-tertiary)]" />}</td>
-        <td className="text-[var(--text-secondary)]">{new Date(item.created_at).toLocaleString()}</td>
+        <td className="text-[var(--text-secondary)]">{formatDateTime(item.created_at)}</td>
         <td className="font-semibold text-[var(--text-primary)]">{item.symbol}</td>
         <td>
           <span className="inline-flex rounded border border-[var(--border-default)] bg-[var(--bg-elevated)] px-2 py-0.5 font-mono text-[11px] text-[var(--text-primary)]">

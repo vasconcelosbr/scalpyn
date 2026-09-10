@@ -6,6 +6,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .init_db import init_db
+from .logging_config import install_brazil_time_logging
+
+# Display-only: log lines print America/Sao_Paulo wall-clock time instead of
+# the container's system time. Must run after uvicorn's own logging.config
+# call (which happens before this module is imported) so we can reformat its
+# handlers too, not just the ones app code attaches later.
+install_brazil_time_logging()
 
 from .api import (
     auth,

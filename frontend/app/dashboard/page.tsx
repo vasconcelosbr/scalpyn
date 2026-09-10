@@ -44,6 +44,7 @@ import {
   Calendar,
 } from "lucide-react";
 import { apiGet, apiPost } from "@/lib/api";
+import { formatDate, formatDateTime, formatTime } from "@/lib/datetime";
 import MonitoringTab from "./MonitoringTab";
 
 type DashboardTab = "overview" | "monitoring";
@@ -153,8 +154,8 @@ function fmtPct(v: number, showPlus = true): string {
 function fmtDate(iso: string, mode: "short" | "day" = "short"): string {
   if (!iso) return "";
   const d = new Date(iso);
-  if (mode === "day") return d.toLocaleDateString("en", { month: "short", day: "numeric" });
-  return d.toLocaleString("en", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  if (mode === "day") return formatDate(d, { month: "short", day: "numeric" });
+  return formatDateTime(d, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 function fmtHours(seconds: number): string {
@@ -837,7 +838,7 @@ export default function DashboardPage() {
           <div className="flex items-center gap-3 flex-shrink-0">
             {lastFetched && (
               <span className="text-[11px]" style={{ color: C.textTertiary }}>
-                {lastFetched.toLocaleTimeString("en", { hour: "2-digit", minute: "2-digit" })}
+                {formatTime(lastFetched, { hour: "2-digit", minute: "2-digit" })}
               </span>
             )}
             <button

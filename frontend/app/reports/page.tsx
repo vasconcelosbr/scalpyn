@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { Download, FileText, Calendar } from "lucide-react";
 import { apiGet } from "@/lib/api";
+import { formatDate } from "@/lib/datetime";
 
 function fmtC(v: number) { return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(v); }
 function fmtP(v: number) { return `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`; }
@@ -185,7 +186,7 @@ export default function ReportsPage() {
                   </td></tr>
                 ) : reports.map((r, i) => (
                   <tr key={i}>
-                    <td className="text-[var(--text-secondary)]">{r.date ? new Date(r.date).toLocaleDateString("en", { month: "short", day: "numeric" }) : "—"}</td>
+                    <td className="text-[var(--text-secondary)]">{r.date ? formatDate(r.date, { month: "short", day: "numeric" }) : "—"}</td>
                     <td className="font-semibold">{r.symbol}</td>
                     <td><span className={`badge ${r.direction === "long" ? "bullish" : "bearish"}`}>{r.direction}</span></td>
                     <td className="numeric">{fmtC(r.entry_price)}</td>

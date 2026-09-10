@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { CalendarDays, History, Wallet } from "lucide-react";
 import { apiGet } from "@/lib/api";
+import { formatDateTime } from "@/lib/datetime";
 
 interface ActivePosition {
   id: string;
@@ -320,7 +321,7 @@ export default function TradesPage() {
                     <tr key={trade.id}>
                       <td className="text-[var(--text-secondary)]">
                         {trade.exit_at
-                          ? new Date(trade.exit_at).toLocaleString("en", {
+                          ? formatDateTime(trade.exit_at, {
                               month: "short",
                               day: "numeric",
                               hour: "2-digit",

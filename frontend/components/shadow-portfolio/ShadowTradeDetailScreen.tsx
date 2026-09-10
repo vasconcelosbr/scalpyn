@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Activity, AlertTriangle, ArrowLeft, Clock, Crosshair, Database, Download, Sparkles } from "lucide-react";
 
 import { ApiError, apiGet } from "@/lib/api";
+import { formatDateTime } from "@/lib/datetime";
 import { buildShadowTradeExport, shadowTradeExportFilename } from "./shadowTradeExport";
 import { TradeCandlestickChart } from "./TradeCandlestickChart";
 import type { ShadowTradeChartResponse, ShadowTradeDetail } from "./types";
@@ -30,7 +31,7 @@ function fmtDateTime(value: string | null | undefined, withSeconds = false): str
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("pt-BR", {
+  return formatDateTime(date, {
     day: "2-digit",
     month: "2-digit",
     year: "2-digit",
@@ -38,7 +39,7 @@ function fmtDateTime(value: string | null | undefined, withSeconds = false): str
     minute: "2-digit",
     second: withSeconds ? "2-digit" : undefined,
     hour12: false,
-  }).format(date);
+  });
 }
 
 function fmtPrice(value: number | null | undefined): string {

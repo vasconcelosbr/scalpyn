@@ -5,6 +5,7 @@ import { Save, RefreshCw, Settings, BarChart2, Eye, EyeOff, CheckCircle2, XCircl
 import { useConfig } from "@/hooks/useConfig";
 import AIProviderSection from "@/components/settings/AIProviderSection";
 import { apiGet } from "@/lib/api";
+import { formatDateTime } from "@/lib/datetime";
 
 function authHeaders(): HeadersInit {
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
@@ -178,7 +179,7 @@ function CMCProviderCard() {
               </code>
               {status.last_tested_at && (
                 <span style={{ fontSize: 11, color: "var(--text-tertiary)" }}>
-                  testado {new Date(status.last_tested_at).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                  testado {formatDateTime(status.last_tested_at, { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
                 </span>
               )}
             </div>
@@ -248,7 +249,7 @@ const DRY_RUN_ACTIONS = new Set(["DRY_RUN_MUTATED", "DRY_RUN_RULES_ADJUSTED", "D
 
 function fmtDate(iso: string | null) {
   if (!iso) return "—";
-  return new Date(iso).toLocaleString("pt-BR", {
+  return formatDateTime(iso, {
     day: "2-digit", month: "2-digit", year: "2-digit",
     hour: "2-digit", minute: "2-digit",
   });

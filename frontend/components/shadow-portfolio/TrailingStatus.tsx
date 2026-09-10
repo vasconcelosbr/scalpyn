@@ -2,8 +2,9 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { trailingPercent, trailingReasons, trailingSummary, type ShadowTrailingView, type TrailingLevel, type TrailingRegime } from '@/lib/shadowTrailingView';
+import { formatDateTime } from '@/lib/datetime';
 
-const time = (v: string | null) => v ? new Date(v).toLocaleString('pt-BR') : 'Não registrado';
+const time = (v: string | null) => v ? formatDateTime(v) : 'Não registrado';
 const price = (v: number | null) => v == null ? 'Não registrado' : `$${v.toLocaleString('pt-BR',{maximumFractionDigits:8})}`;
 const quality: Record<string,string> = { VALID:'Válidos', STALE:'Desatualizados', INCOMPLETE:'Incompletos', INCOMPLETE_OR_STALE:'Incompletos ou desatualizados', UNAVAILABLE:'Indisponíveis', PARAMETERS_REQUIRED:'Parâmetros ausentes', PRICE_HISTORY_GAP:'Lacuna no histórico de preços' };
 

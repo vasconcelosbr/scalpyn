@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { TrailingStatus } from '@/components/shadow-portfolio/TrailingStatus';
 import type { ShadowTrailingView } from '@/lib/shadowTrailingView';
+import { formatDateTime } from '@/lib/datetime';
 import {
   Activity,
   AlertTriangle,
@@ -308,7 +309,7 @@ function fmtDateTime(iso: string | null | undefined): string {
   try {
     const d = new Date(iso);
     if (isNaN(d.getTime())) return "—";
-    return d.toLocaleString("pt-BR", {
+    return formatDateTime(d, {
       day: "2-digit",
       month: "2-digit",
       year: "2-digit",
