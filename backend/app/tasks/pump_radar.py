@@ -39,6 +39,25 @@ logger = logging.getLogger(__name__)
 GATE_CANDLES_URL = "https://api.gateio.ws/api/v4/spot/candlesticks"
 TIMEFRAME_SECONDS = {"5m": 300, "15m": 900, "1h": 3600}
 CAPTURE_CONTRACT = "pump_radar_gate_spot_closed_v1"
+# Gate.io's public candlesticks endpoint rejects any request whose start is
+# older than "10000 points ago" (confirmed live: INVALID_PARAM_VALUE
+# "Candlestick too long ago. Maximum 10000 points ago are allowed"),
+# regardless of interval. For 5m that's ~34.7 days -- far short of the
+# 180-day default backfill window, which made every asset fail outright on
+# its very first page request. A 50-point safety margin absorbs the clock
+# drift between when we compute this clamp and when Gate.io evaluates "now".
+GATE_MAX_CANDLES_BACK = 10000 - 50
+
+
+def _earliest_fetchable(timeframe: str) -> datetime:
+    return datetime.now(timezone.utc) - timedelta(
+        seconds=TIMEFRAME_SECONDS[timeframe] * GATE_MAX_CANDLES_BACK
+    )
+
+
+def _clamp_capture_start(capture_start: datetime, timeframe: str) -> datetime:
+    """Never ask Gate.io for candles older than it can actually serve."""
+    return max(capture_start, _earliest_fetchable(timeframe))
 
 
 def _utc(value: datetime) -> datetime:
@@ -228,6 +247,7 @@ async def _backfill_asset(run_id: UUID, symbol: str) -> dict:
         expected = 0
         for timeframe in config.capture_timeframes:
             capture_start = date_from - timedelta(seconds=TIMEFRAME_SECONDS[timeframe] * config.context_candles)
+            capture_start = _clamp_capture_start(capture_start, timeframe)
             rows = await _fetch_range(symbol, timeframe, capture_start, date_to, historical=historical)
             captured += len(rows)
             expected += max(0, int((_utc(date_to) - _utc(capture_start)).total_seconds() // TIMEFRAME_SECONDS[timeframe]))
