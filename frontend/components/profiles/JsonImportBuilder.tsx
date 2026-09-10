@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
-  ArrowLeft, Upload, FileJson, CheckCircle2, XCircle,
+  ArrowLeft, Upload, Download, FileJson, CheckCircle2, XCircle,
   Loader2, Globe, Filter, Target, ShoppingCart,
   ChevronRight, Eye, EyeOff, Pencil, Check, X, BookOpen, ChevronDown,
   AlertTriangle,
@@ -16,6 +16,26 @@ import {
   validateProfileImport,
   type ImportPreflightIssue,
 } from "@/lib/profileImportPreflight";
+import {
+  STRATEGY_PROFILE_INDICATORS,
+  type IndicatorCategory,
+  type StrategyProfileSection,
+} from "@/lib/indicatorCatalog";
+
+const SECTION_LABELS: Record<StrategyProfileSection, string> = {
+  filters: "F", signals: "S", block_rules: "B", entry_triggers: "E",
+};
+const CATEGORY_META: Record<IndicatorCategory, { label: string; color: string }> = {
+  price:          { label: "Preço e Volume",              color: "#8B92A5" },
+  liquidity:      { label: "Liquidez Real",                color: "#4F7BF7" },
+  price_position: { label: "Posição de Preço (Distância)", color: "#06B6D4" },
+  momentum:       { label: "Momentum",                     color: "#F59E0B" },
+  trend:          { label: "Tendência e Estrutura",        color: "#34D399" },
+  ema:            { label: "EMA e Alinhamento",            color: "#A78BFA" },
+  scores:         { label: "Scores",                       color: "#EC4899" },
+};
+const CATEGORY_ORDER: IndicatorCategory[] =
+  ["price", "liquidity", "price_position", "momentum", "trend", "ema", "scores"];
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type FunnelRole = "universe_filter" | "primary_filter" | "score_engine" | "acquisition_queue";
@@ -79,6 +99,12 @@ interface ExistingProfileRef {
   profile_role?: string | null;
   is_active?: boolean;
   selected_rule_ids: string[];
+  filters?: JsonObject;
+  signals?: JsonObject;
+  block_rules?: JsonObject;
+  entry_triggers?: JsonObject;
+  expected_profile_version_id?: string | null;
+  expected_profile_config_hash?: string | null;
 }
 
 interface ParsedProfile {
@@ -265,6 +291,12 @@ export function JsonImportBuilder({ onClose }: Props) {
             profile_role: (p.profile_role as string | null) ?? null,
             is_active: p.is_active !== false,
             selected_rule_ids: Array.isArray(rawIds) ? rawIds.map(String) : [],
+            filters: config?.filters as JsonObject | undefined,
+            signals: config?.signals as JsonObject | undefined,
+            block_rules: config?.block_rules as JsonObject | undefined,
+            entry_triggers: config?.entry_triggers as JsonObject | undefined,
+            expected_profile_version_id: (p.expected_profile_version_id as string | null) ?? null,
+            expected_profile_config_hash: (p.expected_profile_config_hash as string | null) ?? null,
           };
         })
       ))
@@ -282,6 +314,41 @@ export function JsonImportBuilder({ onClose }: Props) {
     null,
     2
   );
+
+  // Full current filters/signals/block_rules/entry_triggers of every existing
+  // profile, shaped exactly as the update_indicators_only import contract
+  // expects (profile_id + all 4 execution sections + the optimistic-
+  // concurrency identifiers) — send to an AI, get the sections adjusted back,
+  // paste the result into "Colar JSON" to update the same profiles in place.
+  const buildFullExportPayload = () => ({
+    update_indicators_only: true,
+    profiles: existingProfiles.map((p) => ({
+      profile_id: p.id,
+      name: p.name,
+      profile_role: p.profile_role,
+      expected_profile_version_id: p.expected_profile_version_id,
+      expected_profile_config_hash: p.expected_profile_config_hash,
+      filters: p.filters ?? { logic: "AND", conditions: [] },
+      signals: p.signals ?? { logic: "AND", conditions: [] },
+      block_rules: p.block_rules ?? { blocks: [] },
+      entry_triggers: p.entry_triggers ?? { logic: "AND", conditions: [] },
+    })),
+  });
+
+  const downloadCurrentProfilesJson = () => {
+    const blob = new Blob(
+      [JSON.stringify(buildFullExportPayload(), null, 2)],
+      { type: "application/json" },
+    );
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `scalpyn-profiles-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
   const [rawJson, setRawJson]           = useState<string>("");
   const [showJson, setShowJson]         = useState(false);
   const [editingIdx, setEditingIdx]     = useState<number | null>(null);
@@ -560,6 +627,30 @@ export function JsonImportBuilder({ onClose }: Props) {
             <input ref={fileRef} type="file" accept=".json" className="hidden" onChange={handleFileInput} />
           </div>
 
+          {/* Export current profiles for AI-assisted editing */}
+          <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-xl p-4 flex items-center justify-between gap-4">
+            <div>
+              <h3 className="text-[13px] font-semibold text-[var(--text-primary)] flex items-center gap-2">
+                <Download className="w-4 h-4 text-[var(--text-tertiary)]" />
+                Exportar profiles atuais
+              </h3>
+              <p className="text-[12px] text-[var(--text-secondary)] mt-1">
+                Baixa filters/signals/block_rules/entry_triggers de todos os {existingProfiles.length} profiles
+                existentes, já no formato de atualização (<code className="font-mono text-[var(--accent-primary)]">update_indicators_only</code>).
+                Envie para uma IA analisar, cole o JSON ajustado em &quot;Colar JSON&quot; abaixo e importe — atualiza
+                os mesmos profiles, sem criar novos.
+              </p>
+            </div>
+            <button
+              className="btn btn-secondary text-[12px] px-3 py-1.5 shrink-0"
+              onClick={downloadCurrentProfilesJson}
+              disabled={existingProfiles.length === 0}
+            >
+              <Download className="w-3.5 h-3.5 mr-1.5" />
+              Baixar JSON
+            </button>
+          </div>
+
           <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-xl p-4 space-y-3">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -697,6 +788,56 @@ export function JsonImportBuilder({ onClose }: Props) {
   ]
 }`}</pre>
 
+            <div className="border-t border-[var(--border-subtle)] pt-4">
+              <h4 className="text-[12px] font-semibold text-[var(--text-primary)] flex items-center gap-2 mb-1">
+                <Pencil className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                Atualizar profiles existentes (sem criar novos, sem trocar de profile)
+              </h4>
+              <p className="text-[12px] text-[var(--text-secondary)] mb-2">
+                Use <code className="font-mono text-[var(--accent-primary)]">update_indicators_only: true</code>. Cada
+                item é identificado por <code className="font-mono text-[var(--accent-primary)]">profile_id</code> (nunca
+                cria profile novo, nunca renomeia) e precisa das 4 seções completas ({" "}
+                <code className="font-mono text-[var(--accent-primary)]">filters</code>,{" "}
+                <code className="font-mono text-[var(--accent-primary)]">signals</code>,{" "}
+                <code className="font-mono text-[var(--accent-primary)]">block_rules</code>,{" "}
+                <code className="font-mono text-[var(--accent-primary)]">entry_triggers</code>) mais o par de
+                concorrência otimista abaixo — use o botão &quot;Baixar JSON&quot; acima para gerar isso automaticamente a
+                partir dos profiles atuais. <strong>Scoring não é tocado neste modo</strong> — use a aba Scoring do
+                profile ou <code className="font-mono text-[var(--accent-primary)]">scoring_assignments</code> (mais
+                abaixo) para isso.
+              </p>
+              <pre className="text-[11px] text-[var(--text-secondary)] font-mono overflow-x-auto leading-relaxed bg-[var(--bg-tertiary)] rounded-lg p-3">{`{
+  "update_indicators_only": true,
+  "profiles": [
+    {
+      "profile_id": "3f9a1c2e-...",                    // obrigatório — identifica o profile a atualizar
+      "name": "L3_TREND_FORTE_V1",                      // opcional; só valida que bate com o nome atual
+      "expected_profile_version_id": "8b21...",         // obrigatório — copiado do export atual
+      "expected_profile_config_hash": "a94f...64 hex",  // obrigatório — copiado do export atual
+                                                          // (se o profile mudou desde o export: 409 conflito)
+      "filters":        { "logic": "AND", "conditions": [ /* completo */ ] },
+      "signals":        { "logic": "AND", "conditions": [ /* completo */ ] },
+      "block_rules":    { "blocks": [ /* completo */ ] },
+      "entry_triggers": { "logic": "AND", "conditions": [ /* completo */ ] }
+    }
+  ]
+}`}</pre>
+            </div>
+
+            <div className="border-t border-[var(--border-subtle)] pt-4">
+              <h4 className="text-[12px] font-semibold text-[var(--text-primary)] mb-1">Os 3 blocos de scoring</h4>
+              <p className="text-[12px] text-[var(--text-secondary)]">
+                Existem 3 blocos de scoring independentes por profile — cada um com o mesmo formato
+                (<code className="font-mono text-[var(--accent-primary)]">{"{ enabled, selected_rule_ids, weights }"}</code>):{" "}
+                <code className="font-mono text-[var(--accent-primary)]">config.scoring</code> (aba SCORING),{" "}
+                <code className="font-mono text-[var(--accent-primary)]">signals.scoring</code> (scoring interno da aba
+                SIGNALS) e <code className="font-mono text-[var(--accent-primary)]">entry_triggers.scoring</code> (scoring
+                interno da aba ENTRY TRIGGERS). Pesos padrão:{" "}
+                <code className="font-mono text-[var(--accent-primary)]">{"{ liquidity: 25, market_structure: 25, momentum: 25, signal: 25 }"}</code>.
+                Nenhum dos três é tocado por <code className="font-mono text-[var(--accent-primary)]">update_indicators_only</code>.
+              </p>
+            </div>
+
             {/* Toggle indicator reference */}
             <button
               className="flex items-center gap-2 text-[12px] text-[var(--accent-primary)] hover:underline font-medium"
@@ -713,151 +854,116 @@ export function JsonImportBuilder({ onClose }: Props) {
                 {/* Condition syntax */}
                 <div>
                   <p className="text-[11px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider mb-2">Sintaxe das condições</p>
-                  <pre className="text-[11px] text-[var(--text-secondary)] font-mono leading-relaxed bg-[var(--bg-tertiary)] rounded-lg p-3 overflow-x-auto">{`// filters e signals → usar "field"
+                  <pre className="text-[11px] text-[var(--text-secondary)] font-mono leading-relaxed bg-[var(--bg-tertiary)] rounded-lg p-3 overflow-x-auto">{`// filters e signals → usar "field". Booleanos usam "==" (nao is_true/is_false aqui)
 { "field": "rsi", "operator": ">=", "value": 30, "period": 14, "timeframe": "5m" }
 { "field": "adx", "operator": "between", "min": 20, "max": 50 }
 { "field": "ema9_gt_ema21", "operator": "==", "value": true }
+// Operadores numéricos (filters/signals): >  <  >=  <=  ==  !=  between
 
-// block_rules (condições dentro de cada bloco) → usar "type" + "indicator"
+// block_rules e entry_triggers (dentro de cada bloco/condição) → usar "type" + "indicator".
+// Aqui SIM os booleanos usam is_true/is_false, nao "==".
 { "type": "threshold",  "indicator": "rsi",          "operator": "<",      "value": 75, "period": 14 }
 { "type": "boolean",    "indicator": "ema9_gt_ema21", "operator": "is_true"                           }
 { "type": "comparison", "left": "price",              "operator": ">",      "right": "ema9"           }
+// Operadores numéricos (block_rules/entry_triggers): >  <  >=  <=  ==  !=  between
+// Operadores booleanos (block_rules/entry_triggers): is_true  is_false
 
-// entry_triggers → igual block_rules + "required" + "enabled"
+// entry_triggers → igual block_rules + "required" (bool) + "enabled" (bool) por condição
 { "type": "threshold", "indicator": "rsi", "operator": "between", "min": 40, "max": 65,
   "period": 14, "timeframe": "5m", "required": true, "enabled": true }
 
-// Operadores numéricos: >  <  >=  <=  ==  !=  between
-// Operadores booleanos: is_true  is_false`}</pre>
+// indicadores marcados "requiresReferenceWindow" abaixo (ex: breakout_distance_pct) exigem também:
+{ "field": "breakout_distance_pct", "operator": ">=", "value": 2, "reference_window": "15m" }
+// reference_window: 5m | 15m | 30m | 1h`}</pre>
                 </div>
 
-                {/* Indicator table */}
+                {/* Indicator table — generated from lib/indicatorCatalog.ts, the same
+                    catalog the profile editor and the import preflight validator use,
+                    so this can never drift out of sync again. */}
                 <div>
-                  <p className="text-[11px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider mb-3">Indicadores disponíveis</p>
+                  <p className="text-[11px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider mb-1">
+                    Indicadores disponíveis ({STRATEGY_PROFILE_INDICATORS.length})
+                  </p>
+                  <p className="text-[11px] text-[var(--text-tertiary)] mb-3">
+                    Coluna &quot;Seções&quot;: em quais das 4 seções o indicador pode ser usado —{" "}
+                    <strong>F</strong>ilters, <strong>S</strong>ignals, <strong>B</strong>lock Rules, <strong>E</strong>ntry
+                    Triggers. Um indicador cinza numa seção não é aceito lá (o preflight rejeita com{" "}
+                    <code className="font-mono">INDICATOR_SECTION_NOT_ALLOWED</code>).
+                  </p>
                   <div className="grid grid-cols-1 gap-3">
 
-                    {[
-                      {
-                        group: "Preço e Volume",
-                        color: "#8B92A5",
-                        rows: [
-                          { field: "volume_24h",  label: "Volume 24h",      type: "number",  period: false, note: "" },
-                          { field: "market_cap",  label: "Market Cap",      type: "number",  period: false, note: "" },
-                          { field: "price",       label: "Preço",           type: "number",  period: false, note: "usado como left/right em comparison" },
-                          { field: "change_24h",  label: "Variação 24h %",  type: "number",  period: false, note: "" },
-                        ],
-                      },
-                      {
-                        group: "Liquidez Real",
-                        color: "#4F7BF7",
-                        rows: [
-                          { field: "spread_pct",          label: "Spread %",                    type: "number", period: false, note: "" },
-                          { field: "orderbook_depth_usdt",label: "Profundidade Book (USDT)",    type: "number", period: false, note: "" },
-                          { field: "taker_ratio",         label: "Taker Ratio (buy/(b+s), 0-1)",type: "number", period: false, note: "" },
-                          { field: "volume_spike",        label: "Volume Spike",                type: "number", period: true,  note: "default period: 20" },
-                          { field: "volume_delta",        label: "Volume Delta",                type: "number", period: true,  note: "default period: 20" },
-                          { field: "orderbook_pressure",  label: "Orderbook Pressure",          type: "number", period: false, note: "" },
-                          { field: "bid_ask_imbalance",   label: "Bid/Ask Imbalance",           type: "number", period: false, note: "" },
-                          { field: "obv",                 label: "OBV",                         type: "number", period: true,  note: "default period: 20" },
-                          { field: "vwap_distance_pct",   label: "VWAP Distance %",             type: "number", period: true,  note: "default period: 20" },
-                        ],
-                      },
-                      {
-                        group: "Momentum",
-                        color: "#F59E0B",
-                        rows: [
-                          { field: "rsi",            label: "RSI",              type: "number", period: true,  note: "default period: 14" },
-                          { field: "macd",           label: "MACD",             type: "number", period: true,  note: "default period: 12" },
-                          { field: "macd_histogram", label: "MACD Histogram",   type: "number", period: true,  note: "default period: 12" },
-                          { field: "macd_signal",    label: "MACD Signal",      type: "string", period: false, note: 'valor: "bullish" | "bearish"' },
-                          { field: "stoch_k",        label: "Stochastic %K",    type: "number", period: true,  note: "default period: 14" },
-                          { field: "stoch_d",        label: "Stochastic %D",    type: "number", period: true,  note: "default period: 14" },
-                          { field: "zscore",         label: "Z-Score",          type: "number", period: true,  note: "default period: 20" },
-                        ],
-                      },
-                      {
-                        group: "Tendência e Estrutura",
-                        color: "#34D399",
-                        rows: [
-                          { field: "adx",        label: "ADX",             type: "number",  period: true,  note: "default period: 14" },
-                          { field: "di_plus",    label: "DI+",             type: "number",  period: true,  note: "default period: 14" },
-                          { field: "di_minus",   label: "DI-",             type: "number",  period: true,  note: "default period: 14" },
-                          { field: "di_trend",   label: "DI+ > DI- (Alta)",type: "boolean", period: false, note: 'value: true | false' },
-                          { field: "atr",        label: "ATR",             type: "number",  period: true,  note: "default period: 14" },
-                          { field: "atr_percent",label: "ATR %",           type: "number",  period: true,  note: "default period: 14" },
-                          { field: "bb_width",   label: "Bollinger Width", type: "number",  period: true,  note: "default period: 20" },
-                          { field: "psar_trend", label: "PSAR Trend",      type: "string",  period: false, note: 'valor: "RISING" | "FALLING"' },
-                        ],
-                      },
-                      {
-                        group: "EMA e Alinhamento",
-                        color: "#A78BFA",
-                        rows: [
-                          { field: "ema_full_alignment", label: "EMA Full Alignment", type: "boolean", period: false, note: 'value: true | false' },
-                          { field: "ema9_gt_ema21",      label: "EMA9 > EMA21",       type: "boolean", period: false, note: 'value: true | false' },
-                          { field: "ema9_gt_ema50",      label: "EMA9 > EMA50",       type: "boolean", period: false, note: 'value: true | false' },
-                          { field: "ema50_gt_ema200",    label: "EMA50 > EMA200",     type: "boolean", period: false, note: 'value: true | false' },
-                          { field: "ema5",               label: "EMA5  (valor)",      type: "number",  period: false, note: "usar como left/right em comparison" },
-                          { field: "ema9",               label: "EMA9  (valor)",      type: "number",  period: false, note: "usar como left/right em comparison" },
-                          { field: "ema21",              label: "EMA21 (valor)",      type: "number",  period: false, note: "usar como left/right em comparison" },
-                          { field: "ema50",              label: "EMA50 (valor)",      type: "number",  period: false, note: "usar como left/right em comparison" },
-                          { field: "ema200",             label: "EMA200 (valor)",     type: "number",  period: false, note: "usar como left/right em comparison" },
-                        ],
-                      },
-                      {
-                        group: "Scores",
-                        color: "#EC4899",
-                        rows: [
-                          { field: "score",           label: "Alpha Score",      type: "number", period: false, note: "0–100" },
-                          { field: "liquidity_score", label: "Liquidity Score",  type: "number", period: false, note: "0–100" },
-                          { field: "momentum_score",  label: "Momentum Score",   type: "number", period: false, note: "0–100" },
-                        ],
-                      },
-                    ].map((grp) => (
-                      <div key={grp.group} className="bg-[var(--bg-tertiary)] rounded-lg overflow-hidden">
+                    {CATEGORY_ORDER.map((category) => {
+                      const meta = CATEGORY_META[category];
+                      const rows = STRATEGY_PROFILE_INDICATORS.filter((ind) => ind.category === category);
+                      if (rows.length === 0) return null;
+                      return (
+                      <div key={category} className="bg-[var(--bg-tertiary)] rounded-lg overflow-hidden">
                         <div
                           className="px-3 py-2 text-[11px] font-bold uppercase tracking-wider"
-                          style={{ color: grp.color, backgroundColor: `${grp.color}14` }}
+                          style={{ color: meta.color, backgroundColor: `${meta.color}14` }}
                         >
-                          {grp.group}
+                          {meta.label}
                         </div>
                         <table className="w-full text-[11px]">
                           <thead>
                             <tr className="border-b border-[var(--border-subtle)]">
-                              <th className="text-left px-3 py-1.5 text-[10px] font-semibold text-[var(--text-tertiary)] uppercase w-[200px]">field / indicator</th>
-                              <th className="text-left px-3 py-1.5 text-[10px] font-semibold text-[var(--text-tertiary)] uppercase w-[180px]">Label</th>
+                              <th className="text-left px-3 py-1.5 text-[10px] font-semibold text-[var(--text-tertiary)] uppercase w-[220px]">field / indicator</th>
+                              <th className="text-left px-3 py-1.5 text-[10px] font-semibold text-[var(--text-tertiary)] uppercase w-[200px]">Label</th>
                               <th className="text-center px-3 py-1.5 text-[10px] font-semibold text-[var(--text-tertiary)] uppercase w-20">Tipo</th>
-                              <th className="text-center px-3 py-1.5 text-[10px] font-semibold text-[var(--text-tertiary)] uppercase w-16">Period</th>
-                              <th className="text-left px-3 py-1.5 text-[10px] font-semibold text-[var(--text-tertiary)] uppercase">Nota</th>
+                              <th className="text-left px-3 py-1.5 text-[10px] font-semibold text-[var(--text-tertiary)] uppercase w-32">Período</th>
+                              <th className="text-center px-3 py-1.5 text-[10px] font-semibold text-[var(--text-tertiary)] uppercase w-28">Seções (F/S/B/E)</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {grp.rows.map((row) => (
-                              <tr key={row.field} className="border-b border-[var(--border-subtle)]/50 last:border-0 hover:bg-[var(--bg-surface)]/30">
-                                <td className="px-3 py-1.5 font-mono font-semibold" style={{ color: grp.color }}>{row.field}</td>
-                                <td className="px-3 py-1.5 text-[var(--text-secondary)]">{row.label}</td>
-                                <td className="px-3 py-1.5 text-center">
-                                  <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold font-mono ${
-                                    row.type === "boolean" ? "bg-purple-500/15 text-purple-400" :
-                                    row.type === "string"  ? "bg-yellow-500/15 text-yellow-400" :
-                                    "bg-blue-500/15 text-blue-400"
-                                  }`}>
-                                    {row.type}
-                                  </span>
-                                </td>
-                                <td className="px-3 py-1.5 text-center">
-                                  {row.period
-                                    ? <CheckCircle2 className="w-3 h-3 text-[var(--color-profit)] mx-auto" />
-                                    : <span className="text-[var(--text-tertiary)]">—</span>
-                                  }
-                                </td>
-                                <td className="px-3 py-1.5 text-[var(--text-tertiary)] italic">{row.note}</td>
-                              </tr>
-                            ))}
+                            {rows.map((ind) => {
+                              const periodNote = ind.requiresReferenceWindow
+                                ? "exige reference_window"
+                                : ind.fixedPeriod !== undefined
+                                ? `fixo: ${ind.fixedPeriod}`
+                                : ind.defaultPeriod !== undefined
+                                ? `padrão: ${ind.defaultPeriod}`
+                                : ind.noTimeframe
+                                ? "sem período"
+                                : "—";
+                              return (
+                                <tr key={ind.id} className="border-b border-[var(--border-subtle)]/50 last:border-0 hover:bg-[var(--bg-surface)]/30">
+                                  <td className="px-3 py-1.5 font-mono font-semibold" style={{ color: meta.color }}>{ind.id}</td>
+                                  <td className="px-3 py-1.5 text-[var(--text-secondary)]">{ind.label}</td>
+                                  <td className="px-3 py-1.5 text-center">
+                                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold font-mono ${
+                                      ind.kind === "boolean" ? "bg-purple-500/15 text-purple-400" :
+                                      ind.kind === "string"  ? "bg-yellow-500/15 text-yellow-400" :
+                                      "bg-blue-500/15 text-blue-400"
+                                    }`}>
+                                      {ind.kind}
+                                    </span>
+                                  </td>
+                                  <td className="px-3 py-1.5 text-[var(--text-tertiary)] italic">{periodNote}</td>
+                                  <td className="px-3 py-1.5">
+                                    <div className="flex items-center justify-center gap-1 font-mono">
+                                      {(["filters", "signals", "block_rules", "entry_triggers"] as StrategyProfileSection[]).map((section) => (
+                                        <span
+                                          key={section}
+                                          title={section}
+                                          className={`w-4 h-4 flex items-center justify-center rounded text-[9px] font-bold ${
+                                            ind.sections.includes(section)
+                                              ? "bg-[var(--color-profit)]/15 text-[var(--color-profit)]"
+                                              : "text-[var(--text-tertiary)]/40"
+                                          }`}
+                                        >
+                                          {SECTION_LABELS[section]}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>
-                    ))}
+                      );
+                    })}
 
                     {/* Block structure example */}
                     <div>
