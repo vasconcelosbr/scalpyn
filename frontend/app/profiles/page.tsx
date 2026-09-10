@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Plus, Settings2, Trash2, Play, Copy, Layers, ListChecks, FileJson } from "lucide-react";
+import { Plus, Settings2, Trash2, Play, Copy, Layers, ListChecks, FileJson, EyeOff, Eye } from "lucide-react";
 import { apiGet, apiPost, apiDelete, apiPut } from "@/lib/api";
 import { ProfileBuilder } from "@/components/profiles/ProfileBuilder";
 import { ProfileCard } from "@/components/profiles/ProfileCard";
@@ -57,6 +57,30 @@ export default function ProfilesPage() {
   const [editingProfile, setEditingProfile] = useState<Profile | null>(null);
   const [testResults, setTestResults] = useState<any>(null);
   const [selectedProfiles, setSelectedProfiles] = useState<Set<string>>(new Set());
+  const [hideInactive, setHideInactive] = useState(false);
+
+  useEffect(() => {
+    try {
+      setHideInactive(localStorage.getItem("profiles.hideInactive") === "1");
+    } catch {
+      // localStorage unavailable (private mode, etc.) — default stays visible
+    }
+  }, []);
+
+  const toggleHideInactive = () => {
+    setHideInactive((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("profiles.hideInactive", next ? "1" : "0");
+      } catch {
+        // ignore persistence failure, filter still works for this session
+      }
+      return next;
+    });
+  };
+
+  const visibleProfiles = hideInactive ? profiles.filter((p) => p.is_active) : profiles;
+  const inactiveCount = profiles.filter((p) => !p.is_active).length;
 
   const fetchProfiles = async () => {
     setLoading(true);
@@ -180,10 +204,10 @@ export default function ProfilesPage() {
   }
 
   const toggleSelectAll = () => {
-    if (selectedProfiles.size === profiles.length) {
+    if (selectedProfiles.size === visibleProfiles.length) {
       setSelectedProfiles(new Set());
     } else {
-      setSelectedProfiles(new Set(profiles.map((p) => p.id)));
+      setSelectedProfiles(new Set(visibleProfiles.map((p) => p.id)));
     }
   };
 
@@ -236,10 +260,19 @@ export default function ProfilesPage() {
           <button
             className="btn btn-secondary"
             onClick={toggleSelectAll}
-            title={selectedProfiles.size === profiles.length ? "Deselect All" : "Select All"}
+            title={selectedProfiles.size === visibleProfiles.length ? "Deselect All" : "Select All"}
           >
             <ListChecks className="w-4 h-4 mr-2" />
-            {selectedProfiles.size === profiles.length ? "Deselect All" : "Select All"}
+            {selectedProfiles.size === visibleProfiles.length ? "Deselect All" : "Select All"}
+          </button>
+          <button
+            className={`btn btn-secondary ${hideInactive ? "bg-[var(--accent-primary)]/10 text-[var(--accent-primary)] border-[var(--accent-primary)]/30" : ""}`}
+            onClick={toggleHideInactive}
+            disabled={inactiveCount === 0}
+            title={hideInactive ? "Mostrar profiles inativos" : "Ocultar profiles inativos"}
+          >
+            {hideInactive ? <EyeOff className="w-4 h-4 mr-2" /> : <Eye className="w-4 h-4 mr-2" />}
+            {hideInactive ? `Inativos ocultos (${inactiveCount})` : "Ocultar Inativos"}
           </button>
           <button
             className="btn btn-secondary"
@@ -338,9 +371,25 @@ export default function ProfilesPage() {
             </button>
           </div>
         </div>
+      ) : visibleProfiles.length === 0 ? (
+        <div className="card border-dashed border-2 border-[var(--border-subtle)] bg-transparent">
+          <div className="card-body text-center py-16">
+            <EyeOff className="w-12 h-12 text-[var(--text-tertiary)] opacity-30 mx-auto mb-4" />
+            <h3 className="text-[15px] font-semibold text-[var(--text-primary)] mb-1">
+              Todos os {inactiveCount} profiles estão inativos
+            </h3>
+            <p className="text-[var(--text-secondary)] text-[13px] max-w-sm mx-auto mb-6">
+              O filtro &quot;Ocultar Inativos&quot; está ativo e não sobrou nenhum profile ativo para mostrar.
+            </p>
+            <button className="btn btn-secondary" onClick={toggleHideInactive}>
+              <Eye className="w-4 h-4 mr-2" />
+              Mostrar Inativos
+            </button>
+          </div>
+        </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {profiles.map((profile) => (
+          {visibleProfiles.map((profile) => (
             <ProfileCard
               key={profile.id}
               profile={profile}
