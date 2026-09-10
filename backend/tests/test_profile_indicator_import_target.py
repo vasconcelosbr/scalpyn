@@ -362,6 +362,121 @@ async def test_duplicate_display_names_update_only_requested_profile_id(monkeypa
     db.commit.assert_awaited_once()
 
 
+def _legacy_l3_config(condition_value=1000000):
+    """A pre-contract-v3 L3 profile: real conditions, none carry source identity."""
+    return {
+        "filters": {
+            "logic": "AND",
+            "conditions": [
+                {"field": "volume_24h", "operator": ">=", "value": condition_value},
+            ],
+        },
+        "signals": {"logic": "AND", "conditions": []},
+        "entry_triggers": {"logic": "AND", "conditions": []},
+        "block_rules": {"blocks": []},
+    }
+
+
+@pytest.mark.asyncio
+async def test_indicator_update_tolerates_legacy_l3_profile_without_widening_debt(
+    monkeypatch,
+):
+    """PROFILE_EDITOR_LEGACY_IDENTITY_UPDATE_COMPATIBILITY must also cover
+    bulk-import: re-saving a legacy L3 profile's existing (source-less)
+    conditions — even with a plain threshold tweak — must not 422 just
+    because the governed editor already tolerates this exact profile.
+    """
+    profile_id = UUID(PROFILE_ID)
+    profile = SimpleNamespace(
+        id=profile_id,
+        name="DUPLICATE_DISPLAY_NAME",
+        config=_legacy_l3_config(),
+        profile_role="acquisition_queue",
+        profile_type="STANDARD",
+    )
+    db = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
+    monkeypatch.setattr(
+        profiles_api,
+        "lock_profiles_for_update",
+        AsyncMock(return_value={profile_id: profile}),
+    )
+    activate = AsyncMock(
+        return_value={"profile_version_id": VERSION_ID, "version_created": True}
+    )
+    monkeypatch.setattr(profiles_api, "activate_profile_config", activate)
+
+    item = _item(
+        filters={
+            "logic": "AND",
+            # Same indicator/shape as the legacy config, just a tweaked
+            # threshold — still no source identity, matching the debt.
+            "conditions": [
+                {"field": "volume_24h", "operator": ">=", "value": 1500000},
+            ],
+        },
+    )
+
+    result = await profiles_api.bulk_import_profiles(
+        {"update_indicators_only": True, "profiles": [item]},
+        db=db,
+        user_id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+    )
+
+    assert result["updated"] == 1
+    assert result["results"][0]["warnings"][0]["code"] == "L3_FEATURE_IDENTITY_PENDING"
+    assert activate.await_args.kwargs["require_feature_identity"] is False
+    db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_indicator_update_still_rejects_new_identity_gap_on_legacy_profile(
+    monkeypatch,
+):
+    """The compatibility path is non-regression only: a legacy L3 profile
+    still cannot gain a brand-new source-less condition through bulk-import.
+    """
+    profile_id = UUID(PROFILE_ID)
+    profile = SimpleNamespace(
+        id=profile_id,
+        name="DUPLICATE_DISPLAY_NAME",
+        config=_legacy_l3_config(),
+        profile_role="acquisition_queue",
+        profile_type="STANDARD",
+    )
+    db = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
+    monkeypatch.setattr(
+        profiles_api,
+        "lock_profiles_for_update",
+        AsyncMock(return_value={profile_id: profile}),
+    )
+    activate = AsyncMock()
+    monkeypatch.setattr(profiles_api, "activate_profile_config", activate)
+
+    item = _item(
+        filters={
+            "logic": "AND",
+            "conditions": [
+                {"field": "volume_24h", "operator": ">=", "value": 1500000},
+                # New, additional source-less condition not present in the
+                # currently persisted config — genuinely widens the debt.
+                {"field": "spread_pct", "operator": "<=", "value": 0.5},
+            ],
+        },
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await profiles_api.bulk_import_profiles(
+            {"update_indicators_only": True, "profiles": [item]},
+            db=db,
+            user_id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+        )
+
+    assert exc.value.status_code == 422
+    assert "L3_FEATURE_IDENTITY_INVALID" in str(exc.value.detail)
+    activate.assert_not_awaited()
+    db.commit.assert_not_awaited()
+
+
 def _mtf_profile_payload(*, activation_mode="DRAFT"):
     return {
         "name": "MTF L1 TEST",

@@ -962,8 +962,32 @@ async def bulk_import_profiles(
                 next_config = _replace_execution_sections(
                     profile.config or {}, item
                 )
-                require_feature_identity = _requires_l3_feature_identity(
-                    getattr(profile, "profile_role", None)
+                # PROFILE_EDITOR_LEGACY_IDENTITY_UPDATE_COMPATIBILITY: the
+                # governed editor (PUT /profiles/{id}) already tolerates
+                # updating a legacy L3 profile whose conditions predate the
+                # provenance/source contract, as long as the edit doesn't
+                # widen that identity debt (see
+                # _validate_profile_config_for_editor_update). Bulk-import's
+                # update_indicators_only path exists to make the same kind
+                # of threshold/parameter tuning edit on existing profiles —
+                # it must not be stricter than the editor for that same
+                # profile, or every legacy L3 profile becomes permanently
+                # un-importable even with zero real changes.
+                try:
+                    next_config, legacy_warnings = (
+                        _validate_profile_config_for_editor_update(
+                            next_config,
+                            current_config=profile.config or {},
+                            profile_role=getattr(profile, "profile_role", None),
+                        )
+                    )
+                except ValueError as exc:
+                    raise ValueError(f"profiles[{i}]: {exc}") from exc
+                require_feature_identity = (
+                    _requires_l3_feature_identity(
+                        getattr(profile, "profile_role", None)
+                    )
+                    and not legacy_warnings
                 )
                 activation = await activate_profile_config(
                     db,
@@ -981,15 +1005,26 @@ async def bulk_import_profiles(
                     ),
                     require_feature_identity=require_feature_identity,
                 )
-                results.append(
-                    {
-                        "index": i,
-                        "name": profile.name,
-                        "status": "updated",
-                        "id": str(profile.id),
-                        **activation,
-                    }
-                )
+                result_item = {
+                    "index": i,
+                    "name": profile.name,
+                    "status": "updated",
+                    "id": str(profile.id),
+                    **activation,
+                }
+                if legacy_warnings:
+                    result_item["warnings"] = [
+                        {
+                            "code": "L3_FEATURE_IDENTITY_PENDING",
+                            "message": (
+                                "Parâmetros salvos sem ampliar as lacunas de "
+                                "identidade já existentes; o contrato "
+                                "canônico permanece fail-closed."
+                            ),
+                            "errors": legacy_warnings,
+                        }
+                    ]
+                results.append(result_item)
             await db.commit()
         except ProfileContractConflict as exc:
             await db.rollback()
