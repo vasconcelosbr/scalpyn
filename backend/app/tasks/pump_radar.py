@@ -608,6 +608,7 @@ def _anchor_features(
     index: int,
     btc_by_time: dict[datetime, PumpRadarOHLCV],
     btc_times_sorted: list[datetime],
+    quote_volume_prefix: list[Decimal],
 ) -> dict[str, float] | None:
     if index < 288:
         return None
@@ -618,7 +619,7 @@ def _anchor_features(
     if any(history[i].open_time - history[i-1].open_time != timedelta(minutes=5) for i in range(1, len(history))):
         return None
     atr = _atr_pct(rows, index - 1)
-    quote_volume = sum(Decimal(row.volume_quote or 0) for row in rows[index - 288 : index])
+    quote_volume = quote_volume_prefix[index] - quote_volume_prefix[index - 288]
     if atr is None:
         return None
     now_pos = bisect.bisect_right(btc_times_sorted, anchor.open_time) - 1
@@ -686,11 +687,14 @@ async def _build_controls(run_id: UUID) -> dict:
                 PumpRadarOHLCV.open_time <= run.date_to,
             ).order_by(PumpRadarOHLCV.open_time))).scalars().all()
             index_by_time = {row.open_time: index for index, row in enumerate(rows)}
+            quote_volume_prefix: list[Decimal] = [Decimal(0)] * (len(rows) + 1)
+            for i, row in enumerate(rows):
+                quote_volume_prefix[i + 1] = quote_volume_prefix[i] + Decimal(row.volume_quote or 0)
             for event in symbol_events:
                 event_index = index_by_time.get(event.start_at)
                 if event_index is None:
                     continue
-                event_features = _anchor_features(rows, event_index, btc_by_time, btc_times_sorted)
+                event_features = _anchor_features(rows, event_index, btc_by_time, btc_times_sorted, quote_volume_prefix)
                 if event_features is None:
                     continue
                 candidates: list[tuple[float, int, dict[str, float]]] = []
@@ -706,7 +710,7 @@ async def _build_controls(run_id: UUID) -> dict:
                         continue
                     if any(followup[offset].open_time - followup[offset - 1].open_time != timedelta(minutes=5) for offset in range(1, len(followup))):
                         continue
-                    candidate_features = _anchor_features(rows, index, btc_by_time, btc_times_sorted)
+                    candidate_features = _anchor_features(rows, index, btc_by_time, btc_times_sorted, quote_volume_prefix)
                     if candidate_features is None:
                         continue
                     candidates.append((_match_distance(event_features, candidate_features), index, candidate_features))

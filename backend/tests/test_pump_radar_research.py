@@ -19,6 +19,13 @@ def candle(at, value=10):
         volume_base=100, volume_quote=1000)
 
 
+def quote_volume_prefix(rows):
+    prefix = [Decimal(0)] * (len(rows) + 1)
+    for i, row in enumerate(rows):
+        prefix[i + 1] = prefix[i] + Decimal(row.volume_quote or 0)
+    return prefix
+
+
 def test_1235_never_consumes_1235_to_1240_candle():
     at = datetime(2026, 9, 8, 12, 35, tzinfo=timezone.utc)
     rows = [candle(at - timedelta(minutes=5 * i)) for i in range(30, -2, -1)]
@@ -138,11 +145,32 @@ def test_control_features_do_not_use_anchor_candle_or_unclosed_btc():
     rows = [candle(at - timedelta(minutes=5 * i)) for i in range(300, -1, -1)]
     btc = {r.close_time: r for r in rows}
     btc_times_sorted = sorted(btc)
-    first = _anchor_features(rows, 300, btc, btc_times_sorted)
+    prefix = quote_volume_prefix(rows)
+    first = _anchor_features(rows, 300, btc, btc_times_sorted, prefix)
     assert first is not None
     rows[-1].high = 9999
     rows[-1].close = 9999
-    assert _anchor_features(rows, 300, btc, btc_times_sorted) == first
+    assert _anchor_features(rows, 300, btc, btc_times_sorted, prefix) == first
+
+
+def test_anchor_features_liquidity_uses_prefix_sum_not_flat_1000_per_candle():
+    """quote_volume used to be recomputed by summing 288 fresh Decimal(volume_quote)
+    objects per call; it's now a prefix-sum lookup. Guard against an off-by-one in
+    the prefix array by giving each candle a distinct volume_quote and checking the
+    288-candle liquidity sum matches a direct brute-force sum of that exact window."""
+    at = datetime(2026, 9, 8, 12, 35, tzinfo=timezone.utc)
+    rows = [candle(at - timedelta(minutes=5 * i)) for i in range(300, -1, -1)]
+    for i, row in enumerate(rows):
+        row.volume_quote = 100 + i
+    btc = {r.close_time: r for r in rows}
+    btc_times_sorted = sorted(btc)
+    prefix = quote_volume_prefix(rows)
+
+    for index in (288, 300):
+        result = _anchor_features(rows, index, btc, btc_times_sorted, prefix)
+        assert result is not None
+        expected = float(sum(Decimal(row.volume_quote) for row in rows[index - 288 : index]))
+        assert result["liquidity_quote_24h"] == pytest.approx(expected)
 
 
 def test_anchor_features_btc_lookup_matches_brute_force_with_gaps():
@@ -156,6 +184,7 @@ def test_anchor_features_btc_lookup_matches_brute_force_with_gaps():
     btc_rows = [candle(at - timedelta(minutes=5 * i), value=10 + i) for i in range(300, -1, -1) if i % 3 != 1]
     btc = {r.close_time: r for r in btc_rows}
     btc_times_sorted = sorted(btc)
+    prefix = quote_volume_prefix(rows)
 
     def brute_force(anchor_open_time):
         btc_times = [v for v in btc if v <= anchor_open_time]
@@ -169,7 +198,7 @@ def test_anchor_features_btc_lookup_matches_brute_force_with_gaps():
 
     for index in (288, 300):
         expected = brute_force(rows[index].open_time)
-        result = _anchor_features(rows, index, btc, btc_times_sorted)
+        result = _anchor_features(rows, index, btc, btc_times_sorted, prefix)
         if expected is None:
             assert result is None
         else:
