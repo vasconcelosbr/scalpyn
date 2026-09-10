@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from pydantic import ValidationError
 
@@ -16,7 +18,13 @@ from app.models.pump_radar import (
 )
 from app.schemas.pump_radar import PumpRadarConfig
 from app.tasks.celery_app import QUEUE_PUMP_RADAR, TASK_ROUTES
-from app.tasks.pump_radar import _select_universe
+from app.tasks.pump_radar import (
+    GATE_MAX_CANDLES_BACK,
+    TIMEFRAME_SECONDS,
+    _clamp_capture_start,
+    _earliest_fetchable,
+    _select_universe,
+)
 
 
 def test_config_is_observation_only_and_digest_is_stable() -> None:
@@ -106,3 +114,50 @@ def test_every_pump_radar_task_uses_isolated_queue() -> None:
         "snapshots", "build_controls", "statistics",
     }
     assert all(route["queue"] == QUEUE_PUMP_RADAR for route in routes.values())
+
+
+def test_earliest_fetchable_matches_gate_documented_history_limit() -> None:
+    """Confirmed live against Gate.io (2026-09-10): requesting 5m candles
+    further back than ~34.7 days returns INVALID_PARAM_VALUE "Candlestick
+    too long ago. Maximum 10000 points ago are allowed" -- on the very
+    first page, regardless of how the request is paginated. The clamp must
+    track that limit per-interval (it scales linearly with candle width),
+    with a safety margin under the documented 10000, never over it.
+    """
+    for timeframe, seconds in TIMEFRAME_SECONDS.items():
+        before = datetime.now(timezone.utc)
+        boundary = _earliest_fetchable(timeframe)
+        after = datetime.now(timezone.utc)
+        max_age = timedelta(seconds=seconds * GATE_MAX_CANDLES_BACK)
+        assert before - max_age <= boundary <= after - max_age
+        # Must stay strictly inside Gate's own 10000-point ceiling, not merely
+        # equal to it -- computing the clamp takes nonzero time.
+        assert boundary > datetime.now(timezone.utc) - timedelta(seconds=seconds * 10000)
+
+
+def test_clamp_capture_start_rejects_the_180_day_default_that_broke_every_asset() -> None:
+    """Reproduces the 2026-09-10 production incident: a backfill run with
+    the schema's default backfill_days=180 requested 5m candles from ~180
+    days ago and every one of 65 assets failed with the same Gate.io 400 on
+    its first HTTP call. The clamp must pull that request inside the
+    fetchable window instead of forwarding it verbatim.
+    """
+    naive_start_180_days_ago = datetime.now(timezone.utc) - timedelta(days=180)
+    clamped = _clamp_capture_start(naive_start_180_days_ago, "5m")
+    assert clamped > naive_start_180_days_ago
+    assert abs((clamped - _earliest_fetchable("5m")).total_seconds()) < 1
+
+
+def test_clamp_capture_start_leaves_recent_requests_untouched() -> None:
+    recent_start = datetime.now(timezone.utc) - timedelta(days=1)
+    assert _clamp_capture_start(recent_start, "5m") == recent_start
+
+
+def test_clamp_scales_with_interval_width() -> None:
+    """1h candles can reach ~416 days back; 5m only ~34.7. A backfill window
+    that's within range for 1h context must not be silently truncated to
+    the much tighter 5m limit, and vice versa.
+    """
+    ninety_days_ago = datetime.now(timezone.utc) - timedelta(days=90)
+    assert _clamp_capture_start(ninety_days_ago, "5m") > ninety_days_ago
+    assert _clamp_capture_start(ninety_days_ago, "1h") == ninety_days_ago
