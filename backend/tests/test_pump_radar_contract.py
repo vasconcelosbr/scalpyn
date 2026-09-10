@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
@@ -23,6 +24,7 @@ from app.tasks.pump_radar import (
     TIMEFRAME_SECONDS,
     _clamp_capture_start,
     _earliest_fetchable,
+    _refresh_run,
     _select_universe,
 )
 
@@ -161,3 +163,62 @@ def test_clamp_scales_with_interval_width() -> None:
     ninety_days_ago = datetime.now(timezone.utc) - timedelta(days=90)
     assert _clamp_capture_start(ninety_days_ago, "5m") > ninety_days_ago
     assert _clamp_capture_start(ninety_days_ago, "1h") == ninety_days_ago
+
+
+class _FakeRunRefreshResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def all(self):
+        return self._rows
+
+
+class _FakeRunRefreshDB:
+    """Records every statement _refresh_run issues, in order, and answers
+    the group-by-status count query with a fixed asset status distribution.
+    """
+
+    def __init__(self, status_counts: dict[str, int]):
+        self.status_counts = status_counts
+        self.statements: list[str] = []
+
+    async def execute(self, stmt):
+        compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+        self.statements.append(compiled)
+        if "FOR UPDATE" in compiled.upper():
+            return _FakeRunRefreshResult([])
+        if compiled.strip().upper().startswith("SELECT"):
+            return _FakeRunRefreshResult(list(self.status_counts.items()))
+        return _FakeRunRefreshResult([])
+
+
+@pytest.mark.asyncio
+async def test_refresh_run_locks_the_run_row_before_counting_assets() -> None:
+    """The fix for the 2026-09-10 stuck-run incident: the row lock must be
+    acquired first, so a concurrent caller blocks until the previous one's
+    write is committed instead of racing it with a stale count.
+    """
+    db = _FakeRunRefreshDB({"COMPLETED": 65})
+    await _refresh_run(db, uuid4())
+    assert len(db.statements) >= 2
+    assert "FOR UPDATE" in db.statements[0].upper()
+
+
+@pytest.mark.asyncio
+async def test_refresh_run_flips_to_completed_only_once_every_asset_is_terminal() -> None:
+    # 64 of 65 assets done, the 65th still mid-pipeline: no status transition yet.
+    db = _FakeRunRefreshDB({"COMPLETED": 64, "CAPTURING": 1})
+    await _refresh_run(db, uuid4())
+    update_stmt = db.statements[-1]
+    assert "status=" not in update_stmt.replace(" ", "").lower()
+
+    db_done = _FakeRunRefreshDB({"COMPLETED": 65})
+    await _refresh_run(db_done, uuid4())
+    assert "COMPLETED" in db_done.statements[-1]
+
+
+@pytest.mark.asyncio
+async def test_refresh_run_reports_partial_when_any_asset_failed() -> None:
+    db = _FakeRunRefreshDB({"COMPLETED": 60, "FAILED": 5})
+    await _refresh_run(db, uuid4())
+    assert "PARTIAL" in db.statements[-1]
