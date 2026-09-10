@@ -45,6 +45,24 @@ from .profile_runtime_config import canonical_hash, canonical_profile_config_has
 
 CONFIG_TYPES = ("strategy", "spot_engine", "ml")
 ATR_TIMEFRAMES = ("1m", "5m", "15m", "1h")
+# LayerRuntimeContractConfig fields typed Dict[str, ...] with an empty default.
+# They are populated per-group by dedicated services (calibration, provenance),
+# never by the generic settings form, so the unknown-key allowlist walker
+# (which compares against a *default* SpotEngineConfig dump) must treat them
+# as open rather than reject every key on round-trip.
+_MULTILAYER_FREEFORM_GROUP_FIELDS = (
+    "required_indicators_by_group",
+    "validity_margin_seconds_by_group",
+    "validity_evidence_by_group",
+)
+SPOT_ENGINE_OPEN_PATHS = {
+    "spot_engine.scanner.multilayer_contract.statistical_gate",
+    *(
+        f"spot_engine.scanner.multilayer_contract.layers.{layer}.{field}"
+        for layer in ("L1", "L2", "L3")
+        for field in _MULTILAYER_FREEFORM_GROUP_FIELDS
+    ),
+}
 PUBLIC_TOP_LEVEL_KEYS = {
     "schema",
     "schema_version",
@@ -636,9 +654,7 @@ class StrategySettingsService:
                 patch_parts["spot_engine"],
                 templates["spot_engine"],
                 path="spot_engine",
-                open_paths={
-                    "spot_engine.scanner.multilayer_contract.statistical_gate"
-                },
+                open_paths=SPOT_ENGINE_OPEN_PATHS,
             )
         if "ml_shadow" in patch_parts:
             _reject_unknown_keys(
