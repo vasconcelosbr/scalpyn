@@ -222,6 +222,58 @@ def test_populated_statistical_gate_round_trips_without_unknown_field_error():
     service.validate_payload(payload, current_parts)
 
 
+def test_populated_layer_group_maps_round_trip_without_unknown_field_error():
+    """Regression: required_indicators_by_group, validity_margin_seconds_by_group
+    and validity_evidence_by_group are freeform per-group maps (Dict[str, ...])
+    on LayerRuntimeContractConfig, same empty-default shape as statistical_gate.
+    Once calibration/provenance services populate a group key (e.g.
+    "structural") for L1, re-saving the settings form used to reject it as
+    "Unknown field: ...layers.L1.required_indicators_by_group.structural".
+    """
+    service = StrategySettingsService()
+    current_parts = service._default_parts()
+    evidence = {
+        "formula": "p99(open_to_available_seconds)+scan_interval_seconds",
+        "window_started_at": "2026-09-01T00:00:00Z",
+        "window_ended_at": "2026-09-08T00:00:00Z",
+        "sample_count": 500,
+        "active_symbol_count": 40,
+        "covered_symbol_count": 40,
+        "p99_open_to_available_seconds": 12.5,
+        "scan_interval_seconds": 30,
+        "validity_margin_seconds": 43,
+        "measured_at": "2026-09-08T00:00:00Z",
+        "evidence_hash": "a" * 64,
+    }
+    l1 = current_parts["spot_engine"]["scanner"]["multilayer_contract"]["layers"]["L1"]
+    l1["required_indicators_by_group"] = {"structural": ["adx", "atr"]}
+    l1["validity_margin_seconds_by_group"] = {"structural": 43}
+    l1["validity_evidence_by_group"] = {"structural": deepcopy(evidence)}
+
+    payload = {
+        "spot_engine": {
+            "scanner": {
+                "multilayer_contract": {
+                    "layers": {
+                        "L1": {
+                            "required_indicators_by_group": {
+                                "structural": ["adx", "atr"]
+                            },
+                            "validity_margin_seconds_by_group": {"structural": 43},
+                            "validity_evidence_by_group": {
+                                "structural": deepcopy(evidence)
+                            },
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    # Must not raise StrategySettingsValidationError("Unknown field: ...structural").
+    service.validate_payload(payload, current_parts)
+
+
 def test_new_trade_receives_exact_persisted_runtime_and_open_snapshot_is_immutable():
     spot = SpotEngineConfig().model_dump(mode="json")
     spot["shadow"].update({"amount_usdt": 321.5, "timeout_candles": 77})
