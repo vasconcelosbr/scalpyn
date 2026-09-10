@@ -193,6 +193,35 @@ def test_invalid_imports_are_rejected(payload, expected):
         service.validate_payload(payload, service._default_parts())
 
 
+def test_populated_statistical_gate_round_trips_without_unknown_field_error():
+    """Regression: statistical_gate is a freeform Dict[str, Any] whose default
+    is {}. Once a dedicated waiver endpoint populates it (e.g. status,
+    run_status, ...), simply re-saving the settings form previously rejected
+    every key inside it as "Unknown field" because the allowlist walker
+    compared against the empty default template instead of an open path.
+    """
+    service = StrategySettingsService()
+    current_parts = service._default_parts()
+    gate = {
+        "status": "WAIVED_FOR_SHADOW",
+        "run_status": "DRAFT_INSUFFICIENT_DATA",
+        "failure_reason": "MIN_SAMPLES_NOT_MET",
+        "authorization_scope": "OBSERVATIONAL_ONLY",
+    }
+    current_parts["spot_engine"]["scanner"]["multilayer_contract"][
+        "statistical_gate"
+    ] = gate
+
+    payload = {
+        "spot_engine": {
+            "scanner": {"multilayer_contract": {"statistical_gate": deepcopy(gate)}}
+        }
+    }
+
+    # Must not raise StrategySettingsValidationError("Unknown field: ...status").
+    service.validate_payload(payload, current_parts)
+
+
 def test_new_trade_receives_exact_persisted_runtime_and_open_snapshot_is_immutable():
     spot = SpotEngineConfig().model_dump(mode="json")
     spot["shadow"].update({"amount_usdt": 321.5, "timeout_candles": 77})
