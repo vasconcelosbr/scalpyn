@@ -17,6 +17,7 @@ import {
 } from "@/lib/indicatorCatalog";
 import {
   normalizeProfileRuleCondition,
+  prepareProfileBlockRuleIdentities,
   prepareProfileEntryTriggerIdentities,
   profileSourcePoliciesForEditor,
   serializeProfileEditorConfig,
@@ -555,20 +556,24 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
     ].includes(String(profileRole || ""));
     let configForSave = config;
     if (requiresEntryFeatureIdentity) {
-      const prepared = prepareProfileEntryTriggerIdentities(
-        config,
-        profileSourcePoliciesForEditor(spotEngineConfig, profile?.profile_type, profileRole),
-        normalizeProfileConfig(profile?.config),
+      const policies = profileSourcePoliciesForEditor(spotEngineConfig, profile?.profile_type, profileRole);
+      const currentConfig = normalizeProfileConfig(profile?.config);
+      const preparedTriggers = prepareProfileEntryTriggerIdentities(
+        configForSave, policies, currentConfig,
       );
-      if (prepared.issues.length > 0) {
+      const preparedBlocks = prepareProfileBlockRuleIdentities(
+        preparedTriggers.config, policies, currentConfig,
+      );
+      const issues = [...preparedTriggers.issues, ...preparedBlocks.issues];
+      if (issues.length > 0) {
         alert(
-          "Não foi possível identificar a fonte governada de todos os Entry Triggers. "
+          "Não foi possível identificar a fonte governada de todos os Entry Triggers/Block Rules. "
           + "Revise as políticas de proveniência do Spot Engine antes de salvar:\n"
-          + prepared.issues.slice(0, 8).join("\n"),
+          + issues.slice(0, 8).join("\n"),
         );
         return;
       }
-      configForSave = prepared.config;
+      configForSave = preparedBlocks.config;
     }
     setSaving(true);
     const profileData = {
