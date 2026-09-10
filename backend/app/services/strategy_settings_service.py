@@ -633,7 +633,12 @@ class StrategySettingsService:
             )
         if "spot_engine" in patch_parts:
             _reject_unknown_keys(
-                patch_parts["spot_engine"], templates["spot_engine"], path="spot_engine"
+                patch_parts["spot_engine"],
+                templates["spot_engine"],
+                path="spot_engine",
+                open_paths={
+                    "spot_engine.scanner.multilayer_contract.statistical_gate"
+                },
             )
         if "ml_shadow" in patch_parts:
             _reject_unknown_keys(
