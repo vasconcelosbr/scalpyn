@@ -424,6 +424,16 @@ async def _associate_asset(run_id: UUID, symbol: str) -> dict:
 
 
 async def _refresh_run(db, run_id: UUID) -> None:
+    # Assets finish concurrently across forked Celery workers, each in its
+    # own transaction, each calling this right before its own commit. Under
+    # READ COMMITTED, a transaction's SELECT here can miss a sibling asset's
+    # not-yet-committed terminal update -- both undercount by one, neither
+    # flips the run to a terminal status, and it's stuck at N-1/N forever
+    # even once every asset has actually finished (confirmed in production,
+    # 2026-09-10: run 3fb987ac stuck RUNNING with 65/65 assets COMPLETED).
+    # Locking the run row serializes concurrent callers so each one's count
+    # is taken only after the previous holder's write has committed.
+    await db.execute(select(PumpRadarRun.id).where(PumpRadarRun.id == run_id).with_for_update())
     statuses = (await db.execute(select(PumpRadarRunAsset.status, func.count()).where(PumpRadarRunAsset.run_id == run_id).group_by(PumpRadarRunAsset.status))).all()
     counts = {status: count for status, count in statuses}
     completed = counts.get("COMPLETED", 0)
