@@ -91,8 +91,6 @@ def _first_event(segment: Sequence[RadarCandle], start_index: int, config: PumpR
 
     base = segment[base_index]
     confirmation = segment[confirmation_index]
-    peak = confirmation
-    peak_price = confirmation.high
     end: RadarCandle | None = None
     retracement: Decimal | None = None
     incomplete = False
@@ -100,12 +98,31 @@ def _first_event(segment: Sequence[RadarCandle], start_index: int, config: PumpR
     no_high_timeout = timedelta(minutes=config.no_new_high_minutes)
     retrace_fraction = Decimal(str(config.retracement_pct)) / Decimal("100")
 
+    def _confirmed_high(candle: RadarCandle) -> Decimal:
+        """A candle's high only counts as a peak candidate if it held --
+        i.e. the candle's own close didn't already give back more than the
+        configured retracement threshold before the candle even closed. A
+        wick that reverts within its own candle (single anomalous tick,
+        API glitch) never traded as a sustained level; falling back to the
+        candle's close keeps peak_price/rise_pct anchored to a price the
+        market actually settled at instead of a fleeting intrabar spike.
+        """
+        candle_gain = candle.high - base.open
+        gave_back = candle.high - candle.close
+        if candle_gain > 0 and gave_back > candle_gain * retrace_fraction:
+            return candle.close
+        return candle.high
+
+    peak = confirmation
+    peak_price = _confirmed_high(confirmation)
+
     for index in range(confirmation_index, len(segment)):
         candle = segment[index]
-        made_new_high = candle.high > peak_price
+        candidate_high = _confirmed_high(candle)
+        made_new_high = candidate_high > peak_price
         if made_new_high:
             peak = candle
-            peak_price = candle.high
+            peak_price = candidate_high
 
         gain = peak_price - base.open
         retrace_level = peak_price - (gain * retrace_fraction)
