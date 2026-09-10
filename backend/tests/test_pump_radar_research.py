@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
@@ -136,11 +137,46 @@ def test_control_features_do_not_use_anchor_candle_or_unclosed_btc():
     at = datetime(2026, 9, 8, 12, 35, tzinfo=timezone.utc)
     rows = [candle(at - timedelta(minutes=5 * i)) for i in range(300, -1, -1)]
     btc = {r.close_time: r for r in rows}
-    first = _anchor_features(rows, 300, btc)
+    btc_times_sorted = sorted(btc)
+    first = _anchor_features(rows, 300, btc, btc_times_sorted)
     assert first is not None
     rows[-1].high = 9999
     rows[-1].close = 9999
-    assert _anchor_features(rows, 300, btc) == first
+    assert _anchor_features(rows, 300, btc, btc_times_sorted) == first
+
+
+def test_anchor_features_btc_lookup_matches_brute_force_with_gaps():
+    """_anchor_features used to scan every btc_by_time key per call (O(n) per
+    candidate row); this now uses bisect over a pre-sorted list. Guard that the
+    bisect result stays identical to the old "max(value <= threshold)" scan,
+    including with gaps in the BTC series (missing candles are common in
+    production captures)."""
+    at = datetime(2026, 9, 8, 12, 35, tzinfo=timezone.utc)
+    rows = [candle(at - timedelta(minutes=5 * i)) for i in range(300, -1, -1)]
+    btc_rows = [candle(at - timedelta(minutes=5 * i), value=10 + i) for i in range(300, -1, -1) if i % 3 != 1]
+    btc = {r.close_time: r for r in btc_rows}
+    btc_times_sorted = sorted(btc)
+
+    def brute_force(anchor_open_time):
+        btc_times = [v for v in btc if v <= anchor_open_time]
+        if not btc_times:
+            return None
+        now = btc[max(btc_times)]
+        prior_times = [v for v in btc_times if v <= anchor_open_time - timedelta(hours=1)]
+        if not prior_times:
+            return None
+        return now, btc[max(prior_times)]
+
+    for index in (288, 300):
+        expected = brute_force(rows[index].open_time)
+        result = _anchor_features(rows, index, btc, btc_times_sorted)
+        if expected is None:
+            assert result is None
+        else:
+            assert result is not None
+            assert result["btc_regime_1h_pct"] == pytest.approx(
+                float((Decimal(expected[0].close) / Decimal(expected[1].close) - Decimal("1")) * Decimal("100"))
+            )
 
 
 def test_statistics_count_distinct_events_and_controls_and_keep_split_separate():

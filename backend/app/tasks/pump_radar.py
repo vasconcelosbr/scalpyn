@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import bisect
 import json
 import logging
 import math
@@ -602,7 +603,12 @@ def _atr_pct(rows: list[PumpRadarOHLCV], index: int, period: int = 14) -> float 
     return float((sum(true_ranges) / len(true_ranges)) / close * Decimal("100")) if true_ranges and close else None
 
 
-def _anchor_features(rows: list[PumpRadarOHLCV], index: int, btc_by_time: dict[datetime, PumpRadarOHLCV]) -> dict[str, float] | None:
+def _anchor_features(
+    rows: list[PumpRadarOHLCV],
+    index: int,
+    btc_by_time: dict[datetime, PumpRadarOHLCV],
+    btc_times_sorted: list[datetime],
+) -> dict[str, float] | None:
     if index < 288:
         return None
     anchor = rows[index]
@@ -613,14 +619,16 @@ def _anchor_features(rows: list[PumpRadarOHLCV], index: int, btc_by_time: dict[d
         return None
     atr = _atr_pct(rows, index - 1)
     quote_volume = sum(Decimal(row.volume_quote or 0) for row in rows[index - 288 : index])
-    btc_times = [value for value in btc_by_time if value <= anchor.open_time]
-    if not btc_times or atr is None:
+    if atr is None:
         return None
-    btc_now = btc_by_time[max(btc_times)]
-    btc_prior_times = [value for value in btc_times if value <= anchor.open_time - timedelta(hours=1)]
-    if not btc_prior_times:
+    now_pos = bisect.bisect_right(btc_times_sorted, anchor.open_time) - 1
+    if now_pos < 0:
         return None
-    btc_prior = btc_by_time[max(btc_prior_times)]
+    btc_now = btc_by_time[btc_times_sorted[now_pos]]
+    prior_pos = bisect.bisect_right(btc_times_sorted, anchor.open_time - timedelta(hours=1)) - 1
+    if prior_pos < 0:
+        return None
+    btc_prior = btc_by_time[btc_times_sorted[prior_pos]]
     prior_close = Decimal(btc_prior.close)
     if prior_close <= 0:
         return None
@@ -665,6 +673,7 @@ async def _build_controls(run_id: UUID) -> dict:
             PumpRadarOHLCV.open_time <= run.date_to,
         ).order_by(PumpRadarOHLCV.open_time))).scalars().all()
         btc_by_time = {row.close_time: row for row in btc_rows if row.is_closed}
+        btc_times_sorted = sorted(btc_by_time)
         await db.execute(delete(PumpRadarControl).where(PumpRadarControl.run_id == run_id))
         inserted = 0
         by_symbol: dict[str, list[PumpRadarEvent]] = {}
@@ -681,7 +690,7 @@ async def _build_controls(run_id: UUID) -> dict:
                 event_index = index_by_time.get(event.start_at)
                 if event_index is None:
                     continue
-                event_features = _anchor_features(rows, event_index, btc_by_time)
+                event_features = _anchor_features(rows, event_index, btc_by_time, btc_times_sorted)
                 if event_features is None:
                     continue
                 candidates: list[tuple[float, int, dict[str, float]]] = []
@@ -697,7 +706,7 @@ async def _build_controls(run_id: UUID) -> dict:
                         continue
                     if any(followup[offset].open_time - followup[offset - 1].open_time != timedelta(minutes=5) for offset in range(1, len(followup))):
                         continue
-                    candidate_features = _anchor_features(rows, index, btc_by_time)
+                    candidate_features = _anchor_features(rows, index, btc_by_time, btc_times_sorted)
                     if candidate_features is None:
                         continue
                     candidates.append((_match_distance(event_features, candidate_features), index, candidate_features))
