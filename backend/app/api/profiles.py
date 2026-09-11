@@ -18,7 +18,10 @@ from ..services.profile_engine import ProfileEngine
 from ..services.score_engine import hydrate_profile_scoring
 from ..services.config_service import config_service
 from ..services.l3_authorization_contract_v3 import validate_profile_contract
-from ..services.profile_config_validation import validate_profile_config
+from ..services.profile_config_validation import (
+    validate_profile_config,
+    profile_config_warnings,
+)
 from ..services.profile_indicator_contract import validate_profile_execution_structure
 from ..services.profile_execution_contract import (
     EXECUTION_SECTIONS,
@@ -1200,6 +1203,7 @@ async def create_profile(
         validated_config = _validate_profile_config_for_role(config, target_role)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+    warnings.extend(profile_config_warnings(validated_config))
 
     profile = Profile(
         user_id=user_id,
@@ -1388,6 +1392,10 @@ async def update_profile(
         ]
     if rename_warnings:
         result.setdefault("warnings", []).extend(rename_warnings)
+    if _next_config is not None:
+        config_warnings = profile_config_warnings(_next_config)
+        if config_warnings:
+            result.setdefault("warnings", []).extend(config_warnings)
     return result
 
 

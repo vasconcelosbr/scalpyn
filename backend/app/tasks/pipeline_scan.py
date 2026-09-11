@@ -1479,6 +1479,8 @@ def _decision_reason_map(processed: dict, has_signal_conditions: bool) -> dict:
 
 
 def _decision_metrics(asset: dict, processed: dict) -> dict:
+    from ..services.profile_engine import indicator_timeframe_conflicts
+
     score = processed.get("score", {}) or {}
     robust_context = asset.get("_score_components") or {}
     component_fields = (
@@ -1522,6 +1524,12 @@ def _decision_metrics(asset: dict, processed: dict) -> dict:
         "technical_score": asset.get("_technical_score", asset.get("_score")),
         "final_score": asset.get("_score"),
         "social_score": dict(asset.get("_social_score") or {}),
+        # AUD-002 (auditoria shadow SL_HIT 2026-09-11): indicator keys whose
+        # merged value is ambiguous across timeframes (e.g. bb_width/
+        # volume_spike resolved from a 30m row when the profile's
+        # default_timeframe is 5m). Observability only -- see
+        # profile_engine._build_eval_data for why this isn't enforced yet.
+        "timeframe_integrity": indicator_timeframe_conflicts(asset),
     }
     for component_name in (
         "liquidity_score",
@@ -2198,6 +2206,16 @@ async def _evaluate_l3_decisions(
                 "gate_v2_decision": gate_v2["shadow_decision"],
                 "final_decision": decision,
                 "operational_effect": gate_v2["operational_effect"],
+                # AUD-001 (auditoria shadow SL_HIT 2026-09-11): entry_triggers
+                # has precedence over signals whenever entry_triggers has any
+                # conditions (see ProfileEngine.__init__, self.signals_config).
+                # When both are populated, signals is evaluated for nothing --
+                # record that here so it's visible per-decision, not just at
+                # profile-save time (profile_config_warnings).
+                "signals_shadowed_by_entry_triggers": bool(
+                    (profile_config or {}).get("entry_triggers", {}).get("conditions")
+                    and (profile_config or {}).get("signals", {}).get("conditions")
+                ),
             },
         }
         metrics = _build_l3_persisted_metrics(

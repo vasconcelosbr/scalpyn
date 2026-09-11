@@ -112,6 +112,31 @@ def _collect_required_timeframes(profile_config: Dict[str, Any]) -> Dict[str, Li
     return dict(grouped)
 
 
+def indicator_timeframe_conflicts(asset: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """AUD-002: surface indicator keys whose merged value is ambiguous across
+    timeframes (``merge_indicator_rows`` already computes this per key as
+    ``observed_timeframes``/``timeframe_conflict`` in ``MergedIndicators.meta``
+    -- it just never reached the condition-evaluation layer before this).
+
+    Returns ``{indicator_key: {"timeframe": ..., "observed_timeframes": [...]}}``
+    for every key flagged ``timeframe_conflict=True``. Empty when the asset
+    carries no ``_merged_indicators`` (e.g. synthetic/test assets) or none
+    of its keys conflict.
+    """
+    merged = asset.get("_merged_indicators")
+    meta = getattr(merged, "meta", None)
+    if not meta:
+        return {}
+    return {
+        key: {
+            "timeframe": info.get("timeframe"),
+            "observed_timeframes": info.get("observed_timeframes") or [],
+        }
+        for key, info in meta.items()
+        if info.get("timeframe_conflict")
+    }
+
+
 # ── Structured condition log helper ──────────────────────────────────────────
 
 def _log_condition_eval(
@@ -515,7 +540,22 @@ class ProfileEngine:
         indicators = asset.get("indicators", {})
         if not indicators:
             indicators = {k: v for k, v in asset.items() if k not in ["symbol", "name"]}
-        return {**asset, **indicators}
+        eval_data = {**asset, **indicators}
+
+        # AUD-002: a key merged from conflicting timeframes (e.g. bb_width
+        # resolved from a 30m row when the profile's default_timeframe is
+        # 5m) is reported via _timeframe_conflicts so it reaches
+        # decision_audit (see pipeline_scan._decision_metrics). Not yet
+        # enforced: blanking the value here would make BlockEngine /
+        # SignalEngine treat it as SKIPPED, and both explicitly allow entry
+        # when a required condition is SKIPPED ("missing data must not
+        # block trades") -- so a naive blank-out would make conflicting
+        # data *more* permissive, not less. Enforcing fail-closed requires
+        # those engines to distinguish "unreliable value" from "missing
+        # value" for required conditions; left as follow-up, not attempted
+        # here to avoid shipping a change that looks like a fix but isn't.
+        eval_data["_timeframe_conflicts"] = indicator_timeframe_conflicts(asset)
+        return eval_data
 
     def _apply_filters(
         self,
