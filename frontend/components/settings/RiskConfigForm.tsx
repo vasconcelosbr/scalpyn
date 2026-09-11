@@ -92,17 +92,6 @@ export function RiskConfigForm() {
               <input type="range" min={0.5} max={15} step={0.5} value={dailyLoss} onChange={(e) => set("daily_loss_limit_pct", parseFloat(e.target.value))} className="slider w-full" style={{ "--progress": `${(dailyLoss / 15) * 100}%` } as any} />
             </div>
 
-            {/* Trailing Stop */}
-            <div className="flex items-center justify-between p-4 bg-[var(--bg-elevated)] border border-[var(--border-default)] rounded-[var(--radius-md)]">
-              <div>
-                <h4 className="font-semibold text-[14px] text-[var(--text-primary)]">Trailing Stop</h4>
-                <p className="text-[12px] text-[var(--text-secondary)]">Distance: {local.trailing_stop_distance_pct ?? 0.5}%</p>
-              </div>
-              <div className={`toggle ${local.trailing_stop_enabled ? "active" : ""}`} onClick={() => set("trailing_stop_enabled", !local.trailing_stop_enabled)}>
-                <div className="knob" />
-              </div>
-            </div>
-
             {/* Order Type */}
             <div className="flex items-center justify-between pt-3 border-t border-[var(--border-subtle)]">
               <label className="text-[13px] font-semibold text-[var(--text-primary)]">Default Order Type</label>

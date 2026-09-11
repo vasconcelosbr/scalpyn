@@ -262,38 +262,13 @@ def _trailing_floor_fixed(
     return hwm * (1 - trail_pct / 100)
 
 
-def _trailing_floor_proportional(hwm: float, entry_price: float, k: float) -> float:
-    """Retain (1-k) of the peak PROFIT, not of the raw peak price.
-
-    Worked check: peak=1% profit, k=0.30 -> floor=0.7% profit; peak=4%
-    profit, k=0.30 -> floor=2.8% profit.
-    """
-    return entry_price + (hwm - entry_price) * (1 - k)
-
-
-def _trailing_floor_stepped(
-    hwm: float,
-    entry_price: float,
-    steps: list[dict[str, float]],
-    base_activation_pct: float | None,
-    base_trail_pct: float | None,
-) -> float | None:
-    """Floor jumps to the highest crossed step's floor_profit_pct (flat within
-    a tier). Below the first step, falls back to a FIXED-style trail when a
-    base (activation_pct, trail_pct) pair is configured, else no trailing."""
-    hwm_pct = (hwm / entry_price - 1) * 100
-    applicable = [s for s in steps if hwm_pct >= s["peak_profit_pct"]]
-    if applicable:
-        floor_pct = max(s["floor_profit_pct"] for s in applicable)
-        return entry_price * (1 + floor_pct / 100)
-    if base_activation_pct is not None and base_trail_pct is not None:
-        return _trailing_floor_fixed(hwm, entry_price, base_activation_pct, base_trail_pct)
-    return None
-
-
 def _resolve_trailing_floor(
     hwm: float, entry_price: float, trailing_policy: Mapping[str, Any]
 ) -> float | None:
+    """FIXED is the only surviving family -- shadow_hwm_trailing_v1 is the
+    sole live contract (STEPPED/PROPORTIONAL and the shadow_trailing_policy_v2
+    contract were opt-in research infra, never activated in production, and
+    have been retired)."""
     family = trailing_policy.get("policy_family")
     if family == "FIXED":
         return _trailing_floor_fixed(
@@ -301,16 +276,6 @@ def _resolve_trailing_floor(
             entry_price,
             float(trailing_policy["activation_profit_pct"]),
             float(trailing_policy["hwm_trail_pct"]),
-        )
-    if family == "PROPORTIONAL":
-        return _trailing_floor_proportional(hwm, entry_price, float(trailing_policy["k"]))
-    if family == "STEPPED":
-        return _trailing_floor_stepped(
-            hwm,
-            entry_price,
-            list(trailing_policy["steps"]),
-            trailing_policy.get("base_activation_profit_pct"),
-            trailing_policy.get("base_hwm_trail_pct"),
         )
     raise ValueError(f"unsupported_trailing_policy_family: {family!r}")
 
@@ -330,14 +295,17 @@ def evaluate_closed_candles_policy_v2(
     trailing_protected_profit_pct: float = 0.0,
 ) -> dict[str, Any]:
     """Same CLOSED_ONLY / SL_FIRST / first-touch discipline as
-    ``evaluate_closed_candles``, generalized to the Shadow-only
-    ``shadow_trailing_policy_v2`` families (FIXED/STEPPED/PROPORTIONAL).
+    ``evaluate_closed_candles``, plus the entry-boundary-ambiguity fix
+    (Bloco A, C2): it never freezes on an ambiguous entry-boundary candle,
+    it records the ambiguity once and keeps walking later candles.
 
-    Does not replace ``evaluate_closed_candles`` -- Shadows born under
-    ``shadow_hwm_trailing_v1`` keep evaluating through that function,
-    unmodified, forever. This function only serves Shadows whose frozen
-    ``config_snapshot.trailing.contract_version ==
-    "shadow_trailing_policy_v2"``.
+    This is the canonical evaluator for every live Shadow trade -- the
+    monitor no longer calls ``evaluate_closed_candles`` (kept only so a
+    result computed before this fix shipped stays reproducible). Trailing
+    is generic via ``trailing_policy``/``_resolve_trailing_floor``: legacy
+    ``shadow_hwm_trailing_v1`` snapshots are translated by the caller into
+    the same FIXED-family dict this function expects, so both run through
+    identical trailing math.
     """
     ordered = [dict(row) for row in candles]
     ordered.sort(key=lambda row: row.get("time"))

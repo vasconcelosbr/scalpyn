@@ -58,7 +58,7 @@ export function ShadowL3ExitPolicyForm() {
   return <section className="card p-6 space-y-6" aria-label="Trailing Stop — Shadow L3">
     <div className="flex justify-between gap-4 items-start">
       <div><h2 className="text-lg font-semibold">Trailing Stop — Shadow L3</h2>
-        <p className="text-sm text-[var(--text-secondary)] mt-2">Continuação após o TP com pisos progressivos. Exclusivo do shadow L3; não controla ordens reais.</p></div>
+        <p className="text-sm text-[var(--text-secondary)] mt-2">Continuação após o TP com pisos progressivos. Único mecanismo de trailing do shadow L3; exclusivo do shadow L3, não controla ordens reais.</p></div>
       <button type="button" className="btn btn-primary" onClick={save} disabled={saving || isLoading || !meta || !!error}>Salvar política L3</button>
     </div>
     {error && <p role="alert">Não foi possível carregar a configuração. O salvamento permanece bloqueado.</p>}

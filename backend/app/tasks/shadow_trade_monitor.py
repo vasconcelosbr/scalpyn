@@ -446,18 +446,9 @@ async def _advance_shadow_canonical(
     # ambiguity once and keeps walking later candles. evaluate_closed_candles
     # (v1) stays untouched, byte-for-byte, for anyone reproducing a result
     # computed before this fix shipped; the live monitor no longer calls it.
-    # Trailing family is orthogonal: legacy shadow_hwm_trailing_v1 snapshots
-    # (FIXED-only) are translated into the same generic trailing_policy dict
-    # that shadow_trailing_policy_v2 snapshots already carry, so both run
-    # through one evaluator with identical FIXED-family math (verified
-    # 0/559 divergence against evaluate_closed_candles this session).
+    # shadow_hwm_trailing_v1 is the sole trailing contract: translated into
+    # the generic FIXED-family trailing_policy dict this evaluator expects.
     if (
-        trailing.get("enabled") is True
-        and trailing.get("contract_version") == "shadow_trailing_policy_v2"
-        and isinstance(trailing.get("policy"), dict)
-    ):
-        trailing_policy = trailing["policy"]
-    elif (
         trailing.get("enabled") is True
         and trailing.get("contract_version")
         == shadow_trade_service.SHADOW_TRAILING_CONTRACT_VERSION

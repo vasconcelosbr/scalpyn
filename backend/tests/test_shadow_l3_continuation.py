@@ -147,7 +147,9 @@ def test_cvd_and_price_evidence_are_aligned(policy):
                   max_gap=10,buy=8,sell=2,entry_delta=6) for i in range(3)]
     end=T+timedelta(minutes=3)
     e=build_evidence(buckets,candles,candles,policy,T,end,end)
-    assert e["quality"]=="VALID" and e["cvd"]==18
+    # warmup_seconds=120: only the last 2 of the 3 one-minute buckets are
+    # inside the rolling window, so cvd sums 2*entry_delta, not 3*.
+    assert e["quality"]=="VALID" and e["cvd"]==12
     assert e["taker_ratio"]==.8 and e["delta_normalized"]==.6 and e["cvd_slope_normalized"]==.6
     assert build_evidence(buckets,candles,candles,policy,T,end,end+timedelta(seconds=61))["quality"]=="INCOMPLETE_OR_STALE"
 
@@ -180,6 +182,40 @@ def test_compacted_evidence_replay_equals_incremental(policy):
     encoded=json.loads(json.dumps(data,default=str))
     actual=replay(encoded,policy,T)["trades"][0]["state"]
     assert actual==state
+
+
+def test_stale_entry_gap_does_not_poison_evidence_forever(policy):
+    """Regression: a one-time flow-capture gap right after entry (e.g. the
+    symbol had no open position for days, so the WebSocket subscription
+    only catches up a few minutes late) must age out of the lookback once
+    the trade outlives warmup_seconds. Before the min->max fix, `start`
+    stayed pinned at entry_at forever once the trade aged past warmup,
+    so this single gap kept the evidence INCOMPLETE_OR_STALE permanently
+    even though real, dense flow resumed minutes later."""
+    entry_at = T
+    candles = [dict(time=T + timedelta(minutes=i), open=100, high=101, low=99, close=100.5)
+               for i in range(10)]
+    near_entry = dict(time=T, first_at=T + timedelta(seconds=2), last_at=T + timedelta(seconds=5),
+                       max_gap=0, buy=1, sell=1, entry_delta=0)
+    healthy = [dict(time=T + timedelta(minutes=m),
+                     first_at=T + timedelta(minutes=m, seconds=1),
+                     last_at=T + timedelta(minutes=m, seconds=59),
+                     max_gap=5, buy=8, sell=2, entry_delta=6) for m in (8, 9)]
+    buckets = [near_entry] + healthy
+
+    # Still within the poisoned window (trade only 3 min old, well before the
+    # healthy flow resumes at minute 8): there is no confirmed-good data yet,
+    # so this must never be reported as VALID.
+    early = build_evidence(buckets, candles[:3], candles[:3], policy, entry_at,
+                            T + timedelta(minutes=3), T + timedelta(minutes=3))
+    assert early["quality"] != "VALID"
+
+    # Trade has outlived warmup_seconds (120s) by a wide margin: the rolling
+    # window must forget the old gap and evaluate on recent, healthy flow.
+    late = build_evidence(buckets, candles, candles, policy, entry_at,
+                           T + timedelta(minutes=10), T + timedelta(minutes=10))
+    assert late["quality"] == "VALID"
+    assert late["max_gap_seconds"] < policy.max_gap_seconds
 
 
 def test_activation_keeps_initial_floor_when_current_flow_is_missing(policy):

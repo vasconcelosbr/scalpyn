@@ -97,7 +97,6 @@ DEFAULT_BLOCK = {
 DEFAULT_RISK = {
     "take_profit_pct": 1.5,
     "stop_loss_atr_multiplier": 1.5,
-    "trailing_stop_enabled": False,
     "max_positions": 5,
     "daily_loss_limit_pct": 3.0,
     "max_exposure_per_asset_pct": 20,
