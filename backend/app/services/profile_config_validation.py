@@ -84,3 +84,33 @@ def validate_profile_config(
             )
 
     return validated
+
+
+def profile_config_warnings(validated_config: Dict[str, Any]) -> list[str]:
+    """Non-blocking advisory warnings about an already-validated profile.
+
+    AUD-001 (auditoria shadow SL_HIT 2026-09-11): ``entry_triggers`` and
+    ``signals`` can both carry conditions, but ``ProfileEngine`` only
+    evaluates ``signals`` when ``entry_triggers.conditions`` is empty (see
+    ``profile_engine.py``, ``self.signals_config = _et if _et.get(...)
+    else _sig``). A profile with both populated silently authorizes entries
+    using only ``entry_triggers`` -- ``signals`` conditions (e.g. a
+    momentum_score floor) are never evaluated, with no error and no signal
+    to whoever is reading the profile.
+
+    Distinct from ``validate_profile_config``'s hard errors: never raises,
+    never mutates the config. Callers append the result to whatever
+    ``warnings`` list they already return to the profile editor.
+    """
+    warnings: list[str] = []
+    entry_triggers = (validated_config.get("entry_triggers") or {}).get("conditions") or []
+    signals = (validated_config.get("signals") or {}).get("conditions") or []
+    if entry_triggers and signals:
+        warnings.append(
+            "entry_triggers e signals estão ambos preenchidos neste perfil: apenas "
+            "entry_triggers é avaliado para autorizar a entrada -- signals é "
+            "ignorado inteiramente enquanto entry_triggers tiver condições. "
+            "Considere mover as condições de signals para entry_triggers ou "
+            "esvaziar uma das duas seções."
+        )
+    return warnings
