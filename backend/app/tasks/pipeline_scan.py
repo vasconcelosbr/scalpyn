@@ -68,6 +68,26 @@ def _l3_profile_contract_operational_enabled() -> bool:
     return configured.strip().lower() in _TRUE_ENV_VALUES
 
 
+def _l3_exact_timeframe_resolution_enabled() -> bool:
+    """AUD-002 (auditoria shadow SL_HIT 2026-09-11) Etapa B: whether
+    _evaluate_l3_decisions pre-fetches each CANDLE_TIMEFRAME timeframe a
+    profile's conditions need by exact identity (fetch_timeframe_indicators)
+    so ProfileEngine._apply_exact_timeframe_override (Etapa A,
+    profile_engine.py) has real per-timeframe data instead of the flat,
+    potentially cross-timeframe merged value.
+
+    Default "false": this issues one additional batched DB query per
+    distinct candle-timeframe a profile's own conditions require, per L3
+    scan cycle -- not load-tested against production traffic yet. Same
+    opt-in pattern as L3_GATE_V2_OPERATIONAL/L3_PROFILE_CONTRACT_OPERATIONAL
+    above: ships disabled, promoted only after reviewing the
+    decision_audit.metrics.timeframe_integrity[].mismatch rate these already
+    expose in production (PRs #136/#137).
+    """
+    configured = os.environ.get("L3_EXACT_TIMEFRAME_RESOLUTION", "false")
+    return configured.strip().lower() in _TRUE_ENV_VALUES
+
+
 def _apply_l3_gate_v2_operational_promotion(
     *, legacy_decision: str, legacy_l3_pass: bool, gate_v2: dict
 ) -> tuple[str, bool]:
@@ -1950,6 +1970,55 @@ async def _evaluate_l3_decisions(
     )
     has_signal_conditions = bool(sig_conditions)
     timeframe = (profile_config or {}).get("default_timeframe", "5m")
+
+    # AUD-002 Etapa B (2026-09-11 SL_HIT audit, Ponto 3): pre-fetch, by exact
+    # (timeframe, scheduler_group) identity, every CANDLE_TIMEFRAME timeframe
+    # this profile's own filters/signals/entry_triggers actually reference --
+    # populating asset["_indicators_by_tf"] so ProfileEngine's Etapa A
+    # (_apply_exact_timeframe_override, profile_engine.py) has real data to
+    # prefer over the flat merge that collapses e.g. compute_30m and
+    # compute_structural_5m's rows (both scheduler_group='structural') by
+    # "whichever ran last", independent of what timeframe a condition asked
+    # for. asset["indicators"] (the flat merge feeding features_snapshot/ML)
+    # is untouched either way. Flag-gated: default "false" leaves every L3
+    # decision byte-identical to before this fix.
+    if db is not None and assets and _l3_exact_timeframe_resolution_enabled():
+        try:
+            from ..services.indicator_classifier import timeframe_semantics
+            from ..services.indicators_provider import get_timeframe_indicators
+            from ..services.profile_engine import _collect_required_timeframes
+
+            candle_timeframes = {
+                tf_key
+                for tf_key, conds in _collect_required_timeframes(profile_config or {}).items()
+                if any(
+                    timeframe_semantics(c.get("field") or c.get("indicator") or "")
+                    == "CANDLE_TIMEFRAME"
+                    for c in conds
+                )
+            }
+            symbols = [a.get("symbol") for a in assets if a.get("symbol")]
+            for tf_key in candle_timeframes:
+                try:
+                    exact = await get_timeframe_indicators(
+                        db, symbols, timeframe=tf_key, market_type="spot",
+                    )
+                except Exception:
+                    logger.exception(
+                        "[L3_EXACT_TF] fetch failed profile=%s timeframe=%s",
+                        profile_name, tf_key,
+                    )
+                    continue
+                for asset in assets:
+                    merged = exact.get(asset.get("symbol"))
+                    if merged is None:
+                        continue
+                    asset.setdefault("_indicators_by_tf", {})[tf_key] = merged.as_flat_dict()
+        except Exception:
+            logger.exception(
+                "[L3_EXACT_TF] pre-fetch setup failed profile=%s; falling back to flat merge",
+                profile_name,
+            )
 
     inject_live = db is not None and user_id is not None
     mtf_observations: dict[str, dict] = {}
