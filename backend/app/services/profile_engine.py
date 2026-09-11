@@ -16,6 +16,7 @@ from collections import defaultdict
 from typing import Dict, Any, List, Optional
 
 from .block_engine import BlockEngine
+from .indicator_classifier import timeframe_semantics
 from .rule_engine import RuleEngine
 from .score_engine import ScoreEngine
 from .signal_engine import SignalEngine
@@ -169,8 +170,6 @@ def condition_timeframe_evidence(
     should ever gate anything operationally -- ``timeframe_conflict`` alone
     must not.
     """
-    from .indicator_classifier import timeframe_semantics
-
     if timeframe_semantics(indicator_key) != "CANDLE_TIMEFRAME":
         return None
     merged = asset.get("_merged_indicators")
@@ -423,6 +422,32 @@ class ProfileEngine:
             return {}
         # Fallback: default timeframe data
         return self._indicator_cache.get(symbol, self.default_timeframe) or {}
+
+    def _apply_exact_timeframe_override(
+        self, symbol: str, cond: Dict[str, Any], field: str, eval_data: Dict[str, Any]
+    ) -> None:
+        """AUD-002 (auditoria shadow SL_HIT 2026-09-11), Etapa A: for a
+        CANDLE_TIMEFRAME field, prefer the value cached under the
+        condition's own requested timeframe (``_get_indicators_for_condition``
+        -- already implemented, never called until this fix) over whatever
+        is already in ``eval_data`` from the flat, potentially
+        cross-timeframe merge (``fetch_merged_indicators``' latest-wins
+        collapse across scheduler groups).
+
+        A no-op by construction unless something has populated
+        ``asset["_indicators_by_tf"]`` for that exact timeframe (Etapa B,
+        ``pipeline_scan.py``'s L3 pre-fetch, gated by
+        ``L3_EXACT_TIMEFRAME_RESOLUTION``) -- so shipping this function
+        alone changes nothing for any profile today. ROLLING_WINDOW /
+        LIVE_SNAPSHOT / COMPOSITE fields are skipped entirely: they have no
+        candle-timeframe identity to resolve by (see
+        indicator_classifier.timeframe_semantics).
+        """
+        if not field or timeframe_semantics(field) != "CANDLE_TIMEFRAME":
+            return
+        resolved = self._get_indicators_for_condition(symbol, cond).get(field)
+        if resolved is not None:
+            eval_data[field] = resolved
 
     # ── Pipeline ──────────────────────────────────────────────────────────────
 
@@ -678,6 +703,10 @@ class ProfileEngine:
             if not applicable:
                 result.append(asset)
                 continue
+            for cond in applicable:
+                self._apply_exact_timeframe_override(
+                    symbol, cond, cond.get("field", ""), base_data
+                )
             eval_result = self.rule_engine.evaluate(applicable, base_data, filter_logic)
 
             # Structured logging for filter conditions
@@ -720,6 +749,12 @@ class ProfileEngine:
         score_result = self.score_engine.compute_score(eval_data)
 
         # ── Signals ───────────────────────────────────────────────────────────
+        for cond in self.signal_engine.conditions:
+            if not cond.get("enabled", True):
+                continue
+            self._apply_exact_timeframe_override(
+                symbol, cond, cond.get("field") or cond.get("indicator", ""), eval_data
+            )
         signal_result = self.signal_engine.evaluate(
             eval_data,
             score_result.get("total_score", 0),
@@ -749,6 +784,12 @@ class ProfileEngine:
                 )
 
         # ── Entry Triggers ────────────────────────────────────────────────────
+        for cond in self.entry_triggers_config.get("conditions", []):
+            if not cond.get("enabled", True):
+                continue
+            self._apply_exact_timeframe_override(
+                symbol, cond, cond.get("indicator", ""), eval_data
+            )
         entry_result = self.block_engine.evaluate_entry(
             eval_data,
             alpha_score=score_result.get("total_score", 0),
