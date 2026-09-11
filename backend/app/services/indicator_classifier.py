@@ -349,3 +349,76 @@ def is_structural(name: str) -> bool:
 
 def is_microstructure(name: str) -> bool:
     return classify_indicator(name) == "microstructure"
+
+
+# ── Timeframe semantics (AUD-002 follow-up, 2026-09-11) ──────────────────────
+# "structural"/"microstructure" above is a scheduler-cadence grouping, not a
+# timeframe-identity axis -- both groups can (and do: compute_30m vs
+# _compute_structural_5m_async both write scheduler_group='structural')
+# contain values computed from more than one OHLCV timeframe for the same
+# indicator name. Whether "requested 5m, got 30m" is even a meaningful
+# question for a given indicator is a separate, coarser classification:
+# does this indicator have a candle-timeframe identity at all, or is it a
+# live snapshot / rolling window / composite score instead?
+#
+# Mirrors two existing, narrower sets kept in pipeline_scan.py (duplicated
+# here rather than imported, to avoid a profile_engine/indicator_classifier
+# -> pipeline_scan import cycle: pipeline_scan already imports
+# profile_engine, which imports this module):
+#   _LIVE_ORDER_FLOW_FIELDS        -> ROLLING_WINDOW below
+#   _DECISION_CONTEXT_SNAPSHOT_FIELDS -> COMPOSITE below
+
+TimeframeSemantics = Literal[
+    "CANDLE_TIMEFRAME", "ROLLING_WINDOW", "LIVE_SNAPSHOT", "COMPOSITE", "UNKNOWN"
+]
+
+# Overwritten in-place by _inject_live_order_flow from a rolling trade-tape
+# window (pipeline_scan.py: taker_window, e.g. "300s") -- never a fixed
+# OHLCV candle, regardless of what group/timeframe last wrote the DB row.
+_ROLLING_WINDOW_FIELDS: frozenset[str] = frozenset({
+    "taker_ratio", "buy_pressure", "taker_buy_volume", "taker_sell_volume",
+    "volume_delta",
+})
+
+# Weighted composites of other indicators/scores; "which candle timeframe"
+# does not apply to the composite itself (each component may have its own).
+_COMPOSITE_FIELDS: frozenset[str] = frozenset({
+    "score", "score_raw", "score_max", "score_components",
+    "liquidity_score", "market_structure_score", "momentum_score",
+    "signal_score", "final_score", "technical_score", "social_score",
+})
+
+# Point-in-time order book / ticker snapshot, not a candle aggregate.
+_LIVE_SNAPSHOT_PREFIXES: tuple[str, ...] = (
+    "market_data_", "orderbook_", "funding_", "spread_", "bid_ask_",
+)
+
+
+def timeframe_semantics(name: str) -> TimeframeSemantics:
+    """Does ``name`` have a candle-timeframe identity at all?
+
+    Only ``"CANDLE_TIMEFRAME"`` should ever be compared against a profile
+    condition's requested timeframe (AUD-002's ``requested != selected``
+    check) or gated by a future ``L3_TIMEFRAME_INTEGRITY_OPERATIONAL``
+    promotion. The others have their own, different identity axis (a
+    rolling window in seconds, a live snapshot instant, or a formula over
+    other fields) and comparing them against "5m vs 30m" is a category
+    error, not evidence of a bug.
+    """
+    if name in _ROLLING_WINDOW_FIELDS:
+        return "ROLLING_WINDOW"
+    if name in _COMPOSITE_FIELDS:
+        return "COMPOSITE"
+    if name.startswith(_LIVE_SNAPSHOT_PREFIXES):
+        return "LIVE_SNAPSHOT"
+    if (
+        name in _MICRO_EXPLICIT
+        or name in _STRUCT_EXPLICIT
+        or name in _STRUCT_HYBRID
+        or name in _HYBRID_INDICATORS
+    ):
+        return "CANDLE_TIMEFRAME"
+    for _prefix in ("ema", "sma", "wma"):
+        if name.startswith(_prefix) and name[len(_prefix):].isdigit():
+            return "CANDLE_TIMEFRAME"
+    return "UNKNOWN"

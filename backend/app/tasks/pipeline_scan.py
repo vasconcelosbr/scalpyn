@@ -1479,8 +1479,6 @@ def _decision_reason_map(processed: dict, has_signal_conditions: bool) -> dict:
 
 
 def _decision_metrics(asset: dict, processed: dict) -> dict:
-    from ..services.profile_engine import indicator_timeframe_conflicts
-
     score = processed.get("score", {}) or {}
     robust_context = asset.get("_score_components") or {}
     component_fields = (
@@ -1524,12 +1522,19 @@ def _decision_metrics(asset: dict, processed: dict) -> dict:
         "technical_score": asset.get("_technical_score", asset.get("_score")),
         "final_score": asset.get("_score"),
         "social_score": dict(asset.get("_social_score") or {}),
-        # AUD-002 (auditoria shadow SL_HIT 2026-09-11): indicator keys whose
-        # merged value is ambiguous across timeframes (e.g. bb_width/
-        # volume_spike resolved from a 30m row when the profile's
-        # default_timeframe is 5m). Observability only -- see
-        # profile_engine._build_eval_data for why this isn't enforced yet.
-        "timeframe_integrity": indicator_timeframe_conflicts(asset),
+        # AUD-002 (auditoria shadow SL_HIT 2026-09-11): per-condition evidence
+        # of a candle-timeframe identity mismatch -- one entry per
+        # filters/signals/entry_triggers condition whose indicator has a
+        # candle-timeframe identity at all (see indicator_classifier.
+        # timeframe_semantics; composite scores, live order-book snapshots
+        # and rolling-flow windows are excluded, they have no "5m vs 30m" to
+        # compare). Each entry's "mismatch" field (requested_timeframe !=
+        # selected_timeframe) is the operational signal, not the coarser
+        # "timeframe_conflict" alone -- an indicator legitimately existing
+        # at multiple timeframes is not, by itself, evidence of anything.
+        # Observability only -- see profile_engine._build_eval_data for why
+        # this isn't enforced yet.
+        "timeframe_integrity": asset.get("_condition_timeframe_evidence") or [],
     }
     for component_name in (
         "liquidity_score",

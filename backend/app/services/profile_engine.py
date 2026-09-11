@@ -137,6 +137,72 @@ def indicator_timeframe_conflicts(asset: Dict[str, Any]) -> Dict[str, Dict[str, 
     }
 
 
+def condition_timeframe_evidence(
+    indicator_key: str,
+    requested_timeframe: str,
+    asset: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """AUD-002 follow-up: per-*condition* evidence of a candle-timeframe
+    identity mismatch, not just "this key has more than one timeframe
+    somewhere in its history" (that alone is not evidence of anything -- an
+    indicator can legitimately be observed at 5m, 30m and 1h; the bug in
+    T04/T06 was that a condition asking for 5m silently received 30m).
+
+    Returns ``None`` when ``indicator_key`` has no candle-timeframe identity
+    at all (see :func:`indicator_classifier.timeframe_semantics` -- rolling
+    windows, live snapshots and composite scores are a category error to
+    compare against "requested timeframe") or when there is no merged
+    indicator data to evaluate against. Otherwise returns::
+
+        {
+            "indicator": "bb_width",
+            "requested_timeframe": "5m",
+            "selected_timeframe": "30m",
+            "available_timeframes": ["5m", "30m"],
+            "timeframe_conflict": True,
+            "selected_source_timestamp": "2026-09-11T07:20:00+00:00",
+            "selection_reason": "LATEST_TIMESTAMP_WINS",
+            "mismatch": True,
+        }
+
+    ``mismatch`` (requested != selected, both non-null) is the field that
+    should ever gate anything operationally -- ``timeframe_conflict`` alone
+    must not.
+    """
+    from .indicator_classifier import timeframe_semantics
+
+    if timeframe_semantics(indicator_key) != "CANDLE_TIMEFRAME":
+        return None
+    merged = asset.get("_merged_indicators")
+    meta = getattr(merged, "meta", None)
+    info = (meta or {}).get(indicator_key)
+    if not info:
+        return None
+    selected_timeframe = info.get("timeframe")
+    timestamp = info.get("timestamp")
+    mismatch = bool(
+        selected_timeframe
+        and requested_timeframe
+        and str(selected_timeframe) != str(requested_timeframe)
+    )
+    return {
+        "indicator": indicator_key,
+        "requested_timeframe": requested_timeframe,
+        "selected_timeframe": selected_timeframe,
+        "available_timeframes": info.get("observed_timeframes") or [],
+        "timeframe_conflict": bool(info.get("timeframe_conflict")),
+        "selected_source_timestamp": (
+            timestamp.isoformat() if hasattr(timestamp, "isoformat") else timestamp
+        ),
+        # The only algorithm merge_indicator_rows implements today (Step 3,
+        # "per-key latest-timestamp-wins merge"). Not a config value -- a
+        # protocol tag, same spirit as SHADOW_TRAILING_CONTRACT_VERSION
+        # elsewhere in this codebase. Update if the merge algorithm changes.
+        "selection_reason": "LATEST_TIMESTAMP_WINS",
+        "mismatch": mismatch,
+    }
+
+
 # ── Structured condition log helper ──────────────────────────────────────────
 
 def _log_condition_eval(
@@ -629,6 +695,11 @@ class ProfileEngine:
                     target_value=cond.get("value"),
                     result=field in (eval_result.get("matched") or []),
                 )
+                evidence = condition_timeframe_evidence(field, tf, asset)
+                if evidence:
+                    asset.setdefault("_condition_timeframe_evidence", []).append(
+                        {**evidence, "section": "filters"}
+                    )
 
             if eval_result["passed"]:
                 result.append(asset)
@@ -658,7 +729,7 @@ class ProfileEngine:
         for cond in self.signal_engine.conditions:
             if not cond.get("enabled", True):
                 continue
-            ind = cond.get("indicator", "")
+            ind = cond.get("field") or cond.get("indicator", "")
             tf = cond.get("timeframe") or self.default_timeframe
             _log_condition_eval(
                 symbol=symbol,
@@ -671,6 +742,11 @@ class ProfileEngine:
                 target_value=cond.get("value"),
                 result=cond.get("id", "?") in (signal_result.get("matched") or []),
             )
+            evidence = condition_timeframe_evidence(ind, tf, asset)
+            if evidence:
+                asset.setdefault("_condition_timeframe_evidence", []).append(
+                    {**evidence, "section": "signals"}
+                )
 
         # ── Entry Triggers ────────────────────────────────────────────────────
         entry_result = self.block_engine.evaluate_entry(
@@ -695,6 +771,11 @@ class ProfileEngine:
                 target_value=cond.get("value"),
                 result=cond.get("id", "?") in (entry_result.get("matched") or []),
             )
+            evidence = condition_timeframe_evidence(ind, tf, asset)
+            if evidence:
+                asset.setdefault("_condition_timeframe_evidence", []).append(
+                    {**evidence, "section": "entry_triggers"}
+                )
 
         # Combine signal + entry trigger: signal only fires if entry is also allowed
         signal_triggered = signal_result.get("signal", False)
