@@ -46,11 +46,6 @@ def advance(state: dict, candle: dict, evidence: dict, policy: ShadowL3ExitPolic
             candidate = hwm * (1 - distance / 100)
             if not trailing.get("never_sell_at_loss") or candidate >= protected:
                 pre_floor = candidate
-    elif trailing.get("enabled") and trailing.get("contract_version") == "shadow_trailing_policy_v2":
-        from .shadow_barrier_evaluator import _resolve_trailing_floor
-        pre_floor = _resolve_trailing_floor(hwm, entry, trailing["policy"])
-        if pre_floor is not None and trailing.get("never_sell_at_loss") and pre_floor < protected:
-            pre_floor = None
     effective = max(sl, old_floor or sl, (pre_floor or sl) if not s.get("continuation") else sl)
     s.update(last_candle_at=at.isoformat(), last_evaluated_at=evidence.get("decision_at"),
              quality=evidence.get("quality", "UNAVAILABLE"), reason="WAITING_TP")

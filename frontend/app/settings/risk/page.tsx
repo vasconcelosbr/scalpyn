@@ -71,22 +71,9 @@ export default function RiskSettingsPage() {
         <div className="card-body p-6">
           <div className="grid grid-cols-1 md:grid-cols-5 gap-8">
             <div className="md:col-span-3 space-y-8">
-              {/* Circuit Breaker Toggle */}
-              <div className="flex items-center justify-between p-4 bg-[var(--bg-elevated)] border border-[var(--border-default)] rounded-[var(--radius-md)]">
-                <div>
-                    <h4 className="font-semibold text-[14px] text-[var(--text-primary)]">Trailing Stop — Global Risk</h4>
-                    <p className="text-[12px] text-[var(--text-secondary)] mt-0.5">Configuração global independente. Para acompanhar os shadows L3, use o bloco próprio abaixo.</p>
-                </div>
-                <button type="button" role="switch" aria-label="Trailing Stop — Global Risk" aria-checked={!!form.trailing_stop_enabled} className={`toggle ${form.trailing_stop_enabled ? "active" : ""}`}
-                  onClick={() => update("trailing_stop_enabled", !form.trailing_stop_enabled)}>
-                  <div className="knob" />
-                </button>
-              </div>
-
               {/* Sliders */}
               {[
                 { key: "take_profit_pct", label: "Default Take Profit", suffix: "%", min: 0.1, max: 10, step: 0.1 },
-                { key: "trailing_stop_distance_pct", label: "Distância do trailing global", suffix: "%", min: 0.1, max: 100, step: 0.1 },
                 { key: "stop_loss_atr_multiplier", label: "Dynamic Stop Loss (ATR)", suffix: "x", min: 0.5, max: 5, step: 0.1 },
                 { key: "max_positions", label: "Max Concurrent Positions", suffix: "POS", min: 1, max: 20, step: 1 },
                 { key: "daily_loss_limit_pct", label: "Daily Loss Limit", suffix: "%", min: 0.5, max: 15, step: 0.5 },

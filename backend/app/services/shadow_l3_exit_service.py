@@ -53,7 +53,10 @@ def build_evidence(buckets, candles, structure, policy, entry_at, end, decision_
     if policy.missing_parameters():
         evidence["quality"] = "PARAMETERS_REQUIRED"
         return evidence
-    start = min(entry_at, end - timedelta(seconds=policy.warmup_seconds))
+    # Rolling lookback: last warmup_seconds, never before entry (NOT an
+    # ever-growing window -- a single stale gap must not poison evidence
+    # quality forever once the trade outlives the warmup period).
+    start = max(entry_at, end - timedelta(seconds=policy.warmup_seconds))
     rows = [b for b in buckets if start <= b["last_at"] < end]
     if not rows:
         return evidence
@@ -67,8 +70,15 @@ def build_evidence(buckets, candles, structure, policy, entry_at, end, decision_
     warm = [b for b in rows if b["time"] >= end - timedelta(seconds=policy.warmup_seconds)]
     coverage = min(100., len(warm) * 60 / policy.warmup_seconds * 100)
     age = (decision_at - rows[-1]["last_at"]).total_seconds()
+    # cvd_before_window (evidence["flow_context"], replay-only) compensated
+    # for buckets trimmed from storage that used to fall inside the old,
+    # ever-growing-from-entry window. With `start` now rolling and bounded
+    # by warmup_seconds (<= replay_lookback_seconds, enforced by the
+    # schema), [start, end) can never reach before the persisted buckets,
+    # so that compensation no longer applies -- adding it back would
+    # double count volume the current window already excludes.
     evidence.update(coverage_pct=coverage, data_age_seconds=age, max_gap_seconds=max(gaps),
-                    cvd=sum(b["entry_delta"] for b in rows)+context.get("cvd_before_window",0))
+                    cvd=sum(b["entry_delta"] for b in rows))
     if (max(gaps) > policy.max_gap_seconds or coverage < policy.min_coverage_pct
             or age > policy.max_age_seconds or (decision_at-end).total_seconds() > policy.alignment_seconds):
         evidence["quality"] = "INCOMPLETE_OR_STALE"
@@ -113,7 +123,7 @@ def build_evidence(buckets, candles, structure, policy, entry_at, end, decision_
 async def candle_evidence(db, shadow, candle, history, policy):
     end = candle["time"] + timedelta(minutes=1)
     decision_at = max(end, candle["ingested_at"])
-    start = min(shadow.entry_timestamp, end - timedelta(seconds=policy.warmup_seconds or 0))
+    start = max(shadow.entry_timestamp, end - timedelta(seconds=policy.warmup_seconds or 0))
     data = (await db.execute(text("""
         WITH trades AS (
           SELECT *, extract(epoch FROM occurred_at-lag(occurred_at) OVER(ORDER BY occurred_at,trade_id)) gap

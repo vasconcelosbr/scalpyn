@@ -112,7 +112,7 @@ class RiskEngine:
         current_price: float,
         indicators: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Check if an open position should be closed (TP/SL/trailing).
+        """Check if an open position should be closed (TP/SL).
 
         Returns:
             {"should_exit": bool, "exit_reason": str, "exit_type": str}
@@ -138,15 +138,6 @@ class RiskEngine:
                 return {"should_exit": True, "exit_reason": f"Stop loss at {sl_price}", "exit_type": "stop_loss"}
             if direction == "short" and current_price >= sl_price:
                 return {"should_exit": True, "exit_reason": f"Stop loss at {sl_price}", "exit_type": "stop_loss"}
-
-        # Trailing stop (if enabled)
-        if self.config.get("trailing_stop_enabled", False):
-            trailing_pct = self.config.get("trailing_stop_distance_pct", 0.5)
-            if direction == "long":
-                # Track highest price since entry (would need price history in practice)
-                trailing_sl = current_price * (1 - trailing_pct / 100)
-                if sl_price and trailing_sl > sl_price:
-                    pass  # Would update stop loss dynamically
 
         return {"should_exit": False, "exit_reason": None, "exit_type": None}
 
