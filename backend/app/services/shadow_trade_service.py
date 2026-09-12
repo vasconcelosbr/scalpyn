@@ -3627,10 +3627,25 @@ async def safe_backfill_watchlist_shadows(
                             user_id, symbol,
                         )
                         continue
+                    # AUD12-004 (2026-09-12 audit): without this, the
+                    # safety-net path had NO protection against creating a
+                    # second active shadow for a symbol that already has
+                    # one -- consolidation_enforced defaulted to
+                    # user_config.get("l3_single_profile_per_symbol_enabled",
+                    # False), a flag never turned on for any observed user.
+                    # This brings the safety net to parity with the primary
+                    # consolidation path (l3_trade_consolidation.py), which
+                    # already enforces the same "no concurrently active
+                    # shadow" invariant unconditionally. Confirmed live:
+                    # trades bbb5f8a2.../6cd5e6e7.../08c58212... (UNI_USDT,
+                    # 2026-09-12) were each created ~1 cycle (300s) after
+                    # the previous one's administrative close, via three
+                    # different profiles, with zero suppression recorded.
                     new_id = await _create_from_decision(
                         own_db, decision, "NOT_TRADABLE", user_config,
                         source=SHADOW_SOURCE_L3,
                         lineage=_lineage,
+                        consolidation_enforced=True,
                     )
                     if new_id is not None:
                         created_count += 1
