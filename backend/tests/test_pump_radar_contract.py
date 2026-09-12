@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
@@ -21,9 +23,11 @@ from app.schemas.pump_radar import PumpRadarConfig
 from app.tasks.celery_app import QUEUE_PUMP_RADAR, TASK_ROUTES
 from app.tasks.pump_radar import (
     GATE_MAX_CANDLES_BACK,
+    STALE_ASSET_TIMEOUT_MINUTES,
     TIMEFRAME_SECONDS,
     _clamp_capture_start,
     _earliest_fetchable,
+    _reap_stale_assets,
     _refresh_run,
     _select_universe,
 )
@@ -113,7 +117,7 @@ def test_every_pump_radar_task_uses_isolated_queue() -> None:
     routes = {name: route for name, route in TASK_ROUTES.items() if name.startswith("app.tasks.pump_radar.")}
     assert {name.rsplit(".", 1)[-1] for name in routes} == {
         "inventory", "backfill_asset", "detect_asset", "associate_asset",
-        "snapshots", "build_controls", "statistics",
+        "snapshots", "build_controls", "statistics", "reap_stale_assets",
     }
     assert all(route["queue"] == QUEUE_PUMP_RADAR for route in routes.values())
 
@@ -222,3 +226,69 @@ async def test_refresh_run_reports_partial_when_any_asset_failed() -> None:
     db = _FakeRunRefreshDB({"COMPLETED": 60, "FAILED": 5})
     await _refresh_run(db, uuid4())
     assert "PARTIAL" in db.statements[-1]
+
+
+@pytest.mark.asyncio
+async def test_reap_stale_assets_fails_stuck_asset_and_retriggers_build_controls() -> None:
+    """Reproduces the 2026-09-12 incident: run 6d8211cc stuck RUNNING for
+    ~43h because BEAT_USDT's snapshots task never reached a terminal status
+    (a worker SIGKILL bypasses every except-block in pump_radar.py, and
+    acks_late=False means Celery never redelivers it). The reaper must fail
+    the stuck asset and, since no _snapshots call will ever run again for
+    this run to enqueue it, explicitly re-trigger build_controls itself.
+    """
+    run_id = uuid4()
+    update_statements: list[str] = []
+
+    async def execute(stmt):
+        sql = str(stmt)
+        if sql.strip().upper().startswith("UPDATE"):
+            update_statements.append(str(stmt.compile(compile_kwargs={"literal_binds": True})))
+            return SimpleNamespace()
+        if "JOIN pump_radar_runs" in sql:
+            return SimpleNamespace(all=lambda: [(run_id, "BEAT_USDT")])
+        if "pump_radar_runs.status" in sql:
+            # _refresh_run is mocked out below, so this simulates it having
+            # already flipped the run to PARTIAL (1 failed, 64 completed).
+            return SimpleNamespace(all=lambda: [(run_id, "PARTIAL")])
+        return SimpleNamespace(all=lambda: [])
+
+    db = SimpleNamespace(execute=AsyncMock(side_effect=execute), commit=AsyncMock())
+    session = AsyncMock()
+    session.__aenter__.return_value = db
+    with patch("app.database.CeleryAsyncSessionLocal", return_value=session), \
+         patch("app.tasks.pump_radar._refresh_run", AsyncMock()) as refresh_mock, \
+         patch("app.tasks.pump_radar.enqueue") as enqueue_mock:
+        result = await _reap_stale_assets()
+
+    assert result == {"status": "ok", "reaped": 1, "runs_completed": 1}
+    assert any("STALE_TASK_REAPED" in stmt and str(STALE_ASSET_TIMEOUT_MINUTES) in stmt for stmt in update_statements)
+    refresh_mock.assert_awaited_once_with(db, run_id)
+    enqueue_mock.assert_called_once_with(
+        "app.tasks.pump_radar.build_controls",
+        dedup_key=f"pump-radar:{run_id}:controls",
+        ttl_seconds=900,
+        queue=QUEUE_PUMP_RADAR,
+        args=(str(run_id),),
+    )
+
+
+@pytest.mark.asyncio
+async def test_reap_stale_assets_leaves_run_running_alone_when_nothing_is_stale() -> None:
+    async def execute(stmt):
+        sql = str(stmt)
+        if "JOIN pump_radar_runs" in sql:
+            return SimpleNamespace(all=lambda: [])
+        return SimpleNamespace(all=lambda: [])
+
+    db = SimpleNamespace(execute=AsyncMock(side_effect=execute), commit=AsyncMock())
+    session = AsyncMock()
+    session.__aenter__.return_value = db
+    with patch("app.database.CeleryAsyncSessionLocal", return_value=session), \
+         patch("app.tasks.pump_radar._refresh_run", AsyncMock()) as refresh_mock, \
+         patch("app.tasks.pump_radar.enqueue") as enqueue_mock:
+        result = await _reap_stale_assets()
+
+    assert result == {"status": "ok", "reaped": 0, "runs_completed": 0}
+    refresh_mock.assert_not_awaited()
+    enqueue_mock.assert_not_called()

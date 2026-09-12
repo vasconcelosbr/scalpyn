@@ -225,6 +225,7 @@ TASK_ROUTES = {
     "app.tasks.pump_radar.snapshots":                    {"queue": QUEUE_PUMP_RADAR},
     "app.tasks.pump_radar.build_controls":               {"queue": QUEUE_PUMP_RADAR},
     "app.tasks.pump_radar.statistics":                   {"queue": QUEUE_PUMP_RADAR},
+    "app.tasks.pump_radar.reap_stale_assets":            {"queue": QUEUE_PUMP_RADAR},
 
     # Decision Log Enricher (Module 1)
     "app.tasks.decision_log_enricher.enrich":            {"queue": QUEUE_STRUCTURAL},
@@ -459,9 +460,17 @@ TASK_ANNOTATIONS = {
     "app.tasks.pump_radar.backfill_asset": {"time_limit": 3600, "soft_time_limit": 3540, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.pump_radar.detect_asset": {"time_limit": 900, "soft_time_limit": 840, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.pump_radar.associate_asset": {"time_limit": 900, "soft_time_limit": 840, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
-    "app.tasks.pump_radar.snapshots": {"time_limit": 900, "soft_time_limit": 840, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
+    # 900s (2026-09-12 default) is not enough for an asset with an unusually
+    # high event/shadow-link count -- run 6d8211cc's BEAT_USDT snapshots task
+    # never surfaced a timeout error, consistent with Celery's own hard
+    # time_limit SIGKILL-ing the worker process before the except block in
+    # _snapshots() can run (acks_late=False means it's never requeued
+    # either). Doubled as a defensive mitigation; _reap_stale_assets is the
+    # actual backstop regardless of which timeout a future heavy asset hits.
+    "app.tasks.pump_radar.snapshots": {"time_limit": 1800, "soft_time_limit": 1740, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.pump_radar.build_controls": {"time_limit": 900, "soft_time_limit": 840, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.pump_radar.statistics": {"time_limit": 600, "soft_time_limit": 540, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.pump_radar.reap_stale_assets": {"time_limit": 120, "soft_time_limit": 90, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
 
     # Decision Log Enricher (Module 1)
     "app.tasks.decision_log_enricher.enrich":            {**_STRUCTURAL_GUARDS, "rate_limit": "6/m"},
@@ -767,6 +776,14 @@ celery_app.conf.beat_schedule = {
     "orphan_tx_watchdog_every_5min": {
         "task": "app.tasks.orphan_tx_watchdog.kill_orphans",
         "schedule": 300.0,
+    },
+    # Pump Radar stale-asset reaper: every 10 min, fails any run-asset with
+    # no progress for over STALE_ASSET_TIMEOUT_MINUTES so a single lost/
+    # crashed task (worker SIGKILL, OOM, redeploy) can't leave the whole run
+    # stuck RUNNING forever (see app/tasks/pump_radar.py::_reap_stale_assets).
+    "pump_radar_reap_stale_assets_every_10min": {
+        "task": "app.tasks.pump_radar.reap_stale_assets",
+        "schedule": 600.0,
     },
     # Task #262 — Structural 30m collector. Dispara exatamente no
     # fechamento da candle 30m (UTC 00:00, 00:30, …, 23:30) — sem drift

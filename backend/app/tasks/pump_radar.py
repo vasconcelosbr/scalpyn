@@ -48,6 +48,15 @@ CAPTURE_CONTRACT = "pump_radar_gate_spot_closed_v1"
 # its very first page request. A 50-point safety margin absorbs the clock
 # drift between when we compute this clamp and when Gate.io evaluates "now".
 GATE_MAX_CANDLES_BACK = 10000 - 50
+# A worker crash mid-task (SIGKILL, OOM, redeploy) skips every except-block
+# in this module, so the asset never reaches a terminal status and
+# _refresh_run waits for it forever. Confirmed in production 2026-09-12:
+# run 6d8211cc stuck RUNNING for ~43h on a single asset (BEAT_USDT) stuck
+# in SNAPSHOTS since 2026-09-10 21:34 UTC, with 64/65 other assets long
+# COMPLETED. See _reap_stale_assets below.
+STALE_ASSET_TIMEOUT_MINUTES = 60
+_NON_TERMINAL_ASSET_STATUSES = ("QUEUED", "CAPTURING", "DETECTING", "ASSOCIATING", "SNAPSHOTS")
+_NON_TERMINAL_RUN_STATUSES = ("QUEUED", "RUNNING", "CANCELLING")
 
 
 def _earliest_fetchable(timeframe: str) -> datetime:
@@ -876,3 +885,59 @@ async def _statistics(run_id: UUID) -> dict:
 @celery_app.task(name="app.tasks.pump_radar.statistics")
 def statistics(run_id: str) -> str:
     return json.dumps(_run_async(_statistics(UUID(run_id))), default=str)
+
+
+async def _reap_stale_assets() -> dict:
+    """Fail any asset stuck in a non-terminal status past the timeout so
+    ``_refresh_run`` can stop waiting on a task that will never finish, then
+    re-trigger ``build_controls`` for any run this newly completes -- normally
+    only a successful ``_snapshots`` call does that, which never happens for
+    a reaped run since its last asset never gets there.
+    """
+    from ..database import CeleryAsyncSessionLocal
+
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=STALE_ASSET_TIMEOUT_MINUTES)
+    reaped: list[tuple[UUID, str]] = []
+    now_terminal: set[UUID] = set()
+    async with CeleryAsyncSessionLocal() as db:
+        stale = (await db.execute(
+            select(PumpRadarRunAsset.run_id, PumpRadarRunAsset.symbol)
+            .join(PumpRadarRun, PumpRadarRun.id == PumpRadarRunAsset.run_id)
+            .where(
+                PumpRadarRunAsset.status.in_(_NON_TERMINAL_ASSET_STATUSES),
+                PumpRadarRunAsset.started_at.is_not(None),
+                PumpRadarRunAsset.started_at < cutoff,
+                PumpRadarRun.status.in_(_NON_TERMINAL_RUN_STATUSES),
+            )
+        )).all()
+        affected_runs = {run_id for run_id, _ in stale}
+        for run_id, symbol in stale:
+            await db.execute(
+                update(PumpRadarRunAsset)
+                .where(PumpRadarRunAsset.run_id == run_id, PumpRadarRunAsset.symbol == symbol)
+                .values(
+                    status="FAILED",
+                    finished_at=datetime.now(timezone.utc),
+                    error_code="STALE_TASK_REAPED",
+                    error_message=f"No progress for over {STALE_ASSET_TIMEOUT_MINUTES} minutes; likely a lost/crashed worker task.",
+                )
+            )
+            reaped.append((run_id, symbol))
+        for run_id in affected_runs:
+            await _refresh_run(db, run_id)
+        if affected_runs:
+            rows = (await db.execute(
+                select(PumpRadarRun.id, PumpRadarRun.status).where(PumpRadarRun.id.in_(affected_runs))
+            )).all()
+            now_terminal = {run_id for run_id, status in rows if status in {"COMPLETED", "PARTIAL"}}
+        await db.commit()
+    for run_id in now_terminal:
+        enqueue("app.tasks.pump_radar.build_controls", dedup_key=f"pump-radar:{run_id}:controls", ttl_seconds=900, queue=QUEUE_PUMP_RADAR, args=(str(run_id),))
+    if reaped:
+        logger.warning("[PUMP-RADAR] reaped %d stale asset(s), triggered build_controls for %d run(s): %s", len(reaped), len(now_terminal), reaped)
+    return {"status": "ok", "reaped": len(reaped), "runs_completed": len(now_terminal)}
+
+
+@celery_app.task(name="app.tasks.pump_radar.reap_stale_assets")
+def reap_stale_assets() -> str:
+    return json.dumps(_run_async(_reap_stale_assets()), default=str)
