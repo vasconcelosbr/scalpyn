@@ -57,6 +57,12 @@ export default function PumpRadarPage() {
   const [playing, setPlaying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const eventRequest = useRef(0);
+  // Mirrors `event` without being a `load` dependency, so the 10s poll
+  // (below) can tell whether the current selection is still valid without
+  // recreating `load` on every selection change -- recreating it would
+  // retrigger the mount-effect that calls it and cause a request loop.
+  const selectedEventIdRef = useRef<string | null>(null);
+  useEffect(() => { selectedEventIdRef.current = event?.event_id ?? null; }, [event]);
 
   const loadEvent = useCallback(async (runId: string, eventId: string, point?: string | null, conceal = true) => {
     const request = ++eventRequest.current;
@@ -89,10 +95,18 @@ export default function PumpRadarPage() {
         apiGet<Envelope<Run>>(`/pump-radar/runs/${latest.id}`),
         apiGet<Envelope<{ items: AssetEvent[] }>>(`/pump-radar/runs/${latest.id}/assets?limit=100`),
       ]);
-      setEvent(null); setChart(null); setRun(runResponse.data); setEvents(assetResponse.data.items);
-      const first = assetResponse.data.items[0];
-      if (first) await loadEvent(latest.id, first.event_id, null, true);
-      else { setEvent(null); setChart(null); setComparisons([]); setRanges([]); }
+      setRun(runResponse.data); setEvents(assetResponse.data.items);
+      // Only touch the detail panel (event/chart) when the previously
+      // selected event fell out of the refreshed list -- otherwise every
+      // periodic poll blanks and re-fetches an unchanged selection, which
+      // reads as the whole page flickering while a run is still processing.
+      const items = assetResponse.data.items;
+      const stillSelected = items.some((item) => item.event_id === selectedEventIdRef.current);
+      if (!stillSelected) {
+        const first = items[0];
+        if (first) await loadEvent(latest.id, first.event_id, null, true);
+        else { setEvent(null); setChart(null); setComparisons([]); setRanges([]); }
+      }
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.detail ?? cause.message : cause instanceof Error ? cause.message : "Falha ao carregar o Radar de Pumps");
     } finally { setLoading(false); }
