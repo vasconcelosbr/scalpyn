@@ -19,7 +19,7 @@ import {
   Upload,
 } from "lucide-react";
 import { apiGet, apiPost } from "@/lib/api";
-import { formatDateTime } from "@/lib/datetime";
+import { DISPLAY_TZ, displayDateTimeLocalValue, displayDateTimeToUtcIso, formatDateTime } from "@/lib/datetime";
 import { ModuleAIAnalysisAction } from "@/components/ai/ModuleAIAnalysisAction";
 import {
   SHADOW_REPORT_OUTCOMES,
@@ -177,22 +177,10 @@ const inputClass =
 const buttonClass =
   "inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-white/10 bg-[#151925] px-3 text-xs font-semibold text-[#c7cedd] transition hover:border-white/20 hover:bg-[#1b2030] disabled:cursor-not-allowed disabled:opacity-45";
 
-function dateValue(date: Date): string {
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-  return local.toISOString().slice(0, 10);
-}
-
-function initialDates(days = 7): { from: string; to: string } {
-  const today = new Date();
-  const start = new Date(today);
-  start.setDate(start.getDate() - (days - 1));
-  return { from: dateValue(start), to: dateValue(today) };
-}
-
-function inclusiveEndUtc(value: string): string {
-  const end = new Date(`${value}T00:00:00`);
-  end.setDate(end.getDate() + 1);
-  return end.toISOString();
+function initialDateTimes(days = 7): { from: string; to: string } {
+  const now = new Date();
+  const from = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+  return { from: displayDateTimeLocalValue(from), to: displayDateTimeLocalValue(now) };
 }
 
 function money(value: number | null): string {
@@ -271,7 +259,7 @@ function FacetPicker({
 
 export default function DetailedReportWorkspace() {
   const router = useRouter();
-  const initial = useMemo(() => initialDates(), []);
+  const initial = useMemo(() => initialDateTimes(), []);
   const [sources, setSources] = useState<Source[]>(["L3"]);
   const [outcomes, setOutcomes] = useState<ShadowReportOutcome[]>([...SHADOW_REPORT_OUTCOMES]);
   const [dateFrom, setDateFrom] = useState(initial.from);
@@ -394,9 +382,9 @@ export default function DetailedReportWorkspace() {
         include_legacy_watchlist: includeLegacy,
         profile_ids: profileIds,
         outcomes,
-        date_from: new Date(`${dateFrom}T00:00:00`).toISOString(),
-        date_to: inclusiveEndUtc(dateTo),
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+        date_from: displayDateTimeToUtcIso(dateFrom),
+        date_to: displayDateTimeToUtcIso(dateTo),
+        timezone: DISPLAY_TZ,
       });
       setRun(created);
       setAppliedSelectionKey(executedSelectionKey);
@@ -530,7 +518,7 @@ export default function DetailedReportWorkspace() {
             </div>
             <div className="flex gap-1.5">
               {presets.map((days) => (
-                <button key={days} className={buttonClass} onClick={() => { const value = initialDates(days); setDateFrom(value.from); setDateTo(value.to); }}>
+                <button key={days} className={buttonClass} onClick={() => { const value = initialDateTimes(days); setDateFrom(value.from); setDateTo(value.to); }}>
                   {days}d
                 </button>
               ))}
@@ -552,8 +540,8 @@ export default function DetailedReportWorkspace() {
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <label className="space-y-1.5 text-[11px] uppercase tracking-wide text-[#7f899f]">Início<input className={`${inputClass} block w-full normal-case`} type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /></label>
-              <label className="space-y-1.5 text-[11px] uppercase tracking-wide text-[#7f899f]">Fim<input className={`${inputClass} block w-full normal-case`} type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} /></label>
+              <label className="space-y-1.5 text-[11px] uppercase tracking-wide text-[#7f899f]">Início<input className={`${inputClass} block w-full normal-case`} type="datetime-local" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} title="Data e hora inicial (GMT-3)" /></label>
+              <label className="space-y-1.5 text-[11px] uppercase tracking-wide text-[#7f899f]">Fim<input className={`${inputClass} block w-full normal-case`} type="datetime-local" value={dateTo} onChange={(event) => setDateTo(event.target.value)} title="Data e hora final (GMT-3)" /></label>
             </div>
             <div>
               <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7f899f]">Resultado</div>

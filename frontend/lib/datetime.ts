@@ -36,6 +36,17 @@ export function displayDateTimeToUtcIso(value: string): string {
   return new Date(utcMs).toISOString();
 }
 
+/**
+ * The inverse of displayDateTimeToUtcIso: given any instant, returns the
+ * DISPLAY_TZ wall-clock "YYYY-MM-DDTHH:mm" string an
+ * `<input type="datetime-local">` needs as its value.
+ */
+export function displayDateTimeLocalValue(value: string | number | Date): string {
+  const shifted = new Date(new Date(value).getTime() - DISPLAY_TZ_UTC_OFFSET_HOURS * 60 * 60 * 1000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${shifted.getUTCFullYear()}-${pad(shifted.getUTCMonth() + 1)}-${pad(shifted.getUTCDate())}T${pad(shifted.getUTCHours())}:${pad(shifted.getUTCMinutes())}`;
+}
+
 /** lightweight-charts `localization.timeFormatter` — `time` is epoch seconds. */
 export function chartTimeFormatter(time: number): string {
   return formatDateTime(time * 1000, { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
