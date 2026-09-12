@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { TrailingStatus } from '@/components/shadow-portfolio/TrailingStatus';
 import type { ShadowTrailingView } from '@/lib/shadowTrailingView';
-import { formatDateTime } from '@/lib/datetime';
+import { formatDateTime, displayDateTimeToUtcIso } from '@/lib/datetime';
 import {
   Activity,
   AlertTriangle,
@@ -260,7 +260,7 @@ type StatusFilter = "ALL" | "OPEN" | "TP_HIT" | "SL_HIT" | "TRAILING_STOP" | "TI
 interface FilterState {
   status: StatusFilter;
   symbol: string;
-  minDate: string; // YYYY-MM-DD
+  minDate: string; // <input type="datetime-local"> value, DISPLAY_TZ (GMT-3) wall-clock
   maxDate: string;
   page: number;
   pageSize: number;
@@ -549,7 +549,7 @@ function FilterBar({
           }}
         />
         <input
-          type="date"
+          type="datetime-local"
           value={filter.minDate}
           onChange={(e) => onChange({ ...filter, minDate: e.target.value, page: 1 })}
           style={{
@@ -562,11 +562,11 @@ function FilterBar({
             outline: "none",
             colorScheme: "dark",
           }}
-          title="Data inicial"
+          title="Data e hora inicial (GMT-3)"
         />
         <span style={{ color: C.dim, fontSize: 11 }}>até</span>
         <input
-          type="date"
+          type="datetime-local"
           value={filter.maxDate}
           onChange={(e) => onChange({ ...filter, maxDate: e.target.value, page: 1 })}
           style={{
@@ -579,7 +579,7 @@ function FilterBar({
             outline: "none",
             colorScheme: "dark",
           }}
-          title="Data final"
+          title="Data e hora final (GMT-3)"
         />
         <button
           onClick={onRefresh}
@@ -2324,8 +2324,10 @@ function buildBaseQuery(
   const params = new URLSearchParams();
   if (overrides.status) params.set("status", overrides.status);
   if (filter.symbol.trim()) params.set("symbol", filter.symbol.trim());
-  if (filter.minDate) params.set("min_date", filter.minDate);
-  if (filter.maxDate) params.set("max_date", filter.maxDate);
+  const minDateUtc = displayDateTimeToUtcIso(filter.minDate);
+  const maxDateUtc = displayDateTimeToUtcIso(filter.maxDate);
+  if (minDateUtc) params.set("min_date", minDateUtc);
+  if (maxDateUtc) params.set("max_date", maxDateUtc);
   // A aba continua sendo a autoridade da lane mesmo quando um profile é
   // selecionado. Isso permite ao backend localizar o profile também entre os
   // associados de uma consolidação sem misturar fontes.
@@ -2339,8 +2341,10 @@ function buildBaseQuery(
 function buildSummaryQuery(filter: FilterState, source?: SourceTab, profileId?: string | null): string {
   const params = new URLSearchParams();
   if (filter.symbol.trim()) params.set("symbol", filter.symbol.trim());
-  if (filter.minDate) params.set("min_date", filter.minDate);
-  if (filter.maxDate) params.set("max_date", filter.maxDate);
+  const minDateUtc = displayDateTimeToUtcIso(filter.minDate);
+  const maxDateUtc = displayDateTimeToUtcIso(filter.maxDate);
+  if (minDateUtc) params.set("min_date", minDateUtc);
+  if (maxDateUtc) params.set("max_date", maxDateUtc);
   if (source) params.set("source", source);
   if (profileId) params.set("profile_id", profileId);
   return params.toString();
