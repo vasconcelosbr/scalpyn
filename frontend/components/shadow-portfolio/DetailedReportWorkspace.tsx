@@ -539,7 +539,7 @@ export default function DetailedReportWorkspace() {
                 ))}
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3">
               <label className="space-y-1.5 text-[11px] uppercase tracking-wide text-[#7f899f]">Início<input className={`${inputClass} block w-full normal-case`} type="datetime-local" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} title="Data e hora inicial (GMT-3)" /></label>
               <label className="space-y-1.5 text-[11px] uppercase tracking-wide text-[#7f899f]">Fim<input className={`${inputClass} block w-full normal-case`} type="datetime-local" value={dateTo} onChange={(event) => setDateTo(event.target.value)} title="Data e hora final (GMT-3)" /></label>
             </div>
