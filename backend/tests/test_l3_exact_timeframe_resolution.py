@@ -16,6 +16,22 @@ Etapa B (pipeline_scan.py, gated by L3_EXACT_TIMEFRAME_RESOLUTION, default
 "false"): actually populates asset["_indicators_by_tf"] for L3 by fetching
 each CANDLE_TIMEFRAME timeframe a profile's conditions need via the
 existing fetch_timeframe_indicators() exact-identity path.
+
+AUD12-001 (2026-09-12 audit, confirmed live in production on trade
+08983ccb.../UNI_USDT): Etapa A/B above never actually reached two real
+consumers of the flat merge --
+  1. ProfileEngine.evaluate_asset()'s own block_rules evaluation
+     (self.block_engine.evaluate(eval_data)) runs BEFORE
+     _process_single_asset ever applies the override, so every block
+     condition always saw the ambiguous flat value regardless of Etapa B.
+  2. l3_gate_compiler_v2.evaluate_l3_gate_v2 -- the gate with
+     operational_effect=true today -- independently rebuilds its own
+     eval_data from asset["indicators"] and never called the override at
+     all.
+Both are fixed below; see also the _collect_required_timeframes fix for a
+third, related gap (block_rules conditions were grouped by the whole block,
+which has no "field"/"indicator" key, so an indicator referenced only
+inside a block was never in Etapa B's pre-fetch set).
 """
 from __future__ import annotations
 
@@ -23,7 +39,7 @@ from copy import deepcopy
 
 import pytest
 
-from app.services.profile_engine import ProfileEngine
+from app.services.profile_engine import ProfileEngine, _collect_required_timeframes
 
 
 def _profile(**overrides):
@@ -170,3 +186,126 @@ async def test_etapa_b_enabled_prefetches_exact_timeframe_and_corrects_entry(mon
     assert calls == ["5m"]
     assert asset["_indicators_by_tf"]["5m"]["bb_width"] == 0.02254
     assert decisions[0]["decision"] == "BLOCK"  # corrected: 0.02254 fails the 0.03-0.06 band
+
+
+# ── AUD12-001: block_rules (ProfileEngine.evaluate_asset) ───────────────────
+
+def test_block_rule_uses_exact_timeframe_value_when_available():
+    """Reproduces T16/UNI ORDERBOOK_ABSORPTION_BREAK: 'MACD Momentum Decay'
+    blocks on macd_hist_slope_3 < 0 at 5m. The flat merge carries the 30m
+    value (+0.153057, does not block); the real 5m value (-0.073912) should
+    block. Before this fix, block_rules ran before any override existed."""
+    asset = {
+        "symbol": "UNI_USDT",
+        "indicators": {"macd_histogram": 0.00639111, "macd_hist_slope_3": 0.153057},
+        "_indicators_by_tf": {"5m": {"macd_hist_slope_3": -0.073912}},
+    }
+    profile = _profile(block_rules={"blocks": [
+        {
+            "name": "MACD Momentum Decay", "logic": "AND", "enabled": True, "timeframe": "5m",
+            "conditions": [
+                {"type": "threshold", "value": 0, "operator": ">", "indicator": "macd_histogram", "timeframe": "5m"},
+                {"type": "threshold", "value": 0, "operator": "<", "indicator": "macd_hist_slope_3", "timeframe": "5m"},
+            ],
+        },
+    ]})
+    engine = ProfileEngine(profile)
+    result = engine.evaluate_asset(asset)
+    assert result["blocked"] is True
+
+
+def test_block_rule_falls_back_to_flat_merge_without_per_timeframe_data():
+    """Same profile, no _indicators_by_tf -- must reproduce today's (buggy)
+    behavior exactly: the 30m-contaminated flat value does not block."""
+    asset = {
+        "symbol": "UNI_USDT",
+        "indicators": {"macd_histogram": 0.00639111, "macd_hist_slope_3": 0.153057},
+    }
+    profile = _profile(block_rules={"blocks": [
+        {
+            "name": "MACD Momentum Decay", "logic": "AND", "enabled": True, "timeframe": "5m",
+            "conditions": [
+                {"type": "threshold", "value": 0, "operator": ">", "indicator": "macd_histogram", "timeframe": "5m"},
+                {"type": "threshold", "value": 0, "operator": "<", "indicator": "macd_hist_slope_3", "timeframe": "5m"},
+            ],
+        },
+    ]})
+    engine = ProfileEngine(profile)
+    result = engine.evaluate_asset(asset)
+    assert result["blocked"] is False
+
+
+# ── AUD12-001: l3_gate_v2 (l3_gate_compiler_v2.evaluate_l3_gate_v2) ─────────
+
+def test_gate_v2_entry_trigger_uses_exact_timeframe_value_when_available():
+    """The gate with operational_effect=true today never called the Etapa A
+    override at all -- it independently rebuilds eval_data from
+    asset["indicators"]. Reproduces T16's exact entry trigger."""
+    from app.services.l3_gate_compiler_v2 import evaluate_l3_gate_v2
+    from datetime import datetime, timezone
+
+    asset = {
+        "symbol": "UNI_USDT",
+        "indicators": {"macd_hist_slope_3": 0.153057},
+        "_indicators_by_tf": {"5m": {"macd_hist_slope_3": -0.073912}},
+    }
+    profile = _profile(entry_triggers={"logic": "AND", "conditions": [
+        {"id": "macd_hist_slope_3", "indicator": "macd_hist_slope_3", "operator": ">",
+         "value": 0, "enabled": True, "required": True},
+    ]})
+    result = evaluate_l3_gate_v2(
+        asset=asset, profile_config=profile, score=50.0, score_context={},
+        evaluated_at=datetime.now(timezone.utc), base_eligible=True,
+        legacy_decision="BLOCK",
+        block_rules_audit={"rules": [], "matched_blocks": [], "blocked": False, "blocked_by": [], "skipped_blocks": []},
+    )
+    condition = result["entry_triggers"]["conditions"][0]
+    assert condition["actual"] == -0.073912
+    assert result["entry_triggers"]["gate_passed"] is False
+
+
+def test_gate_v2_falls_back_to_flat_merge_without_per_timeframe_data():
+    """Same profile, no _indicators_by_tf -- must reproduce today's (buggy)
+    ALLOW faithfully."""
+    from app.services.l3_gate_compiler_v2 import evaluate_l3_gate_v2
+    from datetime import datetime, timezone
+
+    asset = {"symbol": "UNI_USDT", "indicators": {"macd_hist_slope_3": 0.153057}}
+    profile = _profile(entry_triggers={"logic": "AND", "conditions": [
+        {"id": "macd_hist_slope_3", "indicator": "macd_hist_slope_3", "operator": ">",
+         "value": 0, "enabled": True, "required": True},
+    ]})
+    result = evaluate_l3_gate_v2(
+        asset=asset, profile_config=profile, score=50.0, score_context={},
+        evaluated_at=datetime.now(timezone.utc), base_eligible=True,
+        legacy_decision="ALLOW",
+        block_rules_audit={"rules": [], "matched_blocks": [], "blocked": False, "blocked_by": [], "skipped_blocks": []},
+    )
+    condition = result["entry_triggers"]["conditions"][0]
+    assert condition["actual"] == 0.153057
+    assert result["entry_triggers"]["gate_passed"] is True
+
+
+# ── _collect_required_timeframes: block_rules grouped by inner condition ───
+
+def test_collect_required_timeframes_groups_block_conditions_not_whole_block():
+    """Before this fix, block_rules entries were grouped by the whole block
+    dict (no 'field'/'indicator' key), so an indicator referenced ONLY
+    inside a block_rules condition never made it into Etapa B's pre-fetch
+    set. Each inner condition must appear individually, tagged
+    _section='block_rules', using its own timeframe (or the block's, or the
+    profile default, in that order)."""
+    profile = _profile(block_rules={"blocks": [
+        {
+            "name": "Only in block", "enabled": True, "timeframe": "15m",
+            "conditions": [
+                {"indicator": "rsi", "operator": ">", "value": 50},
+                {"indicator": "adx", "operator": ">", "value": 20, "timeframe": "1h"},
+            ],
+        },
+    ]})
+    grouped = _collect_required_timeframes(profile)
+    fifteen_min = [c for c in grouped.get("15m", []) if c.get("indicator") == "rsi"]
+    one_hour = [c for c in grouped.get("1h", []) if c.get("indicator") == "adx"]
+    assert len(fifteen_min) == 1 and fifteen_min[0]["_section"] == "block_rules"
+    assert len(one_hour) == 1 and one_hour[0]["_section"] == "block_rules"

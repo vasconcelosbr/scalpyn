@@ -33,7 +33,7 @@ FeatureEngine calc-key sets that map config keys to groups:
 
 from __future__ import annotations
 
-from typing import Literal, Optional, TypedDict
+from typing import Any, Literal, Optional, TypedDict
 
 Group = Literal["structural", "microstructure"]
 Subtype = Literal["pure", "hybrid"]
@@ -422,3 +422,38 @@ def timeframe_semantics(name: str) -> TimeframeSemantics:
         if name.startswith(_prefix) and name[len(_prefix):].isdigit():
             return "CANDLE_TIMEFRAME"
     return "UNKNOWN"
+
+
+def resolve_candle_timeframe_value(
+    asset: dict[str, Any],
+    cond: dict[str, Any],
+    field: str,
+    default_timeframe: str,
+    flat_value: Any,
+) -> Any:
+    """AUD12-001 (2026-09-12 audit): prefer ``asset["_indicators_by_tf"]``
+    (Etapa B's exact-identity pre-fetch, ``pipeline_scan.py``, gated by
+    ``L3_EXACT_TIMEFRAME_RESOLUTION``) over a flat, potentially
+    cross-timeframe merged value, for a ``CANDLE_TIMEFRAME`` field.
+
+    Framework-agnostic equivalent of
+    ``ProfileEngine._apply_exact_timeframe_override`` for consumers that
+    have no ``ProfileEngine`` instance (and therefore no indicator cache)
+    of their own -- namely ``l3_gate_compiler_v2.evaluate_l3_gate_v2``,
+    which independently rebuilds its own flat ``eval_data`` and never
+    reached the original fix.
+
+    A no-op by construction unless ``asset["_indicators_by_tf"][requested
+    timeframe]`` actually has this field.
+    """
+    if not field or timeframe_semantics(field) != "CANDLE_TIMEFRAME":
+        return flat_value
+    by_tf = asset.get("_indicators_by_tf")
+    if not isinstance(by_tf, dict):
+        return flat_value
+    tf = cond.get("timeframe") or default_timeframe
+    tf_dict = by_tf.get(tf)
+    if not isinstance(tf_dict, dict):
+        return flat_value
+    resolved = tf_dict.get(field)
+    return flat_value if resolved is None else resolved

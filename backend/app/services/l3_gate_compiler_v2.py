@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, Iterable
 
+from .indicator_classifier import resolve_candle_timeframe_value
 from .indicator_validity import RuleStatus, SkipReason
 from .l3_gate_runtime_policy import (
     ENVELOPE_CONTRACT_VERSION,
@@ -234,6 +235,31 @@ def _evaluate_section(
     }
 
 
+def _apply_exact_timeframe_overrides(
+    asset: Dict[str, Any], profile: Dict[str, Any], eval_data: Dict[str, Any]
+) -> None:
+    """AUD12-001 (2026-09-12 audit): this module rebuilds eval_data directly
+    from asset["indicators"] -- the flat, potentially cross-timeframe merged
+    dict -- and never picked up AUD-002's exact-timeframe fix
+    (ProfileEngine._apply_exact_timeframe_override), even though it is the
+    consumer with operational_effect=true. Confirmed live in production on
+    2026-09-12 (trade 08983ccb.../UNI_USDT/T16): a 5m-implicit entry trigger
+    and an explicitly-5m block condition both read a 30m value instead.
+
+    A no-op by construction unless Etapa B (pipeline_scan.py, gated by
+    L3_EXACT_TIMEFRAME_RESOLUTION) has populated asset["_indicators_by_tf"].
+    """
+    default_tf = profile.get("default_timeframe", "5m")
+    for section in ("filters", "signals", "entry_triggers"):
+        for cond in (profile.get(section) or {}).get("conditions") or []:
+            field = cond.get("field") or cond.get("indicator") or ""
+            if not field:
+                continue
+            eval_data[field] = resolve_candle_timeframe_value(
+                asset, cond, field, default_tf, eval_data.get(field)
+            )
+
+
 def evaluate_l3_gate_v2(
     *,
     asset: Dict[str, Any],
@@ -250,6 +276,7 @@ def evaluate_l3_gate_v2(
     profile = profile_config or {}
     runtime_policy = policy_from_profile(profile)
     eval_data = {**asset, **(asset.get("indicators") or {}), "alpha_score": score}
+    _apply_exact_timeframe_overrides(asset, profile, eval_data)
     filters = _evaluate_section(
         section="filters",
         config=profile.get("filters") or {},

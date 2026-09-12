@@ -95,11 +95,10 @@ def _collect_required_timeframes(profile_config: Dict[str, Any]) -> Dict[str, Li
     default_tf = profile_config.get("default_timeframe", "5m")
     grouped: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
 
-    # Filters & Signals use "field" key; Block Rules & Entry Triggers use "indicator"
+    # Filters & Signals use "field" key; Entry Triggers use "indicator"
     section_specs = [
         ("filters",        profile_config.get("filters", {}).get("conditions", [])),
         ("signals",        profile_config.get("signals", {}).get("conditions", [])),
-        ("block_rules",    profile_config.get("block_rules", {}).get("blocks", [])),
         ("entry_triggers", profile_config.get("entry_triggers", {}).get("conditions", [])),
     ]
 
@@ -109,6 +108,20 @@ def _collect_required_timeframes(profile_config: Dict[str, Any]) -> Dict[str, Li
             if tf not in VALID_TIMEFRAMES:
                 tf = default_tf
             grouped[tf].append({**cond, "_section": section_name})
+
+    # Block Rules wrap their own list of conditions one level deeper than the
+    # other sections. AUD12-001 (2026-09-12 audit): grouping by the block
+    # dict itself (which has no "field"/"indicator" key) silently excluded
+    # every indicator referenced only inside a block from Etapa B's
+    # pre-fetch. Group by each inner condition instead, falling back to the
+    # block's own declared timeframe before the profile default.
+    for block in profile_config.get("block_rules", {}).get("blocks", []):
+        block_tf = block.get("timeframe")
+        for cond in block.get("conditions", []):
+            tf = cond.get("timeframe") or block_tf or default_tf
+            if tf not in VALID_TIMEFRAMES:
+                tf = default_tf
+            grouped[tf].append({**cond, "_section": "block_rules"})
 
     return dict(grouped)
 
@@ -504,6 +517,14 @@ class ProfileEngine:
             if blocks_configured:
                 symbol = asset.get("symbol", "?")
                 eval_data = self._build_eval_data(asset)
+                # AUD12-001: same fix as evaluate_asset -- see its comment.
+                for block in self.block_rules_config.get("blocks", []):
+                    if not block.get("enabled", True):
+                        continue
+                    for cond in block.get("conditions", []):
+                        self._apply_exact_timeframe_override(
+                            symbol, cond, cond.get("indicator") or cond.get("field", ""), eval_data
+                        )
                 block_result = self.block_engine.evaluate(eval_data)
                 if block_result.get("blocked"):
                     blocked_count += 1
@@ -940,6 +961,20 @@ class ProfileEngine:
         symbol = asset.get("symbol", "?")
 
         # ── 1. Block Rules ────────────────────────────────────────────────────
+        # AUD12-001 (2026-09-12 audit): this runs before _process_single_asset,
+        # which is the only place _apply_exact_timeframe_override was ever
+        # called -- so block rules always evaluated the flat, potentially
+        # cross-timeframe merged value, no matter what Etapa B (pipeline_scan.py,
+        # L3_EXACT_TIMEFRAME_RESOLUTION) had pre-fetched into
+        # asset["_indicators_by_tf"]. Apply the same override here too, for
+        # every block's own conditions, before the block engine reads eval_data.
+        for block in self.block_rules_config.get("blocks", []):
+            if not block.get("enabled", True):
+                continue
+            for cond in block.get("conditions", []):
+                self._apply_exact_timeframe_override(
+                    symbol, cond, cond.get("indicator") or cond.get("field", ""), eval_data
+                )
         block_result = self.block_engine.evaluate(eval_data)
         if block_result.get("blocked"):
             return {
