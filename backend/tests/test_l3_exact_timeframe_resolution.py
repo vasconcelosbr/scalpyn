@@ -309,3 +309,47 @@ def test_collect_required_timeframes_groups_block_conditions_not_whole_block():
     one_hour = [c for c in grouped.get("1h", []) if c.get("indicator") == "adx"]
     assert len(fifteen_min) == 1 and fifteen_min[0]["_section"] == "block_rules"
     assert len(one_hour) == 1 and one_hour[0]["_section"] == "block_rules"
+
+
+# ── AUD12-003: ema21_distance_pct is the same bug class as AUD12-001 ───────
+
+def test_block_rule_ema21_distance_pct_uses_exact_timeframe_value():
+    """Reproduces T16/UNI ORDERBOOK_ABSORPTION_BREAK: three block conditions
+    reference ema21_distance_pct (two with explicit timeframe '5m').
+    Production data confirmed the flat merge can carry a stale/ambiguous
+    value while the real 5m value is available in
+    asset["_indicators_by_tf"] -- same mechanism as AUD12-001, verified
+    here for this specific field rather than only by analogy."""
+    asset = {
+        "symbol": "UNI_USDT",
+        "indicators": {"ema21_distance_pct": 2.9},  # ambiguous/stale flat value
+        "_indicators_by_tf": {"5m": {"ema21_distance_pct": 0.7449}},
+    }
+    profile = _profile(block_rules={"blocks": [
+        {
+            "name": "Limite de extensao da entrada", "logic": "AND", "enabled": True, "timeframe": "5m",
+            "conditions": [
+                {"type": "threshold", "value": 2.5, "operator": ">", "indicator": "ema21_distance_pct", "timeframe": "5m"},
+            ],
+        },
+    ]})
+    engine = ProfileEngine(profile)
+    result = engine.evaluate_asset(asset)
+    assert result["blocked"] is False  # 0.7449 does not exceed the 2.5 threshold
+
+
+def test_block_rule_ema21_distance_pct_falls_back_without_per_timeframe_data():
+    """Same profile, no _indicators_by_tf -- must reproduce the ambiguous
+    (ungated) flat value blocking when the correct 5m value wouldn't have."""
+    asset = {"symbol": "UNI_USDT", "indicators": {"ema21_distance_pct": 2.9}}
+    profile = _profile(block_rules={"blocks": [
+        {
+            "name": "Limite de extensao da entrada", "logic": "AND", "enabled": True, "timeframe": "5m",
+            "conditions": [
+                {"type": "threshold", "value": 2.5, "operator": ">", "indicator": "ema21_distance_pct", "timeframe": "5m"},
+            ],
+        },
+    ]})
+    engine = ProfileEngine(profile)
+    result = engine.evaluate_asset(asset)
+    assert result["blocked"] is True  # 2.9 > 2.5 -- the stale/ambiguous value blocks

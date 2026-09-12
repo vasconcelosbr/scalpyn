@@ -381,3 +381,74 @@ async def test_backfill_skips_symbols_with_pending_or_running_shadow(monkeypatch
     assert eligible_seen == ["CCC_USDT"]
     # _fake_resolve devolve None → nada é criado, mas o filtro é o ponto chave.
     assert created == 0
+
+
+@pytest.mark.asyncio
+async def test_backfill_enforces_consolidation_on_create(monkeypatch):
+    """AUD12-004 (2026-09-12 audit): the safety net had NO protection
+    against creating a second active shadow for a symbol once the
+    previous one closed and dropped out of PENDING/RUNNING -- because it
+    called _create_from_decision without consolidation_enforced, which
+    then fell back to a per-user config flag
+    (l3_single_profile_per_symbol_enabled) that defaults to False and was
+    never turned on for any observed user. Confirmed live: trades
+    bbb5f8a2.../6cd5e6e7.../08c58212... (UNI_USDT, 2026-09-12), one per
+    profile, each created ~one sweep cycle after the previous one's
+    administrative close, with zero suppression recorded anywhere.
+
+    This brings the safety net to parity with the primary consolidation
+    path (l3_trade_consolidation.py), which already enforces
+    consolidation unconditionally rather than through an opt-in flag.
+    """
+    from app.services import shadow_trade_service as svc
+
+    user_id = uuid4()
+    fake_snapshot = [
+        {"symbol": "UNI_USDT", "score": 50.0, "direction": "SPOT",
+         "approved_at": None, "watchlist_id": uuid4(),
+         "watchlist_name": "L3", "watchlist_level": "L3",
+         "source_watchlist_id": None, "profile_id": uuid4(),
+         "profile_name": "L3_VWAP_GAP_HOLD_PUMP_V1",
+         "profile_version": datetime.now(timezone.utc),
+         "rules_snapshot": {"signals": {"conditions": []}},
+         "indicators_snapshot": {"rsi": 1.0}},
+    ]
+
+    class _TxCtx:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+
+    class _ReadDb:
+        async def execute(self, *_a, **_kw):
+            return _StubResult([])  # no RUNNING/PENDING rows -- symbol looks free
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        def begin(self): return _TxCtx()
+
+    async def _fake_get_currently_approved_l3(db, uid, direction="SPOT"):
+        return fake_snapshot
+
+    monkeypatch.setattr(svc, "get_currently_approved_l3",
+                        _fake_get_currently_approved_l3)
+
+    from app import database as _db_mod
+    monkeypatch.setattr(_db_mod, "CeleryAsyncSessionLocal", lambda: _ReadDb())
+
+    fake_decision = object()
+
+    async def _fake_resolve(*args, **_kw):
+        return fake_decision, "recent_log"
+
+    monkeypatch.setattr(svc, "_resolve_decision_with_fallback", _fake_resolve)
+
+    captured_kwargs: dict = {}
+
+    async def _fake_create_from_decision(*_args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return uuid4()
+
+    monkeypatch.setattr(svc, "_create_from_decision", _fake_create_from_decision)
+
+    await svc.safe_backfill_watchlist_shadows(user_id, user_config={})
+
+    assert captured_kwargs.get("consolidation_enforced") is True
