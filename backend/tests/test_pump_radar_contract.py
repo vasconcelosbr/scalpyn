@@ -113,6 +113,26 @@ def test_public_contract_has_no_profile_apply_or_promote_endpoint() -> None:
     assert all("apply" not in path and "promote" not in path and "activate" not in path for path in methods_by_path)
 
 
+def test_selection_report_and_indicator_summary_endpoints_are_registered() -> None:
+    methods_by_path = {route.path: set(route.methods or set()) for route in router.routes}
+    assert methods_by_path["/api/pump-radar/runs/{run_id}/indicator-summary"] == {"GET"}
+    assert methods_by_path["/api/pump-radar/runs/{run_id}/report-runs"] == {"POST"}
+    assert methods_by_path["/api/pump-radar/report-runs/{report_run_id}"] == {"GET"}
+    assert methods_by_path["/api/pump-radar/report-runs/{report_run_id}/export"] == {"GET"}
+
+
+def test_report_run_create_rejects_empty_and_duplicate_event_ids() -> None:
+    from app.schemas.pump_radar import PumpRadarReportRunCreate
+
+    with pytest.raises(ValidationError):
+        PumpRadarReportRunCreate(event_ids=[])
+    duplicate = uuid4()
+    with pytest.raises(ValidationError):
+        PumpRadarReportRunCreate(event_ids=[duplicate, duplicate])
+    single = PumpRadarReportRunCreate(event_ids=[uuid4()])
+    assert len(single.event_ids) == 1
+
+
 def test_every_pump_radar_task_uses_isolated_queue() -> None:
     routes = {name: route for name, route in TASK_ROUTES.items() if name.startswith("app.tasks.pump_radar.")}
     assert {name.rsplit(".", 1)[-1] for name in routes} == {

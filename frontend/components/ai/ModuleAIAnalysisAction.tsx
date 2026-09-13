@@ -16,7 +16,8 @@ type ModuleKey =
   | "global_risk"
   | "strategies"
   | "social_score"
-  | "intelligence_runs";
+  | "intelligence_runs"
+  | "pump_radar";
 
 type Capabilities = {
   runtime_enabled: boolean;

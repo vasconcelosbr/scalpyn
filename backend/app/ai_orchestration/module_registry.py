@@ -176,6 +176,17 @@ _MODULES = (
         freshness=300,
     ),
     _capability(
+        "pump_radar",
+        entities=("pump_radar_events", "pump_radar_report_runs", "pump_radar_report_items"),
+        reads=(
+            "pump_radar.get_run", "pump_radar.get_event", "pump_radar.get_indicator_summary",
+            "pump_radar.get_range_results", "pump_radar.get_report_run",
+        ),
+        dependencies=("shadow_portfolio", "market_regime"),
+        freshness=300,
+        risk_class="READ_ONLY",
+    ),
+    _capability(
         "audit_version_memory",
         entities=("decision_memory", "decision_hypotheses", "ai_change_sets", "config_audit_log"),
         reads=(

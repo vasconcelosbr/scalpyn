@@ -196,6 +196,35 @@ class PumpRadarRangeResult(Base):
     provenance = Column(JSONB, nullable=False, default=dict)
 
 
+class PumpRadarReportRun(Base):
+    __tablename__ = "pump_radar_report_runs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    run_id = Column(UUID(as_uuid=True), ForeignKey("pump_radar_runs.id", ondelete="CASCADE"), nullable=False)
+    selection_mode = Column(String(16), nullable=False)
+    filters = Column(JSONB, nullable=False, default=dict)
+    selection_hash = Column(String(64), nullable=False)
+    total_events = Column(Integer, nullable=False, default=0)
+    status = Column(String(30), nullable=False, default="READY")
+    completeness = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class PumpRadarReportItem(Base):
+    __tablename__ = "pump_radar_report_items"
+    __table_args__ = (
+        UniqueConstraint("report_run_id", "event_id", name="uq_pump_radar_report_item_event"),
+        UniqueConstraint("report_run_id", "position", name="uq_pump_radar_report_item_position"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    report_run_id = Column(UUID(as_uuid=True), ForeignKey("pump_radar_report_runs.id", ondelete="CASCADE"), nullable=False)
+    event_id = Column(UUID(as_uuid=True), ForeignKey("pump_radar_events.id", ondelete="CASCADE"), nullable=False)
+    position = Column(Integer, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
 class PumpRadarHypothesis(Base):
     __tablename__ = "pump_radar_hypotheses"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

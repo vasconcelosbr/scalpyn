@@ -23,6 +23,7 @@ EXPECTED_MODULES = {
     "social_score",
     "market_regime",
     "audit_version_memory",
+    "pump_radar",
 }
 
 

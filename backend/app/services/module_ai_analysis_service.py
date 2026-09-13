@@ -25,10 +25,12 @@ from ..ai_orchestration.provider_registry import default_registry
 from ..models.config_profile import ConfigProfile
 from ..models.profile import Profile
 from ..models.profile_intelligence import MLModelRegistry
+from ..models.pump_radar import PumpRadarEvent, PumpRadarReportItem, PumpRadarReportRun
 from ..models.shadow_trade import ShadowTrade
 from ..models.social_intelligence import SocialAssetObservation
 from ..models.systemic_ai import AIModelApprovalRecord
 from .ai_graph_service import AIGraphRunService
+from .pump_radar_indicator_summary import build_indicator_summary
 from .shadow_full_canonical_service import (
     CONTRACT_VERSION as SHADOW_CANONICAL_CONTRACT_VERSION,
     capture_report,
@@ -44,6 +46,7 @@ _READ_ONLY_MODULES = {
     "social_score",
     "market_regime",
     "audit_version_memory",
+    "pump_radar",
 }
 _REGENERATIVE_MODULES = {"strategy_profiles", "score_engine", "shadow_portfolio"}
 _DOMAIN = {
@@ -57,6 +60,7 @@ _DOMAIN = {
     "social_score": "SOCIAL_SCORE",
     "market_regime": "MARKET_REGIME",
     "audit_version_memory": "AUDIT_VERSION_MEMORY",
+    "pump_radar": "PUMP_RADAR",
 }
 _CONFIG_TYPES = {
     "score_engine": ("score", "score_engine"),
@@ -233,6 +237,48 @@ class ModuleAIAnalysisService:
         if module_key == "shadow_portfolio":
             raise RuntimeError("SHADOW_CANONICAL_REPORT_REQUIRED")
 
+        if module_key == "pump_radar":
+            report_run_id = _uuid_or_none(filters.get("report_run_id"))
+            if report_run_id is None:
+                raise RuntimeError("PUMP_RADAR_REPORT_RUN_REQUIRED")
+            report_run = await db.get(PumpRadarReportRun, report_run_id)
+            if report_run is None or report_run.user_id != tenant_id:
+                return []
+            items = list((await db.execute(
+                select(PumpRadarReportItem)
+                .where(PumpRadarReportItem.report_run_id == report_run.id)
+                .order_by(PumpRadarReportItem.position)
+            )).scalars())
+            event_ids = [item.event_id for item in items]
+            events_by_id = {
+                event.id: event for event in
+                (await db.execute(select(PumpRadarEvent).where(PumpRadarEvent.id.in_(event_ids)))).scalars()
+            }
+            summary = await build_indicator_summary(db, report_run.run_id, event_ids, tenant_id)
+            indicators_by_event: dict[str, list[dict[str, Any]]] = {}
+            for indicator in summary["indicators"]:
+                for anchor_name, anchor in indicator["anchors"].items():
+                    for sample in anchor["samples"]:
+                        indicators_by_event.setdefault(sample["event_id"], []).append({
+                            "layer": indicator["layer"], "timeframe": indicator["timeframe"],
+                            "indicator_id": indicator["indicator_id"], "anchor": anchor_name,
+                            "value": sample["value"], "link_id": sample.get("link_id"),
+                        })
+            pump_radar_rows: list[dict[str, Any]] = []
+            for event_id in event_ids:
+                event = events_by_id.get(event_id)
+                pump_radar_rows.append({
+                    "id": str(event_id), "event_identity": str(event_id), "outcome": "PUMP_EVENT",
+                    "lineage_status": "REAL_MARKET_RECONSTRUCTION",
+                    "symbol": event.symbol if event else None,
+                    "rise_pct": float(event.rise_pct) if event and event.rise_pct is not None else None,
+                    "start_at": _iso(event.start_at) if event else None,
+                    "peak_at": _iso(event.peak_at) if event else None,
+                    "reconstruction_status": event.reconstruction_status if event else None,
+                    "indicator_observations": indicators_by_event.get(str(event_id), []),
+                })
+            return pump_radar_rows
+
         if module_key in _CONFIG_TYPES:
             records = list((await db.execute(select(ConfigProfile).where(
                 ConfigProfile.user_id == tenant_id,
@@ -371,6 +417,8 @@ class ModuleAIAnalysisService:
             raise RuntimeError("SHADOW_REPORT_RUN_REQUIRED")
         if origin_module == "shadow_portfolio" and not max_shard_input_tokens:
             raise RuntimeError("SHARD_CONTEXT_LIMIT_REQUIRED")
+        if origin_module == "pump_radar" and report_run_id is None:
+            raise RuntimeError("PUMP_RADAR_REPORT_RUN_REQUIRED")
         shadow_provider_enabled = True
         shadow_shard_max_items: int | None = None
 

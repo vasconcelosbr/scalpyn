@@ -56,6 +56,7 @@ def get_langgraph_settings() -> LangGraphSettings:
         "market_regime": "AI_MODULE_MARKET_REGIME_ENABLED",
         "intelligence_runs": "AI_MODULE_INTELLIGENCE_RUNS_ENABLED",
         "audit_version_memory": "AI_MODULE_AUDIT_MEMORY_ENABLED",
+        "pump_radar": "AI_MODULE_PUMP_RADAR_ENABLED",
     }
     return LangGraphSettings(
         runtime=runtime,

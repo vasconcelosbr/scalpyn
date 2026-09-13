@@ -4,6 +4,7 @@ import hashlib
 import json
 from datetime import date
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -68,6 +69,16 @@ class PumpRadarRunCreate(BaseModel):
     def validate_dates(self) -> "PumpRadarRunCreate":
         if self.date_from and self.date_to and self.date_from > self.date_to:
             raise ValueError("date_from must be on or before date_to")
+        return self
+
+
+class PumpRadarReportRunCreate(BaseModel):
+    event_ids: list[UUID] = Field(min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def validate_unique(self) -> "PumpRadarReportRunCreate":
+        if len(set(self.event_ids)) != len(self.event_ids):
+            raise ValueError("event_ids cannot contain duplicates")
         return self
 
 
