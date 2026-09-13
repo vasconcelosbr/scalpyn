@@ -170,6 +170,7 @@ READONLY_CANARY_TOOLS = (
     "social_score.get_snapshot",
     "market_regime.get_current",
     "audit_memory.find_similar_decisions",
+    "pump_radar.get_run",
 )
 
 

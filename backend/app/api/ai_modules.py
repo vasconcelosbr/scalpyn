@@ -19,6 +19,7 @@ from ..ai_orchestration.hashing import canonical_hash
 from ..ai_orchestration.langgraph.config import get_langgraph_settings
 from ..ai_orchestration.provider_registry import default_registry
 from ..database import get_db
+from ..models.pump_radar import PumpRadarReportRun
 from ..models.shadow_trade_analysis import ShadowTradeReportRun
 from ..models.systemic_ai import (
     AIAnalysisPromptRecord,
@@ -38,6 +39,10 @@ router = APIRouter(prefix="/api/ai/modules", tags=["AI Modules"])
 MODEL_APPROVAL_PHRASE = "APROVO MODELO E CUSTO"
 PROFILE_APPROVAL_METHOD = "PREDEFINED_PROFILE"
 MAX_EFFECTIVE_QUESTION_CHARACTERS = MAX_AI_REQUEST_QUESTION_CHARS
+_REPORT_RUN_MODEL_BY_ORIGIN: dict[str, Any] = {
+    "shadow_portfolio": ShadowTradeReportRun,
+    "pump_radar": PumpRadarReportRun,
+}
 
 
 class CreateModelApprovalRequest(BaseModel):
@@ -53,7 +58,7 @@ class CreateModelApprovalRequest(BaseModel):
     module: Literal[
         "strategy_profiles", "ml_models", "shadow_portfolio", "score_engine",
         "global_risk", "strategies", "intelligence_runs", "social_score",
-        "market_regime", "audit_version_memory",
+        "market_regime", "audit_version_memory", "pump_radar",
     ]
     max_input_tokens: int = Field(gt=0)
     max_output_tokens: int = Field(gt=0)
@@ -233,7 +238,7 @@ class CreateModuleAnalysisRequest(BaseModel):
     origin_module: Literal[
         "strategy_profiles", "ml_models", "shadow_portfolio", "score_engine",
         "global_risk", "strategies", "intelligence_runs", "social_score",
-        "market_regime", "audit_version_memory",
+        "market_regime", "audit_version_memory", "pump_radar",
     ]
     origin_view: str = Field(min_length=1, max_length=200)
     entity_ids: tuple[str, ...] = ()
@@ -251,7 +256,7 @@ class CreateProfileAnalysisRequest(BaseModel):
     origin_module: Literal[
         "strategy_profiles", "ml_models", "shadow_portfolio", "score_engine",
         "global_risk", "strategies", "intelligence_runs", "social_score",
-        "market_regime", "audit_version_memory",
+        "market_regime", "audit_version_memory", "pump_radar",
     ]
     origin_view: str = Field(min_length=1, max_length=200)
     entity_ids: tuple[str, ...] = ()
@@ -391,14 +396,17 @@ async def create_module_analysis_run_from_profile(
     extra_filters: dict[str, Any] = {}
     if payload.origin_module == "shadow_portfolio" and payload.report_run_id is None:
         raise HTTPException(status_code=422, detail={"code": "SHADOW_REPORT_RUN_REQUIRED"})
+    if payload.origin_module == "pump_radar" and payload.report_run_id is None:
+        raise HTTPException(status_code=422, detail={"code": "PUMP_RADAR_REPORT_RUN_REQUIRED"})
     if payload.report_run_id is not None:
-        if payload.origin_module != "shadow_portfolio":
+        report_run_model = _REPORT_RUN_MODEL_BY_ORIGIN.get(payload.origin_module)
+        if report_run_model is None:
             raise HTTPException(status_code=422, detail={"code": "REPORT_RUN_SCOPE_INVALID"})
         report_run = (
             await db.execute(
-                select(ShadowTradeReportRun).where(
-                    ShadowTradeReportRun.id == payload.report_run_id,
-                    ShadowTradeReportRun.user_id == user_id,
+                select(report_run_model).where(
+                    report_run_model.id == payload.report_run_id,
+                    report_run_model.user_id == user_id,
                 )
             )
         ).scalar_one_or_none()

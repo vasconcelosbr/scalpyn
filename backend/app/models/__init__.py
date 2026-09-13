@@ -88,6 +88,8 @@ from .pump_radar import (
     PumpRadarIndicatorValue,
     PumpRadarOHLCV,
     PumpRadarRangeResult,
+    PumpRadarReportItem,
+    PumpRadarReportRun,
     PumpRadarRun,
     PumpRadarRunAsset,
 )
@@ -188,4 +190,6 @@ __all__ = [
     "PumpRadarControl",
     "PumpRadarRangeResult",
     "PumpRadarHypothesis",
+    "PumpRadarReportRun",
+    "PumpRadarReportItem",
 ]

@@ -25,11 +25,19 @@ from ..models.pump_radar import (
     PumpRadarIndicatorValue,
     PumpRadarOHLCV,
     PumpRadarRangeResult,
+    PumpRadarReportItem,
+    PumpRadarReportRun,
     PumpRadarRun,
     PumpRadarRunAsset,
 )
-from ..schemas.pump_radar import PumpRadarConfig, PumpRadarHypothesisCreate, PumpRadarRunCreate
+from ..schemas.pump_radar import (
+    PumpRadarConfig,
+    PumpRadarHypothesisCreate,
+    PumpRadarReportRunCreate,
+    PumpRadarRunCreate,
+)
 from ..services.config_service import config_service
+from ..services.pump_radar_indicator_summary import build_indicator_summary
 from ..services.pump_radar_research import UNIVERSE_SOURCE, load_user_universe
 from ..tasks.celery_app import QUEUE_PUMP_RADAR
 from ..tasks.task_dispatch import enqueue
@@ -325,6 +333,130 @@ async def comparisons(run_id: UUID, event_id: UUID | None = None, layer: str | N
         query = query.where(PumpRadarIndicatorValue.layer == layer.upper())
     rows = (await db.execute(query.order_by(PumpRadarIndicatorValue.layer, PumpRadarIndicatorValue.indicator_id, PumpRadarIndicatorSnapshot.snapshot_at))).all()
     return _envelope([{"event_id": str(event.id), "symbol": event.symbol, "snapshot_at": _iso(snapshot.snapshot_at), "indicator_id": value.indicator_id, "layer": value.layer, "timeframe": value.timeframe, "state": value.state, "value": _number(value.numeric_value) if value.numeric_value is not None else value.text_value, "rule": value.rule, "source": value.source, "version": value.version, "numerator": value.numerator, "denominator": value.denominator, "coverage": _number(snapshot.coverage), "provenance": value.provenance} for event, snapshot, value in rows])
+
+
+def _parse_event_ids(raw: str) -> list[UUID]:
+    ids: list[UUID] = []
+    for chunk in raw.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        try:
+            ids.append(UUID(chunk))
+        except ValueError:
+            raise HTTPException(status_code=422, detail="PUMP_RADAR_EVENT_ID_INVALID")
+    if not ids:
+        raise HTTPException(status_code=422, detail="PUMP_RADAR_EVENT_IDS_REQUIRED")
+    if len(ids) > 200:
+        raise HTTPException(status_code=422, detail="PUMP_RADAR_TOO_MANY_EVENTS")
+    return ids
+
+
+@router.get("/runs/{run_id}/indicator-summary")
+async def indicator_summary(run_id: UUID, event_ids: str = Query(...), db: AsyncSession = Depends(get_db), user_id: UUID = Depends(get_current_user_id)) -> dict[str, Any]:
+    await _owned_run(db, run_id, user_id)
+    ids = _parse_event_ids(event_ids)
+    return _envelope(
+        await build_indicator_summary(db, run_id, ids, user_id),
+        provenance={"source": "pump_radar_indicator_snapshots", "validated": False, "method": "descriptive_selection_commonality"},
+    )
+
+
+def _report_run_payload(report_run: PumpRadarReportRun) -> dict[str, Any]:
+    return {
+        "id": str(report_run.id), "run_id": str(report_run.run_id), "selection_mode": report_run.selection_mode,
+        "selection_hash": report_run.selection_hash, "total_events": report_run.total_events,
+        "status": report_run.status, "completeness": report_run.completeness, "created_at": _iso(report_run.created_at),
+    }
+
+
+async def _owned_report_run(db: AsyncSession, report_run_id: UUID, user_id: UUID) -> PumpRadarReportRun:
+    report_run = (await db.execute(select(PumpRadarReportRun).where(
+        PumpRadarReportRun.id == report_run_id, PumpRadarReportRun.user_id == user_id,
+    ))).scalar_one_or_none()
+    if report_run is None:
+        raise HTTPException(status_code=404, detail="PUMP_RADAR_REPORT_RUN_NOT_FOUND")
+    return report_run
+
+
+@router.post("/runs/{run_id}/report-runs", status_code=201)
+async def create_report_run(run_id: UUID, payload: PumpRadarReportRunCreate, db: AsyncSession = Depends(get_db), user_id: UUID = Depends(get_current_user_id)) -> dict[str, Any]:
+    """Materialize an immutable selection of events -- downloads and analysis use exactly these events."""
+    await _owned_run(db, run_id, user_id)
+    found = set((await db.execute(select(PumpRadarEvent.id).where(
+        PumpRadarEvent.id.in_(payload.event_ids), PumpRadarEvent.run_id == run_id,
+    ))).scalars().all())
+    if any(event_id not in found for event_id in payload.event_ids):
+        raise HTTPException(status_code=422, detail="PUMP_RADAR_EVENT_NOT_IN_RUN")
+    selection_hash = hashlib.sha256(json.dumps(sorted(str(event_id) for event_id in payload.event_ids)).encode()).hexdigest()
+    report_run = PumpRadarReportRun(
+        user_id=user_id, run_id=run_id,
+        selection_mode="ASSET" if len(payload.event_ids) == 1 else "ALL",
+        filters={}, selection_hash=selection_hash, total_events=len(payload.event_ids),
+        status="READY", completeness={"event_count": len(payload.event_ids)},
+    )
+    db.add(report_run)
+    await db.flush()
+    db.add_all([
+        PumpRadarReportItem(report_run_id=report_run.id, event_id=event_id, position=index)
+        for index, event_id in enumerate(payload.event_ids)
+    ])
+    await db.commit()
+    await db.refresh(report_run)
+    return _envelope(_report_run_payload(report_run))
+
+
+@router.get("/report-runs/{report_run_id}")
+async def get_report_run(report_run_id: UUID, db: AsyncSession = Depends(get_db), user_id: UUID = Depends(get_current_user_id)) -> dict[str, Any]:
+    report_run = await _owned_report_run(db, report_run_id, user_id)
+    return _envelope(_report_run_payload(report_run))
+
+
+@router.get("/report-runs/{report_run_id}/export")
+async def export_report_run(report_run_id: UUID, db: AsyncSession = Depends(get_db), user_id: UUID = Depends(get_current_user_id)) -> dict[str, Any]:
+    report_run = await _owned_report_run(db, report_run_id, user_id)
+    items = (await db.execute(select(PumpRadarReportItem).where(
+        PumpRadarReportItem.report_run_id == report_run.id,
+    ).order_by(PumpRadarReportItem.position))).scalars().all()
+    event_ids = [item.event_id for item in items]
+    events_by_id = {
+        event.id: event for event in
+        (await db.execute(select(PumpRadarEvent).where(PumpRadarEvent.id.in_(event_ids)))).scalars().all()
+    }
+    links_by_event: dict[UUID, list[PumpRadarEventLink]] = {}
+    for link in (await db.execute(select(PumpRadarEventLink).where(
+        PumpRadarEventLink.event_id.in_(event_ids), PumpRadarEventLink.user_id == user_id,
+    ))).scalars().all():
+        links_by_event.setdefault(link.event_id, []).append(link)
+    events_payload = []
+    for item in items:
+        event = events_by_id.get(item.event_id)
+        if event is None:
+            continue
+        events_payload.append({
+            "event_id": str(event.id), "symbol": event.symbol, "rise_pct": _number(event.rise_pct),
+            "start_at": _iso(event.start_at), "peak_at": _iso(event.peak_at), "end_at": _iso(event.end_at),
+            "reconstruction_status": event.reconstruction_status, "quality_status": event.quality_status,
+            "links": [{
+                "id": str(link.id), "shadow_trade_id": str(link.shadow_trade_id) if link.shadow_trade_id else None,
+                "is_primary": link.is_primary, "approval_at": _iso(link.approval_at), "entry_at": _iso(link.entry_at),
+                "exit_at": _iso(link.exit_at), "delay_seconds": link.delay_seconds,
+                "realized_pnl_pct": _number(link.realized_pnl_pct),
+                "profile_id": str(link.profile_id) if link.profile_id else None,
+            } for link in links_by_event.get(event.id, [])],
+        })
+    indicator_summary = await build_indicator_summary(db, report_run.run_id, event_ids, user_id)
+    return {
+        "export_metadata": {
+            "schema": "scalpyn.pump_radar_report_export", "schema_version": "1.0.0",
+            "generated_at": datetime.now(timezone.utc).isoformat(), "report_run_id": str(report_run.id),
+            "run_id": str(report_run.run_id), "selection_mode": report_run.selection_mode,
+            "selection_hash": report_run.selection_hash,
+        },
+        "summary": {"total_events": report_run.total_events},
+        "events": events_payload,
+        "indicator_summary": indicator_summary,
+    }
 
 
 @router.get("/runs/{run_id}/ranges")

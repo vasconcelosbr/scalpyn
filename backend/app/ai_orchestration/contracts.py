@@ -48,6 +48,7 @@ class CanonicalDatasetRequest(BaseModel):
         "SHADOW_PORTFOLIO", "PROFILE_INTELLIGENCE", "CALIBRATION", "ML_BAYESIAN",
         "MARKET_REGIME", "STRATEGY_PROFILES", "SCORE_ENGINE", "GLOBAL_RISK",
         "STRATEGIES", "SOCIAL_SCORE", "INTELLIGENCE_RUNS", "AUDIT_VERSION_MEMORY",
+        "PUMP_RADAR",
     ]
     window_start: datetime
     window_end: datetime

@@ -64,6 +64,7 @@ class CanonicalDatasetService:
         "INTELLIGENCE_RUNS": ("ai_graph_runs", "ai_graph_events", "ai_graph_interrupts"),
         "SOCIAL_SCORE": ("social_intelligence_runs", "social_asset_observations"),
         "AUDIT_VERSION_MEMORY": ("decision_memory", "decision_hypotheses", "ai_change_sets"),
+        "PUMP_RADAR": ("pump_radar_events", "pump_radar_report_runs", "pump_radar_report_items"),
     }
 
     def build(self, *, tenant_id: UUID, request: CanonicalDatasetRequest,
