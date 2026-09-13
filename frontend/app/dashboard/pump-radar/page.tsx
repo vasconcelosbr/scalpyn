@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarDays, ChevronLeft, ChevronRight, Download, EyeOff, FileSearch,
-  ListFilter, Pause, Play, RefreshCw, Search, Settings2, ShieldAlert,
+  ListFilter, Pause, Play, RefreshCw, Search, Settings2, ShieldAlert, X,
 } from "lucide-react";
 
 import { ApiError, apiGet, apiPost, apiPut } from "@/lib/api";
@@ -61,6 +61,7 @@ export default function PumpRadarPage() {
   const [ranges, setRanges] = useState<RangeRow[]>([]);
   const [config, setConfig] = useState<RadarConfig | null>(null);
   const [search, setSearch] = useState("");
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [contextTf, setContextTf] = useState("5min");
   const [rangeTf, setRangeTf] = useState("combined");
   const [layer, setLayer] = useState("TODAS");
@@ -200,7 +201,15 @@ export default function PumpRadarPage() {
     const anchor = document.createElement("a"); anchor.href = url; anchor.download = `pump-radar-${run.id}-events.csv`; anchor.click(); URL.revokeObjectURL(url);
   }
 
-  const filteredEvents = useMemo(() => events.filter((item) => item.symbol.toLowerCase().includes(search.toLowerCase())), [events, search]);
+  const filteredEvents = useMemo(() => events.filter((item) => {
+    if (!item.symbol.toLowerCase().includes(search.toLowerCase())) return false;
+    if (selectedDate) {
+      const local = new Date(item.start_at);
+      const key = `${local.getFullYear()}-${String(local.getMonth() + 1).padStart(2, "0")}-${String(local.getDate()).padStart(2, "0")}`;
+      if (key !== selectedDate) return false;
+    }
+    return true;
+  }), [events, search, selectedDate]);
   const summary = run?.universe_compatible ? run.summary ?? EMPTY_SUMMARY : EMPTY_SUMMARY;
   const primaryLink = event?.links.find((link) => link.is_primary) ?? event?.links[0] ?? null;
   const timelineStart = event ? +new Date(event.start_at) - 30 * 60_000 : 0;
@@ -274,7 +283,16 @@ export default function PumpRadarPage() {
         </div>
         <div className={styles.actions}>
           <span className={`${styles.badge} ${run?.quality_badge === "COBERTURA PARCIAL" ? styles.badgePartial : ""}`}>{run?.quality_badge ?? "DADOS INSUFICIENTES"}</span>
-          <button className={styles.control}><CalendarDays size={14} />{run?.date_from ? localTime(run.date_from, true) : "Sem execução"}</button>
+          <label className={`${styles.control} cursor-pointer`} title="Selecionar data para filtrar os pumps do dia">
+            <CalendarDays size={14} />
+            <input
+              type="date"
+              value={selectedDate ?? ""}
+              onChange={(e) => setSelectedDate(e.target.value || null)}
+              className="w-[92px] cursor-pointer border-none bg-transparent p-0 text-inherit outline-none [color-scheme:dark]"
+            />
+          </label>
+          {selectedDate && <button className={styles.ghost} onClick={() => setSelectedDate(null)} title="Limpar filtro de data"><X size={13} /></button>}
           <button className={styles.control}>Gate • Spot</button><button className={styles.control}>UTC−3</button>
           <button className={styles.control} onClick={() => setConfigOpen((value) => !value)}><Settings2 size={14} />Configurar</button>
           <button className={`${styles.control} ${styles.mobileRankButton}`} onClick={() => { setCollapsed(false); setMobileRankOpen(true); }}><ListFilter size={14} />Ranking</button>
