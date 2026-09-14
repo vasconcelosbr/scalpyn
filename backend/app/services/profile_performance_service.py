@@ -14,6 +14,8 @@ from ..schemas.profile_performance import (
     ProfileDailyPerformancePoint,
     ProfileDailyPerformanceResponse,
     ProfileDailyRange,
+    ProfileHourlyPerformancePoint,
+    ProfileHourlyPerformanceResponse,
     ProfilePerformanceHighlight,
     ProfilePerformanceHighlights,
     ProfilePerformanceHistoryPoint,
@@ -31,6 +33,7 @@ from .watchlist_performance_ranking_service import (
 
 CONTRACT_VERSION = "profile-performance-v2"
 DAILY_CONTRACT_VERSION = "profile-performance-daily-v2"
+HOURLY_CONTRACT_VERSION = "profile-performance-hourly-v1"
 DISPLAY_TIMEZONE = "UTC"
 ALLOWED_RANGE_DAYS = {7, 14, 30}
 DAILY_RANGE_DAYS: Dict[ProfileDailyRange, int | None] = {
@@ -231,6 +234,50 @@ PROFILE_DAILY_PERFORMANCE_QUERY = text("""
 """)
 
 
+PROFILE_HOURLY_PERFORMANCE_QUERY = text("""
+    WITH eligible_trades AS (
+        SELECT
+            COALESCE(st.exit_timestamp, st.completed_at, st.updated_at, st.created_at) AS close_at,
+            st.outcome,
+            st.pnl_pct,
+            st.pnl_usdt
+        FROM shadow_trades AS st
+        JOIN pipeline_watchlists AS pw
+          ON pw.id = st.watchlist_id
+         AND pw.user_id = st.user_id
+         AND pw.profile_id = st.profile_id
+         AND UPPER(pw.level) = 'L3'
+        WHERE st.user_id = :uid
+          AND st.profile_id IS NOT NULL
+          AND st.status = 'COMPLETED'
+          AND st.source = ANY(CAST(:sources AS text[]))
+          AND COALESCE(st.exit_timestamp, st.completed_at, st.updated_at, st.created_at)
+              >= CAST(:as_of AS date)
+          AND COALESCE(st.exit_timestamp, st.completed_at, st.updated_at, st.created_at)
+              < CAST(:as_of AS date) + INTERVAL '1 day'
+    ), hours AS (
+        SELECT hour::timestamp AS hour_start
+        FROM generate_series(
+            CAST(:as_of AS date)::timestamp,
+            CAST(:as_of AS date)::timestamp + INTERVAL '23 hours',
+            INTERVAL '1 hour'
+        ) AS hour
+    )
+    SELECT
+        h.hour_start,
+        COUNT(t.close_at) FILTER (WHERE t.pnl_pct IS NOT NULL)::integer AS hourly_closed_trades,
+        COUNT(t.close_at) FILTER (WHERE t.outcome = 'TP_HIT')::integer AS hourly_tp,
+        COUNT(t.close_at) FILTER (WHERE t.outcome = 'SL_HIT')::integer AS hourly_sl,
+        COALESCE(SUM(t.pnl_usdt), 0)::double precision AS hourly_pnl_usdt
+    FROM hours AS h
+    LEFT JOIN eligible_trades AS t
+      ON t.close_at >= h.hour_start
+     AND t.close_at < h.hour_start + INTERVAL '1 hour'
+    GROUP BY h.hour_start
+    ORDER BY h.hour_start
+""")
+
+
 def _int(row: Mapping[str, Any], key: str) -> int:
     return int(row.get(key) or 0)
 
@@ -272,6 +319,38 @@ def build_profile_daily_performance_response(
         metric_definitions={
             "win_rate": "Daily TP_HIT divided by TP_HIT + SL_HIT; TRAILING_STOP and TIMEOUT are excluded.",
             "pnl_day": "Sum of pnl_usdt for L3 trades assigned to the UTC day in which each trade closed.",
+        },
+    )
+
+
+def build_profile_hourly_performance_response(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    as_of: date,
+) -> ProfileHourlyPerformanceResponse:
+    points = []
+    for row in rows:
+        closed_trades = _int(row, "hourly_closed_trades")
+        tp_count = _int(row, "hourly_tp")
+        sl_count = _int(row, "hourly_sl")
+        decided_trades = tp_count + sl_count
+        hour_start: datetime = row["hour_start"]
+        points.append(ProfileHourlyPerformancePoint(
+            hour=hour_start.strftime("%H:00"),
+            hour_start=hour_start,
+            closed_trades=closed_trades,
+            wins=tp_count,
+            win_rate=round(tp_count / decided_trades, 6) if decided_trades else None,
+            pnl_usdt=round(_float(row, "hourly_pnl_usdt"), 4),
+        ))
+    return ProfileHourlyPerformanceResponse(
+        contract_version=HOURLY_CONTRACT_VERSION,
+        as_of=as_of,
+        timezone=DISPLAY_TIMEZONE,
+        points=points,
+        metric_definitions={
+            "win_rate": "Hourly TP_HIT divided by TP_HIT + SL_HIT; TRAILING_STOP and TIMEOUT are excluded.",
+            "pnl_hour": "Sum of pnl_usdt for L3 trades assigned to the UTC hour in which each trade closed.",
         },
     )
 
@@ -708,3 +787,26 @@ async def get_profile_daily_performance(
         as_of=as_of,
         range_key=range_key,
     )
+
+
+async def get_profile_hourly_performance(
+    db: AsyncSession,
+    user_id: UUID,
+    *,
+    as_of: date,
+) -> ProfileHourlyPerformanceResponse:
+    if as_of > datetime.now(timezone.utc).date():
+        raise ValueError("as_of cannot be in the future")
+
+    config = await get_ranking_config(db, user_id)
+    rows = (
+        await db.execute(
+            PROFILE_HOURLY_PERFORMANCE_QUERY,
+            {
+                "uid": str(user_id),
+                "sources": config["source_filter"],
+                "as_of": as_of,
+            },
+        )
+    ).mappings().all()
+    return build_profile_hourly_performance_response(rows, as_of=as_of)

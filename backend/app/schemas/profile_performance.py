@@ -1,6 +1,6 @@
 """Typed read-only contract for the Shadow Portfolio profile monitor."""
 
-from datetime import date
+from datetime import date, datetime
 from typing import Dict, List, Literal, Optional
 from uuid import UUID
 
@@ -53,6 +53,23 @@ class ProfileDailyPerformanceResponse(BaseModel):
     range: ProfileDailyRange
     timezone: str
     points: List[ProfileDailyPerformancePoint]
+    metric_definitions: Dict[str, str]
+
+
+class ProfileHourlyPerformancePoint(BaseModel):
+    hour: str  # "HH:00" UTC label
+    hour_start: datetime
+    closed_trades: int
+    wins: int  # TP_HIT count
+    win_rate: Optional[float] = None  # TP_HIT / (TP_HIT + SL_HIT)
+    pnl_usdt: float
+
+
+class ProfileHourlyPerformanceResponse(BaseModel):
+    contract_version: str
+    as_of: date
+    timezone: str
+    points: List[ProfileHourlyPerformancePoint]
     metric_definitions: Dict[str, str]
 
 

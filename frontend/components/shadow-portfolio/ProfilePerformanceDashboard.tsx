@@ -42,11 +42,13 @@ import {
   heatmapColor,
   historyMetricValue,
   profileDailyPerformanceRequestPath,
+  profileHourlyPerformanceRequestPath,
   profilePerformanceRequestPath,
   sortProfileRows,
   type ProfileMonitorStatus,
   type ProfileDailyPerformanceResponse,
   type ProfileDailyRange,
+  type ProfileHourlyPerformanceResponse,
   type ProfilePerformanceHighlight,
   type ProfilePerformanceMetric,
   type ProfilePerformanceResponse,
@@ -267,13 +269,17 @@ export function EmptyProfilesState() {
   );
 }
 
+type EvolutionView = ProfileDailyRange | "hoje";
+
 function L3DailyEvolution({ asOf }: { asOf: string }) {
-  const [range, setRange] = useState<ProfileDailyRange>("7d");
+  const [view, setView] = useState<EvolutionView>("7d");
   const [data, setData] = useState<ProfileDailyPerformanceResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const range = view === "hoje" ? null : view;
 
   useEffect(() => {
+    if (range === null) return;
     let cancelled = false;
     Promise.resolve()
       .then(() => {
@@ -297,7 +303,7 @@ function L3DailyEvolution({ asOf }: { asOf: string }) {
     };
   }, [asOf, range]);
 
-  const currentData = data?.range === range && data.as_of === asOf ? data : null;
+  const currentData = range !== null && data?.range === range && data.as_of === asOf ? data : null;
   const points = useMemo(() => currentData?.points ?? [], [currentData]);
   const chartPoints = useMemo(() => points.map((point) => ({
     ...point,
@@ -305,7 +311,8 @@ function L3DailyEvolution({ asOf }: { asOf: string }) {
     pnl_negative_usdt: point.pnl_usdt < 0 ? point.pnl_usdt : null,
   })), [points]);
   const tablePoints = useMemo(() => [...points].reverse(), [points]);
-  const ranges: { value: ProfileDailyRange; label: string }[] = [
+  const ranges: { value: EvolutionView; label: string }[] = [
+    { value: "hoje", label: "Hoje" },
     { value: "7d", label: "7d" },
     { value: "15d", label: "15d" },
     { value: "30d", label: "30d" },
@@ -324,12 +331,12 @@ function L3DailyEvolution({ asOf }: { asOf: string }) {
           {ranges.map((option) => (
             <button
               key={option.value}
-              onClick={() => setRange(option.value)}
+              onClick={() => setView(option.value)}
               className="rounded-md border px-3 py-2 text-[10px] font-semibold"
               style={{
-                color: range === option.value ? "white" : C.muted,
-                background: range === option.value ? C.blue : C.elevated,
-                borderColor: range === option.value ? C.blue : C.border,
+                color: view === option.value ? "white" : C.muted,
+                background: view === option.value ? C.blue : C.elevated,
+                borderColor: view === option.value ? C.blue : C.border,
               }}
             >
               {option.label}
@@ -338,7 +345,9 @@ function L3DailyEvolution({ asOf }: { asOf: string }) {
         </div>
       </div>
 
-      {error && !currentData ? (
+      {view === "hoje" ? (
+        <L3HourlyEvolution asOf={asOf} />
+      ) : error && !currentData ? (
         <div className="px-4 py-12 text-center text-xs text-red-300">Não foi possível carregar a evolução diária: {error}</div>
       ) : loading && !currentData ? (
         <div className="m-4 h-72 animate-pulse rounded-lg bg-white/[0.035]" aria-label="Carregando evolução diária L3" />
@@ -398,6 +407,107 @@ function L3DailyEvolution({ asOf }: { asOf: string }) {
       )}
       {error && currentData ? <div className="border-t px-4 py-2 text-[10px] text-amber-200" style={{ borderColor: C.border }}>Atualização falhou: {error}. Mantendo os últimos dados carregados.</div> : null}
     </section>
+  );
+}
+
+function L3HourlyEvolution({ asOf }: { asOf: string }) {
+  const [data, setData] = useState<ProfileHourlyPerformanceResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    apiGet<ProfileHourlyPerformanceResponse>(profileHourlyPerformanceRequestPath(asOf))
+      .then((response) => {
+        if (!cancelled) setData(response);
+      })
+      .catch((caught: unknown) => {
+        if (cancelled) return;
+        setError(caught instanceof ApiError ? caught.toDescriptiveString() : caught instanceof Error ? caught.message : "Erro desconhecido");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [asOf]);
+
+  const currentData = data?.as_of === asOf ? data : null;
+  const points = useMemo(() => currentData?.points ?? [], [currentData]);
+  const chartPoints = useMemo(() => points.map((point) => ({
+    ...point,
+    pnl_positive_usdt: point.pnl_usdt >= 0 ? point.pnl_usdt : null,
+    pnl_negative_usdt: point.pnl_usdt < 0 ? point.pnl_usdt : null,
+  })), [points]);
+  const tablePoints = useMemo(
+    () => [...points].reverse().filter((point) => point.closed_trades > 0),
+    [points],
+  );
+
+  if (error && !currentData) {
+    return <div className="px-4 py-12 text-center text-xs text-red-300">Não foi possível carregar a evolução de hoje: {error}</div>;
+  }
+  if (loading && !currentData) {
+    return <div className="m-4 h-72 animate-pulse rounded-lg bg-white/[0.035]" aria-label="Carregando evolução de hoje" />;
+  }
+  if (!points.some((point) => point.closed_trades > 0)) {
+    return <div className="px-4 py-12 text-center text-xs" style={{ color: C.muted }}>Sem trades L3 finalizados hoje ainda.</div>;
+  }
+
+  return (
+    <div className="grid gap-0 xl:grid-cols-[minmax(0,1.6fr)_minmax(360px,0.8fr)]">
+      <div className="min-w-0 border-b p-4 xl:border-b-0 xl:border-r" style={{ borderColor: C.border }}>
+        <div className="h-[320px] w-full">
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={chartPoints} margin={{ top: 10, right: 8, bottom: 4, left: 0 }}>
+              <CartesianGrid stroke="rgba(255,255,255,0.05)" vertical={false} />
+              <XAxis dataKey="hour" minTickGap={20} tick={{ fill: C.dim, fontSize: 9 }} axisLine={false} tickLine={false} />
+              <YAxis yAxisId="rate" domain={[0, 1]} tickFormatter={(value) => `${Math.round(Number(value) * 100)}%`} tick={{ fill: C.dim, fontSize: 9 }} axisLine={false} tickLine={false} width={38} />
+              <YAxis yAxisId="pnl" orientation="right" tickFormatter={(value) => `$${Number(value).toFixed(0)}`} tick={{ fill: C.dim, fontSize: 9 }} axisLine={false} tickLine={false} width={48} />
+              <Tooltip
+                formatter={(value, name) => [name === "Win Rate TP/SL" ? formatRate(Number(value)) : formatUsd(Number(value)), name]}
+                labelFormatter={(value) => `${value} UTC`}
+                contentStyle={{ background: C.elevated, border: `1px solid ${C.borderStrong}`, borderRadius: 8, fontSize: 10 }}
+              />
+              <Line yAxisId="pnl" type="monotone" dataKey="pnl_positive_usdt" name="P&L positivo" stroke={C.green} strokeWidth={2.2} dot={{ r: 2.2, fill: C.green }} activeDot={{ r: 4 }} connectNulls={false} isAnimationActive={false} />
+              <Line yAxisId="pnl" type="monotone" dataKey="pnl_negative_usdt" name="P&L negativo" stroke={C.red} strokeWidth={2.2} dot={{ r: 2.2, fill: C.red }} activeDot={{ r: 4 }} connectNulls={false} isAnimationActive={false} />
+              <Line yAxisId="rate" type="monotone" dataKey="win_rate" name="Win Rate TP/SL" stroke={C.blue} strokeWidth={2.2} dot={{ r: 2.2, fill: C.blue }} activeDot={{ r: 4 }} isAnimationActive={false} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-4 text-[10px]" style={{ color: C.muted }}>
+          <span className="inline-flex items-center gap-2"><span className="h-0.5 w-5 bg-[#4f7bf7]" /> Win Rate TP/SL</span>
+          <span className="inline-flex items-center gap-2"><span className="h-0.5 w-5 bg-[#22b97a]" /> P&amp;L positivo</span>
+          <span className="inline-flex items-center gap-2"><span className="h-0.5 w-5 bg-[#e5484d]" /> P&amp;L negativo</span>
+        </div>
+      </div>
+
+      <div className="max-h-[390px] overflow-auto">
+        <table className="w-full min-w-[430px] border-collapse text-[11px]">
+          <thead className="sticky top-0 z-10 bg-[#0d0f16] text-[9.5px] uppercase tracking-[0.08em]" style={{ color: C.muted }}>
+            <tr>
+              <th className="px-3 py-3 text-left">Hora (UTC)</th>
+              <th className="px-3 py-3 text-right">Finalizados</th>
+              <th className="px-3 py-3 text-right">Win Rate TP/SL</th>
+              <th className="px-3 py-3 text-right">P&amp;L do período</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/[0.055]">
+            {tablePoints.map((point) => (
+              <tr key={point.hour_start}>
+                <td className="whitespace-nowrap px-3 py-2.5" style={{ color: C.text }}>{point.hour}</td>
+                <td className="px-3 py-2.5 text-right font-mono" style={{ color: C.muted }} title={`${point.wins} TP · Win Rate exclui stop móvel e prazo operacional`}>{point.closed_trades.toLocaleString("pt-BR")}</td>
+                <td className="px-3 py-2.5 text-right font-mono font-semibold" style={{ color: point.win_rate == null ? C.dim : C.blue }}>{formatRate(point.win_rate)}</td>
+                <td className="px-3 py-2.5 text-right font-mono font-semibold" style={{ color: deltaColor(point.pnl_usdt) }}>{formatUsd(point.pnl_usdt)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
