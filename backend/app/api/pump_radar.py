@@ -214,12 +214,16 @@ async def cancel_run(run_id: UUID, db: AsyncSession = Depends(get_db), user_id: 
 
 
 @router.get("/runs/{run_id}/assets")
-async def list_assets(run_id: UUID, search: str | None = None, limit: int = Query(default=100, ge=1, le=500), offset: int = Query(default=0, ge=0), db: AsyncSession = Depends(get_db), user_id: UUID = Depends(get_current_user_id)) -> dict[str, Any]:
+async def list_assets(run_id: UUID, search: str | None = None, start_from: datetime | None = None, start_to: datetime | None = None, limit: int = Query(default=100, ge=1, le=500), offset: int = Query(default=0, ge=0), db: AsyncSession = Depends(get_db), user_id: UUID = Depends(get_current_user_id)) -> dict[str, Any]:
     await _owned_run(db, run_id, user_id)
     link_counts = select(PumpRadarEventLink.event_id, func.count(PumpRadarEventLink.id).label("links"), func.count(PumpRadarEventLink.entry_at).label("entries")).where(PumpRadarEventLink.user_id == user_id).group_by(PumpRadarEventLink.event_id).subquery()
     query = select(PumpRadarEvent, func.coalesce(link_counts.c.links, 0), func.coalesce(link_counts.c.entries, 0)).outerjoin(link_counts, link_counts.c.event_id == PumpRadarEvent.id).where(PumpRadarEvent.run_id == run_id)
     if search:
         query = query.where(PumpRadarEvent.symbol.ilike(f"%{search.strip()}%"))
+    if start_from is not None:
+        query = query.where(PumpRadarEvent.start_at >= start_from)
+    if start_to is not None:
+        query = query.where(PumpRadarEvent.start_at <= start_to)
     rows = (await db.execute(query.order_by(PumpRadarEvent.rise_pct.desc(), PumpRadarEvent.start_at).offset(offset).limit(limit))).all()
     data = [{
         "event_id": str(event.id), "symbol": event.symbol, "rise_pct": _number(event.rise_pct),

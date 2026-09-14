@@ -61,7 +61,11 @@ export default function PumpRadarPage() {
   const [ranges, setRanges] = useState<RangeRow[]>([]);
   const [config, setConfig] = useState<RadarConfig | null>(null);
   const [search, setSearch] = useState("");
-  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [rangeOpen, setRangeOpen] = useState(false);
+  const [rangeFrom, setRangeFrom] = useState<string>("");
+  const [rangeTo, setRangeTo] = useState<string>("");
+  const [rangeDraftFrom, setRangeDraftFrom] = useState<string>("");
+  const [rangeDraftTo, setRangeDraftTo] = useState<string>("");
   const [contextTf, setContextTf] = useState("5min");
   const [rangeTf, setRangeTf] = useState("combined");
   const [layer, setLayer] = useState("TODAS");
@@ -111,9 +115,10 @@ export default function PumpRadarPage() {
         setRun(latest); setEvents([]); setEvent(null); setChart(null); setRanges([]);
         return;
       }
+      const rangeParams = `${rangeFrom ? `&start_from=${encodeURIComponent(new Date(rangeFrom).toISOString())}` : ""}${rangeTo ? `&start_to=${encodeURIComponent(new Date(rangeTo).toISOString())}` : ""}`;
       const [runResponse, assetResponse] = await Promise.all([
         apiGet<Envelope<Run>>(`/pump-radar/runs/${latest.id}`),
-        apiGet<Envelope<{ items: AssetEvent[] }>>(`/pump-radar/runs/${latest.id}/assets?limit=100`),
+        apiGet<Envelope<{ items: AssetEvent[] }>>(`/pump-radar/runs/${latest.id}/assets?limit=100${rangeParams}`),
       ]);
       setRun(runResponse.data); setEvents(assetResponse.data.items);
       // Only touch the detail panel (event/chart) when the previously
@@ -130,7 +135,7 @@ export default function PumpRadarPage() {
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.detail ?? cause.message : cause instanceof Error ? cause.message : "Falha ao carregar o Radar de Pumps");
     } finally { setLoading(false); }
-  }, [loadEvent]);
+  }, [loadEvent, rangeFrom, rangeTo]);
 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
@@ -201,15 +206,9 @@ export default function PumpRadarPage() {
     const anchor = document.createElement("a"); anchor.href = url; anchor.download = `pump-radar-${run.id}-events.csv`; anchor.click(); URL.revokeObjectURL(url);
   }
 
-  const filteredEvents = useMemo(() => events.filter((item) => {
-    if (!item.symbol.toLowerCase().includes(search.toLowerCase())) return false;
-    if (selectedDate) {
-      const local = new Date(item.start_at);
-      const key = `${local.getFullYear()}-${String(local.getMonth() + 1).padStart(2, "0")}-${String(local.getDate()).padStart(2, "0")}`;
-      if (key !== selectedDate) return false;
-    }
-    return true;
-  }), [events, search, selectedDate]);
+  const filteredEvents = useMemo(() => events.filter((item) => (
+    item.symbol.toLowerCase().includes(search.toLowerCase())
+  )), [events, search]);
   const summary = run?.universe_compatible ? run.summary ?? EMPTY_SUMMARY : EMPTY_SUMMARY;
   const primaryLink = event?.links.find((link) => link.is_primary) ?? event?.links[0] ?? null;
   const timelineStart = event ? +new Date(event.start_at) - 30 * 60_000 : 0;
@@ -283,16 +282,25 @@ export default function PumpRadarPage() {
         </div>
         <div className={styles.actions}>
           <span className={`${styles.badge} ${run?.quality_badge === "COBERTURA PARCIAL" ? styles.badgePartial : ""}`}>{run?.quality_badge ?? "DADOS INSUFICIENTES"}</span>
-          <label className={`${styles.control} cursor-pointer`} title="Selecionar data para filtrar os pumps do dia">
-            <CalendarDays size={14} />
-            <input
-              type="date"
-              value={selectedDate ?? ""}
-              onChange={(e) => setSelectedDate(e.target.value || null)}
-              className="w-[92px] cursor-pointer border-none bg-transparent p-0 text-inherit outline-none [color-scheme:dark]"
-            />
-          </label>
-          {selectedDate && <button className={styles.ghost} onClick={() => setSelectedDate(null)} title="Limpar filtro de data"><X size={13} /></button>}
+          <div className={styles.rangeWrap}>
+            <button
+              className={styles.control}
+              onClick={() => { setRangeDraftFrom(rangeFrom); setRangeDraftTo(rangeTo); setRangeOpen((value) => !value); }}
+              title="Selecionar período (data e horário) para filtrar os pumps"
+            >
+              <CalendarDays size={14} />
+              {rangeFrom || rangeTo ? `${rangeFrom ? localTime(rangeFrom, true) : "…"} → ${rangeTo ? localTime(rangeTo, true) : "…"}` : "Período"}
+            </button>
+            {rangeOpen && <div className={styles.rangePopover}>
+              <div className={styles.field}><label>De</label><input type="datetime-local" value={rangeDraftFrom} onChange={(e) => setRangeDraftFrom(e.target.value)} /></div>
+              <div className={styles.field}><label>Até</label><input type="datetime-local" value={rangeDraftTo} onChange={(e) => setRangeDraftTo(e.target.value)} /></div>
+              <div className="flex justify-end gap-2 pt-1">
+                <button className={styles.ghost} onClick={() => { setRangeDraftFrom(""); setRangeDraftTo(""); setRangeFrom(""); setRangeTo(""); setRangeOpen(false); }}>Limpar</button>
+                <button className={styles.primary} onClick={() => { setRangeFrom(rangeDraftFrom); setRangeTo(rangeDraftTo); setRangeOpen(false); }}>Aplicar</button>
+              </div>
+            </div>}
+          </div>
+          {(rangeFrom || rangeTo) && <button className={styles.ghost} onClick={() => { setRangeFrom(""); setRangeTo(""); }} title="Limpar filtro de período"><X size={13} /></button>}
           <button className={styles.control}>Gate • Spot</button><button className={styles.control}>UTC−3</button>
           <button className={styles.control} onClick={() => setConfigOpen((value) => !value)}><Settings2 size={14} />Configurar</button>
           <button className={`${styles.control} ${styles.mobileRankButton}`} onClick={() => { setCollapsed(false); setMobileRankOpen(true); }}><ListFilter size={14} />Ranking</button>
@@ -322,7 +330,7 @@ export default function PumpRadarPage() {
       {run?.universe_compatible && <>
         <div className={`${styles.mainGrid} ${collapsed ? styles.mainGridCollapsed : ""}`}>
           {collapsed ? <aside className={`${styles.panel} ${styles.collapsedRail}`}><button className={styles.ghost} onClick={() => setCollapsed(false)} title="Abrir ranking"><ChevronRight size={15} /></button></aside> : <aside className={`${styles.panel} ${styles.rankPanel} ${mobileRankOpen ? styles.rankOpen : ""}`}>
-            <div className={styles.panelHeader}><strong className="text-[12px]">TOP pumps do dia</strong><div className={styles.segmented}>{["5min", "15min", "1h"].map((item) => <button key={item} onClick={() => setContextTf(item)} className={`${styles.segment} ${contextTf === item ? styles.segmentActive : ""}`}>{item}</button>)}</div><button onClick={() => { setCollapsed(true); setMobileRankOpen(false); }} className="text-[#7589a6]" title="Recolher ranking"><ChevronLeft size={14} /></button></div>
+            <div className={styles.panelHeader}><strong className="text-[12px]">{rangeFrom || rangeTo ? "TOP pumps do período" : "TOP pumps do dia"}</strong><div className={styles.segmented}>{["5min", "15min", "1h"].map((item) => <button key={item} onClick={() => setContextTf(item)} className={`${styles.segment} ${contextTf === item ? styles.segmentActive : ""}`}>{item}</button>)}</div><button onClick={() => { setCollapsed(true); setMobileRankOpen(false); }} className="text-[#7589a6]" title="Recolher ranking"><ChevronLeft size={14} /></button></div>
             <label className={styles.search}><Search size={13} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar ativo…" /></label>
             <div className={styles.rankHead}><span>#</span><span>Ativo</span><span>Pump</span><span>Shadow</span></div>
             <div className={`${styles.rankList} px-1`}>
