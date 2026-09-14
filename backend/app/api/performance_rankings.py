@@ -11,11 +11,13 @@ from ..database import get_db
 from ..schemas.profile_performance import (
     ProfileDailyPerformanceResponse,
     ProfileDailyRange,
+    ProfileHourlyPerformanceResponse,
     ProfilePerformanceResponse,
 )
 from ..schemas.shadow_trade import ProfileReportRow
 from ..services.profile_performance_service import (
     get_profile_daily_performance,
+    get_profile_hourly_performance,
     get_profile_performance,
 )
 from ..services.watchlist_performance_ranking_service import (
@@ -95,6 +97,30 @@ async def shadow_portfolio_profile_daily_performance(
             user_id,
             as_of=selected_day,
             range_key=range,
+        )
+    except RankingConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get(
+    "/api/shadow-portfolio/profile-performance/hourly",
+    response_model=ProfileHourlyPerformanceResponse,
+)
+async def shadow_portfolio_profile_hourly_performance(
+    as_of: date | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> ProfileHourlyPerformanceResponse:
+    """Hourly L3 Win Rate and realized P&L for a single UTC day (default: today)."""
+
+    selected_day = as_of or datetime.now(timezone.utc).date()
+    try:
+        return await get_profile_hourly_performance(
+            db,
+            user_id,
+            as_of=selected_day,
         )
     except RankingConfigError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

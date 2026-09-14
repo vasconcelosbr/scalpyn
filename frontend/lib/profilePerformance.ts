@@ -117,6 +117,23 @@ export interface ProfileDailyPerformanceResponse {
   metric_definitions: Record<string, string>;
 }
 
+export interface ProfileHourlyPerformancePoint {
+  hour: string;
+  hour_start: string;
+  closed_trades: number;
+  wins: number;
+  win_rate: number | null;
+  pnl_usdt: number;
+}
+
+export interface ProfileHourlyPerformanceResponse {
+  contract_version: string;
+  as_of: string;
+  timezone: string;
+  points: ProfileHourlyPerformancePoint[];
+  metric_definitions: Record<string, string>;
+}
+
 export const STATUS_LABEL: Record<ProfileMonitorStatus, string> = {
   POSITIVE: "Positivo",
   STABLE: "Estável",
@@ -194,6 +211,11 @@ export function profilePerformanceRequestPath(asOf: string, rangeDays: 7 | 14 | 
 export function profileDailyPerformanceRequestPath(asOf: string, range: ProfileDailyRange): string {
   const params = new URLSearchParams({ as_of: asOf, range });
   return `/api/shadow-portfolio/profile-performance/daily?${params}`;
+}
+
+export function profileHourlyPerformanceRequestPath(asOf: string): string {
+  const params = new URLSearchParams({ as_of: asOf });
+  return `/api/shadow-portfolio/profile-performance/hourly?${params}`;
 }
 
 export function historyMetricValue(

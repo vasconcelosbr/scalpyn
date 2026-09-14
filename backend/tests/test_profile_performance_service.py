@@ -8,6 +8,7 @@ import pytest
 from app.services.profile_performance_service import (
     DEFAULT_MONITORING_POLICY,
     build_profile_daily_performance_response,
+    build_profile_hourly_performance_response,
     build_profile_performance_response,
     calculate_trend,
     monitoring_policy_from_config,
@@ -245,3 +246,45 @@ def test_daily_contract_is_read_only_and_supports_total_range():
     assert "DELETE FROM SHADOW_TRADES" not in service
     assert '"/api/shadow-portfolio/profile-performance/daily"' in api
     assert '"TOTAL"' in service
+
+
+def test_hourly_l3_performance_uses_hourly_closed_trades_and_preserves_empty_hours():
+    as_of = date(2026, 9, 14)
+    response = build_profile_hourly_performance_response(
+        [
+            {
+                "hour_start": datetime(2026, 9, 14, 16, 0, tzinfo=timezone.utc),
+                "hourly_closed_trades": 3,
+                "hourly_tp": 1,
+                "hourly_sl": 0,
+                "hourly_pnl_usdt": 31.72,
+            },
+            {
+                "hour_start": datetime(2026, 9, 14, 17, 0, tzinfo=timezone.utc),
+                "hourly_closed_trades": 0,
+                "hourly_tp": 0,
+                "hourly_sl": 0,
+                "hourly_pnl_usdt": 0,
+            },
+        ],
+        as_of=as_of,
+    )
+
+    assert response.as_of == as_of
+    assert response.points[0].hour == "16:00"
+    assert response.points[0].closed_trades == 3
+    assert response.points[0].wins == 1
+    assert response.points[0].win_rate == round(1 / 1, 6)
+    assert response.points[0].pnl_usdt == 31.72
+    assert response.points[1].win_rate is None
+    assert response.points[1].pnl_usdt == 0
+    assert "TRAILING_STOP and TIMEOUT are excluded" in response.metric_definitions["win_rate"]
+
+
+def test_hourly_contract_is_read_only_and_scoped_to_a_single_day():
+    service = Path("backend/app/services/profile_performance_service.py").read_text(encoding="utf-8").upper()
+    api = Path("backend/app/api/performance_rankings.py").read_text(encoding="utf-8")
+    assert "PROFILE_HOURLY_PERFORMANCE_QUERY" in service
+    assert "UPDATE SHADOW_TRADES" not in service
+    assert "DELETE FROM SHADOW_TRADES" not in service
+    assert '"/api/shadow-portfolio/profile-performance/hourly"' in api
