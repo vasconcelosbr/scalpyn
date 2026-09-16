@@ -8,6 +8,28 @@ from app.services.l3_capture_preparation import prepare_profile_metadata
 from app.services.l3_capture_diagnostics import capture_stage
 
 
+def test_scheduled_scanner_preserves_configured_resolver_source_policies():
+    from app.schemas.spot_engine_config import SpotEngineConfig
+    from app.services.l3_gate_runtime_policy import build_policy_snapshot
+    policies = {
+        source: {'allowed_source_providers': [provider], 'provider_policy_id': 'actual-policy',
+                 'max_age_seconds': 60, 'window_seconds': 60 if source == 'live_trade_flow' else None}
+        for source, provider in [('ohlcv', 'gate.io'), ('live_trade_flow', 'gate_trades_ws_spot'),
+                                 ('live_order_book', 'gate'), ('decision_context', 'market_metadata')]
+    }
+    raw = {'scanner': {'l3_v3_provenance_resolver': {
+        'enabled': True, 'profile_allowlist': ['profile'], 'source_policies': policies}}}
+    loaded = SpotEngineConfig.from_config_json(raw)
+    snapshot = build_policy_snapshot(loaded.scanner, profile_id='profile')
+    resolver = snapshot['l3_v3_provenance_resolver']
+    assert resolver['enabled'] is True and resolver['profile_allowlist'] == ['profile']
+    for source, configured in policies.items():
+        assert {k: resolver['source_policies'][source][k] for k in configured} == configured
+    empty = build_policy_snapshot(SpotEngineConfig().scanner)['l3_v3_provenance_resolver']
+    assert empty['enabled'] is False
+    assert all(not p['allowed_source_providers'] for p in empty['source_policies'].values())
+
+
 def test_metadata_repair_preserves_predicates_and_rejects_other_period_changes():
     policies = {'ohlcv': {'source_provider': 'gate.io', 'provider_policy_id': 'test',
                          'max_age_seconds': 700, 'candle_policy': 'CLOSED_ONLY'}}
@@ -172,3 +194,19 @@ def test_score_alias_reads_gate_score_and_keeps_threshold_block():
     _, above = engine.evaluate_condition_status(rule, {'score': 0, 'alpha_score': 67}, field_key='indicator')
     assert below['status'] == 'FAIL' and above['status'] == 'PASS'
     assert config[0]['field'] == 'score' and config[0]['value'] == 67
+
+
+def test_ema_alignment_keeps_dependencies_and_rejects_mixed_candles():
+    from app.services.l3_authorization_contract_v3 import _derived_candle_candidates
+    inputs = [{'indicator': f'ema{p}', 'period': p, 'actual': v, 'source': 'ohlcv',
+               'source_provider': 'gate.io', 'timeframe': '5m', 'parameters': {},
+               'source_timestamp': '2026-09-16T12:00:00Z',
+               'computed_at': f'2026-09-16T12:05:0{i}Z',
+               'available_at': f'2026-09-16T12:05:0{i}Z'}
+              for i, (p, v) in enumerate([(9, 103), (50, 102), (200, 100)])]
+    result = next(c for c in _derived_candle_candidates(inputs) if c['indicator'] == 'ema_full_alignment')
+    assert result['actual'] is True and result['period'] is None
+    assert len(result['dependencies']) == 3
+    assert result['available_at'] == inputs[-1]['available_at']
+    inputs[-1]['source_timestamp'] = '2026-09-16T11:55:00Z'
+    assert not any(c['indicator'] == 'ema_full_alignment' for c in _derived_candle_candidates(inputs))

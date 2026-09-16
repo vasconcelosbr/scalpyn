@@ -1648,6 +1648,7 @@
       "id": "l3-producer-identity-and-canonical-on-demand",
       "description": "Producer calculation identity, immutable book clocks and canonical on-demand authorization preserve strategy and expose capture exclusions.",
       "files": [
+        {"path": "backend/tests/test_l3_capture_preparation.py", "contains_all": ["test_scheduled_scanner_preserves_configured_resolver_source_policies"]},
         {"path": "backend/app/services/indicator_calculation_identity.py", "contains_all": ["def calculation_identities", "UTC_DAY"]},
         {"path": "backend/app/services/l3_authorization_contract_v3.py", "contains_all": ["def _derived_candle_candidates", "registry.extend(_derived_candle_candidates(registry))"]},
         {"path": "backend/app/services/l3_gate_compiler_v2.py", "contains_all": ["condition[\"field\"] = condition[\"indicator\"]"]},

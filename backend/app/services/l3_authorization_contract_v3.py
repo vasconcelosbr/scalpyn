@@ -414,6 +414,46 @@ def _derived_candle_candidates(registry: list[dict]) -> list[dict]:
     """
     from .price_position import BREAKOUT_REFERENCE_INDICATORS
     results = []
+    # EMA hybrids are computed at merge time because fast/slow EMAs belong
+    # to different scheduler groups. Use matching candles, retaining each
+    # dependency and the last actual computation/availability timestamp.
+    ema_inputs = _latest_same_identity([c for c in registry if c.get('source') == 'ohlcv'
+                                       and c.get('indicator') in {'ema9', 'ema50', 'ema200'}])
+    def ema_observation(c):
+        identity = _feature_identity(c)
+        identity.pop('indicator', None)
+        identity.pop('period', None)
+        return {**identity, 'provider_policy_id': c.get('provider_policy_id'),
+                'source_timestamp': c.get('source_timestamp')}
+    for name, periods in [('ema9_gt_ema50', (9, 50)), ('ema_full_alignment', (9, 50, 200))]:
+        for first in [c for c in ema_inputs if c.get('indicator') == 'ema9' and c.get('period') == 9]:
+            dependencies = [first]
+            for period in periods[1:]:
+                matching = [c for c in ema_inputs if c.get('indicator') == f'ema{period}'
+                            and c.get('period') == period and ema_observation(c) == ema_observation(first)]
+                if len(matching) != 1:
+                    break
+                dependencies.append(matching[0])
+            if len(dependencies) != len(periods) or any(
+                _as_utc(c.get(k)) is None for c in dependencies
+                for k in ('source_timestamp', 'computed_at', 'available_at')
+            ):
+                continue
+            try:
+                values = [float(c['actual']) for c in dependencies]
+                if not all(math.isfinite(v) for v in values):
+                    continue
+            except (TypeError, ValueError, KeyError):
+                continue
+            derived = deepcopy(first)
+            derived.update(indicator=name, period=None,
+                           actual=all(a > b for a, b in zip(values, values[1:])),
+                           stale=any(c.get('stale') for c in dependencies),
+                           fallback_used=any(c.get('fallback_used') for c in dependencies),
+                           dependencies=[canonical_hash(c) for c in dependencies])
+            for clock in ('computed_at', 'available_at'):
+                derived[clock] = max(dependencies, key=lambda c: _as_utc(c[clock]))[clock]
+            results.append(derived)
     for window, indicator in BREAKOUT_REFERENCE_INDICATORS.items():
         for candidate in registry:
             if candidate.get('source') != 'ohlcv' or candidate.get('indicator') != indicator:
