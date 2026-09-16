@@ -44,7 +44,7 @@ _SUPPORTED_OPERATORS = {
     "=", "==", "!=", ">", ">=", "<", "<=", "between",
     "is_true", "is_false", "in", "not_in",
 }
-_FEATURE_ALIASES = {"orderbook_pressure": "bid_ask_imbalance"}
+_FEATURE_ALIASES = {"orderbook_pressure": "bid_ask_imbalance", "score": "alpha_score"}
 
 
 def contract_authorizes_shadow_capture(
@@ -274,10 +274,11 @@ def _registry_candidate(raw: dict, *, market_scope: dict, evaluated_at: datetime
     source = _source_for_db_candidate(raw)
     source_timestamp = raw.get("source_timestamp")
     age = raw.get("age_seconds")
-    if age is None:
-        source_at = _as_utc(source_timestamp)
-        if source_at is not None:
-            age = max(0.0, (evaluated_at - source_at).total_seconds())
+    source_at = _as_utc(source_timestamp)
+    if source_at is not None:
+        elapsed = max(0.0, (evaluated_at - source_at).total_seconds())
+        # A previously recorded age cannot be made younger by re-evaluation.
+        age = max(float(age), elapsed) if age is not None else elapsed
     indicator = str(raw.get("indicator") or "")
     alias_of = _FEATURE_ALIASES.get(indicator)
     return {
@@ -497,6 +498,28 @@ def _same_observed_value(left: Any, right: Any) -> bool:
     return _canonicalize(left) == _canonicalize(right)
 
 
+def _latest_same_identity(candidates: list[dict]) -> list[dict]:
+    """Collapse repeated producer observations, never distinct feature identities.
+
+    Equal clocks remain ambiguous and fail closed, even if values agree.
+    """
+    groups: dict[str, list[dict]] = {}
+    for candidate in candidates:
+        key = canonical_hash({**_feature_identity(candidate),
+                              'provider_policy_id': candidate.get('provider_policy_id')})
+        groups.setdefault(key, []).append(candidate)
+    selected = []
+    for group in groups.values():
+        def clock(candidate):
+            floor = datetime.min.replace(tzinfo=timezone.utc)
+            return (_as_utc(candidate.get('source_timestamp')) or floor,
+                    _as_utc(candidate.get('computed_at')) or floor)
+        latest_clock = max(map(clock, group))
+        latest = [c for c in group if clock(c) == latest_clock]
+        selected.extend(latest)
+    return selected
+
+
 def _reference_resolution(
     *,
     indicator: Any,
@@ -553,6 +576,7 @@ def _reference_resolution(
             candidate for candidate in candidates
             if _candidate_parameters(candidate) == configured_parameters
         ]
+    candidates = _latest_same_identity(candidates)
     if not candidates:
         return None, ["FEATURE_IDENTITY_NOT_AVAILABLE"]
     if len(candidates) != 1:
@@ -683,9 +707,10 @@ def _materialize_condition(
                 trace.get("target", trace.get("expected")),
             ))
         for side, indicator, observed in references:
+            reference_config = (condition.get("resolved_operands") or {}).get(side) or condition
             resolved, reference_errors = _reference_resolution(
                 indicator=indicator,
-                condition=condition,
+                condition=reference_config,
                 observed_value=observed,
                 registry=registry,
                 default_timeframe=default_timeframe,
@@ -1058,6 +1083,11 @@ def _apply_operator(condition: dict, actual: Any) -> bool:
 
 def _freshness_reasons(condition: dict, candidate: dict) -> list[str]:
     reasons: list[str] = []
+    evaluated_at = _as_utc(candidate.get('evaluated_at'))
+    for key in ('source_timestamp', 'computed_at', 'available_at'):
+        timestamp = _as_utc(candidate.get(key))
+        if evaluated_at and timestamp and timestamp > evaluated_at:
+            reasons.append(f'{key.upper()}_IN_FUTURE')
     if candidate.get("fallback_used"):
         reasons.append("FALLBACK_FORBIDDEN")
     if candidate.get("partial_window"):
@@ -1178,6 +1208,7 @@ def _evaluate_reference(
             candidate for candidate in registry
             if _matches_identity(candidate, expected, provider_policy_id)
         ]
+    candidates = _latest_same_identity(candidates)
     if not candidates:
         return {
             "status": "CONTRACT_REJECT" if required else "SKIPPED_OPTIONAL",
@@ -1362,6 +1393,7 @@ def _evaluate_condition(
             candidate for candidate in registry
             if _matches_identity(candidate, expected, provider_policy_id)
         ]
+    candidates = _latest_same_identity(candidates)
     if not candidates:
         status = "CONTRACT_REJECT" if base["required"] else "SKIPPED_OPTIONAL"
         return {
