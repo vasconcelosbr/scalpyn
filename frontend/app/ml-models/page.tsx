@@ -195,6 +195,14 @@ export default function MlModelsPage() {
   const { data: readiness, error: readinessError, isValidating: refreshingReadiness } = useSWR<{
     total_rows: number; labelable_rows: number; min_required: number; ready: boolean;
     blocked_reasons: string[]; dataset_query_cutoff: string; label_version: string; automatic_training_enabled: boolean;
+    capture_diagnostics?: {
+      profile_contracts_valid: boolean;
+      profiles: { profile_id: string; name: string; last_scanned_at: string | null; errors: unknown[] }[];
+      latest_capture: { id?: string; symbol?: string; stage: string; reason: string; matures_at?: string };
+      latest_decision: { id: number; created_at: string; symbol: string; decision: string; authorization_status?: string } | null;
+      latest_capture_skip: { created_at: string; symbol: string; skip_reason: string } | null;
+      note: string;
+    };
   }>(lane === "L3_PROFILE" ? "/api/ml/catboost/readiness?source=L3" : null, apiGet, {
     refreshInterval: 15_000,
     revalidateOnFocus: true,
@@ -288,6 +296,16 @@ export default function MlModelsPage() {
             <p className="mt-1">{readiness.blocked_reasons.join(" · ") || "A aprovação depende das métricas do novo candidato."}</p>
             <p className="mt-1">Readiness não aprova nem ativa um modelo.</p>
             <p className="mt-1">Treino automático CatBoost L3: {readiness.automatic_training_enabled ? "habilitado" : "desabilitado"}.</p>
+            {readiness.capture_diagnostics && <div className="mt-3 border-t border-white/10 pt-3 space-y-1">
+              <p className="font-semibold text-[#E2E8F0]">Acompanhamento da coleta</p>
+              <p>Metadados dos perfis: {readiness.capture_diagnostics.profile_contracts_valid ? "validados" : "com pendências ou sem perfis ativos"}.</p>
+              <p>{readiness.capture_diagnostics.latest_capture.symbol && `${readiness.capture_diagnostics.latest_capture.symbol} · `}{readiness.capture_diagnostics.latest_capture.reason}</p>
+              {readiness.capture_diagnostics.latest_capture.id && <p className="break-all">Captura: {readiness.capture_diagnostics.latest_capture.id}</p>}
+              {readiness.capture_diagnostics.latest_capture.matures_at && <p>Maturação prevista: {fmtDateTime(readiness.capture_diagnostics.latest_capture.matures_at)}</p>}
+              {readiness.capture_diagnostics.latest_decision && <p>Última decisão: {readiness.capture_diagnostics.latest_decision.symbol} · {readiness.capture_diagnostics.latest_decision.decision} · {readiness.capture_diagnostics.latest_decision.authorization_status || "envelope não disponível"} · {fmtDateTime(readiness.capture_diagnostics.latest_decision.created_at)}</p>}
+              {readiness.capture_diagnostics.latest_capture_skip && <p>Última tentativa não persistida: {readiness.capture_diagnostics.latest_capture_skip.skip_reason} · {fmtDateTime(readiness.capture_diagnostics.latest_capture_skip.created_at)}</p>}
+              <p>{readiness.capture_diagnostics.note}</p>
+            </div>}
           </>}
           {readinessError && <p className="mt-2 text-[#F87171]">Não foi possível verificar o dataset L3 agora. A consulta será repetida automaticamente.</p>}
         </div>

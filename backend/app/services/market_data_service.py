@@ -43,6 +43,7 @@ class MarketDataNormalized:
     source: str = "gate"
     confidence_score: Optional[float] = None
     source_map: Dict[str, str] = field(default_factory=dict)
+    source_times: Dict[str, str] = field(default_factory=dict)
 
     def to_indicator_payload(self) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
@@ -72,6 +73,16 @@ class MarketDataNormalized:
             payload["taker_ratio"] = round(float(self.taker_ratio), 8)
         if self.volume_delta is not None:
             payload["volume_delta"] = round(float(self.volume_delta), 8)
+        payload["_source_metadata"] = {
+            name: {"source": "live_order_book", "source_provider": self.source_map[name],
+                   "provider_policy_id": "observed_order_book_v1", "snapshot": True,
+                   "timeframe": None, "period": None, "parameters": {},
+                   "candle_policy": None, "candle_closed": None,
+                   "source_timestamp": timestamp, "computed_at": timestamp,
+                   "available_at": timestamp, "fallback_used": self.source_map[name] != "gate"}
+            for name, timestamp in self.source_times.items()
+            if name in {"bid_ask_imbalance", "orderbook_pressure", "spread_pct", "orderbook_depth_usdt"}
+        }
         return payload
 
 
@@ -195,6 +206,7 @@ class MarketDataService:
         source: str,
         indicator: str,
         reason: Optional[str] = None,
+        source_at: Optional[str] = None,
     ) -> None:
         if not self.is_valid_data(indicator, value):
             return
@@ -202,6 +214,8 @@ class MarketDataService:
             return
         setattr(data, attribute, float(value))
         data.source_map[indicator] = source
+        if source_at:
+            data.source_times[indicator] = source_at
         if source != "gate":
             logger.info(
                 "[DATA_SOURCE] symbol=%s indicator=%s source=%s reason=%s",
@@ -253,7 +267,9 @@ class MarketDataService:
                     params={"currency_pair": pair, "limit": depth, "with_id": "false"},
                 )
                 resp.raise_for_status()
-                return resp.json()
+                payload = resp.json()
+                payload["_observed_at"] = datetime.now(timezone.utc).isoformat()
+                return payload
 
         result, _source = await fetch_with_resilience(
             f"depth:gate:{symbol}:{depth}",
@@ -368,6 +384,7 @@ class MarketDataService:
                     metrics["orderbook_pressure"] = imbalance  # alias semântico
             except Exception as exc:
                 logger.warning("[DATA_FAIL] bid_ask_imbalance calc falhou: %s", exc)
+            metrics["_source_timestamp"] = book.get("_observed_at")
             return metrics
         except Exception as exc:
             logger.warning("[DATA_FAIL] _extract_orderbook_metrics parse error: %s", exc)
@@ -734,6 +751,7 @@ class MarketDataService:
                 gate_book_metrics.get("bid_ask_imbalance"),
                 "gate",
                 "bid_ask_imbalance",
+                source_at=gate_book_metrics.get("_source_timestamp"),
             )
             self._record_indicator(
                 normalized,
@@ -741,6 +759,7 @@ class MarketDataService:
                 gate_book_metrics.get("orderbook_pressure"),
                 "gate",
                 "orderbook_pressure",
+                source_at=gate_book_metrics.get("_source_timestamp"),
             )
 
         # Mesmo gating estendido para o fallback Binance (mesmo motivo).

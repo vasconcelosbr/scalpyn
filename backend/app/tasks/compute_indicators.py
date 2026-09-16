@@ -768,6 +768,7 @@ async def _compute_5m_async():
     """Compute technical indicators from 5-minute OHLCV candles."""
     from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
     from ..services.feature_engine import FeatureEngine
+    from ..services.indicator_calculation_identity import calculation_identities
     from ..services.market_data_service import market_data_service
     from ..services.order_flow_service import get_order_flow_data
 
@@ -889,6 +890,7 @@ async def _compute_5m_async():
                         default_source="candle_computed",
                         default_confidence=0.80,
                         key_source_map=_COMPUTE_KEY_SOURCE_MAP,
+                        key_metadata={**calculation_identities(indicators_config, results), **(market_data.get("_source_metadata") or {})},
                         envelope_metadata={
                             "timeframe": "5m",
                             "market_type": symbol_market_type.get(symbol, "spot"),
@@ -1046,6 +1048,7 @@ async def _compute_structural_5m_async():
     """
     from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
     from ..services.feature_engine import FeatureEngine
+    from ..services.indicator_calculation_identity import calculation_identities
 
     import sqlalchemy.exc as _sqla_exc
     logger.info("[COMPUTE-S5m] Starting structural-on-5m indicator computation…")
@@ -1122,6 +1125,7 @@ async def _compute_structural_5m_async():
                         default_source="candle_computed",
                         default_confidence=0.80,
                         key_source_map=_COMPUTE_KEY_SOURCE_MAP,
+                        key_metadata=calculation_identities(indicators_config, results),
                         envelope_metadata={
                             "timeframe": "5m",
                             "market_type": symbol_market_type.get(symbol, "spot"),

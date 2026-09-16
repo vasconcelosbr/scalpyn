@@ -148,6 +148,7 @@ def envelop_results(
     default_confidence: float = 0.80,
     key_source_map: Optional[Dict[str, tuple]] = None,
     envelope_metadata: Optional[Dict[str, Any]] = None,
+    key_metadata: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Wrap a flat indicator dict into the IndicatorEnvelope dict format.
 
@@ -186,7 +187,10 @@ def envelop_results(
             out[k] = {"value": None, "source": "unknown", "confidence": 0.0, "status": "NO_DATA", **metadata}
         else:
             out[k] = {"value": v, "source": src, "confidence": conf, "status": "VALID", **metadata}
-    if metadata:
+    for key, identity in (key_metadata or {}).items():
+        if key in out:
+            out[key].update(identity)
+    if metadata or key_metadata:
         from ..services.profile_runtime_config import canonical_hash
 
         for envelope in out.values():
@@ -406,7 +410,10 @@ def merge_indicator_rows(
                 ),
                 "confidence": confidence,
                 "indicator_status": status,
-                "timeframe": str(timeframe) if timeframe is not None else None,
+                "timeframe": (
+                    raw.get("timeframe") if isinstance(raw, dict) and "timeframe" in raw
+                    else str(timeframe) if timeframe is not None else None
+                ),
                 "window_seconds": (
                     raw.get("window_seconds") if isinstance(raw, dict) else None
                 ),

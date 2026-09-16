@@ -35,7 +35,10 @@ async def l3_readiness(db, user_id, *, cutoff=None, config=None, lookback_days=N
               "blocked_reasons": [], "funnel": meta, "split": None,
               "training_started": False, "execution_authority": False}
     result["automatic_training_enabled"] = bool((pi_config or {}).get("enable_catboost", False))
+    from .l3_capture_diagnostics import l3_capture_diagnostics
     if not records:
+        result['capture_diagnostics'] = await l3_capture_diagnostics(
+            db, user_id, cutoff=cutoff, config=config, eligible_ids=set())
         result["blocked_reasons"] = ["insufficient_contract_valid_rows"]
         return result
     built = service._build_l3_dataset(records, FEATURE_COLUMNS, config["ml_win_fast_threshold_seconds"],
@@ -44,6 +47,8 @@ async def l3_readiness(db, user_id, *, cutoff=None, config=None, lookback_days=N
         backfill_marker_key=config.get("ml_backfill_marker_key"), label_objective=config["ml_label_objective"],
         fee_roundtrip_pct=float(config["ml_fee_roundtrip_pct"]))
     result["labelable_rows"] = len(built[1])
+    result['capture_diagnostics'] = await l3_capture_diagnostics(
+        db, user_id, cutoff=cutoff, config=config, eligible_ids={str(i) for i in built[6]})
     if len(built[1]) < minimum:
         result["blocked_reasons"] = ["insufficient_labelable_rows"]
         return result

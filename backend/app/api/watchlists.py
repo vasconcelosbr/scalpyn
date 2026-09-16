@@ -2395,68 +2395,26 @@ async def _resolve_and_persist(
     if effective_level == "L3" and newly_approved_l3:
         try:
             from ..models.backoffice import DecisionLog as _DecisionLog
-            _timeframe = (profile_config_full or {}).get("default_timeframe", "5m")
-            _assets_by_sym = {a["symbol"]: a for a in assets_out}
+            from ..services.l3_on_demand_decisions import evaluate_on_demand_l3
+            _evaluated = await evaluate_on_demand_l3(
+                db, user_id=user_id, watchlist=wl,
+                symbols=[item[0] for item in newly_approved_l3],
+                score_config=merged_score_config,
+            )
+            _events = {item[0]: item[1] for item in newly_approved_l3}
             _dl_rows = []
-            for _sym, _evt, _score in newly_approved_l3:
-                _ad = _assets_by_sym.get(_sym, {})
-                _direction = _ad.get("futures_direction") or (
-                    "NEUTRAL" if (wl.market_mode or "spot") == "futures" else "SPOT"
-                )
-                # Build reasons from score_rules_map (same format as pipeline_scan)
-                _rules = score_rules_map.get(_sym) or []
-                _reasons: dict = {}
-                for _r in _rules:
-                    _rname = str(_r.get("id") or _r.get("label") or "rule")
-                    _rstatus = "OK" if _r.get("passed") else "FAIL"
-                    _reasons[_rname] = _rstatus
-                if not _reasons:
-                    _reasons["pipeline"] = "OK"
-                # Build metrics from ind_map + latest robust alpha_scores.
-                # This on-demand producer must obey the same ML feature
-                # contract as pipeline_scan; otherwise /api/watchlists refreshes
-                # create L3 approved shadows without the component fields the
-                # L3 trainer needs.
-                _flat_ind = ind_map.get(_sym) or {}
-                _component_fields = precomp_component_map.get(_sym) or {}
-                _metrics = _build_on_demand_l3_decision_metrics(
-                    watchlist_id=wl.id,
-                    watchlist_name=wl.name,
-                    score=_score,
-                    flat_indicators=_flat_ind,
-                    component_fields=_component_fields,
-                    asset_data=_ad,
-                )
-                if not _l3_decision_snapshot_complete(_metrics):
-                    logger.warning(
-                        "[Pipeline] _resolve_and_persist: skipping L3 decisions_log "
-                        "for %s wl=%s event=%s reason=incomplete_l3_metric_snapshot "
-                        "snapshot_keys=%s",
-                        _sym,
-                        wl.id,
-                        _evt,
-                        sorted((_metrics.get("indicators_snapshot") or {}).keys()),
-                    )
-                    continue
+            for _record in _evaluated:
+                _metrics = _record.get("metrics") or {}
+                if not _metrics.get("l3_authorization_contract_v3") or not _metrics.get("l3_gate_v2"):
+                    raise ValueError("L3_ON_DEMAND_EVALUATION_ENVELOPE_MISSING")
                 _dl_rows.append(_DecisionLog(
-                    symbol=_sym,
-                    strategy="L3",
-                    timeframe=_timeframe,
-                    score=_score,
-                    decision="ALLOW",
-                    l1_pass=True,
-                    l2_pass=True,
-                    l3_pass=True,
-                    reasons=_reasons or None,
-                    metrics=_metrics,
-                    latency_ms=None,
-                    direction=_direction,
-                    event_type=_evt,
-                    user_id=user_id,
-                    profile_id=wl.profile_id,
-                    profile_name=profile_name,
+                    **{key: _record.get(key) for key in (
+                        "symbol", "strategy", "timeframe", "score", "decision",
+                        "l1_pass", "l2_pass", "l3_pass", "reasons", "metrics",
+                        "latency_ms", "direction", "created_at")},
+                    event_type=_events[_record["symbol"]], user_id=user_id,
+                    profile_id=wl.profile_id, profile_name=profile_name,
                     profile_version=profile_version,
-                    created_at=now,
                 ))
             db.add_all(_dl_rows)
             logger.info(
