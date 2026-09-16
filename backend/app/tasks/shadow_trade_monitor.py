@@ -2087,8 +2087,17 @@ async def _fast_barrier_scan_async(run_id: str) -> Dict[str, Any]:
                 for shadow in shadows:
                     try:
                         prev_status = shadow.status
-                        transition = await _advance_shadow(
-                            db, shadow, closure_path_hint="fast_scan"
+                        # Bloco C3/C4 parity with the regular batch: reuse
+                        # the same savepoint-isolated helper so a DB error
+                        # inside _advance_shadow (e.g. a live-close price
+                        # query) can't leave the whole fast-scan transaction
+                        # aborted for every shadow after this one — confirmed
+                        # in production 2026-09-16 (InFailedSQLTransactionError
+                        # cascading through an entire fast-scan tick because
+                        # this loop, unlike the regular batch, called
+                        # _advance_shadow directly with no savepoint).
+                        transition, _enrich_target = await _advance_shadow_in_savepoint(
+                            db, shadow, None, closure_path_hint="fast_scan"
                         )
                         if transition == "completed":
                             outcome = shadow.outcome or "UNKNOWN"
@@ -2390,6 +2399,8 @@ async def _advance_shadow_in_savepoint(
     db,
     shadow: ShadowTrade,
     force_close_policy: Optional[Dict[str, Any]],
+    *,
+    closure_path_hint: str = "regular_batch",
 ) -> tuple[str, Optional[Dict[str, Any]]]:
     """Advance and flush one Shadow inside its own database savepoint.
 
@@ -2398,7 +2409,9 @@ async def _advance_shadow_in_savepoint(
     otherwise they would abort the parent batch during its final commit.
     """
     async with db.begin_nested():
-        transition = await _advance_shadow(db, shadow, force_close_policy)
+        transition = await _advance_shadow(
+            db, shadow, force_close_policy, closure_path_hint=closure_path_hint
+        )
         await db.flush()
         enrich_target = _snapshot_shadow_enrichment_target(shadow)
     return transition, enrich_target
