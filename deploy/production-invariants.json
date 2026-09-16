@@ -1648,6 +1648,7 @@
       "id": "l3-producer-identity-and-canonical-on-demand",
       "description": "Producer calculation identity, immutable book clocks and canonical on-demand authorization preserve strategy and expose capture exclusions.",
       "files": [
+        {"path": "backend/tests/test_l3_authorization_contract_v3.py", "contains_all": ["test_inline_block_threshold_matches_canonical_block_engine"]},
         {"path": "backend/app/tasks/collect_research_ohlcv.py", "contains_all": ["CANONICAL-5m-COMPUTE", "result.get(\"canonical_read_enabled\") is True"]},
         {"path": "backend/tests/test_research_ohlcv_pipeline.py", "contains_all": ["test_canonical_5m_refreshes_indicators_only_after_committed_rows"]},
         {"path": "backend/tests/test_l3_capture_preparation.py", "contains_all": ["test_scheduled_scanner_preserves_configured_resolver_source_policies"]},
