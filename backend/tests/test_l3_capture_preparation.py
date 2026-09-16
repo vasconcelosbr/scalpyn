@@ -208,5 +208,11 @@ def test_ema_alignment_keeps_dependencies_and_rejects_mixed_candles():
     assert result['actual'] is True and result['period'] is None
     assert len(result['dependencies']) == 3
     assert result['available_at'] == inputs[-1]['available_at']
+    native = {k: v for k, v in result.items() if k != 'dependencies'}
+    assert not any(c['indicator'] == 'ema_full_alignment'
+                   for c in _derived_candle_candidates(inputs + [native]))
+    conflict = {**native, 'actual': False}
+    assert any(c['indicator'] == 'ema_full_alignment'
+               for c in _derived_candle_candidates(inputs + [conflict]))
     inputs[-1]['source_timestamp'] = '2026-09-16T11:55:00Z'
     assert not any(c['indicator'] == 'ema_full_alignment' for c in _derived_candle_candidates(inputs))

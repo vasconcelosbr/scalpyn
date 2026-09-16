@@ -486,7 +486,14 @@ def _derived_candle_candidates(registry: list[dict]) -> list[dict]:
                        fallback_used=bool(left.get('fallback_used') or right.get('fallback_used')),
                        dependencies=[canonical_hash(left), canonical_hash(right)])
         results.append(derived)
-    return results
+    # Some producers already emit the hybrid. Do not manufacture a second
+    # candidate for the exact same observation; conflicting values/clocks
+    # must remain separate and fail the existing ambiguity checks.
+    def observation(c):
+        return {**_feature_identity(c), **{k: c.get(k) for k in (
+            'provider_policy_id', 'source_timestamp', 'computed_at', 'available_at',
+            'actual', 'stale', 'fallback_used', 'partial_window', 'candle_closed')}}
+    return [c for c in results if not any(observation(c) == observation(r) for r in registry)]
 
 
 def build_feature_registry(asset: dict, *, evaluated_at: datetime) -> list[dict]:
