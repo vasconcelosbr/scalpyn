@@ -817,6 +817,15 @@ async def readiness_latest(
     return latest
 
 
+@router.get("/l3/capture-preflight")
+async def l3_capture_preflight(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    from ..services.l3_capture_preflight import capture_preflight
+    return await capture_preflight(db, user_id)
+
+
 @router.get("/catboost/readiness")
 async def catboost_readiness(
     source: str = "L3",

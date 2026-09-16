@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from copy import deepcopy
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -405,6 +406,49 @@ def _live_candidates(
     return results
 
 
+def _derived_candle_candidates(registry: list[dict]) -> list[dict]:
+    """Carry existing derived formulas' actual inputs into the v3 registry.
+
+    Never infer an input from the requested profile or combine different
+    candle observations. Missing/ambiguous dependencies remain unavailable.
+    """
+    from .price_position import BREAKOUT_REFERENCE_INDICATORS
+    results = []
+    for window, indicator in BREAKOUT_REFERENCE_INDICATORS.items():
+        for candidate in registry:
+            if candidate.get('source') != 'ohlcv' or candidate.get('indicator') != indicator:
+                continue
+            derived = deepcopy(candidate)
+            derived.update(indicator='breakout_distance_pct', reference_window=window,
+                           dependencies=[canonical_hash(candidate)])
+            results.append(derived)
+    plus = [c for c in registry if c.get('indicator') == 'di_plus' and c.get('source') == 'ohlcv']
+    minus = [c for c in registry if c.get('indicator') == 'di_minus' and c.get('source') == 'ohlcv']
+    def dependency_identity(c):
+        return {**_feature_identity(c), 'indicator': 'di',
+                **{k: c.get(k) for k in ('provider_policy_id', 'source_timestamp', 'computed_at', 'available_at')}}
+    for left in plus:
+        if left.get('period') is None or any(not left.get(k) for k in ('source_timestamp','computed_at','available_at')):
+            continue
+        matched = [r for r in minus if dependency_identity(left) == dependency_identity(r)]
+        if len(matched) != 1:
+            continue
+        right = matched[0]
+        try:
+            a, b = float(left['actual']), float(right['actual'])
+            if not math.isfinite(a) or not math.isfinite(b):
+                continue
+        except (TypeError, ValueError, KeyError):
+            continue
+        derived = deepcopy(left)
+        derived.update(indicator='di_trend', actual=a > b,
+                       stale=bool(left.get('stale') or right.get('stale')),
+                       fallback_used=bool(left.get('fallback_used') or right.get('fallback_used')),
+                       dependencies=[canonical_hash(left), canonical_hash(right)])
+        results.append(derived)
+    return results
+
+
 def build_feature_registry(asset: dict, *, evaluated_at: datetime) -> list[dict]:
     """Return immutable candidates without consulting the legacy flat map."""
     registry: list[dict] = []
@@ -421,6 +465,7 @@ def build_feature_registry(asset: dict, *, evaluated_at: datetime) -> list[dict]
         registry.append(_registry_candidate(
             raw, market_scope=market_scope, evaluated_at=evaluated_at
         ))
+    registry.extend(_derived_candle_candidates(registry))
     registry.extend(_live_candidates(
         asset.get("_l3_live_order_flow_snapshot"),
         source="live_trade_flow",

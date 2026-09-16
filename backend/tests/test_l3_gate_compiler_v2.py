@@ -459,6 +459,7 @@ async def test_pipeline_operational_promotion_blocks_lit_incident(monkeypatch):
         "gate_v2_decision": "BLOCK",
         "final_decision": "BLOCK",
         "operational_effect": True,
+        "signals_shadowed_by_entry_triggers": True,
     }
 
 

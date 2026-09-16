@@ -2,7 +2,7 @@
 from copy import deepcopy
 
 
-async def evaluate_on_demand_l3(db, *, user_id, watchlist, symbols, score_config):
+async def evaluate_on_demand_l3(db, *, user_id, watchlist, symbols, score_config, read_only=False):
     from .config_service import config_service
     from .profile_execution_contract import load_profile_execution_snapshots
     from .profile_runtime_config import merge_profile_runtime_block_config
@@ -34,4 +34,4 @@ async def evaluate_on_demand_l3(db, *, user_id, watchlist, symbols, score_config
         watchlist_id=watchlist.id, profile_id=watchlist.profile_id,
         profile_name=snapshot['name'], profile_version=snapshot['version'],
         watchlist_name=watchlist.name, watchlist_level=watchlist.level,
-        source_watchlist_id=watchlist.source_watchlist_id)
+        source_watchlist_id=watchlist.source_watchlist_id, read_only=read_only)
