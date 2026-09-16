@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import useSWR from "swr";
 import { apiGet } from "@/lib/api";
 import { buildModelDatasetAudit, type AuditWindow } from "@/lib/mlModelAudit";
 import { formatDateTime } from "@/lib/datetime";
-import { Brain, CheckCircle, Archive, ChevronDown, ChevronRight, ShieldCheck } from "lucide-react";
+import { Brain, CheckCircle, Archive, ChevronDown, ChevronRight, ShieldCheck, Target, Hourglass, RefreshCw } from "lucide-react";
 import { ModuleAIAnalysisAction } from "@/components/ai/ModuleAIAnalysisAction";
 
 interface MetricsBlock {
@@ -82,17 +83,17 @@ interface MlModel {
 }
 
 function fmt(v: number | null, digits = 4): string {
-  if (v == null) return "—";
+  if (v == null) return "â€”";
   return v.toFixed(digits);
 }
 
 function fmtPct(v: number | null): string {
-  if (v == null) return "—";
+  if (v == null) return "â€”";
   return `${(v * 100).toFixed(1)}%`;
 }
 
 function fmtDateTime(s: string | null): string {
-  if (!s) return "—";
+  if (!s) return "â€”";
   return formatDateTime(s, {
     day: "2-digit", month: "short", year: "numeric",
     hour: "2-digit", minute: "2-digit",
@@ -100,9 +101,9 @@ function fmtDateTime(s: string | null): string {
 }
 
 function fmtAuditWindow(window: AuditWindow): string {
-  if (!window.from) return "Não registrado";
-  if (!window.to) return `${fmtDateTime(window.from)} → fim não registrado`;
-  return `${fmtDateTime(window.from)} → ${fmtDateTime(window.to)}`;
+  if (!window.from) return "NÃ£o registrado";
+  if (!window.to) return `${fmtDateTime(window.from)} â†’ fim nÃ£o registrado`;
+  return `${fmtDateTime(window.from)} â†’ ${fmtDateTime(window.to)}`;
 }
 
 function windowEvidence(window: AuditWindow): string | null {
@@ -124,7 +125,7 @@ function MetricBadge({ label, value, good }: { label: string; value: string; goo
 }
 
 function HyperparamValue({ v }: { v: unknown }) {
-  if (v == null) return <span className="text-[#4B5563]">—</span>;
+  if (v == null) return <span className="text-[#4B5563]">â€”</span>;
   if (typeof v === "number") {
     return <span>{Number.isInteger(v) ? v : v.toFixed(4)}</span>;
   }
@@ -149,14 +150,14 @@ function HyperparamValue({ v }: { v: unknown }) {
   if (typeof v === "object") {
     const keys = Object.keys(v as object);
     if (keys.length === 0) return <span className="text-[#4B5563]">{"{}"}</span>;
-    // Small objects (≤4 keys, all primitive): inline
+    // Small objects (â‰¤4 keys, all primitive): inline
     const allPrimitive = keys.every((k) => typeof (v as Record<string, unknown>)[k] !== "object");
     if (keys.length <= 4 && allPrimitive) {
       return <span>{keys.map((k) => `${k}:${(v as Record<string, unknown>)[k]}`).join(" ")}</span>;
     }
     return (
       <details className="inline">
-        <summary className="cursor-pointer text-[#60A5FA] hover:underline">{"{"}…{keys.length} keys{"}"}</summary>
+        <summary className="cursor-pointer text-[#60A5FA] hover:underline">{"{"}â€¦{keys.length} keys{"}"}</summary>
         <pre className="mt-1 text-[10px] text-[#94A3B8] whitespace-pre-wrap break-all max-h-48 overflow-auto bg-[#060810] p-2 rounded">
           {JSON.stringify(v, null, 2)}
         </pre>
@@ -167,7 +168,7 @@ function HyperparamValue({ v }: { v: unknown }) {
 }
 
 function HyperparamTable({ params }: { params: Record<string, unknown> | null }) {
-  if (!params) return <span className="text-[#4B5563]">—</span>;
+  if (!params) return <span className="text-[#4B5563]">â€”</span>;
   const entries = Object.entries(params).filter(
     ([k]) => !["objective", "eval_metric", "tree_method", "device", "random_state", "missing"].includes(k)
   );
@@ -191,15 +192,19 @@ export default function MlModelsPage() {
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [lane, setLane] = useState("L3_PROFILE");
-  const [readiness, setReadiness] = useState<{ total_rows: number; labelable_rows: number; min_required: number; ready: boolean; blocked_reasons: string[]; dataset_query_cutoff: string; label_version: string; automatic_training_enabled: boolean } | null>(null);
-  const [readinessError, setReadinessError] = useState<string | null>(null);
+  const { data: readiness, error: readinessError, isValidating: refreshingReadiness } = useSWR<{
+    total_rows: number; labelable_rows: number; min_required: number; ready: boolean;
+    blocked_reasons: string[]; dataset_query_cutoff: string; label_version: string; automatic_training_enabled: boolean;
+  }>(lane === "L3_PROFILE" ? "/api/ml/catboost/readiness?source=L3" : null, apiGet, {
+    refreshInterval: 15_000,
+    revalidateOnFocus: true,
+    revalidateOnReconnect: true,
+    refreshWhenHidden: false,
+  });
+  const validCaptures = readiness?.labelable_rows;
+  const missingCaptures = readiness ? Math.max(0, readiness.min_required - readiness.labelable_rows) : undefined;
+  const formatCaptures = (value: number | undefined) => value == null ? "â€”" : value.toLocaleString("pt-BR");
   const visibleModels = models.filter(m => lane === "ALL" || m.model_lane === lane);
-
-  useEffect(() => {
-    apiGet("/api/ml/catboost/readiness?source=L3")
-      .then(setReadiness)
-      .catch(() => setReadinessError("Não foi possível verificar o dataset L3 agora."));
-  }, []);
 
 
   useEffect(() => {
@@ -235,7 +240,7 @@ export default function MlModelsPage() {
       <div className="flex flex-wrap items-center gap-3 mb-2">
         <Brain size={20} className="text-[#60A5FA]" />
         <h1 className="text-[17px] font-semibold text-[#E2E8F0] tracking-wide">ML Models</h1>
-        <span className="text-[11px] text-[#4B5563] ml-1">{visibleModels.length} {visibleModels.length === 1 ? "versão" : "versões"}</span>
+        <span className="text-[11px] text-[#4B5563] ml-1">{visibleModels.length} {visibleModels.length === 1 ? "versÃ£o" : "versÃµes"}</span>
         <select aria-label="Lane do modelo" value={lane} onChange={e => setLane(e.target.value)} className="rounded border border-[#1A2035] bg-[#060810] px-2 py-1 text-xs text-[#94A3B8]">
           <option value="L3_PROFILE">L3_PROFILE</option>
           <option value="ALL">Todas as lanes</option>
@@ -252,17 +257,41 @@ export default function MlModelsPage() {
       </div>
 
       {lane === "L3_PROFILE" && (
+        <section aria-label="Capturas para treinamento L3_PROFILE" className="space-y-3">
+          <dl className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {[
+              { label: "Meta de capturas", value: readiness?.min_required, description: "MÃ­nimo para formar um candidato", Icon: Target, color: "#60A5FA" },
+              { label: "Capturas vÃ¡lidas", value: validCaptures, description: "ElegÃ­veis para treino, com resultado definido", Icon: ShieldCheck, color: "#34D399" },
+              { label: "Faltam para a meta", value: missingCaptures, description: "Capturas vÃ¡lidas ainda necessÃ¡rias", Icon: Hourglass, color: "#FBBF24" },
+            ].map(({ label, value, description, Icon, color }) => (
+              <div key={label} className="rounded-xl border border-[#1A2035] bg-[#0B0F1C] p-4 sm:p-5">
+                <dt className="flex items-center justify-between gap-2 text-xs font-medium text-[#94A3B8]">
+                  {label}<Icon size={17} style={{ color }} aria-hidden="true" />
+                </dt>
+                <dd className="mt-3 font-mono text-3xl font-semibold tracking-tight tabular-nums" style={{ color }}>
+                  {formatCaptures(value)}
+                </dd>
+                <p className="mt-2 text-[11px] leading-relaxed text-[#64748B]">{description}</p>
+              </div>
+            ))}
+          </dl>
+          <div role="status" className="flex flex-wrap items-center gap-2 text-[11px] text-[#94A3B8]">
+            <RefreshCw size={12} className={refreshingReadiness ? "animate-spin" : ""} aria-hidden="true" />
+            <span>{readinessError ? "AtualizaÃ§Ã£o indisponÃ­vel â€” exibindo a Ãºltima consulta recebida." : "AtualizaÃ§Ã£o automÃ¡tica a cada 15 segundos"}</span>
+            {readiness && <span>Â· Ãšltima consulta: {new Date(readiness.dataset_query_cutoff).toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo" })} (BrasÃ­lia)</span>}
+          </div>
         <div className="rounded-lg border border-[#1A2035] bg-[#060810] p-4 text-xs text-[#94A3B8]">
-          <div className="font-semibold text-[#E2E8F0]">Dataset L3_PROFILE · {readiness ? (readiness.ready ? "Pronto para avaliação de candidato" : "Treinamento bloqueado") : "Verificando"}</div>
+          <div className="font-semibold text-[#E2E8F0]">Dataset L3_PROFILE Â· {readiness ? (readiness.ready ? "Pronto para avaliaÃ§Ã£o de candidato" : "Treinamento bloqueado") : "Verificando"}</div>
           {readiness && <>
-            <p className="mt-2">{readiness.total_rows} registros compatíveis · {readiness.labelable_rows} com label · mínimo para candidato: {readiness.min_required}</p>
-            <p className="mt-1">Label: {readiness.label_version} · consulta: {fmtDateTime(readiness.dataset_query_cutoff)}</p>
-            <p className="mt-1">{readiness.blocked_reasons.join(" · ") || "A aprovação depende das métricas do novo candidato."}</p>
-            <p className="mt-1">Readiness não aprova nem ativa um modelo.</p>
-            <p className="mt-1">Treino automático CatBoost L3: {readiness.automatic_training_enabled ? "habilitado" : "desabilitado"}.</p>
+            <p className="mt-2">{readiness.total_rows} registros compatÃ­veis Â· {readiness.labelable_rows} com label Â· mÃ­nimo para candidato: {readiness.min_required}</p>
+            <p className="mt-1">Label: {readiness.label_version} Â· consulta: {fmtDateTime(readiness.dataset_query_cutoff)}</p>
+            <p className="mt-1">{readiness.blocked_reasons.join(" Â· ") || "A aprovaÃ§Ã£o depende das mÃ©tricas do novo candidato."}</p>
+            <p className="mt-1">Readiness nÃ£o aprova nem ativa um modelo.</p>
+            <p className="mt-1">Treino automÃ¡tico CatBoost L3: {readiness.automatic_training_enabled ? "habilitado" : "desabilitado"}.</p>
           </>}
-          {readinessError && <p className="mt-2 text-[#F87171]">{readinessError}</p>}
+          {readinessError && <p className="mt-2 text-[#F87171]">NÃ£o foi possÃ­vel verificar o dataset L3 agora. A consulta serÃ¡ repetida automaticamente.</p>}
         </div>
+        </section>
       )}
       {visibleModels.length === 0 && (
         <div className="text-[#4B5563] text-sm py-8 text-center border border-dashed border-[#1A2035] rounded-lg">
@@ -314,7 +343,7 @@ export default function MlModelsPage() {
                   </span>
                 ) : isDescriptiveValidated ? (
                   <span className="flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-[#F59E0B]/10 text-[#FBBF24] border border-[#F59E0B]/20">
-                    RELATÓRIO DESCRITIVO
+                    RELATÃ“RIO DESCRITIVO
                   </span>
                 ) : isActive ? (
                   <span className="flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-[#34D399]/10 text-[#34D399] border border-[#34D399]/20">
@@ -353,7 +382,7 @@ export default function MlModelsPage() {
                 {(m.label_version || m.metrics_json?.label_version) && (
                   <div className="flex items-center gap-3 flex-wrap">
                     <span className="text-[10px] px-2 py-0.5 rounded bg-[#1A2035] border border-[#334155] font-mono text-[#94A3B8]">
-                      label: {m.label_version ?? m.metrics_json?.label_version ?? "—"}
+                      label: {m.label_version ?? m.metrics_json?.label_version ?? "â€”"}
                     </span>
                     {m.model_lane && (
                       <span className="text-[10px] px-2 py-0.5 rounded bg-[#0C1020] border border-[#334155] font-mono text-[#60A5FA]">
@@ -362,7 +391,7 @@ export default function MlModelsPage() {
                     )}
                     {(m.target_window_seconds ?? m.metrics_json?.target_window_seconds) != null && (
                       <span className="text-[10px] px-2 py-0.5 rounded bg-[#1A2035] border border-[#334155] font-mono text-[#94A3B8]">
-                        {(m.label_version ?? m.metrics_json?.label_version)?.startsWith("positive_net_return") ? "alvo: retorno líquido positivo no fechamento" : `janela TP: ${Math.round(((m.target_window_seconds ?? m.metrics_json?.target_window_seconds) as number) / 60)} min`}
+                        {(m.label_version ?? m.metrics_json?.label_version)?.startsWith("positive_net_return") ? "alvo: retorno lÃ­quido positivo no fechamento" : `janela TP: ${Math.round(((m.target_window_seconds ?? m.metrics_json?.target_window_seconds) as number) / 60)} min`}
                       </span>
                     )}
                   </div>
@@ -374,17 +403,17 @@ export default function MlModelsPage() {
                       <div className={`flex items-center gap-2 ${isPredictiveApproved ? "text-[#34D399]" : "text-[#F87171]"}`}>
                         <ShieldCheck size={15} />
                         <span className="text-[11px] font-semibold uppercase tracking-widest">
-                          {isPredictiveApproved ? "Modelo preditivo aprovado para inteligência" : "Modelo preditivo reprovado"}
+                          {isPredictiveApproved ? "Modelo preditivo aprovado para inteligÃªncia" : "Modelo preditivo reprovado"}
                         </span>
                       </div>
                       <span className="text-[10px] font-mono text-[#94A3B8]">
-                        execução: bloqueada
+                        execuÃ§Ã£o: bloqueada
                       </span>
                     </div>
                     <p className="mt-2 text-[11px] leading-relaxed text-[#64748B]">
                       {isPredictiveApproved
-                        ? "Pode publicar evidência estruturada; execução e auto-pilot continuam bloqueados."
-                        : "Relatório histórico/descritivo somente. Não gera regras, não calibra Profiles e não participa do auto-pilot."}
+                        ? "Pode publicar evidÃªncia estruturada; execuÃ§Ã£o e auto-pilot continuam bloqueados."
+                        : "RelatÃ³rio histÃ³rico/descritivo somente. NÃ£o gera regras, nÃ£o calibra Profiles e nÃ£o participa do auto-pilot."}
                     </p>
                   </div>
                 )}
@@ -392,7 +421,7 @@ export default function MlModelsPage() {
                 {isDescriptiveValidated && actionableFindings.length > 0 && (
                   <div>
                     <div className="text-[10px] uppercase tracking-widest text-[#334155] mb-3">
-                      Inteligência de indicadores — validação e hold-out concordantes
+                      InteligÃªncia de indicadores â€” validaÃ§Ã£o e hold-out concordantes
                     </div>
                     <div className="grid gap-2 sm:grid-cols-2">
                       {actionableFindings.map((finding, index) => (
@@ -405,10 +434,10 @@ export default function MlModelsPage() {
                               {finding.indicator}
                             </div>
                             <div className="mt-0.5 text-[10px] text-[#475569]">
-                              lift test {finding.test.lift >= 0 ? "+" : ""}{fmtPct(finding.test.lift)} · N efetivo {finding.test.effective_cases.toFixed(0)}
+                              lift test {finding.test.lift >= 0 ? "+" : ""}{fmtPct(finding.test.lift)} Â· N efetivo {finding.test.effective_cases.toFixed(0)}
                             </div>
                             <div className="mt-0.5 text-[10px] font-mono text-[#64748B]">
-                              intervalo: ({finding.bucket.lower_exclusive ?? "−∞"}, {finding.bucket.upper_inclusive ?? "+∞"}]
+                              intervalo: ({finding.bucket.lower_exclusive ?? "âˆ’âˆž"}, {finding.bucket.upper_inclusive ?? "+âˆž"}]
                             </div>
                           </div>
                           <span className={`shrink-0 rounded px-2 py-1 text-[9px] font-semibold tracking-wide ${
@@ -426,15 +455,15 @@ export default function MlModelsPage() {
 
                 {m.model_lane === "L3_PROFILE" && (
                   <div className="rounded border border-[#1A2035] p-3 text-xs text-[#94A3B8]">
-                    <p>Aprovação: {m.metrics_json?.promotion_gate?.status ?? "Não registrada"} · execução: {m.execution_authority ? "autorizada" : "não autorizada"}</p>
-                    <p className="mt-1">Criado: {fmtDateTime(m.created_at ?? null)} · ativado: {fmtDateTime(m.activated_at)}</p>
+                    <p>AprovaÃ§Ã£o: {m.metrics_json?.promotion_gate?.status ?? "NÃ£o registrada"} Â· execuÃ§Ã£o: {m.execution_authority ? "autorizada" : "nÃ£o autorizada"}</p>
+                    <p className="mt-1">Criado: {fmtDateTime(m.created_at ?? null)} Â· ativado: {fmtDateTime(m.activated_at)}</p>
                     {(m.metrics_json?.promotion_gate?.reasons ?? []).map(reason => <p key={reason} className="mt-1 text-[#F87171]">{reason}</p>)}
                   </div>
                 )}
                 {/* Validation metrics (precision_score/recall_score columns carry val metrics for challenger models) */}
                 <div>
                   <div className="text-[10px] uppercase tracking-widest text-[#334155] mb-3">
-                    {m.metrics_json?.validation ? "Métricas — validação (val set)" : "Métricas"}
+                    {m.metrics_json?.validation ? "MÃ©tricas â€” validaÃ§Ã£o (val set)" : "MÃ©tricas"}
                   </div>
                   <div className="grid grid-cols-3 gap-3 sm:grid-cols-6">
                     {[
@@ -442,7 +471,7 @@ export default function MlModelsPage() {
                       { label: "Recall",    value: fmtPct(m.metrics_json?.validation?.recall ?? m.recall_score),       good: (m.metrics_json?.validation?.recall ?? m.recall_score ?? 0) >= 0.4 },
                       { label: "F1",        value: fmt(m.metrics_json?.validation?.f1 ?? m.f1_score, 4),               good: (m.metrics_json?.validation?.f1 ?? m.f1_score ?? 0) >= 0.5 },
                       { label: "ROC AUC",   value: fmt(m.metrics_json?.validation?.roc_auc ?? m.roc_auc, 4),           good: (m.metrics_json?.validation?.roc_auc ?? m.roc_auc ?? 0) >= 0.6 },
-                      { label: "Amostras", value: String(m.metrics_json?.validation?.samples ?? m.val_samples ?? "—"), good: true },
+                      { label: "Amostras", value: String(m.metrics_json?.validation?.samples ?? m.val_samples ?? "â€”"), good: true },
                       { label: "FPR",       value: fmtPct(m.metrics_json?.validation?.fpr ?? m.false_positive_rate),  good: (m.metrics_json?.validation?.fpr ?? m.false_positive_rate ?? 1) <= 0.4 },
                     ].map((item) => (
                       <div key={item.label} className="bg-[#0C1020] rounded-md p-3 flex flex-col items-center gap-1">
@@ -455,10 +484,10 @@ export default function MlModelsPage() {
                   </div>
                 </div>
 
-                {/* Test set metrics — only available post-migration-104 */}
+                {/* Test set metrics â€” only available post-migration-104 */}
                 {m.metrics_json?.test && (
                   <div>
-                    <div className="text-[10px] uppercase tracking-widest text-[#334155] mb-3">Métricas — test set (hold-out)</div>
+                    <div className="text-[10px] uppercase tracking-widest text-[#334155] mb-3">MÃ©tricas â€” test set (hold-out)</div>
                     <div className="grid grid-cols-3 gap-3 sm:grid-cols-5">
                       {[
                         { label: "Precision", value: fmtPct(m.metrics_json.test.precision), good: (m.metrics_json.test.precision ?? 0) >= 0.5 },
@@ -486,9 +515,9 @@ export default function MlModelsPage() {
                   <div className="text-[10px] uppercase tracking-widest text-[#334155] mb-3">Auditoria temporal do dataset</div>
                   <div className="grid gap-x-8 gap-y-2 text-[11px] sm:grid-cols-2">
                     {[
-                      { label: "Período total elegível", window: datasetAudit.datasetWindow },
+                      { label: "PerÃ­odo total elegÃ­vel", window: datasetAudit.datasetWindow },
                       { label: "Janela de treino", window: datasetAudit.trainWindow },
-                      { label: "Janela de validação", window: datasetAudit.validationWindow },
+                      { label: "Janela de validaÃ§Ã£o", window: datasetAudit.validationWindow },
                       { label: "Janela de teste", window: datasetAudit.testWindow },
                     ].map(({ label, window }) => (
                       <div key={label} className="flex min-w-0 items-start justify-between gap-3 border-b border-[#111827] py-1.5">
@@ -515,7 +544,7 @@ export default function MlModelsPage() {
                 {/* Dataset reconciliation */}
                 <div>
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                    <div className="text-[10px] uppercase tracking-widest text-[#334155]">Reconciliação das amostras</div>
+                    <div className="text-[10px] uppercase tracking-widest text-[#334155]">ReconciliaÃ§Ã£o das amostras</div>
                     <div className={`text-[10px] font-mono ${
                       datasetAudit.reconciles === true
                         ? "text-[#34D399]"
@@ -526,14 +555,14 @@ export default function MlModelsPage() {
                       {datasetAudit.reconciles === true
                         ? "FECHA COM A BASE DO SPLIT"
                         : datasetAudit.reconciles === false
-                          ? "DIVERGÊNCIA DE CONTAGEM"
-                          : "RECONCILIAÇÃO INCOMPLETA"}
+                          ? "DIVERGÃŠNCIA DE CONTAGEM"
+                          : "RECONCILIAÃ‡ÃƒO INCOMPLETA"}
                     </div>
                   </div>
                   <div className="mb-2 flex flex-wrap gap-x-6 gap-y-1 text-[10px] font-mono text-[#64748B]">
-                    <span>contrato econômico: <strong className="text-[#94A3B8]">{datasetAudit.includedTradeCount ?? "—"}</strong></span>
-                    <span>rejeitado por features: <strong className="text-[#94A3B8]">{datasetAudit.featureRejectedCount ?? "—"}</strong></span>
-                    <span>base do split: <strong className="text-[#94A3B8]">{datasetAudit.datasetRows ?? "—"}</strong></span>
+                    <span>contrato econÃ´mico: <strong className="text-[#94A3B8]">{datasetAudit.includedTradeCount ?? "â€”"}</strong></span>
+                    <span>rejeitado por features: <strong className="text-[#94A3B8]">{datasetAudit.featureRejectedCount ?? "â€”"}</strong></span>
+                    <span>base do split: <strong className="text-[#94A3B8]">{datasetAudit.datasetRows ?? "â€”"}</strong></span>
                   </div>
                   <div className="overflow-x-auto border-y border-[#1A2035]">
                     <table className="w-full min-w-[620px] table-fixed text-left">
@@ -548,9 +577,9 @@ export default function MlModelsPage() {
                       <tbody>
                         <tr className="border-t border-[#111827] font-mono text-[12px] text-[#CBD5E1]">
                           {datasetAudit.reconciliationRows.map((row) => (
-                            <td key={row.key} className="px-2 py-2.5">{row.count ?? "—"}</td>
+                            <td key={row.key} className="px-2 py-2.5">{row.count ?? "â€”"}</td>
                           ))}
-                          <td className="px-2 py-2.5 font-semibold text-[#60A5FA]">{datasetAudit.reconciledTotal ?? "—"}</td>
+                          <td className="px-2 py-2.5 font-semibold text-[#60A5FA]">{datasetAudit.reconciledTotal ?? "â€”"}</td>
                         </tr>
                       </tbody>
                     </table>
@@ -561,8 +590,8 @@ export default function MlModelsPage() {
                 <div>
                   <div className="text-[10px] uppercase tracking-widest text-[#334155] mb-3">
                     {Number(m.hyperparams?.n_trials ?? 0) > 0 && m.hyperparams?.best_trial_number != null
-                      ? "Hiperparâmetros (Optuna)"
-                      : "Configuração fixa"}
+                      ? "HiperparÃ¢metros (Optuna)"
+                      : "ConfiguraÃ§Ã£o fixa"}
                   </div>
                   <HyperparamTable params={m.hyperparams as Record<string, unknown> | null} />
                 </div>

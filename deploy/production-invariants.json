@@ -1626,6 +1626,23 @@
           ]
         }
       ]
+    },
+    {
+      "id": "l3-live-capture-summary-cards",
+      "description": "L3 capture goal, labelable valid rows and nonnegative deficit refresh automatically without fabricating zero during loading.",
+      "files": [
+        {
+          "path": "frontend/app/ml-models/page.tsx",
+          "contains_all": [
+            "Meta de capturas",
+            "Capturas válidas",
+            "Faltam para a meta",
+            "Math.max(0, readiness.min_required - readiness.labelable_rows)",
+            "refreshInterval: 15_000",
+            "refreshWhenHidden: false"
+          ]
+        }
+      ]
     }
   ]
 }
