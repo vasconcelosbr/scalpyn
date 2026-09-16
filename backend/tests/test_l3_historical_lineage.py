@@ -23,6 +23,8 @@ def test_audit_jsonb_decoder_normalizes_asyncpg_text_codec():
 def _raw_record():
     return {
         "shadow_id": "shadow-1",
+        "symbol": "BTC_USDT", "exchange": "gate", "timeframe": "5m",
+        "entry_timestamp": datetime(2026, 7, 24, tzinfo=timezone.utc),
         "entry_timestamp": DECISION_AT - timedelta(minutes=5),
         "created_at": DECISION_AT + timedelta(seconds=2),
         "holding_seconds": 780.0,

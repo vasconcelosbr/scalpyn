@@ -168,6 +168,7 @@ class GCSModelLoader:
             try:
                 model._n_inference_features = len(feature_columns)
                 model._inference_feature_names = list(feature_columns)
+                model._required_feature_names = list(metadata.get("required_feature_names") or [])
             except Exception:
                 pass
 

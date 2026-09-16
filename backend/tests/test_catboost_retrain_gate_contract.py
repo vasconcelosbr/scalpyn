@@ -87,6 +87,7 @@ def test_shared_catboost_preparation_applies_profile_and_barrier_contract():
                 "ml_l3_dataset_valid_from": "2026-07-11T03:21:06+00:00",
                 "ml_maturity_embargo_margin_minutes": 60,
                 "shadow_barrier_mode": "ATR_DYNAMIC",
+                "ml_active_barrier_contract_version": "shadow_atr_dynamic_v2",
             },
             strategy_tp_pct=0.6,
             collect_diagnostics=True,
@@ -170,6 +171,10 @@ def test_catboost_train_gate_uses_database_minimum_and_reports_deficit(monkeypat
     async def _run():
         svc = MLChallengerService()
         svc._load_ml_config = AsyncMock(return_value={
+            "ml_label_objective": "positive_net_return",
+            "ml_active_barrier_contract_version": "shadow_atr_dynamic_v3",
+            "ml_fee_roundtrip_pct": 0.2,
+            "ml_win_fast_threshold_seconds": 14400,
             "ml_dataset_valid_from": "2026-07-01T00:00:00+00:00",
             "ml_l3_dataset_valid_from": "2026-07-11T03:21:06+00:00",
             "ml_win_fast_threshold_seconds": 14400,
@@ -287,6 +292,21 @@ def test_catboost_dry_run_blocks_when_promotion_holdout_is_infeasible():
     assert payload["split_readiness"]["diagnostics"]["test_sample_deficit"] == 56
 
 
+
+def _contract_db_result_factory():
+    definitions = {}
+    def execute(statement, params=None):
+        sql = str(statement)
+        params = params or {}
+        if "INSERT INTO ml_" in sql and "description" in params:
+            definitions[params["id"]] = params["description"]
+        class Result:
+            def scalar(self): return 80
+            def first(self): return (1,)
+            def scalar_one(self): return definitions[params["id"]]
+        return Result()
+    return execute
+
 def test_new_candidate_persists_contracts_and_fail_closed_governance():
     class _ScalarResult:
         @staticmethod
@@ -300,10 +320,14 @@ def test_new_candidate_persists_contracts_and_fail_closed_governance():
     async def _run():
         db = AsyncMock()
         db.execute = AsyncMock(
-            side_effect=[_ScalarResult(), _ScalarResult(), None, None, None, None]
+            side_effect=_contract_db_result_factory()
         )
         svc = MLChallengerService()
         svc._load_ml_config = AsyncMock(return_value={
+            "ml_label_objective": "positive_net_return",
+            "ml_active_barrier_contract_version": "shadow_atr_dynamic_v3",
+            "ml_fee_roundtrip_pct": 0.2,
+            "ml_win_fast_threshold_seconds": 14400,
             "ml_label_version": "is_tp_4h_v2_sim_outcome",
             "ml_promotion_min_test_auc": 0.6,
             "ml_promotion_min_test_samples": 300,
@@ -351,7 +375,7 @@ def test_new_candidate_persists_contracts_and_fail_closed_governance():
         return db
 
     db = asyncio.run(_run())
-    insert_params = db.execute.await_args_list[2].args[1]
+    insert_params = next(call.args[1] for call in db.execute.await_args_list if "INSERT INTO ml_models" in str(call.args[0]))
     assert insert_params["dataset_contract_id"]
     assert insert_params["label_contract_id"]
     assert insert_params["feature_contract_id"]
@@ -413,10 +437,14 @@ def test_new_candidate_sanitizes_non_finite_metrics_before_jsonb():
     async def _run():
         db = AsyncMock()
         db.execute = AsyncMock(
-            side_effect=[_ScalarResult(), _ScalarResult(), None, None, None, None]
+            side_effect=_contract_db_result_factory()
         )
         svc = MLChallengerService()
         svc._load_ml_config = AsyncMock(return_value={
+            "ml_label_objective": "positive_net_return",
+            "ml_active_barrier_contract_version": "shadow_atr_dynamic_v3",
+            "ml_fee_roundtrip_pct": 0.2,
+            "ml_win_fast_threshold_seconds": 14400,
             "ml_label_version": "positive_net_return_v1",
             "ml_promotion_min_test_auc": 0.6,
             "ml_promotion_min_test_samples": 300,
@@ -464,7 +492,7 @@ def test_new_candidate_sanitizes_non_finite_metrics_before_jsonb():
         return db
 
     db = asyncio.run(_run())
-    insert_params = db.execute.await_args_list[2].args[1]
+    insert_params = next(call.args[1] for call in db.execute.await_args_list if "INSERT INTO ml_models" in str(call.args[0]))
     assert insert_params["roc_auc"] is None
     assert "NaN" not in insert_params["hyperparams"]
     assert "NaN" not in insert_params["metrics_json"]

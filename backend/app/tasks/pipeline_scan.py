@@ -1621,6 +1621,7 @@ def _decision_metrics(asset: dict, processed: dict) -> dict:
         # persisted snapshot matches what the decision engine actually saw.
         # Only keys present in _LIVE_ORDER_FLOW_FIELDS are candidates — those
         # are the only fields that _inject_live_order_flow can override.
+        live_meta = flat_indicators.get("_l3_live_order_flow_meta") or {}
         for key in _LIVE_ORDER_FLOW_FIELDS:
             if key in flat_indicators:
                 live_val = flat_indicators[key]
@@ -1628,14 +1629,15 @@ def _decision_metrics(asset: dict, processed: dict) -> dict:
                     # Preserve existing metadata (source_group, ts, stale) but
                     # overwrite value to match the live-injected value that drove
                     # the decision.
-                    if snapshot[key].get("value") != live_val:
+                    if snapshot[key].get("value") != live_val or key in live_meta.get("overridden_fields", []):
                         snapshot[key] = {
                             **snapshot[key],
                             "value": live_val,
                             "source_group": "live_injection",
+                            "ts": live_meta.get("source_at"),
                         }
                 else:
-                    snapshot[key] = {"value": live_val, "source_group": "live_injection"}
+                    snapshot[key] = {"value": live_val, "source_group": "live_injection", "ts": live_meta.get("source_at")}
 
         for key in _DECISION_CONTEXT_SNAPSHOT_FIELDS:
             if key in component_fields and component_fields.get(key) is not None:

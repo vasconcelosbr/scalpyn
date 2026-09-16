@@ -65,6 +65,7 @@ interface MlModel {
   dataset_query_cutoff: string | null;
   model_path: string | null;
   decision_threshold: number | null;
+  created_at?: string | null;
   activated_at: string | null;
   retired_at: string | null;
   notes: string | null;
@@ -189,6 +190,17 @@ export default function MlModelsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [lane, setLane] = useState("L3_PROFILE");
+  const [readiness, setReadiness] = useState<{ total_rows: number; labelable_rows: number; min_required: number; ready: boolean; blocked_reasons: string[]; dataset_query_cutoff: string; label_version: string; automatic_training_enabled: boolean } | null>(null);
+  const [readinessError, setReadinessError] = useState<string | null>(null);
+  const visibleModels = models.filter(m => lane === "ALL" || m.model_lane === lane);
+
+  useEffect(() => {
+    apiGet("/api/ml/catboost/readiness?source=L3")
+      .then(setReadiness)
+      .catch(() => setReadinessError("Não foi possível verificar o dataset L3 agora."));
+  }, []);
+
 
   useEffect(() => {
     apiGet("/api/ml/models")
@@ -223,7 +235,12 @@ export default function MlModelsPage() {
       <div className="flex flex-wrap items-center gap-3 mb-2">
         <Brain size={20} className="text-[#60A5FA]" />
         <h1 className="text-[17px] font-semibold text-[#E2E8F0] tracking-wide">ML Models</h1>
-        <span className="text-[11px] text-[#4B5563] ml-1">{models.length} versão{models.length !== 1 ? "ões" : ""}</span>
+        <span className="text-[11px] text-[#4B5563] ml-1">{visibleModels.length} {visibleModels.length === 1 ? "versão" : "versões"}</span>
+        <select aria-label="Lane do modelo" value={lane} onChange={e => setLane(e.target.value)} className="rounded border border-[#1A2035] bg-[#060810] px-2 py-1 text-xs text-[#94A3B8]">
+          <option value="L3_PROFILE">L3_PROFILE</option>
+          <option value="ALL">Todas as lanes</option>
+          {Array.from(new Set(models.map(m => m.model_lane).filter((v): v is string => Boolean(v) && v !== "L3_PROFILE"))).sort().map(v => <option key={v} value={v}>{v}</option>)}
+        </select>
         <div className="ml-auto">
           <ModuleAIAnalysisAction
             originModule="ml_models"
@@ -234,13 +251,26 @@ export default function MlModelsPage() {
         </div>
       </div>
 
-      {models.length === 0 && (
+      {lane === "L3_PROFILE" && (
+        <div className="rounded-lg border border-[#1A2035] bg-[#060810] p-4 text-xs text-[#94A3B8]">
+          <div className="font-semibold text-[#E2E8F0]">Dataset L3_PROFILE · {readiness ? (readiness.ready ? "Pronto para avaliação de candidato" : "Treinamento bloqueado") : "Verificando"}</div>
+          {readiness && <>
+            <p className="mt-2">{readiness.total_rows} registros compatíveis · {readiness.labelable_rows} com label · mínimo para candidato: {readiness.min_required}</p>
+            <p className="mt-1">Label: {readiness.label_version} · consulta: {fmtDateTime(readiness.dataset_query_cutoff)}</p>
+            <p className="mt-1">{readiness.blocked_reasons.join(" · ") || "A aprovação depende das métricas do novo candidato."}</p>
+            <p className="mt-1">Readiness não aprova nem ativa um modelo.</p>
+            <p className="mt-1">Treino automático CatBoost L3: {readiness.automatic_training_enabled ? "habilitado" : "desabilitado"}.</p>
+          </>}
+          {readinessError && <p className="mt-2 text-[#F87171]">{readinessError}</p>}
+        </div>
+      )}
+      {visibleModels.length === 0 && (
         <div className="text-[#4B5563] text-sm py-8 text-center border border-dashed border-[#1A2035] rounded-lg">
           Nenhum modelo treinado ainda.
         </div>
       )}
 
-      {models.map((m) => {
+      {visibleModels.map((m) => {
         const isExpanded = expanded === m.id;
         const isActive = m.status === "active";
         const isIntelligence = [
@@ -311,7 +341,7 @@ export default function MlModelsPage() {
               </div>
 
               <div className="text-[11px] text-[#4B5563] shrink-0">
-                {fmtDateTime(m.activated_at)}
+                {fmtDateTime(m.created_at ?? null)}
               </div>
             </div>
 
@@ -332,7 +362,7 @@ export default function MlModelsPage() {
                     )}
                     {(m.target_window_seconds ?? m.metrics_json?.target_window_seconds) != null && (
                       <span className="text-[10px] px-2 py-0.5 rounded bg-[#1A2035] border border-[#334155] font-mono text-[#94A3B8]">
-                        janela TP: {Math.round(((m.target_window_seconds ?? m.metrics_json?.target_window_seconds) as number) / 60)} min
+                        {(m.label_version ?? m.metrics_json?.label_version)?.startsWith("positive_net_return") ? "alvo: retorno líquido positivo no fechamento" : `janela TP: ${Math.round(((m.target_window_seconds ?? m.metrics_json?.target_window_seconds) as number) / 60)} min`}
                       </span>
                     )}
                   </div>
@@ -394,6 +424,13 @@ export default function MlModelsPage() {
                   </div>
                 )}
 
+                {m.model_lane === "L3_PROFILE" && (
+                  <div className="rounded border border-[#1A2035] p-3 text-xs text-[#94A3B8]">
+                    <p>Aprovação: {m.metrics_json?.promotion_gate?.status ?? "Não registrada"} · execução: {m.execution_authority ? "autorizada" : "não autorizada"}</p>
+                    <p className="mt-1">Criado: {fmtDateTime(m.created_at ?? null)} · ativado: {fmtDateTime(m.activated_at)}</p>
+                    {(m.metrics_json?.promotion_gate?.reasons ?? []).map(reason => <p key={reason} className="mt-1 text-[#F87171]">{reason}</p>)}
+                  </div>
+                )}
                 {/* Validation metrics (precision_score/recall_score columns carry val metrics for challenger models) */}
                 <div>
                   <div className="text-[10px] uppercase tracking-widest text-[#334155] mb-3">
@@ -405,7 +442,7 @@ export default function MlModelsPage() {
                       { label: "Recall",    value: fmtPct(m.metrics_json?.validation?.recall ?? m.recall_score),       good: (m.metrics_json?.validation?.recall ?? m.recall_score ?? 0) >= 0.4 },
                       { label: "F1",        value: fmt(m.metrics_json?.validation?.f1 ?? m.f1_score, 4),               good: (m.metrics_json?.validation?.f1 ?? m.f1_score ?? 0) >= 0.5 },
                       { label: "ROC AUC",   value: fmt(m.metrics_json?.validation?.roc_auc ?? m.roc_auc, 4),           good: (m.metrics_json?.validation?.roc_auc ?? m.roc_auc ?? 0) >= 0.6 },
-                      { label: "Capture",   value: fmtPct(m.win_fast_capture_rate),                                    good: (m.win_fast_capture_rate ?? 0) >= 0.5 },
+                      { label: "Amostras", value: String(m.metrics_json?.validation?.samples ?? m.val_samples ?? "—"), good: true },
                       { label: "FPR",       value: fmtPct(m.metrics_json?.validation?.fpr ?? m.false_positive_rate),  good: (m.metrics_json?.validation?.fpr ?? m.false_positive_rate ?? 1) <= 0.4 },
                     ].map((item) => (
                       <div key={item.label} className="bg-[#0C1020] rounded-md p-3 flex flex-col items-center gap-1">

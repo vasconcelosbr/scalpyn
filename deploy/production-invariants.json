@@ -1503,19 +1503,106 @@
       "id": "pump-radar-user-universe-and-reconstruction",
       "description": "Radar never expands outside user pool/pipeline and reconstructs closed candles without requiring Shadow",
       "files": [
-        { "path": "backend/app/services/pump_radar_research.py", "contains_all": ["user_pool_pipeline_v1", "load_user_universe", "close_time <= at"] },
-        { "path": "backend/tests/test_pump_radar_research.py", "contains_all": ["test_event_without_shadow_still_persists_reconstructed_snapshots", "test_1235_never_consumes_1235_to_1240_candle"] },
-        { "path": "backend/tests/test_pump_radar_contract.py", "contains_all": ["test_exchange_outsiders_never_enter_user_universe"] }
+        {
+          "path": "backend/app/services/pump_radar_research.py",
+          "contains_all": [
+            "user_pool_pipeline_v1",
+            "load_user_universe",
+            "close_time <= at"
+          ]
+        },
+        {
+          "path": "backend/tests/test_pump_radar_research.py",
+          "contains_all": [
+            "test_event_without_shadow_still_persists_reconstructed_snapshots",
+            "test_1235_never_consumes_1235_to_1240_candle"
+          ]
+        },
+        {
+          "path": "backend/tests/test_pump_radar_contract.py",
+          "contains_all": [
+            "test_exchange_outsiders_never_enter_user_universe"
+          ]
+        }
       ]
     },
     {
       "id": "profile-entry-trigger-feature-identity",
       "description": "Editor preserves governed feature identity and blocks writes with incomplete policy",
       "files": [
-        { "path": "frontend/lib/profileConditionState.ts", "contains_all": ["prepareProfileEntryTriggerIdentities", "profileSourcePoliciesForEditor"] },
-        { "path": "frontend/lib/profileConditionState.test.ts", "contains_all": ["new Entry Trigger receives governed OHLCV identity before save", "editing a legacy profile does not require identity for untouched Entry Triggers", "a newly added live Entry Trigger still fails closed without a configured live policy"] },
-        { "path": "backend/app/api/profiles.py", "contains_all": ["_legacy_entry_trigger_error_debt", "remaining_entry_debt"] },
-        { "path": "backend/tests/test_profiles_config_validation.py", "contains_all": ["test_legacy_entry_triggers_can_be_reordered_or_removed_without_index_debt", "test_duplicate_new_legacy_entry_trigger_still_counts_as_new_identity_debt"] }
+        {
+          "path": "frontend/lib/profileConditionState.ts",
+          "contains_all": [
+            "prepareProfileEntryTriggerIdentities",
+            "profileSourcePoliciesForEditor"
+          ]
+        },
+        {
+          "path": "frontend/lib/profileConditionState.test.ts",
+          "contains_all": [
+            "new Entry Trigger receives governed OHLCV identity before save",
+            "editing a legacy profile does not require identity for untouched Entry Triggers",
+            "a newly added live Entry Trigger still fails closed without a configured live policy"
+          ]
+        },
+        {
+          "path": "backend/app/api/profiles.py",
+          "contains_all": [
+            "_legacy_entry_trigger_error_debt",
+            "remaining_entry_debt"
+          ]
+        },
+        {
+          "path": "backend/tests/test_profiles_config_validation.py",
+          "contains_all": [
+            "test_legacy_entry_triggers_can_be_reordered_or_removed_without_index_debt",
+            "test_duplicate_new_legacy_entry_trigger_still_counts_as_new_identity_debt"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "l3-ml-integrity-v1",
+      "description": "L3 exact economic contract, feature order, causal capture, independent holdout and canonical readiness; no automatic execution authority",
+      "files": [
+        {
+          "path": "backend/app/ml/l3_integrity.py",
+          "contains_all": [
+            "def build_inference_frame",
+            "def market_event_key",
+            "utc_day_cluster_bootstrap_event_weighted_v1",
+            "def project_capture"
+          ]
+        },
+        {
+          "path": "backend/app/services/l3_ml_readiness.py",
+          "contains_all": [
+            "_prepare_catboost_gate_records",
+            "independent_test_events",
+            "execution_authority"
+          ]
+        },
+        {
+          "path": "backend/app/ml/prediction_service.py",
+          "contains_all": [
+            "build_inference_frame(model, features, profile_id)"
+          ]
+        },
+        {
+          "path": "backend/tests/test_l3_ml_integrity.py",
+          "contains_all": [
+            "test_nonprefix_features_use_artifact_order_and_preserve_missing",
+            "test_market_event_identity_ignores_profile_snapshot_but_not_time",
+            "test_future_score_timestamp_is_never_neutralized_to_hide_violation"
+          ]
+        },
+        {
+          "path": "frontend/app/ml-models/page.tsx",
+          "contains_all": [
+            "Lane do modelo",
+            "Readiness não aprova"
+          ]
+        }
       ]
     }
   ]

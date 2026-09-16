@@ -106,6 +106,7 @@ def evaluate_promotion_gate(
         else model_row.get("roc_auc")
     )
 
+    independent_events = test.get("independent_events") if model_row.get("model_lane") == "L3_PROFILE" else None
     reasons: list[str] = []
     rejected = False
     blocked = False
@@ -131,6 +132,13 @@ def evaluate_promotion_gate(
     elif test_samples < min_test_samples:
         rejected = True
         reasons.append(f"test_samples_below_minimum:{test_samples}<{min_test_samples}")
+
+    if independent_events is not None and int(independent_events) < min_test_samples:
+        rejected = True
+        reasons.append(f"independent_test_events_below_minimum:{independent_events}<{min_test_samples}")
+    if model_row.get("model_lane") == "L3_PROFILE" and metrics_json.get("l3_contract") and independent_events is None:
+        rejected = True
+        reasons.append("missing_independent_test_events")
 
     # ---- Rule #4: generalization gap (overfitting signature) ------------------
     if test_auc is not None and val_auc is not None:
