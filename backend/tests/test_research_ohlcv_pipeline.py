@@ -180,8 +180,11 @@ def test_research_tasks_are_isolated_and_have_no_decision_dispatch() -> None:
         for name in names
     )
     source = inspect.getsource(collect_research_ohlcv)
-    assert "task_dispatch" not in source
-    assert "compute_indicators" not in source
+    # Canonical 5m commits may refresh existing indicators; research-only
+    # captures must still never dispatch the operational chain.
+    collector = inspect.getsource(collect_research_ohlcv._collect_state_shadow_async)
+    assert "task_dispatch" not in collector
+    assert "compute_indicators" not in collector
     assert "compute_scores" not in source
     assert "evaluate_signals" not in source
     assert "timeframe = '1m'" not in inspect.getsource(
@@ -196,6 +199,29 @@ def test_research_tasks_are_isolated_and_have_no_decision_dispatch() -> None:
     assert "compute_indicators" not in latency_source
     assert "compute_scores" not in latency_source
     assert "evaluate_signals" not in latency_source
+
+
+@pytest.mark.parametrize('changes,expected', [
+    ({}, 2), ({'mode': 'SHADOW'}, 0), ({'closed_table': 'ohlcv_shadow'}, 0),
+    ({'canonical_read_enabled': False}, 0), ({'inserted_closed_rows': 0}, 0),
+])
+def test_canonical_5m_refreshes_indicators_only_after_committed_rows(monkeypatch, changes, expected):
+    from app.tasks import task_dispatch
+    result = {'mode': 'CANONICAL', 'closed_table': 'ohlcv', 'canonical_read_enabled': True,
+              'inserted_closed_rows': 66, **changes}
+    events = []
+    def completed(coro):
+        coro.close()
+        events.append('collection_committed')
+        return result
+    monkeypatch.setattr(collect_research_ohlcv, '_run_async', completed)
+    monkeypatch.setattr(task_dispatch, 'enqueue', lambda name, **kw: events.append((name,kw)))
+    collect_research_ohlcv.collect_5m_shadow.run()
+    assert events[0] == 'collection_committed'
+    assert len(events)-1 == expected
+    if expected:
+        assert [e[1]['dedup_key'] for e in events[1:]] == ['compute_structural_5m', 'compute_5m']
+        assert all(e[0].startswith('app.tasks.compute_indicators.') for e in events[1:])
 
 
 def test_readiness_sql_uses_portable_bind_cast() -> None:
