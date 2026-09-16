@@ -998,6 +998,18 @@ async def list_watchlists(
             )).fetchall()
             source_wl_levels = {row.id: row.level for row in source_rows}
 
+    # Approval counters must describe the exact authorized population exposed
+    # by the list endpoint, not a stale membership count from the scanner.
+    if any(w.level == "L3" and w.market_mode == "spot" for w in wls):
+        public_candidates = await load_live_l3_candidates(db, user_id=user_id)
+        authorized_assets: Dict[UUID, set] = {}
+        for candidate in public_candidates:
+            for contribution in candidate.contributors:
+                authorized_assets.setdefault(contribution.watchlist_id, set()).add(contribution.asset_id)
+        for w in wls:
+            if w.level == "L3" and w.market_mode == "spot":
+                counts[w.id] = len(authorized_assets.get(w.id, set()))
+
     def _with_ranking(watchlist: PipelineWatchlist) -> Dict[str, Any]:
         profile_name = profile_names.get(str(watchlist.profile_id)) if watchlist.profile_id else None
         source_level = source_wl_levels.get(str(watchlist.source_watchlist_id)) if watchlist.source_watchlist_id else None

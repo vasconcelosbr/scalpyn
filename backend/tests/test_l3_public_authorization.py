@@ -89,6 +89,22 @@ async def test_latest_block_is_not_filtered_out_before_latest_decision_selection
 
 
 @pytest.mark.asyncio
+async def test_l3_card_count_excludes_raw_membership_without_authorization(monkeypatch):
+    from app.api import watchlists
+    l3 = Obj(id=uuid4(), level="L3", market_mode="spot", profile_id=None, source_watchlist_id=None)
+    l1 = Obj(id=uuid4(), level="L1", market_mode="spot", profile_id=None, source_watchlist_id=None)
+    db = Obj(execute=AsyncMock(side_effect=[
+        Obj(scalars=lambda: Obj(all=lambda: [l3, l1])),
+        Obj(fetchall=lambda: [Obj(watchlist_id=l3.id, cnt=2), Obj(watchlist_id=l1.id, cnt=2)]),
+    ]))
+    monkeypatch.setattr(watchlists, "load_live_l3_candidates", AsyncMock(return_value=[]))
+    monkeypatch.setattr(watchlists, "_wl_to_dict", lambda w, **kwargs: {"id": str(w.id), "level": w.level})
+    result = await watchlists.list_watchlists(order_by="created_at", user_id=uuid4(), db=db)
+    assert result["watchlists"][0]["asset_count"] == 0
+    assert result["watchlists"][1]["asset_count"] == 2
+
+
+@pytest.mark.asyncio
 async def test_on_demand_persists_decision_outbox_and_membership_atomically(monkeypatch):
     from app.models.backoffice import DecisionLog, L3AuthorizationOutbox
     from app.models.pipeline_watchlist import PipelineWatchlistAsset

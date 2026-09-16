@@ -111,7 +111,7 @@ def public_authorization(decision, event, *, watchlist_id, profile_version=None,
         "evaluated_at": evaluated.isoformat(),
         "expires_at": expiry.isoformat(),
         "shadow_status": shadow_status,
-        "shadow_reason": result or event.last_error,
+        "shadow_reason": result or ("SHADOW_RETRY_PENDING" if event.status == "RETRY" else None),
         "alpha_score": metrics.get("final_score") if metrics.get("final_score") is not None else decision.score,
         "current_price": metrics.get("price"),
         "_indicators": {key: value.get("value") if isinstance(value, dict) else value
