@@ -106,3 +106,14 @@ def test_future_ema_dependency_fails_closed() -> None:
     )
 
     assert "feature_source_after_decision" in capture.errors
+
+
+def test_live_timestamp_replaces_old_candle_even_when_value_is_equal():
+    merged = MergedIndicators()
+    merged.values = {"taker_ratio": 1.2}
+    merged.meta = {"taker_ratio": {"group": "structural", "timestamp": NOW - timedelta(minutes=5), "stale": False}}
+    asset = _build_pipeline_asset("BTC_USDT", name="BTC", indicators=merged.as_flat_dict(), score_row=None,
+        has_market_metadata=True, price=100, price_source_at=NOW, merged_indicators=merged)
+    asset["indicators"]["_l3_live_order_flow_meta"] = {"source_at": NOW.isoformat(), "overridden_fields": ["taker_ratio"]}
+    metrics = _decision_metrics(asset, {"score": {"components": {}}, "signal": {}})
+    assert metrics["indicators_snapshot"]["taker_ratio"]["ts"] == NOW.isoformat()

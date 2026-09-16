@@ -140,7 +140,7 @@ class WinFastPredictor:
 
         # Verify feature column alignment if model stores feature names (Audit P1-21)
         model_feature_names = getattr(model, 'feature_names_in_', None)
-        if model_feature_names is not None:
+        if model_feature_names is not None and model_lane != 'L3_PROFILE':
             expected = list(FEATURE_COLUMNS[:len(model_feature_names)])
             actual = list(model_feature_names)
             if expected != actual:
@@ -214,7 +214,13 @@ class WinFastPredictor:
             and ({"source_encoded", "profile_id_encoded"} & set(_inf_names[len(FEATURE_COLUMNS):]))
         )
 
-        if _has_cat_features:
+        if model_lane == "L3_PROFILE":
+            from .l3_integrity import build_inference_frame
+            try:
+                X_infer = build_inference_frame(model, features, profile_id)
+            except (ValueError, TypeError, IndexError) as exc:
+                return _fail_closed_result(model_lane=model_lane, reason_code="MODEL_SCHEMA_ERROR", reason=str(exc))
+        elif _has_cat_features:
             # CatBoost was trained with source_encoded + profile_id_encoded as categorical
             # columns AFTER the base features. Numpy float arrays are rejected — must use
             # a DataFrame with those columns set as integers (CatBoost converts internally).

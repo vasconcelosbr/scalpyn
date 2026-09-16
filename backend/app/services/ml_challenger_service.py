@@ -222,6 +222,7 @@ def _filter_l3_barrier_contract(
     *,
     expected_mode: str,
     expected_tp_pct: float,
+    expected_contract_version: str = BARRIER_CONTRACT_ATR_DYNAMIC_V2,
 ) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Keep rows produced under the active ML economic contract.
 
@@ -254,7 +255,7 @@ def _filter_l3_barrier_contract(
         # o dataset com economia fixa disfarçada de ATR-dinâmica. A regime-2 de
         # TP-match agora só vale para modos NÃO-ATR_DYNAMIC.
         if mode == "ATR_DYNAMIC":
-            if record.get("barrier_contract_version") == BARRIER_CONTRACT_ATR_DYNAMIC_V2:
+            if record.get("barrier_contract_version") == expected_contract_version:
                 kept.append(record)
             else:
                 atr_non_v2_excluded += 1
@@ -264,6 +265,8 @@ def _filter_l3_barrier_contract(
             continue
         kept.append(record)
     return kept, {
+        "barrier_contract_expected_version": expected_contract_version,
+        "barrier_contract_version_mismatch": atr_non_v2_excluded,
         "barrier_contract_expected_mode": mode,
         "barrier_contract_expected_tp_pct": tp,
         "barrier_contract_included": len(kept),
@@ -402,6 +405,7 @@ def _calibrate_ev_threshold(
     returns,
     grid_step: float,
     min_positives: int,
+    weights=None,
 ) -> tuple[float, list[dict[str, Any]]]:
     """Pick threshold on validation only by positive net EV.
 
@@ -426,9 +430,10 @@ def _calibrate_ev_threshold(
     for threshold in thresholds:
         mask = np.asarray(proba) >= threshold
         positives = int(mask.sum())
-        if positives < min_pos:
+        effective_positives = float(np.asarray(weights)[mask].sum()) if weights is not None else positives
+        if effective_positives < min_pos:
             continue
-        ev = float(np.nanmean(returns_arr[mask]))
+        ev = float(np.average(returns_arr[mask], weights=np.asarray(weights)[mask])) if weights is not None else float(np.nanmean(returns_arr[mask]))
         point = {"threshold": round(float(threshold), 6), "positives": positives, "net_ev": ev}
         curve.append(point)
         if ev > best_ev or (ev == best_ev and (best_threshold is None or threshold > best_threshold)):
@@ -445,11 +450,12 @@ def _validation_selection_score(
     returns,
     grid_step: float,
     min_positives: int,
+    weights=None,
 ) -> float:
     """Optuna score aligned with the downstream economic threshold gate."""
     if returns is not None:
         _, curve = _calibrate_ev_threshold(
-            predictions, returns, grid_step, min_positives
+            predictions, returns, grid_step, min_positives, weights=weights
         )
         return max(point["net_ev"] for point in curve)
     from sklearn.metrics import roc_auc_score
@@ -755,6 +761,7 @@ def _train_catboost_sync(
     seed: int = 42,
     optuna_timeout_s: int = 180,
     early_stopping_rounds: int = 30,
+    test_times=None, test_groups=None, bootstrap_iterations: int | None = None,
 ) -> Dict[str, Any]:
     if fixed_params is None and not search_space:
         raise ValueError("missing_ml_optuna_search_space_catboost")
@@ -816,6 +823,7 @@ def _train_catboost_sync(
                 val_returns,
                 threshold_grid_step,
                 threshold_min_positives,
+                weights=val_weights,
             )
         except ValueError:
             return -float("inf")
@@ -858,7 +866,7 @@ def _train_catboost_sync(
         threshold, threshold_curve = 0.5, []
     else:
         threshold, threshold_curve = _calibrate_ev_threshold(
-            val_preds, val_returns, threshold_grid_step, threshold_min_positives
+            val_preds, val_returns, threshold_grid_step, threshold_min_positives, weights=val_weights
         )
     binary_preds = (val_preds >= threshold).astype(int)
     f1 = float(f1_score(y_val, binary_preds, zero_division=0))
@@ -894,6 +902,13 @@ def _train_catboost_sync(
             "weighted_brier": float(brier_score_loss(y_test, t_preds, sample_weight=test_weights)),
             "effective_snapshots": float(np.asarray(test_weights).sum()) if test_weights is not None else float(len(y_test)),
         }
+
+    if test_times is not None and test_metrics:
+        from app.ml.l3_integrity import holdout_statistics
+        test_metrics.update(holdout_statistics(
+            y_test, t_preds, test_returns, threshold, test_times, test_groups,
+            iterations=bootstrap_iterations, seed=seed,
+        ))
 
     return {
         "model": final_model,
@@ -1062,6 +1077,7 @@ class MLChallengerService:
                     SELECT smr.status = 'READY' AND smr.entry_quality = 'OK'
                       FROM shadow_trade_measurement_revisions smr
                      WHERE smr.shadow_trade_id = shadow_trades.id
+                       AND smr.created_at <= :dataset_query_cutoff
                      ORDER BY smr.created_at DESC, smr.id DESC
                      LIMIT 1
                   ), FALSE)
@@ -1294,6 +1310,7 @@ class MLChallengerService:
                     SELECT smr.status = 'READY' AND smr.entry_quality = 'OK'
                       FROM shadow_trade_measurement_revisions smr
                      WHERE smr.shadow_trade_id = st.id
+                       AND smr.created_at <= :dataset_query_cutoff
                      ORDER BY smr.created_at DESC, smr.id DESC
                      LIMIT 1
                   ), FALSE)
@@ -1486,6 +1503,8 @@ class MLChallengerService:
         # build_training_dataframe faz `continue` em pnl_pct is None; mantendo
         # a mesma filtragem aqui garantimos que zip(valid, df.iterrows) é válido.
         valid_records = [r for r in records if r.get("pnl_pct") is not None]
+        if lane_name == "L3_PROFILE" and label_objective == "positive_net_return":
+            valid_records = [r for r in valid_records if r.get("net_return_pct") is not None]
 
         df = build_training_dataframe(
             valid_records,
@@ -1609,7 +1628,11 @@ class MLChallengerService:
             list(df["_holding_seconds"]) if "_holding_seconds" in df.columns
             else [0.0] * len(df)
         )
-        snapshot_keys = [_snapshot_group_key(r) for r in valid_records]
+        if lane_name == "L3_PROFILE":
+            from app.ml.l3_integrity import market_event_key
+            snapshot_keys = [market_event_key(r) for r in valid_records]
+        else:
+            snapshot_keys = [_snapshot_group_key(r) for r in valid_records]
         return (
             X, y, all_feature_names, cat_feature_indices, returns, created_at, ids,
             holding_seconds, snapshot_keys,
@@ -2108,6 +2131,7 @@ class MLChallengerService:
         test_metrics: Optional[Dict[str, Any]] = None,
         win_fast_threshold_s: float = 1800.0,
         dataset_stats: Optional[Dict[str, Any]] = None,
+        training_config: Optional[Dict[str, Any]] = None,
     ) -> UUID:
         """Persistência transacional de um treino (Fase 1 B.4).
 
@@ -2117,7 +2141,15 @@ class MLChallengerService:
         ou tudo é gravado, ou nada é gravado (rollback no caller).
         """
         import joblib as _joblib
+        from pathlib import Path
+        from app.ml.gcs_model_loader import _ml_dependency_versions
 
+        artifact_config = training_config if training_config is not None else await self._load_ml_config(db)
+        if model_lane is None:
+            model_lane = "L3_PROFILE" if model_type == "catboost" else "L1_SPECTRUM"
+        if model_lane == "L3_PROFILE":
+            from app.ml.l3_integrity import contract_definitions
+            metrics = {**metrics, "l3_contract": contract_definitions(artifact_config, feature_columns)}
         buf = io.BytesIO()
         payload = {
             "model": model_obj,
@@ -2130,6 +2162,12 @@ class MLChallengerService:
                 "threshold": threshold,
                 "trained_by": "MLChallengerService",
                 "cat_feature_indices": cat_feature_indices,
+                "code_commit": os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT_SHA"),
+                "implementation_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                "dependency_versions": _ml_dependency_versions(),
+                "required_feature_names": [name for name in feature_columns if name in (
+                    (artifact_config.get("ml_feature_contract") or {}).get(model_lane, {}).get("required", [])
+                )],
             },
         }
         _joblib.dump(payload, buf)
@@ -2180,7 +2218,7 @@ class MLChallengerService:
             fc_hash = None
             fc_schema_ver = None
             label_ver = "is_win_fast_v1"
-        _ml_config = await self._load_ml_config(db)
+        _ml_config = artifact_config
         label_ver = str(_ml_config.get("ml_label_version", label_ver))
 
         # train_sources is injected into `metrics` by train_challengers() callers
@@ -2234,6 +2272,15 @@ class MLChallengerService:
                 "contrato em ml_dataset_contracts antes de treinar"
             )
 
+        if model_lane == "L3_PROFILE":
+            from app.ml.l3_contract_registry import register_l3_contracts
+            definitions = await register_l3_contracts(db, _ml_config, feature_columns)
+            label_contract_id = definitions["label_id"]
+            feature_contract_id = definitions["feature_id"]
+            dataset_contract_id = definitions["dataset_id"]
+            metrics["l3_contract"] = definitions
+            hyperparams_full["l3_contract"] = definitions
+
         # Feature importance — extracted from trained model object, persisted in
         # metrics_json for drift analysis and feature selection audits.
         _feature_importance: dict = {}
@@ -2283,9 +2330,15 @@ class MLChallengerService:
                 # Fase 1.5 P3 — gates estatísticos de aprovação.
                 "roc_auc_ci_low": (test_metrics or {}).get("roc_auc_ci_low"),
                 "distinct_days": (test_metrics or {}).get("distinct_days"),
+                **{key: (test_metrics or {}).get(key) for key in (
+                    "independent_events", "selected_events", "selected_samples", "roc_auc_ci_high",
+                    "uncertainty_method", "bootstrap_iterations", "bootstrap_valid_iterations", "bootstrap_seed",
+                )},
             } if test_metrics else None,
             "feature_importance": _feature_importance or None,
         }
+        if model_lane == "L3_PROFILE":
+            _metrics_json_dict["l3_contract"] = metrics["l3_contract"]
         if metrics.get("intelligence_report") is not None:
             _metrics_json_dict["indicator_intelligence"] = metrics["intelligence_report"]
 
@@ -2668,7 +2721,14 @@ class MLChallengerService:
             "historical": historical_diagnostics,
             "records_after_lineage_resolution": len(cb_all_records),
         }
+        if cb_lane == "L3_PROFILE" and not ml_config.get("ml_active_barrier_contract_version"):
+            raise ValueError("missing_ml_active_barrier_contract_version")
         cb_profile_records = [r for r in cb_all_records if r.get("profile_id")]
+        missing_net_return = 0
+        if cb_lane == "L3_PROFILE" and ml_config.get("ml_label_objective") == "positive_net_return":
+            missing_net_return = sum(r.get("net_return_pct") is None for r in cb_profile_records)
+            cb_profile_records = [r for r in cb_profile_records if r.get("net_return_pct") is not None]
+
         barrier_meta: Dict[str, Any] = {}
         # L3_LAB incluído (2026-07-25): a migração do lab para o contrato
         # shadow_atr_dynamic_v2 convive, na mesma janela de valid_from, com
@@ -2686,6 +2746,10 @@ class MLChallengerService:
                 cb_profile_records,
                 expected_mode=str(ml_config["shadow_barrier_mode"]),
                 expected_tp_pct=strategy_tp_pct,
+                expected_contract_version=(
+                    str(ml_config.get("ml_active_barrier_contract_version") or "")
+                    if cb_lane == "L3_PROFILE" else BARRIER_CONTRACT_ATR_DYNAMIC_V2
+                ),
             )
         else:
             cb_records = cb_profile_records
@@ -2694,6 +2758,7 @@ class MLChallengerService:
             cb_all_records, cb_profile_records, cb_sources
         )
         l3_meta.update(barrier_meta)
+        l3_meta["missing_net_return_excluded"] = missing_net_return
         l3_meta["dataset_policy"] = cb_dataset_policy
         l3_meta["included_trade_count"] = len(cb_records)
         l3_meta["dataset_valid_from"] = cb_dataset_valid_from.isoformat()
@@ -3254,7 +3319,7 @@ class MLChallengerService:
                         ret_va = _cb_split["meta_va"][0]
                         ret_te = _cb_split["meta_te"][0] if _cb_split["has_test"] else None
                         train_weights = val_weights = test_weights = None
-                        if intelligence_lane:
+                        if intelligence_lane or cb_lane == "L3_PROFILE":
                             from app.ml.indicator_intelligence import inverse_group_frequency_weights
                             train_weights = inverse_group_frequency_weights(_cb_split["meta_tr"][3])
                             val_weights = inverse_group_frequency_weights(_cb_split["meta_va"][3])
@@ -3299,6 +3364,14 @@ class MLChallengerService:
                                 "min_test_samples": catboost_min_test_samples,
                                 "split_diagnostics": _cb_split["split_diagnostics"],
                             }
+                        elif cb_lane == "L3_PROFILE" and (
+                            len(set(_cb_split["meta_te"][3])) < int(ml_config["ml_promotion_min_test_samples"])
+                            or len({t.astimezone(timezone.utc).date() for t in _cb_split["meta_te"][1]}) < int(ml_config["ml_approval_min_distinct_days"])
+                        ):
+                            results["catboost"] = {"status": "skipped", "reason": "insufficient_independent_promotion_holdout",
+                                "independent_test_events": len(set(_cb_split["meta_te"][3])),
+                                "test_distinct_days": len({t.astimezone(timezone.utc).date() for t in _cb_split["meta_te"][1]}),
+                                "split_diagnostics": _cb_split["split_diagnostics"]}
                         elif len(y_va) < catboost_min_validation_samples:
                             results["catboost"] = {"status": "skipped", "reason": "val_too_small"}
                         else:
@@ -3320,6 +3393,9 @@ class MLChallengerService:
                                 seed=_cb_seed,
                                 optuna_timeout_s=_cb_timeout,
                                 early_stopping_rounds=cb_early_stopping_rounds,
+                                test_times=_cb_split["meta_te"][1] if cb_lane == "L3_PROFILE" else None,
+                                test_groups=_cb_split["meta_te"][3] if cb_lane == "L3_PROFILE" else None,
+                                bootstrap_iterations=_require_positive_int_config(ml_config, "ml_approval_bootstrap_iterations"),
                             )
                             intelligence_report = None
                             if intelligence_lane:
@@ -3406,6 +3482,7 @@ class MLChallengerService:
                                 test_metrics=cb_result.get("test_metrics"),
                                 win_fast_threshold_s=win_fast_threshold_s,
                                 dataset_stats=cb_dataset_stats,
+                                training_config=ml_config,
                             )
                             await db.commit()
                             results["catboost"] = {

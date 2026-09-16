@@ -385,7 +385,7 @@ async def list_ml_models(
 
     rows = await db.execute(sa_text("""
         SELECT
-            id, version, status,
+            id, version, status, created_at,
             hyperparams,
             train_samples, val_samples, test_samples,
             precision_score, recall_score, f1_score, roc_auc,
@@ -403,7 +403,7 @@ async def list_ml_models(
             calibration_authority, rule_generation_authority,
             autopilot_authority, execution_authority, governance_reason
         FROM ml_models
-        ORDER BY version DESC
+        ORDER BY created_at DESC, id DESC
     """))
     models = []
     for r in rows.mappings():
@@ -425,6 +425,7 @@ async def list_ml_models(
         models.append({
             "id":                   str(r["id"]),
             "version":              r["version"],
+            "created_at":           r["created_at"].isoformat() if r["created_at"] else None,
             "status":               r["status"],
             "governance_warning":   gov["governance_warning"],
             "allowed_usage":        gov["allowed_usage"],
@@ -792,6 +793,7 @@ async def promote_ml_model(
 
 @router.get("/readiness/latest")
 async def readiness_latest(
+    model_lane: str | None = None,
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ):
@@ -801,6 +803,9 @@ async def readiness_latest(
     GREEN/YELLOW/RED, invariantes I01–I11, WARNs e o cumulativo com dias
     projetados para 1500/3000/5000 elegíveis.
     """
+    if model_lane == "L3_PROFILE":
+        from ..services.l3_ml_readiness import l3_readiness
+        return await l3_readiness(db, user_id)
     from ..services.ml_data_certification_service import latest_certification
 
     latest = await latest_certification(db)
@@ -815,7 +820,7 @@ async def readiness_latest(
 @router.get("/catboost/readiness")
 async def catboost_readiness(
     source: str = "L3",
-    label_version: str = "is_tp_4h_v1",
+    label_version: str | None = None,
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ):
@@ -829,7 +834,16 @@ async def catboost_readiness(
     label_version : str
         e.g. 'is_tp_4h_v1'
     """
+    if source.upper() == "L3":
+        from ..services.l3_ml_readiness import l3_readiness
+        report = await l3_readiness(db, user_id)
+        if label_version is not None and label_version != report["label_version"]:
+            raise HTTPException(status_code=422, detail="label_version differs from active L3 contract")
+        return report
+
     from ..ml.dataset_policy import CatBoostReadinessGate, DatasetPolicy
+
+    label_version = label_version or "is_tp_4h_v1"
 
     _POLICY_MAP = {
         "L3":       DatasetPolicy.L3_ONLY,

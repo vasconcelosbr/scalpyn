@@ -164,6 +164,7 @@ async def _run_ml_challengers_if_enabled(db, user_id) -> None:
         enable_lgbm = bool(cfg.get("enable_lightgbm", False))
         enable_cb   = bool(cfg.get("enable_catboost", False))
         if not enable_lgbm and not enable_cb:
+            logger.info("[MLChallenger] skipped user=%s reason=training_disabled enable_catboost=%s", user_id, enable_cb)
             return
         # Fase 1 B.3 — fonte única: train_challengers lê o threshold da config
         # ml ativa; passar valor por chamada aqui (lido de outra config, com

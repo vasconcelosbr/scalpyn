@@ -169,6 +169,7 @@ def _apply_barrier_params(user_config: dict, ml_config: dict) -> dict:
     # Carimbo do contrato ativo propagado para o write path — _create_from_decision
     # usa isto para exigir fail-closed as chaves do contrato v2 (P1 Fase 1.6).
     user_config["ml_active_barrier_contract_version"] = active_contract
+    user_config["ml_feature_contract"] = deepcopy(ml_config.get("ml_feature_contract") or {})
     user_config["shadow_barrier_mode"] = ml_config.get("shadow_barrier_mode")
     user_config["shadow_atr_timeframe"] = ml_config.get("shadow_atr_timeframe")
     user_config["tp_atr_multiplier"] = ml_config.get("shadow_atr_multiplier_tp")
@@ -1686,8 +1687,13 @@ async def _create_from_decision(
     from .entry_risk_features import pending_entry_risk_payload
 
     _entry_risk_pending = pending_entry_risk_payload(_source_snapshot)
+    capture_features = _build_features_snapshot(decision)
+    projection_meta = None
+    if normalized_source == "L3":
+        from app.ml.l3_integrity import project_capture
+        capture_features, projection_meta = project_capture(capture_features, _source_snapshot, user_config)
     native_capture = capture_native_snapshot(
-        _build_features_snapshot(decision),
+        capture_features,
         source_snapshot=_source_snapshot,
         decision_created_at=decision.created_at,
         entry_at=entry_ts,
@@ -1776,6 +1782,9 @@ async def _create_from_decision(
                     _mtf_rejected_layer = _layer
                     _mtf_rejected_rule = _record.get("rule")
                     break
+    if projection_meta is not None:
+        config_snap["ml_capture_projection"] = projection_meta
+
     # Merge caller-provided metadata (e.g. l3_decision, l3_score, l3_reasons for
     # L3_REJECTED / L3_SIMULATED) into config_snapshot so outcomes can be correlated
     # with gate labels after closure.
