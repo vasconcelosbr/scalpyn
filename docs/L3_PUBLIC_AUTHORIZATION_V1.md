@@ -32,13 +32,18 @@ this repository; adding these fields does not update that integration.
 
 ## Producer and worker behavior
 
-On-demand Spot L3 refresh uses the scanner's canonical evaluator once. Decision,
+Explicit on-demand Spot L3 refresh uses the scanner's canonical evaluator once. Decision,
 contract, outbox and membership projection commit together. Failure rolls back
 the transaction. The scanner uses the same decision/outbox persistence boundary.
 New L3 requests with invalid or expired contracts are not dispatched for capture.
 Outbox workers retain their idempotency and active-position/consolidation locks;
 new expired requests terminate explicitly as AUTHORIZATION_EXPIRED. No synthetic
 price, historical purchase or retroactive Shadow is created.
+
+Spot L3 GET endpoints only read persisted authorization. They do not trigger an
+inline or background refresh when a list is empty or stale. Scheduled scans and
+explicit refresh requests own production; refreshing the UI cannot produce a
+decision or compete for its profile write lock.
 
 The public winner and Shadow consolidation share the existing ranking function.
 Pending batch membership can change before consolidation completes; STARTED is

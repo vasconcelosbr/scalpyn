@@ -2512,7 +2512,7 @@ async def get_watchlist_assets(
     )
     assets = await _load_active_watchlist_assets(watchlist_id, db)
 
-    if wl.auto_refresh:
+    if wl.auto_refresh and not (effective_level == "L3" and getattr(wl, "market_mode", "spot") == "spot"):
         try:
             if not assets:
                 # Empty snapshot — must resolve inline so there is something to show.
@@ -3082,7 +3082,7 @@ async def _get_watchlist_rejections_payload(
     )
     assets = await _load_active_watchlist_assets(wl.id, db)
 
-    if wl.auto_refresh:
+    if wl.auto_refresh and not (effective_level == "L3" and getattr(wl, "market_mode", "spot") == "spot"):
         try:
             async with db.begin_nested():
                 await _auto_refresh_watchlist_assets_if_needed(
