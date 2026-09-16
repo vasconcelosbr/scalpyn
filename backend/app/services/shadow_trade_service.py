@@ -169,6 +169,7 @@ def _apply_barrier_params(user_config: dict, ml_config: dict) -> dict:
     # Carimbo do contrato ativo propagado para o write path — _create_from_decision
     # usa isto para exigir fail-closed as chaves do contrato v2 (P1 Fase 1.6).
     user_config["ml_active_barrier_contract_version"] = active_contract
+    user_config["ml_l3_managed_exit"] = deepcopy(ml_config.get("ml_l3_managed_exit"))
     user_config["ml_feature_contract"] = deepcopy(ml_config.get("ml_feature_contract") or {})
     user_config["shadow_barrier_mode"] = ml_config.get("shadow_barrier_mode")
     user_config["shadow_atr_timeframe"] = ml_config.get("shadow_atr_timeframe")
@@ -1850,6 +1851,15 @@ async def _create_from_decision(
         else "UNRESOLVED_VERSION"
     )
 
+    from app.ml.l3_managed_exit import freeze as freeze_managed_exit, VERSION as MANAGED_LABEL_VERSION
+    managed_capture = freeze_managed_exit(config_snap, user_config, source=source,
+        capture_valid=lineage_status == "EXACT" and authorization_contract_valid and _profile_contract_valid
+        and isinstance(_l3_contract_v3, dict) and _l3_contract_v3.get("authorization_status") == "ALLOW")
+    if managed_capture is not None:
+        config_snap["l3_managed_ml"] = managed_capture
+        config_snap["label_contract_version"] = MANAGED_LABEL_VERSION
+        config_hash = hashlib.sha256(json.dumps(config_snap, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
+
     try:
         async with db.begin_nested():
             res = await db.execute(
@@ -1952,7 +1962,7 @@ async def _create_from_decision(
                     "feature_schema_version": native_capture.feature_schema_version,
                     "feature_extractor_version": native_capture.feature_extractor_version,
                     "capture_contract_version": native_capture.capture_contract_version,
-                    "label_contract_version": LABEL_CONTRACT_VERSION,
+                    "label_contract_version": MANAGED_LABEL_VERSION if managed_capture is not None else LABEL_CONTRACT_VERSION,
                     "barrier_contract_version": _barrier_contract_version,
                     "feature_source_at": native_capture.source_at,
                     "feature_source_times": json.dumps(native_capture.source_times),

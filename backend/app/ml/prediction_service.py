@@ -171,6 +171,15 @@ class WinFastPredictor:
                 reason="no approved model threshold row",
             )
 
+        if model_lane == "L3_PROFILE":
+            from .l3_managed_exit import inference_compatible
+            try:
+                if (str(getattr(model, "_artifact_version", "")) != str(model_version)
+                        or not await inference_compatible(db, model_id, getattr(model, "_l3_contract", None))):
+                    return _fail_closed_result(model_lane=model_lane, reason_code="MODEL_CONTRACT_MISMATCH", reason="active L3 economic contract differs from artifact")
+            except Exception as exc:
+                return _fail_closed_result(model_lane=model_lane, reason_code="MODEL_CONTRACT_MISMATCH", reason=str(exc))
+
         if metrics is None:
             metrics = {}
 

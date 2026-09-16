@@ -140,6 +140,9 @@ def holdout_statistics(labels, probabilities, returns, threshold, times, groups,
 
 def contract_definitions(config, feature_names):
     """Immutable full definitions stored in the existing contract registry."""
+    from .l3_managed_exit import lane_config, definition, OUTCOMES
+    config = lane_config(config)
+    managed = definition(config)
     from .feature_contract_v2 import CAPTURE_CONTRACT_VERSION
     from .feature_extractor import FEATURE_SCHEMA_VERSION
     def identity(value):
@@ -152,6 +155,8 @@ def contract_definitions(config, feature_names):
              "formula": "net_return_pct > 0" if config["ml_label_objective"] == "positive_net_return" else "TP_HIT within target_window_seconds",
              "economic_config": {k: v for k, v in config.items() if k.startswith(("shadow_", "ml_fee_", "ml_label_", "ml_l3_label_", "ml_maturity_")) or k in ("ml_active_barrier_contract_version", "ml_win_fast_threshold_seconds")},
              "outcomes": ["TP_HIT", "SL_HIT", "TIMEOUT"], "net_return_required": True}
+    if managed:
+        label.update(managed_exit=managed, outcomes=list(OUTCOMES), formula="gross_return_pct - fee_roundtrip_pct - slippage_roundtrip_pct > 0", maturity="max(entry+horizon,label_available_at)+embargo", censored="exclude; do not force exit", evidence="contiguous closed candles; replay; warmup price-only then VALID flow")
     features = {"version": VERSION, "schema": FEATURE_SCHEMA_VERSION, "capture": CAPTURE_CONTRACT_VERSION,
                 "ordered_features": list(feature_names), "row_contract": (config.get("ml_feature_contract") or {}).get("L3_PROFILE"),
                 "ranges": config.get("ml_feature_ranges"), "exclusions": config.get("ml_l3_feature_exclusions"),

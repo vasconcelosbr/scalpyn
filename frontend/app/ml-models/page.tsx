@@ -208,6 +208,7 @@ export default function MlModelsPage() {
   const { data: readiness, error: readinessError, isValidating: refreshingReadiness } = useSWR<{
     total_rows: number; labelable_rows: number; min_required: number; ready: boolean;
     blocked_reasons: string[]; dataset_query_cutoff: string; label_version: string; automatic_training_enabled: boolean;
+    managed_exit_contract?: { version: string; fee_roundtrip_pct: number; slippage_roundtrip_pct: number; max_holding_seconds: number } | null;
     capture_diagnostics?: {
       profile_contracts_valid: boolean;
       profiles: { profile_id: string; name: string; last_scanned_at: string | null; errors: unknown[] }[];
@@ -306,6 +307,10 @@ export default function MlModelsPage() {
           {readiness && <>
             <p className="mt-2">{readiness.total_rows} registros compatíveis · {readiness.labelable_rows} com label · mínimo para candidato: {readiness.min_required}</p>
             <p className="mt-1">Label: {readiness.label_version} · consulta: {fmtDateTime(readiness.dataset_query_cutoff)}</p>
+            {readiness.managed_exit_contract && <p className="mt-1">
+              Alvo: retorno líquido da saída gerenciada · Taxas: {readiness.managed_exit_contract.fee_roundtrip_pct.toLocaleString("pt-BR")}% · Slippage total: {readiness.managed_exit_contract.slippage_roundtrip_pct.toLocaleString("pt-BR")}% · Horizonte: {(readiness.managed_exit_contract.max_holding_seconds / 3600).toLocaleString("pt-BR")} h.
+              {" "}Capturas anteriores permanecem fora deste contrato.
+            </p>}
             <p className="mt-1">{readiness.blocked_reasons.join(" · ") || "A aprovação depende das métricas do novo candidato."}</p>
             <p className="mt-1">Readiness não aprova nem ativa um modelo.</p>
             <p className="mt-1">Treino automático CatBoost L3: {readiness.automatic_training_enabled ? "habilitado" : "desabilitado"}.</p>
@@ -429,7 +434,7 @@ export default function MlModelsPage() {
                     )}
                     {(m.target_window_seconds ?? m.metrics_json?.target_window_seconds) != null && (
                       <span className="text-[10px] px-2 py-0.5 rounded bg-[#1A2035] border border-[#334155] font-mono text-[#94A3B8]">
-                        {(m.label_version ?? m.metrics_json?.label_version)?.startsWith("positive_net_return") ? "alvo: retorno líquido positivo no fechamento" : `janela TP: ${Math.round(((m.target_window_seconds ?? m.metrics_json?.target_window_seconds) as number) / 60)} min`}
+                        {(m.label_version ?? m.metrics_json?.label_version)?.match(/^(positive_net_return|l3_managed_net)/) ? "alvo: retorno líquido positivo no fechamento" : `janela TP: ${Math.round(((m.target_window_seconds ?? m.metrics_json?.target_window_seconds) as number) / 60)} min`}
                       </span>
                     )}
                   </div>

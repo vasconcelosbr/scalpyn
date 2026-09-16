@@ -236,4 +236,8 @@ async def advance_shadow(db, shadow):
                           closure_path="l3_continuation",exit_price_nominal=state.get("trigger_price"),
                           exit_price_observed=state.get("observed_price"),exit_price_semantics=state["semantics"])
         shadow.eligible_for_training = False
+        from app.ml.l3_managed_exit import finalize as finalize_managed_label
+        state = await finalize_managed_label(db, shadow, state)
+        await db.execute(text("UPDATE shadow_l3_exit_states SET state=CAST(:state AS JSONB),checked_at=clock_timestamp() WHERE shadow_id=:id"),
+                         {"id":shadow.id,"state":json.dumps(state,default=str)})
     return state
