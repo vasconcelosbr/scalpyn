@@ -347,7 +347,24 @@ def collect_1m_shadow() -> str:
 
 @celery_app.task(name="app.tasks.collect_research_ohlcv.collect_5m_shadow")
 def collect_5m_shadow() -> str:
-    return json.dumps(_run_async(_collect_state_shadow_async("5m")), default=str)
+    result = _run_async(_collect_state_shadow_async("5m"))
+    # R1 moved closed candles to this writer, but the indicator chain still
+    # waited for the unrelated legacy metadata collector. Dispatch only after
+    # committed canonical inserts; SHADOW/empty captures keep no consumers.
+    if (result.get("mode") == "CANONICAL" and result.get("closed_table") == "ohlcv"
+            and result.get("canonical_read_enabled") is True
+            and result.get("inserted_closed_rows", 0) > 0):
+        from .task_dispatch import enqueue
+        for task, key, ttl in (
+            ("app.tasks.compute_indicators.compute_structural_5m", "compute_structural_5m", 1800),
+            ("app.tasks.compute_indicators.compute_5m", "compute_5m", 210),
+        ):
+            try:
+                enqueue(task, dedup_key=key, ttl_seconds=ttl)
+                logger.info("[CANONICAL-5m-COMPUTE] dispatch requested task=%s", task)
+            except Exception:
+                logger.exception("[CANONICAL-5m-COMPUTE] dispatch failed task=%s; legacy recovery remains active", task)
+    return json.dumps(result, default=str)
 
 
 @celery_app.task(name="app.tasks.collect_research_ohlcv.collect_30m_shadow")
