@@ -1611,6 +1611,19 @@
             "Lane do modelo",
             "Readiness não aprova"
           ]
+        },
+        {
+          "path": "backend/app/logging_config.py",
+          "contains_all": [
+            "copy(existing)",
+            "MethodType(BrazilTimeFormatter.formatTime, formatter)"
+          ]
+        },
+        {
+          "path": "backend/tests/test_logging_provider_fields.py",
+          "contains_all": [
+            "test_brazil_time_preserves_uvicorn_access_fields"
+          ]
         }
       ]
     }

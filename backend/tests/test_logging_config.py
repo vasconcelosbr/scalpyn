@@ -26,7 +26,7 @@ def test_install_preserves_existing_format_and_datefmt():
     root.addHandler(handler)
     try:
         install_brazil_time_logging()
-        assert isinstance(handler.formatter, BrazilTimeFormatter)
+        assert type(handler.formatter) is logging.Formatter
         record = logging.LogRecord("t", logging.INFO, "x.py", 1, "m", None, None)
         record.created = 1757534400.0
         assert handler.formatter.format(record) == "17:00:00 | m"

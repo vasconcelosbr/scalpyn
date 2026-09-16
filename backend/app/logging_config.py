@@ -7,6 +7,8 @@ convert from UTC.
 """
 
 import logging
+from copy import copy
+from types import MethodType
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -24,12 +26,15 @@ class BrazilTimeFormatter(logging.Formatter):
 
 
 def install_brazil_time_logging() -> None:
-    """Swap every handler's formatter on the given loggers to BrazilTimeFormatter,
-    preserving each handler's existing format string (only the time source changes)."""
+    """Change timestamps without discarding provider-specific formatMessage.
+
+    Uvicorn formatters supply levelprefix, request_line and status_code. Replacing
+    their class with logging.Formatter breaks otherwise successful request logs.
+    """
     for name in _LOGGER_NAMES:
         logger = logging.getLogger(name)
         for handler in logger.handlers:
             existing = handler.formatter
-            fmt = existing._fmt if existing is not None else None
-            datefmt = existing.datefmt if existing is not None else None
-            handler.setFormatter(BrazilTimeFormatter(fmt, datefmt))
+            formatter = copy(existing) if existing is not None else BrazilTimeFormatter()
+            formatter.formatTime = MethodType(BrazilTimeFormatter.formatTime, formatter)
+            handler.setFormatter(formatter)
