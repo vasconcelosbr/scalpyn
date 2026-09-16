@@ -1404,7 +1404,7 @@
           "contains_all": [
             "riskDraftReducer",
             "sameRiskValues",
-            "Distância do trailing global"
+            "<ShadowL3ExitPolicyForm />"
           ]
         },
         {
@@ -1413,8 +1413,17 @@
             "test_effective_floor_schedule_next_step_and_pending_floor",
             "test_other_users_are_excluded_before_query"
           ]
+        },
+        {
+          "path": "frontend/components/settings/ShadowL3ExitPolicyForm.tsx",
+          "contains_all": [
+            "useConfig(\"shadow_l3_exit_policy\")",
+            "continuation_taker_min",
+            "step_floor_pct"
+          ]
         }
-      ]
+      ],
+      "description": "Preserve persisted risk settings and the consolidated ShadowL3ExitPolicyForm from main commit ae36c3a3; obsolete global trailing slider was intentionally removed there."
     },
     {
       "id": "mtf-shadow-v5-group-qualified-provenance",
