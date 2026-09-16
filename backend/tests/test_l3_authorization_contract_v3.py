@@ -1177,4 +1177,26 @@ def test_legacy_inline_threshold_defaults_match_block_engine_without_profile_mut
     assert condition["expected"] == {"value": 0, "min": 20, "max": 80}
     assert "OPERATOR_UNSUPPORTED" not in result["reason_codes"]
     assert result["valid"] is True
+    assert result["sections"]["block_rules"]["blocked"] is False
     assert canonical_hash(profile) == original
+
+
+@pytest.mark.parametrize('operator,value,actual', [
+    ('>', 50, 50), ('>', 50, 51), ('>=', 50, 49), ('>=', 50, 50),
+    ('<', 50, 50), ('<', 50, 49), ('<=', 50, 51), ('<=', 50, 50),
+])
+def test_inline_block_threshold_matches_canonical_block_engine(operator, value, actual):
+    from app.services.block_engine import BlockEngine
+    from app.services.l3_authorization_contract_v3 import _evaluate_blocks
+    asset = _asset()
+    asset['_merged_indicators'].candidates[1]['actual'] = actual
+    registry = build_feature_registry(asset, evaluated_at=NOW)
+    block = {'id': 'threshold', 'type': 'threshold', 'indicator': 'rsi',
+             'operator': operator, 'value': value, 'source': 'ohlcv',
+             'source_provider': 'gate_io_candles', 'provider_policy_id': 'provider-policy-v1',
+             'timeframe': '5m', 'period': 14, 'candle_policy': 'CLOSED_ONLY', 'max_age_seconds': 30}
+    section = {'blocks': [block]}
+    expected = BlockEngine(section, zero_is_value=True).evaluate({'rsi': actual})['blocked']
+    evaluated = _evaluate_blocks({'block_rules': section}, registry, registry[1]['market_scope'])
+    assert evaluated['contract_reject'] is False
+    assert evaluated['blocked'] == expected

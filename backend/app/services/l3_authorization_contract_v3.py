@@ -1650,6 +1650,13 @@ def _evaluate_blocks(
             section="block_rules", rule_id=block_id, required_default=True,
         )
         is_match = evaluated["passed"] and bool(conditions)
+        if (not block.get("conditions") and block.get("type", "threshold") == "threshold"
+                and block.get("operator", ">") in {">", ">=", "<", "<="}):
+            # Legacy inline thresholds are minimum/maximum requirements:
+            # BlockEngine blocks when they FAIL. Explicit condition groups
+            # instead describe the blocking predicate itself.
+            is_match = not evaluated['contract_reject'] and any(
+                c['status'] == 'FAIL' for c in evaluated['conditions'])
         matched = matched or is_match
         contract_reject = contract_reject or evaluated["contract_reject"]
         results.append({
