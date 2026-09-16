@@ -192,6 +192,19 @@ export default function MlModelsPage() {
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [lane, setLane] = useState("L3_PROFILE");
+  const [captureCheck, setCaptureCheck] = useState<{
+    checked_at: string; note: string;
+    profiles: { profile_id: string; name: string; symbol: string | null; status: string; reason_codes: string[] }[];
+  } | null>(null);
+  const [checkingCapture, setCheckingCapture] = useState(false);
+  const [captureCheckError, setCaptureCheckError] = useState(false);
+  async function checkCapture() {
+    setCheckingCapture(true);
+    setCaptureCheckError(false);
+    try { setCaptureCheck(await apiGet("/api/ml/l3/capture-preflight")); }
+    catch { setCaptureCheckError(true); }
+    finally { setCheckingCapture(false); }
+  }
   const { data: readiness, error: readinessError, isValidating: refreshingReadiness } = useSWR<{
     total_rows: number; labelable_rows: number; min_required: number; ready: boolean;
     blocked_reasons: string[]; dataset_query_cutoff: string; label_version: string; automatic_training_enabled: boolean;
@@ -305,6 +318,13 @@ export default function MlModelsPage() {
               {readiness.capture_diagnostics.latest_decision && <p>Última decisão: {readiness.capture_diagnostics.latest_decision.symbol} · {readiness.capture_diagnostics.latest_decision.decision} · {readiness.capture_diagnostics.latest_decision.authorization_status || "envelope não disponível"} · {fmtDateTime(readiness.capture_diagnostics.latest_decision.created_at)}</p>}
               {readiness.capture_diagnostics.latest_capture_skip && <p>Última tentativa não persistida: {readiness.capture_diagnostics.latest_capture_skip.skip_reason} · {fmtDateTime(readiness.capture_diagnostics.latest_capture_skip.created_at)}</p>}
               <p>{readiness.capture_diagnostics.note}</p>
+              <button type="button" onClick={checkCapture} disabled={checkingCapture} className="mt-2 rounded border border-[#38BDF8]/30 px-3 py-1 text-[#7DD3FC] disabled:opacity-50">{checkingCapture ? "Verificando dados atuais…" : "Verificar coleta agora"}</button>
+              {captureCheckError && <p className="text-[#F87171]">Não foi possível concluir a verificação. Tente novamente.</p>}
+              {captureCheck && <div className="space-y-1 pt-2">
+                <p>Verificação: {fmtDateTime(captureCheck.checked_at)}</p>
+                {captureCheck.profiles.map(p => <p key={p.profile_id}>{p.name} · {p.symbol || "sem candidato"} · {p.status === "STRATEGY_BLOCK" ? "Aguardando condições da estratégia" : p.status === "ALLOW" ? "Amostra aprovada na verificação" : p.status === "NO_UPSTREAM_CANDIDATE" ? "Aguardando candidato na origem" : p.status === "DATA_UNAVAILABLE" ? "Aguardando dados válidos" : "Pendência técnica"}{p.status === "CONTRACT_REJECT" && `: ${p.reason_codes.join(" · ")}`}</p>)}
+                <p>{captureCheck.note}</p>
+              </div>}
             </div>}
           </>}
           {readinessError && <p className="mt-2 text-[#F87171]">Não foi possível verificar o dataset L3 agora. A consulta será repetida automaticamente.</p>}

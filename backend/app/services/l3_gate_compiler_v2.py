@@ -107,6 +107,11 @@ def compile_conditions(
             source_key = "field" if section == "signals" else "indicator"
             indicator = condition.get(source_key) or condition.get("indicator") or condition.get("field")
             condition["indicator"] = _canonical_indicator(indicator)
+            # RuleEngine gives an existing `field` precedence over `indicator`.
+            # Keep both names aligned so the UI score alias reads the same
+            # freshly computed alpha score recorded in the gate envelope.
+            if "field" in condition:
+                condition["field"] = condition["indicator"]
 
         compiled.append(condition)
     return compiled

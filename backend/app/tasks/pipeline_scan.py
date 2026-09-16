@@ -1943,6 +1943,7 @@ async def _evaluate_l3_decisions(
     watchlist_name=None,
     watchlist_level=None,
     source_watchlist_id=None,
+    read_only=False,
 ) -> list[dict]:
     """Avaliar candidatos L3 (rules + entry triggers) e produzir decisions.
 
@@ -2024,7 +2025,7 @@ async def _evaluate_l3_decisions(
 
     inject_live = db is not None and user_id is not None
     mtf_observations: dict[str, dict] = {}
-    if inject_live and assets:
+    if inject_live and assets and not read_only:
         try:
             from ..services.mtf_observation_service import (
                 build_observations_for_assets,
@@ -2455,7 +2456,7 @@ async def _evaluate_l3_decisions(
     # Durable capture is deliberately placed here, before the caller applies
     # edge-triggered decision-log filtering. Stable ALLOW/BLOCK evaluations
     # must remain auditable even when no decisions_log transition is emitted.
-    if db is not None and user_id is not None and watchlist_id is not None and decisions:
+    if not read_only and db is not None and user_id is not None and watchlist_id is not None and decisions:
         try:
             from ..services.l3_gate_evaluation_store import (
                 persist_gate_evaluations,

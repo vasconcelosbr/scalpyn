@@ -71,10 +71,36 @@ async def test_on_demand_uses_canonical_evaluator_and_preserves_block(monkeypatc
     assert result[0]['decision'] == 'BLOCK'
     assert evaluate.call_args.args[1]['_execution_contract']['watchlist_profile_id'] == 'p'
     assert evaluate.call_args.kwargs['watchlist_id'] == 'wl'
+    await evaluate_on_demand_l3(object(), user_id='u', watchlist=watchlist, symbols=['BTC_USDT'], score_config={}, read_only=True)
+    assert evaluate.call_args.kwargs['read_only'] is True
     snapshot['contract']['contract_valid'] = False
     with pytest.raises(ValueError, match='PROFILE_CONTRACT_INVALID'):
         await evaluate_on_demand_l3(object(), user_id='u', watchlist=watchlist, symbols=['BTC_USDT'], score_config={})
-    assert evaluate.await_count == 1
+    assert evaluate.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_read_only_evaluation_cannot_persist_gate_or_mtf_state(monkeypatch):
+    from unittest.mock import AsyncMock
+    from app.tasks import pipeline_scan
+    from app.services import l3_gate_evaluation_store, mtf_observation_service
+    monkeypatch.setenv('L3_EXACT_TIMEFRAME_RESOLUTION', 'false')
+    async def flow(**kwargs):
+        return kwargs['indicators'], True
+    async def score(assets, **kwargs):
+        assets[0]['_score'] = 0
+    monkeypatch.setattr(pipeline_scan, '_inject_live_order_flow', flow)
+    monkeypatch.setattr(pipeline_scan, '_apply_robust_authoritative_scoring', score)
+    persist = AsyncMock()
+    mtf = AsyncMock()
+    monkeypatch.setattr(l3_gate_evaluation_store, 'persist_gate_evaluations', persist)
+    monkeypatch.setattr(mtf_observation_service, 'build_observations_for_assets', mtf)
+    result = await pipeline_scan._evaluate_l3_decisions(
+        [{'symbol': 'BTC_USDT', 'indicators': {}}], {}, 'L3', {},
+        db=object(), user_id='user', watchlist_id='watchlist', read_only=True)
+    assert len(result) == 1
+    persist.assert_not_awaited()
+    mtf.assert_not_awaited()
 
 
 def test_calculation_identity_is_producer_config_not_profile_request():
@@ -115,3 +141,34 @@ def test_future_provenance_cannot_be_certified_fresh():
     candidate = {'source': 'decision_context', 'source_timestamp': '2026-09-16T12:01:00Z',
                  'evaluated_at': '2026-09-16T12:00:00Z', 'age_seconds': 0}
     assert 'SOURCE_TIMESTAMP_IN_FUTURE' in _freshness_reasons({'max_age_seconds': 10}, candidate)
+
+
+def test_derived_provenance_requires_same_observation_and_keeps_window():
+    from app.services.l3_authorization_contract_v3 import _derived_candle_candidates
+    common = {'source': 'ohlcv', 'source_provider': 'gate.io', 'timeframe': '5m', 'period': 14,
+              'source_timestamp': '2026-09-16T12:00:00Z', 'computed_at': '2026-09-16T12:05:00Z',
+              'available_at': '2026-09-16T12:05:00Z'}
+    plus = {**common, 'indicator': 'di_plus', 'actual': 30}
+    minus = {**common, 'indicator': 'di_minus', 'actual': 20}
+    assert _derived_candle_candidates([plus]) == []
+    assert _derived_candle_candidates([plus, {**minus, 'timeframe': '30m'}]) == []
+    assert _derived_candle_candidates([plus, {**minus, 'computed_at': '2026-09-16T12:06:00Z'}]) == []
+    derived = _derived_candle_candidates([plus, minus])[0]
+    assert derived['actual'] is True and len(derived['dependencies']) == 2
+    assert derived['source_timestamp'] == common['source_timestamp']
+    high = {**common, 'indicator': 'recent_high_15m_distance_pct', 'actual': 0.8, 'period': None}
+    breakout = _derived_candle_candidates([high])[0]
+    assert breakout['reference_window'] == '15m' and breakout['actual'] == 0.8
+
+
+def test_score_alias_reads_gate_score_and_keeps_threshold_block():
+    from app.services.l3_gate_compiler_v2 import compile_conditions
+    from app.services.rule_engine import RuleEngine
+    config = [{'field': 'score', 'operator': '>=', 'value': 67}]
+    rule = compile_conditions(config, section='signals')[0]
+    assert rule['field'] == rule['indicator'] == 'alpha_score'
+    engine = RuleEngine()
+    _, below = engine.evaluate_condition_status(rule, {'score': 99, 'alpha_score': 66.9}, field_key='indicator')
+    _, above = engine.evaluate_condition_status(rule, {'score': 0, 'alpha_score': 67}, field_key='indicator')
+    assert below['status'] == 'FAIL' and above['status'] == 'PASS'
+    assert config[0]['field'] == 'score' and config[0]['value'] == 67

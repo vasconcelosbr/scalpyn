@@ -1649,6 +1649,10 @@
       "description": "Producer calculation identity, immutable book clocks and canonical on-demand authorization preserve strategy and expose capture exclusions.",
       "files": [
         {"path": "backend/app/services/indicator_calculation_identity.py", "contains_all": ["def calculation_identities", "UTC_DAY"]},
+        {"path": "backend/app/services/l3_authorization_contract_v3.py", "contains_all": ["def _derived_candle_candidates", "registry.extend(_derived_candle_candidates(registry))"]},
+        {"path": "backend/app/services/l3_gate_compiler_v2.py", "contains_all": ["condition[\"field\"] = condition[\"indicator\"]"]},
+        {"path": "backend/tests/test_l3_capture_preparation.py", "contains_all": ["test_derived_provenance_requires_same_observation_and_keeps_window", "test_score_alias_reads_gate_score_and_keeps_threshold_block", "test_read_only_evaluation_cannot_persist_gate_or_mtf_state"]},
+        {"path": "backend/app/services/l3_capture_preflight.py", "contains_all": ["SET TRANSACTION READ ONLY", "read_only=True", "capture_created"]},
         {"path": "backend/app/services/l3_on_demand_decisions.py", "contains_all": ["_evaluate_l3_decisions", "L3_ON_DEMAND_PROFILE_ID_MISMATCH"]},
         {"path": "backend/app/api/watchlists.py", "contains_all": ["await evaluate_on_demand_l3", "L3_ON_DEMAND_EVALUATION_ENVELOPE_MISSING"]},
         {"path": "backend/app/services/l3_capture_diagnostics.py", "contains_all": ["AWAITING_MATURITY", "eligible_ids", "source='L3'"]},
