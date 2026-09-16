@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query, Response
 from sqlalchemy import select, text, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -926,6 +926,8 @@ def _normalize_decision_snapshot(
 def _iso_utc(value: Optional[datetime]) -> Optional[str]:
     if value is None:
         return None
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value.replace("Z", "+00:00"))
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -1030,8 +1032,11 @@ async def list_watchlists(
 async def list_l3_consolidated_assets(
     user_id: UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
+    response: Response = None,
 ):
     """Return only live L3 opportunities; Shadow positions are not a source."""
+    if response is not None:
+        response.headers["Cache-Control"] = "private, no-store"
     candidates = await load_live_l3_candidates(db, user_id=user_id)
     items: List[Dict[str, Any]] = []
     for candidate in candidates:
@@ -1043,6 +1048,7 @@ async def list_l3_consolidated_assets(
             default=None,
         )
         items.append({
+            **{key: value for key, value in (winner.authorization or {}).items() if not key.startswith("_")},
             "asset_id": str(winner.asset_id),
             "watchlist_id": str(winner.watchlist_id),
             "symbol": candidate.symbol,
@@ -1064,6 +1070,8 @@ async def list_l3_consolidated_assets(
         "virtual": True,
         "read_only": True,
         "semantic": "LIVE_L3_CANDIDATES",
+        "authorization_contract": "L3_PUBLIC_AUTHORIZATION_V1",
+        "consumer_policy": "Require ALLOW and now < expires_at; deduplicate authorization_id before placing an order.",
         "items": items,
         "total": len(items),
         "as_of": _iso_utc(datetime.now(timezone.utc)),
@@ -1814,6 +1822,13 @@ async def _resolve_and_persist(
         return []
 
     base_symbols = await _get_base_symbols(wl, user_id, db)
+    if wl.level == "L3" and getattr(wl, "market_mode", "spot") == "spot":
+        from ..services.l3_watchlist_publication import publish_l3_watchlist
+        try:
+            return await publish_l3_watchlist(db, user_id=user_id, watchlist=wl, symbols=base_symbols)
+        except BaseException:
+            await db.rollback()
+            raise
     if not base_symbols:
         # No upstream symbols — mark all existing active assets as 'down'
         # so the watchlist properly reflects the empty upstream state.
@@ -2443,6 +2458,7 @@ async def get_watchlist_assets(
     hide_neutral: bool = Query(False, description="Futures mode: omit assets with no direction assigned (score gap < 5 pts)"),
     user_id: UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
+    response: Response = None,
 ):
     """Return resolved and filtered assets for this watchlist level.
 
@@ -2521,6 +2537,46 @@ async def get_watchlist_assets(
     # read so the UI never exposes an asset after it has already left its
     # immediate parent, even during that short convergence window.
     assets = await _intersect_assets_with_active_parent(wl, assets, db)
+
+    if effective_level == "L3" and getattr(wl, "market_mode", "spot") == "spot":
+        if response is not None:
+            response.headers["Cache-Control"] = "private, no-store"
+        # Read the same persisted authority as Consolidado; never re-score or
+        # re-evaluate an approval using a different live indicator snapshot.
+        from types import SimpleNamespace
+        contributions = [item for candidate in await load_live_l3_candidates(db, user_id=user_id)
+                         for item in candidate.contributors if item.watchlist_id == wl.id]
+        authority = {item.symbol: item.authorization for item in contributions}
+        enriched, approved_items = [], []
+        for asset in assets:
+            auth = authority.get(asset.symbol)
+            if not auth:
+                continue
+            trace = [{
+                "type": item.get("section", "signal"),
+                "indicator": item.get("indicator"), "name": item.get("indicator"),
+                "status": item.get("status"), "current_value": item.get("actual"),
+                "expected": item.get("expected", item.get("target")),
+                "condition": item.get("operator", ""),
+            } for item in auth["_trace"]]
+            snapshot = build_analysis_snapshot(
+                symbol=asset.symbol, stage="L3", profile_id=str(wl.profile_id),
+                status="approved", trace=trace, timestamp=auth["evaluated_at"])
+            public = {key: value for key, value in auth.items() if not key.startswith("_")}
+            frozen = SimpleNamespace(**{column.key: getattr(asset, column.key)
+                                        for column in PipelineWatchlistAsset.__table__.columns})
+            frozen.analysis_snapshot = snapshot
+            frozen.alpha_score = auth["alpha_score"]
+            frozen.current_price = auth["current_price"]
+            enriched.append({**_asset_to_dict(frozen, indicators=auth["_indicators"]), **public,
+                             "analysis_snapshot": snapshot})
+            approved_items.append({**_normalize_decision_snapshot(
+                symbol=asset.symbol, status="approved", stage="L3", profile_id=str(wl.profile_id),
+                timestamp=auth["evaluated_at"], snapshot=snapshot, alpha_score=auth["alpha_score"]), **public})
+        return {"assets": enriched, "approved_items": approved_items, "total": len(enriched),
+                "profile_indicators": _extract_profile_indicator_fields(profile_config),
+                "show_score": True, "market_mode": "spot", "is_futures": False,
+                "authorization_contract": "L3_PUBLIC_AUTHORIZATION_V1"}
 
     # Resolve dynamic columns from the profile's Score tab (selected_rule_ids).
     _global_rules_assets = await _load_user_score_rules(db, user_id)

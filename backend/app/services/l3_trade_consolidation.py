@@ -154,7 +154,13 @@ def rank_candidates(
     """Apply the v1 ordering contract with deterministic final tie-breakers."""
     return sorted(
         candidates,
-        key=lambda candidate: (
+        key=candidate_rank_key,
+    )
+
+
+def candidate_rank_key(candidate):
+    """Shared ordering for the public projection and Shadow consolidation."""
+    return (
             -candidate.normalized_score_margin,
             -_as_float(candidate.decision_score),
             -_as_float(candidate.market_structure_score),
@@ -163,8 +169,7 @@ def rank_candidates(
             -_as_float(candidate.signal_score),
             (candidate.profile_name or "").casefold(),
             str(candidate.profile_id or ""),
-        ),
-    )
+        )
 
 
 def selection_thresholds(

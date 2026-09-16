@@ -2576,6 +2576,7 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
                     "L3_CONSOLIDATION_CANDIDATE",
                     "L3_CONTRACT_V3_SHADOW_EVALUATED",
                     "ML_ADVISORY_EVALUATED",
+                    "L3_PUBLIC_AUTHORIZATION_EVALUATED",
                 }
             ):
                 decisions_to_insert.append(decision)
@@ -2603,6 +2604,18 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
     for decision in decisions:
         m = decision.get("metrics") or {}
         contract_v3 = m.get("l3_authorization_contract_v3")
+        if isinstance(contract_v3, dict) and (contract_v3.get("lineage") or {}).get("watchlist_level") == "L3":
+            from ..services.l3_public_authorization import authorization_expiry
+            expiry = authorization_expiry(contract_v3)
+            strict_allow = (decision.get("decision") == "ALLOW"
+                            and contract_v3.get("valid") is True
+                            and contract_v3.get("authorization_status") == "ALLOW"
+                            and contract_v3.get("contract_technical_decision") == "ALLOW"
+                            and expiry is not None and expiry > now)
+            decision["_public_authorization_v1"] = True
+            if not strict_allow:
+                decision["_shadow_creation_required"] = False
+                decision["_consolidation_required"] = False
         if isinstance(contract_v3, dict) and not contract_v3.get(
             "authorization_contract_hash"
         ):
@@ -2721,6 +2734,7 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
                 now + timedelta(minutes=2) if consolidation_required else now
             ),
             payload={
+                "public_authorization_v1": bool(source_decision.get("_public_authorization_v1")),
                 "contract_mode": contract_v3.get("mode"),
                 "legacy_decision": row.decision,
                 "contract_technical_decision": contract_v3.get(

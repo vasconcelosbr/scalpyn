@@ -244,6 +244,14 @@ async def _process_direct(event_id: Any) -> str:
                 raise ValueError("DECISION_NOT_FOUND")
             contract = _contract(decision, event)
             required = bool((event.payload or {}).get("shadow_creation_required", False))
+            if (event.payload or {}).get("public_authorization_v1"):
+                from .l3_public_authorization import authorization_expiry
+                expiry = authorization_expiry(contract)
+                if expiry is None or expiry <= datetime.now(timezone.utc):
+                    event.payload = {**(event.payload or {}), "processing_result": "AUTHORIZATION_EXPIRED"}
+                    event.status = "PROCESSED"
+                    event.processed_at = datetime.now(timezone.utc)
+                    return "AUTHORIZATION_EXPIRED"
             processing_result = _direct_processing_result(
                 contract, required=required
             )
@@ -352,6 +360,12 @@ async def _process_consolidation(scan_run_id: str) -> tuple[int, str]:
     for event, decision in rows:
         contract = _contract(decision, event)
         payload = event.payload or {}
+        if payload.get("public_authorization_v1"):
+            from .l3_public_authorization import authorization_expiry
+            expiry = authorization_expiry(contract)
+            if expiry is None or expiry <= datetime.now(timezone.utc):
+                immediate_results[event.id] = "AUTHORIZATION_EXPIRED"
+                continue
         if not payload.get("consolidation_required"):
             immediate_results[event.id] = "NO_SHADOW_REQUIRED"
             continue

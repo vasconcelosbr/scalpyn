@@ -133,7 +133,14 @@ async def test_child_snapshot_is_intersected_with_current_parent():
 
 
 @pytest.mark.asyncio
-async def test_live_candidates_consider_every_l3_and_pick_highest_score():
+async def test_live_candidates_consider_every_l3_and_pick_highest_score(monkeypatch):
+    from app.services import l3_public_authorization
+    async def authorities(db, *, user_id, candidates):
+        return {(r["watchlist_id"], r["symbol"]): {
+            "alpha_score": r["alpha_score"], "current_price": r["current_price"],
+            "evaluated_at": "2026-09-16T16:00:00Z",
+        } for r in candidates}
+    monkeypatch.setattr(l3_public_authorization, "load_public_authorizations", authorities)
     symbol = "BTC_USDT"
     low_profile = uuid4()
     high_profile = uuid4()

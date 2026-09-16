@@ -76,6 +76,13 @@ interface PipelineWatchlist {
 }
 
 interface L3ConsolidatedAsset {
+  decision_id: number;
+  authorization_id: string;
+  authorization_status: 'ALLOW';
+  evaluated_at: string;
+  expires_at: string;
+  shadow_status: 'PENDING' | 'RETRY' | 'STARTED';
+  shadow_reason: string | null;
   asset_id: string;
   watchlist_id: string;
   symbol: string;
@@ -1441,6 +1448,7 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const requestInFlight = useRef(false);
+  const [authorizationClock, setAuthorizationClock] = useState(Date.now());
 
   const load = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
     if (requestInFlight.current) return;
@@ -1454,9 +1462,8 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
       setData(response);
       setError(null);
     } catch (err: unknown) {
-      if (!silent) {
-        setError(err instanceof Error ? err.message : 'Falha ao carregar a consolidação L3.');
-      }
+      setData(null);
+      setError(err instanceof Error ? err.message : 'Falha ao carregar a consolidação L3.');
     } finally {
       requestInFlight.current = false;
       if (!silent) setLoading(false);
@@ -1474,7 +1481,14 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
     return () => window.clearTimeout(timer);
   }, [refreshTick, load]);
 
-  const items = data?.items ?? [];
+  useEffect(() => {
+    const clock = window.setInterval(() => setAuthorizationClock(Date.now()), 1000);
+    const poll = window.setInterval(() => void load({ silent: true }), 5000);
+    return () => { window.clearInterval(clock); window.clearInterval(poll); };
+  }, [load]);
+
+  const items = (data?.items ?? []).filter(asset =>
+    asset.authorization_status === 'ALLOW' && Date.parse(asset.expires_at) > authorizationClock);
 
   return (
     <div
@@ -1517,7 +1531,7 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
             </span>
           </div>
           <p className="mt-0.5 truncate text-[11px] text-[#64748B]">
-            Somente criptos com condições favoráveis neste momento, consolidadas entre profiles.
+            Somente oportunidades com autorização válida e encaminhamento para Shadow.
           </p>
         </div>
         <span
@@ -1647,8 +1661,15 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
                         </td>
                         <td className="px-3 py-3">
                           <span className="rounded-full border border-[#22B97A]/25 bg-[#22B97A]/10 px-2 py-1 text-[9px] font-bold uppercase tracking-[0.1em] text-[#34D399]">
-                            Favorável agora
+                            Aprovado para execução
                           </span>
+                          <div className="mt-2 text-[10px] text-[#94A3B8]">
+                            {asset.shadow_status === 'STARTED' ? 'Shadow iniciado' :
+                              asset.shadow_status === 'RETRY' ? 'Falha no Shadow · nova tentativa pendente' : 'Shadow pendente'}
+                          </div>
+                          <div className="mt-1 text-[10px] text-[#64748B]">
+                            Válido até {new Date(asset.expires_at).toLocaleTimeString('pt-BR')}
+                          </div>
                         </td>
                         <td className="px-4 py-3 text-right text-[#64748B]" title={refreshedAt ? formatDateTime(refreshedAt) : undefined}>
                           {asset.refreshed_at ? timeAgo(asset.refreshed_at) : '—'}
