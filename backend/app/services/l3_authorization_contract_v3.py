@@ -1335,6 +1335,7 @@ def _evaluate_reference(
         }
     invalid = _freshness_reasons(reference, candidate)
     return {
+        "max_age_seconds": reference.get("max_age_seconds"),
         "status": (
             "CONTRACT_REJECT" if required else "SKIPPED_OPTIONAL"
         ) if invalid else "RESOLVED",

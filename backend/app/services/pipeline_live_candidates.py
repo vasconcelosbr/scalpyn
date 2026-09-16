@@ -42,6 +42,7 @@ class LiveL3Contribution:
     alpha_score: Optional[float]
     current_price: Optional[float]
     refreshed_at: object
+    authorization: Optional[dict] = None
 
 
 @dataclass(frozen=True)
@@ -149,6 +150,8 @@ async def load_live_l3_candidates(
             PipelineWatchlistAsset.watchlist_id.label("watchlist_id"),
             PipelineWatchlist.profile_id.label("profile_id"),
             Profile.name.label("profile_name"),
+            Profile.profile_version.label("profile_version"),
+            PipelineWatchlist.filters_json.label("watchlist_filters"),
             PipelineWatchlistAsset.symbol.label("symbol"),
             PipelineWatchlistAsset.alpha_score.label("alpha_score"),
             PipelineWatchlistAsset.current_price.label("current_price"),
@@ -252,9 +255,17 @@ async def load_live_l3_candidates(
         statement = statement.where(PipelineWatchlist.source_watchlist_id == l2_watchlist_id)
 
     rows = (await db.execute(statement)).mappings().all()
+    from .l3_public_authorization import load_public_authorizations
+    authorizations = await load_public_authorizations(db, user_id=user_id, candidates=rows)
     by_symbol: dict[str, list[LiveL3Contribution]] = {}
     seen_asset_ids: set[UUID] = set()
     for row in rows:
+        authority = authorizations.get((row["watchlist_id"], row["symbol"]))
+        if authority is None:
+            continue
+        minimum = float((row.get("watchlist_filters") or {}).get("min_alpha_score") or 0)
+        if minimum > 0 and (authority["alpha_score"] is None or float(authority["alpha_score"]) < minimum):
+            continue
         if row["asset_id"] in seen_asset_ids:
             continue
         seen_asset_ids.add(row["asset_id"])
@@ -264,9 +275,10 @@ async def load_live_l3_candidates(
             profile_id=row["profile_id"],
             profile_name=str(row["profile_name"]),
             symbol=str(row["symbol"]).upper(),
-            alpha_score=float(row["alpha_score"]) if row["alpha_score"] is not None else None,
-            current_price=float(row["current_price"]) if row["current_price"] is not None else None,
-            refreshed_at=row["refreshed_at"],
+            alpha_score=float(authority["alpha_score"]) if authority["alpha_score"] is not None else None,
+            current_price=float(authority["current_price"]) if authority["current_price"] is not None else None,
+            refreshed_at=authority["evaluated_at"],
+            authorization=authority,
         )
         by_symbol.setdefault(contribution.symbol, []).append(contribution)
 
@@ -274,7 +286,7 @@ async def load_live_l3_candidates(
     for symbol, contributions in by_symbol.items():
         ordered = sorted(
             contributions,
-            key=lambda item: (
+            key=lambda item: (item.authorization or {}).get("_rank_key") or (
                 item.alpha_score is None,
                 -(item.alpha_score or 0.0),
                 item.profile_name,

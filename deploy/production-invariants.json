@@ -144,7 +144,7 @@
         {
           "path": "frontend/app/watchlist/page.tsx",
           "contains_all": [
-            "Favorável agora",
+            "Aprovado para execução",
             "Trades já abertos continuam sendo acompanhados exclusivamente no Shadow Portfolio",
             "setRefreshError(null)"
           ]
@@ -1691,6 +1691,44 @@
             "test_managed_evidence_fails_closed",
             "test_managed_loader_population_is_segregated_and_mature",
             "test_inference_rejects_old_artifact_under_new_contract"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "l3-public-authorization-v1",
+      "description": "Consolidado and watchlist approval require latest valid unexpired immutable authorization plus transactional Shadow outbox; no stale membership approvals.",
+      "files": [
+        {
+          "path": "backend/app/services/l3_public_authorization.py",
+          "contains_all": [
+            "L3_PUBLIC_AUTHORIZATION_V1",
+            "def public_authorization",
+            "def authorization_expiry",
+            "DecisionLog.created_at.desc()"
+          ]
+        },
+        {
+          "path": "backend/app/services/l3_watchlist_publication.py",
+          "contains_all": [
+            "await _persist_decision_logs",
+            "await db.commit()",
+            "L3_PUBLIC_AUTHORIZATION_EVALUATED"
+          ]
+        },
+        {
+          "path": "backend/app/services/pipeline_live_candidates.py",
+          "contains_all": [
+            "load_public_authorizations",
+            "authority is None"
+          ]
+        },
+        {
+          "path": "backend/tests/test_l3_public_authorization.py",
+          "contains_all": [
+            "test_uni_membership_never_overrides_block_or_expired_contract",
+            "test_lit_allow_requires_transactional_outbox",
+            "test_on_demand_persists_decision_outbox_and_membership_atomically"
           ]
         }
       ]

@@ -10,7 +10,10 @@ const consolidatedCard = page.slice(
 
 test('L3 consolidated renders live opportunities instead of open Shadow trades', () => {
   assert.match(page, /semantic: 'LIVE_L3_CANDIDATES'/);
-  assert.match(consolidatedCard, /Favorável agora/);
+  assert.match(consolidatedCard, /Aprovado para execução/);
+  assert.match(consolidatedCard, /Date.parse\(asset.expires_at\) > authorizationClock/);
+  assert.match(consolidatedCard, /Shadow pendente/);
+  assert.match(consolidatedCard, /setData\(null\)/);
   assert.match(consolidatedCard, /Shadow Portfolio/);
   assert.doesNotMatch(consolidatedCard, /shadow_id/);
   assert.doesNotMatch(consolidatedCard, /dashboard\/shadow-portfolio\//);
