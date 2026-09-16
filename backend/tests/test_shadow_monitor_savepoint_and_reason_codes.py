@@ -77,6 +77,31 @@ async def test_shadow_advance_flushes_inside_savepoint(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_shadow_advance_in_savepoint_forwards_closure_path_hint(monkeypatch):
+    """Bloco C3/C4 fast-scan parity (2026-09-16): the fast-scan loop in
+    _fast_barrier_scan_async used to call _advance_shadow directly, with no
+    savepoint boundary, so a DB error there (e.g. a live-close price query)
+    could leave the whole fast-scan transaction aborted at the Postgres
+    level for every shadow processed after it in that tick — confirmed in
+    production as a cascading InFailedSQLTransactionError. It now routes
+    through this same isolated helper as the regular batch, so the hint it
+    passes for logging/attribution must reach _advance_shadow unchanged."""
+    db = _FakeDb()
+    shadow = _shadow()
+    advance = AsyncMock(return_value="completed")
+    monkeypatch.setattr(monitor, "_advance_shadow", advance)
+
+    transition, _target = await monitor._advance_shadow_in_savepoint(
+        db, shadow, None, closure_path_hint="fast_scan"
+    )
+
+    assert transition == "completed"
+    advance.assert_awaited_once_with(db, shadow, None, closure_path_hint="fast_scan")
+    assert db.savepoint_entered == 1
+    assert db.savepoint_exits == [None]
+
+
+@pytest.mark.asyncio
 async def test_shadow_flush_error_rolls_back_only_nested_transaction(monkeypatch):
     db = _FakeDb(flush_error=ValueError("varchar overflow"))
     shadow = _shadow()
