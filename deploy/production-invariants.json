@@ -1732,6 +1732,29 @@
           ]
         }
       ]
+    },
+    {
+      "id": "bounded-5m-publication-before-scan",
+      "description": "5m compute is isolated from collection, uses bounded independent sessions and commits before the downstream scan.",
+      "files": [
+        {
+          "path": "backend/app/tasks/compute_indicators.py",
+          "contains_all": [
+            "_process_one_symbol_5m",
+            "COMPUTE_5M_BATCH_SIZE",
+            "COMPUTE-5m-PUBLISHED",
+            "if count <= 0:"
+          ]
+        },
+        {
+          "path": "backend/tests/test_parallel_5m_compute.py",
+          "contains_all": [
+            "test_bounded_workers_overlap_without_exceeding_limit",
+            "test_symbol_publication_waits_for_commit",
+            "test_scan_only_after_successful_publication"
+          ]
+        }
+      ]
     }
   ]
 }

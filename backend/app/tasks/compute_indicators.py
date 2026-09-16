@@ -107,6 +107,7 @@ _COMPUTE_KEY_SOURCE_MAP: dict = {k: ("gate_trades", 1.00) for k in _ORDER_FLOW_K
 # Each concurrent slot opens its own DB session. Default 10 keeps connection
 # pool pressure low while reducing the sequential-loop wall time by ~10×.
 # Raise via env var COMPUTE_30M_BATCH_SIZE if the pool allows more connections.
+COMPUTE_5M_BATCH_SIZE: int = max(1, min(8, int(os.environ.get("COMPUTE_5M_BATCH_SIZE", "4"))))
 COMPUTE_30M_BATCH_SIZE: int = int(os.environ.get("COMPUTE_30M_BATCH_SIZE", "10"))
 
 
@@ -764,246 +765,203 @@ def compute_30m():
     return f"[COMPUTE-30m] Computed indicators for {count} symbols"
 
 
-async def _compute_5m_async():
-    """Compute technical indicators from 5-minute OHLCV candles."""
+async def _process_one_symbol_5m(symbol, indicators_config, indicator_config_identity,
+                                 metadata_map, market_type, min_candles_5m,
+                                 query_limit_5m):
+    """Publish one complete symbol atomically, with an isolated DB session.
+
+    Direct commit is intentional: an asynchronous persistence enqueue is not
+    a publication barrier and must not authorize the downstream scan.
+    """
     from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
     from ..services.feature_engine import FeatureEngine
     from ..services.indicator_calculation_identity import calculation_identities
     from ..services.market_data_service import market_data_service
     from ..services.order_flow_service import get_order_flow_data
+    engine = FeatureEngine(indicators_config)
+    symbol_market_type = {symbol: market_type}
+    try:
+        async with AsyncSessionLocal() as db:
+            ohlcv_result = await db.execute(text("""
+                SELECT time, open, high, low, close, volume, quote_volume, exchange,
+                       is_closed, ingested_at, capture_contract_version
+                FROM ohlcv
+                WHERE symbol = :symbol AND timeframe = '5m'
+                  AND time <= now() - interval '5 minutes'
+                ORDER BY time DESC
+                LIMIT :limit
+            """), {"symbol": symbol, "limit": query_limit_5m})
+            rows = ohlcv_result.fetchall()
 
-    import sqlalchemy.exc as _sqla_exc
-    logger.info("Starting 5m indicator computation...")
+            if len(rows) < min_candles_5m:
+                logger.debug(
+                    "Skipping 5m indicator computation for %s: only %d candles (need ≥%d)",
+                    symbol, len(rows), min_candles_5m,
+                )
+                return 0
+            if (
+                rows[0].is_closed is not True
+                or rows[0].ingested_at is None
+                or not rows[0].capture_contract_version
+            ):
+                logger.warning("[COMPUTE-5m] rejected ungoverned source symbol=%s", symbol)
+                return 0
 
-    computed = 0
+            df = pd.DataFrame([{
+                "time": r.time, "open": float(r.open), "high": float(r.high),
+                "low": float(r.low), "close": float(r.close), "volume": float(r.volume),
+                "quote_volume": float(r.quote_volume) if r.quote_volume is not None else None,
+            } for r in reversed(rows)])
 
-    async with AsyncSessionLocal() as db:
-        try:
-            indicators_config, indicator_config_identity = (
-                await _load_active_indicator_config(db)
+            one_minute_result = await db.execute(text("""
+                SELECT time, open, high, low, close, volume, quote_volume
+                FROM ohlcv
+                WHERE symbol = :symbol AND timeframe = '1m'
+                ORDER BY time DESC
+                LIMIT 10
+            """), {"symbol": symbol})
+            one_minute_rows = one_minute_result.fetchall()
+            df_1m = pd.DataFrame([{
+                "time": r.time, "open": float(r.open), "high": float(r.high),
+                "low": float(r.low), "close": float(r.close), "volume": float(r.volume),
+                "quote_volume": float(r.quote_volume) if r.quote_volume is not None else None,
+            } for r in reversed(one_minute_rows)]) if one_minute_rows else None
+
+            market_data = await market_data_service.fetch_indicator_fallbacks(
+                symbol,
+                existing_data=metadata_map.get(symbol),
             )
-            engine = FeatureEngine(indicators_config)
-            min_candles_5m = _derive_min_candles(indicators_config, "5m")
-            query_limit_5m = max(288, min_candles_5m)
-            # Task #232: ingestion gate is ``is_active`` only — see
-            # ``compute_indicators._compute_async`` above for rationale.
-            symbols_result = await db.execute(text("""
-                SELECT DISTINCT o.symbol, p.market_type
-                FROM ohlcv o
-                JOIN pool_coins p ON o.symbol = p.symbol
-                WHERE p.is_active = true
-                  AND o.timeframe = '5m'
-                  AND o.time > now() - interval '2 hours'
-            """))
-            symbol_rows = symbols_result.fetchall()
-            # Task #273: deterministic sort — see ``_compute_async`` above.
-            symbols = sorted(row.symbol for row in symbol_rows)
-            symbol_market_type = {row.symbol: row.market_type for row in symbol_rows}
-            metadata_map = await _load_market_metadata_map(db)
+            results = engine.calculate(
+                df,
+                market_data=market_data,
+                timeframe="5m",
+                df_1m=df_1m,
+            )
+            if not results:
+                return 0
 
-            for symbol in symbols:
-                try:
-                    ohlcv_result = await db.execute(text("""
-                        SELECT time, open, high, low, close, volume, quote_volume, exchange,
-                               is_closed, ingested_at, capture_contract_version
-                        FROM ohlcv
-                        WHERE symbol = :symbol AND timeframe = '5m'
-                          AND time <= now() - interval '5 minutes'
-                        ORDER BY time DESC
-                        LIMIT :limit
-                    """), {"symbol": symbol, "limit": query_limit_5m})
-                    rows = ohlcv_result.fetchall()
+            logger.debug(
+                "Indicator volume audit %s[5m]: last_base=%s last_usdt=%s agg24h_usdt=%s ticker24h_usdt=%s coverage_h=%s candles_24h=%s",
+                symbol,
+                results.get("volume_last_candle_base"),
+                results.get("volume_last_candle_usdt"),
+                results.get("volume_24h_usdt_aggregated"),
+                results.get("volume_24h_usdt"),
+                results.get("volume_24h_coverage_hours"),
+                results.get("volume_24h_candles"),
+            )
 
-                    if len(rows) < min_candles_5m:
-                        logger.debug(
-                            "Skipping 5m indicator computation for %s: only %d candles (need ≥%d)",
-                            symbol, len(rows), min_candles_5m,
-                        )
-                        continue
-                    if (
-                        rows[0].is_closed is not True
-                        or rows[0].ingested_at is None
-                        or not rows[0].capture_contract_version
-                    ):
-                        logger.warning("[COMPUTE-5m] rejected ungoverned source symbol=%s", symbol)
-                        continue
+            # Merge real order flow data (taker_ratio, buy_pressure).
+            # Window aligned to Redis buffer TTL (Task #171: 300s consumed, 360s TTL).
+            of_data = await get_order_flow_data(
+                symbol, window_seconds=300, market_type="spot"
+            )
+            _merge_order_flow_into_results(results, of_data)
 
-                    df = pd.DataFrame([{
-                        "time": r.time, "open": float(r.open), "high": float(r.high),
-                        "low": float(r.low), "close": float(r.close), "volume": float(r.volume),
-                        "quote_volume": float(r.quote_volume) if r.quote_volume is not None else None,
-                    } for r in reversed(rows)])
+            # Compute and persist score fields inside indicators_json so
+            # every row is self-contained.  Must happen BEFORE envelop_results.
+            results.update(_compute_score_fields(results))
 
-                    one_minute_result = await db.execute(text("""
-                        SELECT time, open, high, low, close, volume, quote_volume
-                        FROM ohlcv
-                        WHERE symbol = :symbol AND timeframe = '1m'
-                        ORDER BY time DESC
-                        LIMIT 10
-                    """), {"symbol": symbol})
-                    one_minute_rows = one_minute_result.fetchall()
-                    df_1m = pd.DataFrame([{
-                        "time": r.time, "open": float(r.open), "high": float(r.high),
-                        "low": float(r.low), "close": float(r.close), "volume": float(r.volume),
-                        "quote_volume": float(r.quote_volume) if r.quote_volume is not None else None,
-                    } for r in reversed(one_minute_rows)]) if one_minute_rows else None
+            now = datetime.now(timezone.utc)
 
-                    market_data = await market_data_service.fetch_indicator_fallbacks(
-                        symbol,
-                        existing_data=metadata_map.get(symbol),
-                    )
-                    results = engine.calculate(
-                        df,
-                        market_data=market_data,
-                        timeframe="5m",
-                        df_1m=df_1m,
-                    )
-                    if not results:
-                        continue
+            payload_json = json.dumps(envelop_results(
+                results,
+                default_source="candle_computed",
+                default_confidence=0.80,
+                key_source_map=_COMPUTE_KEY_SOURCE_MAP,
+                key_metadata={**calculation_identities(indicators_config, results), **(market_data.get("_source_metadata") or {})},
+                envelope_metadata={
+                    "timeframe": "5m",
+                    "market_type": symbol_market_type.get(symbol, "spot"),
+                    "scheduler_group": "microstructure",
+                    "source_provider": str(rows[0].exchange or "gate.io"),
+                    "provider_policy_id": "spot_gate_closed_ohlcv_v1",
+                    "candle_policy": "CLOSED_ONLY",
+                    "candle_closed": True,
+                    "source_timestamp": rows[0].time.isoformat(),
+                    "computed_at": now.isoformat(),
+                    "available_at": now.isoformat(),
+                    "producer_version": "compute_5m_v2",
+                    "capture_contract_version": rows[0].capture_contract_version,
+                    "source_ingested_at": rows[0].ingested_at.isoformat(),
+                    **indicator_config_identity,
+                },
+            ))
 
-                    logger.debug(
-                        "Indicator volume audit %s[5m]: last_base=%s last_usdt=%s agg24h_usdt=%s ticker24h_usdt=%s coverage_h=%s candles_24h=%s",
-                        symbol,
-                        results.get("volume_last_candle_base"),
-                        results.get("volume_last_candle_usdt"),
-                        results.get("volume_24h_usdt_aggregated"),
-                        results.get("volume_24h_usdt"),
-                        results.get("volume_24h_coverage_hours"),
-                        results.get("volume_24h_candles"),
-                    )
-
-                    # Merge real order flow data (taker_ratio, buy_pressure).
-                    # Window aligned to Redis buffer TTL (Task #171: 300s consumed, 360s TTL).
-                    of_data = await get_order_flow_data(
-                        symbol, window_seconds=300, market_type="spot"
-                    )
-                    _merge_order_flow_into_results(results, of_data)
-
-                    # Compute and persist score fields inside indicators_json so
-                    # every row is self-contained.  Must happen BEFORE envelop_results.
-                    results.update(_compute_score_fields(results))
-
-                    now = datetime.now(timezone.utc)
-
-                    payload_json = json.dumps(envelop_results(
-                        results,
-                        default_source="candle_computed",
-                        default_confidence=0.80,
-                        key_source_map=_COMPUTE_KEY_SOURCE_MAP,
-                        key_metadata={**calculation_identities(indicators_config, results), **(market_data.get("_source_metadata") or {})},
-                        envelope_metadata={
-                            "timeframe": "5m",
-                            "market_type": symbol_market_type.get(symbol, "spot"),
-                            "scheduler_group": "microstructure",
-                            "source_provider": str(rows[0].exchange or "gate.io"),
-                            "provider_policy_id": "spot_gate_closed_ohlcv_v1",
-                            "candle_policy": "CLOSED_ONLY",
-                            "candle_closed": True,
-                            "source_timestamp": rows[0].time.isoformat(),
-                            "computed_at": now.isoformat(),
-                            "available_at": now.isoformat(),
-                            "producer_version": "compute_5m_v2",
-                            "capture_contract_version": rows[0].capture_contract_version,
-                            "source_ingested_at": rows[0].ingested_at.isoformat(),
-                            **indicator_config_identity,
-                        },
-                    ))
-
-                    # Task #236: persistence-queue path. See _compute_async for rationale.
-                    if _pq.is_enabled():
-                        await _pq.enqueue_or_log(
-                            producer="compute-5m",
-                            msg=_pq.IndicatorsUpsert(
-                                category="scheduler",
-                                enqueued_at=_pq.now_monotonic(),
-                                symbol=symbol,
-                                timeframe="5m",
-                                market_type=symbol_market_type.get(symbol, "spot"),
-                                scheduler_group="microstructure",
-                                time=now,
-                                payload_json=payload_json,
-                                mode="upsert",
-                            ),
-                        )
-                        if (
-                            results.get("price") is not None
-                            or results.get("spread_pct") is not None
-                            or results.get("orderbook_depth_usdt") is not None
-                        ):
-                            await _pq.enqueue_or_log(
-                                producer="compute-5m",
-                                msg=_pq.MarketMetadataUpsert(
-                                    category="scheduler",
-                                    enqueued_at=_pq.now_monotonic(),
-                                    symbol=symbol,
-                                    last_updated=now,
-                                    price=results.get("price"),
-                                    spread_pct=results.get("spread_pct"),
-                                    orderbook_depth_usdt=results.get("orderbook_depth_usdt"),
-                                ),
-                            )
-                    else:
-                        # SAVEPOINT: isolates this symbol's writes so that a
-                        # failure here does not roll back other symbols' data.
-                        try:
-                            async with db.begin_nested():
-                                await _upsert_market_metadata_snapshot(db, symbol, results, now)
-                                # Store in TimescaleDB (envelope format — value + source + confidence + status).
-                                # Task #216: explicit ``scheduler_group='microstructure'`` so the
-                                # read path can identify which cadence wrote each row.
-                                await db.execute(text("""
-                                    INSERT INTO indicators
-                                        (time, symbol, timeframe, market_type, scheduler_group, indicators_json)
-                                    VALUES
-                                        (:time, :symbol, :timeframe, :market_type, :scheduler_group, :indicators)
-                                """), {
-                                    "time":            now,
-                                    "symbol":          symbol,
-                                    "timeframe":       "5m",
-                                    "market_type":     symbol_market_type.get(symbol, "spot"),
-                                    "scheduler_group": "microstructure",
-                                    "indicators":      payload_json,
-                                })
-                        except Exception as _sp_exc:
-                            # SAVEPOINT auto-rolled back by begin_nested context manager.
-                            # See "Nested-savepoint rollback rule" gotcha — do NOT call
-                            # db.rollback() here.
-                            logger.error(
-                                "[ComputeIndicators] SAVEPOINT (5m) failed for %s — savepoint rolled back: %s",
-                                symbol, _sp_exc,
-                            )
-                            raise
-
-                    computed += 1
-
-                except Exception as e:
-                    if isinstance(e, _sqla_exc.PendingRollbackError):
-                        await db.rollback()
-                        logger.error(
-                            "[ComputeIndicators] PendingRollbackError on 5m loop for %s — session rolled back, stopping symbol loop: %s",
-                            symbol, e,
-                        )
-                        break
-                    logger.warning(f"Failed to compute 5m indicators for {symbol}: {e}")
-                    if not db.is_active:
-                        logger.error("[ComputeIndicators] Session inactive after 5m error for %s — stopping symbol loop", symbol)
-                        break
-                    continue
+            # SAVEPOINT: isolates this symbol's writes so that a
+            # failure here does not roll back other symbols' data.
+            try:
+                async with db.begin_nested():
+                    await _upsert_market_metadata_snapshot(db, symbol, results, now)
+                    # Store in TimescaleDB (envelope format — value + source + confidence + status).
+                    # Task #216: explicit ``scheduler_group='microstructure'`` so the
+                    # read path can identify which cadence wrote each row.
+                    await db.execute(text("""
+                        INSERT INTO indicators
+                            (time, symbol, timeframe, market_type, scheduler_group, indicators_json)
+                        VALUES
+                            (:time, :symbol, :timeframe, :market_type, :scheduler_group, :indicators)
+                    """), {
+                        "time":            now,
+                        "symbol":          symbol,
+                        "timeframe":       "5m",
+                        "market_type":     symbol_market_type.get(symbol, "spot"),
+                        "scheduler_group": "microstructure",
+                        "indicators":      payload_json,
+                    })
+            except Exception as _sp_exc:
+                # SAVEPOINT auto-rolled back by begin_nested context manager.
+                # See "Nested-savepoint rollback rule" gotcha — do NOT call
+                # db.rollback() here.
+                logger.error(
+                    "[ComputeIndicators] SAVEPOINT (5m) failed for %s — savepoint rolled back: %s",
+                    symbol, _sp_exc,
+                )
+                raise
 
             await db.commit()
-        except Exception as e:
-            logger.error("5m indicator computation failed: %s", e)
-            await db.rollback()
-            raise
+            logger.info("[COMPUTE-5m-PUBLISHED] symbol=%s source_at=%s computed_at=%s",
+                        symbol, rows[0].time.isoformat(), now.isoformat())
+            return 1
+    except Exception:
+        logger.exception("[COMPUTE-5m] SYMBOL_ERROR symbol=%s", symbol)
+        return 0
 
-    logger.info(f"5m indicator computation complete: {computed} symbols")
+
+async def _compute_5m_async():
+    """Bounded I/O concurrency; independent sessions and per-symbol commits."""
+    from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
+    from ..utils.bounded_async import bounded_map
+    async with AsyncSessionLocal() as db:
+        indicators_config, indicator_config_identity = await _load_active_indicator_config(db)
+        min_candles = _derive_min_candles(indicators_config, "5m")
+        result = await db.execute(text("""
+            SELECT DISTINCT o.symbol, p.market_type
+            FROM ohlcv o JOIN pool_coins p ON o.symbol = p.symbol
+            WHERE p.is_active = true AND o.timeframe = '5m'
+              AND o.time > now() - interval '2 hours'
+        """))
+        symbol_market_type = {r.symbol: r.market_type for r in result.fetchall()}
+        metadata_map = await _load_market_metadata_map(db)
+    started = time.monotonic()
+    async def process(symbol):
+        return await _process_one_symbol_5m(
+            symbol, indicators_config, indicator_config_identity, metadata_map,
+            symbol_market_type[symbol], min_candles, max(288, min_candles))
+    counts = await bounded_map(process, sorted(symbol_market_type), COMPUTE_5M_BATCH_SIZE)
+    computed = sum(counts)
+    logger.info("[COMPUTE-5m] COMPLETE total_symbols=%d computed=%d duration_s=%.3f batch_size=%d",
+                len(counts), computed, time.monotonic() - started, COMPUTE_5M_BATCH_SIZE)
     return computed
 
 
 @celery_app.task(name="app.tasks.compute_indicators.compute_5m")
 def compute_5m():
     count = _run_async(_compute_5m_async())
-    # Chain: fresh 5m indicators → pipeline scan (microstructure queue).
+    # Every successful symbol is committed before the downstream scan.
+    if count <= 0:
+        return "Computed 5m indicators for 0 symbols"
+    # Chain: published 5m indicators → pipeline scan (structural queue).
     # TTL = pipeline_scan time_limit (180s) + 30s margin.
     from . import task_dispatch
     task_dispatch.enqueue(
