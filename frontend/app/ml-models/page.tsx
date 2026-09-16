@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import useSWR from "swr";
 import { apiGet } from "@/lib/api";
 import { buildModelDatasetAudit, type AuditWindow } from "@/lib/mlModelAudit";
 import { formatDateTime } from "@/lib/datetime";
-import { Brain, CheckCircle, Archive, ChevronDown, ChevronRight, ShieldCheck } from "lucide-react";
+import { Brain, CheckCircle, Archive, ChevronDown, ChevronRight, ShieldCheck, Target, Hourglass, RefreshCw } from "lucide-react";
 import { ModuleAIAnalysisAction } from "@/components/ai/ModuleAIAnalysisAction";
 
 interface MetricsBlock {
@@ -191,15 +192,19 @@ export default function MlModelsPage() {
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [lane, setLane] = useState("L3_PROFILE");
-  const [readiness, setReadiness] = useState<{ total_rows: number; labelable_rows: number; min_required: number; ready: boolean; blocked_reasons: string[]; dataset_query_cutoff: string; label_version: string; automatic_training_enabled: boolean } | null>(null);
-  const [readinessError, setReadinessError] = useState<string | null>(null);
+  const { data: readiness, error: readinessError, isValidating: refreshingReadiness } = useSWR<{
+    total_rows: number; labelable_rows: number; min_required: number; ready: boolean;
+    blocked_reasons: string[]; dataset_query_cutoff: string; label_version: string; automatic_training_enabled: boolean;
+  }>(lane === "L3_PROFILE" ? "/api/ml/catboost/readiness?source=L3" : null, apiGet, {
+    refreshInterval: 15_000,
+    revalidateOnFocus: true,
+    revalidateOnReconnect: true,
+    refreshWhenHidden: false,
+  });
+  const validCaptures = readiness?.labelable_rows;
+  const missingCaptures = readiness ? Math.max(0, readiness.min_required - readiness.labelable_rows) : undefined;
+  const formatCaptures = (value: number | undefined) => value == null ? "—" : value.toLocaleString("pt-BR");
   const visibleModels = models.filter(m => lane === "ALL" || m.model_lane === lane);
-
-  useEffect(() => {
-    apiGet("/api/ml/catboost/readiness?source=L3")
-      .then(setReadiness)
-      .catch(() => setReadinessError("Não foi possível verificar o dataset L3 agora."));
-  }, []);
 
 
   useEffect(() => {
@@ -252,6 +257,29 @@ export default function MlModelsPage() {
       </div>
 
       {lane === "L3_PROFILE" && (
+        <section aria-label="Capturas para treinamento L3_PROFILE" className="space-y-3">
+          <dl className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {[
+              { label: "Meta de capturas", value: readiness?.min_required, description: "Mínimo para formar um candidato", Icon: Target, color: "#60A5FA" },
+              { label: "Capturas válidas", value: validCaptures, description: "Elegíveis para treino, com resultado definido", Icon: ShieldCheck, color: "#34D399" },
+              { label: "Faltam para a meta", value: missingCaptures, description: "Capturas válidas ainda necessárias", Icon: Hourglass, color: "#FBBF24" },
+            ].map(({ label, value, description, Icon, color }) => (
+              <div key={label} className="rounded-xl border border-[#1A2035] bg-[#0B0F1C] p-4 sm:p-5">
+                <dt className="flex items-center justify-between gap-2 text-xs font-medium text-[#94A3B8]">
+                  {label}<Icon size={17} style={{ color }} aria-hidden="true" />
+                </dt>
+                <dd className="mt-3 font-mono text-3xl font-semibold tracking-tight tabular-nums" style={{ color }}>
+                  {formatCaptures(value)}
+                </dd>
+                <p className="mt-2 text-[11px] leading-relaxed text-[#64748B]">{description}</p>
+              </div>
+            ))}
+          </dl>
+          <div role="status" className="flex flex-wrap items-center gap-2 text-[11px] text-[#94A3B8]">
+            <RefreshCw size={12} className={refreshingReadiness ? "animate-spin" : ""} aria-hidden="true" />
+            <span>{readinessError ? (readiness ? "Atualização indisponível — exibindo a última consulta recebida." : "Dados indisponíveis — tentando atualizar novamente.") : "Atualização automática a cada 15 segundos"}</span>
+            {readiness && <span>· Última consulta: {new Date(readiness.dataset_query_cutoff).toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo" })} (Brasília)</span>}
+          </div>
         <div className="rounded-lg border border-[#1A2035] bg-[#060810] p-4 text-xs text-[#94A3B8]">
           <div className="font-semibold text-[#E2E8F0]">Dataset L3_PROFILE · {readiness ? (readiness.ready ? "Pronto para avaliação de candidato" : "Treinamento bloqueado") : "Verificando"}</div>
           {readiness && <>
@@ -261,8 +289,9 @@ export default function MlModelsPage() {
             <p className="mt-1">Readiness não aprova nem ativa um modelo.</p>
             <p className="mt-1">Treino automático CatBoost L3: {readiness.automatic_training_enabled ? "habilitado" : "desabilitado"}.</p>
           </>}
-          {readinessError && <p className="mt-2 text-[#F87171]">{readinessError}</p>}
+          {readinessError && <p className="mt-2 text-[#F87171]">Não foi possível verificar o dataset L3 agora. A consulta será repetida automaticamente.</p>}
         </div>
+        </section>
       )}
       {visibleModels.length === 0 && (
         <div className="text-[#4B5563] text-sm py-8 text-center border border-dashed border-[#1A2035] rounded-lg">
