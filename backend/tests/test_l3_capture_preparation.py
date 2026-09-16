@@ -194,3 +194,19 @@ def test_score_alias_reads_gate_score_and_keeps_threshold_block():
     _, above = engine.evaluate_condition_status(rule, {'score': 0, 'alpha_score': 67}, field_key='indicator')
     assert below['status'] == 'FAIL' and above['status'] == 'PASS'
     assert config[0]['field'] == 'score' and config[0]['value'] == 67
+
+
+def test_ema_alignment_keeps_dependencies_and_rejects_mixed_candles():
+    from app.services.l3_authorization_contract_v3 import _derived_candle_candidates
+    inputs = [{'indicator': f'ema{p}', 'period': p, 'actual': v, 'source': 'ohlcv',
+               'source_provider': 'gate.io', 'timeframe': '5m', 'parameters': {},
+               'source_timestamp': '2026-09-16T12:00:00Z',
+               'computed_at': f'2026-09-16T12:05:0{i}Z',
+               'available_at': f'2026-09-16T12:05:0{i}Z'}
+              for i, (p, v) in enumerate([(9, 103), (50, 102), (200, 100)])]
+    result = next(c for c in _derived_candle_candidates(inputs) if c['indicator'] == 'ema_full_alignment')
+    assert result['actual'] is True and result['period'] is None
+    assert len(result['dependencies']) == 3
+    assert result['available_at'] == inputs[-1]['available_at']
+    inputs[-1]['source_timestamp'] = '2026-09-16T11:55:00Z'
+    assert not any(c['indicator'] == 'ema_full_alignment' for c in _derived_candle_candidates(inputs))
