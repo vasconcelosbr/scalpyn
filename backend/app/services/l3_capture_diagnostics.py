@@ -8,6 +8,24 @@ def capture_stage(row, *, cutoff, config, eligible_ids):
     if not row:
         return {'stage': 'NO_CAPTURE', 'reason': 'Nenhuma captura L3 encontrada no período do dataset.'}
     result = {k: row.get(k) for k in ('id', 'decision_id', 'symbol', 'created_at', 'outcome', 'lineage_status', 'measurement_status')}
+    from app.ml.l3_managed_exit import definition, at
+    spec = definition(config)
+    managed = (row.get('config_snapshot') or {}).get('l3_managed_ml') or {}
+    if spec and str(row['id']) not in eligible_ids:
+        if managed.get('contract') != spec or managed.get('capture_valid') is not True:
+            return {**result, 'stage':'EXCLUDED', 'reason':'Captura anterior ou incompatível com o contrato de saída gerenciada.'}
+        if not row.get('outcome'):
+            horizon = row['entry_timestamp'] + timedelta(seconds=spec['max_holding_seconds'])
+            return {**result, 'stage':'EXCLUDED' if cutoff > horizon else 'AWAITING_OUTCOME',
+                    'reason':'Horizonte ML excedido; posição preservada.' if cutoff > horizon else 'Aguardando saída pela política congelada na entrada.'}
+        proof = row.get('managed_label') or {}
+        if not proof.get('valid'):
+            return {**result, 'stage':'EXCLUDED', 'reason':proof.get('reason') or 'Saída ainda sem comprovação para ML.'}
+        if row.get('measurement_status') != 'READY' or row.get('entry_quality') != 'OK':
+            return {**result, 'stage':'AWAITING_MEASUREMENT', 'reason':'Aguardando medição READY/OK.'}
+        mature = max(row['entry_timestamp']+timedelta(seconds=spec['max_holding_seconds']), at(proof['label_available_at'])) + timedelta(minutes=int(config['ml_maturity_embargo_margin_minutes']))
+        if mature > cutoff:
+            return {**result, 'stage':'AWAITING_MATURITY','matures_at':mature,'reason':'Aguardando horizonte e margem de maturação do contrato gerenciado.'}
     if str(row['id']) in eligible_ids:
         result.update(stage='ELIGIBLE', reason='Incluída na população canônica do trainer.')
     elif row.get('lineage_status') != 'EXACT' or row.get('eligible_for_training') is not True:
@@ -50,9 +68,11 @@ async def l3_capture_diagnostics(db, user_id, *, cutoff, config, eligible_ids):
     latest = (await db.execute(text('''
         SELECT st.id::text, st.decision_id, st.symbol, st.created_at, st.outcome,
                st.lineage_status, st.eligible_for_training, st.barrier_contract_version,
+               st.config_snapshot, st.entry_timestamp, sx.state->'ml_label' AS managed_label,
                st.label_resolved_at, st.completed_at, st.ttt_timeout_minutes,
                mr.status AS measurement_status, mr.entry_quality
-          FROM shadow_trades st LEFT JOIN LATERAL (
+          FROM shadow_trades st LEFT JOIN shadow_l3_exit_states sx ON sx.shadow_id=st.id
+          LEFT JOIN LATERAL (
               SELECT status, entry_quality FROM shadow_trade_measurement_revisions
                WHERE shadow_trade_id=st.id AND created_at<=:cutoff
                ORDER BY created_at DESC,id DESC LIMIT 1

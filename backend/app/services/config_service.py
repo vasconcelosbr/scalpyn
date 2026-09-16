@@ -87,6 +87,9 @@ class ConfigService:
         return {}
 
     async def update_config(self, db: AsyncSession, config_type: str, user_id: UUID, new_json: Dict[str, Any], changed_by: UUID, pool_id: Optional[UUID] = None, change_description: str = "") -> Dict[str, Any]:
+        if config_type == "ml":
+            from app.ml.l3_managed_exit import definition
+            definition(new_json)  # Invalid costs or partial contracts never reach production config.
         if config_type == "shadow_l3_exit_policy":
             await self.validate_shadow_l3_policy(db, new_json, user_id, pool_id)
             from ..schemas.shadow_l3_exit_policy import ShadowL3ExitPolicy

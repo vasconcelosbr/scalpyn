@@ -1007,6 +1007,7 @@ class MLChallengerService:
         dataset_query_cutoff: Optional[datetime] = None,
         maturity_embargo_margin_minutes: Optional[int] = None,
         collect_diagnostics: bool = False,
+        managed_contract: Optional[dict] = None,
     ) -> List[Dict[str, Any]]:
         if dataset_query_cutoff is None:
             raise ValueError("missing_dataset_query_cutoff")
@@ -1054,10 +1055,40 @@ class MLChallengerService:
             **valid_from_params,
             **cutoff_params,
         }
+        managed_clause = ""
+        outcome_clause = "outcome IN ('TP_HIT', 'SL_HIT', 'TIMEOUT')"
+        maturity_expression = "created_at + make_interval(mins => COALESCE(ttt_timeout_minutes, 0) + :maturity_embargo_margin_minutes)"
+        if managed_contract is not None:
+            from app.ml.l3_managed_exit import VERSION
+            if sources != ["L3"]:
+                raise ValueError("managed_exit_requires_exact_l3_lane")
+            params.update(managed_version=VERSION, managed_hash=managed_contract["hash"],
+                          managed_horizon=managed_contract["max_holding_seconds"])
+            outcome_clause = "outcome IN ('TP_HIT','SL_HIT','TIMEOUT','TRAILING_STOP','FLOW_STRUCTURE_EXIT')"
+            maturity_expression = "GREATEST(entry_timestamp + make_interval(secs => :managed_horizon), label_resolved_at) + make_interval(mins => :maturity_embargo_margin_minutes)"
+            managed_clause = """
+                AND label_contract_version=:managed_version
+                AND config_snapshot->'l3_managed_ml'->'contract'->>'hash'=:managed_hash
+                AND config_snapshot->'l3_managed_ml'->>'capture_valid'='true'
+                AND closure_path='l3_continuation'
+                AND holding_seconds > 0 AND holding_seconds <= :managed_horizon
+                AND completed_at <= :dataset_query_cutoff
+                AND net_return_pct IS NOT NULL
+                AND EXISTS (SELECT 1 FROM shadow_l3_exit_states sx
+                    WHERE sx.shadow_id=shadow_trades.id AND sx.user_id=shadow_trades.user_id
+                      AND sx.state->'ml_label'->>'valid'='true'
+                      AND sx.state->'ml_label'->>'contract_hash'=:managed_hash
+                      AND CAST(sx.state->'ml_label'->>'label_available_at' AS timestamptz)<=:dataset_query_cutoff
+                      AND abs(CAST(sx.state->'ml_label'->>'net_return_pct' AS numeric)-net_return_pct)<1e-8)
+            """
+        else:
+            # No managed target may leak into legacy/L1 or mixed-source fits.
+            managed_clause = "AND NOT (COALESCE(config_snapshot, '{}'::jsonb) ? 'l3_managed_ml')"
         base_where = f"""
             user_id = :uid
               AND source IN ({source_placeholders})
-              AND outcome IN ('TP_HIT', 'SL_HIT', 'TIMEOUT')
+              AND {outcome_clause}
+              {managed_clause}
               AND pnl_pct IS NOT NULL
               AND features_snapshot IS NOT NULL
               AND features_snapshot::text <> '{{}}'
@@ -1097,17 +1128,11 @@ class MLChallengerService:
                     )::int AS labels_unresolved_at_cutoff,
                     COUNT(*) FILTER (
                         WHERE COALESCE(label_resolved_at, completed_at) <= :dataset_query_cutoff
-                          AND created_at > :dataset_query_cutoff - make_interval(
-                                mins => COALESCE(ttt_timeout_minutes, 0)
-                                      + :maturity_embargo_margin_minutes
-                              )
+                          AND {maturity_expression} > :dataset_query_cutoff
                     )::int AS observations_immature_at_cutoff,
                     COUNT(*) FILTER (
                         WHERE COALESCE(label_resolved_at, completed_at) <= :dataset_query_cutoff
-                          AND created_at <= :dataset_query_cutoff - make_interval(
-                                mins => COALESCE(ttt_timeout_minutes, 0)
-                                      + :maturity_embargo_margin_minutes
-                              )
+                          AND {maturity_expression} <= :dataset_query_cutoff
                     )::int AS records_mature
                 FROM shadow_trades
                 WHERE {base_where}
@@ -1147,10 +1172,7 @@ class MLChallengerService:
             WHERE {base_where}
               AND COALESCE(label_resolved_at, completed_at) IS NOT NULL
               AND COALESCE(label_resolved_at, completed_at) <= :dataset_query_cutoff
-              AND created_at <= :dataset_query_cutoff - make_interval(
-                    mins => COALESCE(ttt_timeout_minutes, 0)
-                          + :maturity_embargo_margin_minutes
-                  )
+              AND {maturity_expression} <= :dataset_query_cutoff
             ORDER BY created_at ASC
         """), params)).fetchall()
         logger.info(
@@ -1629,6 +1651,12 @@ class MLChallengerService:
             else [0.0] * len(df)
         )
         if lane_name == "L3_PROFILE":
+            # Purge through label availability, not merely the earlier simulated
+            # touch. Managed labels can only be known after their proof exists.
+            holding_seconds = [max(float(hold or 0),
+                (r["label_resolved_at"]-r["created_at"]).total_seconds()
+                if (r.get("config_snapshot") or {}).get("l3_managed_ml") and r.get("label_resolved_at") and r.get("created_at") else 0)
+                for hold,r in zip(holding_seconds,valid_records)]
             from app.ml.l3_integrity import market_event_key
             snapshot_keys = [market_event_key(r) for r in valid_records]
         else:
@@ -2148,6 +2176,8 @@ class MLChallengerService:
         if model_lane is None:
             model_lane = "L3_PROFILE" if model_type == "catboost" else "L1_SPECTRUM"
         if model_lane == "L3_PROFILE":
+            from app.ml.l3_managed_exit import lane_config
+            artifact_config = lane_config(artifact_config)
             from app.ml.l3_integrity import contract_definitions
             metrics = {**metrics, "l3_contract": contract_definitions(artifact_config, feature_columns)}
         buf = io.BytesIO()
@@ -2219,7 +2249,7 @@ class MLChallengerService:
             fc_schema_ver = None
             label_ver = "is_win_fast_v1"
         _ml_config = artifact_config
-        label_ver = str(_ml_config.get("ml_label_version", label_ver))
+        label_ver = str((artifact_config if model_lane == "L3_PROFILE" else _ml_config).get("ml_label_version", label_ver))
 
         # train_sources is injected into `metrics` by train_challengers() callers
         # (e.g. metrics={**lgbm_result["metrics"], "train_sources": lgbm_sources}).
@@ -2274,7 +2304,7 @@ class MLChallengerService:
 
         if model_lane == "L3_PROFILE":
             from app.ml.l3_contract_registry import register_l3_contracts
-            definitions = await register_l3_contracts(db, _ml_config, feature_columns)
+            definitions = await register_l3_contracts(db, artifact_config, feature_columns)
             label_contract_id = definitions["label_id"]
             feature_contract_id = definitions["feature_id"]
             dataset_contract_id = definitions["dataset_id"]
@@ -2681,6 +2711,8 @@ class MLChallengerService:
         else:
             cb_dataset_valid_from = l3_dataset_valid_from
 
+        from app.ml.l3_managed_exit import definition as managed_definition
+        managed_contract = managed_definition(ml_config) if cb_lane == "L3_PROFILE" and cb_sources == ["L3"] else None
         native_records = await self._load_shadow_data(
             db,
             user_id,
@@ -2692,11 +2724,12 @@ class MLChallengerService:
                 "ml_maturity_embargo_margin_minutes"
             ),
             collect_diagnostics=collect_diagnostics,
+            **({"managed_contract": managed_contract} if managed_contract else {}),
         )
         native_maturity_diagnostics = dict(self._last_shadow_load_diagnostics)
         historical_records: List[Dict[str, Any]] = []
         historical_diagnostics: Dict[str, Any] = {"enabled": False, "included_rows": 0}
-        if cb_lane == "L3_PROFILE" and cb_sources == ["L3"]:
+        if cb_lane == "L3_PROFILE" and cb_sources == ["L3"] and managed_contract is None:
             historical_records, historical_diagnostics = (
                 await self._load_l3_historical_shadow_data(
                     db,
@@ -2758,6 +2791,7 @@ class MLChallengerService:
             cb_all_records, cb_profile_records, cb_sources
         )
         l3_meta.update(barrier_meta)
+        l3_meta["managed_exit_contract"] = managed_contract
         l3_meta["missing_net_return_excluded"] = missing_net_return
         l3_meta["dataset_policy"] = cb_dataset_policy
         l3_meta["included_trade_count"] = len(cb_records)

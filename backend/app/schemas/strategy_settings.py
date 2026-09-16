@@ -20,6 +20,7 @@ ML_SHADOW_KEYS = (
     "ml_active_barrier_contract_version",
 )
 ML_SHADOW_OPTIONAL_KEYS = (
+    "ml_l3_managed_exit",
     "shadow_capture_l3_rejected_max_per_hour",
     "shadow_measurement_timeframe_priority",
     "shadow_entry_max_lag_seconds",
@@ -81,6 +82,15 @@ class MLShadowConfig(BaseModel):
     shadow_barrier_min_pct: float = Field(0.5, ge=0, le=100)
     shadow_barrier_max_pct: float = Field(3.0, gt=0, le=100)
     ml_fee_roundtrip_pct: float = Field(0.2, ge=0, le=100)
+    # No invented cost defaults: activation requires a complete versioned contract.
+    ml_l3_managed_exit: Dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def validate_managed_exit(self) -> "MLShadowConfig":
+        from app.ml.l3_managed_exit import KEY, definition
+        definition({KEY: self.ml_l3_managed_exit})
+        return self
+
     ml_active_barrier_contract_version: Literal[
         "shadow_fixed_v1", "shadow_atr_dynamic_v2", "shadow_atr_dynamic_v3"
     ] = "shadow_atr_dynamic_v2"

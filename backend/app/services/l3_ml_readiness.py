@@ -16,6 +16,8 @@ async def l3_readiness(db, user_id, *, cutoff=None, config=None, lookback_days=N
         if not row:
             raise ValueError("ml_config_missing")
         config = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+    from app.ml.l3_managed_exit import lane_config, definition
+    config = lane_config(config)
     service = MLChallengerService()
     pi_row = (await db.execute(text("""SELECT config_json FROM config_profiles
         WHERE user_id=:uid AND config_type='profile_intelligence' AND is_active=TRUE LIMIT 1"""), {"uid": str(user_id)})).fetchone()
@@ -34,6 +36,7 @@ async def l3_readiness(db, user_id, *, cutoff=None, config=None, lookback_days=N
               "candidate_ready": False, "promotion_ready": False, "ready": False,
               "blocked_reasons": [], "funnel": meta, "split": None,
               "training_started": False, "execution_authority": False}
+    result["managed_exit_contract"] = definition(config)
     result["automatic_training_enabled"] = bool((pi_config or {}).get("enable_catboost", False))
     from .l3_capture_diagnostics import l3_capture_diagnostics
     if not records:

@@ -105,6 +105,8 @@ def _ml_shadow_dump(model: MLShadowConfig) -> Dict[str, Any]:
     payload = model.model_dump(mode="json")
     if payload.get("canary_minimum_outcomes") is None:
         payload.pop("canary_minimum_outcomes", None)
+    if payload.get("ml_l3_managed_exit") is None:
+        payload.pop("ml_l3_managed_exit", None)
     return payload
 
 

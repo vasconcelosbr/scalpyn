@@ -1662,6 +1662,38 @@
         {"path": "backend/app/services/l3_capture_diagnostics.py", "contains_all": ["AWAITING_MATURITY", "eligible_ids", "source='L3'"]},
         {"path": "backend/tests/test_l3_capture_preparation.py", "contains_all": ["test_on_demand_uses_canonical_evaluator_and_preserves_block", "test_metadata_repair_preserves_predicates_and_rejects_other_period_changes", "test_book_metadata_preserves_observation_clock_and_does_not_invent_it", "test_waiting_diagnosis_does_not_certify_immature_or_excluded_capture"]}
       ]
+    },
+    {
+      "id": "l3-managed-exit-ml-contract",
+      "description": "Prospective managed exit labels require frozen identity, full replay, costs, measurement and maturity; legacy data and incompatible artifacts excluded.",
+      "files": [
+        {
+          "path": "backend/app/ml/l3_managed_exit.py",
+          "contains_all": [
+            "l3_managed_net_v1",
+            "PRICE_HISTORY_GAP",
+            "ENTRY_BOUNDARY_AMBIGUOUS",
+            "CENSORED_OR_INVALID_HORIZON",
+            "async def inference_compatible"
+          ]
+        },
+        {
+          "path": "backend/app/services/ml_challenger_service.py",
+          "contains_all": [
+            "managed_contract",
+            "managed_horizon",
+            "managed_hash"
+          ]
+        },
+        {
+          "path": "backend/tests/test_l3_managed_exit_ml.py",
+          "contains_all": [
+            "test_managed_evidence_fails_closed",
+            "test_managed_loader_population_is_segregated_and_mature",
+            "test_inference_rejects_old_artifact_under_new_contract"
+          ]
+        }
+      ]
     }
   ]
 }

@@ -169,6 +169,8 @@ class GCSModelLoader:
                 model._n_inference_features = len(feature_columns)
                 model._inference_feature_names = list(feature_columns)
                 model._required_feature_names = list(metadata.get("required_feature_names") or [])
+                model._l3_contract = (metadata.get("metrics") or {}).get("l3_contract")
+                model._artifact_version = str(version)
             except Exception:
                 pass
 
