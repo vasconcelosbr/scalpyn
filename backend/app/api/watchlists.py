@@ -998,6 +998,18 @@ async def list_watchlists(
             )).fetchall()
             source_wl_levels = {row.id: row.level for row in source_rows}
 
+    # Approval counters must describe the exact authorized population exposed
+    # by the list endpoint, not a stale membership count from the scanner.
+    if any(w.level == "L3" and w.market_mode == "spot" for w in wls):
+        public_candidates = await load_live_l3_candidates(db, user_id=user_id)
+        authorized_assets: Dict[UUID, set] = {}
+        for candidate in public_candidates:
+            for contribution in candidate.contributors:
+                authorized_assets.setdefault(contribution.watchlist_id, set()).add(contribution.asset_id)
+        for w in wls:
+            if w.level == "L3" and w.market_mode == "spot":
+                counts[w.id] = len(authorized_assets.get(w.id, set()))
+
     def _with_ranking(watchlist: PipelineWatchlist) -> Dict[str, Any]:
         profile_name = profile_names.get(str(watchlist.profile_id)) if watchlist.profile_id else None
         source_level = source_wl_levels.get(str(watchlist.source_watchlist_id)) if watchlist.source_watchlist_id else None
@@ -2500,7 +2512,7 @@ async def get_watchlist_assets(
     )
     assets = await _load_active_watchlist_assets(watchlist_id, db)
 
-    if wl.auto_refresh:
+    if wl.auto_refresh and not (effective_level == "L3" and getattr(wl, "market_mode", "spot") == "spot"):
         try:
             if not assets:
                 # Empty snapshot — must resolve inline so there is something to show.
@@ -3070,7 +3082,7 @@ async def _get_watchlist_rejections_payload(
     )
     assets = await _load_active_watchlist_assets(wl.id, db)
 
-    if wl.auto_refresh:
+    if wl.auto_refresh and not (effective_level == "L3" and getattr(wl, "market_mode", "spot") == "spot"):
         try:
             async with db.begin_nested():
                 await _auto_refresh_watchlist_assets_if_needed(

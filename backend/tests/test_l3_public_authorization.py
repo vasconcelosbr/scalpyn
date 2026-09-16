@@ -89,6 +89,44 @@ async def test_latest_block_is_not_filtered_out_before_latest_decision_selection
 
 
 @pytest.mark.asyncio
+async def test_l3_card_count_excludes_raw_membership_without_authorization(monkeypatch):
+    from app.api import watchlists
+    l3 = Obj(id=uuid4(), level="L3", market_mode="spot", profile_id=None, source_watchlist_id=None)
+    l1 = Obj(id=uuid4(), level="L1", market_mode="spot", profile_id=None, source_watchlist_id=None)
+    db = Obj(execute=AsyncMock(side_effect=[
+        Obj(scalars=lambda: Obj(all=lambda: [l3, l1])),
+        Obj(fetchall=lambda: [Obj(watchlist_id=l3.id, cnt=2), Obj(watchlist_id=l1.id, cnt=2)]),
+    ]))
+    monkeypatch.setattr(watchlists, "load_live_l3_candidates", AsyncMock(return_value=[]))
+    monkeypatch.setattr(watchlists, "_wl_to_dict", lambda w, **kwargs: {"id": str(w.id), "level": w.level})
+    result = await watchlists.list_watchlists(order_by="created_at", user_id=uuid4(), db=db)
+    assert result["watchlists"][0]["asset_count"] == 0
+    assert result["watchlists"][1]["asset_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_empty_l3_get_never_runs_a_producer_or_commits(monkeypatch):
+    from fastapi import BackgroundTasks, Response
+    from app.api import watchlists
+    wl = Obj(id=uuid4(), level="L3", market_mode="spot", auto_refresh=True,
+             profile_id=uuid4(), source_pool_id=None)
+    db = Obj(execute=AsyncMock(return_value=Obj(scalars=lambda: Obj(first=lambda: wl))))
+    producer = AsyncMock(side_effect=AssertionError("GET must not evaluate or write"))
+    monkeypatch.setattr(watchlists, "_load_watchlist_profile_config", AsyncMock(return_value={}))
+    monkeypatch.setattr(watchlists, "_load_active_watchlist_assets", AsyncMock(return_value=[]))
+    monkeypatch.setattr(watchlists, "_intersect_assets_with_active_parent", AsyncMock(return_value=[]))
+    monkeypatch.setattr(watchlists, "load_live_l3_candidates", AsyncMock(return_value=[]))
+    monkeypatch.setattr(watchlists, "_auto_refresh_watchlist_assets_if_needed", producer)
+    tasks, response = BackgroundTasks(), Response()
+    result = await watchlists.get_watchlist_assets(watchlist_id=wl.id, background_tasks=tasks,
+        user_id=uuid4(), db=db, response=response)
+    assert result["total"] == 0 and result["authorization_contract"] == "L3_PUBLIC_AUTHORIZATION_V1"
+    assert response.headers["cache-control"] == "private, no-store"
+    producer.assert_not_called()
+    assert not tasks.tasks
+
+
+@pytest.mark.asyncio
 async def test_on_demand_persists_decision_outbox_and_membership_atomically(monkeypatch):
     from app.models.backoffice import DecisionLog, L3AuthorizationOutbox
     from app.models.pipeline_watchlist import PipelineWatchlistAsset
