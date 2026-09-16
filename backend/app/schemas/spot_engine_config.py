@@ -73,6 +73,11 @@ class L3ProvenanceResolverConfig(BaseModel):
     policy_version: Literal["l3_v3_provenance_resolver_v1"] = (
         "l3_v3_provenance_resolver_v1"
     )
+    # The scheduled scanner parses this schema before building its snapshot.
+    # Preserve the same source policies consumed by the on-demand path.
+    source_policies: L3ProvenanceSourcePoliciesConfig = Field(
+        default_factory=L3ProvenanceSourcePoliciesConfig
+    )
 
 
 class L3GlobalBlockRangeCompilerConfig(BaseModel):
