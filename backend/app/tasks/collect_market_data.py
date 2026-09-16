@@ -673,6 +673,28 @@ async def _collect_5m_async():
     symbols = sorted(valid_symbols)
     active_symbol_set = set(symbols)
 
+    # Fetch concurrently BEFORE opening the write transaction. Network waits
+    # must not retain market_metadata locks needed by the indicator worker.
+    from ..services.market_data_service import market_data_service
+    from ..utils.bounded_async import bounded_map
+    import os
+    concurrency = max(1, min(8, int(os.environ.get("COLLECT_5M_BATCH_SIZE", "4"))))
+
+    async def fetch_symbol(symbol):
+        try:
+            frame = await market_data_service.fetch_ohlcv(symbol, "5m", limit=288)
+        except Exception as exc:
+            return (None, None, None, exc)
+        try:
+            book = await market_data_service.fetch_orderbook_metrics(symbol, depth=10)
+            return (frame, book, datetime.now(timezone.utc), None)
+        except Exception as exc:
+            logger.warning("[COLLECT-5m] orderbook unavailable symbol=%s error=%s", symbol, exc)
+            return (frame, None, None, None)
+
+    fetched = dict(zip(symbols, await bounded_map(fetch_symbol, symbols, concurrency)))
+    logger.info("[COLLECT-5m-PREFETCH] symbols=%d concurrency=%d", len(symbols), concurrency)
+
     async def _inner(db, queue_mode: bool = False) -> int:
         from ..services.market_data_service import market_data_service
         import sqlalchemy.exc as _sqla_exc
@@ -704,7 +726,9 @@ async def _collect_5m_async():
                 # (collect_research_ohlcv.collect_*_shadow); this 5m fetch
                 # stays only as the per-symbol health signal that gates the
                 # compute_5m/compute_structural_5m chain dispatch below.
-                df = await market_data_service.fetch_ohlcv(symbol, "5m", limit=288)
+                df, prefetched_book, book_timestamp, fetch_error = fetched[symbol]
+                if fetch_error is not None:
+                    raise fetch_error
                 logger.info(f"[COLLECT][RESULT] symbol={symbol} result={type(df).__name__} rows={len(df) if df is not None else 'None'}")
 
                 if df is None:
@@ -758,9 +782,9 @@ async def _collect_5m_async():
                 # the pipeline treats as UNKNOWN (not FAIL) since orderbook_depth_usdt
                 # is no longer in STRICT_META.
                 try:
-                    ob = await market_data_service.fetch_orderbook_metrics(symbol, depth=10)
+                    ob = prefetched_book
                     if ob:
-                        _ob_ts = datetime.now(timezone.utc)
+                        _ob_ts = book_timestamp
                         if queue_mode:
                             await _pq.enqueue_or_log(
                                 producer="collect-5m-orderbook",

@@ -157,9 +157,9 @@ celery_app = Celery(
 # without adding it here causes the lint test
 # ``test_every_registered_task_is_routed`` to fail.
 TASK_ROUTES = {
-    # Microstructure (5-minute cadence chain)
+    # 5m collection and calculation use separate workers to avoid queue starvation.
     "app.tasks.collect_market_data.collect_5m":  {"queue": QUEUE_MICROSTRUCTURE},
-    "app.tasks.compute_indicators.compute_5m":   {"queue": QUEUE_MICROSTRUCTURE},
+    "app.tasks.compute_indicators.compute_5m":   {"queue": QUEUE_STRUCTURAL_COMPUTE},
 
     # Structural (hourly+ cadence, heavier work)
     "app.tasks.collect_market_data.collect_all":         {"queue": QUEUE_STRUCTURAL},
