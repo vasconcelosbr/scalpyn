@@ -40,6 +40,13 @@ DEFAULT_PROVENANCE_RESOLVER = {
             "window_seconds": None,
             "snapshot": None,
             "candle_policy": None,
+            # Only meaningful for source="ohlcv": pins which compute
+            # cadence resolves the candidate ("microstructure" or
+            # "structural" — see compute_indicators.py). Unset (None)
+            # keeps the old behavior of accepting either, which allowed
+            # indicators from two different candles to mix within one
+            # decision (see l3_authorization_contract_v3._reference_resolution).
+            "scheduler_group": None,
         }
         for source in (
             "ohlcv", "live_trade_flow", "live_order_book", "decision_context"
