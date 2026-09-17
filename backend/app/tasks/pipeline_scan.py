@@ -2710,6 +2710,7 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
     # (decision_id, authorization_contract_hash) as its canonical idempotency
     # identity.
     outbox_rows = []
+    outbox_by_decision_id = {}
     for row, source_decision in zip(rows, decisions):
         contract_v3 = (row.metrics or {}).get("l3_authorization_contract_v3")
         if not isinstance(contract_v3, dict):
@@ -2725,7 +2726,7 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
             if consolidation_required
             else "CREATE_SHADOW_IF_ALLOWED"
         )
-        outbox_rows.append(L3AuthorizationOutbox(
+        outbox_row = L3AuthorizationOutbox(
             decision_id=row.id,
             authorization_contract_hash=contract_hash,
             event_type=outbox_event_type,
@@ -2767,7 +2768,9 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
                     "reason_codes": row.reason_codes or [],
                 },
             },
-        ))
+        )
+        outbox_rows.append(outbox_row)
+        outbox_by_decision_id[row.id] = outbox_row
     if outbox_rows:
         db.add_all(outbox_rows)
         await db.flush()
@@ -2811,6 +2814,15 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
             ),
             "created_at": row.created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
         }
+        _outbox_row = outbox_by_decision_id.get(row.id)
+        if _outbox_row is not None:
+            # S0.1 (2026-09-17 shadow-trade collapse fix): only the caller
+            # knows when this watchlist's own transaction actually commits.
+            # Exposing the freshly-flushed outbox row's id/type lets it
+            # process a DIRECT event immediately after that commit, instead
+            # of waiting for the rest of the scan's watchlists.
+            payload["_outbox_event_id"] = str(_outbox_row.id)
+            payload["_outbox_event_type"] = _outbox_row.event_type
         logger.info(
             "[Decision] PERSISTED | id=%s | %s | score=%s | %s | event=%s",
             row.id, row.symbol, round(float(row.score or 0), 2), row.decision, row.event_type or "—",
@@ -5230,10 +5242,41 @@ async def _run_pipeline_scan():
                     for payload in decision_payloads:
                         publish_decision_event(payload)
 
-                    # Shadow creation is intentionally not called here.
-                    # DecisionLog + contract + outbox were committed by
-                    # _update_last_scanned; the outbox consumer below owns
-                    # all direct and consolidated shadow writes.
+                    # S0.1 (2026-09-17 shadow-trade collapse fix): a DIRECT
+                    # event (single profile, no rival candidates) has no
+                    # reason to wait for the rest of this scan's watchlists
+                    # -- unlike a CONSOLIDATE event, which genuinely needs
+                    # every contributing watchlist's candidate before a
+                    # winner can be picked (left to the scan-end batch call
+                    # below, unchanged). DecisionLog + contract + outbox
+                    # were just committed by _update_last_scanned above, so
+                    # it is now safe to process. Best-effort: any failure
+                    # here is retried by the scan-end batch call or by
+                    # beat's periodic recovery, exactly like before this fix.
+                    _direct_event_ids = [
+                        payload["_outbox_event_id"] for payload in decision_payloads
+                        if payload.get("_outbox_event_type") == "CREATE_SHADOW_IF_ALLOWED"
+                    ]
+                    if _direct_event_ids:
+                        try:
+                            from ..services.l3_authorization_outbox_service import (
+                                _process_direct as _l3_process_direct_now,
+                            )
+
+                            for _event_id in _direct_event_ids:
+                                await _l3_process_direct_now(_event_id)
+                        except Exception:
+                            logger.exception(
+                                "[L3_OUTBOX_V3] immediate post-commit processing failed "
+                                "wl=%s; events remain retryable via scan-end batch/beat",
+                                wl.name,
+                            )
+
+                    # Consolidated (multi-candidate) events are intentionally
+                    # NOT processed here. DecisionLog + contract + outbox
+                    # were committed by _update_last_scanned; the scan-end
+                    # outbox consumer below owns all consolidated shadow
+                    # writes once every contributing watchlist has run.
 
                     # ── Shadow Bypass Score Gate ──────────────────────────────────────
                     # SHADOW_BYPASS_SCORE_GATE=true: passa os assets rejeitados pelo
