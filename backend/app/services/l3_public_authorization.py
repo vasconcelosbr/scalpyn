@@ -6,9 +6,10 @@ requires the latest decision, its immutable contract and its transactional outbo
 from datetime import datetime, timedelta, timezone
 import math
 
-from sqlalchemy import select, tuple_
+from sqlalchemy import and_, select, tuple_
 
 from ..models.backoffice import DecisionLog, L3AuthorizationOutbox
+from ..models.shadow_trade import ShadowTrade
 from .l3_authorization_contract_v3 import canonical_hash
 
 
@@ -56,7 +57,7 @@ def authorization_expiry(contract):
     return min(deadlines) if deadlines else None
 
 
-def public_authorization(decision, event, *, watchlist_id, profile_version=None, now=None):
+def public_authorization(decision, event, shadow, *, watchlist_id, profile_version=None, now=None):
     now = now or datetime.now(timezone.utc)
     contract = (decision.metrics or {}).get("l3_authorization_contract_v3") or {}
     if (decision.decision != "ALLOW" or contract.get("valid") is not True
@@ -104,6 +105,12 @@ def public_authorization(decision, event, *, watchlist_id, profile_version=None,
         profile_version=profile_version, rules_snapshot=lineage.get("rules_snapshot"),
         watchlist_id=str(watchlist_id), watchlist_name=lineage.get("watchlist_name"),
         watchlist_level="L3", source_watchlist_id=lineage.get("source_watchlist_id"))
+    # S0.3 (2026-09-17 shadow-trade collapse fix): membership in the public
+    # feed was never execution authority by design (module docstring), but
+    # nothing forced a caller to actually check that. A confirmed Shadow —
+    # not just a valid, unexpired contract — is now required to call an
+    # opportunity ``executable``; PENDING/RETRY stay tracking-only states.
+    executable = shadow_status == "STARTED" and shadow is not None
     return {
         "decision_id": decision.id,
         "authorization_id": digest,
@@ -111,6 +118,8 @@ def public_authorization(decision, event, *, watchlist_id, profile_version=None,
         "evaluated_at": evaluated.isoformat(),
         "expires_at": expiry.isoformat(),
         "shadow_status": shadow_status,
+        "shadow_id": str(shadow.id) if shadow is not None else None,
+        "executable": executable,
         "shadow_reason": result or ("SHADOW_RETRY_PENDING" if event.status == "RETRY" else None),
         "alpha_score": metrics.get("final_score") if metrics.get("final_score") is not None else decision.score,
         "current_price": metrics.get("price"),
@@ -135,11 +144,21 @@ async def load_public_authorizations(db, *, user_id, candidates):
                   DecisionLog.created_at.desc(), DecisionLog.id.desc())
     )
     rows = (await db.execute(
-        select(DecisionLog, L3AuthorizationOutbox)
+        select(DecisionLog, L3AuthorizationOutbox, ShadowTrade)
         .outerjoin(L3AuthorizationOutbox, L3AuthorizationOutbox.decision_id == DecisionLog.id)
+        .outerjoin(
+            ShadowTrade,
+            and_(
+                ShadowTrade.decision_id == DecisionLog.id,
+                ShadowTrade.source == "L3",
+            ),
+        )
         .where(DecisionLog.id.in_(latest))
     )).all()
-    by_pair = {(row.profile_id, row.symbol): (row, event) for row, event in rows}
+    by_pair = {
+        (row.profile_id, row.symbol): (row, event, shadow)
+        for row, event, shadow in rows
+    }
     result = {}
     now = datetime.now(timezone.utc)
     for item in candidates:
@@ -148,6 +167,10 @@ async def load_public_authorizations(db, *, user_id, candidates):
             continue
         auth = public_authorization(*pair, watchlist_id=item["watchlist_id"],
                                     profile_version=item.get("profile_version"), now=now)
-        if auth:
+        # S0.3: only a confirmed Shadow makes an opportunity part of the
+        # executable population. PENDING/RETRY (contract valid, Shadow not
+        # yet confirmed) are real states worth surfacing elsewhere for
+        # tracking, but must never reach the list a consumer buys from.
+        if auth and auth.get("executable"):
             result[(item["watchlist_id"], item["symbol"])] = auth
     return result

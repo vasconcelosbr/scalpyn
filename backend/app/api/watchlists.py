@@ -1083,7 +1083,12 @@ async def list_l3_consolidated_assets(
         "read_only": True,
         "semantic": "LIVE_L3_CANDIDATES",
         "authorization_contract": "L3_PUBLIC_AUTHORIZATION_V1",
-        "consumer_policy": "Require ALLOW and now < expires_at; deduplicate authorization_id before placing an order.",
+        "consumer_policy": (
+            "Every item here already has executable=true (ALLOW, now < "
+            "expires_at, AND a confirmed shadow_id) — PENDING/RETRY "
+            "opportunities are excluded from this list, not just flagged. "
+            "Deduplicate by authorization_id before placing an order."
+        ),
         "items": items,
         "total": len(items),
         "as_of": _iso_utc(datetime.now(timezone.utc)),

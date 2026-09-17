@@ -31,43 +31,57 @@ def objects():
                    metrics={"l3_authorization_contract_v3": body, "price": 1.2})
     event = Obj(authorization_contract_hash=body["authorization_contract_hash"],
                 status="PENDING", payload={"shadow_creation_required": True}, last_error=None)
-    return now, watchlist, decision, event, body
+    shadow = None  # no confirmed Shadow by default — most fixtures exercise PENDING/RETRY
+    return now, watchlist, decision, event, shadow, body
 
 
 def test_lit_allow_requires_transactional_outbox():
-    now, wl, decision, event, _ = objects()
-    assert public_authorization(decision, None, watchlist_id=wl, now=now) is None
-    auth = public_authorization(decision, event, watchlist_id=wl, now=now)
+    now, wl, decision, event, shadow, _ = objects()
+    assert public_authorization(decision, None, shadow, watchlist_id=wl, now=now) is None
+    auth = public_authorization(decision, event, shadow, watchlist_id=wl, now=now)
     assert auth["decision_id"] == decision.id
     assert auth["shadow_status"] == "PENDING"
+    assert auth["shadow_id"] is None
+    assert auth["executable"] is False
 
 
 def test_uni_membership_never_overrides_block_or_expired_contract():
-    now, wl, decision, event, body = objects()
+    now, wl, decision, event, shadow, body = objects()
     decision.decision = "BLOCK"
-    assert public_authorization(decision, event, watchlist_id=wl, now=now) is None
+    assert public_authorization(decision, event, shadow, watchlist_id=wl, now=now) is None
     decision.decision = "ALLOW"
-    assert public_authorization(decision, event, watchlist_id=wl, now=now + timedelta(seconds=280)) is None
+    assert public_authorization(decision, event, shadow, watchlist_id=wl, now=now + timedelta(seconds=280)) is None
     body["valid"] = False
-    assert public_authorization(decision, event, watchlist_id=wl, now=now) is None
+    assert public_authorization(decision, event, shadow, watchlist_id=wl, now=now) is None
 
 
 def test_hash_profile_version_and_shadow_suppression_fail_closed():
-    now, wl, decision, event, body = objects()
-    assert public_authorization(decision, event, watchlist_id=uuid4(), now=now) is None
-    assert public_authorization(decision, event, watchlist_id=wl,
+    now, wl, decision, event, shadow, body = objects()
+    assert public_authorization(decision, event, shadow, watchlist_id=uuid4(), now=now) is None
+    assert public_authorization(decision, event, shadow, watchlist_id=wl,
                                 profile_version=now - timedelta(seconds=1), now=now) is None
     event.status = "PROCESSED"
     event.payload["processing_result"] = "SUPPRESSED/SAME_SYMBOL_LOWER_PRIORITY"
-    assert public_authorization(decision, event, watchlist_id=wl, now=now) is None
+    assert public_authorization(decision, event, shadow, watchlist_id=wl, now=now) is None
     event.payload["processing_result"] = "CREATED_OR_RECONCILED"
-    assert public_authorization(decision, event, watchlist_id=wl, now=now)["shadow_status"] == "STARTED"
+    # S0.3: CREATED_OR_RECONCILED alone is not enough — without an actual
+    # confirmed Shadow row, the opportunity is STARTED-by-outbox-result but
+    # still not executable (defensive: a stale/mismatched join must never
+    # authorize execution just because the processing_result string matches).
+    auth_without_shadow = public_authorization(decision, event, None, watchlist_id=wl, now=now)
+    assert auth_without_shadow["shadow_status"] == "STARTED"
+    assert auth_without_shadow["executable"] is False
+    shadow = Obj(id=uuid4())
+    auth = public_authorization(decision, event, shadow, watchlist_id=wl, now=now)
+    assert auth["shadow_status"] == "STARTED"
+    assert auth["shadow_id"] == str(shadow.id)
+    assert auth["executable"] is True
     body["feature_evaluations"][0]["max_age_seconds"] = 999999
-    assert public_authorization(decision, event, watchlist_id=wl, now=now) is None
+    assert public_authorization(decision, event, shadow, watchlist_id=wl, now=now) is None
 
 
 def test_comparison_operands_use_shortest_remaining_lifetime():
-    now, _, _, _, body = objects()
+    now, _, _, _, _, body = objects()
     body["feature_evaluations"].append({"resolved_operands": {"left": {
         "max_age_seconds": 60, "resolved_feature": {"age_seconds": 50}}}})
     assert authorization_expiry(body) == now + timedelta(seconds=10)
@@ -77,15 +91,41 @@ def test_comparison_operands_use_shortest_remaining_lifetime():
 
 @pytest.mark.asyncio
 async def test_latest_block_is_not_filtered_out_before_latest_decision_selection():
-    now, wl, decision, event, body = objects()
+    now, wl, decision, event, shadow, body = objects()
     decision.decision = "BLOCK"
-    db = Obj(execute=AsyncMock(return_value=Obj(all=lambda: [(decision, event)])))
+    db = Obj(execute=AsyncMock(return_value=Obj(all=lambda: [(decision, event, shadow)])))
     result = await load_public_authorizations(db, user_id=uuid4(), candidates=[{
         "profile_id": decision.profile_id, "symbol": decision.symbol, "watchlist_id": wl}])
     assert result == {}
     sql = str(db.execute.call_args.args[0].compile(dialect=postgresql.dialect()))
     assert "DISTINCT ON" in sql and "created_at DESC" in sql
     assert "decision =" not in sql
+
+
+@pytest.mark.asyncio
+async def test_load_public_authorizations_excludes_pending_and_includes_started():
+    """S0.3: the population this feeds (the executable API list) must never
+    include a PENDING/RETRY opportunity just because its contract is valid
+    and unexpired — only a confirmed Shadow makes it in.
+    """
+    now, wl, decision, event, _shadow, body = objects()
+    candidates = [{
+        "profile_id": decision.profile_id, "symbol": decision.symbol, "watchlist_id": wl,
+    }]
+
+    # No Shadow yet (still PENDING) -> excluded entirely.
+    db_pending = Obj(execute=AsyncMock(return_value=Obj(all=lambda: [(decision, event, None)])))
+    result_pending = await load_public_authorizations(db_pending, user_id=uuid4(), candidates=candidates)
+    assert result_pending == {}
+
+    # Confirmed Shadow -> included, with executable=True and the real shadow_id.
+    event.status, event.payload["processing_result"] = "PROCESSED", "CREATED_OR_RECONCILED"
+    confirmed_shadow = Obj(id=uuid4())
+    db_started = Obj(execute=AsyncMock(return_value=Obj(all=lambda: [(decision, event, confirmed_shadow)])))
+    result_started = await load_public_authorizations(db_started, user_id=uuid4(), candidates=candidates)
+    entry = result_started[(wl, decision.symbol)]
+    assert entry["executable"] is True
+    assert entry["shadow_id"] == str(confirmed_shadow.id)
 
 
 @pytest.mark.asyncio
@@ -133,7 +173,7 @@ async def test_on_demand_persists_decision_outbox_and_membership_atomically(monk
     from app.services import l3_watchlist_publication as publication
     from app.services import l3_gate_evaluation_store
 
-    now, wl_id, decision, event, contract = objects()
+    now, wl_id, decision, event, _shadow, contract = objects()
     profile = Obj(id=decision.profile_id, name="L3_TEST", config={}, profile_version=now)
     wl = Obj(id=wl_id, profile_id=profile.id, last_scanned_at=None)
     old_uni = PipelineWatchlistAsset(watchlist_id=wl_id, symbol="UNI_USDT", level_direction="up")

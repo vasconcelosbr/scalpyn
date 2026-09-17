@@ -34,6 +34,15 @@ ACTIVE_SHADOW_STATUSES = ("PENDING", "RUNNING")
 REASON_ACTIVE_TRADE = "ACTIVE_TRADE_ALREADY_EXISTS"
 REASON_LOWER_PRIORITY = "SAME_SYMBOL_LOWER_PRIORITY"
 REASON_CONCURRENT_TRADE = "CONCURRENT_ACTIVE_TRADE_CREATED"
+# S0.4 (2026-09-17 shadow-trade collapse fix): the outbox already checks
+# authorization_expiry once before calling in here, but acquire_consolidation_lock
+# below can block on lock contention — an authorization that was still valid at
+# that upfront check can expire during the wait. Re-checking right after the
+# lock (and right before the actual insert) closes that window instead of
+# creating a Shadow off data the contract itself says is stale. Distinct
+# reason_code from the upfront outbox-level AUTHORIZATION_EXPIRED so an
+# operator can tell whether expiry happened before or after lock contention.
+REASON_EXPIRED_AFTER_LOCK = "AUTHORIZATION_EXPIRED_AFTER_LOCK"
 SUPPRESSION_EVENT_TYPE = "PROFILE_CONSOLIDATION"
 
 
@@ -301,6 +310,36 @@ async def find_active_l3_shadow(
         direction=direction,
         source="L3",
     )
+
+
+async def find_shadow_by_decision_id(
+    db,
+    *,
+    decision_id: Any,
+    source: str = "L3",
+) -> Optional[ShadowTrade]:
+    """S0.5 (2026-09-17 shadow-trade collapse fix): ``_create_from_decision``
+    is idempotent via ``ON CONFLICT (decision_id) DO NOTHING`` and returns
+    ``None`` both on a genuine race AND on a plain retry/re-call for a
+    decision that already has its Shadow. Callers used to fall back to
+    "is there any currently ACTIVE shadow for this symbol", which answers a
+    different question and can under-report a retry as
+    NO_SHADOW_REQUIRED/CONTRACT_REJECT for a decision whose Shadow already
+    exists but has since closed. Look up by the immutable identity
+    (decision_id) first — status-independent — before falling back to the
+    active-shadow check.
+    """
+    if decision_id is None:
+        return None
+    result = await db.execute(
+        select(ShadowTrade)
+        .where(
+            ShadowTrade.decision_id == decision_id,
+            ShadowTrade.source == source,
+        )
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
 
 
 def _candidate_profile_id(candidate: EligibleL3Candidate) -> Optional[str]:
@@ -572,6 +611,55 @@ async def consolidate_l3_candidates(
                             f"winner_decision_not_found:{winner.decision_id}"
                         )
 
+                    v3_contract = (decision_row.metrics or {}).get(
+                        "l3_authorization_contract_v3"
+                    )
+                    if isinstance(v3_contract, dict):
+                        from .l3_public_authorization import authorization_expiry
+
+                        expiry = authorization_expiry(v3_contract)
+                        if expiry is None or expiry <= datetime.now(timezone.utc):
+                            recorded = 0
+                            for rank, candidate in enumerate(ranked, start=1):
+                                recorded += int(
+                                    await _record_suppressed(
+                                        db,
+                                        candidate=candidate,
+                                        event_id=event_id,
+                                        reason_code=REASON_EXPIRED_AFTER_LOCK,
+                                        winner=None,
+                                        winner_trade_id=None,
+                                        candidate_rank=rank,
+                                        candidate_count=candidate_count,
+                                        scan_run_id=scan_run_id,
+                                        rule_version=rule_version,
+                                    )
+                                )
+                            l3_consolidation_metrics.record_suppressed(
+                                symbol, recorded, REASON_EXPIRED_AFTER_LOCK, rule_version
+                            )
+                            logger.info(
+                                "l3_profile_consolidation expired_after_lock "
+                                "event_id=%s symbol=%s direction=%s candidates=%d "
+                                "rule_version=%s",
+                                event_id, symbol, direction, candidate_count,
+                                rule_version,
+                            )
+                            results.append(
+                                ConsolidationResult(
+                                    event_id=event_id,
+                                    symbol=symbol,
+                                    direction=direction,
+                                    decision="SUPPRESSED",
+                                    reason_code=REASON_EXPIRED_AFTER_LOCK,
+                                    winner_profile_id=None,
+                                    trade_id=None,
+                                    candidate_count=candidate_count,
+                                    suppressed_count=candidate_count,
+                                )
+                            )
+                            continue
+
                     suppressed = ranked[1:]
                     consolidation_metadata = {
                         "enabled": True,
@@ -617,6 +705,53 @@ async def consolidate_l3_candidates(
                         consolidation_enforced=True,
                     )
                     if trade_id is None:
+                        # S0.5: reconcile by the winner's OWN decision_id
+                        # first. ``ON CONFLICT DO NOTHING`` returning no row
+                        # means EITHER this exact decision already has its
+                        # Shadow (a retry/re-call — idempotent success, not
+                        # a conflict with anyone else) OR a concurrent
+                        # worker won the symbol/direction race. Checking
+                        # "any ACTIVE shadow for this symbol" first conflates
+                        # the two: a retry arriving after the winner's own
+                        # (already-closed) Shadow finished would find no
+                        # active trade and hit the fail-closed raise below
+                        # forever, since the same conflict recurs on every
+                        # retry attempt.
+                        reconciled = await find_shadow_by_decision_id(
+                            db, decision_id=winner.decision_id
+                        )
+                        if reconciled is not None:
+                            recorded = 0
+                            for rank, candidate in enumerate(suppressed, start=2):
+                                recorded += int(
+                                    await _record_suppressed(
+                                        db,
+                                        candidate=candidate,
+                                        event_id=event_id,
+                                        reason_code=REASON_LOWER_PRIORITY,
+                                        winner=winner,
+                                        winner_trade_id=reconciled.id,
+                                        candidate_rank=rank,
+                                        candidate_count=candidate_count,
+                                        scan_run_id=scan_run_id,
+                                        rule_version=rule_version,
+                                    )
+                                )
+                            results.append(
+                                ConsolidationResult(
+                                    event_id=event_id,
+                                    symbol=symbol,
+                                    direction=direction,
+                                    decision="CREATED",
+                                    reason_code=None,
+                                    winner_profile_id=_candidate_profile_id(winner),
+                                    trade_id=str(reconciled.id),
+                                    candidate_count=candidate_count,
+                                    suppressed_count=recorded,
+                                )
+                            )
+                            continue
+
                         concurrent = await find_active_l3_shadow(
                             db,
                             user_id=winner.user_id,
