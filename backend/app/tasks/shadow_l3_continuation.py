@@ -64,6 +64,7 @@ async def _sweep():
             await drain(db, redis, max(p.capture_batch_size for p in policies))
         processed = errors = 0
         for item in ids:
+            just_closed = False
             try:
                 async with db.begin_nested():
                     shadow = (await db.execute(select(ShadowTrade).where(ShadowTrade.id==item.id)
@@ -74,9 +75,20 @@ async def _sweep():
                     checked = (await db.execute(text("SELECT checked_at FROM shadow_l3_exit_states WHERE shadow_id=:id"), {"id":item.id})).scalar_one_or_none()
                     if checked and (datetime.now(timezone.utc)-checked).total_seconds() < snapshot["evaluation_seconds"]:
                         continue
+                    was_completed = shadow.status == "COMPLETED"
                     await advance_shadow(db, shadow)
                     processed += 1
+                    just_closed = not was_completed and shadow.status == "COMPLETED"
                 await db.commit()
+                if just_closed:
+                    # S3 (2026-09-17 shadow-trade collapse fix): the legacy
+                    # price-monitor path always generated a measurement
+                    # revision on closure; L3 continuation closures never
+                    # did. Isolated session -- a failure here never
+                    # jeopardizes the closure already committed above, and
+                    # falls back to _reconcile_pending_measurements_async.
+                    from .shadow_trade_monitor import _record_measurement_one_async
+                    await _record_measurement_one_async(shadow.id)
             except Exception:
                 await db.rollback()
                 errors += 1
