@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -749,6 +749,103 @@ def test_resolver_rejects_ambiguous_exact_feature_identity():
     ]
     assert result["provenance_resolution"]["status"] == "CONTRACT_REJECT"
     assert result["authorization_status"] == "CONTRACT_REJECT"
+
+
+def _rsi_asset_with_rival_compute_groups():
+    """Same indicator (rsi/5m), same value, computed twice: once by
+    ``compute_5m`` (scheduler_group="microstructure") and once — with a
+    LATER clock — by ``compute_structural_5m`` (scheduler_group=
+    "structural"). Both candidates carry the identical ``actual`` on
+    purpose: in production the two cadences compute the same value from
+    the same candles almost always, so the ambiguity can never be caught
+    by an "actual" mismatch — only by which candle's timestamp is used.
+    """
+    asset = _asset()
+    rsi_candidate = asset["_merged_indicators"].candidates[1]
+    rsi_candidate["group"] = "microstructure"
+    older = NOW - timedelta(seconds=10)
+    rsi_candidate["source_timestamp"] = older
+    rsi_candidate["computed_at"] = older
+    rsi_candidate["available_at"] = older
+    structural_rival = dict(rsi_candidate)
+    structural_rival["group"] = "structural"
+    newer = NOW - timedelta(seconds=5)
+    structural_rival["source_timestamp"] = newer
+    structural_rival["computed_at"] = newer
+    structural_rival["available_at"] = newer
+    asset["_merged_indicators"].candidates.append(structural_rival)
+    return asset
+
+
+def test_scheduler_group_policy_pins_candidate_despite_newer_rival_clock():
+    """The same 5m candles are computed twice in production: ``compute_5m``
+    (scheduler_group="microstructure", the complete/canonical set) and
+    ``compute_structural_5m`` (scheduler_group="structural", a resiliency
+    subset on an isolated queue). Confirmed in prod (decisions 671160,
+    671850, 672356, 673908 on 2026-09-17): without a pinned group,
+    ``_latest_same_identity`` silently prefers whichever cadence last
+    committed — even a structural duplicate with a NEWER clock than the
+    intended microstructure candidate. Pinning ``scheduler_group`` in the
+    source policy must keep the pinned group's candidate regardless of
+    clocks.
+    """
+    asset = _rsi_asset_with_rival_compute_groups()
+    policy = _resolver_policy()
+    policy["l3_v3_provenance_resolver"]["source_policies"]["ohlcv"][
+        "scheduler_group"
+    ] = "microstructure"
+
+    condition = {
+        "id": "pinned-rsi", "indicator": "rsi", "operator": ">", "value": 50,
+        "required": True,
+    }
+    result = build_authorization_contract(
+        asset=asset,
+        profile_config=_legacy_profile(condition),
+        legacy_decision="ALLOW",
+        evaluated_at=NOW,
+        profile_id="profile-canary",
+        profile_name="Canary",
+        profile_version=NOW,
+        gate_evaluation=_gate_trace("pinned-rsi", actual=58.7, target=50),
+        runtime_policy=policy,
+    )
+    evaluated = result["sections"]["signals"]["conditions"][0]
+    assert evaluated["reason_codes"] == []
+    assert evaluated["status"] == "PASS"
+    assert evaluated["resolved_feature"]["scheduler_group"] == "microstructure"
+    assert evaluated["resolved_feature"]["computed_at"] == (
+        NOW - timedelta(seconds=10)
+    ).isoformat().replace("+00:00", "Z")
+    assert result["authorization_status"] == "ALLOW"
+
+
+def test_missing_scheduler_group_policy_falls_back_to_newest_clock_regardless_of_group():
+    """Same rival candidates as above, but WITHOUT pinning ``scheduler_group``
+    in the policy. This documents the current gap rather than an idealized
+    outcome the surgical fix does not attempt: an unpinned policy keeps the
+    pre-existing "latest clock wins" merge — the structural duplicate
+    resolves the condition even though the intended source is
+    microstructure. Pinning ``scheduler_group`` (previous test) is what
+    actually closes this gap; leaving it unset is a configuration risk,
+    not a safe default.
+    """
+    asset = _rsi_asset_with_rival_compute_groups()
+    condition = {
+        "id": "unpinned-rsi", "indicator": "rsi", "operator": ">", "value": 50,
+        "required": True,
+    }
+    result = _build_resolved(
+        _legacy_profile(condition),
+        asset,
+        _gate_trace("unpinned-rsi", actual=58.7, target=50),
+    )
+    evaluated = result["sections"]["signals"]["conditions"][0]
+    assert evaluated["reason_codes"] == []
+    assert evaluated["resolved_feature"]["scheduler_group"] == "structural"
+    assert evaluated["resolved_feature"]["computed_at"] == (
+        NOW - timedelta(seconds=5)
+    ).isoformat().replace("+00:00", "Z")
 
 
 def test_resolver_rejects_unconfigured_source_policy_without_fallback():

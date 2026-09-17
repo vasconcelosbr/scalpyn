@@ -303,6 +303,7 @@ def _registry_candidate(raw: dict, *, market_scope: dict, evaluated_at: datetime
         "parameters": _candidate_parameters(raw),
         "candle_policy": _normalize_candle_policy(raw.get("candle_policy")),
         "candle_closed": raw.get("candle_closed"),
+        "scheduler_group": raw.get("group"),
         "source_timestamp": _iso(source_timestamp),
         "computed_at": _iso(raw.get("computed_at")),
         "available_at": _iso(raw.get("available_at")),
@@ -667,6 +668,33 @@ def _reference_resolution(
         candidates = [
             candidate for candidate in candidates
             if _candidate_parameters(candidate) == configured_parameters
+        ]
+    # Pin the compute cadence for OHLCV candidates. The same 5m candles are
+    # computed twice — ``compute_5m`` (scheduler_group="microstructure",
+    # the complete/canonical set) and ``compute_structural_5m``
+    # (scheduler_group="structural", a resiliency subset isolated on its
+    # own queue so a slow structural pass never delays pipeline_scan; see
+    # celery_app.py queue-topology docstring). Without a pinned group,
+    # ``_latest_same_identity`` below picks whichever cadence last
+    # committed, so two indicators evaluated in the same decision can come
+    # from two different candles. ``condition`` can override per-rule;
+    # otherwise the source policy's ``scheduler_group`` applies.
+    configured_group = condition.get("scheduler_group")
+    if not configured_group:
+        _group_policy_source = configured_source or (
+            candidates[0].get("source") if candidates else None
+        )
+        _group_policy = (
+            source_policies.get(_group_policy_source)
+            if _group_policy_source else None
+        )
+        if isinstance(_group_policy, Mapping):
+            configured_group = _group_policy.get("scheduler_group")
+    if configured_group:
+        candidates = [
+            candidate for candidate in candidates
+            if candidate.get("source") != "ohlcv"
+            or candidate.get("scheduler_group") == configured_group
         ]
     candidates = _latest_same_identity(candidates)
     if not candidates:
