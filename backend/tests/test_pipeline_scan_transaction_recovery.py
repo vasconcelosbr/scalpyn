@@ -22,13 +22,24 @@ def test_ml_opportunity_ranking_insert_is_savepoint_isolated():
     assert "transaction_rolled_back=true" in snippet
 
 
-def test_watchlist_failure_rolls_back_before_next_watchlist():
+def test_watchlist_failure_is_isolated_and_does_not_abort_the_scan():
+    """Each watchlist runs on its own DB session (2026-09-17 shadow-trade
+    collapse fix), so a failure in one watchlist cannot leave a shared
+    connection aborted for the next watchlist. This supersedes the old
+    shared-session ``await db.rollback()`` dance, which is gone by design:
+    an isolated per-watchlist session needs no explicit rollback to
+    protect its siblings.
+    """
     source = _pipeline_source()
-    idx = source.index('logger.exception("[PipelineScan] Error processing watchlist')
-    snippet = source[idx: idx + 1200]
+    fn_idx = source.index("async def _process_one_watchlist")
+    fn_end = source.index("for stage in (*_PIPELINE_EXECUTION_ORDER", fn_idx)
+    fn_snippet = source[fn_idx:fn_end]
+    assert "async with AsyncSessionLocal() as db:" in fn_snippet
 
-    assert "await db.rollback()" in snippet
+    idx = source.index('logger.exception("[PipelineScan] Error processing watchlist')
+    snippet = source[idx: idx + 400]
     assert "continue" in snippet
+    assert "await db.rollback()" not in snippet
 
 
 def test_fail_closed_ml_exception_does_not_escape_as_sql_error():
