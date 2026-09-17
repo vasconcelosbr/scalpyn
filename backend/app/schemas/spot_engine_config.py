@@ -161,6 +161,15 @@ class ScannerConfig(BaseModel):
     # Opt-in preserves the existing behaviour until the operator enables the
     # deterministic L3 profile consolidation in the GUI-backed DB config.
     l3_single_profile_per_symbol_enabled: bool = False
+    # Per-watchlist wall-clock cap inside one pipeline_scan cycle. Each
+    # watchlist now runs on its own isolated DB session (Task 2026-09-17:
+    # shadow-trade collapse investigation), so a slow watchlist times out
+    # without touching any other watchlist's connection/transaction. Without
+    # this cap, a single sequential scan was observed taking anywhere from
+    # 0.16s to 8 minutes end-to-end depending on how many candidates one
+    # watchlist had to evaluate — well past the freshness window of the L3
+    # authorization contract for decisions made early in that same cycle.
+    l3_watchlist_processing_timeout_seconds: float = Field(60.0, ge=1, le=280)
     # Independent opt-in for diagnostic BLOCK captures.  Rejected Shadows
     # never authorize execution and retain a separate rollback switch.
     l3_rejected_single_profile_per_symbol_enabled: bool = False
