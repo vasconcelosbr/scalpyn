@@ -145,3 +145,58 @@ def test_diagnostic_reports_pending_managed_capture_not_fake_exclusion(policy):
     assert result['stage']=='AWAITING_OUTCOME'
     result=capture_stage(row,cutoff=T+timedelta(days=2),config=cfg,eligible_ids=set())
     assert result['stage']=='EXCLUDED'
+
+
+def test_diagnostic_reports_every_concurrent_impediment_not_just_first(policy):
+    """S0.6 (2026-09-17 shadow-trade collapse fix): a closed managed-exit
+    capture like UNI_USDT/b13d595f (invalid flow evidence + no measurement
+    + not yet mature, all true at once) must surface all three, not just
+    whichever one the code happened to check first.
+    """
+    from app.services.l3_capture_diagnostics import capture_stage
+    shadow, _, cfg = scenario(policy)
+    cfg['ml_maturity_embargo_margin_minutes'] = 60
+    row = dict(
+        id='uni', config_snapshot=shadow.config_snapshot, entry_timestamp=T,
+        outcome='TRAILING_STOP', measurement_status=None, entry_quality=None,
+        managed_label={'valid': False, 'reason': 'INCOMPLETE_FLOW_EVIDENCE'},
+    )
+    result = capture_stage(row, cutoff=T + timedelta(minutes=1), config=cfg, eligible_ids=set())
+    codes = {item['code'] for item in result['impediments']}
+    assert codes == {'INCOMPLETE_FLOW_EVIDENCE', 'MEASUREMENT_NOT_READY', 'AWAITING_MATURITY'}
+    assert len(result['impediments']) == 3
+    # Primary reason/stage still reflects the first impediment, for callers
+    # that only read the top-level fields.
+    assert result['reason'] == 'INCOMPLETE_FLOW_EVIDENCE'
+    assert result['stage'] == 'EXCLUDED'
+
+
+@pytest.mark.asyncio
+async def test_flow_evidence_detail_names_the_specific_threshold_broken():
+    """The generic INCOMPLETE_FLOW_EVIDENCE code hides which policy limit was
+    actually violated. _flow_evidence_detail must look up the failing
+    evaluation and name the exact metric and threshold, e.g. 'idade do fluxo
+    ... de 142.97 s, acima de 120 s' -- not just repeat the code.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+    from app.services.l3_capture_diagnostics import _flow_evidence_detail
+    row = dict(
+        id='uni', entry_timestamp=T,
+        config_snapshot={'shadow_l3_exit_policy': {'config': {
+            'warmup_seconds': 60, 'max_gap_seconds': 30,
+            'min_coverage_pct': 80, 'max_age_seconds': 120,
+        }}},
+    )
+    failing_row = {
+        'candle_at': T + timedelta(minutes=5), 'quality': 'INCOMPLETE_OR_STALE',
+        'data_age_seconds': 142.97, 'max_gap_seconds': 10.0,
+        'coverage_pct': 95.0, 'collection_lag_seconds': 5.0,
+    }
+    result = MagicMock()
+    result.mappings.return_value.one_or_none.return_value = failing_row
+    db = SimpleNamespace(execute=AsyncMock(return_value=result))
+    detail = await _flow_evidence_detail(db, row)
+    assert detail['data_age_seconds'] == 142.97
+    assert 'idade do fluxo' in detail['reason']
+    assert '142.97 s' in detail['reason']
+    assert 'acima de 120 s' in detail['reason']

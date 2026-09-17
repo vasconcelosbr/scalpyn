@@ -6,26 +6,57 @@ from .l3_authorization_contract_v3 import validate_profile_contract
 
 def capture_stage(row, *, cutoff, config, eligible_ids):
     if not row:
-        return {'stage': 'NO_CAPTURE', 'reason': 'Nenhuma captura L3 encontrada no período do dataset.'}
+        return {'stage': 'NO_CAPTURE', 'reason': 'Nenhuma captura L3 encontrada no período do dataset.', 'impediments': []}
     result = {k: row.get(k) for k in ('id', 'decision_id', 'symbol', 'created_at', 'outcome', 'lineage_status', 'measurement_status')}
+    result['impediments'] = []  # default; the managed-exit branch below may replace this with a full list
     from app.ml.l3_managed_exit import definition, at
     spec = definition(config)
     managed = (row.get('config_snapshot') or {}).get('l3_managed_ml') or {}
     if spec and str(row['id']) not in eligible_ids:
         if managed.get('contract') != spec or managed.get('capture_valid') is not True:
-            return {**result, 'stage':'EXCLUDED', 'reason':'Captura anterior ou incompatível com o contrato de saída gerenciada.'}
+            return {**result, 'stage':'EXCLUDED', 'reason':'Captura anterior ou incompatível com o contrato de saída gerenciada.', 'impediments': []}
         if not row.get('outcome'):
             horizon = row['entry_timestamp'] + timedelta(seconds=spec['max_holding_seconds'])
             return {**result, 'stage':'EXCLUDED' if cutoff > horizon else 'AWAITING_OUTCOME',
-                    'reason':'Horizonte ML excedido; posição preservada.' if cutoff > horizon else 'Aguardando saída pela política congelada na entrada.'}
+                    'reason':'Horizonte ML excedido; posição preservada.' if cutoff > horizon else 'Aguardando saída pela política congelada na entrada.',
+                    'impediments': []}
+        # S0.6 (2026-09-17 shadow-trade collapse fix): a closed managed-exit
+        # capture can simultaneously fail flow evidence, be missing its
+        # measurement, AND still be short of maturity. Reporting only the
+        # first one hides the rest — an operator who fixes it sees the
+        # capture "still excluded" for a completely different, previously
+        # invisible reason. Collect every applicable impediment instead of
+        # returning on the first match.
         proof = row.get('managed_label') or {}
+        impediments = []
         if not proof.get('valid'):
-            return {**result, 'stage':'EXCLUDED', 'reason':proof.get('reason') or 'Saída ainda sem comprovação para ML.'}
+            impediments.append({
+                'code': proof.get('reason') or 'MANAGED_LABEL_INVALID',
+                'reason': proof.get('reason') or 'Saída ainda sem comprovação para ML.',
+            })
         if row.get('measurement_status') != 'READY' or row.get('entry_quality') != 'OK':
-            return {**result, 'stage':'AWAITING_MEASUREMENT', 'reason':'Aguardando medição READY/OK.'}
-        mature = max(row['entry_timestamp']+timedelta(seconds=spec['max_holding_seconds']), at(proof['label_available_at'])) + timedelta(minutes=int(config['ml_maturity_embargo_margin_minutes']))
+            impediments.append({
+                'code': 'MEASUREMENT_NOT_READY',
+                'reason': f"Medição canônica ausente ou incompleta (status={row.get('measurement_status') or 'AUSENTE'}, "
+                          f"entry_quality={row.get('entry_quality') or 'AUSENTE'}).",
+            })
+        label_available_at = at(proof['label_available_at']) if proof.get('label_available_at') else None
+        horizon = row['entry_timestamp'] + timedelta(seconds=spec['max_holding_seconds'])
+        mature = max(horizon, label_available_at or horizon) + timedelta(minutes=int(config['ml_maturity_embargo_margin_minutes']))
         if mature > cutoff:
-            return {**result, 'stage':'AWAITING_MATURITY','matures_at':mature,'reason':'Aguardando horizonte e margem de maturação do contrato gerenciado.'}
+            impediments.append({
+                'code': 'AWAITING_MATURITY',
+                'reason': f'Prazo mínimo de maturação: {mature.isoformat()}.',
+                'matures_at': mature.isoformat(),
+            })
+        if impediments:
+            primary = impediments[0]
+            stage = (
+                'AWAITING_MEASUREMENT' if primary['code'] == 'MEASUREMENT_NOT_READY'
+                else 'AWAITING_MATURITY' if primary['code'] == 'AWAITING_MATURITY'
+                else 'EXCLUDED'
+            )
+            return {**result, 'stage': stage, 'reason': primary['reason'], 'impediments': impediments}
     if str(row['id']) in eligible_ids:
         result.update(stage='ELIGIBLE', reason='Incluída na população canônica do trainer.')
     elif row.get('lineage_status') != 'EXACT' or row.get('eligible_for_training') is not True:
@@ -48,6 +79,45 @@ def capture_stage(row, *, cutoff, config, eligible_ids):
         else:
             result.update(stage='EXCLUDED', reason='Excluída pelas demais verificações canônicas do dataset; consultar funil de elegibilidade.')
     return result
+
+
+async def _flow_evidence_detail(db, row):
+    """First post-warmup evaluation that failed flow-evidence quality, plus
+    which specific policy threshold it broke -- so an operator sees the exact
+    number instead of just the generic INCOMPLETE_FLOW_EVIDENCE code.
+    """
+    snapshot = row.get('config_snapshot') or {}
+    policy = (snapshot.get('shadow_l3_exit_policy') or {}).get('config') or {}
+    warmup_seconds = policy.get('warmup_seconds')
+    entry_timestamp = row.get('entry_timestamp')
+    if warmup_seconds is None or entry_timestamp is None:
+        return None
+    detail = (await db.execute(text('''
+        SELECT candle_at, evidence->>'quality' AS quality,
+               (evidence->>'data_age_seconds')::float AS data_age_seconds,
+               (evidence->>'max_gap_seconds')::float AS max_gap_seconds,
+               (evidence->>'coverage_pct')::float AS coverage_pct,
+               (evidence->>'collection_lag_seconds')::float AS collection_lag_seconds
+          FROM shadow_l3_exit_decisions
+         WHERE shadow_id = CAST(:id AS uuid) AND candle_at >= :warmup_from
+           AND COALESCE(evidence->>'quality', '') <> 'VALID'
+         ORDER BY candle_at LIMIT 1
+    '''), {'id': row['id'], 'warmup_from': entry_timestamp + timedelta(seconds=warmup_seconds)})).mappings().one_or_none()
+    if not detail:
+        return None
+    when = detail['candle_at']
+    stamp = when.strftime('%d/%m às %H:%M')
+    if detail['max_gap_seconds'] is not None and policy.get('max_gap_seconds') is not None and detail['max_gap_seconds'] > policy['max_gap_seconds']:
+        reason = f"Avaliação de {stamp}: maior lacuna do fluxo de {detail['max_gap_seconds']:.2f} s, acima de {policy['max_gap_seconds']} s."
+    elif detail['coverage_pct'] is not None and policy.get('min_coverage_pct') is not None and detail['coverage_pct'] < policy['min_coverage_pct']:
+        reason = f"Avaliação de {stamp}: cobertura do fluxo de {detail['coverage_pct']:.2f}%, abaixo de {policy['min_coverage_pct']}%."
+    elif detail['data_age_seconds'] is not None and policy.get('max_age_seconds') is not None and detail['data_age_seconds'] > policy['max_age_seconds']:
+        reason = f"Avaliação de {stamp}: idade do fluxo na referência da decisão de {detail['data_age_seconds']:.2f} s, acima de {policy['max_age_seconds']} s."
+    else:
+        reason = f"Avaliação de {stamp}: qualidade do fluxo = {detail['quality'] or 'AUSENTE'}."
+    return {'candle_at': when, 'quality': detail['quality'], 'data_age_seconds': detail['data_age_seconds'],
+            'max_gap_seconds': detail['max_gap_seconds'], 'coverage_pct': detail['coverage_pct'],
+            'collection_lag_seconds': detail['collection_lag_seconds'], 'reason': reason}
 
 
 async def l3_capture_diagnostics(db, user_id, *, cutoff, config, eligible_ids):
@@ -93,8 +163,16 @@ async def l3_capture_diagnostics(db, user_id, *, cutoff, config, eligible_ids):
            AND (source_path ILIKE '%l3%' OR source_path ILIKE '%profile%')
          ORDER BY created_at DESC,id DESC LIMIT 1
     '''),params)).mappings().one_or_none()
+    latest_capture = capture_stage(latest, cutoff=cutoff, config=config, eligible_ids=eligible_ids)
+    for impediment in latest_capture['impediments']:
+        if impediment['code'] == 'INCOMPLETE_FLOW_EVIDENCE':
+            detail = await _flow_evidence_detail(db, latest)
+            if detail:
+                impediment.update(detail)
+                if impediment is latest_capture['impediments'][0]:
+                    latest_capture['reason'] = detail['reason']
     return {'profile_contracts_valid': bool(checks) and all(not p['errors'] for p in checks),
-            'profiles': checks, 'latest_capture': capture_stage(latest,cutoff=cutoff,config=config,eligible_ids=eligible_ids),
+            'profiles': checks, 'latest_capture': latest_capture,
             'latest_decision': dict(decision) if decision else None,
             'latest_capture_skip': dict(failure) if failure else None,
             'runtime_readiness_confirmed': False,
