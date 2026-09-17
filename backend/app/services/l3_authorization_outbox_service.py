@@ -282,19 +282,35 @@ async def _process_direct(event_id: Any) -> str:
                 if trade_id is not None:
                     processing_result = "CREATED_OR_RECONCILED"
                 else:
-                    from .l3_trade_consolidation import find_active_l3_shadow
+                    # S0.5: a repeat/retry call reaches ON CONFLICT DO
+                    # NOTHING and returns None even when this exact
+                    # decision's Shadow already exists (just no longer
+                    # ACTIVE). Reconcile by decision_id first so a retry
+                    # reports the same outcome as the original attempt
+                    # instead of a misleading NO_SHADOW_REQUIRED/
+                    # CONTRACT_REJECT for a decision that does have a Shadow.
+                    from .l3_trade_consolidation import (
+                        find_active_l3_shadow,
+                        find_shadow_by_decision_id,
+                    )
 
-                    active = await find_active_l3_shadow(
-                        db,
-                        user_id=decision.user_id,
-                        symbol=decision.symbol,
-                        direction=(decision.direction or "SPOT").upper(),
+                    reconciled = await find_shadow_by_decision_id(
+                        db, decision_id=decision.id
                     )
-                    processing_result = _direct_processing_result(
-                        contract,
-                        required=required,
-                        active_exists=active is not None,
-                    )
+                    if reconciled is not None:
+                        processing_result = "CREATED_OR_RECONCILED"
+                    else:
+                        active = await find_active_l3_shadow(
+                            db,
+                            user_id=decision.user_id,
+                            symbol=decision.symbol,
+                            direction=(decision.direction or "SPOT").upper(),
+                        )
+                        processing_result = _direct_processing_result(
+                            contract,
+                            required=required,
+                            active_exists=active is not None,
+                        )
             payload = dict(event.payload or {})
             payload["processing_result"] = processing_result
             event.payload = payload

@@ -17,6 +17,7 @@ from app.tasks.pipeline_scan import _ensure_l3_consolidation_candidate_logged
 from app.services.l3_trade_consolidation import (
     REASON_ACTIVE_TRADE,
     REASON_CONCURRENT_TRADE,
+    REASON_EXPIRED_AFTER_LOCK,
     REASON_LOWER_PRIORITY,
     EligibleL3Candidate,
     build_consolidation_event_id,
@@ -288,6 +289,7 @@ class SharedState:
     def __init__(self):
         self.lock = asyncio.Lock()
         self.active = None
+        self.reconciled_shadow = None
         self.decisions = {}
         self.suppressions = []
         self.created = 0
@@ -334,6 +336,15 @@ class FakeSession:
         if descriptions:
             entity = descriptions[0].get("entity")
         if entity is ShadowTrade:
+            # Both queries select the whole ShadowTrade entity, so plain
+            # "decision_id"/"status" substrings appear in both (they're
+            # projected columns either way, not just WHERE-clause hits).
+            # ``:decision_id_1`` (the bind-parameter form, with the colon)
+            # only appears when decision_id is actually compared in the
+            # WHERE clause — i.e. find_shadow_by_decision_id, never
+            # find_active_shadow_for_source.
+            if ":decision_id" in sql:
+                return FakeResult(scalar=self.shared.reconciled_shadow)
             return FakeResult(scalar=self.shared.active)
         if entity is DecisionLog:
             decision_id = None
@@ -441,6 +452,66 @@ async def test_completed_trade_allows_a_new_event(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_expired_v3_contract_is_suppressed_after_lock_not_created(monkeypatch):
+    """S0.4: the outbox checks authorization_expiry once before calling in
+    here, but acquire_consolidation_lock can block on contention — an
+    authorization still valid at that upfront check can expire during the
+    wait. This must be caught right after the lock, not silently create a
+    Shadow off data the contract itself says is stale.
+    """
+    shared = SharedState()
+    user_id = uuid4()
+    rows = [candidate(user_id=user_id, decision_id=1, profile_name="A")]
+    evaluated_at = datetime.now(timezone.utc)
+    contract = {
+        "evaluated_at": evaluated_at.isoformat(),
+        "feature_evaluations": [{
+            "max_age_seconds": 60,
+            "resolved_feature": {"age_seconds": 120},
+        }],
+    }
+    shared.decisions[1] = DecisionLog(
+        id=1, user_id=user_id, symbol="ETH_USDT", strategy="L3",
+        timeframe="5m", score=80.0, decision="ALLOW", direction="SPOT",
+        created_at=NOW, metrics={"l3_authorization_contract_v3": contract},
+    )
+    install_fake_runtime(monkeypatch, shared)
+
+    result = await consolidate_l3_candidates(rows, scan_run_id="scan-expired")
+
+    assert result[0].decision == "SUPPRESSED"
+    assert result[0].reason_code == REASON_EXPIRED_AFTER_LOCK
+    assert shared.created == 0
+    assert len(shared.suppressions) == 1
+
+
+@pytest.mark.asyncio
+async def test_valid_v3_contract_does_not_block_creation(monkeypatch):
+    shared = SharedState()
+    user_id = uuid4()
+    rows = [candidate(user_id=user_id, decision_id=1, profile_name="A")]
+    evaluated_at = datetime.now(timezone.utc)
+    contract = {
+        "evaluated_at": evaluated_at.isoformat(),
+        "feature_evaluations": [{
+            "max_age_seconds": 600,
+            "resolved_feature": {"age_seconds": 5},
+        }],
+    }
+    shared.decisions[1] = DecisionLog(
+        id=1, user_id=user_id, symbol="ETH_USDT", strategy="L3",
+        timeframe="5m", score=80.0, decision="ALLOW", direction="SPOT",
+        created_at=NOW, metrics={"l3_authorization_contract_v3": contract},
+    )
+    install_fake_runtime(monkeypatch, shared)
+
+    result = await consolidate_l3_candidates(rows, scan_run_id="scan-valid")
+
+    assert result[0].decision == "CREATED"
+    assert shared.created == 1
+
+
+@pytest.mark.asyncio
 async def test_seven_approved_profiles_create_one_trade_and_six_audits(monkeypatch):
     shared = SharedState()
     user_id = uuid4()
@@ -471,6 +542,41 @@ async def test_seven_approved_profiles_create_one_trade_and_six_audits(monkeypat
     assert {
         row.metrics["reason_code"] for row in shared.suppressions
     } == {REASON_LOWER_PRIORITY}
+
+
+@pytest.mark.asyncio
+async def test_retry_after_own_shadow_already_closed_reconciles_not_raises(monkeypatch):
+    """S0.5: a retry that reaches ``ON CONFLICT DO NOTHING`` because the
+    winner's OWN decision already has a Shadow — just no longer ACTIVE
+    (it already closed) — must reconcile to that Shadow as CREATED, not
+    raise ``consolidated_shadow_insert_returned_none_without_active_trade``
+    (which would recur on every subsequent retry forever, since neither
+    condition — a fresh insert nor an active trade for the symbol — will
+    ever become true again for this decision).
+    """
+    shared = SharedState()
+    user_id = uuid4()
+    rows = [
+        candidate(user_id=user_id, decision_id=1, profile_name="A"),
+        candidate(user_id=user_id, decision_id=2, profile_name="B"),
+    ]
+    add_decisions(shared, rows)
+    install_fake_runtime(monkeypatch, shared)
+    already_closed_shadow = SimpleNamespace(id=uuid4())
+    shared.reconciled_shadow = already_closed_shadow
+    # shared.active stays None: the winner's own Shadow already closed, so
+    # there is nothing currently ACTIVE for this symbol either.
+
+    async def fake_create_conflict(db, decision, *_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(shadow_trade_service, "_create_from_decision", fake_create_conflict)
+
+    result = await consolidate_l3_candidates(rows, scan_run_id="scan-retry")
+
+    assert result[0].decision == "CREATED"
+    assert result[0].trade_id == str(already_closed_shadow.id)
+    assert shared.created == 0  # nothing new was inserted — reconciled only
 
 
 @pytest.mark.asyncio
