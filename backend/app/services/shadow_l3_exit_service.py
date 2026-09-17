@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import text
 
-from ..schemas.shadow_l3_exit_policy import ShadowL3ExitPolicy, frozen_policy
+from ..schemas.shadow_l3_exit_policy import frozen_policy, validate_policy
 from .shadow_l3_exit_evaluator import advance
 
 
@@ -79,8 +79,21 @@ def build_evidence(buckets, candles, structure, policy, entry_at, end, decision_
     # double count volume the current window already excludes.
     evidence.update(coverage_pct=coverage, data_age_seconds=age, max_gap_seconds=max(gaps),
                     cvd=sum(b["entry_delta"] for b in rows))
+    # S1 (2026-09-17 flow-window/candle-delay split): ``age`` mixes two
+    # independent delays -- last trade to candle close, and candle close to
+    # its availability -- into one number. A policy that sets
+    # flow_window_age_seconds (v2) checks the flow-window component alone;
+    # the candle-availability component is, and remains, alignment_seconds.
+    # v1 policies (no such field) keep the original combined check verbatim.
+    flow_window_age_limit = getattr(policy, "flow_window_age_seconds", None)
+    if flow_window_age_limit is not None:
+        flow_window_age = (end - rows[-1]["last_at"]).total_seconds()
+        evidence["flow_window_age_seconds"] = flow_window_age
+        stale = flow_window_age > flow_window_age_limit
+    else:
+        stale = age > policy.max_age_seconds
     if (max(gaps) > policy.max_gap_seconds or coverage < policy.min_coverage_pct
-            or age > policy.max_age_seconds or (decision_at-end).total_seconds() > policy.alignment_seconds):
+            or stale or (decision_at-end).total_seconds() > policy.alignment_seconds):
         evidence["quality"] = "INCOMPLETE_OR_STALE"
         return evidence
     flow = [b for b in rows if b["time"] >= end - timedelta(seconds=policy.flow_window_seconds)]
@@ -177,7 +190,7 @@ async def advance_shadow(db, shadow):
     snapshot = (shadow.config_snapshot or {}).get("shadow_l3_exit_policy")
     if shadow.source != "L3" or not snapshot or not shadow.entry_timestamp or not shadow.tp_price or not shadow.sl_price:
         return None
-    policy = ShadowL3ExitPolicy.model_validate(snapshot["config"])
+    policy = validate_policy(snapshot["config"])
     if snapshot["hash"] != policy.digest():
         raise ValueError("Frozen shadow L3 policy hash mismatch")
     if policy.mode == "LEGACY":

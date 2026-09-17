@@ -88,6 +88,40 @@ class ShadowL3ExitPolicy(BaseModel):
         return hashlib.sha256(json.dumps(data, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+VERSION_V2 = "shadow_l3_continuation_v2"
+
+
+class ShadowL3ExitPolicyV2(ShadowL3ExitPolicy):
+    """S1 (2026-09-17 flow-window/candle-delay split): adds an independent
+    limit for the age of the flow evidence itself, separate from how long the
+    candle took to become available (``alignment_seconds``, unchanged).
+    ``max_age_seconds`` is kept as-is: shadow_l3_exit_evaluator.advance() uses
+    it for a distinct purpose (continuation-authorization signal freshness),
+    not the flow-evidence-quality gate this field targets.
+    """
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    version: Literal["shadow_l3_continuation_v2"] = VERSION_V2
+    flow_window_age_seconds: int | None = Field(None, gt=0)
+
+
+POLICY_VERSIONS = {VERSION: ShadowL3ExitPolicy, VERSION_V2: ShadowL3ExitPolicyV2}
+
+
+def resolve_policy_class(version):
+    cls = POLICY_VERSIONS.get(version or VERSION)
+    if cls is None:
+        raise ValueError(f"unknown_shadow_l3_exit_policy_version:{version}")
+    return cls
+
+
+def validate_policy(config: dict):
+    """Version-aware entry point: dispatches on ``config['version']``, ALWAYS
+    replacing bare ``ShadowL3ExitPolicy.model_validate`` so both versions can
+    coexist per tenant without any call site guessing which one applies.
+    """
+    return resolve_policy_class((config or {}).get("version")).model_validate(config)
+
+
 def frozen_policy(config: dict) -> dict:
-    policy = ShadowL3ExitPolicy.model_validate(config)
-    return {"config": policy.model_dump(), "hash": policy.digest(), "version": VERSION}
+    policy = validate_policy(config)
+    return {"config": policy.model_dump(), "hash": policy.digest(), "version": policy.version}

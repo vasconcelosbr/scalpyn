@@ -95,6 +95,7 @@ async def _flow_evidence_detail(db, row):
     detail = (await db.execute(text('''
         SELECT candle_at, evidence->>'quality' AS quality,
                (evidence->>'data_age_seconds')::float AS data_age_seconds,
+               (evidence->>'flow_window_age_seconds')::float AS flow_window_age_seconds,
                (evidence->>'max_gap_seconds')::float AS max_gap_seconds,
                (evidence->>'coverage_pct')::float AS coverage_pct,
                (evidence->>'collection_lag_seconds')::float AS collection_lag_seconds
@@ -107,15 +108,26 @@ async def _flow_evidence_detail(db, row):
         return None
     when = detail['candle_at']
     stamp = when.strftime('%d/%m às %H:%M')
+    # S1 (2026-09-17 flow-window/candle-delay split): a v2 policy sets
+    # flow_window_age_seconds and checks it independently from the candle's
+    # own availability delay (alignment_seconds); a v1 policy still gates on
+    # the combined max_age_seconds. Name whichever dimension the frozen
+    # policy actually enforced, not always the v1 one.
+    is_v2 = policy.get('flow_window_age_seconds') is not None
     if detail['max_gap_seconds'] is not None and policy.get('max_gap_seconds') is not None and detail['max_gap_seconds'] > policy['max_gap_seconds']:
         reason = f"Avaliação de {stamp}: maior lacuna do fluxo de {detail['max_gap_seconds']:.2f} s, acima de {policy['max_gap_seconds']} s."
     elif detail['coverage_pct'] is not None and policy.get('min_coverage_pct') is not None and detail['coverage_pct'] < policy['min_coverage_pct']:
         reason = f"Avaliação de {stamp}: cobertura do fluxo de {detail['coverage_pct']:.2f}%, abaixo de {policy['min_coverage_pct']}%."
-    elif detail['data_age_seconds'] is not None and policy.get('max_age_seconds') is not None and detail['data_age_seconds'] > policy['max_age_seconds']:
+    elif is_v2 and detail['flow_window_age_seconds'] is not None and detail['flow_window_age_seconds'] > policy['flow_window_age_seconds']:
+        reason = f"Avaliação de {stamp}: idade do fluxo na janela de {detail['flow_window_age_seconds']:.2f} s, acima de {policy['flow_window_age_seconds']} s."
+    elif is_v2 and detail['collection_lag_seconds'] is not None and policy.get('alignment_seconds') is not None and detail['collection_lag_seconds'] > policy['alignment_seconds']:
+        reason = f"Avaliação de {stamp}: atraso do candle de {detail['collection_lag_seconds']:.2f} s, acima de {policy['alignment_seconds']} s."
+    elif not is_v2 and detail['data_age_seconds'] is not None and policy.get('max_age_seconds') is not None and detail['data_age_seconds'] > policy['max_age_seconds']:
         reason = f"Avaliação de {stamp}: idade do fluxo na referência da decisão de {detail['data_age_seconds']:.2f} s, acima de {policy['max_age_seconds']} s."
     else:
         reason = f"Avaliação de {stamp}: qualidade do fluxo = {detail['quality'] or 'AUSENTE'}."
     return {'candle_at': when, 'quality': detail['quality'], 'data_age_seconds': detail['data_age_seconds'],
+            'flow_window_age_seconds': detail['flow_window_age_seconds'],
             'max_gap_seconds': detail['max_gap_seconds'], 'coverage_pct': detail['coverage_pct'],
             'collection_lag_seconds': detail['collection_lag_seconds'], 'reason': reason}
 

@@ -104,24 +104,24 @@ async def get_config(
         config = PumpRadarConfig.model_validate(config or {}).model_dump(mode="json")
         config_type = "pump_radar_v1"
     elif config_type == "shadow_l3_exit_policy":
-        from ..schemas.shadow_l3_exit_policy import ShadowL3ExitPolicy
-        config = ShadowL3ExitPolicy.model_validate(config).model_dump()
+        from ..schemas.shadow_l3_exit_policy import validate_policy
+        config = validate_policy(config).model_dump()
     return {"config_type": config_type, "pool_id": pool_id, "data": config}
 
 
 @router.get("/shadow_l3_exit_policy/metadata")
 async def shadow_l3_policy_metadata(db: AsyncSession = Depends(get_db), user_id: UUID = Depends(get_current_user_id)):
-    from ..schemas.shadow_l3_exit_policy import ShadowL3ExitPolicy
+    from ..schemas.shadow_l3_exit_policy import validate_policy
     from sqlalchemy import text
     raw = await config_service.get_config(db, "shadow_l3_exit_policy", user_id)
-    policy = ShadowL3ExitPolicy.model_validate(raw)
+    policy = validate_policy(raw)
     spot = await config_service.get_config(db, "spot_engine", user_id)
     approved = (await db.execute(text("""
         SELECT approved_at FROM shadow_l3_policy_validations
         WHERE user_id=:uid AND policy_hash=:hash AND approved_by=:uid
           AND approved_at IS NOT NULL AND report->>'decision'='PASS'
     """), {"uid":user_id,"hash":policy.digest()})).scalar_one_or_none()
-    return {"schema":ShadowL3ExitPolicy.model_json_schema(), "hash":policy.digest(),
+    return {"schema":type(policy).model_json_schema(), "hash":policy.digest(),
             "missing_parameters":policy.missing_parameters(), "approved":bool(approved),
             "validation_status":"VALIDATED" if approved else "NOT_CALIBRATED",
             "pre_tp":{"trailing":(spot.get("sell_flow") or {}).get("trailing"),"selling":spot.get("selling")}}
@@ -170,10 +170,10 @@ async def update_config(
                 )
         payload = validated.model_dump()
     elif config_type == "shadow_l3_exit_policy":
-        from ..schemas.shadow_l3_exit_policy import ShadowL3ExitPolicy
+        from ..schemas.shadow_l3_exit_policy import validate_policy
         from pydantic import ValidationError
         try:
-            payload = ShadowL3ExitPolicy.model_validate(payload).model_dump()
+            payload = validate_policy(payload).model_dump()
             await config_service.validate_shadow_l3_policy(db, payload, user_id, pool_id)
         except (ValueError, ValidationError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

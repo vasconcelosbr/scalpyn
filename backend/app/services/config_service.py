@@ -38,10 +38,10 @@ def _make_redis_client():
 class ConfigService:
     async def validate_shadow_l3_policy(self, db, payload, user_id, pool_id=None):
         from sqlalchemy import text
-        from ..schemas.shadow_l3_exit_policy import ShadowL3ExitPolicy
+        from ..schemas.shadow_l3_exit_policy import validate_policy
         if pool_id is not None:
             raise ValueError("Shadow L3 policy is global per user, not pool-scoped")
-        policy = ShadowL3ExitPolicy.model_validate(payload)
+        policy = validate_policy(payload)
         # Mode changes are explicitly authorized by the authenticated config write
         # and preserved in ConfigAuditLog. Empirical calibration is not an activation gate.
 
@@ -92,8 +92,8 @@ class ConfigService:
             definition(new_json)  # Invalid costs or partial contracts never reach production config.
         if config_type == "shadow_l3_exit_policy":
             await self.validate_shadow_l3_policy(db, new_json, user_id, pool_id)
-            from ..schemas.shadow_l3_exit_policy import ShadowL3ExitPolicy
-            new_json = ShadowL3ExitPolicy.model_validate(new_json).model_dump()
+            from ..schemas.shadow_l3_exit_policy import validate_policy
+            new_json = validate_policy(new_json).model_dump()
         query = select(ConfigProfile).where(
             ConfigProfile.user_id == user_id,
             ConfigProfile.pool_id == pool_id,

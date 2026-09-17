@@ -4,7 +4,9 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from pydantic import ValidationError
 
-from app.schemas.shadow_l3_exit_policy import ShadowL3ExitPolicy, frozen_policy
+from app.schemas.shadow_l3_exit_policy import (
+    ShadowL3ExitPolicy, ShadowL3ExitPolicyV2, frozen_policy, validate_policy,
+)
 from app.services.shadow_l3_exit_evaluator import advance
 from app.services.shadow_l3_exit_service import build_evidence
 from app.services.shadow_l3_flow_capture import normalize_trade
@@ -152,6 +154,66 @@ def test_cvd_and_price_evidence_are_aligned(policy):
     assert e["quality"]=="VALID" and e["cvd"]==12
     assert e["taker_ratio"]==.8 and e["delta_normalized"]==.6 and e["cvd_slope_normalized"]==.6
     assert build_evidence(buckets,candles,candles,policy,T,end,end+timedelta(seconds=61))["quality"]=="INCOMPLETE_OR_STALE"
+
+
+def test_v2_flow_window_age_decouples_from_candle_availability_delay(policy):
+    """S1 (2026-09-17): reproduces the UNI_USDT/b13d595f case from
+    DIAGNOSTICO_E_PROPOSTA_ML_L3_UNI_2026-09-17.md -- 49.25s from last trade
+    to candle close, plus 93.73s candle-registration delay, combine to
+    142.97s and trip v1's single max_age_seconds=120 limit even though
+    neither dimension alone is late. A v2 policy with its own
+    flow_window_age_seconds must judge each dimension on its own.
+    """
+    candles = [dict(time=T+timedelta(minutes=i), open=100+i, high=102+i, low=99+i, close=101+i) for i in range(3)]
+    end = T + timedelta(minutes=3)
+    last_at = end - timedelta(seconds=49.247511)
+    buckets = [dict(time=T+timedelta(minutes=i), first_at=T+timedelta(minutes=i, seconds=1),
+                    last_at=last_at if i == 2 else T+timedelta(minutes=i, seconds=59),
+                    max_gap=10, buy=8, sell=2, entry_delta=6) for i in range(3)]
+    decision_at = end + timedelta(seconds=93.725736)  # candle registered late; still <= alignment_seconds
+    assert build_evidence(buckets, candles, candles, policy, T, end, decision_at)["quality"] == "INCOMPLETE_OR_STALE"
+
+    v2 = ShadowL3ExitPolicyV2.model_validate({
+        **policy.model_dump(), "version": "shadow_l3_continuation_v2",
+        "alignment_seconds": 120, "flow_window_age_seconds": 120,
+    })
+    e = build_evidence(buckets, candles, candles, v2, T, end, decision_at)
+    assert e["quality"] == "VALID", e
+    assert e["flow_window_age_seconds"] == pytest.approx(49.247511)
+
+
+def test_policy_version_dispatch_resolves_v1_and_v2():
+    assert type(validate_policy({})) is ShadowL3ExitPolicy
+    assert type(validate_policy({"version": "shadow_l3_continuation_v1"})) is ShadowL3ExitPolicy
+    assert type(validate_policy({"version": "shadow_l3_continuation_v2"})) is ShadowL3ExitPolicyV2
+    with pytest.raises(ValueError):
+        validate_policy({"version": "unknown"})
+    assert frozen_policy({})["version"] == "shadow_l3_continuation_v1"
+
+
+def test_v2_requires_flow_window_age_seconds_for_apply(policy):
+    v2 = ShadowL3ExitPolicyV2.model_validate({**policy.model_dump(), "version": "shadow_l3_continuation_v2"})
+    assert "flow_window_age_seconds" in v2.missing_parameters()
+    with pytest.raises(ValidationError):
+        ShadowL3ExitPolicyV2.model_validate({**policy.model_dump(), "version": "shadow_l3_continuation_v2", "mode": "APPLY"})
+
+
+def test_v2_keeps_max_age_seconds_for_continuation_authorization_freshness(policy):
+    """max_age_seconds is reused by shadow_l3_exit_evaluator.advance() for an
+    unrelated purpose (how stale a strong continuation signal may be at
+    candle open); S1 must not disturb that when it adds flow_window_age_seconds.
+    """
+    v2 = ShadowL3ExitPolicyV2.model_validate({
+        **policy.model_dump(), "version": "shadow_l3_continuation_v2", "flow_window_age_seconds": 120,
+    })
+    at = T + timedelta(minutes=5)
+    stale_signal_at = at - timedelta(seconds=200)  # older than max_age_seconds=120
+    state = {"authorizations": [{"available_at": stale_signal_at.isoformat(), "strong": True}]}
+    candle = dict(time=at, open=100, high=103, low=100, close=103)  # touches tp=102
+    result = advance(state, candle, ev(at), v2, entry=100, tp=102, sl=95, trailing={}, entry_at=T)
+    # The only known authorization is stale relative to max_age_seconds=120,
+    # so continuation must not be granted at this candle's open -- TP_HIT fires.
+    assert result["outcome"] == "TP_HIT"
 
 
 def test_complete_apply_requires_no_empirical_approval_gate(policy):
