@@ -212,7 +212,10 @@ export default function MlModelsPage() {
     capture_diagnostics?: {
       profile_contracts_valid: boolean;
       profiles: { profile_id: string; name: string; last_scanned_at: string | null; errors: unknown[] }[];
-      latest_capture: { id?: string; symbol?: string; stage: string; reason: string; matures_at?: string };
+      latest_capture: {
+        id?: string; symbol?: string; stage: string; reason: string; matures_at?: string;
+        impediments?: { code: string; reason: string; matures_at?: string }[];
+      };
       latest_decision: { id: number; created_at: string; symbol: string; decision: string; authorization_status?: string } | null;
       latest_capture_skip: { created_at: string; symbol: string; skip_reason: string } | null;
       note: string;
@@ -318,6 +321,16 @@ export default function MlModelsPage() {
               <p className="font-semibold text-[#E2E8F0]">Acompanhamento da coleta</p>
               <p>Metadados dos perfis: {readiness.capture_diagnostics.profile_contracts_valid ? "validados" : "com pendências ou sem perfis ativos"}.</p>
               <p>{readiness.capture_diagnostics.latest_capture.symbol && `${readiness.capture_diagnostics.latest_capture.symbol} · `}{readiness.capture_diagnostics.latest_capture.reason}</p>
+              {(readiness.capture_diagnostics.latest_capture.impediments?.length ?? 0) > 1 && (
+                <ul className="mt-1 list-disc pl-4 space-y-0.5">
+                  {readiness.capture_diagnostics.latest_capture.impediments!.map((impediment, i) => (
+                    <li key={i}>
+                      {impediment.reason}
+                      {impediment.matures_at && ` (${fmtDateTime(impediment.matures_at)})`}
+                    </li>
+                  ))}
+                </ul>
+              )}
               {readiness.capture_diagnostics.latest_capture.id && <p className="break-all">Captura: {readiness.capture_diagnostics.latest_capture.id}</p>}
               {readiness.capture_diagnostics.latest_capture.matures_at && <p>Maturação prevista: {fmtDateTime(readiness.capture_diagnostics.latest_capture.matures_at)}</p>}
               {readiness.capture_diagnostics.latest_decision && <p>Última decisão: {readiness.capture_diagnostics.latest_decision.symbol} · {readiness.capture_diagnostics.latest_decision.decision} · {readiness.capture_diagnostics.latest_decision.authorization_status || "envelope não disponível"} · {fmtDateTime(readiness.capture_diagnostics.latest_decision.created_at)}</p>}
