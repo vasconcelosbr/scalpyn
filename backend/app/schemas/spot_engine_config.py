@@ -170,6 +170,16 @@ class ScannerConfig(BaseModel):
     # watchlist had to evaluate — well past the freshness window of the L3
     # authorization contract for decisions made early in that same cycle.
     l3_watchlist_processing_timeout_seconds: float = Field(60.0, ge=1, le=280)
+    # 2026-09-18 shadow-trade collapse investigation, part 2: even with the
+    # per-watchlist timeout above, running the L3 stage's watchlists one at
+    # a time meant total L3-stage time was the SUM of every watchlist's own
+    # duration (observed 46-254s across normal cycles) -- already past the
+    # 60s TTL of the tightest authorization feature before consolidation
+    # could even start. Each watchlist already has its own isolated DB
+    # session (#167), so running up to this many concurrently is safe; it
+    # bounds worst-case DB-pool usage from this scan rather than leaving it
+    # unbounded.
+    l3_watchlist_max_concurrency: int = Field(8, ge=1, le=50)
     # Independent opt-in for diagnostic BLOCK captures.  Rejected Shadows
     # never authorize execution and retain a separate rollback switch.
     l3_rejected_single_profile_per_symbol_enabled: bool = False

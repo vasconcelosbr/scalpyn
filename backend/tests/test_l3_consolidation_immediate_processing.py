@@ -46,16 +46,35 @@ def test_l3_stage_consolidates_before_custom_watchlists_and_rejected_lane():
     assert "except Exception:" in between_call_and_custom
 
 
-def test_run_stage_watchlists_helper_preserves_isolation_and_timeout():
+def test_run_one_watchlist_safely_preserves_isolation_and_timeout():
     source = _pipeline_source()
-    fn_idx = source.index("async def _run_stage_watchlists")
-    fn_end = source.index("for stage in _PIPELINE_EXECUTION_ORDER:", fn_idx)
+    fn_idx = source.index("async def _run_one_watchlist_safely")
+    fn_end = source.index("async def _run_stage_watchlists", fn_idx)
     body = source[fn_idx:fn_end]
 
     assert "asyncio.wait_for(" in body
     assert "_process_one_watchlist(wl)" in body
     assert "timeout=_wl_timeout_s" in body
     assert 'stats["errors"] += 1' in body
+
+
+def test_run_stage_watchlists_runs_watchlists_concurrently_with_a_bound():
+    """2026-09-18 (part 2): the L3 stage's ~13 watchlists running one at a
+    time was the real bottleneck behind consolidation candidates still
+    expiring after #174 -- total L3-stage time was observed at 46-254s.
+    Each watchlist already has its own isolated DB session (#167), so they
+    must now run concurrently, bounded so this scan cannot exhaust the
+    shared DB pool.
+    """
+    source = _pipeline_source()
+    fn_idx = source.index("async def _run_stage_watchlists")
+    fn_end = source.index("for stage in _PIPELINE_EXECUTION_ORDER:", fn_idx)
+    body = source[fn_idx:fn_end]
+
+    assert "asyncio.gather(" in body
+    assert "asyncio.Semaphore(" in body
+    assert "l3_watchlist_max_concurrency" in body
+    assert "_run_one_watchlist_safely(wl, semaphore)" in body
 
 
 def test_direct_event_immediate_processing_and_scan_end_fallback_unchanged():
