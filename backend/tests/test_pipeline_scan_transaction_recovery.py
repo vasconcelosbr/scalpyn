@@ -32,7 +32,7 @@ def test_watchlist_failure_is_isolated_and_does_not_abort_the_scan():
     """
     source = _pipeline_source()
     fn_idx = source.index("async def _process_one_watchlist")
-    fn_end = source.index("for stage in (*_PIPELINE_EXECUTION_ORDER", fn_idx)
+    fn_end = source.index("async def _run_stage_watchlists", fn_idx)
     fn_snippet = source[fn_idx:fn_end]
     assert "async with AsyncSessionLocal() as db:" in fn_snippet
 

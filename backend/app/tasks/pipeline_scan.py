@@ -5712,7 +5712,7 @@ async def _run_pipeline_scan():
                     )
 
 
-        for stage in (*_PIPELINE_EXECUTION_ORDER, "custom"):
+        async def _run_stage_watchlists(stage: str) -> None:
             for wl in stage_buckets.get(stage, []):
                 _wl_spot_cfg = spot_engine_config_map.get(
                     wl.user_id, SpotEngineConfig()
@@ -5738,6 +5738,43 @@ async def _run_pipeline_scan():
                     logger.exception("[PipelineScan] Error processing watchlist %s: %s", wl.name, exc)
                     stats["errors"] += 1
                     continue
+
+        for stage in _PIPELINE_EXECUTION_ORDER:
+            await _run_stage_watchlists(stage)
+
+        # S0.1-consolidation (2026-09-18 shadow-trade collapse fix, part 2):
+        # every CONSOLIDATE_SHADOW_IF_ALLOWED candidate for this scan comes
+        # from an L3-stage watchlist -- "custom" watchlists never author L3
+        # authorization contracts. Consolidating here, right after the L3
+        # stage's own watchlists finish, means a multi-profile candidate no
+        # longer also waits on "custom" watchlists plus L3-rejected
+        # consolidation plus the integrity check below, none of which can
+        # ever contribute a rival candidate for it. The direct-event fix
+        # (#173) already processes single-profile candidates immediately
+        # per watchlist; this is the same idea for the multi-profile case,
+        # bounded by what genuinely must be waited for (every L3 watchlist
+        # in *this* scan) rather than the whole remaining scan tail.
+        # Best-effort: the unchanged scan-end call below (and beat's
+        # periodic recovery) still catches anything left PENDING/RETRY.
+        try:
+            from ..services.l3_authorization_outbox_service import (
+                process_l3_authorization_outbox as _l3_process_outbox_after_l3_stage,
+            )
+
+            stats["l3_authorization_outbox_after_l3_stage"] = (
+                await _l3_process_outbox_after_l3_stage(
+                    batch_size=1000, scan_run_id=execution_id
+                )
+            )
+        except Exception:
+            logger.exception(
+                "[L3_OUTBOX_V3] post-L3-stage consolidation failed scan_run_id=%s; "
+                "events remain retryable via the scan-end batch call/beat",
+                execution_id,
+            )
+            stats["errors"] += 1
+
+        await _run_stage_watchlists("custom")
 
         if l3_rejected_consolidation_candidates:
             try:
