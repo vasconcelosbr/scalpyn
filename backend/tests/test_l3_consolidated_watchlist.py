@@ -194,19 +194,30 @@ async def test_chain_resolver_anchors_l1_to_pool_watchlist_and_returns_all_l3():
     assert chain.l3_watchlists == tuple(l3_watchlists)
 
 
-def test_live_candidate_module_does_not_read_shadow_trades():
+def test_live_candidate_universe_does_not_read_shadow_trades():
+    """The symbol UNIVERSE (what's live in L2/L1/POOL) must never depend on
+    shadow_trades -- an open Shadow represents historical position follow-up,
+    not a current opportunity. load_recently_authorized_l3_shadows is a
+    deliberate, documented exception (2026-09-18 part 3: public-visibility
+    floor) scoped to its own function, not the universe/candidate/rejection
+    resolution -- see the module docstring."""
     import inspect
-    from app.services import pipeline_live_candidates
+    from app.services import pipeline_live_candidates as m
 
-    source = inspect.getsource(pipeline_live_candidates).lower()
-    assert "select(shadowtrade" not in source
-    assert "from ..models.shadow_trade" not in source
+    universe_source = "".join([
+        inspect.getsource(m._l3_symbol_universe_statement),
+        inspect.getsource(m.load_live_l3_candidates),
+        inspect.getsource(m.load_live_l3_rejections),
+    ]).lower()
+    assert "shadowtrade" not in universe_source
+
+    full_source = inspect.getsource(m).lower()
     # 2026-09-18 (part 3): the L3 symbol universe is anchored on the L2
     # asset, not the L3 watchlist's own (spot L3 never gets a
     # pipeline_watchlist_assets row written in the normal scan cycle, so
     # anchoring there made every caller of load_live_l3_candidates --
     # Approved, Consolidado, execute_buy, evaluate_signals -- structurally
     # always empty).
-    assert "l1_asset.symbol == l2_asset.symbol" in source
-    assert "pool_asset.symbol == l2_asset.symbol" in source
-    assert "profile.is_active.is_(true)" in source
+    assert "l1_asset.symbol == l2_asset.symbol" in full_source
+    assert "pool_asset.symbol == l2_asset.symbol" in full_source
+    assert "profile.is_active.is_(true)" in full_source
