@@ -5712,15 +5712,15 @@ async def _run_pipeline_scan():
                     )
 
 
-        async def _run_stage_watchlists(stage: str) -> None:
-            for wl in stage_buckets.get(stage, []):
-                _wl_spot_cfg = spot_engine_config_map.get(
-                    wl.user_id, SpotEngineConfig()
-                )
-                _wl_timeout_s = float(
-                    _wl_spot_cfg.scanner.l3_watchlist_processing_timeout_seconds
-                    or 60.0
-                )
+        async def _run_one_watchlist_safely(wl, semaphore: asyncio.Semaphore) -> None:
+            _wl_spot_cfg = spot_engine_config_map.get(
+                wl.user_id, SpotEngineConfig()
+            )
+            _wl_timeout_s = float(
+                _wl_spot_cfg.scanner.l3_watchlist_processing_timeout_seconds
+                or 60.0
+            )
+            async with semaphore:
                 try:
                     await asyncio.wait_for(
                         _process_one_watchlist(wl), timeout=_wl_timeout_s
@@ -5733,11 +5733,39 @@ async def _run_pipeline_scan():
                         wl.name, wl.id, _wl_timeout_s,
                     )
                     stats["errors"] += 1
-                    continue
                 except Exception as exc:
                     logger.exception("[PipelineScan] Error processing watchlist %s: %s", wl.name, exc)
                     stats["errors"] += 1
-                    continue
+
+        async def _run_stage_watchlists(stage: str) -> None:
+            # 2026-09-18 (part 2 of the shadow-trade collapse fix): watchlists
+            # within a stage are independent of one another (each filters its
+            # own universe from already-materialized DB/Redis state) and each
+            # already runs on its own isolated DB session (#167), so running
+            # them concurrently is safe. Sequential processing of the L3
+            # stage's ~13 watchlists was the actual bottleneck behind
+            # consolidation candidates still expiring after #174 moved WHEN
+            # consolidation runs but could not fix HOW LONG the L3 stage
+            # itself took (observed 46-254s total, one watchlist at a time).
+            # Stage order itself (POOL -> L1 -> L2 -> L3 -> custom) is left
+            # sequential, since later stages may read state a prior stage's
+            # watchlists just wrote.
+            watchlists = stage_buckets.get(stage, [])
+            if not watchlists:
+                return
+            max_concurrency = min(
+                int(
+                    spot_engine_config_map.get(
+                        wl.user_id, SpotEngineConfig()
+                    ).scanner.l3_watchlist_max_concurrency
+                    or 8
+                )
+                for wl in watchlists
+            )
+            semaphore = asyncio.Semaphore(max(1, max_concurrency))
+            await asyncio.gather(
+                *(_run_one_watchlist_safely(wl, semaphore) for wl in watchlists)
+            )
 
         for stage in _PIPELINE_EXECUTION_ORDER:
             await _run_stage_watchlists(stage)
