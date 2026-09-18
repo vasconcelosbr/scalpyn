@@ -201,7 +201,12 @@ def test_live_candidate_module_does_not_read_shadow_trades():
     source = inspect.getsource(pipeline_live_candidates).lower()
     assert "select(shadowtrade" not in source
     assert "from ..models.shadow_trade" not in source
-    assert "l2_asset.symbol == pipelinewatchlistasset.symbol" in source
-    assert "l1_asset.symbol == pipelinewatchlistasset.symbol" in source
-    assert "pool_asset.symbol == pipelinewatchlistasset.symbol" in source
+    # 2026-09-18 (part 3): the L3 symbol universe is anchored on the L2
+    # asset, not the L3 watchlist's own (spot L3 never gets a
+    # pipeline_watchlist_assets row written in the normal scan cycle, so
+    # anchoring there made every caller of load_live_l3_candidates --
+    # Approved, Consolidado, execute_buy, evaluate_signals -- structurally
+    # always empty).
+    assert "l1_asset.symbol == l2_asset.symbol" in source
+    assert "pool_asset.symbol == l2_asset.symbol" in source
     assert "profile.is_active.is_(true)" in source

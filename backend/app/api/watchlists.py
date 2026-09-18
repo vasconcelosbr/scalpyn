@@ -2560,15 +2560,19 @@ async def get_watchlist_assets(
             response.headers["Cache-Control"] = "private, no-store"
         # Read the same persisted authority as Consolidado; never re-score or
         # re-evaluate an approval using a different live indicator snapshot.
+        # Iterate the live contributions directly -- NOT ``assets`` (this
+        # watchlist's own ``pipeline_watchlist_assets`` rows), which spot L3
+        # never gets written to in the normal scan cycle and is therefore
+        # always empty. Gating this loop on ``assets`` silently hid every
+        # authorized symbol regardless of how many valid authorizations
+        # existed (2026-09-18 shadow-trade collapse fix, part 3).
         from types import SimpleNamespace
         contributions = [item for candidate in await load_live_l3_candidates(db, user_id=user_id)
                          for item in candidate.contributors if item.watchlist_id == wl.id]
-        authority = {item.symbol: item.authorization for item in contributions}
         enriched, approved_items = [], []
-        for asset in assets:
-            auth = authority.get(asset.symbol)
-            if not auth:
-                continue
+        _asset_column_keys = [column.key for column in PipelineWatchlistAsset.__table__.columns]
+        for contribution in contributions:
+            auth = contribution.authorization
             trace = [{
                 "type": item.get("section", "signal"),
                 "indicator": item.get("indicator"), "name": item.get("indicator"),
@@ -2577,18 +2581,20 @@ async def get_watchlist_assets(
                 "condition": item.get("operator", ""),
             } for item in auth["_trace"]]
             snapshot = build_analysis_snapshot(
-                symbol=asset.symbol, stage="L3", profile_id=str(wl.profile_id),
+                symbol=contribution.symbol, stage="L3", profile_id=str(wl.profile_id),
                 status="approved", trace=trace, timestamp=auth["evaluated_at"])
             public = {key: value for key, value in auth.items() if not key.startswith("_")}
-            frozen = SimpleNamespace(**{column.key: getattr(asset, column.key)
-                                        for column in PipelineWatchlistAsset.__table__.columns})
+            frozen = SimpleNamespace(**{key: None for key in _asset_column_keys})
+            frozen.id = contribution.asset_id
+            frozen.watchlist_id = wl.id
+            frozen.symbol = contribution.symbol
             frozen.analysis_snapshot = snapshot
             frozen.alpha_score = auth["alpha_score"]
             frozen.current_price = auth["current_price"]
             enriched.append({**_asset_to_dict(frozen, indicators=auth["_indicators"]), **public,
                              "analysis_snapshot": snapshot})
             approved_items.append({**_normalize_decision_snapshot(
-                symbol=asset.symbol, status="approved", stage="L3", profile_id=str(wl.profile_id),
+                symbol=contribution.symbol, status="approved", stage="L3", profile_id=str(wl.profile_id),
                 timestamp=auth["evaluated_at"], snapshot=snapshot, alpha_score=auth["alpha_score"]), **public})
         return {"assets": enriched, "approved_items": approved_items, "total": len(enriched),
                 "profile_indicators": _extract_profile_indicator_fields(profile_config),
@@ -3106,6 +3112,36 @@ async def _get_watchlist_rejections_payload(
         .order_by(PipelineWatchlistRejection.recorded_at.desc(), PipelineWatchlistRejection.symbol.asc())
     )).scalars().all()
 
+    _l3_live_approved_count: Optional[int] = None
+    if effective_level == "L3" and getattr(wl, "market_mode", "spot") == "spot":
+        # Spot L3 is exempted (above) from the batch refresh that populates
+        # ``pipeline_watchlist_rejections`` on every read -- for the same
+        # cost reason POOL/L1/L2 are not exempted, this snapshot is only ever
+        # refreshed periodically. That leaves a gap: a symbol can be live in
+        # its L2 parent yet have no persisted row here (not authorized, but
+        # not batch-refreshed either) -- appearing in neither Approved nor
+        # Rejected. Fill the gap with the live complement of Approved
+        # (2026-09-18 shadow-trade collapse fix, part 3), without touching
+        # or duplicating already-persisted symbols.
+        from types import SimpleNamespace
+        from ..services.pipeline_live_candidates import load_live_l3_candidates, load_live_l3_rejections
+        _persisted_symbols = {row.symbol for row in rows}
+        _live_rejected = await load_live_l3_rejections(db, user_id=user_id, l3_watchlist_id=wl.id)
+        _l3_live_approved_count = sum(
+            1 for candidate in await load_live_l3_candidates(db, user_id=user_id)
+            for item in candidate.contributors if item.watchlist_id == wl.id
+        )
+        _now = datetime.now(timezone.utc)
+        rows = list(rows) + [
+            SimpleNamespace(
+                symbol=item["symbol"], profile_id=item["profile_id"], recorded_at=_now,
+                analysis_snapshot=None, evaluation_trace=None, stage="L3",
+                failed_type=None, failed_indicator=None, condition_text=None,
+                current_value=None, expected_value=None,
+            )
+            for item in _live_rejected if item["symbol"] not in _persisted_symbols
+        ]
+
     # Recompute evaluation_trace on read so the Rejected tab always reflects
     # the current backend rule semantics (cascade SKIPPED reasons, taker_ratio
     # plausibility, etc.) without waiting for the 30 min scheduler to refresh
@@ -3292,7 +3328,10 @@ async def _get_watchlist_rejections_payload(
             "evaluation_trace": recomputed_trace,
         })
     metrics = rejection_metrics(items)
-    metrics["approved_count"] = len(await _load_active_watchlist_assets(wl.id, db))
+    metrics["approved_count"] = (
+        _l3_live_approved_count if _l3_live_approved_count is not None
+        else len(await _load_active_watchlist_assets(wl.id, db))
+    )
     metrics["available_indicators"] = sorted({item["failed_indicator"] for item in items if item.get("failed_indicator")})
     metrics["stages"] = sorted(
         {item["stage"] for item in items if item.get("stage")},
