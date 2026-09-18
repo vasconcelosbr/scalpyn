@@ -15,7 +15,7 @@ Routes:
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
@@ -33,7 +33,7 @@ from ..models.pipeline_watchlist import (
 )
 from ..models.profile import Profile
 from ..services.market_data_service import _is_etf_pair
-from ..services.pipeline_live_candidates import load_live_l3_candidates
+from ..services.pipeline_live_candidates import ConsolidatedL3Candidate, load_live_l3_candidates
 from ..services.watchlist_performance_ranking_service import (
     RankingConfigError,
     get_performance_rankings,
@@ -1040,6 +1040,76 @@ async def list_watchlists(
     return {"watchlists": items, "total": len(items), "order_by": order_by}
 
 
+async def _l3_public_visibility_floor_seconds(db: AsyncSession, user_id: UUID) -> int:
+    """2026-09-18 (part 3): minimum time an authorized L3 candidate stays in
+    the public feed, independent of the entry-authorization TTL. See
+    ``pipeline_live_candidates.load_recently_authorized_l3_shadows``.
+
+    Best-effort: this is a display-only enrichment, never allowed to break
+    the main Approved/Consolidado read on a config-lookup hiccup -- falls
+    back to the schema default.
+    """
+    from ..schemas.spot_engine_config import SpotEngineConfig
+    try:
+        from ..services.config_service import config_service
+        spot = SpotEngineConfig.from_config_json(
+            await config_service.get_config(db, "spot_engine", user_id) or {})
+        return int(spot.scanner.l3_public_visibility_floor_seconds)
+    except Exception as exc:
+        logger.warning("[Pipeline] l3_public_visibility_floor_seconds lookup failed for %s: %s", user_id, exc)
+        return int(SpotEngineConfig().scanner.l3_public_visibility_floor_seconds)
+
+
+async def _merge_recent_l3_shadows(
+    db: AsyncSession,
+    user_id: UUID,
+    candidates: List[ConsolidatedL3Candidate],
+    *,
+    l3_watchlist_id: Optional[UUID] = None,
+) -> tuple[List[ConsolidatedL3Candidate], int]:
+    """Extend ``candidates`` with any recently-authorized shadow whose symbol
+    isn't already present, and return the configured visibility floor so
+    callers can stamp ``visible_until`` on every item (old and new alike).
+
+    Best-effort: a failure here must never break the main Approved/
+    Consolidado read -- falls back to the untouched ``candidates`` and a
+    zero floor (no ``visible_until`` stamped) on any error.
+    """
+    floor_seconds = await _l3_public_visibility_floor_seconds(db, user_id)
+    if floor_seconds <= 0:
+        return candidates, floor_seconds
+    try:
+        from ..services.pipeline_live_candidates import load_recently_authorized_l3_shadows
+        present = {(item.watchlist_id, candidate.symbol)
+                   for candidate in candidates for item in candidate.contributors}
+        recent = await load_recently_authorized_l3_shadows(
+            db, user_id=user_id, floor_seconds=floor_seconds, l3_watchlist_id=l3_watchlist_id)
+        extra_by_symbol: Dict[str, list] = {}
+        for contribution in recent:
+            if (contribution.watchlist_id, contribution.symbol) in present:
+                continue
+            extra_by_symbol.setdefault(contribution.symbol, []).append(contribution)
+        merged = list(candidates)
+        for symbol, contributions in extra_by_symbol.items():
+            merged.append(ConsolidatedL3Candidate(
+                symbol=symbol, winner=contributions[0], contributors=tuple(contributions),
+            ))
+        return merged, floor_seconds
+    except Exception as exc:
+        logger.warning("[Pipeline] recent-L3-shadow visibility merge failed for %s: %s", user_id, exc)
+        return candidates, 0
+
+
+def _l3_visible_until(authorization: Dict[str, Any], floor_seconds: int) -> Optional[str]:
+    raw = authorization.get("evaluated_at")
+    if not raw or floor_seconds <= 0:
+        return None
+    evaluated = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    if evaluated.tzinfo is None:
+        evaluated = evaluated.replace(tzinfo=timezone.utc)
+    return _iso_utc(evaluated + timedelta(seconds=floor_seconds))
+
+
 @router.get("/l3-consolidated/assets")
 async def list_l3_consolidated_assets(
     user_id: UUID = Depends(get_current_user_id),
@@ -1050,6 +1120,7 @@ async def list_l3_consolidated_assets(
     if response is not None:
         response.headers["Cache-Control"] = "private, no-store"
     candidates = await load_live_l3_candidates(db, user_id=user_id)
+    candidates, floor_seconds = await _merge_recent_l3_shadows(db, user_id, candidates)
     items: List[Dict[str, Any]] = []
     for candidate in candidates:
         winner = candidate.winner
@@ -1073,6 +1144,10 @@ async def list_l3_consolidated_assets(
             "candidate_count": len(candidate.contributors),
             "candidate_profile_ids": profile_ids,
             "candidate_profile_names": profile_names,
+            # 2026-09-18 (part 3): guaranteed minimum visibility floor for
+            # external systems polling this feed, independent of the entry
+            # authorization TTL. Frontend renders a countdown from this.
+            "visible_until": _l3_visible_until(winner.authorization or {}, floor_seconds),
         })
 
     return {
@@ -2569,6 +2644,17 @@ async def get_watchlist_assets(
         from types import SimpleNamespace
         contributions = [item for candidate in await load_live_l3_candidates(db, user_id=user_id)
                          for item in candidate.contributors if item.watchlist_id == wl.id]
+        floor_seconds = await _l3_public_visibility_floor_seconds(db, user_id)
+        if floor_seconds > 0:
+            try:
+                from ..services.pipeline_live_candidates import load_recently_authorized_l3_shadows
+                present_symbols = {item.symbol for item in contributions}
+                recent = await load_recently_authorized_l3_shadows(
+                    db, user_id=user_id, floor_seconds=floor_seconds, l3_watchlist_id=wl.id)
+                contributions.extend(item for item in recent if item.symbol not in present_symbols)
+            except Exception as exc:
+                logger.warning("[Pipeline] recent-L3-shadow visibility merge failed for %s: %s", wl.id, exc)
+                floor_seconds = 0
         enriched, approved_items = [], []
         _asset_column_keys = [column.key for column in PipelineWatchlistAsset.__table__.columns]
         for contribution in contributions:
@@ -2584,6 +2670,7 @@ async def get_watchlist_assets(
                 symbol=contribution.symbol, stage="L3", profile_id=str(wl.profile_id),
                 status="approved", trace=trace, timestamp=auth["evaluated_at"])
             public = {key: value for key, value in auth.items() if not key.startswith("_")}
+            public["visible_until"] = _l3_visible_until(auth, floor_seconds)
             frozen = SimpleNamespace(**{key: None for key in _asset_column_keys})
             frozen.id = contribution.asset_id
             frozen.watchlist_id = wl.id

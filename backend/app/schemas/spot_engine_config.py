@@ -183,6 +183,18 @@ class ScannerConfig(BaseModel):
     # Independent opt-in for diagnostic BLOCK captures.  Rejected Shadows
     # never authorize execution and retain a separate rollback switch.
     l3_rejected_single_profile_per_symbol_enabled: bool = False
+    # 2026-09-18 shadow-trade collapse investigation, part 3: the feature
+    # freshness TTL that gates entry authorization (as short as 60s for
+    # live_trade_flow features -- deliberately tight, protects entry
+    # quality) was also the ONLY thing bounding how long an authorized
+    # candidate stayed visible in the public feed (Consolidado / per-
+    # watchlist Approved). External systems polling that feed need a
+    # guaranteed minimum window to observe a listing regardless of how
+    # quickly the underlying signal goes stale. This floor is purely
+    # additive to the public/display read path -- it does not touch
+    # authorization_expiry() or any of the shadow-creation/consolidation/
+    # outbox gates, which keep using the strict, unmodified TTL.
+    l3_public_visibility_floor_seconds: int = Field(300, ge=0, le=3600)
     l3_profile_consolidation_rule_version: Literal[
         "single_profile_per_symbol_v1"
     ] = "single_profile_per_symbol_v1"

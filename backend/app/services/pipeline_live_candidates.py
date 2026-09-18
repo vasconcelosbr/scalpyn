@@ -7,6 +7,15 @@ instead). This module also deliberately reads asset tables rather than
 ``shadow_trades``: a watchlist represents the opportunity *now*; an open
 Shadow trade represents historical position follow-up and must not keep a
 symbol in the opportunity funnel after its indicators stop qualifying.
+
+The one exception is :func:`load_recently_authorized_l3_shadows` (2026-09-18,
+part 3): external systems polling the public feed (Consolidado / per-
+watchlist Approved) need a guaranteed minimum window to observe a listing,
+which the feature-freshness TTL alone cannot provide (as short as 60s for
+``live_trade_flow`` features). It is purely additive to the two display
+read paths and never affects entry authorization: shadow creation,
+consolidation, and outbox processing keep gating on the strict, unmodified
+``authorization_expiry()`` TTL everywhere else.
 """
 
 from __future__ import annotations
@@ -19,8 +28,10 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from ..models.backoffice import DecisionLog, L3AuthorizationOutbox
 from ..models.pipeline_watchlist import PipelineWatchlist, PipelineWatchlistAsset
 from ..models.profile import Profile
+from ..models.shadow_trade import ShadowTrade
 
 
 def _active_asset(model):
@@ -357,3 +368,104 @@ async def load_live_l3_rejections(
             "watchlist_id": row["watchlist_id"],
         })
     return rejected
+
+
+async def load_recently_authorized_l3_shadows(
+    db: AsyncSession,
+    *,
+    user_id: UUID,
+    floor_seconds: int,
+    l3_watchlist_id: Optional[UUID] = None,
+) -> list[LiveL3Contribution]:
+    """Shadows created within the last ``floor_seconds``, regardless of what
+    a LATER re-evaluation decided for the same (profile, symbol) pair.
+
+    ``load_public_authorizations`` only ever looks at the single latest
+    ``decisions_log`` row per (profile, symbol) -- a routine re-evaluation
+    minutes later landing on BLOCK/SUPPRESSED (the profile's filter
+    conditions simply no longer hold, which is normal and expected) silently
+    buries the original, already-confirmed authorization from public view.
+    Anchoring on the Shadow's own creation time sidesteps that entirely: it
+    does not care what happened after the shadow was created, so a
+    contribution surfaced here stays visible for the full floor regardless
+    of subsequent scan cycles. ``public_authorization(..., ignore_expiry=True)``
+    still enforces every other correctness check (contract hash, lineage,
+    outbox reconciliation) -- only the feature-freshness upper bound is
+    skipped, and only for this display-only read.
+    """
+    if floor_seconds <= 0:
+        return []
+    from datetime import datetime, timedelta, timezone
+
+    from .l3_public_authorization import public_authorization
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(seconds=floor_seconds)
+
+    l3_watchlist = aliased(PipelineWatchlist)
+    statement = (
+        select(
+            DecisionLog,
+            L3AuthorizationOutbox,
+            ShadowTrade,
+            l3_watchlist.id.label("watchlist_id"),
+            Profile.name.label("profile_name"),
+            Profile.profile_version.label("profile_version"),
+        )
+        .select_from(ShadowTrade)
+        .join(DecisionLog, DecisionLog.id == ShadowTrade.decision_id)
+        .outerjoin(L3AuthorizationOutbox, L3AuthorizationOutbox.decision_id == DecisionLog.id)
+        .join(
+            l3_watchlist,
+            and_(
+                l3_watchlist.profile_id == DecisionLog.profile_id,
+                l3_watchlist.user_id == user_id,
+                l3_watchlist.level == "L3",
+                l3_watchlist.market_mode == "spot",
+                l3_watchlist.auto_refresh.is_(True),
+            ),
+        )
+        .join(
+            Profile,
+            and_(
+                Profile.id == l3_watchlist.profile_id,
+                Profile.user_id == user_id,
+                Profile.is_active.is_(True),
+            ),
+        )
+        .where(
+            ShadowTrade.source == "L3",
+            ShadowTrade.created_at > cutoff,
+            DecisionLog.user_id == user_id,
+        )
+    )
+    if l3_watchlist_id is not None:
+        statement = statement.where(l3_watchlist.id == l3_watchlist_id)
+
+    rows = (await db.execute(statement)).all()
+    contributions: list[LiveL3Contribution] = []
+    seen_pairs: set[tuple] = set()
+    for decision, event, shadow, watchlist_id, profile_name, profile_version in rows:
+        pair = (watchlist_id, decision.symbol)
+        if pair in seen_pairs:
+            continue
+        auth = public_authorization(
+            decision, event, shadow,
+            watchlist_id=watchlist_id, profile_version=profile_version,
+            now=now, ignore_expiry=True,
+        )
+        if not auth or not auth.get("executable"):
+            continue
+        seen_pairs.add(pair)
+        contributions.append(LiveL3Contribution(
+            asset_id=shadow.id,
+            watchlist_id=watchlist_id,
+            profile_id=decision.profile_id,
+            profile_name=str(profile_name),
+            symbol=str(decision.symbol).upper(),
+            alpha_score=float(auth["alpha_score"]) if auth["alpha_score"] is not None else None,
+            current_price=float(auth["current_price"]) if auth["current_price"] is not None else None,
+            refreshed_at=auth["evaluated_at"],
+            authorization=auth,
+        ))
+    return contributions

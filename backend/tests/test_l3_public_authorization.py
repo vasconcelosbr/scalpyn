@@ -89,6 +89,35 @@ def test_comparison_operands_use_shortest_remaining_lifetime():
     assert authorization_expiry(body) is None
 
 
+def test_ignore_expiry_is_for_the_public_visibility_floor_only():
+    """2026-09-18 (part 3): ignore_expiry must default to False (every
+    existing caller -- shadow creation, consolidation, outbox, execute_buy's
+    l3_symbols filter -- keeps the exact same strict TTL behavior), and even
+    when explicitly set True it must still refuse a nonsensical
+    evaluated-in-the-future contract."""
+    now, wl, decision, event, shadow, body = objects()
+    event.status = "PROCESSED"
+    event.payload["processing_result"] = "CREATED_OR_RECONCILED"
+    shadow = Obj(id=uuid4())
+    past_expiry = now + timedelta(seconds=280)  # feature TTL: 300 - age(20) = 280s
+
+    # Default (and explicit False) behavior is byte-for-byte unchanged.
+    assert public_authorization(decision, event, shadow, watchlist_id=wl, now=past_expiry) is None
+    assert public_authorization(decision, event, shadow, watchlist_id=wl, now=past_expiry,
+                                ignore_expiry=False) is None
+
+    # ignore_expiry=True is the only thing that changes this outcome.
+    auth = public_authorization(decision, event, shadow, watchlist_id=wl, now=past_expiry,
+                                ignore_expiry=True)
+    assert auth is not None
+    assert auth["executable"] is True
+
+    # A future-dated evaluated_at is never valid, regardless of the flag --
+    # ignore_expiry only skips the UPPER bound, never the sanity check.
+    assert public_authorization(decision, event, shadow, watchlist_id=wl, now=now - timedelta(seconds=1),
+                                ignore_expiry=True) is None
+
+
 @pytest.mark.asyncio
 async def test_latest_block_is_not_filtered_out_before_latest_decision_selection():
     now, wl, decision, event, shadow, body = objects()
