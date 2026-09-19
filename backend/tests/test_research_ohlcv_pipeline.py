@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -621,3 +622,142 @@ def test_canonical_persist_call_site_resolves_contract_dynamically() -> None:
     # flipping back to SHADOW is a DB row insert, not a code change.
     assert "mode = 'SHADOW'" not in source
     assert "canonical_read_enabled IS FALSE" not in source
+
+
+@pytest.mark.asyncio
+async def test_state_shadow_slow_symbol_does_not_delay_faster_symbols_persist(monkeypatch) -> None:
+    """L3_PROFILE flow-evidence-gate fix (2026-09-18), item 3: every symbol used
+    to be awaited via asyncio.gather() before ANY of them reached the database
+    (collect_research_ohlcv.py:231 in the pre-fix version), adding the slowest
+    symbol's full fetch latency to every other symbol's collection_lag_seconds
+    -- a real contributor to INCOMPLETE_FLOW_EVIDENCE, not just a measurement
+    artifact. Each symbol must now persist as soon as its OWN fetch resolves.
+    """
+    import app.database as database_module
+    import app.services.pool_service as pool_service_module
+
+    order: list[str] = []
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def in_transaction(self):
+            return False
+
+        async def rollback(self):
+            pass
+
+    async def fake_get_active_pool_symbols(db, market):
+        return ["SLOW", "FAST"]
+
+    async def fake_active_capture_contract(db, *, timeframe):
+        return {
+            "mode": "SHADOW", "capture_contract_version": "test-v1",
+            "closed_table": "ohlcv_shadow", "finalization_delay_seconds": 0,
+        }
+
+    async def fake_fetch(client, *, symbol, timeframe, points, finalization_delay_seconds):
+        if symbol == "SLOW":
+            await asyncio.sleep(0.05)
+        return GateClosedCandleBatch(
+            symbol=symbol, timeframe=timeframe, observed_at=datetime.now(timezone.utc),
+            records=(), rejected_open_candles=0, rate_limit=None, rate_limit_remaining=None,
+        )
+
+    async def fake_persist(db, batch, *, capture_contract_version, closed_table):
+        order.append(batch.symbol)
+        return 1, 0
+
+    async def fake_paced_delay():
+        return None
+
+    monkeypatch.setattr(pool_service_module, "get_active_pool_symbols", fake_get_active_pool_symbols)
+    monkeypatch.setattr(database_module, "CeleryAsyncSessionLocal", FakeSession)
+    monkeypatch.setattr(collect_research_ohlcv, "active_capture_contract", fake_active_capture_contract)
+    monkeypatch.setattr(collect_research_ohlcv, "fetch_gate_closed_candles", fake_fetch)
+    monkeypatch.setattr(collect_research_ohlcv, "persist_gate_state_batch", fake_persist)
+    monkeypatch.setattr(collect_research_ohlcv, "paced_request_delay", fake_paced_delay)
+    monkeypatch.setattr(collect_research_ohlcv, "_state_symbol_concurrency", lambda: 2)
+    monkeypatch.setattr(collect_research_ohlcv, "_state_points", lambda timeframe: 4)
+
+    summary = await collect_research_ohlcv._collect_state_shadow_async("1m")
+
+    assert order == ["FAST", "SLOW"], (
+        f"FAST's persist must land before SLOW's fetch resolves; got order={order}"
+    )
+    assert summary["successful_symbols"] == 2
+    assert summary["failed_symbols"] == 0
+
+
+@pytest.mark.asyncio
+async def test_state_shadow_one_symbol_failure_does_not_block_others(monkeypatch) -> None:
+    """A fetch or persist failure for one symbol must not prevent the other
+    symbols in the same run from being collected and persisted."""
+    import app.database as database_module
+    import app.services.pool_service as pool_service_module
+
+    persisted: list[str] = []
+    errors_recorded: list[str] = []
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def in_transaction(self):
+            return False
+
+        async def rollback(self):
+            pass
+
+    async def fake_get_active_pool_symbols(db, market):
+        return ["FETCH_FAILS", "PERSIST_FAILS", "OK"]
+
+    async def fake_active_capture_contract(db, *, timeframe):
+        return {
+            "mode": "SHADOW", "capture_contract_version": "test-v1",
+            "closed_table": "ohlcv_shadow", "finalization_delay_seconds": 0,
+        }
+
+    async def fake_fetch(client, *, symbol, timeframe, points, finalization_delay_seconds):
+        if symbol == "FETCH_FAILS":
+            raise RuntimeError("simulated fetch failure")
+        return GateClosedCandleBatch(
+            symbol=symbol, timeframe=timeframe, observed_at=datetime.now(timezone.utc),
+            records=(), rejected_open_candles=0, rate_limit=None, rate_limit_remaining=None,
+        )
+
+    async def fake_persist(db, batch, *, capture_contract_version, closed_table):
+        if batch.symbol == "PERSIST_FAILS":
+            raise RuntimeError("simulated persist failure")
+        persisted.append(batch.symbol)
+        return 1, 0
+
+    async def fake_record_error(db, *, symbol, timeframe, observed_at, error_code, capture_contract_version):
+        errors_recorded.append(symbol)
+
+    async def fake_paced_delay():
+        return None
+
+    monkeypatch.setattr(pool_service_module, "get_active_pool_symbols", fake_get_active_pool_symbols)
+    monkeypatch.setattr(database_module, "CeleryAsyncSessionLocal", FakeSession)
+    monkeypatch.setattr(collect_research_ohlcv, "active_capture_contract", fake_active_capture_contract)
+    monkeypatch.setattr(collect_research_ohlcv, "fetch_gate_closed_candles", fake_fetch)
+    monkeypatch.setattr(collect_research_ohlcv, "persist_gate_state_batch", fake_persist)
+    monkeypatch.setattr(collect_research_ohlcv, "record_gate_state_error", fake_record_error)
+    monkeypatch.setattr(collect_research_ohlcv, "paced_request_delay", fake_paced_delay)
+    monkeypatch.setattr(collect_research_ohlcv, "_state_symbol_concurrency", lambda: 3)
+    monkeypatch.setattr(collect_research_ohlcv, "_state_points", lambda timeframe: 4)
+
+    summary = await collect_research_ohlcv._collect_state_shadow_async("1m")
+
+    assert persisted == ["OK"]
+    assert set(errors_recorded) == {"FETCH_FAILS", "PERSIST_FAILS"}
+    assert summary["successful_symbols"] == 1
+    assert summary["failed_symbols"] == 2

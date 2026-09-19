@@ -25,6 +25,7 @@ import {
   Crown,
   GitMerge,
   LockKeyhole,
+  Timer,
   Users,
 } from 'lucide-react';
 
@@ -95,6 +96,9 @@ interface L3ConsolidatedAsset {
   candidate_count: number;
   candidate_profile_ids: string[];
   candidate_profile_names: string[];
+  /** 2026-09-18 (part 3): guaranteed minimum visibility floor, independent
+   * of the entry-authorization TTL — see backend l3_public_authorization.py. */
+  visible_until: string | null;
 }
 
 interface L3ConsolidatedResponse {
@@ -205,6 +209,17 @@ function timeAgo(isoStr: string | null | undefined): string {
   const hrs = Math.floor(mins / 60);
   if (hrs < 24) return `${hrs}h${mins % 60 > 0 ? `${mins % 60}m` : ''}`;
   return `${Math.floor(hrs / 24)}d`;
+}
+
+/** mm:ss countdown to targetIso, or null once it has passed. */
+function formatCountdown(targetIso: string | null | undefined, nowMs: number): string | null {
+  if (!targetIso) return null;
+  const remainingMs = Date.parse(targetIso) - nowMs;
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) return null;
+  const totalSeconds = Math.floor(remainingMs / 1000);
+  const mins = Math.floor(totalSeconds / 60);
+  const secs = totalSeconds % 60;
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
 /** True when last_scanned_at is >10 min old (stale pipeline). */
@@ -1487,8 +1502,16 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
     return () => { window.clearInterval(clock); window.clearInterval(poll); };
   }, [load]);
 
+  // 2026-09-18 (part 3): visible_until is a guaranteed MINIMUM floor, not a
+  // cap -- a candidate must stay visible until whichever deadline is LATER,
+  // the entry-authorization TTL (expires_at) or the floor. Filtering on
+  // expires_at alone would silently undo the backend's floor the moment the
+  // (often much shorter) feature-freshness TTL passes.
   const items = (data?.items ?? []).filter(asset =>
-    asset.authorization_status === 'ALLOW' && Date.parse(asset.expires_at) > authorizationClock);
+    asset.authorization_status === 'ALLOW' && (
+      Date.parse(asset.expires_at) > authorizationClock ||
+      (asset.visible_until != null && Date.parse(asset.visible_until) > authorizationClock)
+    ));
 
   return (
     <div
@@ -1614,6 +1637,7 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
                   {items.map((asset) => {
                     const contributors = asset.candidate_count;
                     const refreshedAt = asset.refreshed_at ? new Date(asset.refreshed_at) : null;
+                    const visibilityCountdown = formatCountdown(asset.visible_until, authorizationClock);
                     return (
                       <tr
                         key={`${asset.symbol}-${asset.watchlist_id}-${asset.asset_id}`}
@@ -1670,6 +1694,15 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
                           <div className="mt-1 text-[10px] text-[#64748B]">
                             Válido até {new Date(asset.expires_at).toLocaleTimeString('pt-BR')}
                           </div>
+                          {visibilityCountdown && (
+                            <div
+                              className="mt-1 inline-flex items-center gap-1 rounded border border-[#D6A84B]/25 bg-[#D6A84B]/8 px-1.5 py-0.5 font-mono text-[10px] font-semibold tabular-nums text-[#F2C66D]"
+                              title="Piso mínimo de visibilidade garantido para sistemas externos identificarem este ativo, independente do TTL de frescor do sinal"
+                            >
+                              <Timer size={10} />
+                              Garantido {visibilityCountdown}
+                            </div>
+                          )}
                         </td>
                         <td className="px-4 py-3 text-right text-[#64748B]" title={refreshedAt ? formatDateTime(refreshedAt) : undefined}>
                           {asset.refreshed_at ? timeAgo(asset.refreshed_at) : '—'}

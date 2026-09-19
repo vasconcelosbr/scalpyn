@@ -170,9 +170,31 @@ class ScannerConfig(BaseModel):
     # watchlist had to evaluate — well past the freshness window of the L3
     # authorization contract for decisions made early in that same cycle.
     l3_watchlist_processing_timeout_seconds: float = Field(60.0, ge=1, le=280)
+    # 2026-09-18 shadow-trade collapse investigation, part 2: even with the
+    # per-watchlist timeout above, running the L3 stage's watchlists one at
+    # a time meant total L3-stage time was the SUM of every watchlist's own
+    # duration (observed 46-254s across normal cycles) -- already past the
+    # 60s TTL of the tightest authorization feature before consolidation
+    # could even start. Each watchlist already has its own isolated DB
+    # session (#167), so running up to this many concurrently is safe; it
+    # bounds worst-case DB-pool usage from this scan rather than leaving it
+    # unbounded.
+    l3_watchlist_max_concurrency: int = Field(8, ge=1, le=50)
     # Independent opt-in for diagnostic BLOCK captures.  Rejected Shadows
     # never authorize execution and retain a separate rollback switch.
     l3_rejected_single_profile_per_symbol_enabled: bool = False
+    # 2026-09-18 shadow-trade collapse investigation, part 3: the feature
+    # freshness TTL that gates entry authorization (as short as 60s for
+    # live_trade_flow features -- deliberately tight, protects entry
+    # quality) was also the ONLY thing bounding how long an authorized
+    # candidate stayed visible in the public feed (Consolidado / per-
+    # watchlist Approved). External systems polling that feed need a
+    # guaranteed minimum window to observe a listing regardless of how
+    # quickly the underlying signal goes stale. This floor is purely
+    # additive to the public/display read path -- it does not touch
+    # authorization_expiry() or any of the shadow-creation/consolidation/
+    # outbox gates, which keep using the strict, unmodified TTL.
+    l3_public_visibility_floor_seconds: int = Field(300, ge=0, le=3600)
     l3_profile_consolidation_rule_version: Literal[
         "single_profile_per_symbol_v1"
     ] = "single_profile_per_symbol_v1"

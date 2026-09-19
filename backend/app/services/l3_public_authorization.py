@@ -57,7 +57,8 @@ def authorization_expiry(contract):
     return min(deadlines) if deadlines else None
 
 
-def public_authorization(decision, event, shadow, *, watchlist_id, profile_version=None, now=None):
+def public_authorization(decision, event, shadow, *, watchlist_id, profile_version=None, now=None,
+                          ignore_expiry=False):
     now = now or datetime.now(timezone.utc)
     contract = (decision.metrics or {}).get("l3_authorization_contract_v3") or {}
     if (decision.decision != "ALLOW" or contract.get("valid") is not True
@@ -82,7 +83,15 @@ def public_authorization(decision, event, shadow, *, watchlist_id, profile_versi
         return None
     expiry = authorization_expiry(contract)
     evaluated = utc(contract.get("evaluated_at"))
-    if expiry is None or evaluated is None or not evaluated <= now < expiry:
+    if expiry is None or evaluated is None or evaluated > now:
+        return None
+    # 2026-09-18 (part 3): ``ignore_expiry`` is for the public-visibility
+    # floor only (see load_recently_authorized_l3_shadows) -- it never
+    # applies to entry authorization. Every caller that gates shadow
+    # creation/consolidation (pipeline_scan, the outbox service, trade
+    # consolidation, on-demand publish) keeps calling authorization_expiry()
+    # directly and is untouched by this flag.
+    if not ignore_expiry and now >= expiry:
         return None
     result = payload.get("processing_result")
     if event.status == "PROCESSED" and result != "CREATED_OR_RECONCILED":

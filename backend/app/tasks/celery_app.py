@@ -116,6 +116,7 @@ _ALL_TASK_MODULES = (
         "app.tasks.crypto_ev_score",
         "app.tasks.ml_data_certification",
         "app.tasks.prune_indicator_snapshots",
+        "app.tasks.prune_indicators",
         "app.tasks.ai_orchestration",
         "app.tasks.governed_cache_reconciliation",
         "app.tasks.entry_risk_capture",
@@ -300,6 +301,11 @@ TASK_ROUTES = {
     # captura; falha aqui nunca afeta scan/persist_snapshot. DELETE em lotes
     # apenas em indicator_snapshots.
     "app.tasks.prune_indicator_snapshots.run": {"queue": QUEUE_STRUCTURAL_COMPUTE},
+
+    # Auditoria 2026-09-18 — indicators (13GB, 41% do banco) também nunca
+    # teve retenção, mesmo padrão de falha do indicator_snapshots acima.
+    # Compute queue: isolada da captura; falha aqui nunca afeta scan.
+    "app.tasks.prune_indicators.run": {"queue": QUEUE_STRUCTURAL_COMPUTE},
     "app.tasks.ai_orchestration.start_graph_run": {"queue": QUEUE_AI_ORCHESTRATION},
     "app.tasks.ai_orchestration.dispatch_queued_graph_runs": {"queue": QUEUE_AI_ORCHESTRATION},
     "app.tasks.ai_orchestration.resume_graph_run": {"queue": QUEUE_AI_ORCHESTRATION},
@@ -601,6 +607,15 @@ TASK_ANNOTATIONS = {
     # (300s) só importa na primeira execução (pode ter backlog); runs
     # subsequentes ficam bem abaixo disso (incremento horário << backlog inicial).
     "app.tasks.prune_indicator_snapshots.run": {
+        "time_limit": 300,
+        "soft_time_limit": 270,
+        "max_retries": 0,
+        **_NO_REQUEUE_ON_WORKER_LOSS,
+    },
+    # Auditoria 2026-09-18 — retenção de indicators. Mesmo budget generoso:
+    # nada é apagado até a linha mais antiga (hoje ~85 dias) passar de 90
+    # dias, e depois disso o volume por execução é só o incremento diário.
+    "app.tasks.prune_indicators.run": {
         "time_limit": 300,
         "soft_time_limit": 270,
         "max_retries": 0,
@@ -976,6 +991,16 @@ celery_app.conf.beat_schedule = {
     "prune_indicator_snapshots": {
         "task": "app.tasks.prune_indicator_snapshots.run",
         "schedule": crontab(minute=0),
+        "options": {"queue": QUEUE_STRUCTURAL_COMPUTE},
+    },
+    # Auditoria 2026-09-18 — indicators (13GB, 41% do banco) nunca teve
+    # retenção; mesmo padrão de risco que já causou o crash de disco de
+    # 2026-07-26 via indicator_snapshots. A cada hora (0 * * * *), apaga em
+    # lotes o que passou de INDICATORS_RETENTION_DAYS (default 90 — nada é
+    # apagado até a linha mais antiga, hoje com ~85 dias, ultrapassar isso).
+    "prune_indicators": {
+        "task": "app.tasks.prune_indicators.run",
+        "schedule": crontab(minute=15),
         "options": {"queue": QUEUE_STRUCTURAL_COMPUTE},
     },
     "ai_orchestration_recover_stale_runs": {
