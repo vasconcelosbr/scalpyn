@@ -1065,7 +1065,14 @@ class MLChallengerService:
             params.update(managed_version=VERSION, managed_hash=managed_contract["hash"],
                           managed_horizon=managed_contract["max_holding_seconds"])
             outcome_clause = "outcome IN ('TP_HIT','SL_HIT','TIMEOUT','TRAILING_STOP','FLOW_STRUCTURE_EXIT')"
-            maturity_expression = "GREATEST(entry_timestamp + make_interval(secs => :managed_horizon), label_resolved_at) + make_interval(mins => :maturity_embargo_margin_minutes)"
+            # A position that closes early (TP/trailing-stop) has its outcome
+            # certified the moment it closes -- label_resolved_at already
+            # reflects that. Flooring maturity at entry_timestamp+managed_horizon
+            # (the position's max allowed duration, a CENSORED_OR_INVALID_HORIZON
+            # cap enforced elsewhere, not an artificial per-row wait) used to
+            # make every early closer wait out the full horizon anyway, for no
+            # reason tied to the label itself.
+            maturity_expression = "label_resolved_at + make_interval(mins => :maturity_embargo_margin_minutes)"
             managed_clause = """
                 AND label_contract_version=:managed_version
                 AND config_snapshot->'l3_managed_ml'->'contract'->>'hash'=:managed_hash
