@@ -15,14 +15,14 @@ async def _sweep():
     from ..services.redis_client import get_async_redis
     from ..services.shadow_l3_flow_capture import WATCHED, drain
     from ..services.shadow_l3_exit_service import advance_shadow
-    from ..schemas.shadow_l3_exit_policy import ShadowL3ExitPolicy
+    from ..schemas.shadow_l3_exit_policy import ShadowL3ExitPolicy, validate_policy
     redis = await get_async_redis()
     async with CeleryAsyncSessionLocal() as db:
         configs = (await db.execute(text("""
             SELECT config_json FROM config_profiles
             WHERE config_type='shadow_l3_exit_policy' AND pool_id IS NULL AND is_active
         """))).scalars().all()
-        policies = [ShadowL3ExitPolicy.model_validate(c) for c in configs] or [ShadowL3ExitPolicy()]
+        policies = [validate_policy(c) for c in configs] or [ShadowL3ExitPolicy()]
         batch_size = max(p.trade_batch_size for p in policies)
         # Recover only the recent rollout overlap. Future enrollment is atomic
         # with shadow creation, so discovery never scans historical JSONB.

@@ -46,9 +46,9 @@ def freeze(snapshot, config, *, source, capture_valid):
     spec = definition(config)
     if source != "L3" or spec is None:
         return None
-    from app.schemas.shadow_l3_exit_policy import ShadowL3ExitPolicy
+    from app.schemas.shadow_l3_exit_policy import validate_policy
     frozen = snapshot.get("shadow_l3_exit_policy") or {}
-    policy = ShadowL3ExitPolicy.model_validate(frozen.get("config") or {})
+    policy = validate_policy(frozen.get("config") or {})
     compatible = (policy.mode == "APPLY" and policy.digest() == frozen.get("hash") == spec["policy_hash"]
                   and digest(snapshot.get("trailing") or {}) == spec["trailing_hash"]
                   and snapshot.get("barrier_contract_version") == spec["barrier_contract_version"]
@@ -70,7 +70,7 @@ def certify(shadow, decisions, boundary_candle, *, checked_at):
     Warmup is explicitly price-only; thereafter all flow evidence must be VALID.
     Holding beyond the frozen horizon is censored, never forced to close.
     """
-    from app.schemas.shadow_l3_exit_policy import ShadowL3ExitPolicy
+    from app.schemas.shadow_l3_exit_policy import validate_policy
     from app.services.shadow_l3_exit_evaluator import advance
     snap = shadow.config_snapshot or {}
     capture = snap.get("l3_managed_ml") or {}
@@ -91,7 +91,7 @@ def certify(shadow, decisions, boundary_candle, *, checked_at):
             return reject("CENSORED_OR_INVALID_HORIZON")
         if shadow.outcome not in OUTCOMES or shadow.closure_path != "l3_continuation":
             return reject("UNSUPPORTED_CLOSURE")
-        policy = ShadowL3ExitPolicy.model_validate(snap["shadow_l3_exit_policy"]["config"])
+        policy = validate_policy(snap["shadow_l3_exit_policy"]["config"])
         first = entry_at.replace(second=0, microsecond=0)
         if first != entry_at:
             if not boundary_candle or at(boundary_candle["time"]) != first:

@@ -7,27 +7,41 @@ import { apiGet } from "@/lib/api";
 type Values = Record<string, number | string | null>;
 type Property = { type?: string; minimum?: number; maximum?: number; exclusiveMinimum?: number; exclusiveMaximum?: number; anyOf?: Property[] };
 type Meta = { schema: { properties: Record<string, Property> }; missing_parameters: string[]; approved: boolean; validation_status: string; pre_tp: unknown };
-const groups: [string, [string, string][]][] = [
-  ["Fluxo e continuação", [
-    ["flow_window_seconds", "Janela de fluxo (s)"], ["cvd_window_seconds", "Janela da inclinação do CVD (s)"],
-    ["continuation_taker_min", "Taker Ratio mínimo (compra / total)"], ["continuation_delta_min", "Delta normalizado mínimo"],
-    ["continuation_cvd_min", "Inclinação normalizada mínima do CVD"], ["continuation_price_min_pct", "Avanço mínimo do preço (%)"]]],
-  ["Enfraquecimento e confirmação", [
-    ["weakening_taker_max", "Taker Ratio máximo para enfraquecimento"], ["weakening_delta_max", "Delta normalizado máximo"],
-    ["weakening_cvd_max", "Inclinação normalizada máxima do CVD"], ["confirmation_seconds", "Persistência necessária (s)"],
-    ["alignment_seconds", "Atraso máximo entre candle e evidências (s)"], ["pivot_left", "Candles anteriores ao fundo"], ["pivot_right", "Candles posteriores para confirmar fundo"]]],
-  ["Pisos progressivos", [
-    ["initial_buffer_pct", "Folga inicial abaixo do TP (p.p.)"], ["step_trigger_pct", "Avanço para cada degrau (p.p.)"],
-    ["step_floor_pct", "Elevação do piso por degrau (p.p.)"], ["atr_period", "Período do ATR (candles)"],
-    ["atr_multiplier", "Distância normal (× ATR)"], ["tight_atr_multiplier", "Distância apertada (× ATR)"]]],
-  ["Qualidade dos dados", [
-    ["max_age_seconds", "Idade máxima dos negócios (s)"], ["min_coverage_pct", "Cobertura mínima (%)"],
-    ["max_gap_seconds", "Lacuna máxima entre negócios (s)"], ["warmup_seconds", "Coleta necessária antes da decisão (s)"]]],
-  ["Operação", [["evaluation_seconds", "Intervalo mínimo entre avaliações (s)"],
-    ["ui_refresh_seconds", "Atualização do portfólio (s)"], ["retention_days", "Retenção mínima das evidências (dias)"],
-    ["trade_batch_size", "Trades por avaliação"], ["capture_batch_size", "Negócios por lote de captura"], ["max_candles_per_run", "Candles por trade e avaliação"],
-    ["observation_horizon_seconds", "Horizonte de coleta após a entrada (s)"], ["replay_lookback_seconds", "Histórico por decisão para replay (s)"]]],
-];
+const VERSION_V1 = "shadow_l3_continuation_v1";
+const VERSION_V2 = "shadow_l3_continuation_v2";
+// S1 (2026-09-17 flow-window/candle-delay split): v2 adds flow_window_age_seconds
+// as an independent limit on the age of the flow evidence itself. max_age_seconds
+// stays in both versions -- it keeps governing continuation-authorization signal
+// freshness in shadow_l3_exit_evaluator.advance(), a distinct purpose from the
+// flow-evidence-quality gate flow_window_age_seconds targets.
+function buildGroups(version: string): [string, [string, string][]][] {
+  const dataQuality: [string, string][] = version === VERSION_V2
+    ? [["flow_window_age_seconds", "Idade máxima do fluxo na janela (s)"], ["alignment_seconds", "Atraso máximo do candle até disponibilidade (s)"],
+       ["min_coverage_pct", "Cobertura mínima (%)"], ["max_gap_seconds", "Lacuna máxima entre negócios (s)"],
+       ["warmup_seconds", "Coleta necessária antes da decisão (s)"]]
+    : [["max_age_seconds", "Idade máxima dos negócios (s)"], ["min_coverage_pct", "Cobertura mínima (%)"],
+       ["max_gap_seconds", "Lacuna máxima entre negócios (s)"], ["warmup_seconds", "Coleta necessária antes da decisão (s)"]];
+  return [
+    ["Fluxo e continuação", [
+      ["flow_window_seconds", "Janela de fluxo (s)"], ["cvd_window_seconds", "Janela da inclinação do CVD (s)"],
+      ["continuation_taker_min", "Taker Ratio mínimo (compra / total)"], ["continuation_delta_min", "Delta normalizado mínimo"],
+      ["continuation_cvd_min", "Inclinação normalizada mínima do CVD"], ["continuation_price_min_pct", "Avanço mínimo do preço (%)"]]],
+    ["Enfraquecimento e confirmação", [
+      ["weakening_taker_max", "Taker Ratio máximo para enfraquecimento"], ["weakening_delta_max", "Delta normalizado máximo"],
+      ["weakening_cvd_max", "Inclinação normalizada máxima do CVD"], ["confirmation_seconds", "Persistência necessária (s)"],
+      ...(version === VERSION_V2 ? [] : [["alignment_seconds", "Atraso máximo entre candle e evidências (s)"] as [string, string]]),
+      ["pivot_left", "Candles anteriores ao fundo"], ["pivot_right", "Candles posteriores para confirmar fundo"]]],
+    ["Pisos progressivos", [
+      ["initial_buffer_pct", "Folga inicial abaixo do TP (p.p.)"], ["step_trigger_pct", "Avanço para cada degrau (p.p.)"],
+      ["step_floor_pct", "Elevação do piso por degrau (p.p.)"], ["atr_period", "Período do ATR (candles)"],
+      ["atr_multiplier", "Distância normal (× ATR)"], ["tight_atr_multiplier", "Distância apertada (× ATR)"]]],
+    ["Qualidade dos dados", dataQuality],
+    ["Operação", [["evaluation_seconds", "Intervalo mínimo entre avaliações (s)"],
+      ["ui_refresh_seconds", "Atualização do portfólio (s)"], ["retention_days", "Retenção mínima das evidências (dias)"],
+      ["trade_batch_size", "Trades por avaliação"], ["capture_batch_size", "Negócios por lote de captura"], ["max_candles_per_run", "Candles por trade e avaliação"],
+      ["observation_horizon_seconds", "Horizonte de coleta após a entrada (s)"], ["replay_lookback_seconds", "Histórico por decisão para replay (s)"]]],
+  ];
+}
 
 export function ShadowL3ExitPolicyForm() {
   const { config, updateConfig, isLoading, error } = useConfig("shadow_l3_exit_policy");
@@ -40,10 +54,24 @@ export function ShadowL3ExitPolicyForm() {
   useEffect(() => {
     apiGet<Meta>("/config/shadow_l3_exit_policy/metadata").then(setMeta).catch(() => setMeta(null));
   }, [config]);
+  const version = String(form.version || VERSION_V1);
+  const groups = buildGroups(version);
   const missing = groups.flatMap(([, fields]) => fields).filter(([key]) => form[key] == null);
+  // extra="forbid" on both backend schemas: a v1 payload must not carry
+  // flow_window_age_seconds at all, not even as null.
+  const withoutV2OnlyFields = (values: Values): Values => {
+    const copy = { ...values };
+    delete copy.flow_window_age_seconds;
+    return copy;
+  };
+  const setVersion = (next: string) => {
+    const base = next === VERSION_V2 ? form : withoutV2OnlyFields(form);
+    setForm({ ...base, version: next });
+  };
   const save = async () => {
     setSaving(true); setMessage("");
-    try { await updateConfig(form); setMessage("Política salva. Novos trades usarão esta versão; os anteriores mantêm seus parâmetros."); }
+    const payload = version === VERSION_V2 ? form : withoutV2OnlyFields(form);
+    try { await updateConfig(payload); setMessage("Política salva. Novos trades usarão esta versão; os anteriores mantêm seus parâmetros."); }
     catch (e) { setMessage(e instanceof Error ? e.message : "Não foi possível salvar a política."); }
     finally { setSaving(false); }
   };
@@ -69,6 +97,13 @@ export function ShadowL3ExitPolicyForm() {
         <option value="OBSERVE">Observação — calcular candidato sem alterar as saídas</option>
         <option value="APPLY" disabled={missing.length > 0}>Aplicar em novos shadows — execução imediata</option>
       </select>
+    </label>
+    <label className="block text-sm">Versão da política de qualidade do fluxo
+      <select className="input mt-2 w-full" value={version} onChange={e => setVersion(e.target.value)}>
+        <option value={VERSION_V1}>v1 — idade combinada (negócio + disponibilidade do candle)</option>
+        <option value={VERSION_V2}>v2 — relógios separados (S1): idade do fluxo e atraso do candle avaliados de forma independente</option>
+      </select>
+      <span className="block text-xs text-[var(--text-secondary)] mt-1">Novos shadows usam a versão salva; capturas já congeladas mantêm a versão em que foram abertas.</span>
     </label>
     <p className="text-sm text-[var(--text-secondary)]">{missing.length ? "Parâmetros ainda não definidos. A coleta pode prosseguir; a continuação não será autorizada." : "Parâmetros preenchidos. Selecione Aplicar e salve para executar nos novos shadows L3."}</p>
     {meta?.validation_status === "NOT_CALIBRATED" && <p className="text-sm text-[var(--text-secondary)]">Configuração sem calibração empírica concluída. A ativação é registrada no histórico de configurações.</p>}

@@ -71,6 +71,35 @@ def test_partial_entry_cannot_hide_barrier_touch(policy):
     assert proof['reason']=='ENTRY_BOUNDARY_AMBIGUOUS'
 
 
+def test_v2_policy_capture_stays_isolated_until_ml_contract_pins_new_hash(policy):
+    """S2 (2026-09-17): switching a tenant's live shadow_l3_exit_policy to v2
+    must not silently backfill new-version captures into the existing v1 ML
+    training population. freeze() already pins the ML economic contract's
+    policy_hash; a v2-frozen snapshot whose contract still names the OLD v1
+    hash must fail capture_valid, not pass through -- and only becomes
+    eligible again once the contract is explicitly re-pinned to the new hash.
+    """
+    from app.schemas.shadow_l3_exit_policy import ShadowL3ExitPolicyV2
+    v1 = policy.model_copy(update={'mode': 'APPLY'})
+    v2 = ShadowL3ExitPolicyV2.model_validate({
+        **v1.model_dump(), 'version': 'shadow_l3_continuation_v2',
+        'flow_window_age_seconds': 120, 'mode': 'APPLY',
+    })
+    assert v2.digest() != v1.digest()
+    config = {KEY: dict(version=VERSION, policy_hash=v1.digest(), trailing_hash=digest({}),
+                         fee_roundtrip_pct=.2, slippage_roundtrip_pct=.1,
+                         max_holding_seconds=86400, barrier_contract_version='shadow_atr_dynamic_v3')}
+    snapshot = dict(shadow_l3_exit_policy=frozen_policy(v2.model_dump()), trailing={},
+                     barrier_contract_version='shadow_atr_dynamic_v3', ml_fee_roundtrip_pct=.2)
+    result = freeze(snapshot, config, source='L3', capture_valid=True)
+    assert result['capture_valid'] is False
+    assert result['capture_reason'] == 'MANAGED_EXIT_CONFIG_MISMATCH'
+
+    config[KEY]['policy_hash'] = v2.digest()
+    result2 = freeze(snapshot, config, source='L3', capture_valid=True)
+    assert result2['capture_valid'] is True
+
+
 def test_new_contract_does_not_change_other_lanes_or_old_snapshots(policy):
     shadow,rows,cfg=scenario(policy)
     assert freeze(shadow.config_snapshot,cfg,source='L1_SPECTRUM',capture_valid=True) is None
@@ -171,6 +200,30 @@ def test_diagnostic_reports_every_concurrent_impediment_not_just_first(policy):
     assert result['stage'] == 'EXCLUDED'
 
 
+def test_managed_capture_with_no_impediments_is_not_misreported_as_incompatible_outcome(policy):
+    """Item 7 of the L3_PROFILE flow-evidence-gate fix (2026-09-18): a managed
+    capture that cleared every impediment (valid proof, ready measurement,
+    matured) but is not yet reflected in eligible_ids (e.g. a lag on the
+    canonical trainer query) used to fall through to a legacy outcome
+    allowlist ('TP_HIT','SL_HIT','TIMEOUT') that predates TRAILING_STOP and
+    FLOW_STRUCTURE_EXIT as valid managed outcomes -- misreporting it as
+    EXCLUDED for an incompatible outcome the managed contract explicitly
+    allows (l3_managed_exit.OUTCOMES).
+    """
+    from app.services.l3_capture_diagnostics import capture_stage
+    shadow, _, cfg = scenario(policy, kind='TRAILING_STOP')
+    cfg['ml_maturity_embargo_margin_minutes'] = 0
+    row = dict(
+        id='trailing-capture', config_snapshot=shadow.config_snapshot,
+        entry_timestamp=T, outcome='TRAILING_STOP',
+        measurement_status='READY', entry_quality='OK',
+        managed_label={'valid': True, 'label_available_at': None},
+    )
+    result = capture_stage(row, cutoff=T + timedelta(days=2), config=cfg, eligible_ids=set())
+    assert result['stage'] != 'EXCLUDED', result
+    assert 'fora do contrato' not in (result['reason'] or ''), result
+
+
 @pytest.mark.asyncio
 async def test_flow_evidence_detail_names_the_specific_threshold_broken():
     """The generic INCOMPLETE_FLOW_EVIDENCE code hides which policy limit was
@@ -189,7 +242,7 @@ async def test_flow_evidence_detail_names_the_specific_threshold_broken():
     )
     failing_row = {
         'candle_at': T + timedelta(minutes=5), 'quality': 'INCOMPLETE_OR_STALE',
-        'data_age_seconds': 142.97, 'max_gap_seconds': 10.0,
+        'data_age_seconds': 142.97, 'flow_window_age_seconds': None, 'max_gap_seconds': 10.0,
         'coverage_pct': 95.0, 'collection_lag_seconds': 5.0,
     }
     result = MagicMock()
@@ -200,3 +253,31 @@ async def test_flow_evidence_detail_names_the_specific_threshold_broken():
     assert 'idade do fluxo' in detail['reason']
     assert '142.97 s' in detail['reason']
     assert 'acima de 120 s' in detail['reason']
+
+
+@pytest.mark.asyncio
+async def test_flow_evidence_detail_names_flow_window_dimension_under_v2():
+    """S1 (2026-09-17): under a v2 policy the gate that actually fired is
+    flow_window_age_seconds, not the (unused-for-quality) combined
+    data_age_seconds -- the diagnostic message must name the real culprit.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+    from app.services.l3_capture_diagnostics import _flow_evidence_detail
+    row = dict(
+        id='uni-v2', entry_timestamp=T,
+        config_snapshot={'shadow_l3_exit_policy': {'config': {
+            'warmup_seconds': 60, 'max_gap_seconds': 30, 'min_coverage_pct': 80,
+            'max_age_seconds': 120, 'alignment_seconds': 120, 'flow_window_age_seconds': 120,
+        }}},
+    )
+    failing_row = {
+        'candle_at': T + timedelta(minutes=5), 'quality': 'INCOMPLETE_OR_STALE',
+        'data_age_seconds': 142.97, 'flow_window_age_seconds': 142.97,
+        'max_gap_seconds': 10.0, 'coverage_pct': 95.0, 'collection_lag_seconds': 5.0,
+    }
+    result = MagicMock()
+    result.mappings.return_value.one_or_none.return_value = failing_row
+    db = SimpleNamespace(execute=AsyncMock(return_value=result))
+    detail = await _flow_evidence_detail(db, row)
+    assert 'idade do fluxo na janela' in detail['reason']
+    assert '142.97 s' in detail['reason']
