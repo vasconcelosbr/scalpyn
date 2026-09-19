@@ -212,8 +212,24 @@ async def _collect_state_shadow_async(timeframe: str) -> dict[str, Any]:
     semaphore = asyncio.Semaphore(_state_symbol_concurrency())
     timeout = httpx.Timeout(30.0, connect=10.0)
 
+    async def record_error(symbol: str, error_code: str) -> None:
+        async with CeleryAsyncSessionLocal() as db:
+            await record_gate_state_error(
+                db,
+                symbol=symbol,
+                timeframe=timeframe,
+                observed_at=datetime.now(timezone.utc),
+                error_code=error_code,
+                capture_contract_version=contract["capture_contract_version"],
+            )
+
     async with httpx.AsyncClient(timeout=timeout) as client:
-        async def fetch_one(symbol: str):
+        async def fetch_and_persist(symbol: str) -> dict[str, Any]:
+            # A slow fetch for one symbol must never delay persisting a candle
+            # another symbol already received: each symbol opens its own DB
+            # session and persists as soon as ITS OWN fetch resolves, instead
+            # of every symbol waiting for the whole batch via asyncio.gather()
+            # before any of them reach the database.
             async with semaphore:
                 try:
                     batch = await fetch_gate_closed_candles(
@@ -223,12 +239,56 @@ async def _collect_state_shadow_async(timeframe: str) -> dict[str, Any]:
                         points=_state_points(timeframe),
                         finalization_delay_seconds=finalization_delay_seconds,
                     )
+                finally:
                     await paced_request_delay()
-                    return symbol, batch, None
-                except Exception as exc:
-                    return symbol, None, exc
 
-        fetched = await asyncio.gather(*(fetch_one(symbol) for symbol in symbols))
+            try:
+                async with CeleryAsyncSessionLocal() as db:
+                    inserted_now, live_now = await persist_gate_state_batch(
+                        db,
+                        batch,
+                        capture_contract_version=contract["capture_contract_version"],
+                        closed_table=contract["closed_table"],
+                    )
+            except Exception as exc:
+                logger.exception(
+                    "[OHLCV-STATE-SHADOW][PERSIST-FAILED] symbol=%s timeframe=%s",
+                    symbol,
+                    timeframe,
+                )
+                await record_error(symbol, type(exc).__name__)
+                return {"symbol": symbol, "ok": False}
+
+            ohlcv_metrics.record_received(symbol, timeframe, len(batch.records))
+            ohlcv_metrics.record_persisted(symbol, timeframe, inserted_now)
+            if batch.availability_lag_seconds is not None:
+                ohlcv_metrics.record_latest_age(
+                    symbol, timeframe, batch.availability_lag_seconds
+                )
+            return {
+                "symbol": symbol, "ok": True,
+                "received_closed": len(batch.records),
+                "received_live": len(batch.live_records),
+                "inserted_closed": inserted_now,
+                "upserted_live": live_now,
+                "rejected_open": batch.rejected_open_candles,
+                "latest_close_time": batch.latest_close_time,
+            }
+
+        async def run_one(symbol: str) -> dict[str, Any]:
+            try:
+                return await fetch_and_persist(symbol)
+            except Exception as exc:
+                logger.error(
+                    "[OHLCV-STATE-SHADOW][FAILED] symbol=%s timeframe=%s error=%s",
+                    symbol,
+                    timeframe,
+                    type(exc).__name__,
+                )
+                await record_error(symbol, type(exc).__name__)
+                return {"symbol": symbol, "ok": False}
+
+        results = await asyncio.gather(*(run_one(symbol) for symbol in symbols))
 
     successes = 0
     failures = 0
@@ -238,72 +298,21 @@ async def _collect_state_shadow_async(timeframe: str) -> dict[str, Any]:
     upserted_live = 0
     rejected_open = 0
     latest_close_time = None
-
-    async with CeleryAsyncSessionLocal() as db:
-        for symbol, batch, error in fetched:
-            if error is not None or batch is None:
-                failures += 1
-                if db.in_transaction():
-                    await db.rollback()
-                await record_gate_state_error(
-                    db,
-                    symbol=symbol,
-                    timeframe=timeframe,
-                    observed_at=datetime.now(timezone.utc),
-                    error_code=type(error).__name__ if error else "EmptyBatch",
-                    capture_contract_version=contract["capture_contract_version"],
-                )
-                logger.error(
-                    "[OHLCV-STATE-SHADOW][FAILED] symbol=%s timeframe=%s error=%s",
-                    symbol,
-                    timeframe,
-                    type(error).__name__ if error else "EmptyBatch",
-                )
-                continue
-
-            try:
-                inserted_now, live_now = await persist_gate_state_batch(
-                    db,
-                    batch,
-                    capture_contract_version=contract["capture_contract_version"],
-                    closed_table=contract["closed_table"],
-                )
-            except Exception as exc:
-                failures += 1
-                if db.in_transaction():
-                    await db.rollback()
-                await record_gate_state_error(
-                    db,
-                    symbol=symbol,
-                    timeframe=timeframe,
-                    observed_at=datetime.now(timezone.utc),
-                    error_code=type(exc).__name__,
-                    capture_contract_version=contract["capture_contract_version"],
-                )
-                logger.exception(
-                    "[OHLCV-STATE-SHADOW][PERSIST-FAILED] symbol=%s timeframe=%s",
-                    symbol,
-                    timeframe,
-                )
-                continue
-
-            successes += 1
-            received_closed += len(batch.records)
-            received_live += len(batch.live_records)
-            inserted_closed += inserted_now
-            upserted_live += live_now
-            rejected_open += batch.rejected_open_candles
-            if batch.latest_close_time is not None:
-                latest_close_time = max(
-                    latest_close_time or batch.latest_close_time,
-                    batch.latest_close_time,
-                )
-            ohlcv_metrics.record_received(symbol, timeframe, len(batch.records))
-            ohlcv_metrics.record_persisted(symbol, timeframe, inserted_now)
-            if batch.availability_lag_seconds is not None:
-                ohlcv_metrics.record_latest_age(
-                    symbol, timeframe, batch.availability_lag_seconds
-                )
+    for result in results:
+        if not result["ok"]:
+            failures += 1
+            continue
+        successes += 1
+        received_closed += result["received_closed"]
+        received_live += result["received_live"]
+        inserted_closed += result["inserted_closed"]
+        upserted_live += result["upserted_live"]
+        rejected_open += result["rejected_open"]
+        if result["latest_close_time"] is not None:
+            latest_close_time = max(
+                latest_close_time or result["latest_close_time"],
+                result["latest_close_time"],
+            )
 
     summary = {
         "mode": contract["mode"],

@@ -57,6 +57,17 @@ def capture_stage(row, *, cutoff, config, eligible_ids):
                 else 'EXCLUDED'
             )
             return {**result, 'stage': stage, 'reason': primary['reason'], 'impediments': impediments}
+        # No managed impediment found (proof valid, measurement ready, mature)
+        # yet the row is not (yet) in eligible_ids -- e.g. a lag on the
+        # canonical trainer query. The legacy checks below assume the
+        # non-managed contract shape (a 3-outcome allowlist that predates
+        # TRAILING_STOP/FLOW_STRUCTURE_EXIT, a barrier_contract_version field
+        # the managed contract does not use) and would misreport a clean
+        # managed capture as an incompatible outcome. Report the mismatch
+        # honestly instead of fabricating a false reason.
+        return {**result, 'stage': 'PENDING_CANONICAL_INCLUSION',
+                'reason': 'Sem impedimentos identificados pela política gerenciada; aguardando confirmação na população canônica do trainer.',
+                'impediments': []}
     if str(row['id']) in eligible_ids:
         result.update(stage='ELIGIBLE', reason='Incluída na população canônica do trainer.')
     elif row.get('lineage_status') != 'EXACT' or row.get('eligible_for_training') is not True:

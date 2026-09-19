@@ -200,6 +200,30 @@ def test_diagnostic_reports_every_concurrent_impediment_not_just_first(policy):
     assert result['stage'] == 'EXCLUDED'
 
 
+def test_managed_capture_with_no_impediments_is_not_misreported_as_incompatible_outcome(policy):
+    """Item 7 of the L3_PROFILE flow-evidence-gate fix (2026-09-18): a managed
+    capture that cleared every impediment (valid proof, ready measurement,
+    matured) but is not yet reflected in eligible_ids (e.g. a lag on the
+    canonical trainer query) used to fall through to a legacy outcome
+    allowlist ('TP_HIT','SL_HIT','TIMEOUT') that predates TRAILING_STOP and
+    FLOW_STRUCTURE_EXIT as valid managed outcomes -- misreporting it as
+    EXCLUDED for an incompatible outcome the managed contract explicitly
+    allows (l3_managed_exit.OUTCOMES).
+    """
+    from app.services.l3_capture_diagnostics import capture_stage
+    shadow, _, cfg = scenario(policy, kind='TRAILING_STOP')
+    cfg['ml_maturity_embargo_margin_minutes'] = 0
+    row = dict(
+        id='trailing-capture', config_snapshot=shadow.config_snapshot,
+        entry_timestamp=T, outcome='TRAILING_STOP',
+        measurement_status='READY', entry_quality='OK',
+        managed_label={'valid': True, 'label_available_at': None},
+    )
+    result = capture_stage(row, cutoff=T + timedelta(days=2), config=cfg, eligible_ids=set())
+    assert result['stage'] != 'EXCLUDED', result
+    assert 'fora do contrato' not in (result['reason'] or ''), result
+
+
 @pytest.mark.asyncio
 async def test_flow_evidence_detail_names_the_specific_threshold_broken():
     """The generic INCOMPLETE_FLOW_EVIDENCE code hides which policy limit was
