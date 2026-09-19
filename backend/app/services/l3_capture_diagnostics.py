@@ -40,9 +40,17 @@ def capture_stage(row, *, cutoff, config, eligible_ids):
                 'reason': f"Medição canônica ausente ou incompleta (status={row.get('measurement_status') or 'AUSENTE'}, "
                           f"entry_quality={row.get('entry_quality') or 'AUSENTE'}).",
             })
+        # A position that closes early (TP/trailing-stop) has its outcome
+        # certified the moment it closes -- label_available_at already
+        # reflects that. Flooring maturity at entry+max_holding_seconds (the
+        # position's max allowed duration, a CENSORED_OR_INVALID_HORIZON cap
+        # enforced elsewhere, not an artificial per-row wait) used to make
+        # every early closer wait out the full horizon anyway, for no reason
+        # tied to the label itself. Falls back to entry_timestamp only when
+        # the label was never certified (MANAGED_LABEL_INVALID already covers
+        # that case as the primary impediment).
         label_available_at = at(proof['label_available_at']) if proof.get('label_available_at') else None
-        horizon = row['entry_timestamp'] + timedelta(seconds=spec['max_holding_seconds'])
-        mature = max(horizon, label_available_at or horizon) + timedelta(minutes=int(config['ml_maturity_embargo_margin_minutes']))
+        mature = (label_available_at or row['entry_timestamp']) + timedelta(minutes=int(config['ml_maturity_embargo_margin_minutes']))
         if mature > cutoff:
             impediments.append({
                 'code': 'AWAITING_MATURITY',

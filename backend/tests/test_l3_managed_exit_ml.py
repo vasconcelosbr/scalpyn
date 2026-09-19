@@ -139,8 +139,14 @@ async def test_managed_loader_population_is_segregated_and_mature(policy):
     await MLChallengerService()._load_shadow_data(db,'user',30,['L3'],dataset_valid_from=T,
         dataset_query_cutoff=T+timedelta(days=2),maturity_embargo_margin_minutes=60,managed_contract=definition(cfg))
     sql=str(db.execute.call_args.args[0]);params=db.execute.call_args.args[1]
-    for invariant in ["label_contract_version=:managed_version","'TRAILING_STOP'","'FLOW_STRUCTURE_EXIT'","smr.status = 'READY'",'GREATEST(entry_timestamp',"'ml_label'->>'valid'='true'",'completed_at <= :dataset_query_cutoff']:
+    for invariant in ["label_contract_version=:managed_version","'TRAILING_STOP'","'FLOW_STRUCTURE_EXIT'","smr.status = 'READY'",
+                       'label_resolved_at + make_interval','completed_at <= :dataset_query_cutoff']:
         assert invariant in sql
+    # An early closer (TP/trailing-stop) is certified the moment it closes;
+    # maturity must key off that resolution time, not off the position's max
+    # allowed duration (managed_horizon still gates holding_seconds <=, a
+    # separate correctness check, not a per-row maturity wait).
+    assert 'GREATEST(entry_timestamp' not in sql
     assert params['managed_hash']==definition(cfg)['hash']
     assert params['managed_horizon']==86400
 
@@ -222,6 +228,33 @@ def test_managed_capture_with_no_impediments_is_not_misreported_as_incompatible_
     result = capture_stage(row, cutoff=T + timedelta(days=2), config=cfg, eligible_ids=set())
     assert result['stage'] != 'EXCLUDED', result
     assert 'fora do contrato' not in (result['reason'] or ''), result
+
+
+def test_early_closer_matures_from_resolution_time_not_full_horizon(policy):
+    """User-requested correction (2026-09-19): a position that resolves fast
+    (TP/trailing-stop) is certified the moment it closes -- label_available_at
+    already reflects that. Flooring maturity at entry+max_holding_seconds (the
+    24h contract horizon) made every early closer wait out the full horizon
+    regardless of how quickly its label was actually confirmed. Maturity must
+    key off label_available_at + embargo alone.
+    """
+    from app.services.l3_capture_diagnostics import capture_stage
+    shadow, rows, cfg = scenario(policy, kind='TP_HIT')
+    checked_at = T + timedelta(minutes=90)
+    proof = certify(shadow, rows, None, checked_at=checked_at)
+    assert proof['valid'], proof
+    cfg['ml_maturity_embargo_margin_minutes'] = 60
+    row = dict(id='fast', config_snapshot=shadow.config_snapshot, entry_timestamp=T,
+               outcome=shadow.outcome, measurement_status='READY', entry_quality='OK',
+               managed_label=proof)
+    mature_at = checked_at + timedelta(minutes=60)
+    just_before = capture_stage(row, cutoff=mature_at - timedelta(minutes=1), config=cfg, eligible_ids=set())
+    assert just_before['stage'] == 'AWAITING_MATURITY', just_before
+    just_after = capture_stage(row, cutoff=mature_at + timedelta(minutes=1), config=cfg, eligible_ids=set())
+    assert just_after['stage'] != 'AWAITING_MATURITY', just_after
+    # Nowhere near entry + the 24h max_holding_seconds horizon -- proves the
+    # wait no longer floors at the full contract horizon.
+    assert mature_at < T + timedelta(hours=24)
 
 
 @pytest.mark.asyncio
