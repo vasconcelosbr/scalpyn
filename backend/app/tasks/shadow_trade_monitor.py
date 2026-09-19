@@ -1205,12 +1205,27 @@ async def _record_simulation_one_async(shadow_id: Any) -> None:
         )
 
     # ── TX3 — append-only canonical measurement revision ───────────────
-    try:
-        from ..services.shadow_trade_measurement_service import (
-            build_measurement_revision,
-            persist_measurement_revision,
-        )
+    await _record_measurement_one_async(shadow_id)
 
+
+async def _record_measurement_one_async(shadow_id: Any) -> None:
+    """TX3 — append-only canonical measurement revision, isolated session.
+
+    S3 (2026-09-17 shadow-trade collapse fix): extracted so every closure
+    path (legacy price-monitor via ``_record_simulation_one_async`` above,
+    and L3 continuation via ``shadow_l3_continuation._sweep``) generates the
+    measurement the same way, instead of only the legacy path doing it.
+    Best-effort and idempotent by input identity: a failure here leaves the
+    shadow's already-committed closure untouched, and the shadow becomes
+    eligible for ``_reconcile_pending_measurements_async``'s recovery scan.
+    """
+    from ..database import CeleryAsyncSessionLocal
+    from ..services.shadow_trade_measurement_service import (
+        build_measurement_revision,
+        persist_measurement_revision,
+    )
+
+    try:
         async with CeleryAsyncSessionLocal() as db_measurement:
             async with db_measurement.begin():
                 result = await db_measurement.execute(
@@ -1237,7 +1252,7 @@ async def _record_simulation_one_async(shadow_id: Any) -> None:
                 await persist_measurement_revision(db_measurement, revision)
     except Exception:
         logger.warning(
-            "[shadow-monitor] _record_simulation_one_async TX3 (measurement) "
+            "[shadow-monitor] _record_measurement_one_async TX3 (measurement) "
             "falhou para shadow_id=%s — revisão fica pendente para o reconciliador",
             shadow_id,
             exc_info=True,
@@ -1245,7 +1260,17 @@ async def _record_simulation_one_async(shadow_id: Any) -> None:
 
 
 async def _reconcile_pending_measurements_async() -> dict[str, int]:
-    """Retry PENDING revisions after their exit-boundary candle can close."""
+    """Retry PENDING revisions, and recover L3-managed closures with NONE.
+
+    S3 (2026-09-17 shadow-trade collapse fix): a shadow whose measurement
+    generation never ran at all (e.g. the L3 continuation closure path did
+    not call it before this fix) has zero rows in
+    shadow_trade_measurement_revisions -- the PENDING-only scan below never
+    selects it, since ``DISTINCT ON`` requires at least one existing row.
+    The second query recovers exactly that population, scoped to L3 managed
+    -exit captures (never a blanket historical backfill) and batched oldest
+    -first so no capture is starved indefinitely.
+    """
     from ..database import CeleryAsyncSessionLocal
     from ..models.shadow_trade_measurement import ShadowTradeMeasurementRevision
     from ..services.shadow_trade_measurement_service import (
@@ -1253,7 +1278,7 @@ async def _reconcile_pending_measurements_async() -> dict[str, int]:
         persist_measurement_revision,
     )
 
-    result_counts = {"selected": 0, "inserted": 0, "errors": 0}
+    result_counts = {"selected": 0, "inserted": 0, "errors": 0, "never_measured": 0}
     try:
         async with CeleryAsyncSessionLocal() as db_select:
             pending_ids = list(
@@ -1277,8 +1302,30 @@ async def _reconcile_pending_measurements_async() -> dict[str, int]:
                     )
                 ).scalars()
             )
-        result_counts["selected"] = len(pending_ids)
-        for shadow_id in pending_ids:
+            never_measured_ids = list(
+                (
+                    await db_select.execute(
+                        text(
+                            """
+                            SELECT st.id
+                              FROM shadow_trades st
+                             WHERE st.status = 'COMPLETED' AND st.source = 'L3'
+                               AND COALESCE(st.config_snapshot, '{}'::jsonb) ? 'l3_managed_ml'
+                               AND NOT EXISTS (
+                                 SELECT 1 FROM shadow_trade_measurement_revisions r
+                                  WHERE r.shadow_trade_id = st.id
+                               )
+                             ORDER BY st.completed_at ASC NULLS LAST
+                             LIMIT :batch_size
+                            """
+                        ),
+                        {"batch_size": SHADOW_MONITOR_BATCH_SIZE},
+                    )
+                ).scalars()
+            )
+        result_counts["never_measured"] = len(never_measured_ids)
+        result_counts["selected"] = len(pending_ids) + len(never_measured_ids)
+        for shadow_id in [*pending_ids, *never_measured_ids]:
             try:
                 async with CeleryAsyncSessionLocal() as db_measurement:
                     async with db_measurement.begin():

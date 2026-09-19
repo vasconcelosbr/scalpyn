@@ -1,9 +1,21 @@
 """Canonical resolution of the live Spot pipeline and its current L3 candidates.
 
-This module deliberately reads ``pipeline_watchlist_assets`` rather than
-``shadow_trades``.  A watchlist represents the opportunity *now*; an open
+The L3 symbol universe is read from the L2 parent's ``pipeline_watchlist_assets``
+row, not the L3 watchlist's own (spot L3 is never written there in the normal
+scan cycle -- authorization flows through ``decisions_log``/the outbox
+instead). This module also deliberately reads asset tables rather than
+``shadow_trades``: a watchlist represents the opportunity *now*; an open
 Shadow trade represents historical position follow-up and must not keep a
 symbol in the opportunity funnel after its indicators stop qualifying.
+
+The one exception is :func:`load_recently_authorized_l3_shadows` (2026-09-18,
+part 3): external systems polling the public feed (Consolidado / per-
+watchlist Approved) need a guaranteed minimum window to observe a listing,
+which the feature-freshness TTL alone cannot provide (as short as 60s for
+``live_trade_flow`` features). It is purely additive to the two display
+read paths and never affects entry authorization: shadow creation,
+consolidation, and outbox processing keep gating on the strict, unmodified
+``authorization_expiry()`` TTL everywhere else.
 """
 
 from __future__ import annotations
@@ -16,8 +28,10 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from ..models.backoffice import DecisionLog, L3AuthorizationOutbox
 from ..models.pipeline_watchlist import PipelineWatchlist, PipelineWatchlistAsset
 from ..models.profile import Profile
+from ..models.shadow_trade import ShadowTrade
 
 
 def _active_asset(model):
@@ -121,20 +135,23 @@ async def resolve_spot_pipeline_chain(
     )
 
 
-async def load_live_l3_candidates(
-    db: AsyncSession,
+def _l3_symbol_universe_statement(
     *,
     user_id: UUID,
     l2_watchlist_id: Optional[UUID] = None,
-) -> list[ConsolidatedL3Candidate]:
-    """Return current L3 opportunities, intersected with their live L2 parent.
+    l3_watchlist_id: Optional[UUID] = None,
+):
+    """Every symbol currently active in an L3 profile's live L2 parent.
 
-    The parent intersection is evaluated in the same read.  It closes the
-    short cascade window in which a symbol has already left L2 but a previous
-    L3 snapshot has not yet been marked ``down``.  Only active profiles are
-    eligible.  Open Shadow trades are intentionally absent from this query.
+    Anchored on the L2 asset (confirmed live-maintained on every read), not on
+    the L3 watchlist's own ``pipeline_watchlist_assets`` row: nothing writes
+    that row for spot L3 in the normal scan cycle (L3 authorization flows
+    through ``decisions_log``/the outbox instead), so anchoring there made
+    this query -- and every one of its callers -- structurally always empty.
+    The POOL/L1 intersection still guards against the short cascade window in
+    which a symbol has already left an upstream level but a snapshot has not
+    yet been marked ``down``. Only active profiles are eligible.
     """
-
     l2_watchlist = aliased(PipelineWatchlist)
     l2_asset = aliased(PipelineWatchlistAsset)
     l1_watchlist = aliased(PipelineWatchlist)
@@ -146,21 +163,18 @@ async def load_live_l3_candidates(
     pool_profile = aliased(Profile)
     statement = (
         select(
-            PipelineWatchlistAsset.id.label("asset_id"),
-            PipelineWatchlistAsset.watchlist_id.label("watchlist_id"),
+            l2_asset.id.label("asset_id"),
+            PipelineWatchlist.id.label("watchlist_id"),
             PipelineWatchlist.profile_id.label("profile_id"),
             Profile.name.label("profile_name"),
             Profile.profile_version.label("profile_version"),
             PipelineWatchlist.filters_json.label("watchlist_filters"),
-            PipelineWatchlistAsset.symbol.label("symbol"),
-            PipelineWatchlistAsset.alpha_score.label("alpha_score"),
-            PipelineWatchlistAsset.current_price.label("current_price"),
-            PipelineWatchlistAsset.refreshed_at.label("refreshed_at"),
+            l2_asset.symbol.label("symbol"),
+            l2_asset.alpha_score.label("alpha_score"),
+            l2_asset.current_price.label("current_price"),
+            l2_asset.refreshed_at.label("refreshed_at"),
         )
-        .join(
-            PipelineWatchlist,
-            PipelineWatchlist.id == PipelineWatchlistAsset.watchlist_id,
-        )
+        .select_from(PipelineWatchlist)
         .join(Profile, Profile.id == PipelineWatchlist.profile_id)
         .join(
             l2_watchlist,
@@ -175,7 +189,6 @@ async def load_live_l3_candidates(
             l2_asset,
             and_(
                 l2_asset.watchlist_id == l2_watchlist.id,
-                l2_asset.symbol == PipelineWatchlistAsset.symbol,
                 _active_asset(l2_asset),
             ),
         )
@@ -200,7 +213,7 @@ async def load_live_l3_candidates(
             l1_asset,
             and_(
                 l1_asset.watchlist_id == l1_watchlist.id,
-                l1_asset.symbol == PipelineWatchlistAsset.symbol,
+                l1_asset.symbol == l2_asset.symbol,
                 _active_asset(l1_asset),
             ),
         )
@@ -225,7 +238,7 @@ async def load_live_l3_candidates(
             pool_asset,
             and_(
                 pool_asset.watchlist_id == pool_watchlist.id,
-                pool_asset.symbol == PipelineWatchlistAsset.symbol,
+                pool_asset.symbol == l2_asset.symbol,
                 _active_asset(pool_asset),
             ),
         )
@@ -248,17 +261,31 @@ async def load_live_l3_candidates(
             pool_watchlist.auto_refresh.is_(True),
             Profile.user_id == user_id,
             Profile.is_active.is_(True),
-            _active_asset(PipelineWatchlistAsset),
         )
     )
     if l2_watchlist_id is not None:
         statement = statement.where(PipelineWatchlist.source_watchlist_id == l2_watchlist_id)
+    if l3_watchlist_id is not None:
+        statement = statement.where(PipelineWatchlist.id == l3_watchlist_id)
+    return statement
 
+
+async def load_live_l3_candidates(
+    db: AsyncSession,
+    *,
+    user_id: UUID,
+    l2_watchlist_id: Optional[UUID] = None,
+) -> list[ConsolidatedL3Candidate]:
+    """Return current L3 opportunities, intersected with their live L2 parent.
+
+    Open Shadow trades are intentionally absent from this query.
+    """
+    statement = _l3_symbol_universe_statement(user_id=user_id, l2_watchlist_id=l2_watchlist_id)
     rows = (await db.execute(statement)).mappings().all()
     from .l3_public_authorization import load_public_authorizations
     authorizations = await load_public_authorizations(db, user_id=user_id, candidates=rows)
     by_symbol: dict[str, list[LiveL3Contribution]] = {}
-    seen_asset_ids: set[UUID] = set()
+    seen_pairs: set[tuple] = set()
     for row in rows:
         authority = authorizations.get((row["watchlist_id"], row["symbol"]))
         if authority is None:
@@ -266,9 +293,10 @@ async def load_live_l3_candidates(
         minimum = float((row.get("watchlist_filters") or {}).get("min_alpha_score") or 0)
         if minimum > 0 and (authority["alpha_score"] is None or float(authority["alpha_score"]) < minimum):
             continue
-        if row["asset_id"] in seen_asset_ids:
+        pair = (row["watchlist_id"], row["symbol"])
+        if pair in seen_pairs:
             continue
-        seen_asset_ids.add(row["asset_id"])
+        seen_pairs.add(pair)
         contribution = LiveL3Contribution(
             asset_id=row["asset_id"],
             watchlist_id=row["watchlist_id"],
@@ -302,3 +330,142 @@ async def load_live_l3_candidates(
         )
 
     return sorted(consolidated, key=lambda item: item.symbol)
+
+
+async def load_live_l3_rejections(
+    db: AsyncSession,
+    *,
+    user_id: UUID,
+    l3_watchlist_id: UUID,
+) -> list[dict]:
+    """Symbols live-active in this L3 profile's L2 parent but not authorized.
+
+    The live complement of ``load_live_l3_candidates`` for a single L3
+    watchlist: same symbol universe, minus whatever is currently part of the
+    executable authorized population. Exists so the Rejected tab has a live
+    source too, instead of only the periodic batch snapshot in
+    ``pipeline_watchlist_rejections`` (which spot L3 is exempted from
+    refreshing on every read for the same reason POOL/L1/L2 are not: cost).
+    """
+    statement = _l3_symbol_universe_statement(user_id=user_id, l3_watchlist_id=l3_watchlist_id)
+    rows = (await db.execute(statement)).mappings().all()
+    if not rows:
+        return []
+    from .l3_public_authorization import load_public_authorizations
+    authorizations = await load_public_authorizations(db, user_id=user_id, candidates=rows)
+    seen_symbols: set[str] = set()
+    rejected: list[dict] = []
+    for row in rows:
+        symbol = str(row["symbol"]).upper()
+        if symbol in seen_symbols:
+            continue
+        seen_symbols.add(symbol)
+        if authorizations.get((row["watchlist_id"], row["symbol"])) is not None:
+            continue
+        rejected.append({
+            "symbol": symbol,
+            "profile_id": row["profile_id"],
+            "watchlist_id": row["watchlist_id"],
+        })
+    return rejected
+
+
+async def load_recently_authorized_l3_shadows(
+    db: AsyncSession,
+    *,
+    user_id: UUID,
+    floor_seconds: int,
+    l3_watchlist_id: Optional[UUID] = None,
+) -> list[LiveL3Contribution]:
+    """Shadows created within the last ``floor_seconds``, regardless of what
+    a LATER re-evaluation decided for the same (profile, symbol) pair.
+
+    ``load_public_authorizations`` only ever looks at the single latest
+    ``decisions_log`` row per (profile, symbol) -- a routine re-evaluation
+    minutes later landing on BLOCK/SUPPRESSED (the profile's filter
+    conditions simply no longer hold, which is normal and expected) silently
+    buries the original, already-confirmed authorization from public view.
+    Anchoring on the Shadow's own creation time sidesteps that entirely: it
+    does not care what happened after the shadow was created, so a
+    contribution surfaced here stays visible for the full floor regardless
+    of subsequent scan cycles. ``public_authorization(..., ignore_expiry=True)``
+    still enforces every other correctness check (contract hash, lineage,
+    outbox reconciliation) -- only the feature-freshness upper bound is
+    skipped, and only for this display-only read.
+    """
+    if floor_seconds <= 0:
+        return []
+    from datetime import datetime, timedelta, timezone
+
+    from .l3_public_authorization import public_authorization
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(seconds=floor_seconds)
+
+    l3_watchlist = aliased(PipelineWatchlist)
+    statement = (
+        select(
+            DecisionLog,
+            L3AuthorizationOutbox,
+            ShadowTrade,
+            l3_watchlist.id.label("watchlist_id"),
+            Profile.name.label("profile_name"),
+            Profile.profile_version.label("profile_version"),
+        )
+        .select_from(ShadowTrade)
+        .join(DecisionLog, DecisionLog.id == ShadowTrade.decision_id)
+        .outerjoin(L3AuthorizationOutbox, L3AuthorizationOutbox.decision_id == DecisionLog.id)
+        .join(
+            l3_watchlist,
+            and_(
+                l3_watchlist.profile_id == DecisionLog.profile_id,
+                l3_watchlist.user_id == user_id,
+                l3_watchlist.level == "L3",
+                l3_watchlist.market_mode == "spot",
+                l3_watchlist.auto_refresh.is_(True),
+            ),
+        )
+        .join(
+            Profile,
+            and_(
+                Profile.id == l3_watchlist.profile_id,
+                Profile.user_id == user_id,
+                Profile.is_active.is_(True),
+            ),
+        )
+        .where(
+            ShadowTrade.source == "L3",
+            ShadowTrade.created_at > cutoff,
+            DecisionLog.user_id == user_id,
+        )
+    )
+    if l3_watchlist_id is not None:
+        statement = statement.where(l3_watchlist.id == l3_watchlist_id)
+
+    rows = (await db.execute(statement)).all()
+    contributions: list[LiveL3Contribution] = []
+    seen_pairs: set[tuple] = set()
+    for decision, event, shadow, watchlist_id, profile_name, profile_version in rows:
+        pair = (watchlist_id, decision.symbol)
+        if pair in seen_pairs:
+            continue
+        auth = public_authorization(
+            decision, event, shadow,
+            watchlist_id=watchlist_id, profile_version=profile_version,
+            now=now, ignore_expiry=True,
+        )
+        if not auth or not auth.get("executable"):
+            continue
+        seen_pairs.add(pair)
+        contributions.append(LiveL3Contribution(
+            asset_id=shadow.id,
+            watchlist_id=watchlist_id,
+            profile_id=decision.profile_id,
+            profile_name=str(profile_name),
+            symbol=str(decision.symbol).upper(),
+            alpha_score=float(auth["alpha_score"]) if auth["alpha_score"] is not None else None,
+            current_price=float(auth["current_price"]) if auth["current_price"] is not None else None,
+            refreshed_at=auth["evaluated_at"],
+            authorization=auth,
+        ))
+    return contributions

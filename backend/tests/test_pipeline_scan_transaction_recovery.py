@@ -29,17 +29,25 @@ def test_watchlist_failure_is_isolated_and_does_not_abort_the_scan():
     shared-session ``await db.rollback()`` dance, which is gone by design:
     an isolated per-watchlist session needs no explicit rollback to
     protect its siblings.
+
+    2026-09-18: watchlists within a stage now run concurrently
+    (``asyncio.gather`` in ``_run_stage_watchlists``), so isolation matters
+    even more -- ``_run_one_watchlist_safely`` must swallow every failure
+    itself (never re-raise) so one watchlist's exception cannot cancel its
+    siblings still running under the same ``gather``.
     """
     source = _pipeline_source()
     fn_idx = source.index("async def _process_one_watchlist")
-    fn_end = source.index("for stage in (*_PIPELINE_EXECUTION_ORDER", fn_idx)
+    fn_end = source.index("async def _run_one_watchlist_safely", fn_idx)
     fn_snippet = source[fn_idx:fn_end]
     assert "async with AsyncSessionLocal() as db:" in fn_snippet
 
-    idx = source.index('logger.exception("[PipelineScan] Error processing watchlist')
-    snippet = source[idx: idx + 400]
-    assert "continue" in snippet
-    assert "await db.rollback()" not in snippet
+    wrapper_idx = source.index("async def _run_one_watchlist_safely")
+    wrapper_end = source.index("async def _run_stage_watchlists", wrapper_idx)
+    wrapper_snippet = source[wrapper_idx:wrapper_end]
+    assert "await db.rollback()" not in wrapper_snippet
+    assert wrapper_snippet.count("stats[\"errors\"] += 1") == 2
+    assert "raise" not in wrapper_snippet
 
 
 def test_fail_closed_ml_exception_does_not_escape_as_sql_error():
