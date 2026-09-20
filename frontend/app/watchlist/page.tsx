@@ -1824,8 +1824,13 @@ function PipelineTab() {
     return () => window.clearInterval(interval);
   }, [loadSilent]);
 
-  function openCreate() { setModalWl({}); setShowModal(true); }
-  function openEdit(wl: PipelineWatchlist) { setModalWl(wl); setShowModal(true); }
+  // Profiles/pools/watchlists only refresh every WATCHLIST_POLL_MS in the
+  // background; a profile created on another page/tab just before opening
+  // this modal would otherwise be missing from its dropdowns for up to that
+  // long. `profiles` is passed down as a prop, so this refresh updates the
+  // already-open modal in place once it resolves -- no need to await it.
+  function openCreate() { setModalWl({}); setShowModal(true); void loadSilent(); }
+  function openEdit(wl: PipelineWatchlist) { setModalWl(wl); setShowModal(true); void loadSilent(); }
   function closeModal() { setShowModal(false); setModalWl(null); }
 
   async function handleSave(data: Partial<PipelineWatchlist>) {
