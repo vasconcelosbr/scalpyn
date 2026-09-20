@@ -573,7 +573,7 @@ export function WatchlistDecisionTable({
                     {isExpanded && (
                       <tr className="border-b border-[#1A2035] bg-[#06080E]">
                         <td colSpan={totalCols} className="p-4">
-                          <div className="grid gap-4 lg:grid-cols-2">
+                          <div className="grid grid-cols-1 gap-4">
                             <TraceSection
                               title="Block Rules"
                               items={item.details.evaluation_trace.filter((trace) => trace.type === "block_rule")}
@@ -742,7 +742,7 @@ function TraceSection({ title, items }: { title: string; items: DecisionTraceIte
                 <div className="mt-0.5 text-[10px] italic opacity-75">{intentLine}</div>
               )}
               <div className="mt-1 flex flex-wrap gap-3 text-[11px]">
-                <span>
+                <span className="break-all">
                   Current:{" "}
                   <span className="font-mono">
                     {skip && skip.currentText
@@ -750,7 +750,7 @@ function TraceSection({ title, items }: { title: string; items: DecisionTraceIte
                       : fmtValue(item.current_value)}
                   </span>
                 </span>
-                <span>
+                <span className="break-all">
                   {expectedLabel}:{" "}
                   <span className="font-mono">
                     {skip?.expectedOverride ?? (item.expected ?? "—")}

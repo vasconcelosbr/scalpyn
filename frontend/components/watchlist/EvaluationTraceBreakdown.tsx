@@ -92,7 +92,7 @@ export function EvaluationTraceBreakdown({
   const signals = items.filter((item) => item.type === 'signal');
 
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
+    <div className="grid grid-cols-1 gap-4">
       <TraceSection title="Block Rules" items={blockRules} emptyMessage={emptyMessage} />
       <TraceSection title="Filters" items={filters} emptyMessage={emptyMessage} />
       <TraceSection title="Entry Triggers" items={entryTriggers} emptyMessage={emptyMessage} />
@@ -168,7 +168,7 @@ function TraceSection({
                 <div className="mt-0.5 text-[10px] italic opacity-75">{intentLine}</div>
               )}
               <div className="mt-1 flex flex-wrap gap-3 text-[11px]">
-                <span>
+                <span className="break-all">
                   Current:{' '}
                   <span className="font-mono">
                     {skip && skip.currentText
@@ -176,7 +176,7 @@ function TraceSection({
                       : formatEvaluationTraceValue(item.current_value)}
                   </span>
                 </span>
-                <span>
+                <span className="break-all">
                   {expectedLabel}:{' '}
                   <span className="font-mono">
                     {skip?.expectedOverride ?? (item.expected ?? '—')}
