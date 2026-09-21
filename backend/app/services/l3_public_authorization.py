@@ -57,6 +57,18 @@ def authorization_expiry(contract):
     return min(deadlines) if deadlines else None
 
 
+# 2026-09-21: a symbol whose own signal is valid but whose consolidation was
+# suppressed only because a Shadow is ALREADY active for it (same symbol,
+# same direction) must stay visible and executable to public consumers —
+# they run their own execution/position tracking and lose a real, live
+# opportunity if Scalpyn's internal (single) Shadow bookkeeping hides it.
+# This is intentionally narrower than reverting S0.3: every OTHER suppression
+# reason (lower-priority same-candle candidate, rate limit, expired-after-lock)
+# still returns non-executable — only "another Shadow already covers this
+# exact opportunity" is treated as equivalent to having one.
+ACTIVE_TRADE_PROCESSING_RESULT = "SUPPRESSED/ACTIVE_TRADE_ALREADY_EXISTS"
+
+
 def public_authorization(decision, event, shadow, *, watchlist_id, profile_version=None, now=None,
                           ignore_expiry=False):
     now = now or datetime.now(timezone.utc)
@@ -94,10 +106,12 @@ def public_authorization(decision, event, shadow, *, watchlist_id, profile_versi
     if not ignore_expiry and now >= expiry:
         return None
     result = payload.get("processing_result")
-    if event.status == "PROCESSED" and result != "CREATED_OR_RECONCILED":
+    active_trade_covered = result == ACTIVE_TRADE_PROCESSING_RESULT and shadow is not None
+    if (event.status == "PROCESSED" and result != "CREATED_OR_RECONCILED"
+            and not active_trade_covered):
         return None
     shadow_status = (
-        "STARTED" if result == "CREATED_OR_RECONCILED" else
+        "STARTED" if result == "CREATED_OR_RECONCILED" or active_trade_covered else
         "RETRY" if event.status == "RETRY" else "PENDING"
     )
     if event.status not in {"PENDING", "RETRY", "PROCESSED"}:
@@ -144,10 +158,20 @@ async def load_public_authorizations(db, *, user_id, candidates):
     if not candidates:
         return {}
     pairs = {(item["profile_id"], item["symbol"]) for item in candidates}
+    # Exclude "PROFILE_CONSOLIDATION" rows from "latest": those are pure audit
+    # records (l3_trade_consolidation.py's own docstring — "Suppressed
+    # candidates are audit rows ... they never become shadow trades"), written
+    # with no l3_authorization_contract_v3 at all. Picking one as "latest"
+    # would always fail public_authorization()'s very first validity check,
+    # hiding a symbol whose real (contract-bearing) decision is still ALLOW.
+    # The real decision's OWN outbox event already carries the accurate
+    # processing_result ("SUPPRESSED/ACTIVE_TRADE_ALREADY_EXISTS" included) --
+    # see l3_authorization_outbox_service.py::_process_consolidation.
     latest = (
         select(DecisionLog.id)
         .where(DecisionLog.user_id == user_id,
-               tuple_(DecisionLog.profile_id, DecisionLog.symbol).in_(pairs))
+               tuple_(DecisionLog.profile_id, DecisionLog.symbol).in_(pairs),
+               DecisionLog.event_type != "PROFILE_CONSOLIDATION")
         .distinct(DecisionLog.profile_id, DecisionLog.symbol)
         .order_by(DecisionLog.profile_id, DecisionLog.symbol,
                   DecisionLog.created_at.desc(), DecisionLog.id.desc())
@@ -168,18 +192,51 @@ async def load_public_authorizations(db, *, user_id, candidates):
         (row.profile_id, row.symbol): (row, event, shadow)
         for row, event, shadow in rows
     }
+    # 2026-09-21: a decision suppressed only for ACTIVE_TRADE_ALREADY_EXISTS
+    # has no Shadow of its OWN (the join above matches on decision_id, and
+    # the covering Shadow belongs to an earlier decision) -- resolve the
+    # currently active one by (symbol, direction) instead, batched in one
+    # extra query so the common CREATED_OR_RECONCILED path pays nothing.
+    lookup_keys = {
+        (row.symbol, (row.direction or "SPOT").upper())
+        for row, event, shadow in rows
+        if shadow is None and event is not None
+        and (event.payload or {}).get("processing_result") == ACTIVE_TRADE_PROCESSING_RESULT
+    }
+    active_shadow_by_symbol_direction = {}
+    if lookup_keys:
+        active_rows = (await db.execute(
+            select(ShadowTrade).where(
+                ShadowTrade.user_id == user_id,
+                ShadowTrade.source == "L3",
+                ShadowTrade.status.in_(("PENDING", "RUNNING")),
+                tuple_(ShadowTrade.symbol, ShadowTrade.direction).in_(lookup_keys),
+            ).order_by(ShadowTrade.created_at.asc(), ShadowTrade.id.asc())
+        )).scalars().all()
+        for shadow_row in active_rows:
+            key = (shadow_row.symbol, (shadow_row.direction or "SPOT").upper())
+            active_shadow_by_symbol_direction.setdefault(key, shadow_row)
     result = {}
     now = datetime.now(timezone.utc)
     for item in candidates:
         pair = by_pair.get((item["profile_id"], item["symbol"]))
         if pair is None:
             continue
-        auth = public_authorization(*pair, watchlist_id=item["watchlist_id"],
+        row, event, shadow = pair
+        if (shadow is None and event is not None
+                and (event.payload or {}).get("processing_result") == ACTIVE_TRADE_PROCESSING_RESULT):
+            shadow = active_shadow_by_symbol_direction.get(
+                (row.symbol, (row.direction or "SPOT").upper())
+            )
+        auth = public_authorization(row, event, shadow, watchlist_id=item["watchlist_id"],
                                     profile_version=item.get("profile_version"), now=now)
         # S0.3: only a confirmed Shadow makes an opportunity part of the
         # executable population. PENDING/RETRY (contract valid, Shadow not
         # yet confirmed) are real states worth surfacing elsewhere for
         # tracking, but must never reach the list a consumer buys from.
+        # 2026-09-21: ACTIVE_TRADE_ALREADY_EXISTS is now also treated as
+        # "confirmed Shadow" -- it points at the Shadow already covering
+        # this exact (symbol, direction), just created by an earlier cycle.
         if auth and auth.get("executable"):
             result[(item["watchlist_id"], item["symbol"])] = auth
     return result
