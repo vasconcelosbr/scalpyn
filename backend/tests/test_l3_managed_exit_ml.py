@@ -100,6 +100,23 @@ def test_v2_policy_capture_stays_isolated_until_ml_contract_pins_new_hash(policy
     assert result2['capture_valid'] is True
 
 
+def test_hash_is_stable_across_int_and_float_numeric_representation(policy):
+    """A settings-form save that round-trips the whole ml config through JS
+    (no int/float distinction) can turn 0.0 into 0 on a field the user never
+    touched. That must not flip the contract hash -- it flipped it for real
+    on 2026-09-20, orphaning every shadow trade captured before the save from
+    the L3_PROFILE training population despite an unchanged economic
+    contract (0% slippage either way).
+    """
+    base = dict(version=VERSION, policy_hash=policy.digest(), trailing_hash=digest({}),
+                barrier_contract_version='shadow_atr_dynamic_v3')
+    as_float = definition({KEY: {**base, 'fee_roundtrip_pct': .2, 'slippage_roundtrip_pct': 0.0,
+                                  'max_holding_seconds': 86400}})
+    as_int = definition({KEY: {**base, 'fee_roundtrip_pct': .2, 'slippage_roundtrip_pct': 0,
+                                'max_holding_seconds': 86400}})
+    assert as_float['hash'] == as_int['hash']
+
+
 def test_new_contract_does_not_change_other_lanes_or_old_snapshots(policy):
     shadow,rows,cfg=scenario(policy)
     assert freeze(shadow.config_snapshot,cfg,source='L1_SPECTRUM',capture_valid=True) is None
