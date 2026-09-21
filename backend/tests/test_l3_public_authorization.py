@@ -129,6 +129,12 @@ async def test_latest_block_is_not_filtered_out_before_latest_decision_selection
     sql = str(db.execute.call_args.args[0].compile(dialect=postgresql.dialect()))
     assert "DISTINCT ON" in sql and "created_at DESC" in sql
     assert "decision =" not in sql
+    # 2026-09-21: PROFILE_CONSOLIDATION rows are pure audit records with no
+    # contract -- excluded from "latest" so a real ALLOW decision is never
+    # masked by its own later suppression audit row.
+    sql_literal = str(db.execute.call_args.args[0].compile(
+        dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    assert "event_type != 'PROFILE_CONSOLIDATION'" in sql_literal
 
 
 @pytest.mark.asyncio
@@ -155,6 +161,91 @@ async def test_load_public_authorizations_excludes_pending_and_includes_started(
     entry = result_started[(wl, decision.symbol)]
     assert entry["executable"] is True
     assert entry["shadow_id"] == str(confirmed_shadow.id)
+
+
+def test_active_trade_already_exists_is_executable_with_a_shadow():
+    """2026-09-21: a symbol suppressed only because a Shadow already covers
+    this (symbol, direction) must stay executable -- external consumers run
+    their own execution tracking and must not lose a live opportunity just
+    because Scalpyn's own single-Shadow bookkeeping already has a position."""
+    now, wl, decision, event, _shadow, body = objects()
+    event.status = "PROCESSED"
+    event.payload["processing_result"] = "SUPPRESSED/ACTIVE_TRADE_ALREADY_EXISTS"
+
+    # No shadow resolved (e.g. it closed between queries) -- fail closed, same
+    # as any other PROCESSED-but-not-CREATED_OR_RECONCILED outcome.
+    assert public_authorization(decision, event, None, watchlist_id=wl, now=now) is None
+
+    covering_shadow = Obj(id=uuid4())
+    auth = public_authorization(decision, event, covering_shadow, watchlist_id=wl, now=now)
+    assert auth is not None
+    assert auth["shadow_status"] == "STARTED"
+    assert auth["shadow_id"] == str(covering_shadow.id)
+    assert auth["executable"] is True
+    assert auth["shadow_reason"] == "SUPPRESSED/ACTIVE_TRADE_ALREADY_EXISTS"
+
+
+def test_other_suppression_reasons_stay_non_executable_even_with_a_shadow():
+    """Only ACTIVE_TRADE_ALREADY_EXISTS gets this treatment -- a same-candle
+    lower-priority candidate, a rate-limited capture, or an expired-after-lock
+    contract must never become executable, even if some unrelated Shadow for
+    the same (symbol, direction) happens to exist."""
+    now, wl, decision, event, _shadow, body = objects()
+    event.status = "PROCESSED"
+    unrelated_shadow = Obj(id=uuid4())
+    for reason in (
+        "SUPPRESSED/SAME_SYMBOL_LOWER_PRIORITY",
+        "SUPPRESSED/REJECTED_CAPTURE_RATE_LIMIT",
+        "SUPPRESSED/AUTHORIZATION_EXPIRED_AFTER_LOCK",
+    ):
+        event.payload["processing_result"] = reason
+        assert public_authorization(
+            decision, event, unrelated_shadow, watchlist_id=wl, now=now
+        ) is None
+
+
+@pytest.mark.asyncio
+async def test_load_public_authorizations_resolves_active_trade_shadow_by_symbol():
+    """The DB join matches Shadow.decision_id == DecisionLog.id, which is
+    always NULL for an ACTIVE_TRADE_ALREADY_EXISTS decision (the covering
+    Shadow belongs to an earlier decision) -- load_public_authorizations must
+    fall back to a (symbol, direction) lookup instead of leaving it excluded.
+    """
+    now, wl, decision, event, _shadow, body = objects()
+    event.status = "PROCESSED"
+    event.payload["processing_result"] = "SUPPRESSED/ACTIVE_TRADE_ALREADY_EXISTS"
+    candidates = [{
+        "profile_id": decision.profile_id, "symbol": decision.symbol, "watchlist_id": wl,
+    }]
+    covering_shadow = Obj(id=uuid4(), symbol=decision.symbol, direction="SPOT")
+    decision.direction = None  # defaults to SPOT on both sides of the lookup
+
+    db = Obj(execute=AsyncMock(side_effect=[
+        Obj(all=lambda: [(decision, event, None)]),
+        Obj(scalars=lambda: Obj(all=lambda: [covering_shadow])),
+    ]))
+    result = await load_public_authorizations(db, user_id=uuid4(), candidates=candidates)
+    entry = result[(wl, decision.symbol)]
+    assert entry["executable"] is True
+    assert entry["shadow_id"] == str(covering_shadow.id)
+    # Second call only happens because a lookup key existed -- assert it ran.
+    assert db.execute.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_load_public_authorizations_skips_no_active_shadow_lookup_when_unneeded():
+    """The common CREATED_OR_RECONCILED path (a real confirmed Shadow already
+    joined) must not pay for the extra fallback query at all."""
+    now, wl, decision, event, _shadow, body = objects()
+    event.status, event.payload["processing_result"] = "PROCESSED", "CREATED_OR_RECONCILED"
+    confirmed_shadow = Obj(id=uuid4())
+    candidates = [{
+        "profile_id": decision.profile_id, "symbol": decision.symbol, "watchlist_id": wl,
+    }]
+    db = Obj(execute=AsyncMock(return_value=Obj(all=lambda: [(decision, event, confirmed_shadow)])))
+    result = await load_public_authorizations(db, user_id=uuid4(), candidates=candidates)
+    assert result[(wl, decision.symbol)]["executable"] is True
+    assert db.execute.await_count == 1
 
 
 @pytest.mark.asyncio
