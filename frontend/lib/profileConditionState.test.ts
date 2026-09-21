@@ -6,6 +6,8 @@ import {
   normalizeProfileRuleCondition,
   prepareProfileBlockRuleIdentities,
   prepareProfileEntryTriggerIdentities,
+  prepareProfileFilterIdentities,
+  prepareProfileSignalIdentities,
   profileConditionManualUpdates,
   profileConditionPrimaryIndicator,
   profileSourcePoliciesForEditor,
@@ -237,6 +239,55 @@ test("new Entry Trigger receives governed OHLCV identity before save", () => {
     {
       id: "entry-new", type: "threshold", indicator: "rsi",
       operator: "between", min: 52, max: 72, required: true, enabled: true,
+      source: "ohlcv", source_provider: "gate.io",
+      provider_policy_id: "spot_gate_closed_ohlcv_v1",
+      max_age_seconds: 360, timeframe: "5m", candle_policy: "CLOSED_ONLY",
+      period: 14,
+    },
+  );
+});
+
+test("new Signal condition receives governed live_trade_flow identity before save (regression: SOURCE_REQUIRED on taker_ratio)", () => {
+  const prepared = prepareProfileSignalIdentities({
+    default_timeframe: "5m",
+    signals: {
+      conditions: [{
+        id: "signal-taker", type: "threshold", indicator: "taker_ratio",
+        operator: ">=", value: 0.6, required: false, enabled: true,
+      }],
+    },
+  }, SOURCE_POLICIES);
+
+  assert.deepEqual(prepared.issues, []);
+  assert.deepEqual(
+    prepared.config.signals.conditions[0],
+    {
+      id: "signal-taker", type: "threshold", indicator: "taker_ratio",
+      operator: ">=", value: 0.6, required: false, enabled: true,
+      source: "live_trade_flow", source_provider: "gate_trades_ws_spot",
+      provider_policy_id: "spot_gate_trade_flow_v1",
+      max_age_seconds: 30, window_seconds: 60,
+    },
+  );
+});
+
+test("new Filter condition receives governed OHLCV identity before save", () => {
+  const prepared = prepareProfileFilterIdentities({
+    default_timeframe: "5m",
+    filters: {
+      conditions: [{
+        id: "filter-new", type: "threshold", indicator: "rsi",
+        operator: "between", min: 20, max: 80, required: true, enabled: true,
+      }],
+    },
+  }, SOURCE_POLICIES);
+
+  assert.deepEqual(prepared.issues, []);
+  assert.deepEqual(
+    prepared.config.filters.conditions[0],
+    {
+      id: "filter-new", type: "threshold", indicator: "rsi",
+      operator: "between", min: 20, max: 80, required: true, enabled: true,
       source: "ohlcv", source_provider: "gate.io",
       provider_policy_id: "spot_gate_closed_ohlcv_v1",
       max_age_seconds: 360, timeframe: "5m", candle_policy: "CLOSED_ONLY",

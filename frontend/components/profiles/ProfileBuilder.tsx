@@ -19,6 +19,8 @@ import {
   normalizeProfileRuleCondition,
   prepareProfileBlockRuleIdentities,
   prepareProfileEntryTriggerIdentities,
+  prepareProfileFilterIdentities,
+  prepareProfileSignalIdentities,
   profileSourcePoliciesForEditor,
   serializeProfileEditorConfig,
   withoutProfileFeatureIdentity,
@@ -558,16 +560,25 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
     if (requiresEntryFeatureIdentity) {
       const policies = profileSourcePoliciesForEditor(spotEngineConfig, profile?.profile_type, profileRole);
       const currentConfig = normalizeProfileConfig(profile?.config);
-      const preparedTriggers = prepareProfileEntryTriggerIdentities(
+      const preparedFilters = prepareProfileFilterIdentities(
         configForSave, policies, currentConfig,
+      );
+      const preparedSignals = prepareProfileSignalIdentities(
+        preparedFilters.config, policies, currentConfig,
+      );
+      const preparedTriggers = prepareProfileEntryTriggerIdentities(
+        preparedSignals.config, policies, currentConfig,
       );
       const preparedBlocks = prepareProfileBlockRuleIdentities(
         preparedTriggers.config, policies, currentConfig,
       );
-      const issues = [...preparedTriggers.issues, ...preparedBlocks.issues];
+      const issues = [
+        ...preparedFilters.issues, ...preparedSignals.issues,
+        ...preparedTriggers.issues, ...preparedBlocks.issues,
+      ];
       if (issues.length > 0) {
         alert(
-          "Não foi possível identificar a fonte governada de todos os Entry Triggers/Block Rules. "
+          "Não foi possível identificar a fonte governada de todas as Filters/Signals/Entry Triggers/Block Rules. "
           + "Revise as políticas de proveniência do Spot Engine antes de salvar:\n"
           + issues.slice(0, 8).join("\n"),
         );
