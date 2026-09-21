@@ -416,6 +416,72 @@ export function prepareProfileEntryTriggerIdentities<T extends Record<string, an
 }
 
 /**
+ * Complete hidden feature identity for Filters from governed DB config,
+ * mirroring prepareProfileEntryTriggerIdentities.
+ */
+export function prepareProfileFilterIdentities<T extends Record<string, any>>(
+  config: T,
+  policies: ProfileSourcePolicies,
+  currentConfig?: Record<string, any> | null,
+): PreparedProfileEditorConfig<T> {
+  const issues: string[] = [];
+  const defaultTimeframe = String(config.default_timeframe || "");
+  const currentFeatureCounts = new Map<string, number>();
+  for (const condition of currentConfig?.filters?.conditions || []) {
+    const key = _conditionFeatureKey(condition);
+    currentFeatureCounts.set(key, (currentFeatureCounts.get(key) || 0) + 1);
+  }
+  const conditions = _materializeConditionIdentities(
+    config.filters?.conditions || [],
+    currentFeatureCounts,
+    policies,
+    defaultTimeframe,
+    "filters.conditions",
+    issues,
+  );
+  return {
+    config: {
+      ...config,
+      filters: { ...(config.filters || {}), conditions },
+    },
+    issues: [...new Set(issues)],
+  } as PreparedProfileEditorConfig<T>;
+}
+
+/**
+ * Complete hidden feature identity for Signals from governed DB config,
+ * mirroring prepareProfileEntryTriggerIdentities.
+ */
+export function prepareProfileSignalIdentities<T extends Record<string, any>>(
+  config: T,
+  policies: ProfileSourcePolicies,
+  currentConfig?: Record<string, any> | null,
+): PreparedProfileEditorConfig<T> {
+  const issues: string[] = [];
+  const defaultTimeframe = String(config.default_timeframe || "");
+  const currentFeatureCounts = new Map<string, number>();
+  for (const condition of currentConfig?.signals?.conditions || []) {
+    const key = _conditionFeatureKey(condition);
+    currentFeatureCounts.set(key, (currentFeatureCounts.get(key) || 0) + 1);
+  }
+  const conditions = _materializeConditionIdentities(
+    config.signals?.conditions || [],
+    currentFeatureCounts,
+    policies,
+    defaultTimeframe,
+    "signals.conditions",
+    issues,
+  );
+  return {
+    config: {
+      ...config,
+      signals: { ...(config.signals || {}), conditions },
+    },
+    issues: [...new Set(issues)],
+  } as PreparedProfileEditorConfig<T>;
+}
+
+/**
  * Complete hidden feature identity for Block Rules from governed DB config,
  * mirroring prepareProfileEntryTriggerIdentities. Existing debt is matched
  * by feature across the whole block_rules tree (not block position), since
