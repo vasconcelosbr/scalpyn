@@ -32,6 +32,16 @@ def definition(config):
             raise ValueError("invalid_l3_managed_exit_" + name)
     if not raw["barrier_contract_version"]:
         raise ValueError("missing_l3_managed_exit_barrier")
+    # int vs float carries no economic meaning here, but a raw JSON round-trip
+    # (e.g. an unrelated settings-form save that clones the whole config
+    # through JS, which has no int/float distinction) silently turns 0.0 into
+    # 0. digest() hashes the literal JSON token, so that alone changes the
+    # contract hash and orphans every previously captured row from the
+    # training population. Normalize before hashing so contract identity
+    # tracks economics, not incidental serialization.
+    raw = {**raw, "fee_roundtrip_pct": float(raw["fee_roundtrip_pct"]),
+           "slippage_roundtrip_pct": float(raw["slippage_roundtrip_pct"]),
+           "max_holding_seconds": int(raw["max_holding_seconds"])}
     return {**deepcopy(raw), "hash": digest(raw)}
 
 
