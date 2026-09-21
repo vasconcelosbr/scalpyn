@@ -275,6 +275,10 @@ CELERY_LOGLEVEL="${CELERY_LOGLEVEL:-info}"
 #   - "microstructure,structural,execution"  (default — single-container dev)
 #   - "microstructure"                       (Cloud Run scalpyn-worker-micro)
 #   - "structural"                           (Cloud Run scalpyn-worker-structural)
+#   - "structural_collect"                   (Cloud Run scalpyn-worker-structural-collect,
+#                                             collect_market_data.collect_all only)
+#   - "structural_scan"                      (Cloud Run scalpyn-worker-structural-scan,
+#                                             pipeline_scan.scan only)
 #   - "execution"                            (Cloud Run scalpyn-worker-execution)
 #   - "research_ohlcv"                       (isolated 15m/1h collector/backfill)
 #   - "" (empty)                             (Cloud Run scalpyn API or scalpyn-beat
@@ -316,11 +320,27 @@ RUN_BEAT="${RUN_BEAT:-1}"
 # structural worker: collect_all acquires per-symbol locks; 2 concurrent
 # tasks = guaranteed lock contention when pool_coins has >1 symbol.
 # micro worker: similar pattern with 5m indicators.
+#
+# 2026-09-21 — collect_all and pipeline_scan.scan moved to their own
+# dedicated queues/services (structural_collect, structural_scan), each
+# still concurrency=1 for the same reason as before (collect_all's
+# per-symbol lock; pipeline_scan's own long runtime). The remaining
+# scalpyn-worker-structural now only carries ~20 much lighter, short-lived
+# tasks with no known lock-contention concern among themselves, so it
+# defaults to 2 instead of 1 — a conservative bump, not "no limit".
 if [ -z "${CELERY_CONCURRENCY+x}" ]; then
     case "${K_SERVICE:-}" in
         scalpyn-worker-structural)
+            CELERY_CONCURRENCY=2
+            echo "==> [concurrency] K_SERVICE=scalpyn-worker-structural — defaulting CELERY_CONCURRENCY=2 (collect_all/pipeline_scan.scan now isolated elsewhere)"
+            ;;
+        scalpyn-worker-structural-collect)
             CELERY_CONCURRENCY=1
-            echo "==> [concurrency] K_SERVICE=scalpyn-worker-structural — defaulting CELERY_CONCURRENCY=1 (prevents concurrent collect_all lock contention)"
+            echo "==> [concurrency] K_SERVICE=scalpyn-worker-structural-collect — defaulting CELERY_CONCURRENCY=1 (prevents concurrent collect_all lock contention)"
+            ;;
+        scalpyn-worker-structural-scan)
+            CELERY_CONCURRENCY=1
+            echo "==> [concurrency] K_SERVICE=scalpyn-worker-structural-scan — defaulting CELERY_CONCURRENCY=1"
             ;;
         scalpyn-worker-micro)
             CELERY_CONCURRENCY=1
