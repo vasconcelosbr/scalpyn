@@ -276,7 +276,8 @@ CELERY_LOGLEVEL="${CELERY_LOGLEVEL:-info}"
 #   - "microstructure"                       (Cloud Run scalpyn-worker-micro)
 #   - "structural"                           (Cloud Run scalpyn-worker-structural)
 #   - "structural_collect"                   (Cloud Run scalpyn-worker-structural-collect,
-#                                             collect_market_data.collect_all only)
+#                                             collect_market_data.collect_all +
+#                                             radar_auto_discover.sync — 2026-09-21)
 #   - "structural_scan"                      (Cloud Run scalpyn-worker-structural-scan,
 #                                             pipeline_scan.scan only)
 #   - "execution"                            (Cloud Run scalpyn-worker-execution)
