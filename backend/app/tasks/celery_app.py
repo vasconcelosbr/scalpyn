@@ -6,15 +6,27 @@ Queue topology (Task #216, operator spec parts 4-6):
                           collect_5m → compute_5m. Bursty by design (one
                           tick every 5 min).
     structural          — Hourly+ cadence, universe maintenance + ops:
-                          collect_all, collect_structural_30m, pipeline_scan,
-                          discover, fetch_market_caps, macro_regime,
-                          simulation, symbol_health_audit, robust_alerts,
-                          daily_summary, decision_log_enricher,
+                          collect_structural_30m, discover, fetch_market_caps,
+                          macro_regime, simulation, symbol_health_audit,
+                          robust_alerts, daily_summary, decision_log_enricher,
                           trade_reconciliation, health_checks,
                           shadow_timeout_analyzer, ttt_analyzer, autopilot.
-                          pipeline_scan.scan stays here so a microstructure
-                          burst cannot delay the scan and a slow scan cannot
-                          starve the 5m chain.
+                          Concurrency > 1 is safe here — collect_all and
+                          pipeline_scan.scan, the two tasks that actually
+                          needed single-concurrency isolation, have their own
+                          dedicated queues below (2026-09-21 split: collect_all
+                          was being revoked/expired most cycles, starved by
+                          ~20 lighter tasks queued behind it and behind
+                          pipeline_scan's 169s+ runs, all serialized under one
+                          concurrency=1 worker).
+    structural_collect  — collect_market_data.collect_all only, concurrency=1.
+                          That concurrency cap exists solely to prevent
+                          collect_all lock contention with ITSELF; it must
+                          never share a worker with anything else again.
+    structural_scan     — pipeline_scan.scan only, concurrency=1. A single run
+                          takes 169s+ (56% of its own 300s cadence) — giving
+                          it a dedicated worker means its own slowness no
+                          longer throttles every other structural task.
     structural_compute  — Dedicated compute worker for heavy TA + scoring:
                           compute_30m, compute_structural_5m, compute_scores,
                           Isolated so a slow indicator pass
@@ -72,11 +84,18 @@ QUEUE_EXECUTION = "execution"
 QUEUE_AI_ORCHESTRATION = "ai_orchestration"
 QUEUE_RESEARCH_OHLCV = "research_ohlcv"
 QUEUE_PUMP_RADAR = "pump_radar"
+# 2026-09-21 — structural queue split (P0: collect_all + pipeline_scan.scan
+# starving ~20 other structural tasks behind a single concurrency=1 worker;
+# collect_all itself was being revoked/expired most cycles). Each gets its
+# own dedicated single-concurrency worker so neither can block the other or
+# the lighter, high-frequency tasks that stay on QUEUE_STRUCTURAL.
+QUEUE_STRUCTURAL_COLLECT = "structural_collect"
+QUEUE_STRUCTURAL_SCAN = "structural_scan"
 
 ALL_QUEUES = (
     QUEUE_MICROSTRUCTURE, QUEUE_STRUCTURAL, QUEUE_STRUCTURAL_COMPUTE,
     QUEUE_EXECUTION, QUEUE_AI_ORCHESTRATION, QUEUE_RESEARCH_OHLCV,
-    QUEUE_PUMP_RADAR,
+    QUEUE_PUMP_RADAR, QUEUE_STRUCTURAL_COLLECT, QUEUE_STRUCTURAL_SCAN,
 )
 
 _ALL_TASK_MODULES = (
@@ -164,7 +183,12 @@ TASK_ROUTES = {
     "app.tasks.compute_indicators.compute_5m":   {"queue": QUEUE_STRUCTURAL_COMPUTE},
 
     # Structural (hourly+ cadence, heavier work)
-    "app.tasks.collect_market_data.collect_all":         {"queue": QUEUE_STRUCTURAL},
+    # 2026-09-21 — moved off QUEUE_STRUCTURAL to its own single-concurrency
+    # worker. concurrency=1 here exists only to prevent collect_all lock
+    # contention with ITSELF; sharing that slot with ~20 other structural
+    # tasks was starving both collect_all (it was being revoked/expired most
+    # cycles) and everything queued behind it. See QUEUE_STRUCTURAL_COLLECT.
+    "app.tasks.collect_market_data.collect_all":         {"queue": QUEUE_STRUCTURAL_COLLECT},
     # Task #262 — structural 30m pipeline collector (stays structural so the
     # collect beat is never starved by a slow compute run on compute worker).
     "app.tasks.collect_structural_30m.run":              {"queue": QUEUE_STRUCTURAL},
@@ -190,7 +214,11 @@ TASK_ROUTES = {
     "app.tasks.crypto_ev_score.compute":                 {"queue": QUEUE_STRUCTURAL},
     # pipeline_scan.scan: structural per operator spec (cadence-locked
     # safety-net, must not compete with the bursty 5m chain).
-    "app.tasks.pipeline_scan.scan":                      {"queue": QUEUE_STRUCTURAL},
+    # 2026-09-21 — moved off the shared QUEUE_STRUCTURAL to its own worker:
+    # a single run takes 169s+ (56% of its own 300s cadence), which was
+    # single-handedly starving the ~20 other, much lighter structural tasks
+    # queued behind it under concurrency=1. See QUEUE_STRUCTURAL_SCAN.
+    "app.tasks.pipeline_scan.scan":                      {"queue": QUEUE_STRUCTURAL_SCAN},
     "app.tasks.auto_discover_assets.discover":           {"queue": QUEUE_STRUCTURAL},
     "app.tasks.radar_auto_discover.sync":                {"queue": QUEUE_STRUCTURAL},
     "app.tasks.fetch_market_caps.fetch_market_caps":     {"queue": QUEUE_STRUCTURAL},
