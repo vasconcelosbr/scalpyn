@@ -88,6 +88,9 @@ export default function PoolConfigPage() {
   const [autoRemove, setAutoRemove] = useState(false);
   const [notifyChanges, setNotifyChanges] = useState(false);
 
+  // Market Catalyst Radar settings (stored in pool.overrides)
+  const [radarEnabled, setRadarEnabled] = useState(false);
+
   // Discovery settings (stored in pool.overrides)
   const [maxAssets, setMaxAssets] = useState<number>(0);
 
@@ -157,6 +160,7 @@ export default function PoolConfigPage() {
       setAutoRemove(Boolean(ov.auto_remove));
       setNotifyChanges(Boolean(ov.notify_on_changes));
       setMaxAssets(Number(ov.max_assets) || 0);
+      setRadarEnabled(Boolean(ov.radar_enabled));
     } catch (e: any) {
       setError(e.message ?? "Failed to load pool.");
     }
@@ -188,6 +192,7 @@ export default function PoolConfigPage() {
             auto_remove: autoRemove,
             notify_on_changes: notifyChanges,
             max_assets: maxAssets,
+            radar_enabled: radarEnabled,
           },
         }),
       });
@@ -589,6 +594,40 @@ export default function PoolConfigPage() {
         </div>
       </div>
 
+      {/* ── Market Catalyst Radar ── */}
+      {marketType === "spot" && (
+        <div className="card">
+          <div className="card-header">
+            <h3>Market Catalyst Radar</h3>
+            <span style={{ fontSize: "12px", color: "var(--text-tertiary)" }}>
+              Sync top buy-pressure assets every 10 minutes
+            </span>
+          </div>
+          <div className="card-body space-y-3">
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={radarEnabled}
+                onClick={() => setRadarEnabled((v) => !v)}
+                className={`toggle ${radarEnabled ? "active" : ""}`}
+              >
+                <span className="knob" />
+              </button>
+              <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
+                Sync from Market Catalyst Radar every 10 min
+              </span>
+            </div>
+            <p style={{ fontSize: "12px", color: "var(--text-tertiary)", margin: 0 }}>
+              Adds/removes assets automatically based on the top buy-pressure
+              ranking from mdatahub. Requires a Market Catalyst Radar API key
+              configured under Settings → General → Provedores de Dados de
+              Mercado.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* ── Asset List ── */}
       <div className="card">
         <div className="card-header">
@@ -826,14 +865,16 @@ export default function PoolConfigPage() {
                   </td>
                   <td>
                     <span
-                      className={`badge ${coin.origin === "discovered" ? "bullish" : "range"}`}
+                      className={`badge ${coin.origin === "discovered" ? "bullish" : coin.origin === "radar" ? "bullish" : "range"}`}
                       style={
                         coin.origin === "discovered"
                           ? { background: "var(--color-profit-muted)", color: "var(--color-profit)", borderColor: "var(--color-profit-border)" }
-                          : { background: "var(--accent-primary-muted)", color: "var(--accent-primary)", borderColor: "var(--accent-primary)" }
+                          : coin.origin === "radar"
+                            ? { background: "var(--color-warning-muted)", color: "var(--color-warning)", borderColor: "var(--color-warning)" }
+                            : { background: "var(--accent-primary-muted)", color: "var(--accent-primary)", borderColor: "var(--accent-primary)" }
                       }
                     >
-                      {coin.origin === "discovered" ? "Discovered" : "Manual"}
+                      {coin.origin === "discovered" ? "Discovered" : coin.origin === "radar" ? "Radar" : "Manual"}
                     </span>
                   </td>
                   <td>

@@ -18,7 +18,7 @@ from ..database import get_db
 
 security = HTTPBearer()
 
-PROVIDERS = ("anthropic", "openai", "gemini", "deepseek", "coinmarketcap")
+PROVIDERS = ("anthropic", "openai", "gemini", "deepseek", "coinmarketcap", "radar")
 
 DEEPSEEK_MODELS = ("deepseek-v4-flash", "deepseek-v4-pro")
 DEEPSEEK_DEFAULT_MODEL = "deepseek-v4-flash"
@@ -48,6 +48,11 @@ PROVIDER_META = {
         "name": "CoinMarketCap",
         "prefix": "",
         "docs_url": "https://pro.coinmarketcap.com/account",
+    },
+    "radar": {
+        "name": "Market Catalyst Radar",
+        "prefix": "rdr_",
+        "docs_url": "https://mdatahub.scalpyn.com/radar",
     },
 }
 
@@ -277,6 +282,33 @@ async def test_key(
                     "provider": provider,
                     "success": True,
                     "message": f"Conectado. Plano: {plan}. Créditos usados este mês: {credits}.",
+                }
+            else:
+                return {"provider": provider, "success": False, "message": f"Chave inválida (HTTP {resp.status_code})."}
+        except Exception as e:
+            return {"provider": provider, "success": False, "message": f"Erro ao conectar: {str(e)}"}
+
+    if provider == "radar":
+        from ..services.ai_keys_service import get_decrypted_api_key
+        from ..services.radar_service import RADAR_TOP_ASSETS_URL
+        import httpx
+        plain_key = await get_decrypted_api_key(db, user_id, provider)
+        if not plain_key:
+            raise HTTPException(status_code=404, detail="Market Catalyst Radar key not configured.")
+        try:
+            async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+                resp = await client.get(
+                    RADAR_TOP_ASSETS_URL,
+                    headers={"X-Radar-API-Key": plain_key, "Accept": "application/json"},
+                )
+            if resp.status_code == 200:
+                meta = resp.json().get("meta", {})
+                eligible = meta.get("eligible_count", "?")
+                universe = meta.get("universe_count", "?")
+                return {
+                    "provider": provider,
+                    "success": True,
+                    "message": f"Conectado. {eligible} ativos elegíveis de {universe} no universo Gate.io.",
                 }
             else:
                 return {"provider": provider, "success": False, "message": f"Chave inválida (HTTP {resp.status_code})."}

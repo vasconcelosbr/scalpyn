@@ -93,6 +93,7 @@ _ALL_TASK_MODULES = (
         "app.tasks.anti_liq_monitor",
         "app.tasks.macro_regime_update",
         "app.tasks.auto_discover_assets",
+        "app.tasks.radar_auto_discover",
         "app.tasks.execute_buy",
         "app.tasks.fetch_market_caps",
         "app.tasks.pipeline_scan",
@@ -191,6 +192,7 @@ TASK_ROUTES = {
     # safety-net, must not compete with the bursty 5m chain).
     "app.tasks.pipeline_scan.scan":                      {"queue": QUEUE_STRUCTURAL},
     "app.tasks.auto_discover_assets.discover":           {"queue": QUEUE_STRUCTURAL},
+    "app.tasks.radar_auto_discover.sync":                {"queue": QUEUE_STRUCTURAL},
     "app.tasks.fetch_market_caps.fetch_market_caps":     {"queue": QUEUE_STRUCTURAL},
     "app.tasks.macro_regime_update.update":              {"queue": QUEUE_STRUCTURAL},
     "app.tasks.symbol_health_audit.monitor_only":        {"queue": QUEUE_STRUCTURAL},
@@ -440,6 +442,7 @@ TASK_ANNOTATIONS = {
     # but heavier than the 5m TA chain — uses structural cost guards).
     "app.tasks.pipeline_scan.scan":                      {**_STRUCTURAL_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.auto_discover_assets.discover":           {**_STRUCTURAL_GUARDS, "rate_limit": "2/h"},
+    "app.tasks.radar_auto_discover.sync":                {**_STRUCTURAL_GUARDS, "rate_limit": "8/h"},
     "app.tasks.fetch_market_caps.fetch_market_caps":     {**_STRUCTURAL_GUARDS, "rate_limit": "4/h"},
     "app.tasks.macro_regime_update.update":              {**_STRUCTURAL_GUARDS, "rate_limit": "4/h"},
     "app.tasks.symbol_health_audit.monitor_only":        {**_STRUCTURAL_GUARDS, "rate_limit": "12/h"},
@@ -730,6 +733,11 @@ celery_app.conf.beat_schedule = {
     "auto_discover_assets_hourly": {
         "task": "app.tasks.auto_discover_assets.discover",
         "schedule": 3600.0,
+    },
+    # Market Catalyst Radar sync every 10 minutes (pools with radar_enabled)
+    "radar_auto_discover_10min": {
+        "task": "app.tasks.radar_auto_discover.sync",
+        "schedule": 600.0,
     },
     # Buy execution cycle every 60 seconds
     "execute_buy_cycle": {
