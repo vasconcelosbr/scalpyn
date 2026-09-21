@@ -19,10 +19,13 @@ Queue topology (Task #216, operator spec parts 4-6):
                           ~20 lighter tasks queued behind it and behind
                           pipeline_scan's 169s+ runs, all serialized under one
                           concurrency=1 worker).
-    structural_collect  — collect_market_data.collect_all only, concurrency=1.
-                          That concurrency cap exists solely to prevent
-                          collect_all lock contention with ITSELF; it must
-                          never share a worker with anything else again.
+    structural_collect  — collect_market_data.collect_all (concurrency=1 to
+                          prevent it from lock-contending with ITSELF), plus
+                          radar_auto_discover.sync (2026-09-21 follow-up: left
+                          on the shared structural queue by the split above,
+                          it kept expiring behind that queue's backlog — moved
+                          here because it is a short, infrequent (8/h) task
+                          that never overlaps collect_all's per-symbol locks).
     structural_scan     — pipeline_scan.scan only, concurrency=1. A single run
                           takes 169s+ (56% of its own 300s cadence) — giving
                           it a dedicated worker means its own slowness no
@@ -220,7 +223,17 @@ TASK_ROUTES = {
     # queued behind it under concurrency=1. See QUEUE_STRUCTURAL_SCAN.
     "app.tasks.pipeline_scan.scan":                      {"queue": QUEUE_STRUCTURAL_SCAN},
     "app.tasks.auto_discover_assets.discover":           {"queue": QUEUE_STRUCTURAL},
-    "app.tasks.radar_auto_discover.sync":                {"queue": QUEUE_STRUCTURAL},
+    # radar_auto_discover.sync: 10-min cadence, 8/h rate-limited. Still on
+    # QUEUE_STRUCTURAL as of the 2026-09-21 split above — every single run
+    # since was received-then-discarded as expired (same "backlog guard vs.
+    # queue depth" failure mode collect_all had), because the ~700-800 item
+    # backlog left behind by the split takes longer to drain than this
+    # task's 30-min expires window. Moved onto structural_collect: it is a
+    # single short HTTP fetch + a few upserts, never overlaps meaningfully
+    # with collect_all's 1.2s/60s cadence, and does not touch collect_all's
+    # per-symbol locks — so it does not reintroduce the contention that
+    # justified giving structural_collect single-tenant status.
+    "app.tasks.radar_auto_discover.sync":                {"queue": QUEUE_STRUCTURAL_COLLECT},
     "app.tasks.fetch_market_caps.fetch_market_caps":     {"queue": QUEUE_STRUCTURAL},
     "app.tasks.macro_regime_update.update":              {"queue": QUEUE_STRUCTURAL},
     "app.tasks.symbol_health_audit.monitor_only":        {"queue": QUEUE_STRUCTURAL},
