@@ -441,7 +441,7 @@ TASK_ANNOTATIONS = {
     # pipeline_scan.scan: structural cadence (5-min safety-net scan,
     # but heavier than the 5m TA chain — uses structural cost guards).
     "app.tasks.pipeline_scan.scan":                      {**_STRUCTURAL_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},
-    "app.tasks.auto_discover_assets.discover":           {**_STRUCTURAL_GUARDS, "rate_limit": "2/h"},
+    "app.tasks.auto_discover_assets.discover":           {**_STRUCTURAL_GUARDS, "rate_limit": "90/h"},
     "app.tasks.radar_auto_discover.sync":                {**_STRUCTURAL_GUARDS, "rate_limit": "8/h"},
     "app.tasks.fetch_market_caps.fetch_market_caps":     {**_STRUCTURAL_GUARDS, "rate_limit": "4/h"},
     "app.tasks.macro_regime_update.update":              {**_STRUCTURAL_GUARDS, "rate_limit": "4/h"},
@@ -729,10 +729,10 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.macro_regime_update.update",
         "schedule": 1800.0,
     },
-    # Auto-discover assets every hour
-    "auto_discover_assets_hourly": {
+    # Auto-discover assets every 60 seconds
+    "auto_discover_assets_60s": {
         "task": "app.tasks.auto_discover_assets.discover",
-        "schedule": 3600.0,
+        "schedule": 60.0,
     },
     # Market Catalyst Radar sync every 10 minutes (pools with radar_enabled)
     "radar_auto_discover_10min": {

@@ -527,7 +527,7 @@ export default function PoolConfigPage() {
         <div className="card-header">
           <h3>Auto-Refresh</h3>
           <span style={{ fontSize: "12px", color: "var(--text-tertiary)" }}>
-            Discover assets automatically every 1 hour
+            Discover assets automatically every 60 seconds
           </span>
         </div>
         <div className="card-body space-y-3">
@@ -542,7 +542,7 @@ export default function PoolConfigPage() {
               <span className="knob" />
             </button>
             <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
-              Auto-refresh every 1 hour
+              Auto-refresh every 60 seconds
             </span>
           </div>
 
