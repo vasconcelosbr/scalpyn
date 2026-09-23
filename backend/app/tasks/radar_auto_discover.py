@@ -133,7 +133,9 @@ async def _radar_sync_async():
                 api_key = await run_db_task(_load_key, celery=True)
                 if not api_key:
                     logger.warning("[RADAR-SKIP] pool=%s reason=no_radar_key", pd["name"])
-                    assets_by_user[user_id] = set()
+                    # None (not set()) marks "never fetched" so a legitimate
+                    # zero-signal response below is never mistaken for this.
+                    assets_by_user[user_id] = None
                 else:
                     assets = await fetch_top_assets(api_key)
                     assets_by_user[user_id] = {
@@ -142,9 +144,16 @@ async def _radar_sync_async():
                     }
 
             radar_pairs = assets_by_user[user_id]
-            if not radar_pairs:
+            if radar_pairs is None:
                 pools_processed += 1
                 continue
+            # 2026-09-23: an empty (but successfully fetched) radar_pairs is a
+            # real "0 eligible signals right now" state, not "nothing to do" —
+            # it must still reach _persist so every existing origin='radar'
+            # coin gets removed. Skipping here (as before) left stale coins
+            # in the pool forever whenever the feed legitimately went to
+            # zero, since the next non-empty fetch would just keep diffing
+            # against them as if they were still current.
 
             async def _persist(db, _pd=pd, _radar_pairs=radar_pairs):
                 coins_result = await db.execute(
