@@ -306,3 +306,74 @@ async def apply_structural_pool_filter(
         len(symbols), len(kept), len(removed),
     )
     return kept
+
+
+# ── Immediate cross-layer invalidation on pool removal (2026-09-23) ──────────
+# ``pool_coins`` deletion (radar_auto_discover.sync, auto_discover_assets.py)
+# is instant, but L1/L2/L3 pipeline_watchlist_assets rows and the public L3
+# Consolidado feed each have their own independent scan cadence — without
+# this, a symbol removed from the pool could still show "Approved" or
+# "Aprovado para execução" for minutes, until each layer's next cycle (or,
+# for L3 Consolidado, the authorization contract's own TTL) catches up.
+
+async def cascade_invalidate_removed_symbols(db, pool_id, symbols) -> int:
+    """Mark ``symbols`` as ``level_direction='down'`` in every pipeline
+    watchlist descending from ``pool_id`` (POOL -> L1 -> L2 -> L3, any
+    branch depth) — call this immediately after deleting the matching
+    ``pool_coins`` rows so Pool/L1/L2/L3 UIs never lag behind pool
+    membership. Cheap and surgical: a direct UPDATE, no re-evaluation.
+
+    Returns the number of (watchlist, symbol) rows actually flipped.
+    """
+    symbols = list(symbols)
+    if not symbols:
+        return 0
+    result = await db.execute(
+        text("""
+            WITH RECURSIVE descendant_watchlists AS (
+                SELECT id FROM pipeline_watchlists WHERE source_pool_id = :pool_id
+                UNION ALL
+                SELECT pw.id
+                FROM pipeline_watchlists pw
+                JOIN descendant_watchlists dw ON pw.source_watchlist_id = dw.id
+            )
+            UPDATE pipeline_watchlist_assets
+            SET level_direction = 'down', level_change_at = now()
+            WHERE watchlist_id IN (SELECT id FROM descendant_watchlists)
+              AND symbol = ANY(:symbols)
+              AND (level_direction IS NULL OR level_direction != 'down')
+            RETURNING symbol
+        """),
+        {"pool_id": pool_id, "symbols": symbols},
+    )
+    return len(result.fetchall())
+
+
+async def resolve_root_pool_ids(db, watchlist_ids) -> dict:
+    """Return ``{watchlist_id: pool_id}`` for every id in ``watchlist_ids``
+    that descends from a pool (walking UP via ``source_watchlist_id`` to the
+    ``POOL``-level row). A watchlist with no pool ancestor (a standalone L3
+    profile, a manual watchlist) is simply absent from the result — callers
+    must treat that as "no pool-membership constraint applies".
+    """
+    watchlist_ids = list(watchlist_ids)
+    if not watchlist_ids:
+        return {}
+    rows = (await db.execute(
+        text("""
+            WITH RECURSIVE ancestry AS (
+                SELECT id AS start_id, id, source_pool_id, source_watchlist_id
+                FROM pipeline_watchlists
+                WHERE id = ANY(:ids)
+                UNION ALL
+                SELECT a.start_id, pw.id, pw.source_pool_id, pw.source_watchlist_id
+                FROM pipeline_watchlists pw
+                JOIN ancestry a ON pw.id = a.source_watchlist_id
+            )
+            SELECT start_id, source_pool_id
+            FROM ancestry
+            WHERE source_pool_id IS NOT NULL
+        """),
+        {"ids": watchlist_ids},
+    )).fetchall()
+    return {r.start_id: r.source_pool_id for r in rows}

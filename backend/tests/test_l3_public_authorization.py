@@ -118,21 +118,31 @@ def test_ignore_expiry_is_for_the_public_visibility_floor_only():
                                 ignore_expiry=True) is None
 
 
+def _no_pool_ancestry():
+    """A resolve_root_pool_ids() DB response with no pool-linked watchlist —
+    the common case for every fixture here (fake/standalone watchlist ids)."""
+    return Obj(fetchall=lambda: [])
+
+
 @pytest.mark.asyncio
 async def test_latest_block_is_not_filtered_out_before_latest_decision_selection():
     now, wl, decision, event, shadow, body = objects()
     decision.decision = "BLOCK"
-    db = Obj(execute=AsyncMock(return_value=Obj(all=lambda: [(decision, event, shadow)])))
+    db = Obj(execute=AsyncMock(side_effect=[
+        Obj(all=lambda: [(decision, event, shadow)]),
+        _no_pool_ancestry(),
+    ]))
     result = await load_public_authorizations(db, user_id=uuid4(), candidates=[{
         "profile_id": decision.profile_id, "symbol": decision.symbol, "watchlist_id": wl}])
     assert result == {}
-    sql = str(db.execute.call_args.args[0].compile(dialect=postgresql.dialect()))
+    main_query = db.execute.call_args_list[0].args[0]
+    sql = str(main_query.compile(dialect=postgresql.dialect()))
     assert "DISTINCT ON" in sql and "created_at DESC" in sql
     assert "decision =" not in sql
     # 2026-09-21: PROFILE_CONSOLIDATION rows are pure audit records with no
     # contract -- excluded from "latest" so a real ALLOW decision is never
     # masked by its own later suppression audit row.
-    sql_literal = str(db.execute.call_args.args[0].compile(
+    sql_literal = str(main_query.compile(
         dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
     assert "event_type != 'PROFILE_CONSOLIDATION'" in sql_literal
 
@@ -149,14 +159,20 @@ async def test_load_public_authorizations_excludes_pending_and_includes_started(
     }]
 
     # No Shadow yet (still PENDING) -> excluded entirely.
-    db_pending = Obj(execute=AsyncMock(return_value=Obj(all=lambda: [(decision, event, None)])))
+    db_pending = Obj(execute=AsyncMock(side_effect=[
+        Obj(all=lambda: [(decision, event, None)]),
+        _no_pool_ancestry(),
+    ]))
     result_pending = await load_public_authorizations(db_pending, user_id=uuid4(), candidates=candidates)
     assert result_pending == {}
 
     # Confirmed Shadow -> included, with executable=True and the real shadow_id.
     event.status, event.payload["processing_result"] = "PROCESSED", "CREATED_OR_RECONCILED"
     confirmed_shadow = Obj(id=uuid4())
-    db_started = Obj(execute=AsyncMock(return_value=Obj(all=lambda: [(decision, event, confirmed_shadow)])))
+    db_started = Obj(execute=AsyncMock(side_effect=[
+        Obj(all=lambda: [(decision, event, confirmed_shadow)]),
+        _no_pool_ancestry(),
+    ]))
     result_started = await load_public_authorizations(db_started, user_id=uuid4(), candidates=candidates)
     entry = result_started[(wl, decision.symbol)]
     assert entry["executable"] is True
@@ -223,29 +239,78 @@ async def test_load_public_authorizations_resolves_active_trade_shadow_by_symbol
     db = Obj(execute=AsyncMock(side_effect=[
         Obj(all=lambda: [(decision, event, None)]),
         Obj(scalars=lambda: Obj(all=lambda: [covering_shadow])),
+        _no_pool_ancestry(),
     ]))
     result = await load_public_authorizations(db, user_id=uuid4(), candidates=candidates)
     entry = result[(wl, decision.symbol)]
     assert entry["executable"] is True
     assert entry["shadow_id"] == str(covering_shadow.id)
     # Second call only happens because a lookup key existed -- assert it ran.
-    assert db.execute.await_count == 2
+    # Third is the (always-on) pool-ancestry resolution.
+    assert db.execute.await_count == 3
 
 
 @pytest.mark.asyncio
 async def test_load_public_authorizations_skips_no_active_shadow_lookup_when_unneeded():
     """The common CREATED_OR_RECONCILED path (a real confirmed Shadow already
-    joined) must not pay for the extra fallback query at all."""
+    joined) must not pay for the extra ACTIVE_TRADE fallback query. It still
+    pays for the (always-on) pool-ancestry resolution -- 2 calls total, not 3."""
     now, wl, decision, event, _shadow, body = objects()
     event.status, event.payload["processing_result"] = "PROCESSED", "CREATED_OR_RECONCILED"
     confirmed_shadow = Obj(id=uuid4())
     candidates = [{
         "profile_id": decision.profile_id, "symbol": decision.symbol, "watchlist_id": wl,
     }]
-    db = Obj(execute=AsyncMock(return_value=Obj(all=lambda: [(decision, event, confirmed_shadow)])))
+    db = Obj(execute=AsyncMock(side_effect=[
+        Obj(all=lambda: [(decision, event, confirmed_shadow)]),
+        _no_pool_ancestry(),
+    ]))
     result = await load_public_authorizations(db, user_id=uuid4(), candidates=candidates)
     assert result[(wl, decision.symbol)]["executable"] is True
-    assert db.execute.await_count == 1
+    assert db.execute.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_load_public_authorizations_excludes_symbol_removed_from_its_pool():
+    """2026-09-23: a symbol the operator (or radar_auto_discover) already
+    removed from its source pool must stop being executable immediately,
+    even though its authorization contract is still perfectly valid and
+    unexpired -- the pool membership check is an independent, earlier gate."""
+    now, wl, decision, event, _shadow, body = objects()
+    event.status, event.payload["processing_result"] = "PROCESSED", "CREATED_OR_RECONCILED"
+    confirmed_shadow = Obj(id=uuid4())
+    pool_id = uuid4()
+    candidates = [{
+        "profile_id": decision.profile_id, "symbol": decision.symbol, "watchlist_id": wl,
+    }]
+    db = Obj(execute=AsyncMock(side_effect=[
+        Obj(all=lambda: [(decision, event, confirmed_shadow)]),
+        Obj(fetchall=lambda: [Obj(start_id=wl, source_pool_id=pool_id)]),
+        # pool_coins currently active for this pool: does NOT include decision.symbol.
+        Obj(fetchall=lambda: [Obj(pool_id=pool_id, symbol="SOME_OTHER_USDT")]),
+    ]))
+    result = await load_public_authorizations(db, user_id=uuid4(), candidates=candidates)
+    assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_load_public_authorizations_keeps_symbol_still_in_its_pool():
+    """Same setup as above, but the symbol IS still an active pool_coins row
+    -- the pool-membership gate must not exclude a genuinely current symbol."""
+    now, wl, decision, event, _shadow, body = objects()
+    event.status, event.payload["processing_result"] = "PROCESSED", "CREATED_OR_RECONCILED"
+    confirmed_shadow = Obj(id=uuid4())
+    pool_id = uuid4()
+    candidates = [{
+        "profile_id": decision.profile_id, "symbol": decision.symbol, "watchlist_id": wl,
+    }]
+    db = Obj(execute=AsyncMock(side_effect=[
+        Obj(all=lambda: [(decision, event, confirmed_shadow)]),
+        Obj(fetchall=lambda: [Obj(start_id=wl, source_pool_id=pool_id)]),
+        Obj(fetchall=lambda: [Obj(pool_id=pool_id, symbol=decision.symbol)]),
+    ]))
+    result = await load_public_authorizations(db, user_id=uuid4(), candidates=candidates)
+    assert result[(wl, decision.symbol)]["executable"] is True
 
 
 @pytest.mark.asyncio
