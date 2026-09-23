@@ -184,6 +184,11 @@ async def _radar_sync_async():
                     ))
                 for symbol in to_remove:
                     await db.delete(existing_radar[symbol])
+                if to_remove:
+                    # 2026-09-23: same transaction as the pool_coins delete —
+                    # L1/L2/L3 must never show a symbol the pool no longer has.
+                    from ..services.pool_service import cascade_invalidate_removed_symbols
+                    await cascade_invalidate_removed_symbols(db, _pd["id"], to_remove)
                 # run_db_task auto-commits on successful exit
                 return len(to_add), len(to_remove)
 

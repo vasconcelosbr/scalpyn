@@ -6,11 +6,12 @@ requires the latest decision, its immutable contract and its transactional outbo
 from datetime import datetime, timedelta, timezone
 import math
 
-from sqlalchemy import and_, select, tuple_
+from sqlalchemy import and_, select, text, tuple_
 
 from ..models.backoffice import DecisionLog, L3AuthorizationOutbox
 from ..models.shadow_trade import ShadowTrade
 from .l3_authorization_contract_v3 import canonical_hash
+from .pool_service import resolve_root_pool_ids
 
 
 def utc(value):
@@ -216,11 +217,35 @@ async def load_public_authorizations(db, *, user_id, candidates):
         for shadow_row in active_rows:
             key = (shadow_row.symbol, (shadow_row.direction or "SPOT").upper())
             active_shadow_by_symbol_direction.setdefault(key, shadow_row)
+    # 2026-09-23: a symbol the operator (or radar_auto_discover) already
+    # removed from its source pool must stop being "Aprovado para execução"
+    # immediately, not wait for the authorization contract's own TTL to
+    # expire minutes later. A watchlist with no pool ancestor (a standalone
+    # L3 profile, a manual watchlist) is absent from watchlist_pool_ids and
+    # simply skips this check -- only pool-sourced candidates are affected.
+    watchlist_pool_ids = await resolve_root_pool_ids(
+        db, {item["watchlist_id"] for item in candidates}
+    )
+    pool_active_symbols: dict = {}
+    if watchlist_pool_ids:
+        pool_ids = set(watchlist_pool_ids.values())
+        active_pool_rows = (await db.execute(
+            text("""
+                SELECT pool_id, symbol FROM pool_coins
+                WHERE pool_id = ANY(:pool_ids) AND is_active = true
+            """),
+            {"pool_ids": list(pool_ids)},
+        )).fetchall()
+        for r in active_pool_rows:
+            pool_active_symbols.setdefault(r.pool_id, set()).add(r.symbol)
     result = {}
     now = datetime.now(timezone.utc)
     for item in candidates:
         pair = by_pair.get((item["profile_id"], item["symbol"]))
         if pair is None:
+            continue
+        pool_id = watchlist_pool_ids.get(item["watchlist_id"])
+        if pool_id is not None and item["symbol"] not in pool_active_symbols.get(pool_id, set()):
             continue
         row, event, shadow = pair
         if (shadow is None and event is not None
