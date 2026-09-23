@@ -223,13 +223,12 @@ TASK_ROUTES = {
     # queued behind it under concurrency=1. See QUEUE_STRUCTURAL_SCAN.
     "app.tasks.pipeline_scan.scan":                      {"queue": QUEUE_STRUCTURAL_SCAN},
     "app.tasks.auto_discover_assets.discover":           {"queue": QUEUE_STRUCTURAL},
-    # radar_auto_discover.sync: 10-min cadence, 8/h rate-limited. Still on
-    # QUEUE_STRUCTURAL as of the 2026-09-21 split above — every single run
-    # since was received-then-discarded as expired (same "backlog guard vs.
-    # queue depth" failure mode collect_all had), because the ~700-800 item
-    # backlog left behind by the split takes longer to drain than this
-    # task's 30-min expires window. Moved onto structural_collect: it is a
-    # single short HTTP fetch + a few upserts, never overlaps meaningfully
+    # radar_auto_discover.sync: 60s cadence (2026-09-23, up from 10min to
+    # match the minute-signals endpoint), 90/h rate-limited. Moved off
+    # QUEUE_STRUCTURAL by the 2026-09-21 split — every run there was being
+    # received-then-discarded as expired (same "backlog guard vs. queue
+    # depth" failure mode collect_all had). On structural_collect instead:
+    # a single short HTTP fetch + a few upserts, never overlaps meaningfully
     # with collect_all's 1.2s/60s cadence, and does not touch collect_all's
     # per-symbol locks — so it does not reintroduce the contention that
     # justified giving structural_collect single-tenant status.
@@ -483,7 +482,7 @@ TASK_ANNOTATIONS = {
     # but heavier than the 5m TA chain — uses structural cost guards).
     "app.tasks.pipeline_scan.scan":                      {**_STRUCTURAL_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.auto_discover_assets.discover":           {**_STRUCTURAL_GUARDS, "rate_limit": "90/h"},
-    "app.tasks.radar_auto_discover.sync":                {**_STRUCTURAL_GUARDS, "rate_limit": "8/h"},
+    "app.tasks.radar_auto_discover.sync":                {**_STRUCTURAL_GUARDS, "rate_limit": "90/h"},
     "app.tasks.fetch_market_caps.fetch_market_caps":     {**_STRUCTURAL_GUARDS, "rate_limit": "4/h"},
     "app.tasks.macro_regime_update.update":              {**_STRUCTURAL_GUARDS, "rate_limit": "4/h"},
     "app.tasks.symbol_health_audit.monitor_only":        {**_STRUCTURAL_GUARDS, "rate_limit": "12/h"},
@@ -775,10 +774,12 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.auto_discover_assets.discover",
         "schedule": 60.0,
     },
-    # Market Catalyst Radar sync every 10 minutes (pools with radar_enabled)
-    "radar_auto_discover_10min": {
+    # Market Catalyst Radar sync every 60 seconds (pools with radar_enabled) —
+    # 2026-09-23: bumped from 10min to match the new minute-signals endpoint's
+    # own per-minute granularity.
+    "radar_auto_discover_60s": {
         "task": "app.tasks.radar_auto_discover.sync",
-        "schedule": 600.0,
+        "schedule": 60.0,
     },
     # Buy execution cycle every 60 seconds
     "execute_buy_cycle": {
