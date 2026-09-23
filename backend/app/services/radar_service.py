@@ -1,4 +1,4 @@
-"""Market Catalyst Radar (mdatahub) — buy-pressure top-assets feed client."""
+"""Market Catalyst Radar (mdatahub) — buy-pressure feed client."""
 import logging
 from typing import Any
 
@@ -8,7 +8,9 @@ logger = logging.getLogger(__name__)
 
 # quant-feed-pro.lovable.app 302-redirects to mdatahub.scalpyn.com; the
 # client must follow it or every call silently returns an empty body.
-RADAR_TOP_ASSETS_URL = "https://quant-feed-pro.lovable.app/api/public/radar/v1/buy-pressure/top-assets"
+# 2026-09-23: endpoint moved from .../buy-pressure/top-assets to
+# .../buy-pressure/minute-signals (same API key, same request/response shape).
+RADAR_TOP_ASSETS_URL = "https://quant-feed-pro.lovable.app/api/public/radar/v1/buy-pressure/minute-signals"
 
 
 async def fetch_top_assets(api_key: str) -> list[dict[str, Any]]:
