@@ -77,6 +77,38 @@ async def test_shadow_advance_flushes_inside_savepoint(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_advance_shadow_in_savepoint_forwards_closure_path_hint(monkeypatch):
+    """2026-09-24: the fast-scan loop was routed through this helper
+    (previously called _advance_shadow directly, with no savepoint --
+    see the #150/#151 history) and needs its own closure_path_hint
+    ("fast_scan") to keep reaching _advance_shadow unchanged."""
+    db = _FakeDb()
+    shadow = _shadow()
+    advance = AsyncMock(return_value="completed")
+    monkeypatch.setattr(monitor, "_advance_shadow", advance)
+
+    await monitor._advance_shadow_in_savepoint(
+        db, shadow, None, closure_path_hint="fast_scan"
+    )
+
+    advance.assert_awaited_once_with(db, shadow, None, closure_path_hint="fast_scan")
+
+
+@pytest.mark.asyncio
+async def test_advance_shadow_in_savepoint_defaults_closure_path_hint(monkeypatch):
+    """The regular-batch caller (_advance_shadow_batch_isolated) doesn't pass
+    closure_path_hint at all -- must keep defaulting to "regular_batch"."""
+    db = _FakeDb()
+    shadow = _shadow()
+    advance = AsyncMock(return_value="completed")
+    monkeypatch.setattr(monitor, "_advance_shadow", advance)
+
+    await monitor._advance_shadow_in_savepoint(db, shadow, None)
+
+    advance.assert_awaited_once_with(db, shadow, None, closure_path_hint="regular_batch")
+
+
+@pytest.mark.asyncio
 async def test_shadow_flush_error_rolls_back_only_nested_transaction(monkeypatch):
     db = _FakeDb(flush_error=ValueError("varchar overflow"))
     shadow = _shadow()
@@ -121,6 +153,33 @@ async def test_invalid_shadow_does_not_stop_later_rows(monkeypatch):
         good_before.id,
         good_after.id,
     ]
+
+
+@pytest.mark.asyncio
+async def test_invalid_shadow_logs_one_line_not_a_traceback(monkeypatch, caplog):
+    """2026-09-24: logger.exception() here was a direct contributor to the
+    #150/#151 log-storm regression (500 logs/sec, 22171 dropped) -- when
+    most/all rows in a batch fail, a full traceback per row multiplies
+    output far past Railway's rate limit. logger.error() with just the
+    exception type + message keeps one failing batch from ever doing that
+    again, while still naming what went wrong."""
+    invalid = _shadow(symbol="BAD_USDT")
+
+    async def _isolated(_db, shadow, _policy):
+        raise ValueError("varchar overflow")
+
+    monkeypatch.setattr(monitor, "_advance_shadow_in_savepoint", _isolated)
+    summary = {"processed": 0, "completed": 0, "errors": 0}
+
+    with caplog.at_level("ERROR", logger="app.tasks.shadow_trade_monitor"):
+        await monitor._advance_shadow_batch_isolated(object(), [invalid], None, summary)
+
+    assert summary["errors"] == 1
+    records = [r for r in caplog.records if "isolated advance failed" in r.message]
+    assert len(records) == 1
+    assert records[0].exc_info is None  # logger.error, not logger.exception
+    assert "ValueError" in records[0].message
+    assert "varchar overflow" in records[0].message
 
 
 @pytest.mark.parametrize(

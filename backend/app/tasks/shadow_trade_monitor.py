@@ -1492,15 +1492,22 @@ async def _advance_shadow(
     #   - garante coerência visual (UI ≥ TP ⇒ fechamento)
     #   - é mais agressivo no fechamento (qualquer fonte que cruzou já
     #     prova que o preço passou por lá em algum momento)
+    # 2026-09-24: a one-line error (type + message, no traceback) instead of
+    # logger.exception() -- when the shared session/savepoint is already
+    # poisoned (see _advance_shadow_in_savepoint), these three calls fail in
+    # lockstep for every shadow in the batch; a full traceback per call here
+    # was a direct contributor to the #150/#151 log-storm regression
+    # (500 logs/sec, 22171 dropped) without adding diagnostic value beyond
+    # the first occurrence.
     try:
         mm_price, mm_ts = await shadow_trade_service._get_market_metadata_price(
             db, shadow.symbol
         )
-    except Exception:
-        logger.exception(
+    except Exception as exc:
+        logger.error(
             "[shadow-monitor] live-close: get_market_metadata_price failed "
-            "for shadow_id=%s",
-            shadow.id,
+            "for shadow_id=%s: %s: %s",
+            shadow.id, type(exc).__name__, str(exc)[:200],
         )
         mm_price, mm_ts = None, None
 
@@ -1508,11 +1515,11 @@ async def _advance_shadow(
         ohlcv_price, ohlcv_ts = await shadow_trade_service._get_current_price_multi_tf(
             db, shadow.symbol
         )
-    except Exception:
-        logger.exception(
+    except Exception as exc:
+        logger.error(
             "[shadow-monitor] live-close: get_current_price_multi_tf failed "
-            "for shadow_id=%s",
-            shadow.id,
+            "for shadow_id=%s: %s: %s",
+            shadow.id, type(exc).__name__, str(exc)[:200],
         )
         ohlcv_price, ohlcv_ts = None, None
 
@@ -1527,11 +1534,11 @@ async def _advance_shadow(
         ohlcv_high, ohlcv_low, ohlcv_hl_ts = await shadow_trade_service._get_current_ohlc_multi_tf(
             db, shadow.symbol
         )
-    except Exception:
-        logger.exception(
+    except Exception as exc:
+        logger.error(
             "[shadow-monitor] live-close: get_current_ohlc_multi_tf failed "
-            "for shadow_id=%s",
-            shadow.id,
+            "for shadow_id=%s: %s: %s",
+            shadow.id, type(exc).__name__, str(exc)[:200],
         )
         ohlcv_high, ohlcv_low, ohlcv_hl_ts = None, None, None
 
@@ -2132,10 +2139,18 @@ async def _fast_barrier_scan_async(run_id: str) -> Dict[str, Any]:
                 shadows.sort(key=lambda s: s.id)
 
                 for shadow in shadows:
+                    # 2026-09-24: routed through the same per-row savepoint
+                    # helper the regular batch already uses (PR #150's
+                    # diagnosis was right; the standalone fix regressed —
+                    # see the log-verbosity note below). Without this, one
+                    # row's DB error leaves the shared transaction aborted
+                    # at the Postgres level, so every subsequent row in the
+                    # same tick fails too (confirmed live: 476 RUNNING
+                    # Shadows stuck, 280 of them 7+ days, none advancing).
                     try:
                         prev_status = shadow.status
-                        transition = await _advance_shadow(
-                            db, shadow, closure_path_hint="fast_scan"
+                        transition, _enrich_target = await _advance_shadow_in_savepoint(
+                            db, shadow, None, closure_path_hint="fast_scan"
                         )
                         if transition == "completed":
                             outcome = shadow.outcome or "UNKNOWN"
@@ -2162,11 +2177,18 @@ async def _fast_barrier_scan_async(run_id: str) -> Dict[str, Any]:
                                 "closure_reason": outcome,
                                 "closer_run_id": run_id,
                             })
-                    except Exception:
+                    except Exception as exc:
                         errors += 1
-                        logger.exception(
-                            "[shadow-closer] fast-scan advance failed shadow_id=%s",
-                            shadow.id,
+                        # One line, not logger.exception() -- see note above
+                        # the loop: this is the #150/#151 log-storm lesson.
+                        # Up to fast_scan_batch_size rows can legitimately
+                        # fail in one tick; a full traceback per row is what
+                        # exceeded Railway's log rate and dropped messages
+                        # last time, not the savepoint isolation itself.
+                        logger.error(
+                            "[shadow-closer] fast-scan advance failed "
+                            "shadow_id=%s: %s: %s",
+                            shadow.id, type(exc).__name__, str(exc)[:200],
                         )
 
         # Phase 3: write audit rows (best-effort, separate tx)
@@ -2437,15 +2459,23 @@ async def _advance_shadow_in_savepoint(
     db,
     shadow: ShadowTrade,
     force_close_policy: Optional[Dict[str, Any]],
+    *,
+    closure_path_hint: str = "regular_batch",
 ) -> tuple[str, Optional[Dict[str, Any]]]:
     """Advance and flush one Shadow inside its own database savepoint.
 
     The explicit flush is part of the isolation contract: PostgreSQL length,
     constraint and type errors must surface before the savepoint is released,
     otherwise they would abort the parent batch during its final commit.
+
+    ``closure_path_hint`` is forwarded verbatim to ``_advance_shadow`` (see
+    its own docstring) -- 2026-09-24, added so the fast-scan caller can keep
+    recording ``"fast_scan"`` after being routed through this same helper.
     """
     async with db.begin_nested():
-        transition = await _advance_shadow(db, shadow, force_close_policy)
+        transition = await _advance_shadow(
+            db, shadow, force_close_policy, closure_path_hint=closure_path_hint
+        )
         await db.flush()
         enrich_target = _snapshot_shadow_enrichment_target(shadow)
     return transition, enrich_target
@@ -2471,11 +2501,15 @@ async def _advance_shadow_batch_isolated(
                 shadow,
                 force_close_policy,
             )
-        except Exception:
+        except Exception as exc:
             summary["errors"] += 1
-            logger.exception(
-                "[shadow-monitor] isolated advance failed for shadow_id=%s",
-                shadow_id,
+            # One line, not logger.exception() -- 2026-09-24, same log-storm
+            # lesson as the fast-scan loop (see its comment): a whole batch
+            # can legitimately fail row-by-row, and a full traceback each
+            # is what exceeds Railway's log rate, not the isolation itself.
+            logger.error(
+                "[shadow-monitor] isolated advance failed for shadow_id=%s: %s: %s",
+                shadow_id, type(exc).__name__, str(exc)[:200],
             )
             continue
 
