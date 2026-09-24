@@ -183,6 +183,20 @@ async def _evaluate_async():
                 if not signal_config or not risk_config:
                     continue
 
+                # 2026-09-24: _compute_robust_score below used to score every
+                # candidate against seed_service.DEFAULT_SCORE (a 3-rule
+                # stub) instead of this operator's real global score matrix --
+                # same root cause as PR #197 (Rejected tab), except this is
+                # the live buy-decision path. Load the real matrix once per
+                # user so every symbol this cycle scores against the
+                # operator-configured rules, not the generic default.
+                _score_cfg = await config_service.get_config(db, "score", user.id)
+                score_rules = (
+                    (_score_cfg or {}).get("scoring_rules")
+                    or (_score_cfg or {}).get("rules")
+                    or None
+                )
+
                 signal_engine = SignalEngine(signal_config)
                 block_engine = BlockEngine(block_config) if block_config else None
                 risk_engine = RiskEngine(risk_config)
@@ -410,7 +424,7 @@ async def _evaluate_async():
                         continue
 
                     # Authoritative robust score from envelopes.
-                    alpha_score = _compute_robust_score(symbol, indicators)
+                    alpha_score = _compute_robust_score(symbol, indicators, rules=score_rules)
                     if alpha_score is None:
                         continue
 
@@ -681,8 +695,20 @@ async def _evaluate_async():
     return signals_found
 
 
-def _compute_robust_score(symbol: str, indicators: dict) -> float | None:
+def _compute_robust_score(
+    symbol: str, indicators: dict, *, rules: list | None = None,
+) -> float | None:
     """Run the authoritative robust score for a single symbol.
+
+    ``rules`` should be the caller's real global score matrix
+    (``config_profiles(score).scoring_rules``) — this is the actual
+    buy-decision gate (called from here and from ``execute_buy.py``), so
+    scoring against the wrong rules silently disconnects every operator-
+    configured indicator from the alpha_score that ranks/gates real orders.
+    Falls back to ``seed_service.DEFAULT_SCORE`` (a 3-rule stub) only when
+    the caller has none — e.g. a brand-new tenant who never customised the
+    score engine — never as a silent substitute for a caller that forgot
+    to load the real matrix.
 
     Returns the bounded ``[0, 100]`` score, or ``None`` when the engine
     cannot produce a value (missing indicators, gate rejection, etc.) so
@@ -692,21 +718,19 @@ def _compute_robust_score(symbol: str, indicators: dict) -> float | None:
         calculate_score_with_confidence,
         envelope_indicators,
     )
-    from ..services.seed_service import DEFAULT_SCORE
 
     if not indicators:
         return None
+
+    if not rules:
+        from ..services.seed_service import DEFAULT_SCORE
+        rules = DEFAULT_SCORE.get("scoring_rules") or DEFAULT_SCORE.get("rules") or []
 
     try:
         envelopes = envelope_indicators(
             symbol,
             indicators,
             flow_source_hint=indicators.get("taker_source"),
-        )
-        rules = (
-            DEFAULT_SCORE.get("scoring_rules")
-            or DEFAULT_SCORE.get("rules")
-            or []
         )
         result = calculate_score_with_confidence(envelopes, rules)
     except Exception as exc:

@@ -187,6 +187,39 @@ def test_genuine_warmup_payload_fails_is_complete_for_consumer_loop():
     assert set(missing) == {"adx", "rsi", "macd_histogram"}
 
 
+# ── B2. _compute_robust_score seeds from the caller's real matrix ──────────
+# 2026-09-24: this is the live buy-decision score (called from both
+# evaluate_signals.py and execute_buy.py) — it used to always score against
+# seed_service.DEFAULT_SCORE (a 3-rule stub), the same root cause fixed in
+# PR #197 for the Rejected tab, except here it silently disconnected the
+# operator's real ~32-rule matrix from every actual buy decision.
+
+
+def test_compute_robust_score_uses_default_when_no_rules_passed():
+    from app.tasks.evaluate_signals import _compute_robust_score
+
+    indicators = {"rsi": 20, "close": 100.0}  # matches DEFAULT_SCORE's rsi_1 (<=25, 40pts)
+    score = _compute_robust_score("BTC_USDT", indicators)
+    assert score is not None
+    assert score > 0
+
+
+def test_compute_robust_score_prefers_caller_supplied_rules_over_default():
+    from app.tasks.evaluate_signals import _compute_robust_score
+
+    # A rule that DEFAULT_SCORE has no equivalent for (real operator matrix
+    # shape) -- only matches if the passed-in `rules` were actually used.
+    custom_rules = [
+        {"id": "custom_volume_spike", "indicator": "volume_spike", "operator": ">=", "value": 1.0, "points": 100, "category": "liquidity"},
+    ]
+    indicators = {"volume_spike": 2.0, "rsi": 70}  # rsi=70 fails every DEFAULT_SCORE rule
+    score_with_custom = _compute_robust_score("BTC_USDT", indicators, rules=custom_rules)
+    score_with_default = _compute_robust_score("BTC_USDT", indicators)
+
+    assert score_with_custom == 100.0
+    assert score_with_default != score_with_custom
+
+
 # ── C. Task entry point exercises the provider end-to-end ──────────────────
 
 
