@@ -384,6 +384,7 @@ _ROLLING_WINDOW_FIELDS: frozenset[str] = frozenset({
 # does not apply to the composite itself (each component may have its own).
 _COMPOSITE_FIELDS: frozenset[str] = frozenset({
     "score", "score_raw", "score_max", "score_components",
+    "quick_score", "quick_score_raw", "quick_score_max",
     "liquidity_score", "market_structure_score", "momentum_score",
     "signal_score", "final_score", "technical_score", "social_score",
 })

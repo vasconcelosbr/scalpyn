@@ -50,7 +50,14 @@ class SignalEngine:
                 "skipped": [],
             }
 
-        eval_data = {**indicators, "alpha_score": alpha_score}
+        # "score" is a synonym for "alpha_score" throughout the profile
+        # config surface (score_engine._IND_LABELS treats them identically).
+        # 2026-09-24: compute_indicators._compute_score_fields used to write
+        # an unrelated heuristic under the same "score" key in indicators_json,
+        # shadowing this alias for every profile signal condition that
+        # referenced `field: "score"` — that producer field was renamed to
+        # "quick_score", so this alias now reaches the real Alpha Score.
+        eval_data = {**indicators, "alpha_score": alpha_score, "score": alpha_score}
 
         enabled_conditions  = [c for c in self.conditions if c.get("enabled", True)]
         required_conditions = [c for c in enabled_conditions if     c.get("required", False)]
