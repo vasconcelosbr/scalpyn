@@ -33,9 +33,17 @@ def _compute_score_fields(results: dict) -> dict:
       * macd_signal == "positive"          — MACD bullish cross
       * price > vwap                       — price above VWAP
 
-    score (0–100) = score_raw / score_max * 100
-    Stored as "score" in the indicators dict. "score_normalized" was an
-    identical alias kept for legacy display; removed to eliminate duplication.
+    quick_score (0-100) = quick_score_raw / quick_score_max * 100
+
+    2026-09-24: renamed from "score"/"score_raw"/"score_max" — many profile
+    `signals` conditions reference `field: "score"` expecting the real
+    robust-engine Alpha Score (thresholds like ">= 65" only make sense
+    against that composite), but this simple 6-criterion heuristic was
+    silently shadowing it wherever indicators_json got merged into a
+    trace/eval dict ahead of the real alpha_score (e.g.
+    `pipeline_rejections.build_trace_asset`'s `if "score" not in asset`
+    fallback never fired). Freeing "score" lets every consumer alias it to
+    the real Alpha Score instead.
     """
     score = 0
     max_score = 0
@@ -94,9 +102,9 @@ def _compute_score_fields(results: dict) -> dict:
     score_value = round((score / max_score) * 100, 2) if max_score > 0 else 0.0
 
     return {
-        "score_raw": score,
-        "score_max": max_score,
-        "score": score_value,
+        "quick_score_raw": score,
+        "quick_score_max": max_score,
+        "quick_score": score_value,
     }
 
 # Source/confidence map for order-flow keys fetched from real trades.

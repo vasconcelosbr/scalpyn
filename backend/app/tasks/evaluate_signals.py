@@ -310,6 +310,37 @@ async def _evaluate_async():
 
                 merged_by_sym = await get_merged_indicators(db, pool_symbols)
 
+                # 2026-09-24: several profiles' `signals` conditions reference
+                # `liquidity_score`/`momentum_score` (e.g. "momentum_score >=
+                # 55"), expecting the robust engine's component scores. Those
+                # are computed and persisted by compute_scores.py into
+                # `alpha_scores`, but this loop never fetched them — a
+                # leftover from the Task #215 refactor, whose comment ("the
+                # legacy alpha_scores.score column ... was never read in this
+                # loop") predates these profiles. Every such condition is
+                # `required: false`, so it silently SKIPPED forever instead
+                # of blocking anything — but the operator's configured
+                # quality gate never actually applied. Fetch the latest
+                # component scores per symbol so SignalEngine sees real data.
+                component_scores_by_symbol: dict[str, dict] = {}
+                if pool_symbols:
+                    _cs_rows = (await db.execute(text("""
+                        SELECT DISTINCT ON (symbol)
+                               symbol, liquidity_score, momentum_score
+                          FROM alpha_scores
+                         WHERE symbol = ANY(:symbols)
+                         ORDER BY symbol, time DESC
+                    """), {"symbols": pool_symbols})).fetchall()
+                    component_scores_by_symbol = {
+                        r.symbol: {
+                            k: v for k, v in {
+                                "liquidity_score": r.liquidity_score,
+                                "momentum_score": r.momentum_score,
+                            }.items() if v is not None
+                        }
+                        for r in _cs_rows
+                    }
+
                 # Task #310 (2026-05-20): deterministic sort by symbol — same
                 # invariante anti-deadlock 40P01 das Tasks #251/#273. O loop
                 # abaixo emite INSERT em ``decisions_log`` e dispara
@@ -340,6 +371,9 @@ async def _evaluate_async():
                     # accept either flat or envelope shape (they call
                     # ``unwrap_envelope_value`` internally).
                     indicators = mi.as_flat_dict()
+                    _symbol_component_scores = component_scores_by_symbol.get(symbol)
+                    if _symbol_component_scores:
+                        indicators = {**indicators, **_symbol_component_scores}
 
                     # Shared completeness guard (Task #215) — same rule
                     # used by pipeline_scan and execute_buy. Skip cleanly
