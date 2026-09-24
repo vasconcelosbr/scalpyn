@@ -121,6 +121,32 @@ def test_directional_features_from_closed_candles():
     assert result["higher_lows_5"] is True
 
 
+def test_calculate_derives_di_trend_from_di_plus_minus():
+    """2026-09-24: several profile filters reference `di_trend` (e.g. "DI+ >
+    DI-" == True — PROFILE_INDICATOR_CONTRACT declares it boolean), but
+    feature_engine only ever stored the raw `di_plus`/`di_minus` scalars from
+    `_calc_adx`, never the derived flag — every such filter showed "aguardando
+    coleta" forever, regardless of how fresh di_plus/di_minus were.
+    """
+    n = 80
+    close = np.array([100 + i * 0.15 + math.sin(i / 3) for i in range(n)], dtype=float)
+    df = pd.DataFrame(
+        {
+            "open": close - 0.1,
+            "high": close + np.linspace(0.6, 1.0, n),
+            "low": close - np.linspace(0.6, 1.0, n),
+            "close": close,
+            "volume": np.linspace(100.0, 180.0, n),
+        }
+    )
+
+    result = _engine().calculate(df)
+
+    assert result["di_plus"] is not None
+    assert result["di_minus"] is not None
+    assert result["di_trend"] is (result["di_plus"] > result["di_minus"])
+
+
 def test_vwap_reclaim_bool_uses_previous_closed_candle():
     df = pd.DataFrame(
         {
