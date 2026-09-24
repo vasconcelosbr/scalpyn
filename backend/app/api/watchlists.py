@@ -3307,13 +3307,25 @@ async def _get_watchlist_rejections_payload(
             selected_trace_conditions = trace_filter_conditions
 
     # Build a ScoreEngine for live alpha_score computation on rows that pre-date
-    # task #84 and therefore have no alpha_score stored in analysis_snapshot.
+    # task #84 and therefore have no alpha_score stored in analysis_snapshot
+    # (this always includes L3 spot's live-rejected rows, which hardcode
+    # analysis_snapshot=None above).
+    #
+    # 2026-09-24: must seed from the user's actual global score matrix
+    # (`_global_rules_rej`, already loaded above for the indicator columns) —
+    # not the 3-rule seed_service.DEFAULT_SCORE fallback. A profile's
+    # `scoring.selected_rule_ids` is matched against whatever rule set is
+    # passed in (resolve_profile_scoring_rules), and if even one selected id
+    # is absent it fail-closes to an empty rule list (by design, to avoid
+    # silently scoring against the wrong rules). Every real profile selects
+    # ids from the user's customised matrix, so scoring against the 3-rule
+    # default always fail-closed here, making every live-recomputed
+    # rejection score 0 regardless of how the asset actually performed.
     _rejection_se = None
     if profile_config and ind_map:
         try:
             from ..services.score_engine import ScoreEngine as _SE, merge_score_config
-            from ..services.seed_service import DEFAULT_SCORE
-            _rejection_se = _SE(merge_score_config(DEFAULT_SCORE, profile_config))
+            _rejection_se = _SE(merge_score_config({"scoring_rules": _global_rules_rej}, profile_config))
         except Exception as _e:
             logger.debug("[Pipeline] ScoreEngine init for rejections failed: %s", _e)
 
