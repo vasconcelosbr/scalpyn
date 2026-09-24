@@ -6,11 +6,12 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# quant-feed-pro.lovable.app 302-redirects to mdatahub.scalpyn.com; the
-# client must follow it or every call silently returns an empty body.
-# 2026-09-23: endpoint moved from .../buy-pressure/top-assets to
-# .../buy-pressure/minute-signals (same API key, same request/response shape).
-RADAR_TOP_ASSETS_URL = "https://quant-feed-pro.lovable.app/api/public/radar/v1/buy-pressure/minute-signals"
+# 2026-09-24: reverted to top-assets (was moved to minute-signals on
+# 2026-09-23) and pointed directly at mdatahub.scalpyn.com, skipping the
+# quant-feed-pro.lovable.app redirect hop. Same API key, same request/
+# response shape. follow_redirects stays on as a defensive default in
+# case the direct host ever redirects again.
+RADAR_TOP_ASSETS_URL = "https://mdatahub.scalpyn.com/api/public/radar/v1/buy-pressure/top-assets"
 
 
 async def fetch_top_assets(api_key: str) -> list[dict[str, Any]]:
