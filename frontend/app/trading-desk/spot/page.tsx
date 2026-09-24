@@ -195,8 +195,14 @@ export default function SpotTradingPage() {
   // ── Derived values (safe access) ─────────────────────────────────────────
 
   const scanInterval = config?.scanner?.interval ?? 60;
-  const buyScoreThreshold = config?.buying?.score_threshold ?? 75;
-  const strongBuyScore = config?.buying?.strong_buy_score ?? 85;
+  // 2026-09-24: these read/write `scanner.*` — the fields the backend
+  // (SpotEngineConfig.scanner, execute_buy.py's ScoreThreshold gate) actually
+  // reads. They used to read/write `buying.score_threshold` /
+  // `buying.strong_buy_score`, which don't exist on BuyingConfig — pydantic
+  // silently drops unknown keys, so this slider edited a value nothing ever
+  // read while the real gate stayed stuck wherever it was last set directly.
+  const buyScoreThreshold = config?.scanner?.buy_threshold_score ?? 75;
+  const strongBuyScore = config?.scanner?.strong_buy_threshold ?? 85;
   const maxOpportunitiesPerScan = config?.scanner?.max_opportunities ?? 5;
 
   const perTradePct = config?.buying?.capital_per_trade_pct ?? 10;
@@ -475,7 +481,7 @@ export default function SpotTradingPage() {
           <SliderWithValue
             label="Buy Score Threshold"
             value={buyScoreThreshold}
-            onChange={(v) => updateConfig('buying.score_threshold', v)}
+            onChange={(v) => updateConfig('scanner.buy_threshold_score', v)}
             min={0}
             max={100}
             hint="Minimum score required to place a buy"
@@ -483,7 +489,7 @@ export default function SpotTradingPage() {
           <SliderWithValue
             label="Strong Buy Score"
             value={strongBuyScore}
-            onChange={(v) => updateConfig('buying.strong_buy_score', v)}
+            onChange={(v) => updateConfig('scanner.strong_buy_threshold', v)}
             min={0}
             max={100}
             hint="Score considered a strong conviction buy"
