@@ -205,6 +205,16 @@ class FeatureEngine:
                         results["ema9"] > results["ema50"] > results["ema200"]
                     )
 
+            # ── DI+/DI- trend flag ──────────────────────────────────────────
+            # 2026-09-24: di_plus/di_minus (from _calc_adx, called unconditionally
+            # above — not split per group like the EMA fast/slow keys) were stored
+            # as raw values, but `di_trend` — the boolean several profile filters
+            # reference (e.g. "DI+ > DI-" == True) via PROFILE_INDICATOR_CONTRACT
+            # — was never derived from them, so every profile using it always
+            # showed "aguardando coleta" regardless of collection freshness.
+            if results.get("di_plus") is not None and results.get("di_minus") is not None:
+                results["di_trend"] = results["di_plus"] > results["di_minus"]
+
             # EMA9-vs-EMA21 alignment (within microstructure group)
             if group == "microstructure":
                 if "ema9" in results and "ema21" in results:
