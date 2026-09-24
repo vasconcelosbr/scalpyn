@@ -842,6 +842,58 @@ def test_rejection_snapshot_alpha_score_comes_from_live_score_map():
     assert len(_rsnap["score_rules"]) > 0, "score_rules must not be empty when indicators are present"
 
 
+# ── 2026-09-24: Rejected tab live alpha_score always 0 for custom profiles ─────
+
+def test_rejection_score_engine_must_be_seeded_from_users_real_global_rules():
+    """Regression: `_get_watchlist_rejections_payload` (watchlists.py) built
+    its live-recompute ScoreEngine from `seed_service.DEFAULT_SCORE` (a
+    3-rule stub: rsi_1, rsi_2, ema_trend_1) instead of the user's actual
+    persisted global score matrix -- even though the real matrix was already
+    loaded a few lines above (`_global_rules_rej`, used for the indicator
+    columns) and simply not threaded into the ScoreEngine.
+
+    Every real profile's `scoring.selected_rule_ids` references ids from the
+    user's customised matrix. `resolve_profile_scoring_rules` fail-closes to
+    an empty rule list whenever a selected id can't be resolved against the
+    rules handed to it (by design -- never silently score against the wrong
+    rules), so seeding from DEFAULT_SCORE meant every profile's
+    selected_rule_ids failed to resolve, `ScoreEngine.rules` came back empty,
+    and every live-recomputed rejection score (and its non-zero
+    `evaluation_trace`, e.g. Entry Triggers/Signals) always showed Score = 0
+    regardless of how well the asset actually performed. Live example
+    (2026-09-24): WLD_USDT / PUMP3 scored 73.85 in `decisions_log` for the
+    same evaluation cycle the Rejected tab showed Score 0.
+    """
+    from app.services.score_engine import ScoreEngine, merge_score_config
+
+    # A user's real global matrix -- ids that do NOT exist in DEFAULT_SCORE.
+    user_global_rules = [
+        {"id": "rule_volume_spike_ge_105", "indicator": "volume_spike", "operator": ">=", "value": 1.05, "points": 40, "category": "liquidity"},
+        {"id": "rule_spread_pct_le_02", "indicator": "spread_pct", "operator": "<=", "value": 0.2, "points": 60, "category": "liquidity"},
+    ]
+    profile_config = {
+        "scoring": {"enabled": True, "selected_rule_ids": ["rule_volume_spike_ge_105", "rule_spread_pct_le_02"]},
+    }
+    indicators = {"volume_spike": 1.2, "spread_pct": 0.05}
+
+    # Pre-fix: seeding from DEFAULT_SCORE (neither id resolves) fail-closes
+    # to an empty rule list -> score is always 0 no matter the indicators.
+    from app.services.seed_service import DEFAULT_SCORE
+
+    broken_engine = ScoreEngine(merge_score_config(DEFAULT_SCORE, profile_config))
+    assert broken_engine.rules == []
+    broken_result = broken_engine.compute_score(indicators)
+    assert broken_result["total_score"] == 0.0
+
+    # Fix: seed from the user's real global rules (what `_global_rules_rej`
+    # already holds in watchlists.py) -- selected_rule_ids resolves and the
+    # asset's genuinely-matching indicators produce a non-zero score.
+    fixed_engine = ScoreEngine(merge_score_config({"scoring_rules": user_global_rules}, profile_config))
+    assert len(fixed_engine.rules) == 2
+    fixed_result = fixed_engine.compute_score(indicators)
+    assert fixed_result["total_score"] > 0.0
+
+
 # ── Task #253: Block rules expose OK/TRIPPED outcome ─────────────────────────
 
 
