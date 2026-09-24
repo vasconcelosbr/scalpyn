@@ -517,6 +517,18 @@ async def _execute_buy_cycle_async() -> dict:
                         default_block_engine: Optional[BlockEngine] = None
                         signal_config = await config_service.get_config(db, "signal", user_id)
                         block_config = await config_service.get_config(db, "block", user_id)
+                        # 2026-09-24: this is the live buy-decision score --
+                        # _compute_robust_score below used to score every
+                        # candidate against seed_service.DEFAULT_SCORE (a
+                        # 3-rule stub) instead of the operator's real global
+                        # matrix (same root cause as PR #197's Rejected-tab
+                        # fix, here in the path that actually places orders).
+                        _score_cfg = await config_service.get_config(db, "score", user_id)
+                        score_rules = (
+                            (_score_cfg or {}).get("scoring_rules")
+                            or (_score_cfg or {}).get("rules")
+                            or None
+                        )
                         if signal_config:
                             default_signal_engine = SignalEngine(signal_config)
                         if block_config:
@@ -638,7 +650,7 @@ async def _execute_buy_cycle_async() -> dict:
                     # Authoritative robust score; ``None`` when the engine
                     # cannot produce a value, in which case the candidate
                     # is skipped rather than back-filled from legacy.
-                    resolved = _compute_robust_score(symbol, indicators)
+                    resolved = _compute_robust_score(symbol, indicators, rules=score_rules)
                     if resolved is None:
                         await safe_record_decision(
                             db=db, trace_id=get_trace(),
