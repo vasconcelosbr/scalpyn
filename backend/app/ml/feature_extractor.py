@@ -70,6 +70,18 @@ BASE_FEATURE_COLUMNS: List[str] = [
     "vwap_reclaim_bool",       # vwap_distance_pct crosses from <0 to >=0
     "higher_highs_5",          # last 5 closed highs strictly ascending
     "higher_lows_5",           # last 5 closed lows strictly ascending
+    # 2026-09-25: price position relative to the Bollinger bands (already
+    # computed by price_position.py and used live by profile filters/signals
+    # — e.g. PUMP3's "near upper band, middle band as support" condition —
+    # but previously absent from FEATURE_COLUMNS, so project_capture()'s
+    # whitelist silently dropped them from features_snapshot: the trade
+    # itself evaluated correctly, but the persisted record showed neither
+    # field afterward. Appended at the very end (not inserted earlier) to
+    # preserve the existing prefix order that already-trained models'
+    # feature_names_in_ are compared against (see prediction_service.py's
+    # FEATURE_COLUMNS[:len(model_feature_names)] alignment check).
+    "bb_upper_distance_pct",   # (close - bb_upper) / bb_upper * 100 — negative-to-zero as price nears the upper band
+    "bb_middle_distance_pct",  # (close - bb_middle) / bb_middle * 100 — positive when price holds above the middle band
 ]
 
 FEATURE_ALIASES: Dict[str, str] = {
