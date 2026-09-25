@@ -247,6 +247,31 @@ test("new Entry Trigger receives governed OHLCV identity before save", () => {
   );
 });
 
+test("new Entry Trigger on bb_upper_distance_pct receives period+parameters before save (regression: PERIOD_MISMATCH silently CONTRACT_REJECT-ing PUMP3 candidates)", () => {
+  const prepared = prepareProfileEntryTriggerIdentities({
+    default_timeframe: "5m",
+    entry_triggers: {
+      conditions: [{
+        id: "entry-bb-upper", type: "threshold", indicator: "bb_upper_distance_pct",
+        operator: "between", min: -1, max: 0.3, required: true, enabled: true,
+      }],
+    },
+  }, SOURCE_POLICIES);
+
+  assert.deepEqual(prepared.issues, []);
+  assert.deepEqual(
+    prepared.config.entry_triggers.conditions[0],
+    {
+      id: "entry-bb-upper", type: "threshold", indicator: "bb_upper_distance_pct",
+      operator: "between", min: -1, max: 0.3, required: true, enabled: true,
+      source: "ohlcv", source_provider: "gate.io",
+      provider_policy_id: "spot_gate_closed_ohlcv_v1",
+      max_age_seconds: 360, timeframe: "5m", candle_policy: "CLOSED_ONLY",
+      period: 20, parameters: { deviation: 2.0 },
+    },
+  );
+});
+
 test("new Signal condition receives governed live_trade_flow identity before save (regression: SOURCE_REQUIRED on taker_ratio)", () => {
   const prepared = prepareProfileSignalIdentities({
     default_timeframe: "5m",

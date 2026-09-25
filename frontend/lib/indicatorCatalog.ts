@@ -10,6 +10,7 @@ export interface IndicatorCatalogEntry {
   sections: readonly StrategyProfileSection[];
   defaultPeriod?: number;
   fixedPeriod?: number;
+  defaultParameters?: Record<string, number>;
   noTimeframe?: boolean;
   requiresReferenceWindow?: boolean;
   unit?: "percent";
@@ -61,9 +62,9 @@ export const STRATEGY_PROFILE_INDICATORS: readonly IndicatorCatalogEntry[] = [
   entry("ema50_distance_pct", "EMA 50 Distance %", "number", "price_position", { noTimeframe: true, unit: "percent" }),
   entry("ema200_distance_pct", "EMA 200 Distance %", "number", "price_position", { noTimeframe: true, unit: "percent" }),
   entry("vwap_distance_pct", "VWAP Distance %", "number", "price_position", { noTimeframe: true, unit: "percent" }),
-  entry("bb_upper_distance_pct", "BB Upper Distance %", "number", "price_position", { noTimeframe: true, unit: "percent" }),
-  entry("bb_middle_distance_pct", "BB Middle Distance %", "number", "price_position", { noTimeframe: true, unit: "percent" }),
-  entry("bb_lower_distance_pct", "BB Lower Distance %", "number", "price_position", { noTimeframe: true, unit: "percent" }),
+  entry("bb_upper_distance_pct", "BB Upper Distance %", "number", "price_position", { noTimeframe: true, unit: "percent", defaultPeriod: 20, defaultParameters: { deviation: 2.0 } }),
+  entry("bb_middle_distance_pct", "BB Middle Distance %", "number", "price_position", { noTimeframe: true, unit: "percent", defaultPeriod: 20, defaultParameters: { deviation: 2.0 } }),
+  entry("bb_lower_distance_pct", "BB Lower Distance %", "number", "price_position", { noTimeframe: true, unit: "percent", defaultPeriod: 20, defaultParameters: { deviation: 2.0 } }),
   entry("recent_high_5m_distance_pct", "Recent High 5m Distance %", "number", "price_position", { noTimeframe: true, unit: "percent" }),
   entry("recent_high_15m_distance_pct", "Recent High 15m Distance %", "number", "price_position", { noTimeframe: true, unit: "percent" }),
   entry("recent_high_30m_distance_pct", "Recent High 30m Distance %", "number", "price_position", { noTimeframe: true, unit: "percent" }),
@@ -97,7 +98,7 @@ export const STRATEGY_PROFILE_INDICATORS: readonly IndicatorCatalogEntry[] = [
   entry("atr", "ATR", "number", "trend", { defaultPeriod: 14 }),
   entry("atr_pct", "ATR % (atr_pct)", "number", "trend", { defaultPeriod: 14, unit: "percent" }),
   entry("atr_percent", "ATR %", "number", "trend", { defaultPeriod: 14, unit: "percent" }),
-  entry("bb_width", "Bollinger Width", "number", "trend", { defaultPeriod: 20 }),
+  entry("bb_width", "Bollinger Width", "number", "trend", { defaultPeriod: 20, defaultParameters: { deviation: 2.0 } }),
   entry("psar_trend", "PSAR Trend", "string", "trend", { noTimeframe: true }),
 
   entry("ema5", "EMA 5", "number", "ema", { defaultPeriod: 5 }),

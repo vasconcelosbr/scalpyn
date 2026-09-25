@@ -191,6 +191,8 @@ function conditionIdentity(
     const catalog = STRATEGY_PROFILE_INDICATOR_MAP.get(indicator);
     const configuredPeriod = condition.period ?? catalog?.fixedPeriod ?? catalog?.defaultPeriod;
     if (configuredPeriod !== undefined) reference.period = configuredPeriod;
+    const configuredParameters = condition.parameters ?? catalog?.defaultParameters;
+    if (configuredParameters !== undefined) reference.parameters = configuredParameters;
     reference.timeframe = condition.timeframe || reference.timeframe || policy.timeframe || defaultTimeframe;
     reference.candle_policy = reference.candle_policy || policy.candle_policy;
     delete reference.window_seconds;
@@ -198,6 +200,7 @@ function conditionIdentity(
   } else if (source === "live_trade_flow") {
     reference.window_seconds = reference.window_seconds ?? policy.window_seconds;
     delete reference.period;
+    delete reference.parameters;
     delete reference.timeframe;
     delete reference.snapshot;
     delete reference.candle_policy;
@@ -205,10 +208,12 @@ function conditionIdentity(
     reference.snapshot = reference.snapshot ?? policy.snapshot;
     reference.window_seconds = reference.window_seconds ?? policy.window_seconds;
     delete reference.period;
+    delete reference.parameters;
     delete reference.timeframe;
     delete reference.candle_policy;
   } else {
     delete reference.period;
+    delete reference.parameters;
     delete reference.timeframe;
     delete reference.window_seconds;
     delete reference.snapshot;
