@@ -182,20 +182,67 @@ async def _radar_sync_async():
                         pool_id=_pd["id"], symbol=symbol, market_type="spot",
                         is_active=True, origin="radar", discovered_at=now,
                     ))
-                for symbol in to_remove:
+
+                # 2026-09-25 (operator request): a symbol dropping out of the
+                # radar feed must stop being eligible for NEW entries right
+                # away, but must not lose live indicator/score collection
+                # while it has an open shadow trade (PENDING/RUNNING, e.g.
+                # trailing) — the collector universe is pool_coins.is_active,
+                # so deleting the row mid-trade starves that trade's own
+                # ML capture (features_snapshot ends up with holes) even
+                # though the trade itself keeps monitoring fine via
+                # decision_id. Split the removal set: symbols with an open
+                # position keep their pool_coins row (is_active stays true —
+                # collection continues) but get held_for_open_position=true,
+                # which pipeline_scan's POOL-level query excludes from
+                # L1/L2/L3 propagation — durably blocking new candidacy
+                # (cascade_invalidate_removed_symbols's level_direction='down'
+                # alone is NOT durable: pipeline_scan's own upsert flips it
+                # back to NULL on the very next cycle for any symbol still
+                # is_active=true, so it only covers this one cycle here).
+                # Once the trade completes, the next cycle's diff naturally
+                # re-adds the symbol to to_remove_now (no longer held) and
+                # it gets deleted then — no separate cleanup task needed.
+                from ..services.pool_service import (
+                    cascade_invalidate_removed_symbols,
+                    set_held_for_open_position,
+                    symbols_with_open_shadow_trades,
+                )
+                to_remove_held = await symbols_with_open_shadow_trades(
+                    db, _pd["user_id"], to_remove
+                )
+                to_remove_now = to_remove - to_remove_held
+
+                for symbol in to_remove_now:
                     await db.delete(existing_radar[symbol])
+                if to_remove_held:
+                    await set_held_for_open_position(
+                        db, _pd["id"], to_remove_held, held=True
+                    )
                 if to_remove:
                     # 2026-09-23: same transaction as the pool_coins delete —
                     # L1/L2/L3 must never show a symbol the pool no longer has.
-                    from ..services.pool_service import cascade_invalidate_removed_symbols
+                    # Applies to the full to_remove set (including held-for-
+                    # open-position symbols) for Consolidado visibility, even
+                    # though held_for_open_position is now the durable gate.
                     await cascade_invalidate_removed_symbols(db, _pd["id"], to_remove)
-                # run_db_task auto-commits on successful exit
-                return len(to_add), len(to_remove)
 
-            added, removed = await run_db_task(_persist, celery=True)
+                # A symbol back in the radar feed that was previously held
+                # (a fresh signal on an asset whose earlier trade was still
+                # open last cycle) must resume normal candidacy.
+                reactivated = set(existing_radar.keys()) & _radar_pairs
+                if reactivated:
+                    await set_held_for_open_position(
+                        db, _pd["id"], reactivated, held=False
+                    )
+                # run_db_task auto-commits on successful exit
+                return len(to_add), len(to_remove_now), len(to_remove_held)
+
+            added, removed, held = await run_db_task(_persist, celery=True)
             logger.info(
-                "Pool '%s': radar +%d -%d (top_assets=%d)",
+                "Pool '%s': radar +%d -%d (top_assets=%d)%s",
                 pd["name"], added, removed, len(radar_pairs),
+                f" [{held} held for open position]" if held else "",
             )
             total_added += added
             total_removed += removed

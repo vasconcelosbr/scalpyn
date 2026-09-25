@@ -323,25 +323,63 @@ async def _discover_async():
                         ))
                         added += 1
 
+                held = 0
                 if _auto_remove:
                     to_remove = set(existing_discovered.keys()) - selected_symbols
-                    for symbol in to_remove:
+                    # 2026-09-25 (operator request): don't starve an open
+                    # shadow trade's data collection just because the
+                    # discovery universe moved on. is_active stays true
+                    # (collection continues); held_for_open_position=true
+                    # excludes the symbol from pipeline_scan's L1/L2/L3
+                    # propagation — the durable gate against new candidacy
+                    # (cascade_invalidate_removed_symbols's level_direction
+                    # ='down' alone is undone by pipeline_scan's own upsert
+                    # on the very next cycle for any symbol still
+                    # is_active=true — see radar_auto_discover.py for the
+                    # full rationale). Once the trade completes, the next
+                    # cycle's diff naturally re-adds the symbol without
+                    # held_for_open_position and it gets deleted then.
+                    from ..services.pool_service import (
+                        cascade_invalidate_removed_symbols,
+                        set_held_for_open_position,
+                        symbols_with_open_shadow_trades,
+                    )
+                    to_remove_held = await symbols_with_open_shadow_trades(
+                        db, _pd["user_id"], to_remove
+                    )
+                    held = len(to_remove_held)
+                    for symbol in to_remove - to_remove_held:
                         await db.delete(existing_discovered[symbol])
                         removed += 1
+                    if to_remove_held:
+                        await set_held_for_open_position(
+                            db, _pd["id"], to_remove_held, held=True
+                        )
                     if to_remove:
                         # 2026-09-23: same transaction as the pool_coins delete —
                         # L1/L2/L3 must never show a symbol the pool no longer has.
-                        from ..services.pool_service import cascade_invalidate_removed_symbols
+                        # Applies to the full to_remove set for Consolidado
+                        # visibility, even though held_for_open_position is
+                        # now the durable candidacy gate.
                         await cascade_invalidate_removed_symbols(db, _pd["id"], to_remove)
+
+                    # A symbol back in the selected universe that was
+                    # previously held must resume normal candidacy.
+                    reactivated = set(existing_discovered.keys()) & selected_symbols
+                    if reactivated:
+                        await set_held_for_open_position(
+                            db, _pd["id"], reactivated, held=False
+                        )
                 # run_db_task auto-commits on successful exit
 
-                return added, removed, len(selected_symbols), len(excluded_symbols)
+                return added, removed, len(selected_symbols), len(excluded_symbols), held
 
-            added, removed, universe_size, excluded_count = await run_db_task(_persist, celery=True)
+            added, removed, universe_size, excluded_count, held = await run_db_task(_persist, celery=True)
 
             logger.info(
                 f"Pool '{pd['name']}': +{added} -{removed} assets "
                 f"(universe={universe_size}, exclusions={excluded_count}, auto_refresh=true)"
+                + (f" [{held} held for open position]" if held else "")
             )
             total_added += added
             total_removed += removed
