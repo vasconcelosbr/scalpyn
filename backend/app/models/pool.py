@@ -48,6 +48,15 @@ class PoolCoin(Base):
     # (collectors keep reading it); only the pipeline_scan POOL-level query
     # excludes held_for_open_position=true rows from propagating to L1/L2/L3.
     held_for_open_position = Column(Boolean, default=False, nullable=False)
+    # 2026-09-25 — radar_auto_discover's own top-N selection turned out to be
+    # noisy cycle-to-cycle (observed: 0-4 symbols out of ~19 per ~1min run),
+    # so treating a single cycle's absence as "dropped from the radar" made
+    # held_for_open_position flap almost every symbol almost every cycle,
+    # freezing L1/L2/L3 candidacy platform-wide. radar_last_seen_at is
+    # stamped every cycle a symbol IS in the radar's selection; a symbol
+    # only becomes eligible for removal/hold once it has been continuously
+    # absent for RADAR_ABSENCE_GRACE_SECONDS (radar_auto_discover.py).
+    radar_last_seen_at = Column(DateTime(timezone=True), nullable=True)
 
 
 class PoolAssetExclusion(Base):

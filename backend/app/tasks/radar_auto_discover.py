@@ -10,6 +10,36 @@ from ..tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
+# 2026-09-25 incident: the radar feed's own top-N selection is noisy cycle
+# to cycle (observed live: 0-4 symbols out of a ~19-symbol pool per ~1min
+# run). Treating a single cycle's absence as "dropped from the radar" made
+# held_for_open_position flap for almost every symbol almost every cycle,
+# freezing L1/L2/L3 candidacy platform-wide (top_assets=0 briefly held the
+# ENTIRE PUMP pool at once). A symbol must be continuously absent for at
+# least this long before it's treated as genuinely gone.
+RADAR_ABSENCE_GRACE_SECONDS = 300
+
+
+def radar_absence_debounce(
+    *,
+    absent: set,
+    last_seen_by_symbol: dict,
+    now: datetime,
+    grace_seconds: int = RADAR_ABSENCE_GRACE_SECONDS,
+) -> set:
+    """Symbols in ``absent`` that have been missing from the radar's
+    selection long enough to treat as genuinely dropped, not single-cycle
+    noise. A symbol with no recorded sighting (``None``) is grace-exempt --
+    its true absence duration is unknown, so it falls through to the
+    existing held/removed handling rather than being silently pinned
+    forever.
+    """
+    return {
+        symbol for symbol in absent
+        if last_seen_by_symbol.get(symbol) is None
+        or (now - last_seen_by_symbol[symbol]).total_seconds() >= grace_seconds
+    }
+
 
 def _run_async(coro):
     """Run async coroutine in a sync Celery task.
@@ -174,14 +204,30 @@ async def _radar_sync_async():
                 }
 
                 to_add = _radar_pairs - excluded_symbols - other_origin - set(existing_radar.keys())
-                to_remove = set(existing_radar.keys()) - _radar_pairs
+                present = set(existing_radar.keys()) & _radar_pairs
+                absent = set(existing_radar.keys()) - _radar_pairs
 
                 now = datetime.now(timezone.utc)
                 for symbol in to_add:
                     db.add(PoolCoin(
                         pool_id=_pd["id"], symbol=symbol, market_type="spot",
                         is_active=True, origin="radar", discovered_at=now,
+                        radar_last_seen_at=now,
                     ))
+                for symbol in present:
+                    existing_radar[symbol].radar_last_seen_at = now
+
+                # Absence alone isn't enough -- only symbols continuously
+                # missing for RADAR_ABSENCE_GRACE_SECONDS are treated as
+                # genuinely dropped from the radar (see incident note above).
+                to_remove = radar_absence_debounce(
+                    absent=absent,
+                    last_seen_by_symbol={
+                        symbol: existing_radar[symbol].radar_last_seen_at
+                        for symbol in absent
+                    },
+                    now=now,
+                )
 
                 # 2026-09-25 (operator request): a symbol dropping out of the
                 # radar feed must stop being eligible for NEW entries right
@@ -230,7 +276,7 @@ async def _radar_sync_async():
                 # A symbol back in the radar feed that was previously held
                 # (a fresh signal on an asset whose earlier trade was still
                 # open last cycle) must resume normal candidacy.
-                reactivated = set(existing_radar.keys()) & _radar_pairs
+                reactivated = present
                 if reactivated:
                     await set_held_for_open_position(
                         db, _pd["id"], reactivated, held=False
