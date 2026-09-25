@@ -2,7 +2,7 @@
 with an open shadow trade after it drops out of the radar/discovery
 selection, while still excluding it from new L1/L2/L3 candidacy.
 
-Revision ID: 226_pool_coins_held_for_open_position
+Revision ID: 226_held_for_open_position
 Revises: 225_pump_radar_report_runs
 """
 
@@ -10,7 +10,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "226_pool_coins_held_for_open_position"
+revision = "226_held_for_open_position"
 down_revision = "225_pump_radar_report_runs"
 branch_labels = None
 depends_on = None
