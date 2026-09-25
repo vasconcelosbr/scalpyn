@@ -545,6 +545,72 @@ test("editing a legacy profile does not require identity for untouched Entry Tri
   );
 });
 
+test("re-saving an already-governed bb_upper_distance_pct condition backfills the now-defaulted period/parameters (regression: fast-path 'unchanged' match perpetuated a missing period forever)", () => {
+  const currentConfig = {
+    default_timeframe: "5m",
+    entry_triggers: {
+      conditions: [{
+        id: "entry-bb-upper", type: "threshold", indicator: "bb_upper_distance_pct",
+        operator: "between", min: -1, max: 0.3, required: true, enabled: true,
+        source: "ohlcv", source_provider: "gate.io",
+        provider_policy_id: "spot_gate_closed_ohlcv_v1",
+        max_age_seconds: 741, timeframe: "5m", candle_policy: "CLOSED_ONLY",
+      }],
+    },
+  };
+  // The user only widened the threshold (as they actually did, v25 -> v26);
+  // the identity fields are otherwise untouched, so the fast path would
+  // previously have matched and returned this as-is, keeping period missing.
+  const candidate = {
+    ...currentConfig,
+    entry_triggers: {
+      conditions: [{ ...currentConfig.entry_triggers.conditions[0], max: 0.8 }],
+    },
+  };
+
+  const prepared = prepareProfileEntryTriggerIdentities(
+    candidate,
+    { ohlcv: SOURCE_POLICIES.ohlcv },
+    currentConfig,
+  );
+
+  assert.deepEqual(prepared.issues, []);
+  const resaved = prepared.config.entry_triggers.conditions[0] as Record<string, any>;
+  assert.equal(resaved.max, 0.8);
+  assert.equal(resaved.period, 20);
+  assert.deepEqual(resaved.parameters, { deviation: 2.0 });
+});
+
+test("editing a legacy profile does not require identity for untouched Entry Triggers (rsi/taker_ratio stay source-less)", () => {
+  // Same legacy fixture as above -- confirms the bb_upper_distance_pct
+  // backfill above is scoped to already-governed conditions (carrying
+  // `source`) and does not force identity onto genuinely legacy ones.
+  const currentConfig = {
+    default_timeframe: "5m",
+    entry_triggers: {
+      conditions: [{
+        id: "legacy-rsi", type: "threshold", indicator: "rsi",
+        operator: ">=", value: 55, required: true, enabled: true,
+      }],
+    },
+  };
+  const candidate = {
+    ...currentConfig,
+    entry_triggers: {
+      conditions: [{ ...currentConfig.entry_triggers.conditions[0], value: 52 }],
+    },
+  };
+
+  const prepared = prepareProfileEntryTriggerIdentities(
+    candidate,
+    { ohlcv: SOURCE_POLICIES.ohlcv },
+    currentConfig,
+  );
+
+  assert.deepEqual(prepared.issues, []);
+  assert.equal("source" in prepared.config.entry_triggers.conditions[0], false);
+});
+
 test("a newly added live Entry Trigger still fails closed without a configured live policy", () => {
   const prepared = prepareProfileEntryTriggerIdentities({
     default_timeframe: "5m",

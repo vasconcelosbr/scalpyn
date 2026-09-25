@@ -306,6 +306,36 @@ export function profileSourcePoliciesForEditor(
 }
 
 /** Address legacy debt by feature (indicator/timeframe/period), not array index. */
+/**
+ * A condition that already went through governed identity resolution once
+ * (it carries a `source`) but is still missing a period/parameters its
+ * indicator's catalog entry now defaults is incomplete, not merely
+ * "unchanged" -- e.g. an older bb_upper_distance_pct saved before
+ * defaultPeriod/defaultParameters existed for it. Such a condition must
+ * never take the "same feature, keep as-is" fast path below: doing so
+ * would silently perpetuate the missing period/parameters forever, since
+ * its own (incomplete) key always matches itself.
+ *
+ * Scoped to conditions that already carry `source`: a fully legacy
+ * condition (no source at all, predating governed identity entirely) is
+ * intentionally left alone by the fast path below -- see "editing a
+ * legacy profile does not require identity for untouched Entry Triggers".
+ */
+function _needsIdentityBackfill(condition: Record<string, any>): boolean {
+  if (isProfileComparisonCondition(condition)) return false;
+  if (!condition.source) return false;
+  const indicator = String(condition.indicator || condition.field || "");
+  const catalog = STRATEGY_PROFILE_INDICATOR_MAP.get(indicator);
+  if (!catalog) return false;
+  if (condition.period == null && (catalog.fixedPeriod !== undefined || catalog.defaultPeriod !== undefined)) {
+    return true;
+  }
+  if (condition.parameters == null && catalog.defaultParameters !== undefined) {
+    return true;
+  }
+  return false;
+}
+
 function _conditionFeatureKey(condition: Record<string, any>): string {
   return JSON.stringify(
     isProfileComparisonCondition(condition)
@@ -347,7 +377,7 @@ function _materializeConditionIdentities(
     const condition = { ...raw };
     const key = _conditionFeatureKey(condition);
     const matchingCurrentCount = currentFeatureCounts.get(key) || 0;
-    if (matchingCurrentCount > 0) {
+    if (matchingCurrentCount > 0 && !_needsIdentityBackfill(condition)) {
       currentFeatureCounts.set(key, matchingCurrentCount - 1);
       return condition;
     }
