@@ -377,3 +377,66 @@ async def resolve_root_pool_ids(db, watchlist_ids) -> dict:
         {"ids": watchlist_ids},
     )).fetchall()
     return {r.start_id: r.source_pool_id for r in rows}
+
+
+async def symbols_with_open_shadow_trades(db, user_id, symbols) -> set:
+    """Return the subset of ``symbols`` that have a PENDING/RUNNING shadow
+    trade for ``user_id``.
+
+    2026-09-25 (operator request): a symbol whose radar/discovery signal
+    drops must stop being eligible for NEW L1/L2/L3 candidacy immediately
+    (see :func:`set_held_for_open_position` -- ``cascade_invalidate_removed_
+    symbols`` alone is NOT durable for this: pipeline_scan's own upsert
+    flips ``level_direction`` back to NULL on the very next cycle for any
+    symbol still ``is_active=true`` and still structurally passing L1/L2),
+    but must NOT lose live data collection while a shadow trade on it is
+    still open (PENDING/RUNNING, e.g. trailing) -- indicators/alpha_scores
+    would go stale mid-trade otherwise (see the SUI_USDT/LIT_USDT
+    features_snapshot gap this fixes). Callers use this to decide which
+    symbols in a to-be-removed set must keep their ``pool_coins`` row
+    (collection alive) instead of being deleted.
+    """
+    symbols = list(symbols)
+    if not symbols:
+        return set()
+    rows = (await db.execute(
+        text("""
+            SELECT DISTINCT symbol
+            FROM shadow_trades
+            WHERE user_id = :user_id
+              AND symbol = ANY(:symbols)
+              AND status IN ('PENDING', 'RUNNING')
+        """),
+        {"user_id": user_id, "symbols": symbols},
+    )).fetchall()
+    return {r.symbol for r in rows}
+
+
+async def set_held_for_open_position(db, pool_id, symbols, *, held: bool) -> int:
+    """Set ``pool_coins.held_for_open_position`` for ``symbols`` in ``pool_id``.
+
+    ``held=True`` — the symbol dropped out of the radar/discovery selection
+    but has an open shadow trade; ``pipeline_scan``'s POOL-level query
+    excludes ``held_for_open_position=true`` rows from L1/L2/L3 propagation
+    (no new decision/trade can form on it) while ``is_active`` stays true
+    so collectors (indicators, alpha_scores) keep it fresh.
+
+    ``held=False`` — the symbol is back in the radar/discovery selection
+    (or the caller is about to delete the row outright); clears a stale
+    flag so it resumes normal candidacy.
+    """
+    symbols = list(symbols)
+    if not symbols:
+        return 0
+    result = await db.execute(
+        text("""
+            UPDATE pool_coins
+               SET held_for_open_position = :held
+             WHERE pool_id = :pool_id
+               AND symbol = ANY(:symbols)
+               AND held_for_open_position != :held
+            RETURNING symbol
+        """),
+        {"pool_id": pool_id, "symbols": symbols, "held": held},
+    )
+    return len(result.fetchall())

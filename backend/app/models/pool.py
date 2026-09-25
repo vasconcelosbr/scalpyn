@@ -40,6 +40,14 @@ class PoolCoin(Base):
     added_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     origin = Column(String(20), default='manual')          # "manual" or "discovered"
     discovered_at = Column(DateTime(timezone=True), nullable=True)
+    # 2026-09-25 — operator request: a symbol whose radar/discovery signal
+    # drops must stop being eligible for NEW L1/L2/L3 candidacy immediately,
+    # but must not lose live indicator/alpha_score collection while it has
+    # an open shadow trade (PENDING/RUNNING, e.g. trailing) — see
+    # pool_service.symbols_with_open_shadow_trades. is_active stays true
+    # (collectors keep reading it); only the pipeline_scan POOL-level query
+    # excludes held_for_open_position=true rows from propagating to L1/L2/L3.
+    held_for_open_position = Column(Boolean, default=False, nullable=False)
 
 
 class PoolAssetExclusion(Base):

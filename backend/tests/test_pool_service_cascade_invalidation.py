@@ -8,6 +8,8 @@ from sqlalchemy.dialects import postgresql
 from app.services.pool_service import (
     cascade_invalidate_removed_symbols,
     resolve_root_pool_ids,
+    set_held_for_open_position,
+    symbols_with_open_shadow_trades,
 )
 
 
@@ -55,3 +57,68 @@ async def test_resolve_root_pool_ids_maps_watchlist_to_pool_and_omits_standalone
     result = await resolve_root_pool_ids(db, [wl_pool_linked, wl_standalone])
     assert result == {wl_pool_linked: pool_id}
     assert wl_standalone not in result
+
+
+# ── 2026-09-25: held-for-open-position (keep collection, block new candidacy) ──
+
+
+@pytest.mark.asyncio
+async def test_symbols_with_open_shadow_trades_noop_on_empty_input():
+    db = Obj(execute=AsyncMock())
+    result = await symbols_with_open_shadow_trades(db, uuid4(), [])
+    assert result == set()
+    db.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_symbols_with_open_shadow_trades_returns_only_pending_running_symbols():
+    user_id = uuid4()
+    db = Obj(execute=AsyncMock(
+        return_value=Obj(fetchall=lambda: [Obj(symbol="SUI_USDT"), Obj(symbol="LIT_USDT")])
+    ))
+    result = await symbols_with_open_shadow_trades(
+        db, user_id, {"SUI_USDT", "LIT_USDT", "BTC_USDT"}
+    )
+    assert result == {"SUI_USDT", "LIT_USDT"}
+    query, params = db.execute.call_args.args[0], db.execute.call_args.args[1]
+    sql = str(query.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": False}))
+    assert "shadow_trades" in sql
+    assert "'PENDING'" in sql and "'RUNNING'" in sql
+    assert params["user_id"] == user_id
+    assert set(params["symbols"]) == {"SUI_USDT", "LIT_USDT", "BTC_USDT"}
+
+
+@pytest.mark.asyncio
+async def test_set_held_for_open_position_noop_on_empty_input():
+    db = Obj(execute=AsyncMock())
+    count = await set_held_for_open_position(db, uuid4(), [], held=True)
+    assert count == 0
+    db.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_held_for_open_position_marks_held_true():
+    pool_id = uuid4()
+    db = Obj(execute=AsyncMock(
+        return_value=Obj(fetchall=lambda: [Obj(symbol="SUI_USDT")])
+    ))
+    count = await set_held_for_open_position(db, pool_id, {"SUI_USDT"}, held=True)
+    assert count == 1
+    query, params = db.execute.call_args.args[0], db.execute.call_args.args[1]
+    sql = str(query.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": False}))
+    assert "held_for_open_position" in sql
+    assert params["pool_id"] == pool_id
+    assert params["held"] is True
+    assert set(params["symbols"]) == {"SUI_USDT"}
+
+
+@pytest.mark.asyncio
+async def test_set_held_for_open_position_clears_held_false_on_reactivation():
+    pool_id = uuid4()
+    db = Obj(execute=AsyncMock(
+        return_value=Obj(fetchall=lambda: [Obj(symbol="SUI_USDT")])
+    ))
+    count = await set_held_for_open_position(db, pool_id, {"SUI_USDT"}, held=False)
+    assert count == 1
+    params = db.execute.call_args.args[1]
+    assert params["held"] is False

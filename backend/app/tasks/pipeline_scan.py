@@ -3860,11 +3860,21 @@ async def _run_pipeline_scan():
                     # Task #232: pipeline funnel entry uses the
                     # ingestion gate only. Execution authorisation
                     # (``is_tradable``) is enforced downstream.
+                    # 2026-09-25: held_for_open_position=true rows ARE
+                    # ingestion-active (is_active stays true so collectors
+                    # keep them fresh) but must not propagate into L1/L2/L3 —
+                    # they were dropped from the radar/discovery signal and
+                    # are being kept ONLY so an already-open shadow trade's
+                    # data collection doesn't go stale. This is the one
+                    # query that actually decides "new L3 candidacy", so
+                    # this exclusion is what durably blocks new entries
+                    # (see pool_service.set_held_for_open_position).
                     coin_rows = (await db.execute(
                         select(PoolCoin).where(
                             PoolCoin.pool_id == source_pool_id,
                             PoolCoin.is_active == True,
                             PoolCoin.market_type == wl_market_mode,
+                            PoolCoin.held_for_open_position == False,
                         )
                     )).scalars().all()
                     symbols = filter_real_assets([_normalize_sym(c.symbol) for c in coin_rows])
