@@ -657,6 +657,47 @@ test("new Block Rule condition receives governed OHLCV identity before save", ()
   );
 });
 
+test("re-saving an already-governed ema9_distance_pct Block Rule condition backfills the now-fixed period (regression: 'BOOK VENDEDOR EXTREMO' block silently unresolvable)", () => {
+  // 2026-09-26: PUMP3 added ema9_distance_pct > 1 to an existing block
+  // ("BOOK VENDEDOR EXTREMO") without a period -- same bug class as
+  // bb_upper_distance_pct (#206/#207): ema9_distance_pct is computed with
+  // a fixed period=9 baked into its name (price_position.py), but the
+  // catalog never declared that, so the saved condition never carried
+  // period=9. Live evidence: the AND-chain never even reached this
+  // condition yet (the other two order-book conditions rarely both hold),
+  // so it had never been exercised for real -- but the moment it would be,
+  // it would hit the same PERIOD_MISMATCH -> CONTRACT_REJECT as before.
+  const currentConfig = {
+    default_timeframe: "5m",
+    block_rules: {
+      blocks: [{
+        id: "block_1789997453402", name: "BOOK VENDEDOR EXTREMO", enabled: true, logic: "AND",
+        conditions: [{
+          id: "cond_1790455715596", type: "threshold", indicator: "ema9_distance_pct",
+          operator: ">", value: 1, required: true, enabled: true,
+          source: "ohlcv", source_provider: "gate.io",
+          provider_policy_id: "spot_gate_closed_ohlcv_v1",
+          max_age_seconds: 741, timeframe: "5m", candle_policy: "CLOSED_ONLY",
+        }],
+      }],
+    },
+  };
+  const candidate = {
+    ...currentConfig,
+    block_rules: {
+      blocks: [{
+        ...currentConfig.block_rules.blocks[0],
+        conditions: [{ ...currentConfig.block_rules.blocks[0].conditions[0] }],
+      }],
+    },
+  };
+
+  const prepared = prepareProfileBlockRuleIdentities(candidate, SOURCE_POLICIES, currentConfig);
+
+  const resaved = prepared.config.block_rules.blocks[0].conditions[0] as Record<string, any>;
+  assert.equal(resaved.period, 9);
+});
+
 test("comparison Block Rule condition receives an independently resolved identity per operand", () => {
   const prepared = prepareProfileBlockRuleIdentities({
     default_timeframe: "5m",
