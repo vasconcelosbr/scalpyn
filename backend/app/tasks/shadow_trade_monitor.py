@@ -92,6 +92,30 @@ def _new_post_commit_deadline() -> float:
     return time.monotonic() + max(SHADOW_MONITOR_POST_COMMIT_BUDGET_SECONDS, 1)
 
 
+def allocate_monitor_batch_shares(
+    sources: list[str], remaining_slots: int
+) -> dict[str, int]:
+    """Split ``remaining_slots`` evenly across every non-L3 source with
+    eligible rows, instead of one shared created_at-ASC FIFO across all of
+    them. A single large, slow-draining backlog in one source (e.g.
+    L3_LAB) can otherwise consume every remaining slot every cycle purely
+    by having older rows, permanently starving a much smaller source
+    (e.g. L3_REJECTED) sharing the same pool -- confirmed live 2026-09-26:
+    zero L3_REJECTED shadows completed in 6 days while L3_LAB held a
+    426-row backlog dating back 15 days. Deterministic (sorted input,
+    remainder assigned to the first sources alphabetically) so results are
+    reproducible across runs with the same backlog composition.
+    """
+    if remaining_slots <= 0 or not sources:
+        return {}
+    ordered = sorted(sources)
+    base_share, extra = divmod(remaining_slots, len(ordered))
+    return {
+        source: base_share + (1 if index < extra else 0)
+        for index, source in enumerate(ordered)
+    }
+
+
 async def _run_best_effort_budgeted(
     items,
     worker,
@@ -2350,19 +2374,46 @@ async def _monitor_async() -> Dict[str, Any]:
             # processem o mesmo shadow_trade no mesmo tick.
             rest_shadows: List[ShadowTrade] = []
             if remaining_slots > 0:
-                exclude_ids = [s.id for s in l3_shadows]
-                query = (
-                    select(ShadowTrade)
-                    .where(ShadowTrade.status.in_(("PENDING", "RUNNING")))
+                # Bloco A.5 (2026-09-26 incident): a single created_at-ASC
+                # FIFO across every non-L3 source let one large, slow-
+                # draining backlog (L3_LAB: 426 active rows, oldest from
+                # 2026-09-11) permanently starve a much smaller one
+                # (L3_REJECTED: 49 rows, oldest from 2026-09-20) sharing the
+                # same pool -- L3_LAB's older rows always won the ORDER BY
+                # and consumed every remaining slot, so L3_REJECTED never
+                # got a single monitor pass (confirmed live: zero
+                # L3_REJECTED shadows completed since 2026-09-20, all still
+                # open days past their own timeout_candles). Give each
+                # distinct non-L3 source currently holding eligible rows an
+                # even share of remaining_slots instead of one shared FIFO,
+                # so no source can starve another the same way again.
+                other_sources_result = await db.execute(
+                    select(ShadowTrade.source)
+                    .where(
+                        ShadowTrade.status.in_(("PENDING", "RUNNING")),
+                        ShadowTrade.source != "L3",
+                    )
                     .where(_continuous_only)
-                    .order_by(ShadowTrade.created_at.asc(), ShadowTrade.id.asc())
-                    .with_for_update(skip_locked=True)
-                    .limit(remaining_slots)
+                    .distinct()
                 )
-                if exclude_ids:
-                    query = query.where(ShadowTrade.id.notin_(exclude_ids))
-                res_rest = await db.execute(query)
-                rest_shadows = list(res_rest.scalars().all())
+                other_sources = [row[0] for row in other_sources_result.all()]
+                shares = allocate_monitor_batch_shares(other_sources, remaining_slots)
+                if shares:
+                    for other_source, share in shares.items():
+                        if share <= 0:
+                            continue
+                        res_source = await db.execute(
+                            select(ShadowTrade)
+                            .where(
+                                ShadowTrade.status.in_(("PENDING", "RUNNING")),
+                                ShadowTrade.source == other_source,
+                            )
+                            .where(_continuous_only)
+                            .order_by(ShadowTrade.created_at.asc(), ShadowTrade.id.asc())
+                            .with_for_update(skip_locked=True)
+                            .limit(share)
+                        )
+                        rest_shadows.extend(res_source.scalars().all())
             shadows = l3_shadows + rest_shadows
             l3_in_batch = len(l3_shadows)
             summary["l3_batch_slots_reserved"] = l3_slots
