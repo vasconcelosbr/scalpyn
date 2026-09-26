@@ -348,20 +348,26 @@ async def _discover_async():
                         db, _pd["user_id"], to_remove
                     )
                     held = len(to_remove_held)
-                    for symbol in to_remove - to_remove_held:
+                    to_remove_now = to_remove - to_remove_held
+                    for symbol in to_remove_now:
                         await db.delete(existing_discovered[symbol])
                         removed += 1
                     if to_remove_held:
                         await set_held_for_open_position(
                             db, _pd["id"], to_remove_held, held=True
                         )
-                    if to_remove:
+                    if to_remove_now:
                         # 2026-09-23: same transaction as the pool_coins delete —
-                        # L1/L2/L3 must never show a symbol the pool no longer has.
-                        # Applies to the full to_remove set for Consolidado
-                        # visibility, even though held_for_open_position is
-                        # now the durable candidacy gate.
-                        await cascade_invalidate_removed_symbols(db, _pd["id"], to_remove)
+                        # L1/L2/L3 must never show a symbol the pool no longer
+                        # has. Scoped to to_remove_now only (genuinely deleted,
+                        # no open position) -- see radar_auto_discover.py's
+                        # 2026-09-26 incident note: running this on the full
+                        # to_remove set forces level_direction='down' on a
+                        # symbol with a real open L3 shadow trade, hiding it
+                        # from Aprovado/L3 Consolidado even though
+                        # ACTIVE_TRADE_ALREADY_EXISTS is designed to keep it
+                        # visible while blocking a second trade.
+                        await cascade_invalidate_removed_symbols(db, _pd["id"], to_remove_now)
 
                     # A symbol back in the selected universe that was
                     # previously held must resume normal candidacy.

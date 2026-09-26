@@ -265,13 +265,23 @@ async def _radar_sync_async():
                     await set_held_for_open_position(
                         db, _pd["id"], to_remove_held, held=True
                     )
-                if to_remove:
+                if to_remove_now:
                     # 2026-09-23: same transaction as the pool_coins delete —
-                    # L1/L2/L3 must never show a symbol the pool no longer has.
-                    # Applies to the full to_remove set (including held-for-
-                    # open-position symbols) for Consolidado visibility, even
-                    # though held_for_open_position is now the durable gate.
-                    await cascade_invalidate_removed_symbols(db, _pd["id"], to_remove)
+                    # L1/L2/L3 must never show a symbol the pool no longer
+                    # has. Scoped to to_remove_now only (genuinely deleted,
+                    # no open position) -- 2026-09-26 incident: this used to
+                    # run on the full to_remove set, including
+                    # to_remove_held. That forced level_direction='down' on
+                    # a symbol with a real open L3 shadow trade every time it
+                    # got held (e.g. from ongoing radar noise), hiding it
+                    # from Aprovado/L3 Consolidado even though
+                    # l3_trade_consolidation's ACTIVE_TRADE_ALREADY_EXISTS
+                    # path is specifically designed to keep such a symbol
+                    # visible (pointing at the existing shadow) while
+                    # blocking a second one -- confirmed live for ZEC_USDT.
+                    # A held symbol's level_direction must reflect its own
+                    # L3 evaluation, not a removal cascade.
+                    await cascade_invalidate_removed_symbols(db, _pd["id"], to_remove_now)
 
                 # A symbol back in the radar feed that was previously held
                 # (a fresh signal on an asset whose earlier trade was still
