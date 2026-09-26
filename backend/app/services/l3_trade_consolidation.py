@@ -43,6 +43,22 @@ REASON_CONCURRENT_TRADE = "CONCURRENT_ACTIVE_TRADE_CREATED"
 # reason_code from the upfront outbox-level AUTHORIZATION_EXPIRED so an
 # operator can tell whether expiry happened before or after lock contention.
 REASON_EXPIRED_AFTER_LOCK = "AUTHORIZATION_EXPIRED_AFTER_LOCK"
+# 2026-09-26 incident: ``_create_from_decision`` returning ``trade_id=None``
+# with NEITHER a reconciled Shadow (by decision_id) NOR a concurrent active
+# one is a genuine unresolved race (e.g. another consolidation attempt's
+# Shadow was created and already resolved to COMPLETED between this
+# function's own active-trade check and its insert). The S0.5 comment above
+# already anticipated a version of this ("a retry ... would find no active
+# trade and hit the fail-closed raise below forever") but the raise it left
+# in place makes that literal: the outbox event never reaches PROCESSED, so
+# the SAME decision gets retried and re-raises every single subsequent scan
+# cycle forever (confirmed live for ZEC_USDT/XRP_USDT -- the same event_id
+# failing on every retry, contributing errors=1 to every pipeline_scan
+# result indefinitely). Recording this as a diagnosable SUPPRESSED outcome
+# instead lets the outbox event reach PROCESSED and the retry loop stop; a
+# fresh decision on the symbol's next candle gets a normal, unencumbered
+# attempt at Shadow creation.
+REASON_UNRESOLVED_RACE = "SHADOW_CREATION_RACE_UNRESOLVED"
 SUPPRESSION_EVENT_TYPE = "PROFILE_CONSOLIDATION"
 
 
@@ -759,9 +775,47 @@ async def consolidate_l3_candidates(
                             direction=direction,
                         )
                         if concurrent is None:
-                            raise RuntimeError(
-                                "consolidated_shadow_insert_returned_none_without_active_trade"
+                            recorded = 0
+                            for rank, candidate in enumerate(ranked, start=1):
+                                recorded += int(
+                                    await _record_suppressed(
+                                        db,
+                                        candidate=candidate,
+                                        event_id=event_id,
+                                        reason_code=REASON_UNRESOLVED_RACE,
+                                        winner=None,
+                                        winner_trade_id=None,
+                                        candidate_rank=rank,
+                                        candidate_count=candidate_count,
+                                        scan_run_id=scan_run_id,
+                                        rule_version=rule_version,
+                                    )
+                                )
+                            logger.warning(
+                                "l3_profile_consolidation unresolved_race "
+                                "event_id=%s symbol=%s direction=%s "
+                                "winner_decision_id=%s scan_run_id=%s -- "
+                                "insert returned no id but neither a "
+                                "reconciled nor a concurrent active Shadow "
+                                "was found; recording SUPPRESSED instead of "
+                                "failing the whole batch",
+                                event_id, symbol, direction,
+                                winner.decision_id, scan_run_id,
                             )
+                            results.append(
+                                ConsolidationResult(
+                                    event_id=event_id,
+                                    symbol=symbol,
+                                    direction=direction,
+                                    decision="SUPPRESSED",
+                                    reason_code=REASON_UNRESOLVED_RACE,
+                                    winner_profile_id=None,
+                                    trade_id=None,
+                                    candidate_count=candidate_count,
+                                    suppressed_count=recorded,
+                                )
+                            )
+                            continue
                         recorded = 0
                         for rank, candidate in enumerate(ranked, start=1):
                             recorded += int(

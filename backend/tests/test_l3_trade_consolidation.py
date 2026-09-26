@@ -19,6 +19,7 @@ from app.services.l3_trade_consolidation import (
     REASON_CONCURRENT_TRADE,
     REASON_EXPIRED_AFTER_LOCK,
     REASON_LOWER_PRIORITY,
+    REASON_UNRESOLVED_RACE,
     EligibleL3Candidate,
     build_consolidation_event_id,
     candle_open_for_timeframe,
@@ -577,6 +578,41 @@ async def test_retry_after_own_shadow_already_closed_reconciles_not_raises(monke
     assert result[0].decision == "CREATED"
     assert result[0].trade_id == str(already_closed_shadow.id)
     assert shared.created == 0  # nothing new was inserted — reconciled only
+
+
+@pytest.mark.asyncio
+async def test_unresolved_race_is_suppressed_not_raised(monkeypatch):
+    """2026-09-26 incident: insert conflicted (trade_id=None) but NEITHER
+    the winner's own decision_id NOR any currently-active Shadow explains
+    why -- a genuine unresolved race between this attempt's own checks and
+    another one's insert+resolution. Confirmed live: the same event_id for
+    ZEC_USDT/XRP_USDT re-raised on every single subsequent scan cycle
+    forever, since the old ``raise RuntimeError(...)`` here never let the
+    outbox event reach PROCESSED. Must record SUPPRESSED and let the
+    consolidation batch continue instead.
+    """
+    shared = SharedState()
+    user_id = uuid4()
+    rows = [
+        candidate(user_id=user_id, decision_id=1, profile_name="A"),
+        candidate(user_id=user_id, decision_id=2, profile_name="B"),
+    ]
+    add_decisions(shared, rows)
+    install_fake_runtime(monkeypatch, shared)
+    # shared.reconciled_shadow and shared.active both stay None -- neither
+    # lookup finds anything to explain the conflict.
+
+    async def fake_create_conflict(db, decision, *_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(shadow_trade_service, "_create_from_decision", fake_create_conflict)
+
+    result = await consolidate_l3_candidates(rows, scan_run_id="scan-unresolved")
+
+    assert result[0].decision == "SUPPRESSED"
+    assert result[0].reason_code == REASON_UNRESOLVED_RACE
+    assert result[0].trade_id is None
+    assert shared.created == 0
 
 
 @pytest.mark.asyncio
