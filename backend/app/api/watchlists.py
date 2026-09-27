@@ -21,7 +21,7 @@ from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query, Response
-from sqlalchemy import select, text, func
+from sqlalchemy import select, text, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db, AsyncSessionLocal
@@ -982,6 +982,26 @@ async def list_watchlists(
         )
         counts = {row.watchlist_id: row.cnt for row in count_result.fetchall()}
 
+        from ..services.pool_service import load_radar_watchlist_eligibility
+        radar_memberships = await load_radar_watchlist_eligibility(
+            db, user_id=user_id,
+            watchlist_ids=[w.id for w in wls if w.market_mode == "spot"],
+        )
+        if radar_memberships:
+            active_rows = (await db.execute(
+                select(PipelineWatchlistAsset.watchlist_id, PipelineWatchlistAsset.symbol)
+                .where(
+                    PipelineWatchlistAsset.watchlist_id.in_(radar_memberships),
+                    or_(PipelineWatchlistAsset.level_direction.is_(None),
+                        PipelineWatchlistAsset.level_direction == "up"),
+                )
+            )).fetchall()
+            active_by_watchlist = {wid: set() for wid in radar_memberships}
+            for row in active_rows:
+                if row.symbol in radar_memberships[row.watchlist_id]:
+                    active_by_watchlist[row.watchlist_id].add(row.symbol)
+            counts.update({wid: len(symbols) for wid, symbols in active_by_watchlist.items()})
+
         profile_ids = [str(w.profile_id) for w in wls if w.profile_id]
         if profile_ids:
             pname_rows = (await db.execute(
@@ -1586,6 +1606,16 @@ async def _intersect_assets_with_active_parent(
     _visited: Optional[set[UUID]] = None,
 ) -> List[PipelineWatchlistAsset]:
     """Fail closed against the complete persisted parent chain."""
+    if not assets:
+        return assets
+    if getattr(wl, "source_pool_id", None):
+        from ..services.pool_service import load_radar_watchlist_eligibility
+        memberships = await load_radar_watchlist_eligibility(
+            db, user_id=wl.user_id, watchlist_ids=[wl.id],
+            market_type=getattr(wl, "market_mode", None) or "spot",
+        )
+        if wl.id in memberships:
+            assets = [asset for asset in assets if asset.symbol in memberships[wl.id]]
     if not wl.source_watchlist_id or not assets:
         return assets
     visited = set(_visited or set())
@@ -1596,6 +1626,7 @@ async def _intersect_assets_with_active_parent(
         select(PipelineWatchlist).where(
             PipelineWatchlist.id == wl.source_watchlist_id,
             PipelineWatchlist.user_id == wl.user_id,
+            PipelineWatchlist.market_mode == (getattr(wl, "market_mode", None) or "spot"),
         )
     )).scalars().first()
     if parent is None:
@@ -3198,6 +3229,14 @@ async def _get_watchlist_rejections_payload(
         .where(PipelineWatchlistRejection.watchlist_id == wl.id)
         .order_by(PipelineWatchlistRejection.recorded_at.desc(), PipelineWatchlistRejection.symbol.asc())
     )).scalars().all()
+
+    from ..services.pool_service import load_radar_watchlist_eligibility
+    radar_memberships = await load_radar_watchlist_eligibility(
+        db, user_id=user_id, watchlist_ids=[wl.id],
+        market_type=getattr(wl, "market_mode", None) or "spot",
+    )
+    if wl.id in radar_memberships:
+        rows = [row for row in rows if row.symbol in radar_memberships[wl.id]]
 
     _l3_live_approved_count: Optional[int] = None
     if effective_level == "L3" and getattr(wl, "market_mode", "spot") == "spot":

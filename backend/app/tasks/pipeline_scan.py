@@ -3571,7 +3571,7 @@ async def _broadcast_scan_funnel(
 async def _run_pipeline_scan():
     from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
     from ..models.pipeline_watchlist import PipelineWatchlist
-    from ..models.pool import PoolCoin
+    from ..models.pool import Pool, PoolCoin
     from ..models.config_profile import ConfigProfile
     from ..models.profile import Profile
     from ..models.shadow_trade import ShadowTrade
@@ -3838,12 +3838,16 @@ async def _run_pipeline_scan():
 
                 if source_watchlist_id:
                     upstream_rows = (await db.execute(text("""
-                        SELECT symbol
-                        FROM pipeline_watchlist_assets
-                        WHERE watchlist_id = :wid
-                          AND (level_direction IS NULL OR level_direction = 'up')
-                        ORDER BY alpha_score DESC NULLS LAST
-                    """), {"wid": source_watchlist_id})).fetchall()
+                        SELECT a.symbol
+                        FROM pipeline_watchlist_assets a
+                        JOIN pipeline_watchlists parent ON parent.id = a.watchlist_id
+                        WHERE a.watchlist_id = :wid
+                          AND parent.user_id = :user_id
+                          AND parent.market_mode = :market_type
+                          AND (a.level_direction IS NULL OR a.level_direction = 'up')
+                        ORDER BY a.alpha_score DESC NULLS LAST
+                    """), {"wid": source_watchlist_id, "user_id": wl.user_id,
+                            "market_type": wl.market_mode or "spot"})).fetchall()
                     symbols = filter_real_assets([_normalize_sym(r.symbol) for r in upstream_rows])
                     upstream_symbols = set(symbols)
                     logger.info(
@@ -3861,41 +3865,22 @@ async def _run_pipeline_scan():
                     # Task #232: pipeline funnel entry uses the
                     # ingestion gate only. Execution authorisation
                     # (``is_tradable``) is enforced downstream.
-                    # 2026-09-25: held_for_open_position=true rows ARE
-                    # ingestion-active (is_active stays true so collectors
-                    # keep them fresh) but must not propagate into L1/L2/L3 —
-                    # they were dropped from the radar/discovery signal and
-                    # are being kept ONLY so an already-open shadow trade's
-                    # data collection doesn't go stale. This is the one
-                    # query that actually decides "new L3 candidacy", so
-                    # this exclusion is what durably blocks new entries
-                    # (see pool_service.set_held_for_open_position).
-                    #
-                    # 2026-09-27: that blanket exclusion had an unreviewed
-                    # side effect: excluding a held symbol from `symbols`
-                    # here cascades all the way down through
-                    # _intersect_with_upstream (L1 -> L2 -> L3), forcing
-                    # level_direction='down' at every level and hiding it
-                    # from Aprovado/L3 Consolidado -- the exact symptom
-                    # #209 fixed for the radar-cascade path, recurring here
-                    # through this independent one (confirmed live for
-                    # ZEC_USDT/ONDO_USDT/LINK_USDT, each with a RUNNING L3
-                    # shadow trade hidden this way). A held symbol with an
-                    # actual open L3 shadow must keep propagating so it
-                    # stays visible; l3_trade_consolidation.py's
-                    # ACTIVE_TRADE_ALREADY_EXISTS / find_active_l3_shadow()
-                    # check already blocks a second entry for it
-                    # regardless, so re-including it here cannot reopen a
-                    # position. A held symbol with NO open L3 shadow (e.g.
-                    # a stale/transient flag) stays excluded as before.
+                    # Preserve non-radar discovery's existing held policy.
+                    # The independent radar-membership gate below applies to
+                    # every layer, including snapshots whose parent is stale.
                     held_with_open_trade = (await db.execute(
                         select(ShadowTrade.symbol).where(
+                            ShadowTrade.user_id == wl.user_id,
                             ShadowTrade.source == "L3",
                             ShadowTrade.status.in_(["PENDING", "RUNNING"]),
+                            (ShadowTrade.direction == "SPOT") if wl_market_mode == "spot"
+                            else ShadowTrade.direction.in_(["LONG", "SHORT"]),
                         ).distinct()
                     )).scalars().all()
                     coin_rows = (await db.execute(
-                        select(PoolCoin).where(
+                        select(PoolCoin).join(Pool, Pool.id == PoolCoin.pool_id).where(
+                            Pool.user_id == wl.user_id,
+                            Pool.market_type == wl_market_mode,
                             PoolCoin.pool_id == source_pool_id,
                             PoolCoin.is_active == True,
                             PoolCoin.market_type == wl_market_mode,
@@ -3931,6 +3916,16 @@ async def _run_pipeline_scan():
                         wl.name, effective_level, source_pool_id, len(symbols),
                     )
 
+                from ..services.pool_service import load_radar_watchlist_eligibility
+                radar_memberships = await load_radar_watchlist_eligibility(
+                    db, user_id=wl.user_id, watchlist_ids=[wl.id],
+                    market_type=wl.market_mode or "spot",
+                )
+                if wl.id in radar_memberships:
+                    eligible = radar_memberships[wl.id]
+                    symbols = [symbol for symbol in symbols if symbol in eligible]
+                    upstream_symbols.intersection_update(eligible)
+
                 if effective_level in {"L1", "L2", "L3"}:
                     symbols = _intersect_with_upstream(
                         symbols=symbols,
@@ -3942,7 +3937,7 @@ async def _run_pipeline_scan():
                     assert set(symbols).issubset(upstream_symbols)
 
                 if not symbols:
-                    if source_watchlist_id:
+                    if source_watchlist_id or wl.id in radar_memberships:
                         # Upstream watchlist was consulted and approved 0 symbols.
                         # Immediately clear all active assets in this stage so the
                         # downstream reflects the upstream's 0-approved state.

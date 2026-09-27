@@ -23,7 +23,7 @@ during the transition.
 import logging
 import warnings
 
-from sqlalchemy import text
+from sqlalchemy import String, and_, exists, literal, or_, select, text
 
 from ..utils.symbol_filters import filter_real_assets
 
@@ -377,6 +377,159 @@ async def resolve_root_pool_ids(db, watchlist_ids) -> dict:
         {"ids": watchlist_ids},
     )).fetchall()
     return {r.start_id: r.source_pool_id for r in rows}
+
+
+def radar_pool_coin_is_candidate(pool, coin):
+    """Radar membership is independent of the collection/shadow universe."""
+    return and_(
+        pool.is_active.is_(True),
+        pool.overrides["radar_feed_health"]["status"].as_string() == "healthy",
+        coin.is_active.is_(True),
+        coin.held_for_open_position.is_(False),
+        coin.origin == "radar",
+    )
+
+
+def _radar_watchlist_ancestry(*, user_id, watchlist_ids, market_type):
+    from ..models.pipeline_watchlist import PipelineWatchlist
+
+    ancestry = (
+        select(
+            PipelineWatchlist.id.label("watchlist_id"),
+            PipelineWatchlist.id.label("id"),
+            PipelineWatchlist.source_pool_id,
+            PipelineWatchlist.source_watchlist_id,
+        )
+        .where(
+            PipelineWatchlist.id.in_(watchlist_ids),
+            PipelineWatchlist.user_id == user_id,
+            PipelineWatchlist.market_mode == market_type,
+        )
+        .cte("radar_ancestry", recursive=True)
+    )
+    # UNION also terminates a malformed cyclic chain without granting access.
+    ancestry = ancestry.union(
+        select(
+            ancestry.c.watchlist_id,
+            PipelineWatchlist.id,
+            PipelineWatchlist.source_pool_id,
+            PipelineWatchlist.source_watchlist_id,
+        ).join(ancestry, PipelineWatchlist.id == ancestry.c.source_watchlist_id)
+        .where(
+            PipelineWatchlist.user_id == user_id,
+            PipelineWatchlist.market_mode == market_type,
+        )
+    )
+    return ancestry
+
+
+def _radar_watchlist_eligibility_statement(*, user_id, watchlist_ids, market_type):
+    from ..models.pipeline_watchlist import PipelineWatchlist
+    from ..models.pool import Pool, PoolCoin
+
+    ancestry = _radar_watchlist_ancestry(
+        user_id=user_id, watchlist_ids=watchlist_ids, market_type=market_type,
+    )
+    candidates = (
+        select(ancestry.c.watchlist_id, PoolCoin.symbol, literal(False).label("invalid_chain"))
+        .select_from(ancestry)
+        .join(Pool, and_(
+            Pool.id == ancestry.c.source_pool_id,
+            Pool.overrides["radar_enabled"].as_boolean().is_(True),
+        ))
+        .outerjoin(PoolCoin, and_(
+            Pool.user_id == user_id,
+            Pool.market_type == market_type,
+            PoolCoin.pool_id == Pool.id,
+            PoolCoin.market_type == market_type,
+            radar_pool_coin_is_candidate(Pool, PoolCoin),
+        ))
+        .distinct()
+    )
+    valid_parent = exists(select(PipelineWatchlist.id).where(
+        PipelineWatchlist.id == ancestry.c.source_watchlist_id,
+        PipelineWatchlist.user_id == user_id,
+        PipelineWatchlist.market_mode == market_type,
+    )).correlate(ancestry)
+    valid_pool = exists(select(Pool.id).where(
+        Pool.id == ancestry.c.source_pool_id,
+        Pool.user_id == user_id,
+        Pool.market_type == market_type,
+    )).correlate(ancestry)
+    terminal = ancestry.alias("terminal_ancestry")
+    has_terminal = exists(select(terminal.c.watchlist_id).where(
+        terminal.c.watchlist_id == ancestry.c.watchlist_id,
+        or_(terminal.c.source_watchlist_id.is_(None), terminal.c.source_pool_id.is_not(None)),
+    )).correlate(ancestry)
+    # A broken/foreign parent is not a standalone watchlist. Fail closed
+    # rather than interpreting an ancestry cut as permission to skip gating.
+    invalid = select(
+        ancestry.c.watchlist_id, literal(None, String).label("symbol"),
+        literal(True).label("invalid_chain"),
+    ).where(or_(
+        and_(ancestry.c.source_watchlist_id.is_not(None), ~valid_parent),
+        and_(ancestry.c.source_pool_id.is_not(None), ~valid_pool),
+        ~has_terminal,
+    ))
+    return candidates.union(invalid)
+
+
+async def load_radar_watchlist_eligibility(
+    db, *, user_id, watchlist_ids, market_type="spot"
+) -> dict:
+    """Map radar-rooted watchlists to their current eligible symbols.
+
+    An empty set means a radar root exists but cannot offer candidates.
+    Missing keys are non-radar/standalone chains and keep their own policy.
+    Collectors must continue using the ingestion helpers, never this gate.
+    """
+    watchlist_ids = list(watchlist_ids)
+    if not watchlist_ids:
+        return {}
+    rows = (await db.execute(_radar_watchlist_eligibility_statement(
+        user_id=user_id, watchlist_ids=watchlist_ids, market_type=market_type,
+    ))).fetchall()
+    memberships = {}
+    invalid_chains = set()
+    for row in rows:
+        symbols = memberships.setdefault(row.watchlist_id, set())
+        if row.invalid_chain:
+            invalid_chains.add(row.watchlist_id)
+        if row.symbol is not None:
+            symbols.add(normalize_pool_symbol(row.symbol))
+    for watchlist_id in invalid_chains:
+        memberships[watchlist_id] = set()
+    return memberships
+
+
+async def radar_shadow_entry_is_eligible(
+    db, *, user_id, watchlist_id, symbol, market_type="spot"
+) -> bool:
+    """Serialize radar shadow entry with the sync's pool lock, then re-read.
+
+    This is only an entry gate; existing shadows and ingestion never call it.
+    The caller must hold its transaction through the eventual shadow insert.
+    """
+    from uuid import UUID
+    from ..models.pool import Pool
+
+    watchlist_id = UUID(str(watchlist_id))
+    ancestry = _radar_watchlist_ancestry(
+        user_id=user_id, watchlist_ids=[watchlist_id], market_type=market_type,
+    )
+    await db.execute(
+        select(Pool.id).where(
+            Pool.id.in_(select(ancestry.c.source_pool_id)),
+            Pool.user_id == user_id,
+            Pool.market_type == market_type,
+            Pool.overrides["radar_enabled"].as_boolean().is_(True),
+        ).order_by(Pool.id).with_for_update(of=Pool)
+    )
+    memberships = await load_radar_watchlist_eligibility(
+        db, user_id=user_id, watchlist_ids=[watchlist_id], market_type=market_type,
+    )
+    return (watchlist_id not in memberships
+            or normalize_pool_symbol(symbol) in memberships[watchlist_id])
 
 
 async def symbols_with_open_shadow_trades(db, user_id, symbols) -> set:

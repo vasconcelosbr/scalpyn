@@ -1,75 +1,298 @@
+"""Radar lifecycle regressions against a real, isolated PostgreSQL schema.
+
+Set SHADOW_MONITOR_TEST_DATABASE_URL to the local scalpyn_monitor_test database.
+These exercise the production reconciler and its real watchlist cascade SQL.
+"""
 from datetime import datetime, timedelta, timezone
+import os
+from uuid import uuid4
 
-from app.tasks.radar_auto_discover import (
-    RADAR_ABSENCE_GRACE_SECONDS,
-    radar_absence_debounce,
-)
+import pytest
+import pytest_asyncio
+from sqlalchemy import Column, MetaData, Table, select, text
+from sqlalchemy.engine import make_url
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from app.models.pool import Pool, PoolAssetExclusion, PoolCoin
+from app.services.pool_service import radar_pool_coin_is_candidate
+from app.services.radar_pool_sync import operator_pool_overrides, reconcile_radar_pool
 
 
-# 2026-09-25 incident: the radar feed's own top-N selection is noisy
-# cycle-to-cycle (observed live: 0-4 symbols out of a ~19-symbol pool per
-# ~1min run). Treating a single cycle's absence as "dropped from the radar"
-# made held_for_open_position flap for almost every symbol almost every
-# cycle, freezing L1/L2/L3 candidacy platform-wide.
-
-
-def test_symbol_absent_within_grace_window_is_not_removed():
-    now = datetime(2026, 9, 25, 20, 40, tzinfo=timezone.utc)
-    last_seen = {"BTC_USDT": now - timedelta(seconds=RADAR_ABSENCE_GRACE_SECONDS - 30)}
-    result = radar_absence_debounce(
-        absent={"BTC_USDT"}, last_seen_by_symbol=last_seen, now=now
+@pytest_asyncio.fixture
+async def radar_db():
+    database_url = os.environ.get("SHADOW_MONITOR_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("SHADOW_MONITOR_TEST_DATABASE_URL is not configured")
+    parsed = make_url(database_url)
+    if parsed.host not in {"127.0.0.1", "localhost", "::1"} or (
+        parsed.database != "scalpyn_monitor_test"
+    ):
+        pytest.fail("Radar integration tests require an isolated local test database")
+    schema = f"radar_sync_test_{uuid4().hex}"
+    engine = create_async_engine(
+        parsed.set(drivername="postgresql+asyncpg"),
+        connect_args={"server_settings": {"search_path": schema}},
     )
-    assert result == set()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    metadata = MetaData()
+    for model in (Pool, PoolCoin, PoolAssetExclusion):
+        Table(
+            model.__tablename__, metadata,
+            *(Column(c.name, c.type, primary_key=c.primary_key)
+              for c in model.__table__.columns),
+        )
+    ids = {key: uuid4() for key in (
+        "user", "pump", "spot", "pump_root", "pump_l3", "spot_root",
+    )}
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+            await connection.run_sync(metadata.create_all)
+            await connection.execute(text("""
+                CREATE TABLE shadow_trades (
+                    id uuid PRIMARY KEY, user_id uuid, symbol text,
+                    status text, source text, config_snapshot jsonb
+                )
+            """))
+            await connection.execute(text("""
+                CREATE TABLE pipeline_watchlists (
+                    id uuid PRIMARY KEY, source_pool_id uuid,
+                    source_watchlist_id uuid
+                )
+            """))
+            await connection.execute(text("""
+                CREATE TABLE pipeline_watchlist_assets (
+                    watchlist_id uuid, symbol text, level_direction text,
+                    level_change_at timestamptz
+                )
+            """))
+        async with sessions() as db, db.begin():
+            db.add_all([
+                Pool(id=ids["pump"], user_id=ids["user"], name="PUMP",
+                     overrides={"radar_enabled": True}),
+                Pool(id=ids["spot"], user_id=ids["user"], name="POOLSPOT",
+                     overrides={"auto_refresh_enabled": True}),
+            ])
+            await db.execute(text("""
+                INSERT INTO pipeline_watchlists
+                    (id, source_pool_id, source_watchlist_id)
+                VALUES (:pump_root, :pump, NULL), (:pump_l3, NULL, :pump_root),
+                       (:spot_root, :spot, NULL)
+            """), ids)
+            await db.execute(text("""
+                INSERT INTO pipeline_watchlist_assets
+                    (watchlist_id, symbol, level_direction)
+                VALUES (:pump_root, 'BTC_USDT', 'up'),
+                       (:pump_l3, 'BTC_USDT', 'up'),
+                       (:spot_root, 'BTC_USDT', 'up')
+            """), ids)
+        yield sessions, ids
+    finally:
+        async with engine.begin() as connection:
+            await connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        await engine.dispose()
 
 
-def test_symbol_absent_past_grace_window_is_removed():
-    now = datetime(2026, 9, 25, 20, 40, tzinfo=timezone.utc)
-    last_seen = {"BTC_USDT": now - timedelta(seconds=RADAR_ABSENCE_GRACE_SECONDS + 1)}
-    result = radar_absence_debounce(
-        absent={"BTC_USDT"}, last_seen_by_symbol=last_seen, now=now
-    )
-    assert result == {"BTC_USDT"}
+async def _sync(sessions, ids, pairs, **kwargs):
+    async with sessions() as db, db.begin():
+        return await reconcile_radar_pool(
+            db, pool_id=ids["pump"], user_id=ids["user"], radar_pairs=pairs,
+            **kwargs,
+        )
 
 
-def test_symbol_absent_exactly_at_grace_boundary_is_removed():
-    now = datetime(2026, 9, 25, 20, 40, tzinfo=timezone.utc)
-    last_seen = {"BTC_USDT": now - timedelta(seconds=RADAR_ABSENCE_GRACE_SECONDS)}
-    result = radar_absence_debounce(
-        absent={"BTC_USDT"}, last_seen_by_symbol=last_seen, now=now
-    )
-    assert result == {"BTC_USDT"}
+async def _coins(sessions, pool_id):
+    async with sessions() as db:
+        return (await db.scalars(select(PoolCoin).where(
+            PoolCoin.pool_id == pool_id,
+        ))).all()
 
 
-def test_symbol_never_stamped_is_grace_exempt_and_removed_immediately():
-    """A pre-migration row (radar_last_seen_at is None) must not be pinned
-    forever just because its true absence duration is unknown."""
-    now = datetime(2026, 9, 25, 20, 40, tzinfo=timezone.utc)
-    result = radar_absence_debounce(
-        absent={"BTC_USDT"}, last_seen_by_symbol={"BTC_USDT": None}, now=now
-    )
-    assert result == {"BTC_USDT"}
+async def _open_shadow(db, ids, symbol, source="L3", status="RUNNING", user_id=None):
+    shadow_id = uuid4()
+    await db.execute(text("""
+        INSERT INTO shadow_trades
+            (id, user_id, symbol, source, status, config_snapshot)
+        VALUES (:id, :user_id, :symbol, :source, :status, '{"immutable":"entry"}')
+    """), {"id": shadow_id, "user_id": user_id or ids["user"],
+           "symbol": symbol, "source": source, "status": status})
+    return shadow_id
 
 
-def test_noisy_single_cycle_flapping_does_not_remove_the_whole_pool():
-    """Regression for the actual incident: a pool where every symbol was
-    seen within the last minute (normal ~1min sync cadence) must produce
-    zero removals even when the radar's this-cycle selection is empty."""
-    now = datetime(2026, 9, 25, 20, 40, tzinfo=timezone.utc)
-    pool = {f"SYM{i}_USDT" for i in range(19)}
-    last_seen = {symbol: now - timedelta(seconds=60) for symbol in pool}
-    result = radar_absence_debounce(
-        absent=pool, last_seen_by_symbol=last_seen, now=now
-    )
-    assert result == set()
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", [
+    "L3", "L3_LAB", "L3_REJECTED", "L3_SIMULATED", "L1_SPECTRUM",
+    "STRATEGY_LAB", "CUSTOM_OBSERVATION",
+])
+@pytest.mark.parametrize("status", ["PENDING", "RUNNING"])
+async def test_radar_lifecycle_retains_open_shadow_and_reentry_identity(
+    radar_db, source, status,
+):
+    sessions, ids = radar_db
+    assert (await _sync(sessions, ids, {"BTC_USDT"}))["added"] == 1
+    first = (await _coins(sessions, ids["pump"]))[0]
+    assert first.origin == "radar" and not first.held_for_open_position
+    assert not first.is_tradable and not first.is_approved
+    async with sessions() as db, db.begin():
+        shadow_id = await _open_shadow(db, ids, "BTC_USDT", source, status)
+
+    assert (await _sync(sessions, ids, set()))["held"] == 1
+    held = (await _coins(sessions, ids["pump"]))[0]
+    assert held.id == first.id and held.is_active and held.held_for_open_position
+    async with sessions() as db:
+        directions = dict((await db.execute(text("""
+            SELECT watchlist_id, level_direction FROM pipeline_watchlist_assets
+        """))).all())
+        assert directions == {
+            ids["pump_root"]: "down", ids["pump_l3"]: "down", ids["spot_root"]: "up",
+        }
+
+    await _sync(sessions, ids, {"BTC_USDT"})
+    returned = (await _coins(sessions, ids["pump"]))[0]
+    assert returned.id == first.id and not returned.held_for_open_position
+    async with sessions() as db, db.begin():
+        candidates = (await db.scalars(select(PoolCoin.symbol).join(
+            Pool, Pool.id == PoolCoin.pool_id,
+        ).where(Pool.id == ids["pump"], radar_pool_coin_is_candidate(Pool, PoolCoin)))).all()
+        assert candidates == ["BTC_USDT"]
+        shadows = (await db.execute(text("""
+            SELECT id, status, source, config_snapshot FROM shadow_trades
+        """))).all()
+        assert shadows == [(shadow_id, status, source, {"immutable": "entry"})]
+        await db.execute(text("UPDATE shadow_trades SET status = 'COMPLETED' WHERE id = :id"),
+                         {"id": shadow_id})
+
+    assert (await _sync(sessions, ids, set()))["removed"] == 1
+    assert await _coins(sessions, ids["pump"]) == []
+    async with sessions() as db:
+        assert (await db.execute(text("""
+            SELECT id, status, config_snapshot FROM shadow_trades
+        """))).all() == [(shadow_id, "COMPLETED", {"immutable": "entry"})]
 
 
-def test_mixed_pool_only_removes_the_genuinely_stale_symbols():
-    now = datetime(2026, 9, 25, 20, 40, tzinfo=timezone.utc)
-    last_seen = {
-        "FRESH_USDT": now - timedelta(seconds=30),
-        "STALE_USDT": now - timedelta(seconds=RADAR_ABSENCE_GRACE_SECONDS + 60),
-    }
-    result = radar_absence_debounce(
-        absent=set(last_seen), last_seen_by_symbol=last_seen, now=now
-    )
-    assert result == {"STALE_USDT"}
+@pytest.mark.asyncio
+async def test_unavailable_retains_radar_collection_but_healthy_empty_removes(radar_db):
+    sessions, ids = radar_db
+    healthy_at = datetime(2026, 9, 27, 3, tzinfo=timezone.utc)
+    await _sync(sessions, ids, {"BTC_USDT"}, now=healthy_at)
+    async with sessions() as db, db.begin():
+        db.add_all([
+            PoolCoin(pool_id=ids["pump"], symbol="INVALID_USDT", origin="discovered"),
+            PoolCoin(pool_id=ids["pump"], symbol="OPEN_USDT", origin="discovered"),
+        ])
+        await _open_shadow(db, ids, "OPEN_USDT", source="L3_REJECTED")
+    unavailable_at = healthy_at + timedelta(minutes=1)
+    stats = await _sync(sessions, ids, None, reason="market_data_unavailable", now=unavailable_at)
+    assert stats["removed"] == 1 and stats["held"] == 1
+    coins = {coin.symbol: coin for coin in await _coins(sessions, ids["pump"])}
+    assert set(coins) == {"BTC_USDT", "OPEN_USDT"}
+    assert coins["BTC_USDT"].is_active and not coins["BTC_USDT"].held_for_open_position
+    assert coins["OPEN_USDT"].is_active and coins["OPEN_USDT"].held_for_open_position
+    async with sessions() as db:
+        pool = await db.get(Pool, ids["pump"])
+        assert pool.overrides["radar_feed_health"] == {
+            "status": "unavailable", "checked_at": unavailable_at.isoformat(),
+            "last_success_at": healthy_at.isoformat(), "reason": "market_data_unavailable",
+        }
+        assert (await db.scalars(select(PoolCoin.symbol).join(
+            Pool, Pool.id == PoolCoin.pool_id,
+        ).where(Pool.id == ids["pump"], radar_pool_coin_is_candidate(Pool, PoolCoin)))).all() == []
+    await _sync(sessions, ids, set())
+    assert [coin.symbol for coin in await _coins(sessions, ids["pump"])] == ["OPEN_USDT"]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_cleanup_preserves_radar_identity_and_operator_permissions(radar_db):
+    sessions, ids = radar_db
+    radar_id = uuid4()
+    async with sessions() as db, db.begin():
+        db.add_all([
+            PoolCoin(id=radar_id, pool_id=ids["pump"], symbol="BTC_USDT", origin="radar"),
+            PoolCoin(pool_id=ids["pump"], symbol="BTC_USDT", origin="discovered",
+                     is_approved=True, is_tradable=True),
+        ])
+    assert (await _sync(sessions, ids, {"BTC_USDT"}))["duplicates"] == 1
+    coins = await _coins(sessions, ids["pump"])
+    assert len(coins) == 1 and coins[0].id == radar_id
+    assert coins[0].is_approved and coins[0].is_tradable
+    assert (await _sync(sessions, ids, {"BTC_USDT"}))["duplicates"] == 0
+
+
+@pytest.mark.asyncio
+async def test_exclusions_override_feed_and_other_user_shadow_does_not_retain(radar_db):
+    sessions, ids = radar_db
+    symbols = {"BTC_USDT", "BLOCKED_USDT", "NOTADDED_USDT"}
+    async with sessions() as db, db.begin():
+        db.add_all([PoolAssetExclusion(pool_id=ids["pump"], symbol=s) for s in symbols])
+        db.add_all([PoolCoin(pool_id=ids["pump"], symbol=s, origin="radar")
+                    for s in {"BTC_USDT", "BLOCKED_USDT"}])
+        await _open_shadow(db, ids, "BTC_USDT")
+        await _open_shadow(db, ids, "BLOCKED_USDT", user_id=uuid4())
+    await _sync(sessions, ids, symbols)
+    coins = await _coins(sessions, ids["pump"])
+    assert len(coins) == 1 and coins[0].symbol == "BTC_USDT"
+    assert coins[0].is_active and coins[0].held_for_open_position
+
+
+@pytest.mark.asyncio
+async def test_poolspot_is_untouched_by_radar_reconciliation(radar_db):
+    sessions, ids = radar_db
+    async with sessions() as db, db.begin():
+        coin = PoolCoin(pool_id=ids["spot"], symbol="BTC_USDT", origin="discovered",
+                        is_approved=True, is_tradable=True)
+        db.add(coin)
+        await db.flush()
+        before = {c.name: getattr(coin, c.name) for c in PoolCoin.__table__.columns}
+    async with sessions() as db, db.begin():
+        assert (await reconcile_radar_pool(
+            db, pool_id=ids["spot"], user_id=ids["user"], radar_pairs=set(),
+        ))["skipped"]
+    after = (await _coins(sessions, ids["spot"]))[0]
+    assert {c.name: getattr(after, c.name) for c in PoolCoin.__table__.columns} == before
+    async with sessions() as db:
+        assert (await db.get(Pool, ids["spot"])).overrides == {"auto_refresh_enabled": True}
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_operator_cannot_write_or_replay_worker_feed_health(enabled):
+    health = {"status": "unavailable", "reason": "provider_down"}
+    current = {"radar_enabled": True, "radar_feed_health": health}
+    requested = {"radar_enabled": enabled, "radar_feed_health": {"status": "healthy"}}
+    merged = operator_pool_overrides(current, requested)
+    assert merged.get("radar_feed_health") == (health if enabled else None)
+    assert current["radar_feed_health"] == health
+    assert "radar_feed_health" not in operator_pool_overrides(None, requested)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["pool_patch", "overrides_put"])
+async def test_settings_routes_persist_only_worker_health(radar_db, route):
+    from app.api.pools import create_pool, update_pool, update_pool_overrides
+
+    sessions, ids = radar_db
+    forged = {"radar_enabled": True, "radar_feed_health": {"status": "healthy"}}
+    async with sessions() as db:
+        created = await create_pool(
+            {"name": "NEW_RADAR", "overrides": forged}, db=db, user_id=ids["user"],
+        )
+        assert "radar_feed_health" not in created["overrides"]
+    await _sync(sessions, ids, None, reason="provider_down")
+    async with sessions() as db:
+        original_health = (await db.get(Pool, ids["pump"])).overrides["radar_feed_health"]
+
+    async def save(overrides):
+        async with sessions() as db:
+            if route == "pool_patch":
+                return await update_pool(
+                    ids["pump"], {"overrides": overrides}, db=db, user_id=ids["user"],
+                )
+            return await update_pool_overrides(
+                ids["pump"], overrides, db=db, user_id=ids["user"],
+            )
+
+    assert (await save(forged))["overrides"]["radar_feed_health"] == original_health
+    await save({"radar_enabled": False, "radar_feed_health": {"status": "healthy"}})
+    await save(forged)
+    async with sessions() as db:
+        persisted = (await db.get(Pool, ids["pump"])).overrides
+        assert persisted == {"radar_enabled": True}

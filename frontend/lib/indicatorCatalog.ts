@@ -11,6 +11,8 @@ export interface IndicatorCatalogEntry {
   defaultPeriod?: number;
   fixedPeriod?: number;
   defaultParameters?: Record<string, number>;
+  /** The producer embeds its calculation period in the name, with no period/parameters metadata. */
+  calculationIdentity?: "indicator_name";
   noTimeframe?: boolean;
   requiresReferenceWindow?: boolean;
   unit?: "percent";
@@ -56,11 +58,11 @@ export const STRATEGY_PROFILE_INDICATORS: readonly IndicatorCatalogEntry[] = [
   entry("funding_rate", "Funding Rate", "number", "liquidity", { noTimeframe: true }),
   entry("obv", "OBV", "number", "liquidity", { defaultPeriod: 20 }),
 
-  entry("ema5_distance_pct", "EMA 5 Distance %", "number", "price_position", { noTimeframe: true, unit: "percent" }),
-  entry("ema9_distance_pct", "EMA 9 Distance %", "number", "price_position", { noTimeframe: true, unit: "percent" }),
-  entry("ema21_distance_pct", "EMA 21 Distance %", "number", "price_position", { noTimeframe: true, unit: "percent" }),
-  entry("ema50_distance_pct", "EMA 50 Distance %", "number", "price_position", { noTimeframe: true, unit: "percent" }),
-  entry("ema200_distance_pct", "EMA 200 Distance %", "number", "price_position", { noTimeframe: true, unit: "percent" }),
+  entry("ema5_distance_pct", "EMA 5 Distance %", "number", "price_position", { noTimeframe: true, unit: "percent", calculationIdentity: "indicator_name" }),
+  entry("ema9_distance_pct", "EMA 9 Distance %", "number", "price_position", { noTimeframe: true, unit: "percent", calculationIdentity: "indicator_name" }),
+  entry("ema21_distance_pct", "EMA 21 Distance %", "number", "price_position", { noTimeframe: true, unit: "percent", calculationIdentity: "indicator_name" }),
+  entry("ema50_distance_pct", "EMA 50 Distance %", "number", "price_position", { noTimeframe: true, unit: "percent", calculationIdentity: "indicator_name" }),
+  entry("ema200_distance_pct", "EMA 200 Distance %", "number", "price_position", { noTimeframe: true, unit: "percent", calculationIdentity: "indicator_name" }),
   entry("vwap_distance_pct", "VWAP Distance %", "number", "price_position", { noTimeframe: true, unit: "percent" }),
   entry("bb_upper_distance_pct", "BB Upper Distance %", "number", "price_position", { noTimeframe: true, unit: "percent", defaultPeriod: 20, defaultParameters: { deviation: 2.0 } }),
   entry("bb_middle_distance_pct", "BB Middle Distance %", "number", "price_position", { noTimeframe: true, unit: "percent", defaultPeriod: 20, defaultParameters: { deviation: 2.0 } }),

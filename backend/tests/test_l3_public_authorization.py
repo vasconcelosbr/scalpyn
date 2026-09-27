@@ -321,6 +321,7 @@ async def test_l3_card_count_excludes_raw_membership_without_authorization(monke
     db = Obj(execute=AsyncMock(side_effect=[
         Obj(scalars=lambda: Obj(all=lambda: [l3, l1])),
         Obj(fetchall=lambda: [Obj(watchlist_id=l3.id, cnt=2), Obj(watchlist_id=l1.id, cnt=2)]),
+        _no_pool_ancestry(),
     ]))
     monkeypatch.setattr(watchlists, "load_live_l3_candidates", AsyncMock(return_value=[]))
     monkeypatch.setattr(watchlists, "_wl_to_dict", lambda w, **kwargs: {"id": str(w.id), "level": w.level})

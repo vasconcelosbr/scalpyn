@@ -1860,6 +1860,20 @@ async def _create_from_decision(
         config_snap["label_contract_version"] = MANAGED_LABEL_VERSION
         config_hash = hashlib.sha256(json.dumps(config_snap, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
 
+    if lineage and lineage.watchlist_id:
+        from .pool_service import radar_shadow_entry_is_eligible
+        if not await radar_shadow_entry_is_eligible(
+            db, user_id=decision.user_id, watchlist_id=lineage.watchlist_id,
+            symbol=decision.symbol,
+            market_type="spot" if (getattr(decision, "direction", None) or "SPOT").upper() == "SPOT" else "futures",
+        ):
+            logger.info(
+                "[shadow] creation skipped: RADAR_CANDIDATE_NOT_ELIGIBLE "
+                "watchlist_id=%s symbol=%s source=%s",
+                lineage.watchlist_id, decision.symbol, normalized_source,
+            )
+            return None
+
     try:
         async with db.begin_nested():
             res = await db.execute(

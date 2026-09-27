@@ -61,3 +61,12 @@ test("unknown IDs receive an explicit sentinel and never select the first numeri
   assert.match(rendered[0].label, /indicador não suportado/);
   assert.notEqual(rendered[0].value, "ema5_distance_pct");
 });
+
+test("only EMA distance features explicitly exclude period and parameter metadata", () => {
+  assert.deepEqual(
+    STRATEGY_PROFILE_INDICATORS
+      .filter((indicator) => indicator.calculationIdentity === "indicator_name")
+      .map((indicator) => indicator.id),
+    ["ema5_distance_pct", "ema9_distance_pct", "ema21_distance_pct", "ema50_distance_pct", "ema200_distance_pct"],
+  );
+});

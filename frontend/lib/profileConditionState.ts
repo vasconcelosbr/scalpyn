@@ -111,7 +111,7 @@ export function withoutProfileFeatureIdentity<T extends Record<string, unknown>>
   const next = { ...condition };
   for (const key of [
     "source", "source_provider", "provider_policy_id", "max_age_seconds",
-    "window_seconds", "snapshot", "candle_policy", "resolved_operands", "period",
+    "window_seconds", "snapshot", "candle_policy", "resolved_operands", "period", "parameters",
   ]) {
     delete next[key];
   }
@@ -169,13 +169,13 @@ function conditionIdentity(
   defaultTimeframe: string,
   path: string,
   issues: string[],
-  comparisonOperand = false,
+  comparisonOperand: "left" | "right" | false = false,
 ): Record<string, any> {
   const existingMatches = !existing.indicator || existing.indicator === indicator;
   const source = (
     existingMatches && typeof existing.source === "string" && existing.source.trim()
       ? existing.source.trim()
-      : inferredFeatureSource(indicator, comparisonOperand)
+      : inferredFeatureSource(indicator, Boolean(comparisonOperand))
   ) as ProfileFeatureSource;
   const policy = policies[source] || {};
   const reference: Record<string, any> = {
@@ -189,21 +189,19 @@ function conditionIdentity(
 
   if (source === "ohlcv") {
     const catalog = STRATEGY_PROFILE_INDICATOR_MAP.get(indicator);
-    // A catalog entry with neither fixedPeriod nor defaultPeriod means this
-    // indicator's live feature identity never carries a period (e.g.
-    // ema9_distance_pct registers with period=null) -- any period already
-    // on the condition is stale (from before this was known, see #212/#213)
-    // and must be cleared, not preserved via `??`.
-    if (catalog && catalog.fixedPeriod === undefined && catalog.defaultPeriod === undefined) {
+    // Only an explicit producer contract permits removing saved identity.
+    // Missing UI defaults do not invalidate MACD/VWAP parameters or slope periods.
+    if (catalog?.calculationIdentity === "indicator_name") {
       delete reference.period;
-    } else {
-      const configuredPeriod = condition.period ?? catalog?.fixedPeriod ?? catalog?.defaultPeriod;
-      if (configuredPeriod !== undefined) reference.period = configuredPeriod;
-    }
-    if (catalog && catalog.defaultParameters === undefined) {
       delete reference.parameters;
     } else {
-      const configuredParameters = condition.parameters ?? catalog?.defaultParameters;
+      // The editor's shared period belongs to the left operand; the right
+      // operand must retain its own calculation identity.
+      const configuredPeriod = (comparisonOperand === "right" ? undefined : condition.period)
+        ?? reference.period ?? catalog?.fixedPeriod ?? catalog?.defaultPeriod;
+      if (configuredPeriod !== undefined) reference.period = configuredPeriod;
+      const configuredParameters = (comparisonOperand === "right" ? undefined : condition.parameters)
+        ?? reference.parameters ?? catalog?.defaultParameters;
       if (configuredParameters !== undefined) reference.parameters = configuredParameters;
     }
     reference.timeframe = condition.timeframe || reference.timeframe || policy.timeframe || defaultTimeframe;
@@ -335,7 +333,18 @@ export function profileSourcePoliciesForEditor(
  * legacy profile does not require identity for untouched Entry Triggers".
  */
 function _needsIdentityBackfill(condition: Record<string, any>): boolean {
-  if (isProfileComparisonCondition(condition)) return false;
+  if (isProfileComparisonCondition(condition)) {
+    const operands = condition.resolved_operands || {};
+    const sides = condition.operator === "between" ? ["left"] : ["left", "right"];
+    return sides.some((side) => {
+      const operand = operands[side] || {};
+      const indicator = String(condition[side] || (side === "left" ? "price" : "ema9"));
+      return STRATEGY_PROFILE_INDICATOR_MAP.get(indicator)?.calculationIdentity === "indicator_name"
+        && Boolean(operand.source || condition.source)
+        && (operand.period != null || operand.parameters != null
+          || (side === "left" && (condition.period != null || condition.parameters != null)));
+    });
+  }
   if (!condition.source) return false;
   const indicator = String(condition.indicator || condition.field || "");
   const catalog = STRATEGY_PROFILE_INDICATOR_MAP.get(indicator);
@@ -343,17 +352,11 @@ function _needsIdentityBackfill(condition: Record<string, any>): boolean {
   if (condition.period == null && (catalog.fixedPeriod !== undefined || catalog.defaultPeriod !== undefined)) {
     return true;
   }
-  // Inverse case (regression from #212/#213): a stale period stamped onto
-  // the condition by a since-corrected catalog entry must also force the
-  // full path, since conditionIdentity()'s `??` fallback can only fill a
-  // missing value, never clear one that is already present.
-  if (condition.period != null && catalog.fixedPeriod === undefined && catalog.defaultPeriod === undefined) {
+  if (catalog.calculationIdentity === "indicator_name"
+    && (condition.period != null || condition.parameters != null)) {
     return true;
   }
   if (condition.parameters == null && catalog.defaultParameters !== undefined) {
-    return true;
-  }
-  if (condition.parameters != null && catalog.defaultParameters === undefined) {
     return true;
   }
   return false;
@@ -412,16 +415,20 @@ function _materializeConditionIdentities(
       const resolvedOperands: Record<string, any> = {
         left: conditionIdentity(
           left, condition, operands.left || {}, policies, defaultTimeframe,
-          `${path}.resolved_operands.left`, issues, true,
+          `${path}.resolved_operands.left`, issues, "left",
         ),
       };
       if (condition.operator !== "between") {
         resolvedOperands.right = conditionIdentity(
           right, condition, operands.right || {}, policies, defaultTimeframe,
-          `${path}.resolved_operands.right`, issues, true,
+          `${path}.resolved_operands.right`, issues, "right",
         );
       }
       condition.resolved_operands = resolvedOperands;
+      if (STRATEGY_PROFILE_INDICATOR_MAP.get(left)?.calculationIdentity === "indicator_name") {
+        delete condition.period;
+        delete condition.parameters;
+      }
       const leftIdentity = resolvedOperands.left;
       for (const key of [
         "source", "source_provider", "provider_policy_id", "max_age_seconds",

@@ -46,6 +46,10 @@ class _MappingResult:
     def all(self):
         return self._rows
 
+    def fetchall(self):
+        # Existing fixtures model non-radar watchlists.
+        return []
+
 
 class _FetchallResult:
     """Result shape for the plain ``text()`` held-symbols lookup -- distinct
@@ -200,6 +204,9 @@ async def test_rejections_payload_fills_gap_with_live_complement_for_l3_spot(mon
             return self
 
         def all(self):
+            return []
+
+        def fetchall(self):
             return []
 
     class _NullAsyncCtx:
