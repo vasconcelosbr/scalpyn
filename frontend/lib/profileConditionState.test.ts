@@ -689,6 +689,39 @@ test("ema9_distance_pct never gets a period backfilled (regression: incorrectly 
   assert.equal("period" in saved, false);
 });
 
+test("a condition already stuck with the stale period: 9 from #212 gets it cleared on resave (regression)", () => {
+  // 2026-09-26: #212 shipped, computed conditionIdentity() once, and
+  // PERSISTED period: 9 onto the live PUMP3 "EMA9" block's condition
+  // before #213 reverted the catalog entry. Once #213 reverted, the
+  // *catalog* is fixed, but the field-materialization fast path
+  // (_materializeConditionIdentities) matches this condition against
+  // itself by feature key (which includes period) and would otherwise
+  // keep returning it AS-IS forever -- and even a full conditionIdentity()
+  // pass would leave it at 9 via the `condition.period ?? ...` fallback,
+  // since `??` only fills a missing value, never clears a stale one. A
+  // resave must actually strip the now-incorrect period, not just "no
+  // longer add" one.
+  const currentConfig = {
+    default_timeframe: "5m",
+    block_rules: {
+      blocks: [{
+        id: "block-ema9", name: "EMA9", enabled: true, logic: "AND",
+        conditions: [{
+          id: "cond-ema9", type: "threshold", indicator: "ema9_distance_pct",
+          value: 1, period: 9, source: "ohlcv", operator: ">",
+          timeframe: "5m", candle_policy: "CLOSED_ONLY", max_age_seconds: 741,
+          source_provider: "gate.io", provider_policy_id: "spot_gate_closed_ohlcv_v1",
+          required: true, enabled: true,
+        }],
+      }],
+    },
+  };
+  const prepared = prepareProfileBlockRuleIdentities(currentConfig, SOURCE_POLICIES, currentConfig);
+
+  const saved = prepared.config.block_rules.blocks[0].conditions[0] as Record<string, any>;
+  assert.equal("period" in saved, false);
+});
+
 test("comparison Block Rule condition receives an independently resolved identity per operand", () => {
   const prepared = prepareProfileBlockRuleIdentities({
     default_timeframe: "5m",

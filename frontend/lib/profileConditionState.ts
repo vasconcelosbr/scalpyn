@@ -189,10 +189,23 @@ function conditionIdentity(
 
   if (source === "ohlcv") {
     const catalog = STRATEGY_PROFILE_INDICATOR_MAP.get(indicator);
-    const configuredPeriod = condition.period ?? catalog?.fixedPeriod ?? catalog?.defaultPeriod;
-    if (configuredPeriod !== undefined) reference.period = configuredPeriod;
-    const configuredParameters = condition.parameters ?? catalog?.defaultParameters;
-    if (configuredParameters !== undefined) reference.parameters = configuredParameters;
+    // A catalog entry with neither fixedPeriod nor defaultPeriod means this
+    // indicator's live feature identity never carries a period (e.g.
+    // ema9_distance_pct registers with period=null) -- any period already
+    // on the condition is stale (from before this was known, see #212/#213)
+    // and must be cleared, not preserved via `??`.
+    if (catalog && catalog.fixedPeriod === undefined && catalog.defaultPeriod === undefined) {
+      delete reference.period;
+    } else {
+      const configuredPeriod = condition.period ?? catalog?.fixedPeriod ?? catalog?.defaultPeriod;
+      if (configuredPeriod !== undefined) reference.period = configuredPeriod;
+    }
+    if (catalog && catalog.defaultParameters === undefined) {
+      delete reference.parameters;
+    } else {
+      const configuredParameters = condition.parameters ?? catalog?.defaultParameters;
+      if (configuredParameters !== undefined) reference.parameters = configuredParameters;
+    }
     reference.timeframe = condition.timeframe || reference.timeframe || policy.timeframe || defaultTimeframe;
     reference.candle_policy = reference.candle_policy || policy.candle_policy;
     delete reference.window_seconds;
@@ -330,7 +343,17 @@ function _needsIdentityBackfill(condition: Record<string, any>): boolean {
   if (condition.period == null && (catalog.fixedPeriod !== undefined || catalog.defaultPeriod !== undefined)) {
     return true;
   }
+  // Inverse case (regression from #212/#213): a stale period stamped onto
+  // the condition by a since-corrected catalog entry must also force the
+  // full path, since conditionIdentity()'s `??` fallback can only fill a
+  // missing value, never clear one that is already present.
+  if (condition.period != null && catalog.fixedPeriod === undefined && catalog.defaultPeriod === undefined) {
+    return true;
+  }
   if (condition.parameters == null && catalog.defaultParameters !== undefined) {
+    return true;
+  }
+  if (condition.parameters != null && catalog.defaultParameters === undefined) {
     return true;
   }
   return false;
