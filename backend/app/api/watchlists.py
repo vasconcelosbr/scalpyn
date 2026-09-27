@@ -3275,6 +3275,12 @@ async def _get_watchlist_rejections_payload(
     # left untouched (out of scope) and is used as a defensive fallback when
     # the indicators table has no entry for a symbol.
     rejection_symbols = sorted({row.symbol for row in rows})
+    flow_checks = {}
+    if effective_level == "L3" and getattr(wl, "market_mode", "spot") == "spot":
+        from ..services.l3_flow_diagnostics import load_flow_checks
+        flow_checks = await load_flow_checks(
+            user_id=user_id, watchlist_id=wl.id, symbols=rejection_symbols,
+        )
     ind_map = await _fetch_indicators_map(db, rejection_symbols, include_stale=True) if rejection_symbols else {}
     meta_map: Dict[str, Dict[str, Any]] = {}
     if rejection_symbols:
@@ -3458,6 +3464,7 @@ async def _get_watchlist_rejections_payload(
         }
         items.append({
             **normalized,
+            "flow_check": flow_checks.get(row.symbol),
             "failed_type": row.failed_type,
             "failed_indicator": row.failed_indicator,
             "condition": row.condition_text,

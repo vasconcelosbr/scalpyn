@@ -1,11 +1,11 @@
-"""Async Redis singleton — one shared ``redis.asyncio.Redis`` per process.
+"""Async Redis singleton — one shared ``redis.asyncio.Redis`` per event loop.
 
-Why a singleton
+Why a loop-local singleton
 ---------------
 
 Every hot path that needs Redis (the Gate WS trade-buffer handler, the
 buffer-first read in ``order_flow_service``, the Gate-WS leader lock in
-``main.py::lifespan``) must share **one** connection pool.  Calling
+``main.py::lifespan``) must share **one** connection pool within their event loop.  Calling
 ``redis.asyncio.from_url(...)`` per message would (a) leak file
 descriptors under load, (b) double connection setup latency on every WS
 trade frame, and (c) make pool stats meaningless because each call would
@@ -20,7 +20,7 @@ Contract
 * Short ``socket_connect_timeout`` (3 s) so a Redis outage surfaces as a
   log warning + ``None`` return, not as a hung WS dispatcher.
 * The client is created lazily on the first ``get_async_redis()`` call
-  and cached in a module-level variable.  Tests can call
+  and cached on the owning event loop. Celery loops never share transports.  Tests can call
   ``reset_async_redis()`` between cases to drop the cached client.
 
 Usage::
@@ -35,19 +35,32 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import time
-from typing import Optional
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
 
-_async_client = None  # type: ignore[var-annotated]
-# Cooldown timestamp (monotonic seconds) — until this point in time we
-# do *not* retry init.  Avoids a hot-loop hammering ``from_url`` while a
-# transient outage is in progress, but unlike a permanent flag it lets
-# the next call after ``INIT_RETRY_COOLDOWN_SECONDS`` self-recover.
-_init_retry_after: float = 0.0
+# Keep the state on the loop itself: a process-wide client reuses sockets from
+# an already closed Celery loop. A module-level loop map would retain loops.
+@dataclass
+class _LoopState:
+    pid: int
+    client: object = None
+    retry_after: float = 0.0
+
+
+def _state() -> _LoopState:
+    loop = asyncio.get_running_loop()
+    state = getattr(loop, "_scalpyn_redis_state", None)
+    if state is None or state.pid != os.getpid():
+        state = _LoopState(pid=os.getpid())
+        setattr(loop, "_scalpyn_redis_state", state)
+    return state
+
 
 # Time to wait between init attempts after a failure.
 INIT_RETRY_COOLDOWN_SECONDS: float = 30.0
@@ -63,12 +76,12 @@ async def get_async_redis():
     Call :func:`reset_async_redis` to clear the cooldown and the cached
     client (used by tests and by the lifespan shutdown).
     """
-    global _async_client, _init_retry_after
+    state = _state()
 
-    if _async_client is not None:
-        return _async_client
+    if state.client is not None:
+        return state.client
     now = time.monotonic()
-    if now < _init_retry_after:
+    if now < state.retry_after:
         return None
 
     try:
@@ -83,12 +96,12 @@ async def get_async_redis():
             socket_keepalive=True,
             health_check_interval=30,
         )
-        _async_client = client
-        _init_retry_after = 0.0
+        state.client = client
+        state.retry_after = 0.0
         logger.info("[redis] async client initialised (url=%s)", _redacted_url(settings.REDIS_URL))
-        return _async_client
+        return state.client
     except Exception as exc:
-        _init_retry_after = now + INIT_RETRY_COOLDOWN_SECONDS
+        state.retry_after = now + INIT_RETRY_COOLDOWN_SECONDS
         logger.warning(
             "[redis] async client init failed: %s — feature degraded, retrying in %.0fs",
             exc, INIT_RETRY_COOLDOWN_SECONDS,
@@ -97,15 +110,15 @@ async def get_async_redis():
 
 
 async def reset_async_redis() -> None:
-    """Drop the cached client; the next ``get_async_redis()`` reconnects.
+    """Drop the current loop's cached client; the next ``get_async_redis()`` reconnects.
 
     Used by tests and by the lifespan shutdown so the next process boot
     or test case starts from a clean slate.
     """
-    global _async_client, _init_retry_after
-    client = _async_client
-    _async_client = None
-    _init_retry_after = 0.0
+    state = _state()
+    client = state.client
+    state.client = None
+    state.retry_after = 0.0
     if client is not None:
         try:
             # ``aclose`` is the new name in redis-py ≥5.0.1; ``close``
@@ -118,9 +131,9 @@ async def reset_async_redis() -> None:
 
 def set_async_redis(client) -> None:
     """Inject a client (used by tests with ``fakeredis.aioredis``)."""
-    global _async_client, _init_retry_after
-    _async_client = client
-    _init_retry_after = 0.0
+    state = _state()
+    state.client = client
+    state.retry_after = 0.0
 
 
 def _redacted_url(url: str) -> str:

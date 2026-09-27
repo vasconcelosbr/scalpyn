@@ -80,8 +80,8 @@
             "profile-status-badge",
             "Inativar profile",
             "Reativar profile",
-            "Justificativa obrigatória",
-            "Trades e shadows já abertos continuarão sendo acompanhados normalmente"
+            "Justificativa obrigatÃ³ria",
+            "Trades e shadows jÃ¡ abertos continuarÃ£o sendo acompanhados normalmente"
           ]
         }
       ]
@@ -144,8 +144,8 @@
         {
           "path": "frontend/app/watchlist/page.tsx",
           "contains_all": [
-            "Aprovado para execução",
-            "Trades já abertos continuam sendo acompanhados exclusivamente no Shadow Portfolio",
+            "Aprovado para execuÃ§Ã£o",
+            "Trades jÃ¡ abertos continuam sendo acompanhados exclusivamente no Shadow Portfolio",
             "setRefreshError(null)"
           ]
         },
@@ -273,8 +273,8 @@
           "contains_all": [
             "Exportar JSON",
             "Importar JSON",
-            "Shadow Portfolio — Barreiras e custos",
-            "ATR_DYNAMIC v2 está ativo",
+            "Shadow Portfolio â€” Barreiras e custos",
+            "ATR_DYNAMIC v2 estÃ¡ ativo",
             "Fallback: removido"
           ]
         },
@@ -282,8 +282,8 @@
           "path": "frontend/components/settings/StrategySettingsJsonModal.tsx",
           "contains_all": [
             "Etapa {item}",
-            "JSON válido",
-            "Confirmar aplicação",
+            "JSON vÃ¡lido",
+            "Confirmar aplicaÃ§Ã£o",
             "Estrutura esperada"
           ]
         },
@@ -331,7 +331,7 @@
           "contains_all": [
             "Performance dos Profiles",
             "profilePerformance",
-            "Evolução diária L3",
+            "EvoluÃ§Ã£o diÃ¡ria L3",
             "profileDailyPerformanceRequestPath"
           ]
         }
@@ -466,15 +466,15 @@
           "path": "frontend/app/intelligence-runs/page.tsx",
           "contains_all": [
             "Dados completos",
-            "Dados incompletos — contrato legado",
-            "Criar nova análise com dados completos"
+            "Dados incompletos â€” contrato legado",
+            "Criar nova anÃ¡lise com dados completos"
           ]
         },
         {
           "path": "frontend/components/shadow-portfolio/DetailedReportWorkspace.tsx",
           "contains_all": [
             "canonical_analysis_ready",
-            "Análise bloqueada antes do provedor",
+            "AnÃ¡lise bloqueada antes do provedor",
             "{canonicalAnalysisReady && (",
             "reportRunId={run.id}"
           ]
@@ -740,7 +740,7 @@
         {
           "path": "frontend/components/profiles/ExecutionContractPanel.tsx",
           "contains_all": [
-            "Integridade de execução",
+            "Integridade de execuÃ§Ã£o",
             "Persistido",
             "Runtime",
             "Exportar contrato"
@@ -1312,7 +1312,7 @@
         {
           "path": "frontend/components/settings/ShadowL3ExitPolicyForm.tsx",
           "contains_all": [
-            "Trailing Stop — Shadow L3",
+            "Trailing Stop â€” Shadow L3",
             "OBSERVE"
           ]
         },
@@ -1609,7 +1609,7 @@
           "path": "frontend/app/ml-models/page.tsx",
           "contains_all": [
             "Lane do modelo",
-            "Readiness não aprova"
+            "Readiness nÃ£o aprova"
           ]
         },
         {
@@ -1635,7 +1635,7 @@
           "path": "frontend/app/ml-models/page.tsx",
           "contains_all": [
             "Meta de capturas",
-            "Capturas válidas",
+            "Capturas vÃ¡lidas",
             "Faltam para a meta",
             "Math.max(0, readiness.min_required - readiness.labelable_rows)",
             "refreshInterval: 15_000",
@@ -1809,7 +1809,7 @@
           "path": "frontend/app/pools/[id]/page.tsx",
           "contains_all": [
             "radar-feed-health",
-            "Radar indisponível. Novas candidaturas estão suspensas"
+            "Radar indisponÃ­vel. Novas candidaturas estÃ£o suspensas"
           ]
         }
       ]
@@ -1866,6 +1866,48 @@
           "contains_all": [
             "test_pump3_ema9_strict_greater_than_boundary",
             "PERIOD_MISMATCH"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "l3-flow-loop-ownership-and-diagnostics",
+      "description": "Redis transports belong to the current event loop; stale flow remains blocked and its last observation is visible without granting execution authority.",
+      "files": [
+        {
+          "path": "backend/app/services/redis_client.py",
+          "contains_all": [
+            "asyncio.get_running_loop()",
+            "_scalpyn_redis_state"
+          ]
+        },
+        {
+          "path": "backend/app/tasks/pipeline_scan.py",
+          "contains_all": [
+            "loop.run_until_complete(reset_async_redis())",
+            "record_flow_check(",
+            "observation(\"STALE\", live)"
+          ]
+        },
+        {
+          "path": "backend/tests/test_redis_loop_ownership.py",
+          "contains_all": [
+            "test_clients_are_reused_only_within_their_own_loop",
+            "test_celery_closes_redis_before_loop_shutdown"
+          ]
+        },
+        {
+          "path": "backend/tests/test_l3_flow_diagnostics.py",
+          "contains_all": [
+            "test_stale_flow_still_blocks_and_reports_observed_age",
+            "test_flow_check_is_scoped_and_fresh_observation_replaces_stale"
+          ]
+        },
+        {
+          "path": "frontend/components/watchlist/RejectedAssetTable.tsx",
+          "contains_all": [
+            "Aguardando dados de fluxo atualizados",
+            "flow_check?.checked_at"
           ]
         }
       ]
