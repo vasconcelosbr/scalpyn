@@ -349,6 +349,13 @@ def _run_async(coro):
         except BaseException as exc:
             logger.debug("[_run_async] pending-task drain failed: %s", exc)
 
+        # Close Redis transports while their owning task loop is still alive.
+        try:
+            from ..services.redis_client import reset_async_redis
+            loop.run_until_complete(reset_async_redis())
+        except BaseException as exc:
+            logger.debug("[_run_async] Redis cleanup failed: %s", exc)
+
         # Step 2 — graceful engine dispose (closes asyncpg sockets in-loop).
         try:
             from ..database import _celery_engine
@@ -1822,6 +1829,7 @@ async def _inject_live_order_flow(
     window = _ORDER_FLOW_WINDOW_DEFAULT
     max_age = _ORDER_FLOW_MAX_AGE_DEFAULT
     provider_policy_id = None
+    diagnostic_retention = 300
     try:
         cfg = await config_service.get_config(
             db, "pipeline", user_id, pool_id=pool_id,
@@ -1830,11 +1838,24 @@ async def _inject_live_order_flow(
             window = int(cfg.get(_ORDER_FLOW_WINDOW_CONFIG_KEY, window))
             max_age = int(cfg.get(_ORDER_FLOW_MAX_AGE_CONFIG_KEY, max_age))
             provider_policy_id = cfg.get(_ORDER_FLOW_PROVIDER_POLICY_CONFIG_KEY)
+            diagnostic_retention = max(1, int(cfg.get("l3_flow_diagnostic_retention_seconds", diagnostic_retention)))
     except Exception as exc:
         logger.warning(
             "[L3][%s] live_order_flow config read failed (%s) — using defaults",
             symbol, exc,
         )
+
+    def observation(status, live=None):
+        live = live or {}
+        return {
+            "status": status,
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "source": live.get("taker_source"),
+            "data_age_seconds": live.get("data_age_seconds"),
+            "max_age_seconds": max_age,
+            "window_seconds": window,
+            "retention_seconds": diagnostic_retention,
+        }
 
     # ── Live snapshot ────────────────────────────────────────────────────
     try:
@@ -1844,11 +1865,11 @@ async def _inject_live_order_flow(
             "[L3][%s] live_order_flow fetch failed (%r) — falling back to DB",
             symbol, exc,
         )
-        return indicators, True
+        return {**indicators, "_l3_flow_check": observation("UNAVAILABLE")}, True
 
     if not isinstance(live, dict):
         logger.warning("[L3][%s] live_order_flow returned non-dict — fallback", symbol)
-        return indicators, True
+        return {**indicators, "_l3_flow_check": observation("UNAVAILABLE")}, True
 
     # ── Stale guard ──────────────────────────────────────────────────────
     age = live.get("data_age_seconds")
@@ -1857,10 +1878,11 @@ async def _inject_live_order_flow(
             "[L3][%s] live_order_flow STALE: age=%.1fs > max=%ds — blocking decision this cycle",
             symbol, age, max_age,
         )
-        return indicators, False
+        return {**indicators, "_l3_flow_check": observation("STALE", live)}, False
 
     # ── Merge (live wins quando não-nulo) ─────────────────────────────────
     updated = dict(indicators) if isinstance(indicators, dict) else {}
+    updated["_l3_flow_check"] = observation("CURRENT" if age is not None else "UNAVAILABLE", live)
     overridden: list[str] = []
     for asset_key, live_key in _LIVE_ORDER_FLOW_FIELDS.items():
         live_val = live.get(live_key)
@@ -2052,6 +2074,12 @@ async def _evaluate_l3_decisions(
                 user_id=user_id,
                 pool_id=pool_id,
             )
+            if not read_only:
+                from ..services.l3_flow_diagnostics import record_flow_check
+                await record_flow_check(
+                    user_id=user_id, watchlist_id=watchlist_id, symbol=symbol,
+                    observation=updated_indicators.get("_l3_flow_check"),
+                )
             if not order_flow_ok:
                 logger.info(
                     "[L3][%s] skipped this cycle (stale order flow) — will retry next tick",

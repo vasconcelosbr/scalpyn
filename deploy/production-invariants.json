@@ -1869,6 +1869,48 @@
           ]
         }
       ]
+    },
+    {
+      "id": "l3-flow-loop-ownership-and-diagnostics",
+      "description": "Redis transports belong to the current event loop; stale flow remains blocked and its last observation is visible without granting execution authority.",
+      "files": [
+        {
+          "path": "backend/app/services/redis_client.py",
+          "contains_all": [
+            "asyncio.get_running_loop()",
+            "_scalpyn_redis_state"
+          ]
+        },
+        {
+          "path": "backend/app/tasks/pipeline_scan.py",
+          "contains_all": [
+            "loop.run_until_complete(reset_async_redis())",
+            "record_flow_check(",
+            "observation(\"STALE\", live)"
+          ]
+        },
+        {
+          "path": "backend/tests/test_redis_loop_ownership.py",
+          "contains_all": [
+            "test_clients_are_reused_only_within_their_own_loop",
+            "test_celery_closes_redis_before_loop_shutdown"
+          ]
+        },
+        {
+          "path": "backend/tests/test_l3_flow_diagnostics.py",
+          "contains_all": [
+            "test_stale_flow_still_blocks_and_reports_observed_age",
+            "test_flow_check_is_scoped_and_fresh_observation_replaces_stale"
+          ]
+        },
+        {
+          "path": "frontend/components/watchlist/RejectedAssetTable.tsx",
+          "contains_all": [
+            "Aguardando dados de fluxo atualizados",
+            "flow_check?.checked_at"
+          ]
+        }
+      ]
     }
   ]
 }

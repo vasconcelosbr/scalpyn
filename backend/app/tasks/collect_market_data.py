@@ -279,6 +279,13 @@ def _run_async(coro):
         except BaseException as exc:  # pragma: no cover — defensive
             logger.debug("[_run_async] pending-task drain failed: %s", exc)
 
+        # Close Redis transports while their owning task loop is still alive.
+        try:
+            from ..services.redis_client import reset_async_redis
+            loop.run_until_complete(reset_async_redis())
+        except BaseException as exc:
+            logger.debug("[_run_async] Redis cleanup failed: %s", exc)
+
         # Step 2 — graceful engine dispose (closes asyncpg sockets in-loop).
         try:
             from ..database import _celery_engine

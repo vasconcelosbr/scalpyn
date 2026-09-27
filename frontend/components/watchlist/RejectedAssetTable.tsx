@@ -60,6 +60,12 @@ export interface WatchlistDecisionItem {
   ml_final_score?: number | null;
   blocked_by_ml?: boolean | null;
   crypto_ev?: CryptoEVSummary | null;
+  flow_check?: {
+    status: "STALE" | "CURRENT" | "UNAVAILABLE";
+    checked_at: string;
+    data_age_seconds?: number | null;
+    max_age_seconds?: number | null;
+  } | null;
 }
 
 export interface SocialScoreSummary {
@@ -573,6 +579,21 @@ export function WatchlistDecisionTable({
                     {isExpanded && (
                       <tr className="border-b border-[#1A2035] bg-[#06080E]">
                         <td colSpan={totalCols} className="p-4">
+                          {item.stage === "L3" && item.status === "rejected" && (
+                            <div className="mb-4 rounded-xl border border-amber-500/30 bg-amber-950/20 p-4 text-xs text-amber-200" role="status">
+                              <p className="font-semibold">{item.flow_check?.status === "STALE"
+                                ? "Aguardando dados de fluxo atualizados"
+                                : "Sem autorização de entrada confirmada"}</p>
+                              <p className="mt-1">{item.flow_check?.status === "STALE"
+                                ? "Na verificação indicada abaixo, a avaliação foi interrompida porque os dados de fluxo estavam vencidos. O ativo será reavaliado automaticamente."
+                                : item.flow_check?.status === "UNAVAILABLE"
+                                  ? "A última consulta não confirmou a atualização do fluxo. A autorização depende da avaliação completa do servidor."
+                                  : "Os indicadores abaixo são recalculados para consulta. Mesmo aprovados, eles não confirmam a autorização nem o encaminhamento para Shadow."}</p>
+                              {item.flow_check?.checked_at && (
+                                <p className="mt-2 text-amber-200/70">Última verificação do fluxo: {formatDateTime(item.flow_check.checked_at)}</p>
+                              )}
+                            </div>
+                          )}
                           <div className="grid grid-cols-1 gap-4">
                             <TraceSection
                               title="Block Rules"
