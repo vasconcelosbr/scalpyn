@@ -3245,10 +3245,17 @@ async def _replace_rejection_snapshot(
 
 # ─── DB upsert ────────────────────────────────────────────────────────────────
 
-async def _watchlist_profile_is_active(db, watchlist_id: str) -> bool:
-    """Runtime gate shared by every write boundary of a watchlist scan."""
+async def _watchlist_profile_is_active(
+    db, watchlist_id: str, *, lock_for_write: bool = True,
+) -> bool:
+    """Lock same-session writes; own-session Shadow writers recheck and lock.
+
+    A preflight for an own-session writer must not hold this row lock while
+    awaiting that writer: it would wait for the caller's transaction forever.
+    """
     from sqlalchemy import text
 
+    lock_clause = "FOR UPDATE OF p" if lock_for_write else ""
     return bool(await db.scalar(text("""
         SELECT p.id
           FROM pipeline_watchlists pw
@@ -3257,8 +3264,7 @@ async def _watchlist_profile_is_active(db, watchlist_id: str) -> bool:
            AND pw.auto_refresh IS TRUE
            AND p.is_active IS TRUE
            AND p.user_id = pw.user_id
-         FOR UPDATE OF p
-    """), {"watchlist_id": watchlist_id}))
+    """ + lock_clause), {"watchlist_id": watchlist_id}))
 
 
 async def _upsert_assets(
@@ -3765,6 +3771,10 @@ async def _run_pipeline_scan():
         # Rejected candidates must cross the same global watchlist boundary as
         # approved candidates before a winner can be selected.
         l3_rejected_consolidation_candidates: list = []
+        from ..services.pipeline_auxiliary_work import (
+            WatchlistAuxiliaryWork, run_watchlist_auxiliary_work,
+        )
+        l3_auxiliary_jobs: list[WatchlistAuxiliaryWork] = []
 
         async def _process_one_watchlist(wl) -> None:
             # `wl` is a SimpleNamespace primitive snapshot — never an ORM
@@ -5448,330 +5458,343 @@ async def _run_pipeline_scan():
                                 wl.name, _bypass_exc,
                             )
 
-                    # ML Gate — write ml_predictions rows now that we have decision IDs.
-                    # Only fires when ML gate was active AND produced scores.
-                    if _ml_gate_enabled and _ml_gate_scores:
-                        try:
-                            from sqlalchemy import text as _sql_text
-                            _ml_pred_rows = []
-                            for _p in decision_payloads:
-                                _pid = _p.get("id")
-                                _psym = _p.get("symbol")
-                                _pgate = _ml_gate_scores.get(_psym)
-                                if not _pid or not _psym or not _pgate:
-                                    continue
-                                _ml_pred_rows.append({
-                                    "model_id": _pgate.get("model_id"),
-                                    "decision_id": _pid,
-                                    "symbol": _psym,
-                                    "probability": _pgate.get("probability"),
-                                    "approved": bool(_pgate.get("approved", False)),
-                                    "threshold": _pgate.get("threshold"),
-                                    "model_lane": _pgate.get("model_lane"),
-                                    "reason_code": _pgate.get("reason_code"),
-                                    "score_status": _pgate.get("score_status"),
-                                    "promotion_gate_status": _pgate.get("promotion_gate_status"),
-                                    "gate_payload": _pgate.get("gate_payload") or {},
-                                })
-                            if _ml_pred_rows:
-                                async with db.begin_nested():
-                                    await db.execute(
-                                        _sql_text("""
-                                            INSERT INTO ml_predictions
-                                                (model_id, decision_id, symbol,
-                                                 win_fast_probability, model_approved,
-                                                 threshold_used, model_lane, reason_code,
-                                                 score_status, promotion_gate_status,
-                                                 gate_payload)
-                                            SELECT
-                                                CAST(NULLIF(r.model_id, '') AS UUID),
-                                                r.decision_id,
-                                                r.symbol,
-                                                r.probability,
-                                                r.approved,
-                                                r.threshold,
-                                                r.model_lane,
-                                                r.reason_code,
-                                                r.score_status,
-                                                r.promotion_gate_status,
-                                                r.gate_payload
-                                            FROM jsonb_to_recordset(CAST(:rows AS jsonb))
-                                                AS r(model_id text, decision_id int,
-                                                     symbol text, probability float,
-                                                     approved bool, threshold float,
-                                                     model_lane text, reason_code text,
-                                                     score_status text,
-                                                     promotion_gate_status text,
-                                                     gate_payload jsonb)
-                                            ON CONFLICT DO NOTHING
-                                        """),
-                                        {"rows": __import__("json").dumps(_ml_pred_rows)},
+                async def _run_l3_auxiliary() -> None:
+                    async with AsyncSessionLocal() as db:
+                        # ML Gate — write ml_predictions rows now that we have decision IDs.
+                        # Only fires when ML gate was active AND produced scores.
+                        if decision_payloads and _ml_gate_enabled and _ml_gate_scores:
+                            try:
+                                from sqlalchemy import text as _sql_text
+                                _ml_pred_rows = []
+                                for _p in decision_payloads:
+                                    _pid = _p.get("id")
+                                    _psym = _p.get("symbol")
+                                    _pgate = _ml_gate_scores.get(_psym)
+                                    if not _pid or not _psym or not _pgate:
+                                        continue
+                                    _ml_pred_rows.append({
+                                        "model_id": _pgate.get("model_id"),
+                                        "decision_id": _pid,
+                                        "symbol": _psym,
+                                        "probability": _pgate.get("probability"),
+                                        "approved": bool(_pgate.get("approved", False)),
+                                        "threshold": _pgate.get("threshold"),
+                                        "model_lane": _pgate.get("model_lane"),
+                                        "reason_code": _pgate.get("reason_code"),
+                                        "score_status": _pgate.get("score_status"),
+                                        "promotion_gate_status": _pgate.get("promotion_gate_status"),
+                                        "gate_payload": _pgate.get("gate_payload") or {},
+                                    })
+                                if _ml_pred_rows:
+                                    async with db.begin_nested():
+                                        await db.execute(
+                                            _sql_text("""
+                                                INSERT INTO ml_predictions
+                                                    (model_id, decision_id, symbol,
+                                                     win_fast_probability, model_approved,
+                                                     threshold_used, model_lane, reason_code,
+                                                     score_status, promotion_gate_status,
+                                                     gate_payload)
+                                                SELECT
+                                                    CAST(NULLIF(r.model_id, '') AS UUID),
+                                                    r.decision_id,
+                                                    r.symbol,
+                                                    r.probability,
+                                                    r.approved,
+                                                    r.threshold,
+                                                    r.model_lane,
+                                                    r.reason_code,
+                                                    r.score_status,
+                                                    r.promotion_gate_status,
+                                                    r.gate_payload
+                                                FROM jsonb_to_recordset(CAST(:rows AS jsonb))
+                                                    AS r(model_id text, decision_id int,
+                                                         symbol text, probability float,
+                                                         approved bool, threshold float,
+                                                         model_lane text, reason_code text,
+                                                         score_status text,
+                                                         promotion_gate_status text,
+                                                         gate_payload jsonb)
+                                                ON CONFLICT DO NOTHING
+                                            """),
+                                            {"rows": __import__("json").dumps(_ml_pred_rows)},
+                                        )
+                                    await db.commit()
+                                    logger.info(
+                                        "[MLGate] logged %d ml_predictions rows for wl=%s",
+                                        len(_ml_pred_rows), wl.name,
                                     )
-                                logger.info(
-                                    "[MLGate] logged %d ml_predictions rows for wl=%s",
-                                    len(_ml_pred_rows), wl.name,
+                            except Exception as _ml_log_exc:
+                                logger.warning(
+                                    "[MLGate] ml_predictions write failed for wl=%s: %s",
+                                    wl.name, _ml_log_exc,
                                 )
-                        except Exception as _ml_log_exc:
-                            logger.warning(
-                                "[MLGate] ml_predictions write failed for wl=%s: %s",
-                                wl.name, _ml_log_exc,
-                            )
 
-                # ── L3_REJECTED shadows — fora de if decision_payloads ────────────────
-                # Captura TODOS os ativos que chegam ao L3 mas não recebem ALLOW:
-                # 1. Ativos que passaram os filtros do profile mas foram bloqueados
-                #    pelas entry_triggers (decisions com decision=BLOCK).
-                # 2. Ativos que foram rejeitados pelos filtros do profile antes de
-                #    chegar ao _evaluate_l3_decisions (profile_passed=0 quando mercado
-                #    não satisfaz condições de momentum/tendência dos filtros L3).
-                # Sem incluir (2), L3_REJECTED fica sistematicamente vazio sempre que
-                # o mercado não satisfaz os filtros — perdendo todos os dados ML.
-                _allowed_syms_l3 = {
-                    d.get("symbol") for d in decisions if d.get("decision") == "ALLOW"
-                }
-                _all_block_decisions = [
-                    d for d in decisions if d.get("decision") == "BLOCK"
-                ]
-                # Ativos rejeitados pelo filtro do profile (nunca entraram em decisions)
-                _decided_syms = {d.get("symbol") for d in decisions}
-                _filter_rejected_block = []
-                for _fa in assets:
-                    _fsym = _fa.get("symbol")
-                    if not _fsym or _fsym in _allowed_syms_l3 or _fsym in _decided_syms:
-                        continue
-                    _find = dict(_fa.get("indicators") or {})
-                    for _ctx_key in _DECISION_CONTEXT_SNAPSHOT_FIELDS:
-                        if _ctx_key in _fa and _fa.get(_ctx_key) is not None:
-                            _find[_ctx_key] = _fa.get(_ctx_key)
-                    _filter_rejected_block.append({
-                        "symbol": _fsym,
-                        "strategy": level,
-                        "decision": "BLOCK",
-                        "score": _fa.get("_score") or _fa.get("alpha_score") or 0,
-                        "direction": (
-                            _fa.get("futures_direction")
-                            or ("NEUTRAL" if _fa.get("is_futures") else "SPOT")
-                        ),
-                        "reasons": [{"reason": "profile_filter_rejected", "stage": "L3"}],
-                        "metrics": {
-                            "indicators_snapshot": {
-                                k: {"value": v}
-                                for k, v in _find.items()
-                                if v is not None
-                            },
-                            "source": "l3_filter_rejected",
-                        },
-                        "_asset": _fa,
-                    })
-                _all_block_candidates = _all_block_decisions + _filter_rejected_block
-                if (
-                    _all_block_candidates
-                    and await _watchlist_profile_is_active(db, wl_id)
-                ):
-                    try:
-                        if _wl_rejected_consolidation_enabled:
-                            from ..services.l3_rejected_trade_consolidation import (
-                                rejected_candidate_from_decision,
-                            )
+                        # ── L3_REJECTED shadows — fora de if decision_payloads ────────────────
+                        # Captura TODOS os ativos que chegam ao L3 mas não recebem ALLOW:
+                        # 1. Ativos que passaram os filtros do profile mas foram bloqueados
+                        #    pelas entry_triggers (decisions com decision=BLOCK).
+                        # 2. Ativos que foram rejeitados pelos filtros do profile antes de
+                        #    chegar ao _evaluate_l3_decisions (profile_passed=0 quando mercado
+                        #    não satisfaz condições de momentum/tendência dos filtros L3).
+                        # Sem incluir (2), L3_REJECTED fica sistematicamente vazio sempre que
+                        # o mercado não satisfaz os filtros — perdendo todos os dados ML.
+                        _allowed_syms_l3 = {
+                            d.get("symbol") for d in decisions if d.get("decision") == "ALLOW"
+                        }
+                        _all_block_decisions = [
+                            d for d in decisions if d.get("decision") == "BLOCK"
+                        ]
+                        # Ativos rejeitados pelo filtro do profile (nunca entraram em decisions)
+                        _decided_syms = {d.get("symbol") for d in decisions}
+                        _filter_rejected_block = []
+                        for _fa in assets:
+                            _fsym = _fa.get("symbol")
+                            if not _fsym or _fsym in _allowed_syms_l3 or _fsym in _decided_syms:
+                                continue
+                            _find = dict(_fa.get("indicators") or {})
+                            for _ctx_key in _DECISION_CONTEXT_SNAPSHOT_FIELDS:
+                                if _ctx_key in _fa and _fa.get(_ctx_key) is not None:
+                                    _find[_ctx_key] = _fa.get(_ctx_key)
+                            _filter_rejected_block.append({
+                                "symbol": _fsym,
+                                "strategy": level,
+                                "decision": "BLOCK",
+                                "score": _fa.get("_score") or _fa.get("alpha_score") or 0,
+                                "direction": (
+                                    _fa.get("futures_direction")
+                                    or ("NEUTRAL" if _fa.get("is_futures") else "SPOT")
+                                ),
+                                "reasons": [{"reason": "profile_filter_rejected", "stage": "L3"}],
+                                "metrics": {
+                                    "indicators_snapshot": {
+                                        k: {"value": v}
+                                        for k, v in _find.items()
+                                        if v is not None
+                                    },
+                                    "source": "l3_filter_rejected",
+                                },
+                                "_asset": _fa,
+                            })
+                        _all_block_candidates = _all_block_decisions + _filter_rejected_block
+                        if (
+                            _all_block_candidates
+                            and await _watchlist_profile_is_active(db, wl_id, lock_for_write=False)
+                        ):
+                            try:
+                                if _wl_rejected_consolidation_enabled:
+                                    from ..services.l3_rejected_trade_consolidation import (
+                                        rejected_candidate_from_decision,
+                                    )
 
-                            for _rejected_decision in _all_block_candidates:
-                                l3_rejected_consolidation_candidates.append(
-                                    rejected_candidate_from_decision(
+                                    for _rejected_decision in _all_block_candidates:
+                                        l3_rejected_consolidation_candidates.append(
+                                            rejected_candidate_from_decision(
+                                                user_id=wl.user_id,
+                                                decision=_rejected_decision,
+                                                observed_at=scan_started_at,
+                                                buy_threshold=float(_wl_buy_threshold),
+                                                strong_buy_threshold=float(
+                                                    _wl_strong_buy_threshold
+                                                ),
+                                                watchlist_id=str(wl.id),
+                                                watchlist_name=wl.name,
+                                                watchlist_level=wl.level,
+                                                source_watchlist_id=(
+                                                    str(wl.source_watchlist_id)
+                                                    if wl.source_watchlist_id
+                                                    else None
+                                                ),
+                                                profile_id=wl.profile_id,
+                                                profile_name=_wl_profile_name,
+                                                profile_version=_wl_profile_version,
+                                                profile_version_id=_wl_profile_version_id,
+                                                rules_snapshot=profile_config,
+                                                rule_version=(
+                                                    _wl_spot_cfg.scanner.
+                                                    l3_profile_consolidation_rule_version
+                                                ),
+                                            )
+                                        )
+                                else:
+                                    from ..services.shadow_trade_service import (
+                                        create_l3_rejected_inline_shadows,
+                                    )
+                                    await create_l3_rejected_inline_shadows(
                                         user_id=wl.user_id,
-                                        decision=_rejected_decision,
-                                        observed_at=scan_started_at,
-                                        buy_threshold=float(_wl_buy_threshold),
-                                        strong_buy_threshold=float(
-                                            _wl_strong_buy_threshold
-                                        ),
+                                        decisions=_all_block_candidates,
+                                        execution_id=str(execution_id),
+                                        promotion_at=datetime.now(timezone.utc),
                                         watchlist_id=str(wl.id),
                                         watchlist_name=wl.name,
                                         watchlist_level=wl.level,
-                                        source_watchlist_id=(
-                                            str(wl.source_watchlist_id)
-                                            if wl.source_watchlist_id
-                                            else None
-                                        ),
-                                        profile_id=wl.profile_id,
+                                        source_watchlist_id=str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
+                                        profile_id=str(wl.profile_id) if wl.profile_id else None,
                                         profile_name=_wl_profile_name,
                                         profile_version=_wl_profile_version,
-                                        profile_version_id=_wl_profile_version_id,
                                         rules_snapshot=profile_config,
-                                        rule_version=(
-                                            _wl_spot_cfg.scanner.
-                                            l3_profile_consolidation_rule_version
-                                        ),
                                     )
-                                )
-                        else:
-                            from ..services.shadow_trade_service import (
-                                create_l3_rejected_inline_shadows,
-                            )
-                            await create_l3_rejected_inline_shadows(
-                                user_id=wl.user_id,
-                                decisions=_all_block_candidates,
-                                execution_id=str(execution_id),
-                                promotion_at=datetime.now(timezone.utc),
-                                watchlist_id=str(wl.id),
-                                watchlist_name=wl.name,
-                                watchlist_level=wl.level,
-                                source_watchlist_id=str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
-                                profile_id=str(wl.profile_id) if wl.profile_id else None,
-                                profile_name=_wl_profile_name,
-                                profile_version=_wl_profile_version,
-                                rules_snapshot=profile_config,
-                            )
-                    except Exception as _l3rej_exc:
-                        logger.warning(
-                            "[PipelineScan] L3_REJECTED capture failed (%s)"
-                            " — L3 stream unaffected",
-                            _l3rej_exc,
-                        )
-
-                # ── L3_SIMULATED shadows — fora de if decision_payloads ───────────────
-                # Controlado por ML config: shadow_capture_l3_simulated_enabled.
-                if decisions and await _watchlist_profile_is_active(db, wl_id):
-                    try:
-                        from ..services.shadow_trade_service import (
-                            create_l3_simulated_shadows,
-                        )
-                        await create_l3_simulated_shadows(
-                            user_id=wl.user_id,
-                            decisions=decisions,
-                            execution_id=str(execution_id),
-                            promotion_at=datetime.now(timezone.utc),
-                            watchlist_id=str(wl.id),
-                            watchlist_name=wl.name,
-                            watchlist_level=wl.level,
-                            source_watchlist_id=str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
-                            profile_id=str(wl.profile_id) if wl.profile_id else None,
-                            profile_name=_wl_profile_name,
-                            profile_version=_wl_profile_version,
-                            rules_snapshot=profile_config,
-                        )
-                    except Exception as _l3sim_exc:
-                        logger.warning(
-                            "[PipelineScan] L3_SIMULATED capture failed (%s)"
-                            " — L3 stream unaffected",
-                            _l3sim_exc,
-                        )
-
-                # ── Strategy Lab: evaluate all active lab profiles against L3 assets ──
-                # Piggybacks on any L3 scan — no separate watchlist per profile needed.
-                # Each lab profile independently re-evaluates the L2-approved asset pool
-                # with its own rules. Live order flow injection is skipped for speed
-                # (lab runs on the same cached snapshot as the main L3 evaluation).
-                try:
-                    import json as _json
-                    _lab_rows = (await db.execute(
-                        text("""
-                            SELECT id, name, config, updated_at
-                            FROM profiles
-                            WHERE is_active = true
-                              AND user_id = :uid
-                              AND name LIKE 'L3!_%' ESCAPE '!'
-                            LIMIT 50
-                        """),
-                        {"uid": str(wl.user_id)},
-                    )).fetchall()
-                    logger.info(
-                        "[StrategyLab] wl=%s assets=%d lab_profiles=%d",
-                        wl.name, len(assets), len(_lab_rows),
-                    )
-                    if _lab_rows and assets:
-                        from ..services.shadow_trade_service import (
-                            create_strategy_lab_shadows as _create_lab_allow,
-                            create_strategy_lab_rejected_shadows as _create_lab_rejected,
-                        )
-                        _lab_assets_by_sym = {a["symbol"]: a for a in assets}
-                        for _lp in _lab_rows:
-                            try:
-                                # asyncpg returns JSONB as a string from text() queries
-                                _raw_cfg = _lp.config
-                                _lp_cfg = (
-                                    _json.loads(_raw_cfg)
-                                    if isinstance(_raw_cfg, str)
-                                    else (_raw_cfg or {})
-                                ) or {}
-                                _lp_cfg = merge_profile_runtime_block_config(
-                                    _lp_cfg,
-                                    _block_cfg,
-                                    profile_id=_lp.id,
-                                )
-                                _lp_passed, _ = evaluate_rejections(
-                                    assets,
-                                    profile_config=_lp_cfg,
-                                    stage="L3",
-                                    profile_id=str(_lp.id),
-                                )
-                                _lp_decs = await _evaluate_l3_decisions(
-                                    _lp_passed,
-                                    _lp_cfg,
-                                    level,
-                                )
-                                _lp_allow = [d for d in _lp_decs if d.get("decision") == "ALLOW"]
-                                _lp_block = [d for d in _lp_decs if d.get("decision") == "BLOCK"]
-                                logger.info(
-                                    "[StrategyLab] %s → passed=%d ALLOW=%d BLOCK=%d",
-                                    _lp.name, len(_lp_passed), len(_lp_allow), len(_lp_block),
-                                )
-                                if _lp_allow:
-                                    await _create_lab_allow(
-                                        user_id=wl.user_id,
-                                        profile_id=_lp.id,
-                                        profile_version=_lp.updated_at,
-                                        profile_name=_lp.name,
-                                        strategy_type="L3_STRATEGY_LAB",
-                                        rules_snapshot=_lp_cfg,
-                                        allow_decisions=_lp_allow,
-                                        assets_by_symbol=_lab_assets_by_sym,
-                                        execution_id=str(execution_id),
-                                        promotion_at=datetime.now(timezone.utc),
-                                        db=db,
-                                        watchlist_id=str(wl.id),
-                                        watchlist_name=wl.name,
-                                        watchlist_level=wl.level,
-                                        source_watchlist_id=str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
-                                    )
-                                if _lp_block:
-                                    await _create_lab_rejected(
-                                        user_id=wl.user_id,
-                                        profile_id=_lp.id,
-                                        profile_version=_lp.updated_at,
-                                        profile_name=_lp.name,
-                                        strategy_type="L3_STRATEGY_LAB",
-                                        rules_snapshot=_lp_cfg,
-                                        block_decisions=_lp_block,
-                                        assets_by_symbol=_lab_assets_by_sym,
-                                        execution_id=str(execution_id),
-                                        promotion_at=datetime.now(timezone.utc),
-                                        db=db,
-                                        watchlist_id=str(wl.id),
-                                        watchlist_name=wl.name,
-                                        watchlist_level=wl.level,
-                                        source_watchlist_id=str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
-                                    )
-                            except Exception as _lp_exc:
+                            except Exception as _l3rej_exc:
                                 logger.warning(
-                                    "[StrategyLab] profile %s failed: %s",
-                                    _lp.name, _lp_exc,
+                                    "[PipelineScan] L3_REJECTED capture failed (%s)"
+                                    " — L3 stream unaffected",
+                                    _l3rej_exc,
                                 )
-                except Exception as _lab_exc:
-                    logger.warning(
-                        "[StrategyLab] multi-profile evaluation failed wl=%s: %s",
-                        wl.name, _lab_exc,
-                    )
 
-                if new_syms:
-                    stats["new_signals"] += len(new_syms)
-                    await _broadcast_pipeline_update(
-                        watchlist_id=wl_id,
-                        watchlist_name=wl.name,
-                        level="L3",
-                        new_symbols=new_syms,
-                        all_signals=signals,
-                    )
+                        # ── L3_SIMULATED shadows — fora de if decision_payloads ───────────────
+                        # Controlado por ML config: shadow_capture_l3_simulated_enabled.
+                        if decisions and await _watchlist_profile_is_active(db, wl_id, lock_for_write=False):
+                            try:
+                                from ..services.shadow_trade_service import (
+                                    create_l3_simulated_shadows,
+                                )
+                                await create_l3_simulated_shadows(
+                                    user_id=wl.user_id,
+                                    decisions=decisions,
+                                    execution_id=str(execution_id),
+                                    promotion_at=datetime.now(timezone.utc),
+                                    watchlist_id=str(wl.id),
+                                    watchlist_name=wl.name,
+                                    watchlist_level=wl.level,
+                                    source_watchlist_id=str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
+                                    profile_id=str(wl.profile_id) if wl.profile_id else None,
+                                    profile_name=_wl_profile_name,
+                                    profile_version=_wl_profile_version,
+                                    rules_snapshot=profile_config,
+                                )
+                            except Exception as _l3sim_exc:
+                                logger.warning(
+                                    "[PipelineScan] L3_SIMULATED capture failed (%s)"
+                                    " — L3 stream unaffected",
+                                    _l3sim_exc,
+                                )
 
+                        # ── Strategy Lab: evaluate all active lab profiles against L3 assets ──
+                        # Piggybacks on any L3 scan — no separate watchlist per profile needed.
+                        # Each lab profile independently re-evaluates the L2-approved asset pool
+                        # with its own rules. Live order flow injection is skipped for speed
+                        # (lab runs on the same cached snapshot as the main L3 evaluation).
+                        try:
+                            import json as _json
+                            _lab_rows = (await db.execute(
+                                text("""
+                                    SELECT id, name, config, updated_at
+                                    FROM profiles
+                                    WHERE is_active = true
+                                      AND user_id = :uid
+                                      AND name LIKE 'L3!_%' ESCAPE '!'
+                                    LIMIT 50
+                                """),
+                                {"uid": str(wl.user_id)},
+                            )).fetchall()
+                            logger.info(
+                                "[StrategyLab] wl=%s assets=%d lab_profiles=%d",
+                                wl.name, len(assets), len(_lab_rows),
+                            )
+                            if _lab_rows and assets:
+                                from ..services.shadow_trade_service import (
+                                    create_strategy_lab_shadows as _create_lab_allow,
+                                    create_strategy_lab_rejected_shadows as _create_lab_rejected,
+                                )
+                                _lab_assets_by_sym = {a["symbol"]: a for a in assets}
+                                for _lp in _lab_rows:
+                                    try:
+                                        # asyncpg returns JSONB as a string from text() queries
+                                        _raw_cfg = _lp.config
+                                        _lp_cfg = (
+                                            _json.loads(_raw_cfg)
+                                            if isinstance(_raw_cfg, str)
+                                            else (_raw_cfg or {})
+                                        ) or {}
+                                        _lp_cfg = merge_profile_runtime_block_config(
+                                            _lp_cfg,
+                                            _block_cfg,
+                                            profile_id=_lp.id,
+                                        )
+                                        _lp_passed, _ = evaluate_rejections(
+                                            assets,
+                                            profile_config=_lp_cfg,
+                                            stage="L3",
+                                            profile_id=str(_lp.id),
+                                        )
+                                        _lp_decs = await _evaluate_l3_decisions(
+                                            _lp_passed,
+                                            _lp_cfg,
+                                            level,
+                                        )
+                                        _lp_allow = [d for d in _lp_decs if d.get("decision") == "ALLOW"]
+                                        _lp_block = [d for d in _lp_decs if d.get("decision") == "BLOCK"]
+                                        logger.info(
+                                            "[StrategyLab] %s → passed=%d ALLOW=%d BLOCK=%d",
+                                            _lp.name, len(_lp_passed), len(_lp_allow), len(_lp_block),
+                                        )
+                                        if _lp_allow:
+                                            await _create_lab_allow(
+                                                user_id=wl.user_id,
+                                                profile_id=_lp.id,
+                                                profile_version=_lp.updated_at,
+                                                profile_name=_lp.name,
+                                                strategy_type="L3_STRATEGY_LAB",
+                                                rules_snapshot=_lp_cfg,
+                                                allow_decisions=_lp_allow,
+                                                assets_by_symbol=_lab_assets_by_sym,
+                                                execution_id=str(execution_id),
+                                                promotion_at=datetime.now(timezone.utc),
+                                                db=db,
+                                                watchlist_id=str(wl.id),
+                                                watchlist_name=wl.name,
+                                                watchlist_level=wl.level,
+                                                source_watchlist_id=str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
+                                            )
+                                        if _lp_block:
+                                            await _create_lab_rejected(
+                                                user_id=wl.user_id,
+                                                profile_id=_lp.id,
+                                                profile_version=_lp.updated_at,
+                                                profile_name=_lp.name,
+                                                strategy_type="L3_STRATEGY_LAB",
+                                                rules_snapshot=_lp_cfg,
+                                                block_decisions=_lp_block,
+                                                assets_by_symbol=_lab_assets_by_sym,
+                                                execution_id=str(execution_id),
+                                                promotion_at=datetime.now(timezone.utc),
+                                                db=db,
+                                                watchlist_id=str(wl.id),
+                                                watchlist_name=wl.name,
+                                                watchlist_level=wl.level,
+                                                source_watchlist_id=str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
+                                            )
+                                    except Exception as _lp_exc:
+                                        logger.warning(
+                                            "[StrategyLab] profile %s failed: %s",
+                                            _lp.name, _lp_exc,
+                                        )
+                        except Exception as _lab_exc:
+                            logger.warning(
+                                "[StrategyLab] multi-profile evaluation failed wl=%s: %s",
+                                wl.name, _lab_exc,
+                            )
+
+                        if new_syms:
+                            stats["new_signals"] += len(new_syms)
+                            await _broadcast_pipeline_update(
+                                watchlist_id=wl_id,
+                                watchlist_name=wl.name,
+                                level="L3",
+                                new_symbols=new_syms,
+                                all_signals=signals,
+                            )
+
+                        await db.commit()
+
+                l3_auxiliary_jobs.append(WatchlistAuxiliaryWork(
+                    watchlist_name=wl.name,
+                    timeout_seconds=float(
+                        _wl_spot_cfg.scanner.l3_watchlist_processing_timeout_seconds
+                        or 60.0
+                    ),
+                    run=_run_l3_auxiliary,
+                ))
 
         async def _run_one_watchlist_safely(wl, semaphore: asyncio.Semaphore) -> None:
             _wl_spot_cfg = spot_engine_config_map.get(
@@ -5862,6 +5885,24 @@ async def _run_pipeline_scan():
                 execution_id,
             )
             stats["errors"] += 1
+
+        # Every L3 decision transaction has finished and the complete rival
+        # candidate set has been drained. Diagnostic capture must never delay
+        # that boundary or hold locks needed by canonical Shadow writers.
+        if l3_auxiliary_jobs:
+            stats["l3_auxiliary"] = await run_watchlist_auxiliary_work(
+                l3_auxiliary_jobs,
+                max_concurrency=min(
+                    int(spot_engine_config_map.get(
+                        wl.user_id, SpotEngineConfig()
+                    ).scanner.l3_watchlist_max_concurrency or 8)
+                    for wl in stage_buckets.get("L3", [])
+                ),
+            )
+            stats["errors"] += (
+                stats["l3_auxiliary"]["failed"]
+                + stats["l3_auxiliary"]["timed_out"]
+            )
 
         await _run_stage_watchlists("custom")
 
