@@ -143,10 +143,14 @@ async def test_create_from_decision_v2_atr_zero_raises_zero_insert():
 
 @pytest.mark.asyncio
 async def test_create_from_decision_v2_happy_path_stamps_v2():
+    from app.schemas.watchlist_lineage_context import WatchlistLineageContext
+
     entry_time = datetime(2026, 7, 16, 1, 0, tzinfo=timezone.utc)
     result = SimpleNamespace(
         fetchone=lambda: (uuid4(),),
+        fetchall=lambda: [],
         first=lambda: None,
+        scalar_one_or_none=lambda: None,
         mappings=lambda: SimpleNamespace(first=lambda: None),
     )
     db = AsyncMock()
@@ -163,10 +167,21 @@ async def test_create_from_decision_v2_happy_path_stamps_v2():
             new=AsyncMock(return_value=(1.0, entry_time)),
         ),
     ):
-        created_id = await _create_from_decision(db, _decision(), "NOT_TRADABLE", cfg)
+        created_id = await _create_from_decision(
+            db, _decision(), "NOT_TRADABLE", cfg,
+            lineage=WatchlistLineageContext(
+                watchlist_id=str(uuid4()), watchlist_name="L3 barrier test",
+                watchlist_level="L3", profile_id=str(uuid4()),
+                profile_name="L3 barrier test", profile_version=entry_time,
+                rules_snapshot={"entry_triggers": {"conditions": []}},
+            ),
+        )
 
     assert created_id is not None
-    params = db.execute.await_args.args[1]
+    params = next(
+        call.args[1] for call in db.execute.await_args_list
+        if len(call.args) > 1 and "barrier_contract_version" in call.args[1]
+    )
     assert params["barrier_contract_version"] == BARRIER_CONTRACT_ATR_DYNAMIC_V2
     # ATR 1.0 * mult 1.5 = 1.5, dentro do clamp [0.5, 3.0]
     assert params["tp_pct_applied"] == pytest.approx(1.5)

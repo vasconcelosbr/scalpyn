@@ -1916,6 +1916,38 @@
           ]
         }
       ]
+    },
+    {
+      "id": "l3-authorization-before-auxiliary-work",
+      "description": "Complete L3 candidate set drains before diagnostic work, which must not hold the parent profile lock while awaiting own-session Shadow writers",
+      "files": [
+        {
+          "path": "backend/app/tasks/pipeline_scan.py",
+          "contains_all": [
+            "lock_for_write: bool = True",
+            "lock_for_write=False",
+            "run=_run_l3_auxiliary",
+            "run_watchlist_auxiliary_work(",
+            "_l3_process_outbox_after_l3_stage"
+          ]
+        },
+        {
+          "path": "backend/app/services/pipeline_auxiliary_work.py",
+          "contains_all": [
+            "authorization already drained",
+            "asyncio.wait_for(job.run()",
+            "asyncio.Semaphore"
+          ]
+        },
+        {
+          "path": "backend/tests/test_l3_auxiliary_authorization_boundary.py",
+          "contains_all": [
+            "test_own_session_shadow_preflight_does_not_hold_profile_lock",
+            "test_authorization_drains_complete_candidates_before_slow_auxiliary",
+            "test_auxiliary_failure_isolated_and_cancellation_cleans_up"
+          ]
+        }
+      ]
     }
   ]
 }

@@ -314,7 +314,9 @@ def test_open_shadow_monitor_does_not_depend_on_profile_active_state():
 
 
 @pytest.mark.asyncio
-async def test_inactive_l3_profile_cannot_create_a_new_shadow():
+@pytest.mark.parametrize("source", ["L3", "L3_SIMULATED", "L3_REJECTED", "L3_LAB"])
+async def test_inactive_l3_profile_cannot_create_a_new_shadow(source):
+    from app.schemas.watchlist_lineage_context import WatchlistLineageContext
     from app.services.shadow_trade_service import _create_from_decision
 
     now = datetime.now(timezone.utc)
@@ -344,7 +346,12 @@ async def test_inactive_l3_profile_cannot_create_a_new_shadow():
     }
 
     created = await _create_from_decision(
-        db, decision, "L3_AUTHORIZATION_OUTBOX_V3", config
+        db, decision, "L3_AUTHORIZATION_OUTBOX_V3", config, source=source,
+        lineage=WatchlistLineageContext(
+            watchlist_id=str(uuid4()), watchlist_name="L3 inactive", watchlist_level="L3",
+            profile_id=str(decision.profile_id), profile_name=decision.profile_name,
+            profile_version=now, rules_snapshot={"entry_triggers": {"conditions": []}},
+        ),
     )
 
     assert created is None
