@@ -116,6 +116,12 @@ async def _discover_async():
             select(Pool).where(
                 Pool.is_active == True,
                 text("(overrides->>'auto_refresh')::boolean = true"),
+                # 2026-09-27: a radar_enabled pool is driven exclusively by
+                # the Market Catalyst Radar feed (radar_auto_discover.py) --
+                # this task's broad exchange-ticker universe scan must never
+                # also run against it. See is_auto_discovery_enabled()'s
+                # docstring for the incident this fixes.
+                text("(overrides->>'radar_enabled')::boolean IS NOT TRUE"),
             )
         )
         pools = result.scalars().all()
