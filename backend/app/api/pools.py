@@ -10,6 +10,7 @@ from uuid import UUID
 
 from ..database import get_db
 from ..models.pool import Pool, PoolAssetExclusion, PoolCoin
+from ..services.radar_pool_sync import operator_pool_overrides
 from .config import get_current_user_id
 from ..services.pool_selection import (
     apply_pool_discovery_filters,
@@ -147,7 +148,7 @@ async def create_pool(payload: Dict[str, Any], db: AsyncSession = Depends(get_db
         mode=payload.get("mode", "paper"),
         market_type=payload.get("market_type", "spot"),
         profile_id=profile_id,
-        overrides=payload.get("overrides", {}),
+        overrides=operator_pool_overrides(None, payload.get("overrides", {})),
     )
     db.add(pool)
     await db.commit()
@@ -170,7 +171,7 @@ async def delete_pool(pool_id: UUID, db: AsyncSession = Depends(get_db), user_id
 
 @router.patch("/{pool_id}")
 async def update_pool(pool_id: UUID, payload: Dict[str, Any], db: AsyncSession = Depends(get_db), user_id: UUID = Depends(get_current_user_id)):
-    query = select(Pool).where(Pool.id == pool_id, Pool.user_id == user_id)
+    query = select(Pool).where(Pool.id == pool_id, Pool.user_id == user_id).with_for_update()
     result = await db.execute(query)
     pool = result.scalars().first()
     if not pool:
@@ -197,7 +198,7 @@ async def update_pool(pool_id: UUID, payload: Dict[str, Any], db: AsyncSession =
         else:
             pool.profile_id = profile_id
     if "overrides" in payload:
-        pool.overrides = payload["overrides"]
+        pool.overrides = operator_pool_overrides(pool.overrides, payload["overrides"])
 
     await db.commit()
     await db.refresh(pool)
@@ -467,13 +468,13 @@ async def get_pool_overrides(pool_id: UUID, db: AsyncSession = Depends(get_db), 
 
 @router.put("/{pool_id}/overrides")
 async def update_pool_overrides(pool_id: UUID, payload: Dict[str, Any], db: AsyncSession = Depends(get_db), user_id: UUID = Depends(get_current_user_id)):
-    pool_query = select(Pool).where(Pool.id == pool_id, Pool.user_id == user_id)
+    pool_query = select(Pool).where(Pool.id == pool_id, Pool.user_id == user_id).with_for_update()
     pool_result = await db.execute(pool_query)
     pool = pool_result.scalars().first()
     if not pool:
         raise HTTPException(status_code=404, detail="Pool not found")
 
-    pool.overrides = payload
+    pool.overrides = operator_pool_overrides(pool.overrides, payload)
     await db.commit()
     await db.refresh(pool)
     return {"pool_id": str(pool_id), "overrides": pool.overrides}
@@ -507,6 +508,8 @@ async def discover_pool_assets(
 
     market_type = pool.market_type or "spot"
     overrides = pool.overrides or {}
+    if overrides.get("radar_enabled"):
+        raise HTTPException(status_code=409, detail="RADAR_POOL_USES_RADAR_SYNC")
     max_assets = int(overrides.get("max_assets", 0))
 
     # Filters come exclusively from linked Strategy Profile
@@ -866,6 +869,8 @@ async def scan_and_populate_pool(
         raise HTTPException(status_code=404, detail="Pool not found")
 
     overrides = pool.overrides or {}
+    if overrides.get("radar_enabled"):
+        raise HTTPException(status_code=409, detail="RADAR_POOL_USES_RADAR_SYNC")
     max_assets = int(overrides.get("max_assets", 0))
 
     # Filters come exclusively from linked Strategy Profile

@@ -34,6 +34,10 @@ class _RowsResult:
     def all(self):
         return self._rows
 
+    def fetchall(self):
+        # These fixtures are standalone watchlists, with no radar ancestry.
+        return []
+
 
 class _RowsSession:
     def __init__(self, rows):

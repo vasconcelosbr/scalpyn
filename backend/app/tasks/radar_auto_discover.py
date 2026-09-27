@@ -2,44 +2,11 @@
 
 import asyncio
 import logging
-from datetime import datetime, timezone
 
-from sqlalchemy import text
 
 from ..tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
-
-# 2026-09-25 incident: the radar feed's own top-N selection is noisy cycle
-# to cycle (observed live: 0-4 symbols out of a ~19-symbol pool per ~1min
-# run). Treating a single cycle's absence as "dropped from the radar" made
-# held_for_open_position flap for almost every symbol almost every cycle,
-# freezing L1/L2/L3 candidacy platform-wide (top_assets=0 briefly held the
-# ENTIRE PUMP pool at once). A symbol must be continuously absent for at
-# least this long before it's treated as genuinely gone.
-RADAR_ABSENCE_GRACE_SECONDS = 300
-
-
-def radar_absence_debounce(
-    *,
-    absent: set,
-    last_seen_by_symbol: dict,
-    now: datetime,
-    grace_seconds: int = RADAR_ABSENCE_GRACE_SECONDS,
-) -> set:
-    """Symbols in ``absent`` that have been missing from the radar's
-    selection long enough to treat as genuinely dropped, not single-cycle
-    noise. A symbol with no recorded sighting (``None``) is grace-exempt --
-    its true absence duration is unknown, so it falls through to the
-    existing held/removed handling rather than being silently pinned
-    forever.
-    """
-    return {
-        symbol for symbol in absent
-        if last_seen_by_symbol.get(symbol) is None
-        or (now - last_seen_by_symbol[symbol]).total_seconds() >= grace_seconds
-    }
-
 
 def _run_async(coro):
     """Run async coroutine in a sync Celery task.
@@ -119,200 +86,57 @@ def _run_async(coro):
 
 async def _radar_sync_async():
     from ..database import run_db_task
-    from ..models.pool import Pool, PoolAssetExclusion, PoolCoin
+    from ..models.pool import Pool
     from ..services.ai_keys_service import get_decrypted_api_key
-    from ..services.radar_service import fetch_top_assets
+    from ..services.radar_service import fetch_top_assets, RadarFeedUnavailable
+    from ..services.radar_pool_sync import reconcile_radar_pool
     from ..utils.symbol_filters import is_excluded_asset
     from sqlalchemy import select
 
-    logger.info("Radar sync: starting run...")
-
-    # Radar (Gate.io spot, buy-pressure heuristic) only covers spot; a
-    # futures pool has no equivalent feed, so it is excluded up front rather
-    # than silently no-op'd per pool.
     async def _load_pools(db):
-        result = await db.execute(
-            select(Pool).where(
-                Pool.is_active == True,
-                Pool.market_type == "spot",
-                text("(overrides->>'radar_enabled')::boolean = true"),
-            )
-        )
-        pools = result.scalars().all()
-        return [{"id": p.id, "name": p.name, "user_id": p.user_id} for p in pools]
+        result = await db.execute(select(Pool).where(
+            Pool.is_active.is_(True), Pool.market_type == "spot",
+            Pool.overrides["radar_enabled"].as_boolean().is_(True),
+        ))
+        return [{"id": p.id, "name": p.name, "user_id": p.user_id}
+                for p in result.scalars().all()]
 
-    pool_data_list = await run_db_task(_load_pools, celery=True)
-    if not pool_data_list:
-        logger.info("Radar sync: no pool with radar_enabled=true; no mutation performed.")
-        return "0 pools | radar disabled"
-
-    total_added = 0
-    total_removed = 0
-    pools_processed = 0
-    # One tenant may own several radar-enabled pools; the feed is identical
-    # for all of them, so fetch it at most once per distinct user per run.
-    assets_by_user: dict = {}
-
-    for pd in pool_data_list:
-        try:
-            user_id = pd["user_id"]
-            if user_id not in assets_by_user:
-                async def _load_key(db, _uid=user_id):
-                    return await get_decrypted_api_key(db, _uid, "radar")
-
-                api_key = await run_db_task(_load_key, celery=True)
-                if not api_key:
-                    logger.warning("[RADAR-SKIP] pool=%s reason=no_radar_key", pd["name"])
-                    # None (not set()) marks "never fetched" so a legitimate
-                    # zero-signal response below is never mistaken for this.
-                    assets_by_user[user_id] = None
+    pools = await run_db_task(_load_pools, celery=True)
+    total_added = total_removed = processed = 0
+    feeds = {}
+    for pool in pools:
+        user_id = pool["user_id"]
+        if user_id not in feeds:
+            try:
+                async def _load_key(db, uid=user_id):
+                    return await get_decrypted_api_key(db, uid, "radar")
+                key = await run_db_task(_load_key, celery=True)
+                if not key:
+                    feeds[user_id] = (None, "no_radar_key")
                 else:
-                    assets = await fetch_top_assets(api_key)
-                    assets_by_user[user_id] = {
-                        a["pair"] for a in assets
-                        if a.get("pair", "").endswith("_USDT") and not is_excluded_asset(a["pair"])
-                    }
-
-            radar_pairs = assets_by_user[user_id]
-            if radar_pairs is None:
-                pools_processed += 1
-                continue
-            # 2026-09-23: an empty (but successfully fetched) radar_pairs is a
-            # real "0 eligible signals right now" state, not "nothing to do" —
-            # it must still reach _persist so every existing origin='radar'
-            # coin gets removed. Skipping here (as before) left stale coins
-            # in the pool forever whenever the feed legitimately went to
-            # zero, since the next non-empty fetch would just keep diffing
-            # against them as if they were still current.
-
-            async def _persist(db, _pd=pd, _radar_pairs=radar_pairs):
-                coins_result = await db.execute(
-                    select(PoolCoin).where(PoolCoin.pool_id == _pd["id"])
-                )
-                existing_coins = coins_result.scalars().all()
-                exclusions_result = await db.execute(
-                    select(PoolAssetExclusion.symbol).where(
-                        PoolAssetExclusion.pool_id == _pd["id"]
-                    )
-                )
-                excluded_symbols = set(exclusions_result.scalars().all())
-                existing_radar = {
-                    c.symbol: c for c in existing_coins if (c.origin or "manual") == "radar"
-                }
-                other_origin = {
-                    c.symbol for c in existing_coins if (c.origin or "manual") != "radar"
-                }
-
-                to_add = _radar_pairs - excluded_symbols - other_origin - set(existing_radar.keys())
-                present = set(existing_radar.keys()) & _radar_pairs
-                absent = set(existing_radar.keys()) - _radar_pairs
-
-                now = datetime.now(timezone.utc)
-                for symbol in to_add:
-                    db.add(PoolCoin(
-                        pool_id=_pd["id"], symbol=symbol, market_type="spot",
-                        is_active=True, origin="radar", discovered_at=now,
-                        radar_last_seen_at=now,
-                    ))
-                for symbol in present:
-                    existing_radar[symbol].radar_last_seen_at = now
-
-                # Absence alone isn't enough -- only symbols continuously
-                # missing for RADAR_ABSENCE_GRACE_SECONDS are treated as
-                # genuinely dropped from the radar (see incident note above).
-                to_remove = radar_absence_debounce(
-                    absent=absent,
-                    last_seen_by_symbol={
-                        symbol: existing_radar[symbol].radar_last_seen_at
-                        for symbol in absent
-                    },
-                    now=now,
-                )
-
-                # 2026-09-25 (operator request): a symbol dropping out of the
-                # radar feed must stop being eligible for NEW entries right
-                # away, but must not lose live indicator/score collection
-                # while it has an open shadow trade (PENDING/RUNNING, e.g.
-                # trailing) — the collector universe is pool_coins.is_active,
-                # so deleting the row mid-trade starves that trade's own
-                # ML capture (features_snapshot ends up with holes) even
-                # though the trade itself keeps monitoring fine via
-                # decision_id. Split the removal set: symbols with an open
-                # position keep their pool_coins row (is_active stays true —
-                # collection continues) but get held_for_open_position=true,
-                # which pipeline_scan's POOL-level query excludes from
-                # L1/L2/L3 propagation — durably blocking new candidacy
-                # (cascade_invalidate_removed_symbols's level_direction='down'
-                # alone is NOT durable: pipeline_scan's own upsert flips it
-                # back to NULL on the very next cycle for any symbol still
-                # is_active=true, so it only covers this one cycle here).
-                # Once the trade completes, the next cycle's diff naturally
-                # re-adds the symbol to to_remove_now (no longer held) and
-                # it gets deleted then — no separate cleanup task needed.
-                from ..services.pool_service import (
-                    cascade_invalidate_removed_symbols,
-                    set_held_for_open_position,
-                    symbols_with_open_shadow_trades,
-                )
-                to_remove_held = await symbols_with_open_shadow_trades(
-                    db, _pd["user_id"], to_remove
-                )
-                to_remove_now = to_remove - to_remove_held
-
-                for symbol in to_remove_now:
-                    await db.delete(existing_radar[symbol])
-                if to_remove_held:
-                    await set_held_for_open_position(
-                        db, _pd["id"], to_remove_held, held=True
-                    )
-                if to_remove_now:
-                    # 2026-09-23: same transaction as the pool_coins delete —
-                    # L1/L2/L3 must never show a symbol the pool no longer
-                    # has. Scoped to to_remove_now only (genuinely deleted,
-                    # no open position) -- 2026-09-26 incident: this used to
-                    # run on the full to_remove set, including
-                    # to_remove_held. That forced level_direction='down' on
-                    # a symbol with a real open L3 shadow trade every time it
-                    # got held (e.g. from ongoing radar noise), hiding it
-                    # from Aprovado/L3 Consolidado even though
-                    # l3_trade_consolidation's ACTIVE_TRADE_ALREADY_EXISTS
-                    # path is specifically designed to keep such a symbol
-                    # visible (pointing at the existing shadow) while
-                    # blocking a second one -- confirmed live for ZEC_USDT.
-                    # A held symbol's level_direction must reflect its own
-                    # L3 evaluation, not a removal cascade.
-                    await cascade_invalidate_removed_symbols(db, _pd["id"], to_remove_now)
-
-                # A symbol back in the radar feed that was previously held
-                # (a fresh signal on an asset whose earlier trade was still
-                # open last cycle) must resume normal candidacy.
-                reactivated = present
-                if reactivated:
-                    await set_held_for_open_position(
-                        db, _pd["id"], reactivated, held=False
-                    )
-                # run_db_task auto-commits on successful exit
-                return len(to_add), len(to_remove_now), len(to_remove_held)
-
-            added, removed, held = await run_db_task(_persist, celery=True)
-            logger.info(
-                "Pool '%s': radar +%d -%d (top_assets=%d)%s",
-                pd["name"], added, removed, len(radar_pairs),
-                f" [{held} held for open position]" if held else "",
-            )
-            total_added += added
-            total_removed += removed
-            pools_processed += 1
-
-        except Exception as e:
-            logger.error("Radar sync failed for pool '%s': %s", pd["name"], e)
-            continue
-
-    logger.info(
-        "Radar sync complete: %d pools, +%d -%d assets total",
-        pools_processed, total_added, total_removed,
-    )
-    return f"{pools_processed} pools | +{total_added} -{total_removed}"
+                    assets = await fetch_top_assets(key)
+                    feeds[user_id] = ({a["pair"] for a in assets
+                        if a["pair"].endswith("_USDT") and not is_excluded_asset(a["pair"])}, None)
+            except RadarFeedUnavailable as exc:
+                feeds[user_id] = (None, str(exc))
+            except Exception as exc:
+                # Log only the type: provider errors may include request details.
+                logger.warning("Radar fetch unavailable: %s", type(exc).__name__)
+                feeds[user_id] = (None, "fetch_failed")
+        pairs, reason = feeds[user_id]
+        try:
+            async def _persist(db, p=pool, selection=pairs, failure=reason):
+                return await reconcile_radar_pool(db, pool_id=p["id"],
+                    user_id=p["user_id"], radar_pairs=selection, reason=failure)
+            stats = await run_db_task(_persist, celery=True)
+            total_added += stats["added"]
+            total_removed += stats["removed"]
+            processed += 1
+            logger.info("Radar pool=%s health=%s result=%s", pool["name"],
+                        reason or "healthy", stats)
+        except Exception:
+            logger.exception("Radar reconciliation failed for pool=%s", pool["id"])
+    return f"{processed} pools | +{total_added} -{total_removed}"
 
 
 @celery_app.task(name="app.tasks.radar_auto_discover.sync")

@@ -6,12 +6,12 @@ requires the latest decision, its immutable contract and its transactional outbo
 from datetime import datetime, timedelta, timezone
 import math
 
-from sqlalchemy import and_, select, text, tuple_
+from sqlalchemy import and_, or_, select, tuple_
 
 from ..models.backoffice import DecisionLog, L3AuthorizationOutbox
 from ..models.shadow_trade import ShadowTrade
 from .l3_authorization_contract_v3 import canonical_hash
-from .pool_service import resolve_root_pool_ids
+from .pool_service import radar_pool_coin_is_candidate, resolve_root_pool_ids
 
 
 def utc(value):
@@ -228,13 +228,22 @@ async def load_public_authorizations(db, *, user_id, candidates):
     )
     pool_active_symbols: dict = {}
     if watchlist_pool_ids:
+        from ..models.pool import Pool, PoolCoin
         pool_ids = set(watchlist_pool_ids.values())
         active_pool_rows = (await db.execute(
-            text("""
-                SELECT pool_id, symbol FROM pool_coins
-                WHERE pool_id = ANY(:pool_ids) AND is_active = true
-            """),
-            {"pool_ids": list(pool_ids)},
+            select(PoolCoin.pool_id, PoolCoin.symbol)
+            .join(Pool, Pool.id == PoolCoin.pool_id)
+            .where(
+                PoolCoin.pool_id.in_(pool_ids),
+                Pool.user_id == user_id,
+                Pool.market_type == "spot",
+                PoolCoin.market_type == "spot",
+                PoolCoin.is_active.is_(True),
+                or_(
+                    Pool.overrides["radar_enabled"].as_boolean().is_not(True),
+                    radar_pool_coin_is_candidate(Pool, PoolCoin),
+                ),
+            ),
         )).fetchall()
         for r in active_pool_rows:
             pool_active_symbols.setdefault(r.pool_id, set()).add(r.symbol)

@@ -600,7 +600,7 @@ export default function PoolConfigPage() {
           <div className="card-header">
             <h3>Market Catalyst Radar</h3>
             <span style={{ fontSize: "12px", color: "var(--text-tertiary)" }}>
-              Sync top buy-pressure assets every 10 minutes
+              Sincronização com os sinais atuais do radar
             </span>
           </div>
           <div className="card-body space-y-3">
@@ -615,7 +615,7 @@ export default function PoolConfigPage() {
                 <span className="knob" />
               </button>
               <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
-                Sync from Market Catalyst Radar every 10 min
+                Sincronizar ativos do Market Catalyst Radar
               </span>
             </div>
             <p style={{ fontSize: "12px", color: "var(--text-tertiary)", margin: 0 }}>
@@ -624,6 +624,15 @@ export default function PoolConfigPage() {
               configured under Settings → General → Provedores de Dados de
               Mercado.
             </p>
+            {radarEnabled && (
+              <div role="status" data-testid="radar-feed-health" style={{ fontSize: "13px", color: pool?.overrides?.radar_feed_health?.status === "healthy" ? "var(--text-secondary)" : "var(--warning, #fbbf24)" }}>
+                {pool?.overrides?.radar_feed_health?.status === "healthy"
+                  ? "Radar sincronizado. Ativos fora da lista permanecem apenas para acompanhar trades abertos."
+                  : pool?.overrides?.radar_feed_health?.status === "unavailable"
+                    ? "Radar indisponível. Novas candidaturas estão suspensas; trades abertos continuam sendo acompanhados."
+                    : "Aguardando confirmação do radar. Trades abertos continuam sendo acompanhados."}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -752,7 +761,8 @@ export default function PoolConfigPage() {
             <button
               className="btn btn-primary"
               onClick={handleDiscover}
-              disabled={discovering}
+              disabled={discovering || radarEnabled}
+              title={radarEnabled ? "Os ativos deste pool são sincronizados pelo radar." : undefined}
               style={{ gap: "6px" }}
             >
               {discovering ? (

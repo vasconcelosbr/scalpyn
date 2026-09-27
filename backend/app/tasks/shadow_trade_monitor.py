@@ -564,26 +564,32 @@ async def _compute_atr_pct(
     if entry_price <= 0:
         return None
     try:
-        res = await db.execute(
-            text(
-                """
-                SELECT high, low, close
-                  FROM ohlcv
-                 WHERE symbol  = :s
-                   AND timeframe = :tf
-                   AND (:as_of IS NULL OR time <= :as_of)
-                 ORDER BY time DESC
-                 LIMIT :n
-                """
-            ),
-            {
-                "s": symbol,
-                "tf": timeframe,
-                "as_of": as_of,
-                "n": period + 1,
-            },
-        )
-        rows = res.fetchall()
+        # Optional instrumentation must not leave the row's transaction
+        # aborted if this read fails. Catch only after the savepoint rolls back.
+        async with db.begin_nested():
+            res = await db.execute(
+                text(
+                    """
+                    SELECT high, low, close
+                      FROM ohlcv
+                     WHERE symbol  = :s
+                       AND timeframe = :tf
+                       AND (
+                           CAST(:as_of AS timestamptz) IS NULL
+                           OR time <= CAST(:as_of AS timestamptz)
+                       )
+                     ORDER BY time DESC
+                     LIMIT :n
+                    """
+                ),
+                {
+                    "s": symbol,
+                    "tf": timeframe,
+                    "as_of": as_of,
+                    "n": period + 1,
+                },
+            )
+            rows = res.fetchall()
         if len(rows) < 2:
             return None
         rows = list(reversed(rows))  # oldest → newest
@@ -598,6 +604,10 @@ async def _compute_atr_pct(
         atr = sum(trs[-period:]) / len(trs[-period:])
         return round(atr / entry_price * 100.0, 6)
     except Exception as exc:
+        # begin_nested() can flush existing ORM changes before its savepoint
+        # exists. Such a failure belongs to the outer per-shadow transaction.
+        if not db.is_active:
+            raise
         logger.debug(
             "[shadow-monitor] _compute_atr_pct failed symbol=%s tf=%s: %s",
             symbol, timeframe, exc,
@@ -2163,6 +2173,8 @@ async def _fast_barrier_scan_async(run_id: str) -> Dict[str, Any]:
                 shadows.sort(key=lambda s: s.id)
 
                 for shadow in shadows:
+                    # A failed savepoint expires ORM attributes, including id.
+                    shadow_id = shadow.id
                     # 2026-09-24: routed through the same per-row savepoint
                     # helper the regular batch already uses (PR #150's
                     # diagnosis was right; the standalone fix regressed —
@@ -2212,7 +2224,7 @@ async def _fast_barrier_scan_async(run_id: str) -> Dict[str, Any]:
                         logger.error(
                             "[shadow-closer] fast-scan advance failed "
                             "shadow_id=%s: %s: %s",
-                            shadow.id, type(exc).__name__, str(exc)[:200],
+                            shadow_id, type(exc).__name__, str(exc)[:200],
                         )
 
         # Phase 3: write audit rows (best-effort, separate tx)

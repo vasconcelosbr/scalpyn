@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { STRATEGY_PROFILE_INDICATOR_MAP } from "./indicatorCatalog";
 
 import {
   isProfileComparisonCondition,
@@ -208,10 +209,11 @@ test("manual filter edits do not inject score metadata", () => {
 
 test("changing an Entry Trigger feature drops stale identity but keeps its timeframe choice", () => {
   const condition = withoutProfileFeatureIdentity({
-    id: "entry-1", indicator: "rsi", operator: ">", value: 50,
+    id: "entry-1", indicator: "macd_histogram", operator: ">", value: 0,
     source: "ohlcv", source_provider: "gate.io", provider_policy_id: "ohlcv-v1",
     max_age_seconds: 360, timeframe: "15m", candle_policy: "CLOSED_ONLY",
-    period: 14, resolved_operands: { left: { indicator: "rsi" } },
+    period: 8, parameters: { fast: 8, slow: 21, signal: 5 },
+    resolved_operands: { left: { indicator: "macd_histogram" } },
   });
 
   assert.equal(condition.timeframe, "15m");
@@ -219,6 +221,7 @@ test("changing an Entry Trigger feature drops stale identity but keeps its timef
   assert.equal("source_provider" in condition, false);
   assert.equal("provider_policy_id" in condition, false);
   assert.equal("period" in condition, false);
+  assert.equal("parameters" in condition, false);
   assert.equal("resolved_operands" in condition, false);
 });
 
@@ -720,6 +723,142 @@ test("a condition already stuck with the stale period: 9 from #212 gets it clear
 
   const saved = prepared.config.block_rules.blocks[0].conditions[0] as Record<string, any>;
   assert.equal("period" in saved, false);
+});
+
+const CALCULATION_IDENTITY_FIXTURES = [
+  { indicator: "macd_histogram", period: 8, parameters: { fast: 8, slow: 21, signal: 5 } },
+  { indicator: "macd_hist_slope_3", period: 8, parameters: { fast: 8, slow: 21, signal: 5 } },
+  { indicator: "vwap_distance_pct", parameters: { reset: "UTC_DAY" } },
+  { indicator: "rsi_slope_3", period: 14 },
+  { indicator: "adx_acceleration", period: 14 },
+  { indicator: "adx_slope_3", period: 14 },
+  { indicator: "di_trend", period: 14 },
+  { indicator: "stoch_d", period: 3, parameters: { k: 14, d: 3, smooth: 3 } },
+];
+
+test("new and resaved conditions preserve producer calculation metadata across every editor section", () => {
+  const prepareBySection = {
+    filters: prepareProfileFilterIdentities,
+    signals: prepareProfileSignalIdentities,
+    entry_triggers: prepareProfileEntryTriggerIdentities,
+    block_rules: prepareProfileBlockRuleIdentities,
+  };
+  for (const [section, prepare] of Object.entries(prepareBySection)) {
+    const conditions = CALCULATION_IDENTITY_FIXTURES
+      .filter(({ indicator }) => STRATEGY_PROFILE_INDICATOR_MAP.get(indicator)?.sections.some((s) => s === section))
+      .map((identity) => ({
+        id: `keep-${identity.indicator}`,
+        type: identity.indicator === "di_trend" ? "boolean" : "threshold",
+        operator: identity.indicator === "di_trend" ? "==" : ">",
+        value: identity.indicator === "di_trend" ? true : 1,
+        source: "ohlcv", source_provider: "gate.io", timeframe: "5m",
+        provider_policy_id: "spot_gate_closed_ohlcv_v1", max_age_seconds: 360,
+        candle_policy: "CLOSED_ONLY", required: true, enabled: true, ...identity,
+      }));
+    const config = {
+      default_timeframe: "5m",
+      [section]: section === "block_rules"
+        ? { blocks: [{ id: "keep", name: "Keep", enabled: true, logic: "AND", conditions }] }
+        : { logic: "AND", conditions },
+    };
+    const original = structuredClone(config);
+    for (const current of [undefined, config]) {
+      const prepared = prepare(config, SOURCE_POLICIES, current);
+      assert.deepEqual(prepared.issues, [], section);
+      const saved = serializeProfileEditorConfig(prepared.config) as Record<string, any>;
+      const savedConditions = section === "block_rules"
+        ? saved.block_rules.blocks[0].conditions : saved[section].conditions;
+      assert.deepEqual(savedConditions, conditions, section);
+    }
+    assert.deepEqual(config, original, "saving must not mutate the loaded config");
+  }
+});
+
+test("EMA distance cleanup preserves threshold payload and is idempotent for every named period", () => {
+  for (const period of [5, 9, 21, 50, 200]) {
+    const condition = {
+      id: `ema-${period}`, type: "threshold", indicator: `ema${period}_distance_pct`,
+      operator: ">", value: 1, period, parameters: { period },
+      source: "ohlcv", source_provider: "gate.io", timeframe: "5m",
+      provider_policy_id: "spot_gate_closed_ohlcv_v1", max_age_seconds: 741,
+      candle_policy: "CLOSED_ONLY", required: true, enabled: true,
+    };
+    const config = {
+      default_timeframe: "5m",
+      block_rules: { blocks: [{ name: "EMA guard", logic: "AND", enabled: true, conditions: [condition] }] },
+    };
+    const prepared = prepareProfileBlockRuleIdentities(config, SOURCE_POLICIES, config);
+    const expected: Record<string, any> = { ...condition };
+    delete expected.period;
+    delete expected.parameters;
+    assert.deepEqual(prepared.issues, []);
+    assert.deepEqual(prepared.config.block_rules.blocks[0].conditions[0], expected);
+    assert.equal(condition.period, period, "input remains unchanged");
+    assert.deepEqual(
+      prepareProfileBlockRuleIdentities(prepared.config, SOURCE_POLICIES, prepared.config),
+      prepared,
+    );
+  }
+});
+
+test("cleaning either EMA comparison operand preserves the other operand's calculation identity", () => {
+  const provenance = {
+    source: "ohlcv", source_provider: "gate.io", timeframe: "5m",
+    provider_policy_id: "spot_gate_closed_ohlcv_v1", max_age_seconds: 360,
+    candle_policy: "CLOSED_ONLY",
+  };
+  const ema = { ...provenance, indicator: "ema9_distance_pct", period: 9, parameters: { period: 9 } };
+  const macd = {
+    ...provenance, indicator: "macd_histogram", period: 8,
+    parameters: { fast: 8, slow: 21, signal: 5 },
+  };
+  for (const emaSide of ["left", "right"]) {
+    const left = emaSide === "left" ? ema : macd;
+    const right = emaSide === "right" ? ema : macd;
+    const condition = {
+      id: `cmp-${emaSide}`, type: "comparison", operator: ">", ...provenance,
+      left: left.indicator, right: right.indicator, period: left.period, parameters: left.parameters,
+      resolved_operands: { left, right }, required: true,
+    };
+    const config = {
+      default_timeframe: "5m",
+      block_rules: { blocks: [{ name: "Compare", logic: "AND", enabled: true, conditions: [condition] }] },
+    };
+    const original = structuredClone(config);
+    const prepared = prepareProfileBlockRuleIdentities(config, SOURCE_POLICIES, config);
+    const saved = prepared.config.block_rules.blocks[0].conditions[0] as Record<string, any>;
+    assert.deepEqual(prepared.issues, []);
+    const expectedEma: Record<string, any> = { ...ema };
+    delete expectedEma.period;
+    delete expectedEma.parameters;
+    assert.deepEqual(saved.resolved_operands[emaSide], expectedEma);
+    assert.deepEqual(saved.resolved_operands[emaSide === "left" ? "right" : "left"], macd);
+    if (emaSide === "left") {
+      assert.equal("period" in saved, false);
+      assert.equal("parameters" in saved, false);
+    } else {
+      assert.equal(saved.period, macd.period);
+      assert.deepEqual(saved.parameters, macd.parameters);
+    }
+    assert.deepEqual(config, original);
+    assert.deepEqual(
+      prepareProfileBlockRuleIdentities(prepared.config, SOURCE_POLICIES, prepared.config),
+      prepared,
+    );
+  }
+});
+
+test("a comparison's left period does not override its right feature period", () => {
+  const prepared = prepareProfileBlockRuleIdentities({
+    default_timeframe: "5m",
+    block_rules: { blocks: [{ name: "EMA cross", logic: "AND", enabled: true, conditions: [{
+      id: "ema-cross", type: "comparison", left: "ema21", right: "ema50", period: 21, operator: ">",
+    }] }] },
+  }, SOURCE_POLICIES);
+  const saved = prepared.config.block_rules.blocks[0].conditions[0] as Record<string, any>;
+  assert.deepEqual(prepared.issues, []);
+  assert.equal(saved.resolved_operands.left.period, 21);
+  assert.equal(saved.resolved_operands.right.period, 50);
 });
 
 test("comparison Block Rule condition receives an independently resolved identity per operand", () => {

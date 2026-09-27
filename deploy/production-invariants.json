@@ -122,7 +122,7 @@
             "resolve_spot_pipeline_chain",
             "load_live_l3_candidates",
             "Profile.is_active.is_(True)",
-            "pool_asset.symbol == PipelineWatchlistAsset.symbol"
+            "pool_asset.symbol == l2_asset.symbol"
           ]
         },
         {
@@ -138,7 +138,7 @@
           "contains_all": [
             "test_l3_consolidated_assets_exposes_only_current_watchlist_candidates",
             "test_child_snapshot_is_intersected_with_current_parent",
-            "test_live_candidate_module_does_not_read_shadow_trades"
+            "test_live_candidate_universe_does_not_read_shadow_trades"
           ]
         },
         {
@@ -1752,6 +1752,120 @@
             "test_bounded_workers_overlap_without_exceeding_limit",
             "test_symbol_publication_waits_for_commit",
             "test_scan_only_after_successful_publication"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "radar-membership-separate-from-shadow-collection",
+      "description": "Healthy radar presence alone authorizes PUMP candidacy; absence hides every watchlist while all open shadows retain collection and entry is serialized with sync.",
+      "files": [
+        {
+          "path": "backend/app/services/radar_pool_sync.py",
+          "contains_all": [
+            "reconcile_radar_pool",
+            "radar_feed_health",
+            "symbols_with_open_shadow_trades",
+            "cascade_invalidate_removed_symbols",
+            ".with_for_update()"
+          ]
+        },
+        {
+          "path": "backend/app/services/pool_service.py",
+          "contains_all": [
+            "load_radar_watchlist_eligibility",
+            "radar_shadow_entry_is_eligible",
+            "coin.held_for_open_position.is_(False)",
+            "coin.origin == \"radar\""
+          ]
+        },
+        {
+          "path": "backend/app/services/shadow_trade_service.py",
+          "contains_all": [
+            "RADAR_CANDIDATE_NOT_ELIGIBLE",
+            "radar_shadow_entry_is_eligible"
+          ]
+        },
+        {
+          "path": "backend/tests/test_radar_auto_discover.py",
+          "contains_all": [
+            "reconcile_radar_pool"
+          ]
+        },
+        {
+          "path": "backend/tests/test_pipeline_scan_held_position_visibility.py",
+          "contains_all": [
+            "load_radar_watchlist_eligibility"
+          ]
+        },
+        {
+          "path": "backend/tests/test_radar_feed_health.py",
+          "contains_all": [
+            "test_valid_empty_feed_is_a_selection_not_an_outage",
+            "test_provider_disabled_empty_is_not_a_valid_absence"
+          ]
+        },
+        {
+          "path": "frontend/app/pools/[id]/page.tsx",
+          "contains_all": [
+            "radar-feed-health",
+            "Radar indisponível. Novas candidaturas estão suspensas"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "shadow-monitor-typed-atr-savepoint-recovery",
+      "description": "ATR instrumentation preserves the entry cutoff and leaves the row transaction usable on failure; fast scan logs scalar identity after rollback.",
+      "files": [
+        {
+          "path": "backend/app/tasks/shadow_trade_monitor.py",
+          "contains_all": [
+            "CAST(:as_of AS timestamptz)",
+            "if not db.is_active:",
+            "shadow_id = shadow.id"
+          ]
+        },
+        {
+          "path": "backend/tests/test_shadow_monitor_postgres_recovery.py",
+          "contains_all": [
+            "test_atr_timestamp_is_typed_and_future_candles_are_excluded",
+            "test_optional_atr_sql_failure_restores_transaction",
+            "test_fast_scan_recovers_expired_id_and_commits_healthy_row"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ema-distance-specific-editor-identity",
+      "description": "Only explicitly named EMA distance features discard calculation metadata; other configured indicators and comparison operands survive saving.",
+      "files": [
+        {
+          "path": "frontend/lib/indicatorCatalog.ts",
+          "contains_all": [
+            "calculationIdentity",
+            "indicator_name"
+          ]
+        },
+        {
+          "path": "frontend/lib/profileConditionState.ts",
+          "contains_all": [
+            "catalog?.calculationIdentity === \"indicator_name\"",
+            "comparisonOperand === \"right\""
+          ]
+        },
+        {
+          "path": "frontend/lib/profileConditionState.test.ts",
+          "contains_all": [
+            "new and resaved conditions preserve producer calculation metadata",
+            "cleaning either EMA comparison operand preserves the other operand"
+          ]
+        },
+        {
+          "path": "backend/tests/test_pump_ema9_block_boundary.py",
+          "contains_all": [
+            "test_pump3_ema9_strict_greater_than_boundary",
+            "PERIOD_MISMATCH"
           ]
         }
       ]
