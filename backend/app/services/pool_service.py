@@ -380,8 +380,8 @@ async def resolve_root_pool_ids(db, watchlist_ids) -> dict:
 
 
 async def symbols_with_open_shadow_trades(db, user_id, symbols) -> set:
-    """Return the subset of ``symbols`` that have a PENDING/RUNNING shadow
-    trade for ``user_id``.
+    """Return the subset of ``symbols`` that have a PENDING/RUNNING **real**
+    (``source='L3'``) shadow trade for ``user_id``.
 
     2026-09-25 (operator request): a symbol whose radar/discovery signal
     drops must stop being eligible for NEW L1/L2/L3 candidacy immediately
@@ -395,6 +395,16 @@ async def symbols_with_open_shadow_trades(db, user_id, symbols) -> set:
     features_snapshot gap this fixes). Callers use this to decide which
     symbols in a to-be-removed set must keep their ``pool_coins`` row
     (collection alive) instead of being deleted.
+
+    2026-09-27 regression fix: this originally matched ANY shadow_trades
+    source, not just the real ``L3`` lane. ``L3_REJECTED``/``L3_LAB``/etc.
+    are ML-tracking artifacts, not positions -- a symbol whose only "open
+    shadow trade" was an ``L3_REJECTED`` tracking row (created precisely
+    *because* it was rejected) got marked held for a position that never
+    existed, then kept indefinitely re-entering L1/L2/L3 candidacy and the
+    Rejeitados tab on every cycle it failed again. Confirmed live for
+    HYPE_USDT/TAO_USDT/WLD_USDT: each had only an L3_REJECTED shadow (no
+    real L3 trade) yet showed held_for_open_position=true.
     """
     symbols = list(symbols)
     if not symbols:
@@ -405,6 +415,7 @@ async def symbols_with_open_shadow_trades(db, user_id, symbols) -> set:
             FROM shadow_trades
             WHERE user_id = :user_id
               AND symbol = ANY(:symbols)
+              AND source = 'L3'
               AND status IN ('PENDING', 'RUNNING')
         """),
         {"user_id": user_id, "symbols": symbols},
