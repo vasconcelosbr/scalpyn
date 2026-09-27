@@ -1875,6 +1875,10 @@
       "description": "Redis transports belong to the current event loop; stale flow remains blocked and its last observation is visible without granting execution authority.",
       "files": [
         {
+          "path": "backend/app/services/config_service.py",
+          "contains_all": ["async def _cache_client(self)", "return await get_async_redis()", "else await self._cache_client()"]
+        },
+        {
           "path": "backend/app/services/redis_client.py",
           "contains_all": [
             "asyncio.get_running_loop()",
@@ -1893,7 +1897,8 @@
           "path": "backend/tests/test_redis_loop_ownership.py",
           "contains_all": [
             "test_clients_are_reused_only_within_their_own_loop",
-            "test_celery_closes_redis_before_loop_shutdown"
+            "test_celery_closes_redis_before_loop_shutdown",
+            "test_config_cache_uses_current_loop_for_reads_and_invalidation"
           ]
         },
         {
