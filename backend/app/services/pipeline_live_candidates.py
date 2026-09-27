@@ -347,8 +347,8 @@ async def load_live_l3_rejections(
     ``pipeline_watchlist_rejections`` (which spot L3 is exempted from
     refreshing on every read for the same reason POOL/L1/L2 are not: cost).
 
-    2026-09-27: a ``held_for_open_position`` symbol (real open L3 trade,
-    kept propagating through POOL/L1/L2/L3 so it stays visible in Aprovado/
+    2026-09-27: a symbol with a genuine open real L3 shadow trade (kept
+    propagating through POOL/L1/L2/L3 so it stays visible in Aprovado/
     Consolidado -- see the fix in ``pipeline_scan.py``'s POOL query) is not
     a rejected *candidate*: it already has a position, so a fresh filter
     failure on it isn't a rejection, just a "no new entry" outcome the
@@ -356,6 +356,14 @@ async def load_live_l3_rejections(
     Without this exclusion it would double-appear here every cycle it fails
     the profile's current filter -- confirmed live for ZEC_USDT/ONDO_USDT/
     LINK_USDT.
+
+    Deliberately checks ``shadow_trades`` directly rather than
+    ``pool_coins.held_for_open_position``: that flag's semantics are
+    narrower than "has an open position" -- it is cleared every radar
+    cycle for any symbol the radar still sees (``radar_auto_discover.py``'s
+    "reactivated" path), regardless of whether a real trade is still open.
+    Confirmed live: ONDO_USDT's flag flipped back to false one cycle after
+    this fix shipped, with its real L3 shadow still RUNNING throughout.
     """
     statement = _l3_symbol_universe_statement(user_id=user_id, l3_watchlist_id=l3_watchlist_id)
     rows = (await db.execute(statement)).mappings().all()
@@ -366,12 +374,12 @@ async def load_live_l3_rejections(
     symbols = {str(row["symbol"]).upper() for row in rows}
     held_rows = (await db.execute(
         text("""
-            SELECT DISTINCT pc.symbol
-            FROM pool_coins pc
-            JOIN pools p ON p.id = pc.pool_id
-            WHERE p.user_id = :user_id
-              AND pc.symbol = ANY(:symbols)
-              AND pc.held_for_open_position = true
+            SELECT DISTINCT symbol
+            FROM shadow_trades
+            WHERE user_id = :user_id
+              AND symbol = ANY(:symbols)
+              AND source = 'L3'
+              AND status IN ('PENDING', 'RUNNING')
         """),
         {"user_id": user_id, "symbols": list(symbols)},
     )).fetchall()
