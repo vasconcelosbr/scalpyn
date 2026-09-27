@@ -3574,8 +3574,9 @@ async def _run_pipeline_scan():
     from ..models.pool import PoolCoin
     from ..models.config_profile import ConfigProfile
     from ..models.profile import Profile
+    from ..models.shadow_trade import ShadowTrade
     from ..schemas.spot_engine_config import SpotEngineConfig
-    from sqlalchemy import select, text
+    from sqlalchemy import or_, select, text
     from ..utils.symbol_filters import filter_real_assets
     from ..services.l3_authorization_contract_v3 import (
         contract_authorizes_shadow_capture,
@@ -3869,12 +3870,39 @@ async def _run_pipeline_scan():
                     # query that actually decides "new L3 candidacy", so
                     # this exclusion is what durably blocks new entries
                     # (see pool_service.set_held_for_open_position).
+                    #
+                    # 2026-09-27: that blanket exclusion had an unreviewed
+                    # side effect: excluding a held symbol from `symbols`
+                    # here cascades all the way down through
+                    # _intersect_with_upstream (L1 -> L2 -> L3), forcing
+                    # level_direction='down' at every level and hiding it
+                    # from Aprovado/L3 Consolidado -- the exact symptom
+                    # #209 fixed for the radar-cascade path, recurring here
+                    # through this independent one (confirmed live for
+                    # ZEC_USDT/ONDO_USDT/LINK_USDT, each with a RUNNING L3
+                    # shadow trade hidden this way). A held symbol with an
+                    # actual open L3 shadow must keep propagating so it
+                    # stays visible; l3_trade_consolidation.py's
+                    # ACTIVE_TRADE_ALREADY_EXISTS / find_active_l3_shadow()
+                    # check already blocks a second entry for it
+                    # regardless, so re-including it here cannot reopen a
+                    # position. A held symbol with NO open L3 shadow (e.g.
+                    # a stale/transient flag) stays excluded as before.
+                    held_with_open_trade = (await db.execute(
+                        select(ShadowTrade.symbol).where(
+                            ShadowTrade.source == "L3",
+                            ShadowTrade.status.in_(["PENDING", "RUNNING"]),
+                        ).distinct()
+                    )).scalars().all()
                     coin_rows = (await db.execute(
                         select(PoolCoin).where(
                             PoolCoin.pool_id == source_pool_id,
                             PoolCoin.is_active == True,
                             PoolCoin.market_type == wl_market_mode,
-                            PoolCoin.held_for_open_position == False,
+                            or_(
+                                PoolCoin.held_for_open_position == False,
+                                PoolCoin.symbol.in_(held_with_open_trade),
+                            ),
                         )
                     )).scalars().all()
                     symbols = filter_real_assets([_normalize_sym(c.symbol) for c in coin_rows])
