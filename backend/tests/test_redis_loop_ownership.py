@@ -79,3 +79,32 @@ def test_reset_does_not_close_another_loops_client(monkeypatch):
     finally:
         first.close()
         second.close()
+
+
+def test_config_cache_uses_current_loop_for_reads_and_invalidation(monkeypatch):
+    from app.services.config_service import ConfigService
+    from app.tasks.pipeline_scan import _run_async
+
+    class CacheClient(LoopBoundClient):
+        async def get(self, key):
+            await self.ping()
+            return b'{"l3_order_flow_max_age_seconds":15}'
+
+        async def delete(self, key):
+            await self.ping()
+            return 1
+
+    monkeypatch.setattr(redis.asyncio, "from_url", lambda *a, **kw: CacheClient())
+    service = ConfigService()
+    clients = []
+
+    async def invocation():
+        # No DB fallback is available: a cross-loop cache read cannot pass silently.
+        assert await service.get_config(None, "pipeline", "user") == {"l3_order_flow_max_age_seconds": 15}
+        assert await service.invalidate_cache("pipeline", "user") is True
+        clients.append(await service._cache_client())
+
+    _run_async(invocation())
+    _run_async(invocation())
+    assert clients[0] is not clients[1]
+    assert all(c.closed for c in clients)

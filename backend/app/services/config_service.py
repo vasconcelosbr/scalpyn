@@ -11,6 +11,7 @@ from ..config import settings
 logger = logging.getLogger(__name__)
 
 _VALID_SCHEMES = ("redis://", "rediss://", "unix://")
+_DEFAULT_REDIS = object()
 
 
 def _make_redis_client():
@@ -46,11 +47,18 @@ class ConfigService:
         # and preserved in ConfigAuditLog. Empirical calibration is not an activation gate.
 
     def __init__(self):
-        self.redis = _make_redis_client()
+        # Explicit test overrides (including None) remain supported.
+        self.redis = _DEFAULT_REDIS
         # Governed reconciliation runs under Celery's synchronous task wrapper,
         # which creates a fresh asyncio loop for every task invocation.  A
         # redis.asyncio client must not be reused across those loops.
         self._strict_redis_factory = _make_redis_client
+
+    async def _cache_client(self):
+        if self.redis is not _DEFAULT_REDIS:
+            return self.redis
+        from .redis_client import get_async_redis
+        return await get_async_redis()
 
     def _get_cache_key(self, config_type: str, user_id: UUID, pool_id: Optional[UUID] = None) -> str:
         if pool_id:
@@ -60,9 +68,10 @@ class ConfigService:
     async def get_config(self, db: AsyncSession, config_type: str, user_id: UUID, pool_id: Optional[UUID] = None) -> Dict[str, Any]:
         cache_key = self._get_cache_key(config_type, user_id, pool_id)
 
-        if self.redis:
+        client = await self._cache_client()
+        if client:
             try:
-                cached_config = await self.redis.get(cache_key)
+                cached_config = await client.get(cache_key)
                 if cached_config:
                     return json.loads(cached_config)
             except Exception as e:
@@ -77,9 +86,9 @@ class ConfigService:
         profile = result.scalars().first()
 
         if profile:
-            if self.redis:
+            if client:
                 try:
-                    await self.redis.set(cache_key, json.dumps(profile.config_json), ex=3600)
+                    await client.set(cache_key, json.dumps(profile.config_json), ex=3600)
                 except Exception as e:
                     logger.warning("Redis cache write failed (skipping cache): %s", e)
             return profile.config_json
@@ -129,9 +138,10 @@ class ConfigService:
         await db.commit()
 
         cache_key = self._get_cache_key(config_type, user_id, pool_id)
-        if self.redis:
+        client = await self._cache_client()
+        if client:
             try:
-                await self.redis.delete(cache_key)
+                await client.delete(cache_key)
             except Exception as e:
                 logger.warning("Redis cache invalidation failed (skipping): %s", e)
 
@@ -151,7 +161,7 @@ class ConfigService:
         ``strict=True`` because they may only record reconciliation as complete
         after Redis accepted the delete command.
         """
-        redis_client = self._strict_redis_factory() if strict else self.redis
+        redis_client = self._strict_redis_factory() if strict else await self._cache_client()
         if redis_client is None:
             if strict:
                 raise RuntimeError("Redis cache client is unavailable")
