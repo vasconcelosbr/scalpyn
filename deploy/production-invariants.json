@@ -80,8 +80,8 @@
             "profile-status-badge",
             "Inativar profile",
             "Reativar profile",
-            "Justificativa obrigatÃ³ria",
-            "Trades e shadows jÃ¡ abertos continuarÃ£o sendo acompanhados normalmente"
+            "Justificativa obrigatória",
+            "Trades e shadows já abertos continuarão sendo acompanhados normalmente"
           ]
         }
       ]
@@ -144,8 +144,8 @@
         {
           "path": "frontend/app/watchlist/page.tsx",
           "contains_all": [
-            "Aprovado para execuÃ§Ã£o",
-            "Trades jÃ¡ abertos continuam sendo acompanhados exclusivamente no Shadow Portfolio",
+            "Aprovado para execução",
+            "Trades já abertos continuam sendo acompanhados exclusivamente no Shadow Portfolio",
             "setRefreshError(null)"
           ]
         },
@@ -273,8 +273,8 @@
           "contains_all": [
             "Exportar JSON",
             "Importar JSON",
-            "Shadow Portfolio â€” Barreiras e custos",
-            "ATR_DYNAMIC v2 estÃ¡ ativo",
+            "Shadow Portfolio — Barreiras e custos",
+            "ATR_DYNAMIC v2 está ativo",
             "Fallback: removido"
           ]
         },
@@ -282,8 +282,8 @@
           "path": "frontend/components/settings/StrategySettingsJsonModal.tsx",
           "contains_all": [
             "Etapa {item}",
-            "JSON vÃ¡lido",
-            "Confirmar aplicaÃ§Ã£o",
+            "JSON válido",
+            "Confirmar aplicação",
             "Estrutura esperada"
           ]
         },
@@ -331,7 +331,7 @@
           "contains_all": [
             "Performance dos Profiles",
             "profilePerformance",
-            "EvoluÃ§Ã£o diÃ¡ria L3",
+            "Evolução diária L3",
             "profileDailyPerformanceRequestPath"
           ]
         }
@@ -466,15 +466,15 @@
           "path": "frontend/app/intelligence-runs/page.tsx",
           "contains_all": [
             "Dados completos",
-            "Dados incompletos â€” contrato legado",
-            "Criar nova anÃ¡lise com dados completos"
+            "Dados incompletos — contrato legado",
+            "Criar nova análise com dados completos"
           ]
         },
         {
           "path": "frontend/components/shadow-portfolio/DetailedReportWorkspace.tsx",
           "contains_all": [
             "canonical_analysis_ready",
-            "AnÃ¡lise bloqueada antes do provedor",
+            "Análise bloqueada antes do provedor",
             "{canonicalAnalysisReady && (",
             "reportRunId={run.id}"
           ]
@@ -740,7 +740,7 @@
         {
           "path": "frontend/components/profiles/ExecutionContractPanel.tsx",
           "contains_all": [
-            "Integridade de execuÃ§Ã£o",
+            "Integridade de execução",
             "Persistido",
             "Runtime",
             "Exportar contrato"
@@ -1312,7 +1312,7 @@
         {
           "path": "frontend/components/settings/ShadowL3ExitPolicyForm.tsx",
           "contains_all": [
-            "Trailing Stop â€” Shadow L3",
+            "Trailing Stop — Shadow L3",
             "OBSERVE"
           ]
         },
@@ -1609,7 +1609,7 @@
           "path": "frontend/app/ml-models/page.tsx",
           "contains_all": [
             "Lane do modelo",
-            "Readiness nÃ£o aprova"
+            "Readiness não aprova"
           ]
         },
         {
@@ -1635,7 +1635,7 @@
           "path": "frontend/app/ml-models/page.tsx",
           "contains_all": [
             "Meta de capturas",
-            "Capturas vÃ¡lidas",
+            "Capturas válidas",
             "Faltam para a meta",
             "Math.max(0, readiness.min_required - readiness.labelable_rows)",
             "refreshInterval: 15_000",
@@ -1809,7 +1809,7 @@
           "path": "frontend/app/pools/[id]/page.tsx",
           "contains_all": [
             "radar-feed-health",
-            "Radar indisponÃ­vel. Novas candidaturas estÃ£o suspensas"
+            "Radar indisponível. Novas candidaturas estão suspensas"
           ]
         }
       ]
