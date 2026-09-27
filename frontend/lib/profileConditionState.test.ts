@@ -657,45 +657,36 @@ test("new Block Rule condition receives governed OHLCV identity before save", ()
   );
 });
 
-test("re-saving an already-governed ema9_distance_pct Block Rule condition backfills the now-fixed period (regression: 'BOOK VENDEDOR EXTREMO' block silently unresolvable)", () => {
-  // 2026-09-26: PUMP3 added ema9_distance_pct > 1 to an existing block
-  // ("BOOK VENDEDOR EXTREMO") without a period -- same bug class as
-  // bb_upper_distance_pct (#206/#207): ema9_distance_pct is computed with
-  // a fixed period=9 baked into its name (price_position.py), but the
-  // catalog never declared that, so the saved condition never carried
-  // period=9. Live evidence: the AND-chain never even reached this
-  // condition yet (the other two order-book conditions rarely both hold),
-  // so it had never been exercised for real -- but the moment it would be,
-  // it would hit the same PERIOD_MISMATCH -> CONTRACT_REJECT as before.
-  const currentConfig = {
+test("ema9_distance_pct never gets a period backfilled (regression: incorrectly assumed fixedPeriod=9 in #212, reverted)", () => {
+  // 2026-09-26: #212 added fixedPeriod: 9 to ema9_distance_pct (and its
+  // 5/21/50/200 siblings) in the catalog, assuming its identity worked
+  // like bb_upper_distance_pct's (period baked into the indicator name AND
+  // tagged onto the live-computed feature). Live evidence proved this
+  // wrong: the ACTUAL registry entry for ema9_distance_pct carries
+  // "period": null (price_position.py's ema*_distance_pct loop never
+  // tags a period onto the emitted feature, unlike _calc_bollinger for
+  // bb_*_distance_pct). Declaring fixedPeriod: 9 made conditionIdentity()
+  // stamp period: 9 onto the saved condition, creating a NEW mismatch in
+  // the opposite direction (condition expects period=9, real feature has
+  // period=null) -- confirmed live for PUMP3's new "EMA9" block
+  // (CONTRACT_REJECT/PERIOD_MISMATCH immediately after the #212 fix
+  // shipped). #212 was reverted; this condition must resolve to no
+  // period at all, matching the real feature identity.
+  const prepared = prepareProfileBlockRuleIdentities({
     default_timeframe: "5m",
     block_rules: {
       blocks: [{
-        id: "block_1789997453402", name: "BOOK VENDEDOR EXTREMO", enabled: true, logic: "AND",
+        id: "block-ema9", name: "EMA9", enabled: true, logic: "AND",
         conditions: [{
-          id: "cond_1790455715596", type: "threshold", indicator: "ema9_distance_pct",
+          id: "cond-ema9", type: "threshold", indicator: "ema9_distance_pct",
           operator: ">", value: 1, required: true, enabled: true,
-          source: "ohlcv", source_provider: "gate.io",
-          provider_policy_id: "spot_gate_closed_ohlcv_v1",
-          max_age_seconds: 741, timeframe: "5m", candle_policy: "CLOSED_ONLY",
         }],
       }],
     },
-  };
-  const candidate = {
-    ...currentConfig,
-    block_rules: {
-      blocks: [{
-        ...currentConfig.block_rules.blocks[0],
-        conditions: [{ ...currentConfig.block_rules.blocks[0].conditions[0] }],
-      }],
-    },
-  };
+  }, SOURCE_POLICIES);
 
-  const prepared = prepareProfileBlockRuleIdentities(candidate, SOURCE_POLICIES, currentConfig);
-
-  const resaved = prepared.config.block_rules.blocks[0].conditions[0] as Record<string, any>;
-  assert.equal(resaved.period, 9);
+  const saved = prepared.config.block_rules.blocks[0].conditions[0] as Record<string, any>;
+  assert.equal("period" in saved, false);
 });
 
 test("comparison Block Rule condition receives an independently resolved identity per operand", () => {
