@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -346,6 +346,16 @@ async def load_live_l3_rejections(
     source too, instead of only the periodic batch snapshot in
     ``pipeline_watchlist_rejections`` (which spot L3 is exempted from
     refreshing on every read for the same reason POOL/L1/L2 are not: cost).
+
+    2026-09-27: a ``held_for_open_position`` symbol (real open L3 trade,
+    kept propagating through POOL/L1/L2/L3 so it stays visible in Aprovado/
+    Consolidado -- see the fix in ``pipeline_scan.py``'s POOL query) is not
+    a rejected *candidate*: it already has a position, so a fresh filter
+    failure on it isn't a rejection, just a "no new entry" outcome the
+    consolidation layer already handles via ACTIVE_TRADE_ALREADY_EXISTS.
+    Without this exclusion it would double-appear here every cycle it fails
+    the profile's current filter -- confirmed live for ZEC_USDT/ONDO_USDT/
+    LINK_USDT.
     """
     statement = _l3_symbol_universe_statement(user_id=user_id, l3_watchlist_id=l3_watchlist_id)
     rows = (await db.execute(statement)).mappings().all()
@@ -353,11 +363,24 @@ async def load_live_l3_rejections(
         return []
     from .l3_public_authorization import load_public_authorizations
     authorizations = await load_public_authorizations(db, user_id=user_id, candidates=rows)
+    symbols = {str(row["symbol"]).upper() for row in rows}
+    held_rows = (await db.execute(
+        text("""
+            SELECT DISTINCT pc.symbol
+            FROM pool_coins pc
+            JOIN pools p ON p.id = pc.pool_id
+            WHERE p.user_id = :user_id
+              AND pc.symbol = ANY(:symbols)
+              AND pc.held_for_open_position = true
+        """),
+        {"user_id": user_id, "symbols": list(symbols)},
+    )).fetchall()
+    held_symbols = {r.symbol.upper() for r in held_rows}
     seen_symbols: set[str] = set()
     rejected: list[dict] = []
     for row in rows:
         symbol = str(row["symbol"]).upper()
-        if symbol in seen_symbols:
+        if symbol in seen_symbols or symbol in held_symbols:
             continue
         seen_symbols.add(symbol)
         if authorizations.get((row["watchlist_id"], row["symbol"])) is not None:

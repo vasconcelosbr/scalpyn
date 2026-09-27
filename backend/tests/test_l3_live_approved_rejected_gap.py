@@ -47,11 +47,28 @@ class _MappingResult:
         return self._rows
 
 
-class _MappingSession:
+class _FetchallResult:
+    """Result shape for the plain ``text()`` held-symbols lookup -- distinct
+    from ``_MappingResult`` (which backs the ORM-style symbol-universe
+    query) since real code calls ``.fetchall()`` on it, not ``.mappings()``.
+    """
+
     def __init__(self, rows):
         self._rows = rows
 
-    async def execute(self, statement):
+    def fetchall(self):
+        return self._rows
+
+
+class _MappingSession:
+    def __init__(self, rows, held_rows=()):
+        self._rows = rows
+        self._held_rows = held_rows
+
+    async def execute(self, statement, *args, **kwargs):
+        if args or kwargs:
+            # the held-symbols query is issued as text(...) with a params dict
+            return _FetchallResult(self._held_rows)
         return _MappingResult(self._rows)
 
 
@@ -94,6 +111,43 @@ async def test_live_rejections_empty_universe_returns_empty_list():
     db = _MappingSession([])
     result = await load_live_l3_rejections(db, user_id=uuid4(), l3_watchlist_id=uuid4())
     assert result == []
+
+
+@pytest.mark.asyncio
+async def test_live_rejections_excludes_held_for_open_position_symbols(monkeypatch):
+    """2026-09-27 regression: a held_for_open_position symbol (real open L3
+    trade, kept propagating through POOL/L1/L2/L3 by the pipeline_scan.py
+    fix so it stays visible in Aprovado/Consolidado) is not a rejected
+    candidate -- it already has a position. Without this exclusion it
+    reappears in Rejeitados every cycle its fresh filter evaluation fails,
+    confirmed live for ZEC_USDT/ONDO_USDT/LINK_USDT."""
+    from app.services import l3_public_authorization
+
+    watchlist_id = uuid4()
+    profile_id = uuid4()
+
+    async def authorities(db, *, user_id, candidates):
+        # Neither symbol clears a fresh authorization this cycle.
+        return {}
+
+    monkeypatch.setattr(l3_public_authorization, "load_public_authorizations", authorities)
+
+    db = _MappingSession(
+        [
+            {"asset_id": uuid4(), "watchlist_id": watchlist_id, "profile_id": profile_id,
+             "profile_name": "L3 Profile", "symbol": "ONDO_USDT", "alpha_score": 45, "current_price": 1,
+             "refreshed_at": None, "watchlist_filters": {}, "profile_version": None},
+            {"asset_id": uuid4(), "watchlist_id": watchlist_id, "profile_id": profile_id,
+             "profile_name": "L3 Profile", "symbol": "ETH_USDT", "alpha_score": 60, "current_price": 50,
+             "refreshed_at": None, "watchlist_filters": {}, "profile_version": None},
+        ],
+        held_rows=[SimpleNamespace(symbol="ONDO_USDT")],
+    )
+
+    result = await load_live_l3_rejections(db, user_id=uuid4(), l3_watchlist_id=watchlist_id)
+
+    symbols = {item["symbol"] for item in result}
+    assert symbols == {"ETH_USDT"}
 
 
 def test_get_watchlist_assets_l3_branch_iterates_live_contributions_not_stale_table():
