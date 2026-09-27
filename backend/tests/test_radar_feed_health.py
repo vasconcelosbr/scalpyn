@@ -6,9 +6,9 @@ from app.services.radar_service import RadarFeedUnavailable, validated_radar_ass
 
 
 def feed(assets=None, **metadata):
-    # A complete-provider label is deliberately not an assumed protocol enum.
+    # Synthetic complete-coverage fixture, not an assertion about live health.
     return {"data": [] if assets is None else assets, "meta": {
-        "market_data_enabled": True, "coverage_status": "complete-provider-label",
+        "market_data_enabled": True, "coverage_status": "COMPLETE",
         "has_more": False, "source_provider": "gate.io", "market": "spot", **metadata,
     }}
 
@@ -24,6 +24,8 @@ def test_provider_disabled_empty_is_not_a_valid_absence():
 
 @pytest.mark.parametrize("metadata,reason", [
     ({"coverage_status": "PARTIAL"}, "incomplete_coverage"),
+    ({"coverage_status": "PARTIAL "}, "incomplete_coverage"),
+    ({"coverage_status": "UNKNOWN"}, "incomplete_coverage"),
     ({"coverage_status": None}, "incomplete_coverage"),
     ({"market_data_enabled": "true"}, "market_data_disabled"),
     ({"has_more": True}, "incomplete_page"),
@@ -47,6 +49,11 @@ def test_valid_signals_preserve_raw_pair():
     assert validated_radar_assets(feed(assets)) == assets
     with pytest.raises(RadarFeedUnavailable, match="invalid_asset"):
         validated_radar_assets(feed([{"symbol": "ADA"}]))
+
+
+@pytest.mark.parametrize("coverage", ["FULL", "COMPLETE", " complete "])
+def test_explicit_complete_coverage_labels(coverage):
+    assert validated_radar_assets(feed(coverage_status=coverage)) == []
 
 
 @pytest.mark.asyncio

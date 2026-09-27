@@ -15,8 +15,9 @@ monitor quotas are unchanged.
 `radar_feed_health` in pool overrides is worker-owned. Missing health fails
 closed until the first sync. Disabled collection, partial/degraded coverage,
 incomplete pages, malformed responses and request failures are not valid empty
-selections. An undocumented positive coverage label is not assumed; usable
-responses must affirm enabled collection and complete pagination for Gate spot.
+selections. The consumer accepts explicit `FULL` or `COMPLETE` coverage labels;
+unknown labels fail closed until the provider contract can be verified. Usable
+responses must also affirm enabled collection and complete pagination for Gate spot.
 The underlying provider's collector must be restored independently when it
 reports `market_data_enabled=false`.
 

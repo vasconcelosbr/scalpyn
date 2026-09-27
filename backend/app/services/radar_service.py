@@ -19,12 +19,11 @@ def validated_radar_assets(payload: Any) -> list[dict[str, Any]]:
         raise RadarFeedUnavailable("missing_metadata")
     if meta.get("market_data_enabled") is not True:
         raise RadarFeedUnavailable("market_data_disabled")
-    # The provider currently exposes PARTIAL when collection is degraded.
-    # Do not assume an undocumented positive enum (e.g. FULL vs COMPLETE).
+    # Accept only an explicit complete-coverage declaration. Unknown labels
+    # fail closed until the provider contract is verified; whitespace must
+    # never turn a PARTIAL response into an authoritative empty selection.
     coverage = meta.get("coverage_status")
-    if not isinstance(coverage, str) or not coverage.strip() or coverage.upper() in {
-        "PARTIAL", "UNAVAILABLE", "DEGRADED", "STALE", "ERROR", "DISABLED",
-    }:
+    if not isinstance(coverage, str) or coverage.strip().upper() not in {"FULL", "COMPLETE"}:
         raise RadarFeedUnavailable("incomplete_coverage")
     if meta.get("has_more") is not False:
         raise RadarFeedUnavailable("incomplete_page")
