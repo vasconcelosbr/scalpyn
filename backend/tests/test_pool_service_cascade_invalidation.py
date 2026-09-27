@@ -89,21 +89,23 @@ async def test_symbols_with_open_shadow_trades_returns_only_pending_running_symb
 
 
 @pytest.mark.asyncio
-async def test_symbols_with_open_shadow_trades_scopes_to_real_l3_source():
-    """2026-09-27 regression: this query originally matched ANY shadow_trades
-    source. An L3_REJECTED tracking shadow (created because a candidate was
-    rejected, not because it has a position) then falsely counted as "an
-    open shadow trade" -- held_for_open_position got set True for a symbol
-    with no real position, which kept re-entering L1/L2/L3 candidacy (and
-    the Rejeitados tab) forever. Confirmed live for HYPE_USDT/TAO_USDT/
-    WLD_USDT: each had only an L3_REJECTED shadow, no real L3 trade, yet
-    held_for_open_position was true."""
+async def test_symbols_with_open_shadow_trades_matches_any_source_not_just_l3():
+    """2026-09-27: briefly scoped this query to source='L3' only, reasoning
+    that L3_REJECTED/L3_LAB shadows are ML-tracking artifacts rather than
+    positions. That shrank the protected-symbol set live in production
+    from 91 to 14 and, combined with ongoing radar noise (PR #208), caused
+    radar_auto_discover.py to run cascade_invalidate_removed_symbols on
+    dozens of newly-unprotected symbols at once -- level_direction flipped
+    to 'down' across POOL/L1/L2/L3 for effectively every pool in the same
+    instant, and decisions_log went silent system-wide for over an hour.
+    This query's breadth is load-bearing: it must keep matching a shadow
+    trade of ANY source."""
     user_id = uuid4()
     db = Obj(execute=AsyncMock(return_value=Obj(fetchall=lambda: [])))
     await symbols_with_open_shadow_trades(db, user_id, {"HYPE_USDT"})
     query = db.execute.call_args.args[0]
     sql = str(query.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": False}))
-    assert "source" in sql and "'L3'" in sql
+    assert "source" not in sql
 
 
 @pytest.mark.asyncio
