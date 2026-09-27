@@ -152,5 +152,21 @@ def apply_pool_asset_exclusions(
 
 
 def is_auto_discovery_enabled(overrides: dict[str, Any] | None) -> bool:
-    """Fail closed: only literal boolean ``true`` authorizes scheduled discovery."""
+    """Fail closed: only literal boolean ``true`` authorizes scheduled discovery.
+
+    2026-09-27: a pool with ``radar_enabled=true`` is meant to be driven
+    exclusively by the Market Catalyst Radar feed (``radar_auto_discover.py``,
+    which lists exactly what the radar API returns, no volume/cap/max_assets
+    filtering at all) -- never by this task's own broad exchange-ticker
+    universe scan. Both checked only ``auto_refresh`` before, so a pool with
+    both flags true (the normal radar setup) got double-discovered: the
+    radar task added its curated picks, and this task separately imported
+    the *entire* exchange spot universe on top of it (no min_volume/
+    min_market_cap/max_assets configured -- and even when configured,
+    ``max_assets=0`` here means unlimited, not zero). Confirmed live for
+    the PUMP pool: 1622 Gate.io pairs bulk-inserted in one run at 00:45:22,
+    overwhelming every downstream L1/L2/L3 stage.
+    """
+    if (overrides or {}).get("radar_enabled") is True:
+        return False
     return (overrides or {}).get("auto_refresh") is True

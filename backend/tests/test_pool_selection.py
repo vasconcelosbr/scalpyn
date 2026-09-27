@@ -65,3 +65,20 @@ def test_auto_discovery_is_fail_closed_when_operator_disables_it():
     assert is_auto_discovery_enabled({"auto_refresh": False}) is False
     assert is_auto_discovery_enabled({}) is False
     assert is_auto_discovery_enabled({"auto_refresh": "true"}) is False
+
+
+def test_auto_discovery_disabled_for_radar_enabled_pools():
+    """2026-09-27 incident: a pool with both auto_refresh=true and
+    radar_enabled=true (the PUMP pool's normal config) got discovered by
+    BOTH this task's broad exchange-ticker scan AND radar_auto_discover.py's
+    curated Market Catalyst Radar feed. The operator's intent for a
+    radar_enabled pool is for the radar feed to be the *only* source --
+    list exactly what the radar API returns, nothing added or filtered on
+    top of it. This task's own scan (which also ignores max_assets=0 as
+    "unlimited") bulk-inserted the entire Gate.io spot universe (1622
+    pairs) into the PUMP pool in a single run, overwhelming every
+    downstream L1/L2/L3 stage. A radar_enabled pool must be fully
+    exempted from this task regardless of auto_refresh."""
+    assert is_auto_discovery_enabled({"auto_refresh": True, "radar_enabled": True}) is False
+    assert is_auto_discovery_enabled({"auto_refresh": True, "radar_enabled": False}) is True
+    assert is_auto_discovery_enabled({"auto_refresh": True, "radar_enabled": "true"}) is True
