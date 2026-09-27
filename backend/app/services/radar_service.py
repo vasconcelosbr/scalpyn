@@ -17,14 +17,11 @@ def validated_radar_assets(payload: Any) -> list[dict[str, Any]]:
     meta = payload.get("meta")
     if not isinstance(meta, dict):
         raise RadarFeedUnavailable("missing_metadata")
-    if meta.get("market_data_enabled") is not True:
-        raise RadarFeedUnavailable("market_data_disabled")
-    # Accept only an explicit complete-coverage declaration. Unknown labels
-    # fail closed until the provider contract is verified; whitespace must
-    # never turn a PARTIAL response into an authoritative empty selection.
-    coverage = meta.get("coverage_status")
-    if not isinstance(coverage, str) or coverage.strip().upper() not in {"FULL", "COMPLETE"}:
-        raise RadarFeedUnavailable("incomplete_coverage")
+    # minute-signals publishes its current selection in data. The provider also
+    # emits fresh ACTIVE signals with market_data_enabled=false and PARTIAL
+    # coverage; those envelope fields are not this endpoint's availability gate.
+    # Complete pagination, rather than global market coverage, establishes the
+    # full selection. A valid empty selection means the prior signals left it.
     if meta.get("has_more") is not False:
         raise RadarFeedUnavailable("incomplete_page")
     if meta.get("source_provider") != "gate.io" or meta.get("market") != "spot":

@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.models.pool import Pool, PoolAssetExclusion, PoolCoin
 from app.services.pool_service import radar_pool_coin_is_candidate
 from app.services.radar_pool_sync import operator_pool_overrides, reconcile_radar_pool
+from app.services.radar_service import validated_radar_assets
 
 
 @pytest_asyncio.fixture
@@ -168,6 +169,81 @@ async def test_radar_lifecycle_retains_open_shadow_and_reentry_identity(
         assert (await db.execute(text("""
             SELECT id, status, config_snapshot FROM shadow_trades
         """))).all() == [(shadow_id, "COMPLETED", {"immutable": "entry"})]
+
+
+@pytest.mark.asyncio
+async def test_minute_signals_with_partial_global_metadata_drive_membership(radar_db):
+    """The endpoint's live list remains authoritative with global collection off."""
+    sessions, ids = radar_db
+    observed_at = datetime(2026, 9, 27, 16, 39, tzinfo=timezone.utc)
+
+    def selection(*pairs):
+        # Metadata follows the captured minute-signals response, whose ACTIVE
+        # rows coexist with market_data_enabled=false and coverage=PARTIAL.
+        payload = {
+            "data": [
+                {"pair": pair, "status": "ACTIVE", "updated_at": observed_at.isoformat()}
+                for pair in pairs
+            ],
+            "meta": {
+                "market_data_enabled": False,
+                "coverage_status": "PARTIAL",
+                "has_more": False,
+                "source_provider": "gate.io",
+                "market": "spot",
+                "as_of": observed_at.isoformat(),
+                "count": len(pairs),
+            },
+        }
+        return {asset["pair"] for asset in validated_radar_assets(payload)}
+
+    async def candidates():
+        async with sessions() as db:
+            return (await db.scalars(select(PoolCoin.symbol).join(
+                Pool, Pool.id == PoolCoin.pool_id,
+            ).where(
+                Pool.id == ids["pump"], radar_pool_coin_is_candidate(Pool, PoolCoin),
+            ))).all()
+
+    async with sessions() as db, db.begin():
+        await db.execute(text("""
+            UPDATE pipeline_watchlist_assets SET symbol = 'NEAR_USDT'
+            WHERE watchlist_id IN (:pump_root, :pump_l3)
+        """), ids)
+
+    assert (await _sync(sessions, ids, selection("NEAR_USDT")))["added"] == 1
+    first = (await _coins(sessions, ids["pump"]))[0]
+    assert first.is_active and not first.held_for_open_position
+    assert await candidates() == ["NEAR_USDT"]
+    async with sessions() as db, db.begin():
+        shadow_id = await _open_shadow(db, ids, "NEAR_USDT")
+        original_shadow = (await db.execute(text("SELECT * FROM shadow_trades"))).all()
+
+    # A complete empty minute-signals list removes candidacy even though the
+    # same global metadata is still partial. The open trade keeps collection.
+    assert (await _sync(sessions, ids, selection()))["held"] == 1
+    held = (await _coins(sessions, ids["pump"]))[0]
+    assert held.id == first.id and held.is_active and held.held_for_open_position
+    assert await candidates() == []
+    async with sessions() as db:
+        assert dict((await db.execute(text("""
+            SELECT watchlist_id, level_direction FROM pipeline_watchlist_assets
+        """))).all()) == {
+            ids["pump_root"]: "down", ids["pump_l3"]: "down", ids["spot_root"]: "up",
+        }
+        assert (await db.execute(text("SELECT * FROM shadow_trades"))).all() == original_shadow
+
+    # Reentry restores eligibility for the ordinary watchlist scan without
+    # replacing the retained pool row or creating/changing the open Shadow.
+    assert (await _sync(sessions, ids, selection("NEAR_USDT")))["added"] == 0
+    returned = (await _coins(sessions, ids["pump"]))[0]
+    assert returned.id == first.id and returned.is_active and not returned.held_for_open_position
+    assert await candidates() == ["NEAR_USDT"]
+    async with sessions() as db:
+        assert (await db.execute(text("SELECT * FROM shadow_trades"))).all() == original_shadow
+        assert original_shadow[0].id == shadow_id
+        pool = await db.get(Pool, ids["pump"])
+        assert pool.overrides["radar_feed_health"]["status"] == "healthy"
 
 
 @pytest.mark.asyncio
