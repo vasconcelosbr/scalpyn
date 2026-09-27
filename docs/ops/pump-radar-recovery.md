@@ -13,13 +13,14 @@ monitor quotas are unchanged.
 | Feed unavailable | Either | Preserve known radar membership and open trades | Hidden | Blocked |
 
 `radar_feed_health` in pool overrides is worker-owned. Missing health fails
-closed until the first sync. Disabled collection, partial/degraded coverage,
-incomplete pages, malformed responses and request failures are not valid empty
-selections. The consumer accepts explicit `FULL` or `COMPLETE` coverage labels;
-unknown labels fail closed until the provider contract can be verified. Usable
-responses must also affirm enabled collection and complete pagination for Gate spot.
-The underlying provider's collector must be restored independently when it
-reports `market_data_enabled=false`.
+closed until the first sync. Incomplete pages, malformed responses and request
+failures are not valid empty selections. A successful, complete `minute-signals`
+response for Gate spot defines the current selection, including an empty list.
+Its shared `market_data_enabled` and `coverage_status` envelope fields do not
+govern membership: the provider was observed publishing a fresh `ACTIVE` minute
+signal while those fields read `false` and `PARTIAL`. Requiring enabled collection
+or full market coverage incorrectly suppressed that signal. The consumer uses
+`data` for membership and requires `has_more=false` for complete pagination.
 
 Reconciliation locks the pool, prefers an existing radar row when merging
 duplicate symbols, preserves already-granted operator permissions, and keeps

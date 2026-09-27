@@ -6,9 +6,9 @@ from app.services.radar_service import RadarFeedUnavailable, validated_radar_ass
 
 
 def feed(assets=None, **metadata):
-    # Synthetic complete-coverage fixture, not an assertion about live health.
+    # Envelope flags observed alongside a fresh ACTIVE minute signal in production.
     return {"data": [] if assets is None else assets, "meta": {
-        "market_data_enabled": True, "coverage_status": "COMPLETE",
+        "market_data_enabled": False, "coverage_status": "PARTIAL",
         "has_more": False, "source_provider": "gate.io", "market": "spot", **metadata,
     }}
 
@@ -17,17 +17,16 @@ def test_valid_empty_feed_is_a_selection_not_an_outage():
     assert validated_radar_assets(feed()) == []
 
 
-def test_provider_disabled_empty_is_not_a_valid_absence():
-    with pytest.raises(RadarFeedUnavailable, match="market_data_disabled"):
-        validated_radar_assets(feed(market_data_enabled=False, coverage_status="PARTIAL"))
+def test_minute_selection_ignores_global_collection_and_coverage_flags():
+    # Regression for the observed NEAR signal: this endpoint's current list is
+    # authoritative even though its shared envelope reports disabled/PARTIAL.
+    assets = [{"pair": "NEAR_USDT", "status": "ACTIVE",
+               "updated_at": "2026-09-27T16:39:00+00:00"}]
+    assert validated_radar_assets(feed(assets)) == assets
+    assert validated_radar_assets(feed()) == []
 
 
 @pytest.mark.parametrize("metadata,reason", [
-    ({"coverage_status": "PARTIAL"}, "incomplete_coverage"),
-    ({"coverage_status": "PARTIAL "}, "incomplete_coverage"),
-    ({"coverage_status": "UNKNOWN"}, "incomplete_coverage"),
-    ({"coverage_status": None}, "incomplete_coverage"),
-    ({"market_data_enabled": "true"}, "market_data_disabled"),
     ({"has_more": True}, "incomplete_page"),
     ({"has_more": None}, "incomplete_page"),
     ({"market": "futures"}, "unexpected_market"),
@@ -51,9 +50,11 @@ def test_valid_signals_preserve_raw_pair():
         validated_radar_assets(feed([{"symbol": "ADA"}]))
 
 
-@pytest.mark.parametrize("coverage", ["FULL", "COMPLETE", " complete "])
-def test_explicit_complete_coverage_labels(coverage):
-    assert validated_radar_assets(feed(coverage_status=coverage)) == []
+def test_global_metadata_is_not_required_by_minute_selection_contract():
+    payload = feed([{"pair": "NEAR_USDT"}])
+    del payload["meta"]["market_data_enabled"]
+    del payload["meta"]["coverage_status"]
+    assert validated_radar_assets(payload) == payload["data"]
 
 
 @pytest.mark.asyncio
