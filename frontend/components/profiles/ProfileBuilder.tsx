@@ -23,6 +23,11 @@ import {
   prepareProfileSignalIdentities,
   profileSourcePoliciesForEditor,
   setProfileFlowWindow,
+  setProfileBlockTimeframe,
+  blockConditionHasTimeframe,
+  profileBooleanSelection,
+  updateProfileConditionIndicator,
+  withProfileCalculationIdentities,
   profileTemporalIdentity,
   serializeProfileEditorConfig,
   withoutProfileFeatureIdentity,
@@ -494,13 +499,16 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
   const isMtfProfile = profile?.profile_type === "MTF_LAYER";
   const { config: globalScoreConfig } = useConfig("score");
   const { config: spotEngineConfig } = useConfig("spot_engine");
+  const { config: indicatorConfig } = useConfig("indicators");
   const [name, setName]                     = useState(profile?.name || "");
   const [description, setDescription]       = useState(profile?.description || "");
   const [config, setConfig]                 = useState<any>(() => normalizeProfileConfig(profile?.config));
   const [profileRole, setProfileRole]       = useState<ProfileRole | null>(profile?.profile_role || null);
   const sourcePolicies = useMemo(
-    () => profileSourcePoliciesForEditor(spotEngineConfig, profile?.profile_type, profileRole, config),
-    [spotEngineConfig, profile?.profile_type, profileRole, config.l3_order_flow_window_seconds],
+    () => withProfileCalculationIdentities(
+      profileSourcePoliciesForEditor(spotEngineConfig, profile?.profile_type, profileRole, config), indicatorConfig,
+    ),
+    [spotEngineConfig, indicatorConfig, profile?.profile_type, profileRole, config.l3_order_flow_window_seconds],
   );
   const [activeTab, setActiveTab]           = useState<ActiveTab>("filters");
   const [testResult, setTestResult]         = useState<any>(null);
@@ -575,12 +583,9 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
       const preparedTriggers = prepareProfileEntryTriggerIdentities(
         preparedSignals.config, policies, currentConfig,
       );
-      const preparedBlocks = prepareProfileBlockRuleIdentities(
-        preparedTriggers.config, policies, currentConfig,
-      );
       const issues = [
         ...preparedFilters.issues, ...preparedSignals.issues,
-        ...preparedTriggers.issues, ...preparedBlocks.issues,
+        ...preparedTriggers.issues,
       ];
       if (issues.length > 0) {
         alert(
@@ -590,8 +595,17 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
         );
         return;
       }
-      configForSave = preparedBlocks.config;
+      configForSave = preparedTriggers.config;
     }
+    // Block identities apply to L2 editors too, independently of entry gates.
+    const preparedBlocks = prepareProfileBlockRuleIdentities(
+      configForSave, sourcePolicies, normalizeProfileConfig(profile?.config),
+    );
+    if (preparedBlocks.issues.length) {
+      alert("Revise a identidade dos Block Rules antes de salvar:\n" + preparedBlocks.issues.join("\n"));
+      return;
+    }
+    configForSave = preparedBlocks.config;
     setSaving(true);
     const profileData = {
       name,
@@ -670,8 +684,10 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
   const handleTest = async () => {
     setTesting(true);
     try {
+      const prepared = prepareProfileBlockRuleIdentities(config, sourcePolicies, normalizeProfileConfig(profile?.config));
+      if (prepared.issues.length) throw new Error("Block Rules: " + prepared.issues.join(", "));
       const result = await apiPost("/profiles/test-config", {
-        config,
+        config: serializeProfileEditorConfig(prepared.config),
         profile_role: profileRole,
       });
       setTestResult(result);
@@ -770,7 +786,9 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
       ...c,
       block_rules: {
         ...c.block_rules,
-        blocks: (c.block_rules?.blocks || []).map((b: BlockRule) => b.id === id ? { ...b, [field]: value } : b),
+        blocks: (c.block_rules?.blocks || []).map((b: BlockRule) => b.id === id
+          ? field === "timeframe" ? setProfileBlockTimeframe(b, value, c.default_timeframe || "5m") : { ...b, [field]: value }
+          : b),
       },
     }));
 
@@ -797,7 +815,7 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
             ? {
                 ...block,
                 conditions: (block.conditions || []).map((condition) => (
-                  condition.id === conditionId ? { ...condition, ...updates } : condition
+                  condition.id === conditionId ? updateProfileConditionIndicator(condition, updates) : condition
                 )),
               }
             : block
@@ -1452,16 +1470,14 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
                       </div>
 
                       {/* Timeframe / Period overrides */}
-                      {block.conditions.some((condition) => {
-                        const reference = condition.type === "comparison" ? condition.left : condition.indicator;
-                        return reference ? profileTemporalIdentity(condition, sourcePolicies).showTimeframe : false;
-                      }) && (
+                      {block.conditions.some(blockConditionHasTimeframe) && (
                         <div className="grid grid-cols-2 gap-2">
                           <div className="space-y-1">
                             <label className="label text-[11px]">Timeframe</label>
                             <select
                               className="input h-8 text-[12px]"
                               value={block.timeframe || ""}
+                              aria-label="Timeframe do bloco"
                               onChange={(e) => updateBlock(block.id, "timeframe", e.target.value || undefined)}
                             >
                               <option value="">{config.default_timeframe || "5m"} (default)</option>
@@ -1596,7 +1612,8 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
                                 )}
                                 <select
                                   className="input h-8 text-[12px] w-24"
-                                  value={condition.operator === "is_false" ? "false" : "true"}
+                                  aria-label="Valor booleano do bloqueio"
+                                  value={profileBooleanSelection(condition)}
                                   onChange={(e) => {
                                     const booleanValue = e.target.value === "true";
                                     updateBlockCondition(block.id, condition.id, {
@@ -1605,6 +1622,7 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
                                     });
                                   }}
                                 >
+                                  <option value="" disabled>Selecionar</option>
                                   <option value="true">True</option>
                                   <option value="false">False</option>
                                 </select>

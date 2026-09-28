@@ -312,13 +312,14 @@ def _evaluate_block_rule(
     asset: Dict[str, Any],
     block: Dict[str, Any],
 ) -> Dict[str, Any]:
+    from .block_condition_timeframe import block_condition_data
     conditions = block.get("conditions", []) or []
     logic = str(block.get("logic", "AND")).upper()
     details: List[Dict[str, Any]] = []
 
     for condition in conditions:
         status, detail = rule_engine.evaluate_condition_status(
-            condition, asset, field_key="indicator"
+            condition, block_condition_data(condition, asset), field_key="indicator"
         )
         details.append(
             {

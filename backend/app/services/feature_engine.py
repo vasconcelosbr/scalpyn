@@ -736,6 +736,8 @@ class FeatureEngine:
 
         return {
             "bb_upper": round(float(upper.iloc[-1]), 8) if pd.notna(upper.iloc[-1]) else None,
+            "bb_upper_distance_pct": round(float((df["close"].iloc[-1] - upper.iloc[-1]) / upper.iloc[-1] * 100), 4)
+            if pd.notna(upper.iloc[-1]) and upper.iloc[-1] > 0 else None,
             "bb_middle": round(float(sma.iloc[-1]), 8) if pd.notna(sma.iloc[-1]) else None,
             "bb_lower": round(float(lower.iloc[-1]), 8) if pd.notna(lower.iloc[-1]) else None,
             "bb_width": round(float(width.iloc[-1]), 6) if pd.notna(width.iloc[-1]) else None,
