@@ -661,6 +661,7 @@ def recompute_rejection_trace(
     indicators: Optional[Dict[str, Any]],
     meta: Optional[Dict[str, Any]],
     stored_trace: Optional[List[Dict[str, Any]]] = None,
+    block_inputs: Optional[Dict[str, Any]] = None,
     selected_filter_conditions: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """Recompute a single rejection trace from current indicators + meta.
@@ -672,7 +673,7 @@ def recompute_rejection_trace(
 
     Falls back to `stored_trace` when:
       * `profile_config` is missing (nothing to evaluate against), or
-      * `indicators` is empty/None for the symbol — even when `meta` is
+      * Both `indicators` and exact block candle candidates are absent — even when `meta` is
         present. Indicators are the source of truth for the bulk of the
         rules (rsi, taker_ratio, volume_spike, bb_width, …); without
         them recomputation would mass-downgrade everything to SEM DADOS
@@ -684,7 +685,7 @@ def recompute_rejection_trace(
     fallback = list(stored_trace or [])
     if not profile_config:
         return fallback
-    if not indicators:
+    if not indicators and not (block_inputs or {}).get("_block_ohlcv_candidates"):
         return fallback
     try:
         trace_asset = build_trace_asset(
@@ -694,7 +695,7 @@ def recompute_rejection_trace(
             alpha_score=None,
         )
         return build_asset_evaluation_trace(
-            trace_asset,
+            {**trace_asset, **(block_inputs or {})},
             profile_config=profile_config,
             selected_filter_conditions=selected_filter_conditions,
         )
