@@ -85,14 +85,31 @@ async def test_exact_block_inputs_are_loaded_before_gates_reused_and_isolated(mo
     merged = SimpleNamespace(candidates=[candidate("rsi_6", "1m", 80)], as_flat_dict=lambda: {"rsi_6": 80})
     fetch = AsyncMock(return_value={"TEST_USDT": merged})
     monkeypatch.setattr(indicators_provider, "get_timeframe_indicators", fetch)
-    config = profile([condition()])
+    config = profile([condition(timeframe="5m")])
+    merged.candidates[0]["timeframe"] = "5m"
     prepared = await prepare_block_candle_inputs(object(), [source], config)
-    fetch.assert_awaited_once_with(ANY, ["TEST_USDT"], timeframe="1m", market_type="spot")
+    fetch.assert_awaited_once_with(ANY, ["TEST_USDT"], timeframe="5m", market_type="spot")
     assert source == before
     assert ProfileEngine(config).evaluate_asset(prepared[0])["blocked"]
-    assert any(c["timeframe"] == "1m" for c in build_feature_registry(prepared[0], evaluated_at=NOW))
+    assert any(c["timeframe"] == "5m" for c in build_feature_registry(prepared[0], evaluated_at=NOW))
     await prepare_block_candle_inputs(object(), prepared, config)
     assert fetch.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_spot_m1_rsi_goes_directly_to_closed_candles_without_empty_indicator_scan(monkeypatch):
+    from app.services import indicators_provider
+    persisted = AsyncMock(side_effect=AssertionError("M1 has no scheduled indicator producer"))
+    closed = AsyncMock(return_value={"TEST_USDT": candidate("rsi_6", "1m", 80)})
+    monkeypatch.setattr(indicators_provider, "get_timeframe_indicators", persisted)
+    monkeypatch.setattr(indicators_provider, "get_closed_block_rsi6", closed)
+    config = profile([condition()])
+    prepared = await prepare_block_candle_inputs(object(), [{"symbol": "TEST_USDT"}], config)
+    persisted.assert_not_awaited()
+    closed.assert_awaited_once_with(ANY, ["TEST_USDT"])
+    assert ProfileEngine(config).evaluate_asset(prepared[0])["blocked"]
+    await prepare_block_candle_inputs(object(), prepared, config)
+    assert closed.await_count == 1
 
 
 def test_mtf_producer_emits_exact_block_calculation_identities_and_bb_distance():
