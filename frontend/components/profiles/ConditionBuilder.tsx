@@ -4,7 +4,6 @@ import { Plus, Trash2 } from "lucide-react";
 import { useState, useEffect, useMemo, useRef } from "react";
 import {
   BREAKOUT_REFERENCE_WINDOWS,
-  PROFILE_NO_TIMEFRAME_INDICATORS,
   PROFILE_PERIOD_DEFAULTS,
   indicatorOptionsForSection,
   optionsWithUnsupportedIndicator,
@@ -14,7 +13,11 @@ import {
   isProfileComparisonCondition,
   profileConditionManualUpdates,
   profileConditionPrimaryIndicator,
+  profileTemporalIdentity,
+  updateProfileConditionIndicator,
+  type ProfileSourcePolicies,
 } from "@/lib/profileConditionState";
+import { FeatureTemporalIdentity } from "./FeatureTemporalIdentity";
 
 export function numFmt(n: number | null): string {
   if (n === null) return "";
@@ -122,6 +125,7 @@ interface ConditionBuilderProps {
   defaultTimeframe?: string;
   scoreRules?: ScoreRule[];
   showPoints?: boolean;
+  sourcePolicies?: ProfileSourcePolicies;
 }
 
 const OPERATORS = [
@@ -177,6 +181,7 @@ export function ConditionBuilder({
   defaultTimeframe = "5m",
   scoreRules = [],
   showPoints = false,
+  sourcePolicies,
 }: ConditionBuilderProps) {
   const indicatorFields = useMemo(() => indicatorOptionsForSection(section), [section]);
   const getFieldType = (field: string) =>
@@ -193,7 +198,7 @@ export function ConditionBuilder({
 
   const updateCondition = (index: number, updates: Partial<Condition>) => {
     onChange(conditions.map((condition, currentIndex) => (
-      currentIndex === index ? { ...condition, ...updates } : condition
+      currentIndex === index ? updateProfileConditionIndicator(condition, updates) : condition
     )));
   };
 
@@ -236,6 +241,7 @@ export function ConditionBuilder({
         const selectedRule = getSelectedRule(condition);
         const ruleLocked = Boolean(showPoints && selectedRule);
         const points = Number(selectedRule?.points ?? condition.points ?? 0);
+        const temporal = profileTemporalIdentity(condition, sourcePolicies, defaultTimeframe);
 
         return (
           <div
@@ -468,7 +474,8 @@ export function ConditionBuilder({
               </div>
             )}
 
-            {!PROFILE_NO_TIMEFRAME_INDICATORS.has(primaryIndicator) && (
+            <FeatureTemporalIdentity condition={condition} policies={sourcePolicies} defaultTimeframe={defaultTimeframe} />
+            {temporal.showTimeframe && (
               <select
                 className="input w-[72px] text-[11px]"
                 value={condition.timeframe || ""}
@@ -484,7 +491,7 @@ export function ConditionBuilder({
               </select>
             )}
 
-            {PROFILE_PERIOD_DEFAULTS[primaryIndicator] !== undefined && (
+            {temporal.showPeriod && PROFILE_PERIOD_DEFAULTS[primaryIndicator] !== undefined && (
               <input
                 className="input w-20 text-[11px] font-mono"
                 type="number"

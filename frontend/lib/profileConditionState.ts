@@ -146,6 +146,60 @@ function inferredFeatureSource(
   return "ohlcv";
 }
 
+/** A different indicator must not inherit the previous producer or window. */
+export function updateProfileConditionIndicator<T extends Record<string, any>>(condition: T, updates: Partial<T>): T {
+  const next: Record<string, any> = { ...condition, ...updates };
+  if (updates.field !== undefined && condition.indicator !== undefined) next.indicator = updates.field;
+  const indicator = profileConditionPrimaryIndicator(next);
+  const changed = indicator !== profileConditionPrimaryIndicator(condition);
+  if (!changed) return next as T;
+  const cleaned = withoutProfileFeatureIdentity(next);
+  if (inferredFeatureSource(indicator, isProfileComparisonCondition(next)) !== "ohlcv") delete cleaned.timeframe;
+  return cleaned as T;
+}
+
+/** Presentation of configured identity, never a claim of live data availability. */
+export function profileTemporalIdentity(
+  condition: Record<string, any>,
+  policies: ProfileSourcePolicies = {},
+  defaultTimeframe = "",
+) {
+  const indicator = profileConditionPrimaryIndicator(condition);
+  const reference = isProfileComparisonCondition(condition)
+    ? (condition.resolved_operands?.left || {}) : condition;
+  const source = reference.source || inferredFeatureSource(indicator, isProfileComparisonCondition(condition));
+  const policy = policies[source as ProfileFeatureSource] || {};
+  const configured = Boolean(reference.source);
+  const provenance = configured ? "Identidade configurada" : "Política de preenchimento; identidade ainda não validada";
+  const base = { source, windowSeconds: undefined as number | undefined, showTimeframe: false, showPeriod: false,
+    label: "Contexto da decisão", detail: provenance, needsValidation: !configured };
+  if (source === "live_trade_flow") {
+    const window = reference.window_seconds ?? policy.window_seconds;
+    const validWindow = typeof window === "number" && Number.isFinite(window) && window > 0;
+    const differs = validWindow && policy.window_seconds != null && window !== policy.window_seconds;
+    return { ...base, windowSeconds: validWindow ? window : undefined,
+      label: validWindow ? `Janela de fluxo: ${window} s` : "Janela de fluxo não definida",
+      needsValidation: !configured || !validWindow || differs,
+      detail: differs ? `${provenance}. Difere da política (${policy.window_seconds} s); verificar disponibilidade no contrato.` : provenance };
+  }
+  if (source === "live_order_book") {
+    const snapshot = reference.snapshot ?? policy.snapshot;
+    const window = reference.window_seconds ?? policy.window_seconds;
+    return { ...base,
+      label: snapshot === true ? "Snapshot do livro" : "Identidade do livro não confirmada",
+      needsValidation: !configured || snapshot !== true || window != null,
+      detail: window != null ? `${provenance}. Janela configurada: ${window} s; suporte do produtor não confirmado.` : provenance };
+  }
+  if (source === "ohlcv") {
+    const timeframe = reference.timeframe || condition.timeframe || policy.timeframe || defaultTimeframe;
+    const candlePolicy = reference.candle_policy || policy.candle_policy;
+    const candleLabel = candlePolicy === "CLOSED_ONLY" ? "Candles fechados" : candlePolicy === "CURRENT_ALLOWED" ? "Candle atual permitido" : "Política de candle não definida";
+    return { ...base, showTimeframe: !STRATEGY_PROFILE_INDICATOR_MAP.get(indicator)?.noTimeframe,
+      showPeriod: true, label: `${candleLabel}${timeframe ? ` · ${timeframe}` : ""}` };
+  }
+  return base;
+}
+
 function configuredProvider(
   indicator: string,
   existing: Record<string, unknown>,

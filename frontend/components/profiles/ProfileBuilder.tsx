@@ -5,12 +5,12 @@ import { AlertTriangle, ArrowLeft, Loader2, Power, PowerOff, Save, Play, ShieldO
 import { apiPatch, apiPost } from "@/lib/api";
 import { ConditionBuilder, NumericInput, type ScoreRule } from "./ConditionBuilder";
 import { WeightSliders } from "./WeightSliders";
+import { FeatureTemporalIdentity } from "./FeatureTemporalIdentity";
 import PresetIAButton from "./PresetIAButton";
 import ProfileRoleSelector, { ProfileRole } from "./ProfileRoleSelector";
 import { useConfig } from "@/hooks/useConfig";
 import {
   BREAKOUT_REFERENCE_WINDOWS,
-  PROFILE_NO_TIMEFRAME_INDICATORS,
   PROFILE_PERIOD_DEFAULTS,
   indicatorOptionsForSection,
   optionsWithUnsupportedIndicator,
@@ -22,6 +22,7 @@ import {
   prepareProfileFilterIdentities,
   prepareProfileSignalIdentities,
   profileSourcePoliciesForEditor,
+  profileTemporalIdentity,
   serializeProfileEditorConfig,
   withoutProfileFeatureIdentity,
 } from "@/lib/profileConditionState";
@@ -496,6 +497,10 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
   const [description, setDescription]       = useState(profile?.description || "");
   const [config, setConfig]                 = useState<any>(() => normalizeProfileConfig(profile?.config));
   const [profileRole, setProfileRole]       = useState<ProfileRole | null>(profile?.profile_role || null);
+  const sourcePolicies = useMemo(
+    () => profileSourcePoliciesForEditor(spotEngineConfig, profile?.profile_type, profileRole),
+    [spotEngineConfig, profile?.profile_type, profileRole],
+  );
   const [activeTab, setActiveTab]           = useState<ActiveTab>("filters");
   const [testResult, setTestResult]         = useState<any>(null);
   const [testing, setTesting]               = useState(false);
@@ -558,7 +563,7 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
     ].includes(String(profileRole || ""));
     let configForSave = config;
     if (requiresEntryFeatureIdentity) {
-      const policies = profileSourcePoliciesForEditor(spotEngineConfig, profile?.profile_type, profileRole);
+      const policies = sourcePolicies;
       const currentConfig = normalizeProfileConfig(profile?.config);
       const preparedFilters = prepareProfileFilterIdentities(
         configForSave, policies, currentConfig,
@@ -871,10 +876,8 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
     logic: string,
   ) => {
     const describe = (trigger: EntryTrigger, requiredLabel = false) => {
-      const referenceIndicator = trigger.type === "comparison" ? trigger.left : trigger.indicator;
-      const tf = referenceIndicator && PROFILE_NO_TIMEFRAME_INDICATORS.has(referenceIndicator)
-        ? ""
-        : ` (${trigger.timeframe || defaultTimeframe}${trigger.period ? `, P:${trigger.period}` : ""})`;
+      const identity = profileTemporalIdentity(trigger, sourcePolicies, defaultTimeframe);
+      const tf = identity.source === "decision_context" ? "" : ` (${identity.label})`;
       let conditionText = "";
 
       if (trigger.type === "comparison") {
@@ -1298,6 +1301,7 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
                 section="filters"
                 showRequired={false}
                 defaultTimeframe={config.default_timeframe || "5m"}
+                sourcePolicies={sourcePolicies}
                 scoreRules={scoreRules}
               />
             </div>
@@ -1354,6 +1358,7 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
                   section="signals"
                   showRequired={true}
                   defaultTimeframe={config.default_timeframe || "5m"}
+                  sourcePolicies={sourcePolicies}
                 />
               </div>
             </div>
@@ -1431,7 +1436,7 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
                       {/* Timeframe / Period overrides */}
                       {block.conditions.some((condition) => {
                         const reference = condition.type === "comparison" ? condition.left : condition.indicator;
-                        return reference ? !PROFILE_NO_TIMEFRAME_INDICATORS.has(reference) : false;
+                        return reference ? profileTemporalIdentity(condition, sourcePolicies).showTimeframe : false;
                       }) && (
                         <div className="grid grid-cols-2 gap-2">
                           <div className="space-y-1">
@@ -1478,6 +1483,7 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
                               ))}
                             </select>
 
+                            <FeatureTemporalIdentity condition={condition} policies={sourcePolicies} defaultTimeframe={block.timeframe || config.default_timeframe || "5m"} />
                             {condition.type === "comparison" ? (
                               <>
                                 <select
@@ -1943,8 +1949,9 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
                         )}
                       </>
                     )}
+                    <FeatureTemporalIdentity condition={trig} policies={sourcePolicies} defaultTimeframe={config.default_timeframe || "5m"} />
                     {/* Timeframe override */}
-                    {!PROFILE_NO_TIMEFRAME_INDICATORS.has((trig.type === "comparison" ? trig.left : trig.indicator) || "") && (
+                    {profileTemporalIdentity(trig, sourcePolicies).showTimeframe && (
                       <select
                         className="input h-8 text-[11px] w-[68px]"
                         value={trig.timeframe || ""}

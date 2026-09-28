@@ -4,10 +4,10 @@ import { useState } from "react";
 import { ArrowLeft, Save, Plus, Trash2, Check, AlertTriangle, Play } from "lucide-react";
 import { apiPut } from "@/lib/api";
 import { useConfig } from "@/hooks/useConfig";
+import { FeatureTemporalIdentity } from "./FeatureTemporalIdentity";
 import { ConditionBuilder, NumericInput } from "./ConditionBuilder";
 import {
   BREAKOUT_REFERENCE_WINDOWS,
-  PROFILE_NO_TIMEFRAME_INDICATORS,
   PROFILE_PERIOD_DEFAULTS,
   indicatorOptionsForSection,
   optionsWithUnsupportedIndicator,
@@ -15,6 +15,10 @@ import {
 import {
   normalizeProfileRuleCondition,
   prepareProfileEntryTriggerIdentities,
+  prepareProfileFilterIdentities,
+  prepareProfileSignalIdentities,
+  prepareProfileBlockRuleIdentities,
+  profileTemporalIdentity,
   profileSourcePoliciesForEditor,
   withoutProfileFeatureIdentity,
 } from "@/lib/profileConditionState";
@@ -413,17 +417,15 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
         const requiresEntryFeatureIdentity = profile.profile_type === "MTF_LAYER" || ![
           "universe_filter", "primary_filter", "score_engine",
         ].includes(String(profile.profile_role || ""));
-        const configForSave = requiresEntryFeatureIdentity
-          ? prepareProfileEntryTriggerIdentities(
-              cfg,
-              profileSourcePoliciesForEditor(
-                spotEngineConfig,
-                profile.profile_type,
-                profile.profile_role,
-              ),
-              profile.config,
-            )
-          : { config: cfg, issues: [] };
+        let configForSave = { config: cfg, issues: [] as string[] };
+        if (requiresEntryFeatureIdentity) {
+          const policies = profileSourcePoliciesForEditor(spotEngineConfig, profile.profile_type, profile.profile_role);
+          for (const prepare of [prepareProfileFilterIdentities, prepareProfileSignalIdentities,
+            prepareProfileEntryTriggerIdentities, prepareProfileBlockRuleIdentities]) {
+            const prepared = prepare(configForSave.config, policies, profile.config);
+            configForSave = { config: prepared.config, issues: [...configForSave.issues, ...prepared.issues] };
+          }
+        }
         if (configForSave.issues.length > 0) {
           throw new Error(
             `Identidade de fonte incompleta: ${configForSave.issues.join(", ")}`,
@@ -605,7 +607,7 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                       {/* Shared timeframe for block */}
                       {block.conditions.some((c) => {
                         const ref = c.type === "comparison" ? c.left : c.indicator;
-                        return ref ? !PROFILE_NO_TIMEFRAME_INDICATORS.has(ref) : false;
+                        return ref ? profileTemporalIdentity(c).showTimeframe : false;
                       }) && (
                         <select
                           className="input h-8 w-[72px] text-[11px]"
@@ -652,6 +654,7 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                             ))}
                           </select>
 
+                          <FeatureTemporalIdentity condition={condition} defaultTimeframe={block.timeframe} />
                           {condition.type === "comparison" ? (
                             <>
                               <select
@@ -1093,8 +1096,9 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                       </>
                     )}
 
+                    <FeatureTemporalIdentity condition={trig} />
                     {/* Timeframe override */}
-                    {!PROFILE_NO_TIMEFRAME_INDICATORS.has((trig.type === "comparison" ? trig.left : trig.indicator) || "") && (
+                    {profileTemporalIdentity(trig).showTimeframe && (
                       <select
                         className="input h-8 text-[11px] w-[68px]"
                         value={trig.timeframe || ""}

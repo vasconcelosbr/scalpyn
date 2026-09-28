@@ -303,7 +303,7 @@ def _registry_candidate(raw: dict, *, market_scope: dict, evaluated_at: datetime
         "parameters": _candidate_parameters(raw),
         "candle_policy": _normalize_candle_policy(raw.get("candle_policy")),
         "candle_closed": raw.get("candle_closed"),
-        "scheduler_group": raw.get("group"),
+        "scheduler_group": raw.get("scheduler_group") or raw.get("group"),
         "source_timestamp": _iso(source_timestamp),
         "computed_at": _iso(raw.get("computed_at")),
         "available_at": _iso(raw.get("available_at")),
@@ -313,6 +313,7 @@ def _registry_candidate(raw: dict, *, market_scope: dict, evaluated_at: datetime
         "fallback_used": bool(raw.get("fallback_used", False)),
         "partial_window": bool(raw.get("partial_window", False)),
         "coverage_pct": raw.get("coverage_pct"),
+        **{key: deepcopy(raw[key]) for key in ("reference_window", "dependencies") if key in raw},
     }
 
 
@@ -1720,6 +1721,71 @@ def _contract_reasons(sections: dict, blocks: dict) -> list[str]:
     return list(dict.fromkeys(reasons))
 
 
+def build_feature_dependency_audit(registry: list[dict]) -> dict:
+    """Describe shared observations without changing resolution, rules or score.
+
+    Formula aliases are not evidence of equal observations. Missing clocks
+    remain unknown, and separate/overlapping windows never imply independence.
+    """
+    aliases = {**_FEATURE_ALIASES, "buy_pressure": "taker_ratio"}
+    groups: dict[str, dict] = {}
+    for candidate in registry:
+        source = candidate.get("source")
+        if source not in {"live_trade_flow", "live_order_book"}:
+            continue
+        observation = {
+            key: deepcopy(candidate.get(key)) for key in (
+                "market_scope", "source", "source_provider", "provider_policy_id",
+                "timeframe", "window_seconds", "snapshot", "parameters",
+                "source_timestamp", "computed_at", "available_at",
+            )
+        }
+        temporal_identity_present = (
+            observation["window_seconds"] is not None if source == "live_trade_flow"
+            else observation["snapshot"] is True
+        )
+        scope = observation["market_scope"] or {}
+        complete = bool(
+            all(observation[clock] for clock in ("source_timestamp", "computed_at", "available_at"))
+            and observation["source_provider"]
+            and all(scope.get(key) for key in ("exchange", "market_type", "normalized_symbol"))
+            and temporal_identity_present
+        )
+        # An incomplete observation must not be grouped with another unknown.
+        key = canonical_hash(observation) if complete else f"unknown:{len(groups)}"
+        group = groups.setdefault(key, {
+            "feature_family": "trade_flow" if source == "live_trade_flow" else "order_book",
+            "observation_identity": observation,
+            "observation_hash": key if complete else None,
+            "statistical_independence": "NOT_ASSESSED",
+            "members": [],
+        })
+        indicator = str(candidate.get("indicator") or "")
+        alias_of = aliases.get(indicator)
+        equivalent = False
+        if alias_of and complete:
+            identity = {**_feature_identity(candidate), "indicator": alias_of}
+            equivalent = any(
+                _feature_identity(other) == identity
+                and all(other.get(clock) == candidate.get(clock) for clock in (
+                    "source_timestamp", "computed_at", "available_at", "provider_policy_id"))
+                and candidate.get("actual") is not None
+                and other.get("actual") == candidate.get("actual")
+                for other in registry
+            )
+        group["members"].append({
+            "indicator": indicator,
+            "formula_alias_of": alias_of,
+            "alias_equivalence": "SAME_OBSERVATION_AND_VALUE" if equivalent else "NOT_ESTABLISHED",
+        })
+    return {
+        "contract_version": "feature_dependency_audit_v1",
+        "operational_effect": False,
+        "scoring_effect": False,
+        "groups": list(groups.values()),
+    }
+
+
 def build_authorization_contract(
     *,
     asset: dict,
@@ -1945,6 +2011,7 @@ def build_authorization_contract(
             "collapsed_and_rules": collapsed_alias_rules,
             "operational_effect": False,
         },
+        "feature_dependency_audit": build_feature_dependency_audit(registry),
         "feature_evaluations": [
             condition
             for section in sections.values()

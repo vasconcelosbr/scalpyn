@@ -52,7 +52,7 @@ export const STRATEGY_PROFILE_INDICATORS: readonly IndicatorCatalogEntry[] = [
   entry("orderbook_depth_usdt", "Profundidade Book (USDT)", "number", "liquidity", { noTimeframe: true }),
   entry("taker_ratio", "Taker Ratio (buy/(buy+sell), 0-1)", "number", "liquidity", { noTimeframe: true }),
   entry("volume_spike", "Volume Spike", "number", "liquidity", { defaultPeriod: 20 }),
-  entry("volume_delta", "Volume Delta", "number", "liquidity", { defaultPeriod: 20 }),
+  entry("volume_delta", "Volume Delta", "number", "liquidity", { noTimeframe: true }),
   entry("orderbook_pressure", "Orderbook Pressure", "number", "liquidity", { noTimeframe: true }),
   entry("bid_ask_imbalance", "Bid/Ask Imbalance", "number", "liquidity", { noTimeframe: true }),
   entry("funding_rate", "Funding Rate", "number", "liquidity", { noTimeframe: true }),
