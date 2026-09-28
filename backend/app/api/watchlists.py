@@ -46,6 +46,7 @@ from ..services.pipeline_rejections import (
     recompute_rejection_trace,
     rejection_metrics,
 )
+from ..services.block_condition_timeframe import prepare_block_candle_inputs
 from ..utils.pipeline_profile_filters import (
     STRICT_META_FIELDS,
     effective_pipeline_level,
@@ -2259,7 +2260,12 @@ async def _resolve_and_persist(
         )
         candidate_assets.append(asset_entry)
 
-    assets_out = list(candidate_assets)
+    # WATCHLIST_BLOCK_EXACT_TIMEFRAME: refresh must use the same candle inputs
+    # as the scanner, including futures market scope.
+    assets_out = await prepare_block_candle_inputs(
+        db, [{**asset, "is_futures": getattr(wl, "market_mode", "spot") == "futures"}
+             for asset in candidate_assets], profile_config_full or {},
+    )
     rejected_rows: List[Dict[str, Any]] = []
 
     # Apply profile filter conditions (market_cap, volume_24h, Change 24h%, etc.)
@@ -3013,6 +3019,10 @@ async def get_watchlist_assets(
         except Exception as _exc:
             logger.debug("[Pipeline] crypto_ev enrichment skipped: %s", _exc)
 
+    block_inputs = {asset["symbol"]: asset for asset in await prepare_block_candle_inputs(
+        db, [{"symbol": symbol, "is_futures": is_futures} for symbol in symbols],
+        profile_config or {},
+    )}
     enriched = []
     for a in assets:
         indicators = ind_map.get(a.symbol)
@@ -3041,7 +3051,7 @@ async def get_watchlist_assets(
         # or no profile_config is available — same defensive contract as
         # `recompute_rejection_trace`.
         evaluation_trace = stored_evaluation_trace
-        if profile_config and indicators:
+        if profile_config and (indicators or block_inputs.get(a.symbol, {}).get("_block_ohlcv_candidates")):
             try:
                 trace_asset = build_trace_asset(
                     a.symbol,
@@ -3057,7 +3067,7 @@ async def get_watchlist_assets(
                     alpha_score=enriched_asset.get("alpha_score"),
                 )
                 evaluation_trace = build_asset_evaluation_trace(
-                    trace_asset,
+                    {**trace_asset, **block_inputs.get(a.symbol, {})},
                     profile_config=profile_config,
                     selected_filter_conditions=selected_trace_conditions,
                 )
@@ -3086,7 +3096,7 @@ async def get_watchlist_assets(
                 alpha_score=enriched_asset.get("alpha_score"),
             )
             evaluation_trace = build_asset_evaluation_trace(
-                trace_asset,
+                {**trace_asset, **block_inputs.get(a.symbol, {})},
                 profile_config=profile_config,
                 selected_filter_conditions=selected_trace_conditions,
             )
@@ -3407,6 +3417,11 @@ async def _get_watchlist_rejections_payload(
         except Exception:
             return None
 
+    block_inputs = {asset["symbol"]: asset for asset in await prepare_block_candle_inputs(
+        db, [{"symbol": symbol, "is_futures": getattr(wl, "market_mode", "spot") == "futures"}
+             for symbol in rejection_symbols], profile_config or {},
+    )}
+
     def _recompute_trace(row: PipelineWatchlistRejection) -> List[Dict[str, Any]]:
         stored = row.evaluation_trace or []
         indicators = ind_map.get(row.symbol)
@@ -3426,6 +3441,7 @@ async def _get_watchlist_rejections_payload(
             indicators=indicators,
             meta=meta,
             stored_trace=stored,
+            block_inputs=block_inputs.get(row.symbol),
             selected_filter_conditions=selected_trace_conditions,
         )
 

@@ -2009,6 +2009,28 @@
           ]
         }
       ]
+    },
+    {
+      "id": "watchlist-block-exact-timeframe",
+      "description": "Watchlist refresh and read paths preserve exact candle inputs across L1 L2 L3",
+      "files": [
+        {
+          "path": "backend/app/api/watchlists.py",
+          "contains_all": [
+            "WATCHLIST_BLOCK_EXACT_TIMEFRAME",
+            "block_inputs=block_inputs.get(row.symbol)",
+            "**block_inputs.get(a.symbol, {})"
+          ]
+        },
+        {
+          "path": "backend/tests/test_watchlist_block_timeframes.py",
+          "contains_all": [
+            "test_watchlist_levels_refresh_and_read_use_exact_candles",
+            "test_watchlist_api_wires_candle_preparation_into_all_mutable_trace_paths",
+            "test_unusable_candles_do_not_become_valid_through_watchlist_fallback"
+          ]
+        }
+      ]
     }
   ]
 }
