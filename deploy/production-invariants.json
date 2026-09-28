@@ -1957,6 +1957,7 @@
           "path": "backend/app/tasks/pipeline_scan.py",
           "contains_all": [
             "PROFILE_SCOPED_FLOW_WINDOW",
+            "PROFILE_FLOW_BEFORE_REJECTIONS",
             "profile_config=profile_config",
             "INCOMPLETE_WINDOW"
           ]
@@ -1966,6 +1967,7 @@
           "contains_all": [
             "test_five_minute_aggregation_includes_older_trades_and_excludes_future",
             "test_profile_scoped_flow_injection_preserves_other_profiles",
+            "test_profile_flow_precedes_rejections_and_isolates_shared_assets",
             "test_ema9_distance_uses_nine_closed_five_minute_bars"
           ]
         }

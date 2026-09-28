@@ -1981,6 +1981,41 @@ async def _inject_live_order_flow(
     return updated, True
 
 
+async def _prepare_profile_flow_before_rejections(
+    assets, profile_config, *, db, user_id, pool_id, watchlist_id,
+):
+    """Use the selected flow window before any L3 profile gate can reject.
+
+    Copies isolate watchlists sharing upstream assets. The returned snapshots
+    are reused by the decision evaluator so both gates see the same trades.
+    """
+    from ..services.profile_flow_window import profile_flow_window
+    from ..services.l3_flow_diagnostics import record_flow_check
+
+    if profile_flow_window(profile_config) is None:
+        return assets, False
+    prepared = []
+    for original in assets:
+        updated, ok = await _inject_live_order_flow(
+            symbol=original.get("symbol"), indicators=original.get("indicators") or {},
+            db=db, user_id=user_id, pool_id=pool_id, profile_config=profile_config,
+        )
+        await record_flow_check(
+            user_id=user_id, watchlist_id=watchlist_id, symbol=original.get("symbol"),
+            observation=updated.get("_l3_flow_check"),
+        )
+        if not ok:
+            continue
+        asset = dict(original)
+        asset["indicators"] = updated
+        asset["_l3_live_order_flow_snapshot"] = updated.get("_l3_live_order_flow_snapshot")
+        for key in _LIVE_ORDER_FLOW_FIELDS:
+            if updated.get(key) is not None:
+                asset[key] = updated[key]
+        prepared.append(asset)
+    return prepared, True
+
+
 async def _evaluate_l3_decisions(
     assets: list,
     profile_config: Optional[dict],
@@ -1998,6 +2033,7 @@ async def _evaluate_l3_decisions(
     watchlist_level=None,
     source_watchlist_id=None,
     read_only=False,
+    order_flow_prepared=False,
 ) -> list[dict]:
     """Avaliar candidatos L3 (rules + entry triggers) e produzir decisions.
 
@@ -2096,7 +2132,7 @@ async def _evaluate_l3_decisions(
         # ── L3 LIVE ORDER FLOW INJECTION ─────────────────────────────────
         # Sobrescreve indicators de fluxo com snapshot live do Redis
         # antes da regra avaliar. Stale → continue (skip do ciclo).
-        if inject_live:
+        if inject_live and not order_flow_prepared:
             symbol = asset.get("symbol")
             current_indicators = asset.get("indicators") or {}
             updated_indicators, order_flow_ok = await _inject_live_order_flow(
@@ -4458,7 +4494,12 @@ async def _run_pipeline_scan():
 
                     return
 
-                # L3
+                # PROFILE_FLOW_BEFORE_REJECTIONS: every gate must consume the
+                # selected window, including the initial signal/filter pass.
+                assets, order_flow_prepared = await _prepare_profile_flow_before_rejections(
+                    assets, profile_config, db=db, user_id=wl.user_id,
+                    pool_id=wl.source_pool_id, watchlist_id=wl.id,
+                )
                 profile_passed, rejected_rows = evaluate_rejections(
                     assets,
                     profile_config=profile_config,
@@ -4547,6 +4588,7 @@ async def _run_pipeline_scan():
                     watchlist_name=wl.name,
                     watchlist_level=wl.level,
                     source_watchlist_id=wl.source_watchlist_id,
+                    order_flow_prepared=order_flow_prepared,
                 )
                 # Technical filters/signals have now passed. Only at this
                 # point may Social Score change ranking or block a final

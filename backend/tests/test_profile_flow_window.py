@@ -103,3 +103,46 @@ def test_ema9_distance_uses_nine_closed_five_minute_bars():
     changed = deepcopy(frame)
     changed.loc[9, "close"] = 1
     assert calculate_price_position(changed, as_of=now)["ema9_distance_pct"] == result["ema9_distance_pct"]
+
+
+def test_profile_flow_precedes_rejections_and_isolates_shared_assets(monkeypatch):
+    from app.tasks import pipeline_scan
+    from app.services import l3_flow_diagnostics
+    from app.services.pipeline_rejections import evaluate_rejections
+
+    config = {"l3_order_flow_window_seconds": 300, "signals": {"conditions": [
+        {"indicator": "taker_ratio", "operator": ">=", "value": 0.52, "window_seconds": 300},
+        {"indicator": "volume_delta", "operator": ">", "value": 0, "window_seconds": 300},
+    ]}}
+    original = {"symbol": "TEST_USDT", "taker_ratio": 0.1, "volume_delta": -8,
+                "indicators": {"taker_ratio": 0.1, "volume_delta": -8}}
+    before = deepcopy(original)
+    live = {"taker_ratio": 0.9, "volume_delta": 8,
+            "_l3_live_order_flow_snapshot": {"meta": {"window_seconds": 300}}}
+    inject = AsyncMock(return_value=(live, True))
+    monkeypatch.setattr(pipeline_scan, "_inject_live_order_flow", inject)
+    monkeypatch.setattr(l3_flow_diagnostics, "record_flow_check", AsyncMock())
+    args = dict(db=object(), user_id="u", pool_id=None, watchlist_id="w")
+    assert not evaluate_rejections([original], profile_config=config, stage="L3", profile_id="p")[0]
+    prepared, reuse = asyncio.run(pipeline_scan._prepare_profile_flow_before_rejections([original], config, **args))
+    passed, rejected = evaluate_rejections(prepared, profile_config=config, stage="L3", profile_id="p")
+    assert reuse and len(passed) == 1 and not rejected
+    assert passed[0]["indicators"]["taker_ratio"] == passed[0]["taker_ratio"] == 0.9
+    assert original == before
+    # The final evaluator must reuse the exact prefilter snapshot, not fetch
+    # a newer window which could reverse the already-evaluated signal.
+    inject.reset_mock()
+    monkeypatch.setenv("L3_EXACT_TIMEFRAME_RESOLUTION", "false")
+    monkeypatch.setattr(pipeline_scan, "_apply_robust_authoritative_scoring", AsyncMock())
+    decisions = asyncio.run(pipeline_scan._evaluate_l3_decisions(
+        passed, config, "L3", {}, db=object(), user_id="u",
+        read_only=True, order_flow_prepared=reuse,
+    ))
+    assert len(decisions) == 1
+    inject.assert_not_awaited()
+    # An unavailable full window must never fall back to the old flat values.
+    inject.return_value = (live, False)
+    assert asyncio.run(pipeline_scan._prepare_profile_flow_before_rejections([original], config, **args)) == ([], True)
+    inject.reset_mock()
+    assert asyncio.run(pipeline_scan._prepare_profile_flow_before_rejections([original], {}, **args)) == ([original], False)
+    inject.assert_not_awaited()
