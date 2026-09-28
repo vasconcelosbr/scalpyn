@@ -3278,6 +3278,11 @@ async def _get_watchlist_rejections_payload(
             for item in _live_rejected if item["symbol"] not in _persisted_symbols
         ]
 
+    # REJECTED_PARENT_MEMBERSHIP: saved rejections are historical evidence,
+    # not membership in the current funnel. Apply the same complete parent
+    # chain used by Approved after merging saved and live rejection rows.
+    rows = await _intersect_assets_with_active_parent(wl, list(rows), db)
+
     # Recompute evaluation_trace on read so the Rejected tab always reflects
     # the current backend rule semantics (cascade SKIPPED reasons, taker_ratio
     # plausibility, etc.) without waiting for the 30 min scheduler to refresh
