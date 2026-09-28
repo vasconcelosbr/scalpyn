@@ -80,8 +80,8 @@
             "profile-status-badge",
             "Inativar profile",
             "Reativar profile",
-            "Justificativa obrigat\u00f3ria",
-            "Trades e shadows j\u00e1 abertos continuar\u00e3o sendo acompanhados normalmente"
+            "Justificativa obrigatória",
+            "Trades e shadows já abertos continuarão sendo acompanhados normalmente"
           ]
         }
       ]
@@ -144,8 +144,8 @@
         {
           "path": "frontend/app/watchlist/page.tsx",
           "contains_all": [
-            "Aprovado para execu\u00e7\u00e3o",
-            "Trades j\u00e1 abertos continuam sendo acompanhados exclusivamente no Shadow Portfolio",
+            "Aprovado para execução",
+            "Trades já abertos continuam sendo acompanhados exclusivamente no Shadow Portfolio",
             "setRefreshError(null)"
           ]
         },
@@ -273,8 +273,8 @@
           "contains_all": [
             "Exportar JSON",
             "Importar JSON",
-            "Shadow Portfolio \u2014 Barreiras e custos",
-            "ATR_DYNAMIC v2 est\u00e1 ativo",
+            "Shadow Portfolio — Barreiras e custos",
+            "ATR_DYNAMIC v2 está ativo",
             "Fallback: removido"
           ]
         },
@@ -282,8 +282,8 @@
           "path": "frontend/components/settings/StrategySettingsJsonModal.tsx",
           "contains_all": [
             "Etapa {item}",
-            "JSON v\u00e1lido",
-            "Confirmar aplica\u00e7\u00e3o",
+            "JSON válido",
+            "Confirmar aplicação",
             "Estrutura esperada"
           ]
         },
@@ -331,7 +331,7 @@
           "contains_all": [
             "Performance dos Profiles",
             "profilePerformance",
-            "Evolu\u00e7\u00e3o di\u00e1ria L3",
+            "Evolução diária L3",
             "profileDailyPerformanceRequestPath"
           ]
         }
@@ -466,15 +466,15 @@
           "path": "frontend/app/intelligence-runs/page.tsx",
           "contains_all": [
             "Dados completos",
-            "Dados incompletos \u2014 contrato legado",
-            "Criar nova an\u00e1lise com dados completos"
+            "Dados incompletos — contrato legado",
+            "Criar nova análise com dados completos"
           ]
         },
         {
           "path": "frontend/components/shadow-portfolio/DetailedReportWorkspace.tsx",
           "contains_all": [
             "canonical_analysis_ready",
-            "An\u00e1lise bloqueada antes do provedor",
+            "Análise bloqueada antes do provedor",
             "{canonicalAnalysisReady && (",
             "reportRunId={run.id}"
           ]
@@ -740,7 +740,7 @@
         {
           "path": "frontend/components/profiles/ExecutionContractPanel.tsx",
           "contains_all": [
-            "Integridade de execu\u00e7\u00e3o",
+            "Integridade de execução",
             "Persistido",
             "Runtime",
             "Exportar contrato"
@@ -1312,7 +1312,7 @@
         {
           "path": "frontend/components/settings/ShadowL3ExitPolicyForm.tsx",
           "contains_all": [
-            "Trailing Stop \u2014 Shadow L3",
+            "Trailing Stop — Shadow L3",
             "OBSERVE"
           ]
         },
@@ -1609,7 +1609,7 @@
           "path": "frontend/app/ml-models/page.tsx",
           "contains_all": [
             "Lane do modelo",
-            "Readiness n\u00e3o aprova"
+            "Readiness não aprova"
           ]
         },
         {
@@ -1635,7 +1635,7 @@
           "path": "frontend/app/ml-models/page.tsx",
           "contains_all": [
             "Meta de capturas",
-            "Capturas v\u00e1lidas",
+            "Capturas válidas",
             "Faltam para a meta",
             "Math.max(0, readiness.min_required - readiness.labelable_rows)",
             "refreshInterval: 15_000",
@@ -1648,98 +1648,19 @@
       "id": "l3-producer-identity-and-canonical-on-demand",
       "description": "Producer calculation identity, immutable book clocks and canonical on-demand authorization preserve strategy and expose capture exclusions.",
       "files": [
-        {
-          "path": "backend/tests/test_l3_authorization_contract_v3.py",
-          "contains_all": [
-            "test_inline_block_threshold_matches_canonical_block_engine"
-          ]
-        },
-        {
-          "path": "backend/app/tasks/collect_research_ohlcv.py",
-          "contains_all": [
-            "CANONICAL-5m-COMPUTE",
-            "result.get(\"canonical_read_enabled\") is True"
-          ]
-        },
-        {
-          "path": "backend/tests/test_research_ohlcv_pipeline.py",
-          "contains_all": [
-            "test_canonical_5m_refreshes_indicators_only_after_committed_rows"
-          ]
-        },
-        {
-          "path": "backend/tests/test_l3_capture_preparation.py",
-          "contains_all": [
-            "test_scheduled_scanner_preserves_configured_resolver_source_policies"
-          ]
-        },
-        {
-          "path": "backend/app/services/indicator_calculation_identity.py",
-          "contains_all": [
-            "def calculation_identities",
-            "UTC_DAY"
-          ]
-        },
-        {
-          "path": "backend/app/services/l3_authorization_contract_v3.py",
-          "contains_all": [
-            "def _derived_candle_candidates",
-            "registry.extend(_derived_candle_candidates(registry))"
-          ]
-        },
-        {
-          "path": "backend/app/services/l3_gate_compiler_v2.py",
-          "contains_all": [
-            "condition[\"field\"] = condition[\"indicator\"]"
-          ]
-        },
-        {
-          "path": "backend/tests/test_l3_capture_preparation.py",
-          "contains_all": [
-            "test_derived_provenance_requires_same_observation_and_keeps_window",
-            "test_score_alias_reads_gate_score_and_keeps_threshold_block",
-            "test_read_only_evaluation_cannot_persist_gate_or_mtf_state"
-          ]
-        },
-        {
-          "path": "backend/app/services/l3_capture_preflight.py",
-          "contains_all": [
-            "SET TRANSACTION READ ONLY",
-            "read_only=True",
-            "capture_created"
-          ]
-        },
-        {
-          "path": "backend/app/services/l3_on_demand_decisions.py",
-          "contains_all": [
-            "_evaluate_l3_decisions",
-            "L3_ON_DEMAND_PROFILE_ID_MISMATCH"
-          ]
-        },
-        {
-          "path": "backend/app/api/watchlists.py",
-          "contains_all": [
-            "await evaluate_on_demand_l3",
-            "L3_ON_DEMAND_EVALUATION_ENVELOPE_MISSING"
-          ]
-        },
-        {
-          "path": "backend/app/services/l3_capture_diagnostics.py",
-          "contains_all": [
-            "AWAITING_MATURITY",
-            "eligible_ids",
-            "source='L3'"
-          ]
-        },
-        {
-          "path": "backend/tests/test_l3_capture_preparation.py",
-          "contains_all": [
-            "test_on_demand_uses_canonical_evaluator_and_preserves_block",
-            "test_metadata_repair_preserves_predicates_and_rejects_other_period_changes",
-            "test_book_metadata_preserves_observation_clock_and_does_not_invent_it",
-            "test_waiting_diagnosis_does_not_certify_immature_or_excluded_capture"
-          ]
-        }
+        {"path": "backend/tests/test_l3_authorization_contract_v3.py", "contains_all": ["test_inline_block_threshold_matches_canonical_block_engine"]},
+        {"path": "backend/app/tasks/collect_research_ohlcv.py", "contains_all": ["CANONICAL-5m-COMPUTE", "result.get(\"canonical_read_enabled\") is True"]},
+        {"path": "backend/tests/test_research_ohlcv_pipeline.py", "contains_all": ["test_canonical_5m_refreshes_indicators_only_after_committed_rows"]},
+        {"path": "backend/tests/test_l3_capture_preparation.py", "contains_all": ["test_scheduled_scanner_preserves_configured_resolver_source_policies"]},
+        {"path": "backend/app/services/indicator_calculation_identity.py", "contains_all": ["def calculation_identities", "UTC_DAY"]},
+        {"path": "backend/app/services/l3_authorization_contract_v3.py", "contains_all": ["def _derived_candle_candidates", "registry.extend(_derived_candle_candidates(registry))"]},
+        {"path": "backend/app/services/l3_gate_compiler_v2.py", "contains_all": ["condition[\"field\"] = condition[\"indicator\"]"]},
+        {"path": "backend/tests/test_l3_capture_preparation.py", "contains_all": ["test_derived_provenance_requires_same_observation_and_keeps_window", "test_score_alias_reads_gate_score_and_keeps_threshold_block", "test_read_only_evaluation_cannot_persist_gate_or_mtf_state"]},
+        {"path": "backend/app/services/l3_capture_preflight.py", "contains_all": ["SET TRANSACTION READ ONLY", "read_only=True", "capture_created"]},
+        {"path": "backend/app/services/l3_on_demand_decisions.py", "contains_all": ["_evaluate_l3_decisions", "L3_ON_DEMAND_PROFILE_ID_MISMATCH"]},
+        {"path": "backend/app/api/watchlists.py", "contains_all": ["await evaluate_on_demand_l3", "L3_ON_DEMAND_EVALUATION_ENVELOPE_MISSING"]},
+        {"path": "backend/app/services/l3_capture_diagnostics.py", "contains_all": ["AWAITING_MATURITY", "eligible_ids", "source='L3'"]},
+        {"path": "backend/tests/test_l3_capture_preparation.py", "contains_all": ["test_on_demand_uses_canonical_evaluator_and_preserves_block", "test_metadata_repair_preserves_predicates_and_rejects_other_period_changes", "test_book_metadata_preserves_observation_clock_and_does_not_invent_it", "test_waiting_diagnosis_does_not_certify_immature_or_excluded_capture"]}
       ]
     },
     {
@@ -1888,7 +1809,7 @@
           "path": "frontend/app/pools/[id]/page.tsx",
           "contains_all": [
             "radar-feed-health",
-            "Radar indispon\u00edvel. Novas candidaturas est\u00e3o suspensas"
+            "Radar indisponível. Novas candidaturas estão suspensas"
           ]
         }
       ]
@@ -1955,11 +1876,7 @@
       "files": [
         {
           "path": "backend/app/services/config_service.py",
-          "contains_all": [
-            "async def _cache_client(self)",
-            "return await get_async_redis()",
-            "else await self._cache_client()"
-          ]
+          "contains_all": ["async def _cache_client(self)", "return await get_async_redis()", "else await self._cache_client()"]
         },
         {
           "path": "backend/app/services/redis_client.py",
