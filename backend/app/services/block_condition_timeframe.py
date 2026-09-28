@@ -49,15 +49,18 @@ async def prepare_block_candle_inputs(db, assets: list[dict], profile: dict) -> 
     """
     from .indicators_provider import get_timeframe_indicators, get_closed_block_rsi6
 
-    timeframes = set()
+    requested_by_timeframe: dict[str, set[str]] = {}
     for block in (profile.get("block_rules") or {}).get("blocks") or []:
         if block.get("enabled", True) is False:
             continue
         for condition in block.get("conditions") or []:
             references = (list((condition.get("resolved_operands") or {}).values())
                           if condition.get("type") == "comparison" else [condition])
-            timeframes.update(r["timeframe"] for r in references
-                              if r.get("source") == "ohlcv" and r.get("timeframe"))
+            for reference in references:
+                if reference.get("source") == "ohlcv" and reference.get("timeframe"):
+                    requested_by_timeframe.setdefault(reference["timeframe"], set()).add(
+                        reference.get("indicator") or reference.get("field"))
+    timeframes = set(requested_by_timeframe)
     if not timeframes or not assets or db is None:
         return assets
     prepared = [{**a, "_indicators_by_tf": {tf: dict(values) for tf, values in (a.get("_indicators_by_tf") or {}).items()},
@@ -70,7 +73,11 @@ async def prepare_block_candle_inputs(db, assets: list[dict], profile: dict) -> 
                        and ("futures" if a.get("is_futures") else "spot") == market_type]
             if not pending:
                 continue
-            exact = await get_timeframe_indicators(
+            # RSI 6 on spot M1 is request-bound: there is no scheduled M1
+            # indicator series. Do not scan its empty historical table first.
+            direct_rsi = (timeframe == "1m" and market_type == "spot"
+                          and requested_by_timeframe[timeframe] == {"rsi_6"})
+            exact = {} if direct_rsi else await get_timeframe_indicators(
                 db, [a["symbol"] for a in pending], timeframe=timeframe, market_type=market_type,
             )
             missing_rsi = [a["symbol"] for a in pending if not any(
