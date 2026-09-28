@@ -283,7 +283,7 @@ def _aggregate_buy_sell(
     }
 
 
-async def _read_handover_age(redis) -> Optional[float]:
+async def _read_handover_age(redis, window_seconds: int = _HANDOVER_TAINT_WINDOW_SECONDS) -> Optional[float]:
     """Return the age (s) of the last leader handover, or None.
 
     Returns None when:
@@ -304,7 +304,7 @@ async def _read_handover_age(redis) -> Optional[float]:
     except (TypeError, ValueError):
         return None
     age_s = time.time() - (ts_ms / 1000.0)
-    if age_s < 0 or age_s > _HANDOVER_TAINT_WINDOW_SECONDS:
+    if age_s < 0 or age_s > window_seconds:
         return None
     return round(age_s, 2)
 
@@ -313,6 +313,7 @@ async def _read_buffer(
     symbol: str,
     window_seconds: int,
     market_type: str = "spot",
+    require_full_window: bool = False,
 ) -> Optional[Dict[str, Optional[Any]]]:
     """Aggregate taker flow from the Redis ``trades_buffer:{market_type}:*`` sorted set.
 
@@ -339,13 +340,14 @@ async def _read_buffer(
 
     pair = GateAdapter._normalize_symbol(symbol)
     key = f"trades_buffer:{market_type}:{pair}"
-    cutoff_ms = (time.time() - window_seconds) * 1_000.0
+    window_end_ms = time.time() * 1_000.0
+    cutoff_ms = window_end_ms - window_seconds * 1_000.0
 
     try:
         # ZRANGEBYSCORE is sufficient — we don't need scores back, just
         # the JSON payloads, and the score is also stored inside each
         # member as ``"t"``.
-        members = await redis.zrangebyscore(key, cutoff_ms, "+inf")
+        members = await redis.zrangebyscore(key, cutoff_ms, window_end_ms)
     except Exception as exc:
         logger.warning("[OrderFlow] redis zrangebyscore failed for %s: %s", symbol, exc)
         return None
@@ -355,7 +357,18 @@ async def _read_buffer(
 
     # Audit metadata (post-#246): track contributing trade count and the
     # ms-timestamp envelope so callers can detect partial windows.
-    handover_age_s = await _read_handover_age(redis)
+    handover_age_s = await _read_handover_age(
+        redis, window_seconds if require_full_window else _HANDOVER_TAINT_WINDOW_SECONDS,
+    )
+    window_complete = False
+    if require_full_window:
+        try:
+            # A retained trade at/before the cutoff proves the buffer reaches
+            # the beginning of this window. Short startup/capped buffers cannot.
+            earliest = await redis.zrange(key, 0, 0, withscores=True)
+            window_complete = bool(earliest and float(earliest[0][1]) <= cutoff_ms)
+        except Exception:
+            window_complete = False
 
     buy_vol = 0.0
     sell_vol = 0.0
@@ -423,9 +436,11 @@ async def _read_buffer(
         partial = True
     if handover_age_s is not None:
         partial = True
+    if require_full_window and not window_complete:
+        partial = True
 
     ws_source = f"gate_trades_ws_{market_type}"
-    return _aggregate_buy_sell(
+    result = _aggregate_buy_sell(
         symbol=symbol,
         window_seconds=window_seconds,
         buy_vol=buy_vol,
@@ -437,12 +452,17 @@ async def _read_buffer(
         partial_window=partial,
         recent_handover_age_s=handover_age_s,
     )
+    if require_full_window:
+        result.update(window_complete=window_complete and not partial,
+                      window_start_ms=cutoff_ms, window_end_ms=window_end_ms)
+    return result
 
 
 async def get_order_flow_data(
     symbol: str,
     window_seconds: int = WINDOW_SECONDS,
     market_type: str = "spot",
+    require_full_window: bool = False,
 ) -> Dict[str, Optional[Any]]:
     """Fetch recent trades and aggregate taker flow metrics.
 
@@ -482,7 +502,10 @@ async def get_order_flow_data(
     [0, 1] but represent only the covered span.
     """
     # ── Buffer-first read ────────────────────────────────────────────────
-    buffered = await _read_buffer(symbol, window_seconds, market_type=market_type)
+    buffered = await _read_buffer(
+        symbol, window_seconds, market_type=market_type,
+        **({"require_full_window": True} if require_full_window else {}),
+    )
     if buffered is not None:
         return buffered
 

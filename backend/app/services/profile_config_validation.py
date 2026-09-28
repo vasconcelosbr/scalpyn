@@ -14,6 +14,8 @@ def validate_profile_config(
     from .entry_risk_features import assert_no_observational_execution_fields
 
     source = deepcopy(config or {})
+    from .profile_flow_window import validate_profile_flow_window
+    validate_profile_flow_window(source)
     assert_no_observational_execution_fields(source)
     # Preserve every unrelated profile field. Validation may normalize the
     # executable sections below, but it must never silently delete risk,

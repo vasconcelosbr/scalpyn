@@ -122,6 +122,25 @@ const LIVE_TRADE_FLOW_INDICATORS = new Set([
   "taker_ratio", "volume_delta", "buy_pressure",
   "taker_buy_volume", "taker_sell_volume",
 ]);
+
+/** Explicit profile-wide selection; a single flat flow snapshot feeds all rules. */
+export function setProfileFlowWindow<T extends Record<string, any>>(config: T, seconds: number): T {
+  if (![60, 300].includes(seconds)) throw new Error("Janela de fluxo não suportada");
+  const next = structuredClone(config);
+  (next as Record<string, any>).l3_order_flow_window_seconds = seconds;
+  function visit(value: any): void {
+    if (!value || typeof value !== "object") return;
+    const indicator = value.indicator || value.field;
+    if (LIVE_TRADE_FLOW_INDICATORS.has(indicator)) {
+      value.source = "live_trade_flow";
+      value.window_seconds = seconds;
+      for (const key of ["period", "timeframe", "candle_policy", "snapshot"]) delete value[key];
+    }
+    Object.values(value).forEach(visit);
+  }
+  for (const section of ["filters", "signals", "entry_triggers", "block_rules"]) visit(next[section]);
+  return next;
+}
 const LIVE_ORDER_BOOK_INDICATORS = new Set([
   "orderbook_pressure", "bid_ask_imbalance", "orderbook_depth_usdt",
   "spread_pct", "spread",
@@ -178,7 +197,7 @@ export function profileTemporalIdentity(
     const validWindow = typeof window === "number" && Number.isFinite(window) && window > 0;
     const differs = validWindow && policy.window_seconds != null && window !== policy.window_seconds;
     return { ...base, windowSeconds: validWindow ? window : undefined,
-      label: validWindow ? `Janela de fluxo: ${window} s` : "Janela de fluxo não definida",
+      label: validWindow ? `Janela de fluxo: ${window === 300 ? "5 min (300 s)" : `${window} s`}` : "Janela de fluxo não definida",
       needsValidation: !configured || !validWindow || differs,
       detail: differs ? `${provenance}. Difere da política (${policy.window_seconds} s); verificar disponibilidade no contrato.` : provenance };
   }
@@ -310,6 +329,7 @@ export function profileSourcePoliciesForEditor(
   spotEngineConfig: Record<string, any> | null | undefined,
   profileType: unknown,
   profileRole: unknown,
+  profileConfig?: Record<string, any>,
 ): ProfileSourcePolicies {
   const scanner = spotEngineConfig?.scanner || {};
   const levelByRole: Record<string, string> = {
@@ -363,11 +383,17 @@ export function profileSourcePoliciesForEditor(
     )),
   );
   const compilerPolicies = scanner?.l3_global_block_range_compiler?.source_policies || {};
-  return withLayerValidity({
+  const policies = withLayerValidity({
     ...configuredOnly(compilerPolicies),
     ...layerPolicies,
     ...configuredOnly(resolverPolicies),
   });
+  if ([60, 300].includes(profileConfig?.l3_order_flow_window_seconds)) {
+    policies.live_trade_flow = {
+      ...policies.live_trade_flow, window_seconds: profileConfig?.l3_order_flow_window_seconds,
+    };
+  }
+  return policies;
 }
 
 /** Address legacy debt by feature (indicator/timeframe/period), not array index. */

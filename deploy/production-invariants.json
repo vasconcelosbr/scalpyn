@@ -1948,6 +1948,28 @@
           ]
         }
       ]
+    },
+    {
+      "id": "profile-scoped-live-flow-window",
+      "description": "Profile flow window drives the actual aggregation, rejects incomplete windows and preserves EMA9 closed five-minute identity",
+      "files": [
+        {
+          "path": "backend/app/tasks/pipeline_scan.py",
+          "contains_all": [
+            "PROFILE_SCOPED_FLOW_WINDOW",
+            "profile_config=profile_config",
+            "INCOMPLETE_WINDOW"
+          ]
+        },
+        {
+          "path": "backend/tests/test_profile_flow_window.py",
+          "contains_all": [
+            "test_five_minute_aggregation_includes_older_trades_and_excludes_future",
+            "test_profile_scoped_flow_injection_preserves_other_profiles",
+            "test_ema9_distance_uses_nine_closed_five_minute_bars"
+          ]
+        }
+      ]
     }
   ]
 }

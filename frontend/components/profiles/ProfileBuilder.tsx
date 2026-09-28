@@ -22,6 +22,7 @@ import {
   prepareProfileFilterIdentities,
   prepareProfileSignalIdentities,
   profileSourcePoliciesForEditor,
+  setProfileFlowWindow,
   profileTemporalIdentity,
   serializeProfileEditorConfig,
   withoutProfileFeatureIdentity,
@@ -498,8 +499,8 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
   const [config, setConfig]                 = useState<any>(() => normalizeProfileConfig(profile?.config));
   const [profileRole, setProfileRole]       = useState<ProfileRole | null>(profile?.profile_role || null);
   const sourcePolicies = useMemo(
-    () => profileSourcePoliciesForEditor(spotEngineConfig, profile?.profile_type, profileRole),
-    [spotEngineConfig, profile?.profile_type, profileRole],
+    () => profileSourcePoliciesForEditor(spotEngineConfig, profile?.profile_type, profileRole, config),
+    [spotEngineConfig, profile?.profile_type, profileRole, config.l3_order_flow_window_seconds],
   );
   const [activeTab, setActiveTab]           = useState<ActiveTab>("filters");
   const [testResult, setTestResult]         = useState<any>(null);
@@ -1223,10 +1224,27 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
                 ))}
               </select>
               <p className="text-[11px] text-[var(--text-tertiary)]">
-                Indicators inherit this timeframe unless overridden
+                Indicadores de candles herdam este timeframe, salvo configuração específica.
               </p>
             </div>
           </div>
+
+          {!isMtfProfile && profileRole === "acquisition_queue" && (
+            <div className="space-y-2">
+              <label className="label" htmlFor="profile-flow-window">Janela de fluxo do perfil</label>
+              <select id="profile-flow-window" className="input"
+                value={config.l3_order_flow_window_seconds ?? ""}
+                onChange={(e) => setConfig((c: any) => setProfileFlowWindow(c, Number(e.target.value)))}>
+                <option value="" disabled>Coleta legada (sem seleção por perfil)</option>
+                <option value={60}>1 minuto (60 s)</option>
+                <option value={300}>5 minutos (300 s)</option>
+              </select>
+              <p className="text-[11px] text-[var(--text-tertiary)]">
+                Janela móvel de negócios para Taker Ratio, Volume Delta e seus volumes de compra/venda,
+                em todas as condições deste perfil. Aguarda dados completos antes de avaliar.
+              </p>
+            </div>
+          )}
 
           <div className="space-y-2">
             <label className="label">Description</label>

@@ -419,7 +419,7 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
         ].includes(String(profile.profile_role || ""));
         let configForSave = { config: cfg, issues: [] as string[] };
         if (requiresEntryFeatureIdentity) {
-          const policies = profileSourcePoliciesForEditor(spotEngineConfig, profile.profile_type, profile.profile_role);
+          const policies = profileSourcePoliciesForEditor(spotEngineConfig, profile.profile_type, profile.profile_role, cfg);
           for (const prepare of [prepareProfileFilterIdentities, prepareProfileSignalIdentities,
             prepareProfileEntryTriggerIdentities, prepareProfileBlockRuleIdentities]) {
             const prepared = prepare(configForSave.config, policies, profile.config);

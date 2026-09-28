@@ -6,6 +6,8 @@ import { ConditionBuilder } from "../components/profiles/ConditionBuilder";
 import {
   prepareProfileSignalIdentities,
   profileTemporalIdentity,
+  profileSourcePoliciesForEditor,
+  setProfileFlowWindow,
   serializeProfileEditorConfig,
   updateProfileConditionIndicator,
 } from "./profileConditionState";
@@ -78,4 +80,26 @@ test("volume spike keeps its closed candle and calculation period", () => {
   assert.match(html, /condition-timeframe-0/);
   assert.match(html, /Period \(default: 20\)/);
   assert.match(html, /Candles fechados/);
+});
+
+
+test("profile five-minute selection survives save/reload and preserves thresholds", () => {
+  const original = {default_timeframe: "5m", signals: {conditions: [flow]},
+    block_rules: {blocks: [{conditions: [{indicator: "taker_ratio", operator: "<", value: 30, window_seconds: 60},
+      {indicator: "ema9_distance_pct", timeframe: "5m", candle_policy: "CLOSED_ONLY", operator: "<", value: 1}]}]}};
+  const updated = setProfileFlowWindow(original, 300);
+  assert.equal(original.signals.conditions[0].window_seconds, 60);
+  assert.equal(updated.signals.conditions[0].period, undefined);
+  const scoped = profileSourcePoliciesForEditor({scanner: {l3_v3_provenance_resolver: {source_policies: policies}}}, "STANDARD", "acquisition_queue", updated);
+  const prepared = prepareProfileSignalIdentities(updated, scoped, original);
+  assert.deepEqual(prepared.issues, []);
+  const reloaded = JSON.parse(JSON.stringify(serializeProfileEditorConfig(prepared.config)));
+  assert.equal(reloaded.l3_order_flow_window_seconds, 300);
+  assert.equal(reloaded.signals.conditions[0].window_seconds, 300);
+  assert.equal(reloaded.block_rules.blocks[0].conditions[0].value, 30);
+  assert.equal(reloaded.block_rules.blocks[0].conditions[0].window_seconds, 300);
+  assert.deepEqual(reloaded.block_rules.blocks[0].conditions[1], original.block_rules.blocks[0].conditions[1]);
+  const identity = profileTemporalIdentity(reloaded.signals.conditions[0], scoped);
+  assert.match(identity.label, /5 min/);
+  assert.equal(identity.needsValidation, false);
 });

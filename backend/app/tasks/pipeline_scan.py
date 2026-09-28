@@ -1793,6 +1793,7 @@ async def _inject_live_order_flow(
     db,
     user_id,
     pool_id,
+    profile_config=None,
 ) -> tuple[dict, bool]:
     """Sobrescrever indicadores de fluxo do ``indicators`` (DB) com o
     snapshot ao vivo do buffer Redis antes da regra L3 avaliar.
@@ -1821,9 +1822,19 @@ async def _inject_live_order_flow(
 
     Lidos via ``ConfigProfile(config_type="pipeline")``; pool-scoped
     quando ``pool_id`` é não-nulo, senão global por usuário.
+
+    A descrição fail-soft acima aplica-se apenas a profiles legados. Quando
+    o profile seleciona explicitamente l3_order_flow_window_seconds, essa
+    janela prevalece e dados incompletos/indisponíveis aguardam o próximo
+    ciclo: nunca substituímos a janela solicitada por outro agregado do DB.
     """
     from ..services.config_service import config_service
     from ..services.order_flow_service import get_order_flow_data
+    from ..services.profile_flow_window import profile_flow_window
+
+    # PROFILE_SCOPED_FLOW_WINDOW: an explicit profile window governs both
+    # the flat operational values and the immutable provenance snapshot.
+    requested_window = profile_flow_window(profile_config)
 
     # ── Config (best-effort) ─────────────────────────────────────────────
     window = _ORDER_FLOW_WINDOW_DEFAULT
@@ -1855,21 +1866,39 @@ async def _inject_live_order_flow(
             "max_age_seconds": max_age,
             "window_seconds": window,
             "retention_seconds": diagnostic_retention,
+            "partial_window": live.get("partial_window"),
+            "window_complete": live.get("window_complete"),
         }
+
+    if requested_window is not None:
+        window = requested_window
 
     # ── Live snapshot ────────────────────────────────────────────────────
     try:
-        live = await get_order_flow_data(symbol=symbol, window_seconds=window)
+        live = await get_order_flow_data(
+            symbol=symbol, window_seconds=window,
+            **({"require_full_window": True} if requested_window is not None else {}),
+        )
     except Exception as exc:
         logger.error(
-            "[L3][%s] live_order_flow fetch failed (%r) — falling back to DB",
+            "[L3][%s] live_order_flow fetch failed (%r)",
             symbol, exc,
         )
-        return {**indicators, "_l3_flow_check": observation("UNAVAILABLE")}, True
+        return {**indicators, "_l3_flow_check": observation("UNAVAILABLE")}, requested_window is None
 
     if not isinstance(live, dict):
-        logger.warning("[L3][%s] live_order_flow returned non-dict — fallback", symbol)
-        return {**indicators, "_l3_flow_check": observation("UNAVAILABLE")}, True
+        logger.warning("[L3][%s] live_order_flow returned non-dict", symbol)
+        return {**indicators, "_l3_flow_check": observation("UNAVAILABLE")}, requested_window is None
+
+    if requested_window is not None and (
+        live.get("taker_window") != f"{window}s"
+        or live.get("window_complete") is not True
+        or live.get("partial_window")
+        or live.get("taker_ratio") is None
+        or live.get("volume_delta") is None
+        or live.get("data_age_seconds") is None
+    ):
+        return {**indicators, "_l3_flow_check": observation("INCOMPLETE_WINDOW", live)}, False
 
     # ── Stale guard ──────────────────────────────────────────────────────
     age = live.get("data_age_seconds")
@@ -1938,6 +1967,9 @@ async def _inject_live_order_flow(
             "fallback_used": _fallback_used,
             "partial_window": bool(live.get("partial_window", False)),
             "coverage_pct": live.get("coverage_pct"),
+            "window_complete": live.get("window_complete"),
+            "window_start_ms": live.get("window_start_ms"),
+            "window_end_ms": live.get("window_end_ms"),
             "captured_at": _captured_at,
         },
     }
@@ -2073,6 +2105,7 @@ async def _evaluate_l3_decisions(
                 db=db,
                 user_id=user_id,
                 pool_id=pool_id,
+                profile_config=profile_config,
             )
             if not read_only:
                 from ..services.l3_flow_diagnostics import record_flow_check
@@ -2082,7 +2115,7 @@ async def _evaluate_l3_decisions(
                 )
             if not order_flow_ok:
                 logger.info(
-                    "[L3][%s] skipped this cycle (stale order flow) — will retry next tick",
+                    "[L3][%s] skipped this cycle (order flow unavailable, incomplete or stale) — will retry next tick",
                     symbol,
                 )
                 continue
