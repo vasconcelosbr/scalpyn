@@ -2031,6 +2031,25 @@
           ]
         }
       ]
+    },
+    {
+      "id": "rejected-parent-membership",
+      "description": "Current rejected rows remain restricted to approved membership in the complete parent chain",
+      "files": [
+        {
+          "path": "backend/app/api/watchlists.py",
+          "contains_all": [
+            "REJECTED_PARENT_MEMBERSHIP",
+            "rows = await _intersect_assets_with_active_parent(wl, list(rows), db)"
+          ]
+        },
+        {
+          "path": "backend/tests/test_rejected_parent_membership.py",
+          "contains_all": [
+            "test_rejected_payload_respects_entire_parent_chain_without_deleting_history"
+          ]
+        }
+      ]
     }
   ]
 }
