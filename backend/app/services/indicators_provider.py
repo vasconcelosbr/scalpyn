@@ -225,6 +225,71 @@ async def get_timeframe_indicators(
     return merged
 
 
+async def get_closed_block_rsi6(db, symbols: List[str], *, now=None) -> Dict[str, dict]:
+    """Request-bound RSI 6 from governed closed 1m candles; no schedule or writes.
+
+    The existing MTF scheduled producer supplies 15m/1h, not 1m. Keep this
+    calculation in the provider and freeze its full provenance in decisions.
+    """
+    from datetime import timedelta
+    from sqlalchemy import text
+    from ..tasks.compute_mtf_indicators import _load_governed_indicator_config
+    from ..tasks.compute_indicators import _derive_min_candles
+
+    now = now or datetime.now(timezone.utc)
+    config, identity = await _load_governed_indicator_config(db)
+    rsi = config.get("rsi") or {}
+    if not rsi.get("enabled") or 6 not in (rsi.get("periods") or []):
+        return {}
+    limit = max(_derive_min_candles(config, "1m"), max(rsi.get("periods") or []) + 1)
+    rows = (await db.execute(text("""
+        SELECT symbols.symbol, candles.*
+          FROM unnest(CAST(:symbols AS text[])) AS symbols(symbol)
+          CROSS JOIN LATERAL (
+              SELECT time, close, exchange, is_closed, ingested_at, capture_contract_version
+                FROM ohlcv WHERE symbol = symbols.symbol AND market_type = 'spot'
+                 AND timeframe = '1m' AND time <= :latest_closed_open
+               ORDER BY time DESC LIMIT :limit
+          ) candles
+    """), {"symbols": symbols, "latest_closed_open": now - timedelta(minutes=1), "limit": limit})).mappings().all()
+    grouped: Dict[str, list] = {}
+    for row in rows:
+        grouped.setdefault(row["symbol"], []).append(dict(row))
+    return {symbol: candidate for symbol, series in grouped.items()
+            if (candidate := closed_block_rsi6_candidate(series, config, identity, now=now, required=limit)) is not None}
+
+
+def closed_block_rsi6_candidate(rows: list[dict], config: dict, identity: dict, *, now, required: int) -> dict | None:
+    from datetime import timedelta
+    import math
+    import pandas as pd
+    from .feature_engine import FeatureEngine
+
+    series = sorted(rows, key=lambda r: r["time"])
+    if len(series) < required or len(series) < 7:
+        return None
+    duration = timedelta(minutes=1)
+    if any(r.get("is_closed") is not True or not r.get("capture_contract_version")
+           or r.get("ingested_at") is None or r["ingested_at"] > now
+           or r["time"] + duration > now or not math.isfinite(float(r["close"])) for r in series):
+        return None
+    if any(b["time"] - a["time"] != duration for a, b in zip(series, series[1:])):
+        return None
+    if len({r.get("exchange") for r in series}) != 1 or not series[-1].get("exchange"):
+        return None
+    actual = FeatureEngine(config)._calc_rsi(pd.DataFrame({"close": [float(r["close"]) for r in series]})).get("rsi_6")
+    if actual is None:
+        return None
+    latest = series[-1]
+    return {"indicator": "rsi_6", "actual": actual, "source": "ohlcv", "source_provider": latest["exchange"],
+            "provider_policy_id": "spot_gate_closed_ohlcv_v1", "timeframe": "1m", "period": 6, "parameters": {},
+            "candle_policy": "CLOSED_ONLY", "candle_closed": True, "scheduler_group": "structural",
+            "source_timestamp": latest["time"], "computed_at": now, "available_at": now,
+            "age_seconds": (now - latest["time"]).total_seconds(), "stale": False,
+            "producer_version": "profile_block_rsi6_closed_1m_v1", "capture_contract_version": latest["capture_contract_version"],
+            "source_ingested_at": latest["ingested_at"], "sample_count": len(series), **identity}
+
+
 def _emit_sampled_telemetry(merged: Dict[str, MergedIndicators]) -> None:
     """Emit a sampled INFO log per symbol for indicator key/source observability.
 

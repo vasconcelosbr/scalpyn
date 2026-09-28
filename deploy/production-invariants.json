@@ -1972,6 +1972,43 @@
           ]
         }
       ]
+    },
+    {
+      "id": "profile-block-candle-timeframes",
+      "description": "Block timeframe and boolean selection survive save and exact candle evaluation",
+      "files": [
+        {
+          "path": "frontend/lib/profileConditionState.ts",
+          "contains_all": [
+            "setProfileBlockTimeframe",
+            "withProfileCalculationIdentities",
+            "profileBooleanSelection"
+          ]
+        },
+        {
+          "path": "backend/app/services/block_condition_timeframe.py",
+          "contains_all": [
+            "PROFILE_BLOCK_EXACT_TIMEFRAME",
+            "prepare_block_candle_inputs",
+            "block_condition_data"
+          ]
+        },
+        {
+          "path": "backend/tests/test_profile_block_timeframes.py",
+          "contains_all": [
+            "test_block_timeframes_choose_exact_series_at_prefilter_engine_and_final_contract",
+            "test_higher_highs_boolean_choices_preserve_missing_and_m15",
+            "test_request_bound_rsi6_uses_closed_contiguous_m1_candles_and_rejects_bad_inputs"
+          ]
+        },
+        {
+          "path": "frontend/lib/profileBlockTimeframe.test.ts",
+          "contains_all": [
+            "block period survives save/reopen",
+            "higher highs exposes both boolean choices"
+          ]
+        }
+      ]
     }
   ]
 }

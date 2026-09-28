@@ -57,6 +57,7 @@ PROFILE_INDICATOR_CONTRACT.update({
     "ema50_gt_ema200": _contract("boolean"),
     "adx_acceleration": _contract(sections={"block_rules"}),
     "adx_slope_3": _contract(sections={"block_rules"}),
+    "higher_highs_5": _contract("boolean", sections={"block_rules"}),
     "macd_hist_slope_3": _contract(sections={"block_rules", "entry_triggers"}),
     "macd_hist_slope_5": _contract(sections={"entry_triggers"}),
     "rsi_slope_3": _contract(sections={"block_rules"}),

@@ -94,6 +94,7 @@ export const STRATEGY_PROFILE_INDICATORS: readonly IndicatorCatalogEntry[] = [
   entry("adx", "ADX", "number", "trend", { defaultPeriod: 14 }),
   entry("adx_acceleration", "ADX Acceleration", "number", "trend", { sections: BLOCK_ONLY }),
   entry("adx_slope_3", "ADX Slope 3", "number", "trend", { sections: BLOCK_ONLY }),
+  entry("higher_highs_5", "Higher Highs 5", "boolean", "trend", { sections: BLOCK_ONLY }),
   entry("di_plus", "DI+", "number", "trend", { defaultPeriod: 14 }),
   entry("di_minus", "DI-", "number", "trend", { defaultPeriod: 14 }),
   entry("di_trend", "DI+ > DI- (Alta)", "boolean", "trend", { noTimeframe: true }),

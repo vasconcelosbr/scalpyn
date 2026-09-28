@@ -2049,6 +2049,8 @@ async def _evaluate_l3_decisions(
     from ..services.l3_gate_runtime_policy import policy_from_profile
     from ..services.profile_engine import ProfileEngine
 
+    from ..services.block_condition_timeframe import prepare_block_candle_inputs
+    assets = await prepare_block_candle_inputs(db, assets, profile_config or {})
     runtime_policy = policy_from_profile(profile_config)
     engine = ProfileEngine(profile_config)
     engine.score_engine = _RobustScoreShim(
@@ -4178,6 +4180,9 @@ async def _run_pipeline_scan():
                     profile_config["_execution_contract"] = execution_contract
 
                 is_futures = getattr(wl, "market_mode", "spot") == "futures"
+
+                from ..services.block_condition_timeframe import prepare_block_candle_inputs
+                assets = await prepare_block_candle_inputs(db, assets, profile_config or {})
 
                 # ── Robust authoritative scoring ─────────────────────
                 # POOL-level watchlists have no score config in their

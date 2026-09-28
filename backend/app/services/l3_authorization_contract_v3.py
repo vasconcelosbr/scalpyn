@@ -508,7 +508,7 @@ def build_feature_registry(asset: dict, *, evaluated_at: datetime) -> list[dict]
     })
     merged = asset.get("_merged_indicators")
     raw_candidates = getattr(merged, "candidates", []) if merged is not None else []
-    for raw in raw_candidates:
+    for raw in [*raw_candidates, *(asset.get("_block_ohlcv_candidates") or [])]:
         if not raw.get("indicator"):
             continue
         registry.append(_registry_candidate(

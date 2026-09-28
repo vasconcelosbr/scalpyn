@@ -18,6 +18,7 @@ from .indicator_validity import RuleStatus, SkipReason, is_valid, log_skipped, u
 from .l3_gate_runtime_policy import KNOWN_UNIMPLEMENTED_INDICATORS
 from .rule_engine import RuleEngine
 from .block_rule_compiler import compile_block_rule
+from .block_condition_timeframe import block_condition_data
 
 logger = logging.getLogger(__name__)
 
@@ -391,7 +392,7 @@ class BlockEngine:
 
         for condition in conditions:
             status, detail = self.rule_engine.evaluate_condition_status(
-                condition, indicators, field_key="indicator"
+                condition, block_condition_data(condition, indicators), field_key="indicator"
             )
             indicator = str(
                 condition.get("indicator")
@@ -476,6 +477,7 @@ class BlockEngine:
             "left": condition.get("left"),
             "right": condition.get("right"),
             "operator": condition.get("operator"),
+            "timeframe": condition.get("timeframe"),
             "expected": expected,
             "actual": detail.get("actual"),
             "result": status == RuleStatus.PASS,

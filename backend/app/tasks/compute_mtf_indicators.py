@@ -160,6 +160,8 @@ def _governed_envelopes(
     capture_contract_version: str,
     source_ingested_at: datetime,
 ) -> dict[str, Any]:
+    from ..services.indicator_calculation_identity import calculation_identities
+    block_identities = calculation_identities(config, results)
     wrapped = envelop_results(results)
     for key, envelope in wrapped.items():
         if not isinstance(envelope, dict):
@@ -182,6 +184,10 @@ def _governed_envelopes(
             "parameters": _parameters_for_indicator(key, config),
             **config_identity,
         })
+        if key in {"adx_slope_3", "higher_highs_5", "bb_upper_distance_pct", "macd_hist_slope_3", "rsi_6"}:
+            identity = block_identities.get(key) or {}
+            envelope["period"] = identity.get("period")
+            envelope["parameters"] = identity.get("parameters", {})
         envelope.pop("envelope_hash", None)
         envelope["envelope_hash"] = canonical_hash(envelope)
     return wrapped

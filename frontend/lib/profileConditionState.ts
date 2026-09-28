@@ -177,6 +177,58 @@ export function updateProfileConditionIndicator<T extends Record<string, any>>(c
   return cleaned as T;
 }
 
+/** An explicit block edit updates candle identities, never live-flow windows. */
+export function setProfileBlockTimeframe<T extends Record<string, any>>(
+  block: T, timeframe: string | undefined, defaultTimeframe: string,
+): T {
+  const effective = timeframe || defaultTimeframe;
+  const conditions = (block.conditions || []).map((raw: Record<string, any>) => {
+    const condition = structuredClone(raw);
+    const comparison = isProfileComparisonCondition(condition);
+    const indicator = profileConditionPrimaryIndicator(condition);
+    const source = condition.source || inferredFeatureSource(indicator, comparison);
+    if (source === "ohlcv") condition.timeframe = effective;
+    if (comparison && condition.resolved_operands) {
+      for (const side of ["left", "right"]) {
+        const operand = condition.resolved_operands[side];
+        if (operand && (operand.source || inferredFeatureSource(condition[side], true)) === "ohlcv") {
+          operand.timeframe = effective;
+        }
+      }
+    }
+    return condition;
+  });
+  return { ...block, timeframe, conditions };
+}
+
+export function blockConditionHasTimeframe(condition: Record<string, any>): boolean {
+  return profileTemporalIdentity(condition).showTimeframe
+    || profileConditionPrimaryIndicator(condition) === "bb_upper_distance_pct";
+}
+
+/** Canonical Boolean selectors also render imported equality predicates correctly. */
+export function profileBooleanSelection(condition: Record<string, any>): string {
+  if (condition.operator === "is_false") return "false";
+  if (condition.operator === "is_true") return "true";
+  if (typeof condition.value !== "boolean") return "";
+  return String(condition.operator === "!=" ? !condition.value : condition.value);
+}
+
+/** Calculation defaults come from the same editable config as FeatureEngine. */
+export function withProfileCalculationIdentities(policies: ProfileSourcePolicies, indicators: Record<string, any>): ProfileSourcePolicies {
+  const identities: Record<string, any> = {};
+  if (indicators.adx?.period) identities.adx_slope_3 = { period: indicators.adx.period };
+  if (indicators.macd?.fast && indicators.macd?.slow && indicators.macd?.signal) {
+    identities.macd_hist_slope_3 = { period: indicators.macd.fast, parameters: {
+      fast: indicators.macd.fast, slow: indicators.macd.slow, signal: indicators.macd.signal,
+    } };
+  }
+  if (indicators.bollinger?.period && indicators.bollinger?.deviation) {
+    identities.bb_upper_distance_pct = { period: indicators.bollinger.period, parameters: { deviation: indicators.bollinger.deviation } };
+  }
+  return { ...policies, ohlcv: { ...policies.ohlcv, calculation_identities: identities } };
+}
+
 /** Presentation of configured identity, never a claim of live data availability. */
 export function profileTemporalIdentity(
   condition: Record<string, any>,
@@ -210,7 +262,7 @@ export function profileTemporalIdentity(
       detail: window != null ? `${provenance}. Janela configurada: ${window} s; suporte do produtor não confirmado.` : provenance };
   }
   if (source === "ohlcv") {
-    const timeframe = reference.timeframe || condition.timeframe || policy.timeframe || defaultTimeframe;
+    const timeframe = reference.timeframe || condition.timeframe || defaultTimeframe || policy.timeframe;
     const candlePolicy = reference.candle_policy || policy.candle_policy;
     const candleLabel = candlePolicy === "CLOSED_ONLY" ? "Candles fechados" : candlePolicy === "CURRENT_ALLOWED" ? "Candle atual permitido" : "Política de candle não definida";
     return { ...base, showTimeframe: !STRATEGY_PROFILE_INDICATOR_MAP.get(indicator)?.noTimeframe,
@@ -262,6 +314,10 @@ function conditionIdentity(
 
   if (source === "ohlcv") {
     const catalog = STRATEGY_PROFILE_INDICATOR_MAP.get(indicator);
+    const calculation = (policy.calculation_identities as Record<string, any> | undefined)?.[indicator];
+    if (policy.calculation_identities && !calculation
+      && ["adx_slope_3", "macd_hist_slope_3", "bb_upper_distance_pct"].includes(indicator)
+      && condition.period == null) issues.push(`${path}.calculation_config`);
     // Only an explicit producer contract permits removing saved identity.
     // Missing UI defaults do not invalidate MACD/VWAP parameters or slope periods.
     if (catalog?.calculationIdentity === "indicator_name") {
@@ -271,10 +327,10 @@ function conditionIdentity(
       // The editor's shared period belongs to the left operand; the right
       // operand must retain its own calculation identity.
       const configuredPeriod = (comparisonOperand === "right" ? undefined : condition.period)
-        ?? reference.period ?? catalog?.fixedPeriod ?? catalog?.defaultPeriod;
+        ?? reference.period ?? catalog?.fixedPeriod ?? calculation?.period ?? catalog?.defaultPeriod;
       if (configuredPeriod !== undefined) reference.period = configuredPeriod;
       const configuredParameters = (comparisonOperand === "right" ? undefined : condition.parameters)
-        ?? reference.parameters ?? catalog?.defaultParameters;
+        ?? reference.parameters ?? calculation?.parameters ?? catalog?.defaultParameters;
       if (configuredParameters !== undefined) reference.parameters = configuredParameters;
     }
     reference.timeframe = condition.timeframe || reference.timeframe || policy.timeframe || defaultTimeframe;
@@ -652,8 +708,8 @@ export function prepareProfileBlockRuleIdentities<T extends Record<string, any>>
       conditions: _materializeConditionIdentities(
         block.conditions || [],
         currentFeatureCounts,
-        policies,
-        defaultTimeframe,
+        { ...policies, ohlcv: { ...policies.ohlcv, timeframe: block.timeframe || defaultTimeframe || policies.ohlcv?.timeframe } },
+        block.timeframe || defaultTimeframe,
         `block_rules.blocks[${blockIndex}].conditions`,
         issues,
       ),
