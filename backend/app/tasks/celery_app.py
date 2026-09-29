@@ -798,12 +798,11 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.radar_auto_discover.purge_audit",
         "schedule": 60.0,
     },
-    # Pump Monitor observation cycle (D2: 30 s). A missed tick is dropped,
-    # never queued behind the next one.
+    # Pump Monitor observation cycle (D2: 30 s). Expiry comes from the
+    # backlog guard below; the cycle is idempotent, so a late run is harmless.
     "pump_monitor_cycle": {
         "task": "app.tasks.pump_monitor.cycle",
         "schedule": float(os.environ.get("PUMP_MONITOR_INTERVAL_S", 30)),
-        "options": {"expires": float(os.environ.get("PUMP_MONITOR_INTERVAL_S", 30)) - 5},
     },
     "pump_monitor_retention": {
         "task": "app.tasks.pump_monitor.purge",
