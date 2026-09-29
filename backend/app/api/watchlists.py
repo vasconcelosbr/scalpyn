@@ -788,6 +788,60 @@ def _wl_to_dict(
     }
 
 
+_CONTRACT_SECTION_TRACE_TYPE = {
+    "filters": "filter",
+    "signals": "signal",
+    "entry_triggers": "entry_trigger",
+    "global_entry_triggers": "entry_trigger",
+    "block_rules": "block_rule",
+}
+
+
+def _contract_expected_text(expected: Any) -> Optional[str]:
+    if isinstance(expected, dict):
+        if expected.get("min") is not None or expected.get("max") is not None:
+            return f"{expected.get('min')} – {expected.get('max')}"
+        if "value" in expected:
+            return str(expected["value"])
+        return None
+    return None if expected is None else str(expected)
+
+
+def _contract_trace_item(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Shape one L3 contract feature evaluation like the approved/rejected UI trace.
+
+    The contract names sections in the plural and, for block rules, reports
+    whether the *condition* held (PASS = condition true = block tripped). The
+    UI expects singular trace types and PASS/OK for a block that did not trip.
+    """
+    trace_type = _CONTRACT_SECTION_TRACE_TYPE.get(str(item.get("section")), "signal")
+    status = str(item.get("status") or "")
+    expected = _contract_expected_text(item.get("expected", item.get("target")))
+    reason_codes = item.get("reason_codes") or []
+    shaped: Dict[str, Any] = {
+        "type": trace_type,
+        "indicator": item.get("indicator"),
+        "name": item.get("indicator"),
+        "current_value": item.get("actual"),
+        "expected": expected,
+        "condition": " ".join(
+            str(part) for part in (item.get("indicator"), item.get("operator"), expected)
+            if part not in (None, "")
+        ),
+    }
+    if status not in ("PASS", "FAIL"):
+        shaped.update(status="SKIPPED", reason=",".join(reason_codes) or status or None)
+        if trace_type == "block_rule":
+            shaped.update(outcome="SKIPPED", condition_matched=None)
+    elif trace_type == "block_rule":
+        tripped = status == "PASS"
+        shaped.update(status="FAIL" if tripped else "PASS",
+                      outcome="TRIPPED" if tripped else "OK", condition_matched=tripped)
+    else:
+        shaped["status"] = status
+    return shaped
+
+
 def _asset_to_dict(a: PipelineWatchlistAsset, indicators: Optional[Dict[str, Any]] = None, meta: Optional[Dict[str, Any]] = None, override_score: Optional[float] = None) -> Dict[str, Any]:
     ind = indicators or {}
     mt  = meta or {}
@@ -2696,13 +2750,7 @@ async def get_watchlist_assets(
         _asset_column_keys = [column.key for column in PipelineWatchlistAsset.__table__.columns]
         for contribution in contributions:
             auth = contribution.authorization
-            trace = [{
-                "type": item.get("section", "signal"),
-                "indicator": item.get("indicator"), "name": item.get("indicator"),
-                "status": item.get("status"), "current_value": item.get("actual"),
-                "expected": item.get("expected", item.get("target")),
-                "condition": item.get("operator", ""),
-            } for item in auth["_trace"]]
+            trace = [_contract_trace_item(item) for item in auth["_trace"]]
             snapshot = build_analysis_snapshot(
                 symbol=contribution.symbol, stage="L3", profile_id=str(wl.profile_id),
                 status="approved", trace=trace, timestamp=auth["evaluated_at"])
