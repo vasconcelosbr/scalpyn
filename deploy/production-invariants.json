@@ -2137,7 +2137,7 @@
         {
           "path": "backend/tests/test_pump_monitor.py",
           "contains_all": [
-            "test_cp5_twenty_cycles_at_the_top_n_boundary_produce_zero_flapping",
+            "test_cp5_score_oscillating_around_min_score_produces_zero_flapping",
             "test_execution_universes_filter_observation_only_pools"
           ]
         }
