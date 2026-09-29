@@ -507,8 +507,17 @@ def build_feature_registry(asset: dict, *, evaluated_at: datetime) -> list[dict]
         "normalized_symbol": normalize_symbol(asset.get("symbol")),
     })
     merged = asset.get("_merged_indicators")
-    raw_candidates = getattr(merged, "candidates", []) if merged is not None else []
-    for raw in [*raw_candidates, *(asset.get("_block_ohlcv_candidates") or [])]:
+    raw_candidates = list(getattr(merged, "candidates", []) if merged is not None else [])
+    # Block inputs re-read the indicator store for the block timeframe; when
+    # that equals the merged timeframe the very same row comes back. A re-read
+    # is not a second producer, so it must not make the identity ambiguous.
+    # Distinct observations (other clock, value or scheduler_group) still are.
+    merged_rows = {canonical_hash(raw) for raw in raw_candidates}
+    block_rows = [
+        raw for raw in asset.get("_block_ohlcv_candidates") or []
+        if canonical_hash(raw) not in merged_rows
+    ]
+    for raw in [*raw_candidates, *block_rows]:
         if not raw.get("indicator"):
             continue
         registry.append(_registry_candidate(
