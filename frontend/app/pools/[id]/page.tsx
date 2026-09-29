@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { ChevronLeft, Plus, Trash2, Save, Loader2, Search, ListPlus } from "lucide-react";
 import { apiFetch, apiGet, apiPost, apiDelete } from "@/lib/api";
 import AddCryptosModal from "@/components/pools/AddCryptosModal";
+import RadarFeedHistory from "@/components/pools/RadarFeedHistory";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface Pool {
@@ -638,6 +639,7 @@ export default function PoolConfigPage() {
       )}
 
       {/* ── Asset List ── */}
+      {pool && marketType === "spot" && <RadarFeedHistory poolId={id} poolName={pool.name} />}
       <div className="card">
         <div className="card-header">
           <h3>Assets</h3>

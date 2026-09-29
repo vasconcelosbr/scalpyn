@@ -2050,6 +2050,51 @@
           ]
         }
       ]
+    },
+    {
+      "id": "radar-feed-audit-seven-days",
+      "description": "Radar API receipt audit stays isolated from trading, with seven-day retention and owner-scoped history",
+      "files": [
+        {
+          "path": "backend/app/services/radar_feed_audit.py",
+          "contains_all": [
+            "RADAR_FEED_AUDIT",
+            "RETENTION = timedelta(days=7)",
+            "async def purge_expired"
+          ]
+        },
+        {
+          "path": "backend/app/tasks/radar_auto_discover.py",
+          "contains_all": [
+            "record_receipt",
+            "complete_receipt",
+            "app.tasks.radar_auto_discover.purge_audit"
+          ]
+        },
+        {
+          "path": "backend/app/api/pools.py",
+          "contains_all": [
+            "/{pool_id}/radar-history",
+            "Pool.user_id == user_id",
+            "Receipt.expires_at > now"
+          ]
+        },
+        {
+          "path": "frontend/components/pools/RadarFeedHistory.tsx",
+          "contains_all": [
+            "Histórico da API",
+            "source_updated_at_display",
+            "received_at_display"
+          ]
+        },
+        {
+          "path": "backend/tests/test_radar_feed_audit.py",
+          "contains_all": [
+            "test_retention_hides_expired_then_deletes_parent_and_items",
+            "test_audit_failure_cannot_stop_existing_reconciliation"
+          ]
+        }
+      ]
     }
   ]
 }

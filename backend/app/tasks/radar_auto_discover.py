@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 
 
 from ..tasks.celery_app import celery_app
@@ -90,6 +91,7 @@ async def _radar_sync_async():
     from ..services.ai_keys_service import get_decrypted_api_key
     from ..services.radar_service import fetch_top_assets, RadarFeedUnavailable
     from ..services.radar_pool_sync import reconcile_radar_pool
+    from ..services.radar_feed_audit import record_receipt, complete_receipt
     from ..utils.symbol_filters import is_excluded_asset
     from sqlalchemy import select
 
@@ -104,9 +106,11 @@ async def _radar_sync_async():
     pools = await run_db_task(_load_pools, celery=True)
     total_added = total_removed = processed = 0
     feeds = {}
+    receipts = {}
     for pool in pools:
         user_id = pool["user_id"]
         if user_id not in feeds:
+            assets = None
             try:
                 async def _load_key(db, uid=user_id):
                     return await get_decrypted_api_key(db, uid, "radar")
@@ -123,12 +127,30 @@ async def _radar_sync_async():
                 # Log only the type: provider errors may include request details.
                 logger.warning("Radar fetch unavailable: %s", type(exc).__name__)
                 feeds[user_id] = (None, "fetch_failed")
+            receipts[user_id] = (assets, datetime.now(timezone.utc))
         pairs, reason = feeds[user_id]
+        receipt_id = None
+        if reason is None:
+            receipt_assets, received_at = receipts[user_id]
+        else:
+            receipt_assets, received_at = None, receipts[user_id][1]
+        try:
+            async def _audit(db):
+                return await record_receipt(db, pool_id=pool["id"],
+                    assets=receipt_assets, received_at=received_at,
+                    selected_pairs=pairs or set(), reason=reason)
+            receipt_id = await run_db_task(_audit, celery=True)
+        except Exception:
+            logger.exception("Radar audit receipt failed for pool=%s", pool["id"])
+        reconciled = False
+        skipped = False
         try:
             async def _persist(db, p=pool, selection=pairs, failure=reason):
                 return await reconcile_radar_pool(db, pool_id=p["id"],
                     user_id=p["user_id"], radar_pairs=selection, reason=failure)
             stats = await run_db_task(_persist, celery=True)
+            reconciled = True
+            skipped = stats.get("skipped", False)
             total_added += stats["added"]
             total_removed += stats["removed"]
             processed += 1
@@ -136,7 +158,21 @@ async def _radar_sync_async():
                         reason or "healthy", stats)
         except Exception:
             logger.exception("Radar reconciliation failed for pool=%s", pool["id"])
+        if receipt_id is not None and reason is None:
+            try:
+                async def _complete(db):
+                    await complete_receipt(db, receipt_id, reconciled=reconciled, skipped=skipped)
+                await run_db_task(_complete, celery=True)
+            except Exception:
+                logger.exception("Radar audit reconciliation observation failed for pool=%s", pool["id"])
     return f"{processed} pools | +{total_added} -{total_removed}"
+
+
+@celery_app.task(name="app.tasks.radar_auto_discover.purge_audit")
+def purge_audit():
+    from ..database import run_db_task
+    from ..services.radar_feed_audit import purge_expired
+    return _run_async(run_db_task(purge_expired, celery=True))
 
 
 @celery_app.task(name="app.tasks.radar_auto_discover.sync")
