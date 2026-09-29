@@ -171,6 +171,7 @@ async def _collect_symbol(symbol: str, minutes: List[int], config: Dict[str, Any
         fm.bucket_trades(raw["trades"]), minutes,
         covered_from_ms=raw["covered_from_ms"], source=raw["source"],
         gap_reason=raw["gap_reason"], alive_slots=raw.get("alive_slots"),
+        gap_windows=raw.get("gap_windows") or (),
     )
     book = await market_data_service.fetch_raw_orderbook(symbol, int(config["book"]["limit"]))
     if book:

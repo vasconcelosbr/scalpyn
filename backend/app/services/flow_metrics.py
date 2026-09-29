@@ -130,21 +130,29 @@ def materialize_buckets(
     alive_slots: Optional[set] = None,
     slot_seconds: int = 10,
     bucket_seconds: int = 60,
+    gap_windows: Iterable[tuple] = (),
 ) -> List[Dict[str, Any]]:
     """Turn traded buckets into one row per closed minute with coverage flags.
 
     A minute is complete only when the source is known to hold every trade
-    of it: it starts at/after ``covered_from_ms`` and, for the WebSocket
-    path (``alive_slots`` given), the stream delivered frames in every
-    ``slot_seconds`` slot of that minute. A complete minute without trades
-    is a real zero-flow bucket; anything else is ``partial`` with a reason.
+    of it: it starts at/after ``covered_from_ms``, it does not overlap any
+    known gap window (``(start_ms, end_ms, reason)``, e.g. a WS leader
+    handover) and, for the WebSocket path (``alive_slots`` given), the
+    stream delivered frames in every ``slot_seconds`` slot of that minute.
+    A complete minute without trades is a real zero-flow bucket; anything
+    else is ``partial`` with a reason.
     """
+    windows = list(gap_windows or ())
     rows = []
     for start in minutes:
         start = int(start)
+        end = start + bucket_seconds * 1000
         reason = None
+        overlap = next((w for w in windows if w[0] < end and w[1] > start), None)
         if covered_from_ms is None or start < covered_from_ms:
             reason = gap_reason or "not_covered"
+        elif overlap is not None:
+            reason = overlap[2]
         elif alive_slots is not None:
             first = start // 1000
             slots = range(first, first + bucket_seconds, slot_seconds)
