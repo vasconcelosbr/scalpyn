@@ -233,6 +233,7 @@ TASK_ROUTES = {
     # per-symbol locks — so it does not reintroduce the contention that
     # justified giving structural_collect single-tenant status.
     "app.tasks.radar_auto_discover.sync":                {"queue": QUEUE_STRUCTURAL_COLLECT},
+    "app.tasks.radar_auto_discover.purge_audit":         {"queue": QUEUE_STRUCTURAL_COLLECT},
     "app.tasks.fetch_market_caps.fetch_market_caps":     {"queue": QUEUE_STRUCTURAL},
     "app.tasks.macro_regime_update.update":              {"queue": QUEUE_STRUCTURAL},
     "app.tasks.symbol_health_audit.monitor_only":        {"queue": QUEUE_STRUCTURAL},
@@ -779,6 +780,10 @@ celery_app.conf.beat_schedule = {
     # own per-minute granularity.
     "radar_auto_discover_60s": {
         "task": "app.tasks.radar_auto_discover.sync",
+        "schedule": 60.0,
+    },
+    "radar_feed_audit_retention": {
+        "task": "app.tasks.radar_auto_discover.purge_audit",
         "schedule": 60.0,
     },
     # Buy execution cycle every 60 seconds
