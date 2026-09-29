@@ -498,6 +498,9 @@ def _derived_candle_candidates(registry: list[dict]) -> list[dict]:
     return [c for c in results if not any(observation(c) == observation(r) for r in registry)]
 
 
+_READ_TIME_FIELDS = frozenset({"age_seconds", "stale"})
+
+
 def build_feature_registry(asset: dict, *, evaluated_at: datetime) -> list[dict]:
     """Return immutable candidates without consulting the legacy flat map."""
     registry: list[dict] = []
@@ -512,10 +515,15 @@ def build_feature_registry(asset: dict, *, evaluated_at: datetime) -> list[dict]
     # that equals the merged timeframe the very same row comes back. A re-read
     # is not a second producer, so it must not make the identity ambiguous.
     # Distinct observations (other clock, value or scheduler_group) still are.
-    merged_rows = {canonical_hash(raw) for raw in raw_candidates}
+    # Age and staleness are computed at read time, so two reads of one row
+    # differ only there; they are excluded from the row key.
+    def row_key(raw: dict) -> str:
+        return canonical_hash({k: v for k, v in raw.items() if k not in _READ_TIME_FIELDS})
+
+    merged_rows = {row_key(raw) for raw in raw_candidates}
     block_rows = [
         raw for raw in asset.get("_block_ohlcv_candidates") or []
-        if canonical_hash(raw) not in merged_rows
+        if row_key(raw) not in merged_rows
     ]
     for raw in [*raw_candidates, *block_rows]:
         if not raw.get("indicator"):

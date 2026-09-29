@@ -754,9 +754,11 @@ def test_resolver_rejects_ambiguous_exact_feature_identity():
 def test_block_input_reread_of_a_merged_row_is_not_a_second_provenance():
     # prepare_block_candle_inputs re-reads the block timeframe; when it equals
     # the merged timeframe the same row lands in _block_ohlcv_candidates too.
+    # The re-read happens later, so merge_indicator_rows stamps a larger age
+    # (and possibly stale) on the very same row -- production 2026-09-29.
     asset = _asset()
     rsi_row = asset["_merged_indicators"].candidates[1]
-    asset["_block_ohlcv_candidates"] = [dict(rsi_row)]
+    asset["_block_ohlcv_candidates"] = [dict(rsi_row, age_seconds=7.5, stale=True)]
     registry = build_feature_registry(asset, evaluated_at=NOW)
     assert len([c for c in registry if c["indicator"] == "rsi"]) == 1
     condition = {"id": "reread-rsi", "indicator": "rsi", "operator": ">",
