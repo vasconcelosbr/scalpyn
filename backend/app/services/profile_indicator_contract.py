@@ -62,9 +62,34 @@ PROFILE_INDICATOR_CONTRACT.update({
     "macd_hist_slope_5": _contract(sections={"entry_triggers"}),
     "rsi_slope_3": _contract(sections={"block_rules"}),
     "entry_exhaustion_score": _contract(sections={"block_rules"}),
-    "rsi_6": _contract(sections={"block_rules"}, fixed_period=6),
+    # The producer computes RSI 14 as ``rsi`` and RSI 6 as ``rsi_6``; any
+    # other ``rsi`` period has no producer (see canonical_rsi_indicator).
+    "rsi": _contract(fixed_period=14),
+    "rsi_6": _contract(fixed_period=6),
     "breakout_distance_pct": _contract(requires_reference_window=True),
 })
+
+
+def canonical_rsi_indicator(indicator: Any, period: Any) -> Any:
+    """Map ``rsi`` + period N to the produced ``rsi_N`` series.
+
+    Only ``rsi`` (period 14) and ``rsi_N`` names with a matching fixed period
+    in this contract are produced. ``rsi`` with another period used to be
+    evaluated as RSI 14 by the legacy engines and rejected by the L3 contract
+    (FEATURE_IDENTITY_NOT_AVAILABLE). Unproduced periods are left untouched so
+    the validators keep reporting them.
+    """
+    if indicator != "rsi" or period is None or isinstance(period, bool):
+        return indicator
+    try:
+        wanted = int(period)
+    except (TypeError, ValueError):
+        return indicator
+    candidate = f"rsi_{wanted}"
+    contract = PROFILE_INDICATOR_CONTRACT.get(candidate)
+    if contract is not None and contract.get("fixed_period") == wanted:
+        return candidate
+    return indicator
 
 
 def _issue(code: str, path: str, message: str) -> Dict[str, str]:
