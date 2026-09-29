@@ -578,6 +578,15 @@ class MarketDataService:
             logger.error(f"Failed to fetch tickers: {e}")
             return []
 
+    async def fetch_raw_orderbook(self, symbol: str, limit: int) -> Optional[Dict[str, Any]]:
+        """Raw Gate spot book ``{bids, asks, _observed_at}`` with ``limit`` levels.
+
+        Used by the Pump Monitor for per-side depth bands and slippage
+        simulation; shares the resilient/cached fetch path of the other
+        book consumers (cache key is per ``limit``).
+        """
+        return await self._fetch_gate_orderbook(self.normalize_symbol(symbol), int(limit))
+
     async def fetch_orderbook_metrics(self, symbol: str, depth: int = 10) -> Dict[str, Any]:
         """Fetch orderbook for a symbol and compute spread_pct and orderbook_depth_usdt.
 

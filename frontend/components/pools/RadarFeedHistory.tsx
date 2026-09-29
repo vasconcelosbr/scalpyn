@@ -19,7 +19,9 @@ const states: Record<string, string> = {
   SYNC_FAILED: "Falha na sincronização", SKIPPED: "Sincronização não realizada",
 };
 
-export default function RadarFeedHistory({ poolId, poolName }: { poolId: string; poolName: string }) {
+const SOURCE_TITLES: Record<string, string> = { radar: "Histórico da API", pump_monitor: "Histórico do Pump Monitor" };
+
+export default function RadarFeedHistory({ poolId, poolName, source = "radar" }: { poolId: string; poolName: string; source?: "radar" | "pump_monitor" }) {
   const [data, setData] = useState<History | null>(null);
   const [search, setSearch] = useState("");
   const [symbol, setSymbol] = useState("");
@@ -32,15 +34,15 @@ export default function RadarFeedHistory({ poolId, poolName }: { poolId: string;
     let active = true;
     setBusy(true);
     setError("");
-    apiGet<History>(`/pools/${poolId}/radar-history?limit=50&offset=${offset}&symbol=${encodeURIComponent(symbol)}`)
+    apiGet<History>(`/pools/${poolId}/radar-history?limit=50&offset=${offset}&symbol=${encodeURIComponent(symbol)}&source=${source}`)
       .then(result => { if (active) setData(result); })
       .catch(() => { if (active) { setData(null); setError("Não foi possível consultar o histórico."); } })
       .finally(() => { if (active) setBusy(false); });
     return () => { active = false; };
-  }, [poolId, symbol, offset, revision]);
+  }, [poolId, symbol, offset, revision, source]);
 
-  return <section className="card" aria-label="Histórico da API do Radar">
-    <div className="card-header"><h3>Histórico da API · {poolName}</h3>
+  return <section className="card" aria-label={`${SOURCE_TITLES[source]} · ${poolName}`}>
+    <div className="card-header"><h3>{SOURCE_TITLES[source]} · {poolName}</h3>
       <button type="button" className="btn btn-secondary" onClick={reload} disabled={busy}>Atualizar histórico</button>
     </div>
     <div style={{ padding: "16px" }}>

@@ -228,13 +228,15 @@ async def _evaluate_async():
                 # by the gate — not the active∖tradable diff.
                 from ..services.execution_gate_metrics import record_not_tradable
 
-                pool_rows_res = await db.execute(text("""
+                from ..services.pool_service import EXECUTION_POOL_PREDICATE_SQL
+                pool_rows_res = await db.execute(text(f"""
                     SELECT pc.symbol,
                            bool_or(pc.is_tradable) AS is_tradable
                       FROM pool_coins pc
                       JOIN pools p ON p.id = pc.pool_id
                      WHERE pc.is_active = true
                        AND p.user_id    = :uid
+                       AND {EXECUTION_POOL_PREDICATE_SQL}
                   GROUP BY pc.symbol
                 """), {"uid": user.id})
                 pool_rows = pool_rows_res.fetchall()

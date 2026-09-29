@@ -373,13 +373,15 @@ async def _execute_buy_cycle_async() -> dict:
                 # ordering the unbounded SQL ``LIMIT`` could return
                 # only ``is_tradable=false`` rows and drop every
                 # tradable symbol from this user's evaluation cycle.
-                pool_rows_res = await db.execute(text("""
+                from ..services.pool_service import EXECUTION_POOL_PREDICATE_SQL
+                pool_rows_res = await db.execute(text(f"""
                     SELECT pc.symbol,
                            bool_or(pc.is_tradable) AS is_tradable
                       FROM pool_coins pc
                       JOIN pools p ON p.id = pc.pool_id
                      WHERE pc.is_active = true
                        AND p.user_id    = :uid
+                       AND {EXECUTION_POOL_PREDICATE_SQL}
                   GROUP BY pc.symbol
                   ORDER BY bool_or(pc.is_tradable) DESC, pc.symbol ASC
                      LIMIT :cap

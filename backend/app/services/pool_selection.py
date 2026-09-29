@@ -169,4 +169,7 @@ def is_auto_discovery_enabled(overrides: dict[str, Any] | None) -> bool:
     """
     if (overrides or {}).get("radar_enabled") is True:
         return False
+    # A pool fed by the Pump Monitor is likewise driven only by that feed.
+    if (overrides or {}).get("pump_monitor_sync_enabled") is True:
+        return False
     return (overrides or {}).get("auto_refresh") is True

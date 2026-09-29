@@ -27,6 +27,7 @@ import {
   Radio,
   Workflow,
   Radar,
+  Flame,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -54,6 +55,7 @@ export const TRADING_ITEMS: NavItem[] = [
   { name: "Diagnóstico ao vivo", href: "/trading-desk/diagnostics", icon: Activity },
   { name: "Reports", href: "/reports", icon: FileText },
   { name: "Pools", href: "/pools", icon: Layers },
+  { name: "Pump Monitor", href: "/pump-monitor", icon: Flame },
   { name: "Profiles", href: "/profiles", icon: Sliders },
 ];
 

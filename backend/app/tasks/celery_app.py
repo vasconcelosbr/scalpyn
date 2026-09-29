@@ -94,11 +94,15 @@ QUEUE_PUMP_RADAR = "pump_radar"
 # the lighter, high-frequency tasks that stay on QUEUE_STRUCTURAL.
 QUEUE_STRUCTURAL_COLLECT = "structural_collect"
 QUEUE_STRUCTURAL_SCAN = "structural_scan"
+# Pump Monitor 30 s observation cycle — isolated so it never waits behind
+# the 5 m indicator chain or the hour-long pump_radar backfills.
+QUEUE_PUMP_MONITOR = "pump_monitor"
 
 ALL_QUEUES = (
     QUEUE_MICROSTRUCTURE, QUEUE_STRUCTURAL, QUEUE_STRUCTURAL_COMPUTE,
     QUEUE_EXECUTION, QUEUE_AI_ORCHESTRATION, QUEUE_RESEARCH_OHLCV,
     QUEUE_PUMP_RADAR, QUEUE_STRUCTURAL_COLLECT, QUEUE_STRUCTURAL_SCAN,
+    QUEUE_PUMP_MONITOR,
 )
 
 _ALL_TASK_MODULES = (
@@ -144,6 +148,7 @@ _ALL_TASK_MODULES = (
         "app.tasks.governed_cache_reconciliation",
         "app.tasks.entry_risk_capture",
         "app.tasks.pump_radar",
+        "app.tasks.pump_monitor",
 )
 
 
@@ -166,6 +171,8 @@ def _configured_task_modules() -> tuple[str, ...]:
         )
     if queues == (QUEUE_PUMP_RADAR,):
         return ("app.tasks.pump_radar",)
+    if queues == (QUEUE_PUMP_MONITOR,):
+        return ("app.tasks.pump_monitor",)
     return _ALL_TASK_MODULES
 
 
@@ -270,6 +277,9 @@ TASK_ROUTES = {
     "app.tasks.pump_radar.build_controls":               {"queue": QUEUE_PUMP_RADAR},
     "app.tasks.pump_radar.statistics":                   {"queue": QUEUE_PUMP_RADAR},
     "app.tasks.pump_radar.reap_stale_assets":            {"queue": QUEUE_PUMP_RADAR},
+    # Pump Monitor — observation only, own queue/worker.
+    "app.tasks.pump_monitor.cycle":                      {"queue": QUEUE_PUMP_MONITOR},
+    "app.tasks.pump_monitor.purge":                      {"queue": QUEUE_PUMP_MONITOR},
 
     # Decision Log Enricher (Module 1)
     "app.tasks.decision_log_enricher.enrich":            {"queue": QUEUE_STRUCTURAL},
@@ -521,6 +531,8 @@ TASK_ANNOTATIONS = {
     "app.tasks.pump_radar.build_controls": {"time_limit": 900, "soft_time_limit": 840, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.pump_radar.statistics": {"time_limit": 600, "soft_time_limit": 540, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.pump_radar.reap_stale_assets": {"time_limit": 120, "soft_time_limit": 90, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.pump_monitor.cycle": {"time_limit": 60, "soft_time_limit": 50, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.pump_monitor.purge": {"time_limit": 300, "soft_time_limit": 270, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
 
     # Decision Log Enricher (Module 1)
     "app.tasks.decision_log_enricher.enrich":            {**_STRUCTURAL_GUARDS, "rate_limit": "6/m"},
@@ -785,6 +797,16 @@ celery_app.conf.beat_schedule = {
     "radar_feed_audit_retention": {
         "task": "app.tasks.radar_auto_discover.purge_audit",
         "schedule": 60.0,
+    },
+    # Pump Monitor observation cycle (D2: 30 s). Expiry comes from the
+    # backlog guard below; the cycle is idempotent, so a late run is harmless.
+    "pump_monitor_cycle": {
+        "task": "app.tasks.pump_monitor.cycle",
+        "schedule": float(os.environ.get("PUMP_MONITOR_INTERVAL_S", 30)),
+    },
+    "pump_monitor_retention": {
+        "task": "app.tasks.pump_monitor.purge",
+        "schedule": 3600.0,
     },
     # Buy execution cycle every 60 seconds
     "execute_buy_cycle": {

@@ -20,6 +20,7 @@ from .api import (
     strategy_settings,
     indicator_registry,
     pools,
+    pump_monitor,
     exchanges,
     decisions,
     market,
@@ -396,6 +397,7 @@ app.include_router(custom_watchlists.router)
 app.include_router(trades.router)
 app.include_router(orders.router)
 app.include_router(pools.router)
+app.include_router(pump_monitor.router)
 app.include_router(exchanges.router)
 
 # Trading Engines

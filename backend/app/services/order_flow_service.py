@@ -458,6 +458,108 @@ async def _read_buffer(
     return result
 
 
+def _parse_buffer_member(raw) -> Optional[Dict[str, Any]]:
+    """Decode one ``trades_buffer`` member into a raw trade dict.
+
+    Member layout (see ``event_handlers.handle_spot_trades``):
+    ``{"s","a","t"[,"p"]}|<trade_id>`` — the suffix is the exchange trade id
+    when the frame carried one, otherwise ``<ts>|<counter>``.
+    """
+    try:
+        text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+        cut = text.find("}|")
+        payload_str, suffix = (text[:cut + 1], text[cut + 2:]) if cut > 0 else (text, "")
+        t = json.loads(payload_str)
+    except (UnicodeDecodeError, ValueError):
+        return None
+    trade_id = suffix if suffix and "|" not in suffix else None
+    return {
+        "trade_id": trade_id,
+        "side": t.get("s"),
+        "amount": t.get("a"),
+        "price": t.get("p"),
+        "ts_ms": t.get("t"),
+    }
+
+
+async def read_raw_trades(symbol: str, since_ms: float, market_type: str = "spot") -> Dict[str, Any]:
+    """Raw trades since ``since_ms`` for minute bucketing (Pump Monitor).
+
+    Returns ``{"trades", "covered_from_ms", "source", "gap_reason"}``.
+    ``covered_from_ms`` is the earliest instant from which the returned list
+    is known to contain *every* trade; minutes before it are not covered.
+    ``gap_reason`` is set when coverage is uncertain for the whole range
+    (recent WS leader handover, capped buffer, REST cap).
+    """
+    from .redis_client import get_async_redis
+    from ..exchange_adapters.gate_adapter import GateAdapter
+
+    pair = GateAdapter._normalize_symbol(symbol)
+    key = f"trades_buffer:{market_type}:{pair}"
+    now_ms = time.time() * 1000.0
+    redis = None
+    try:
+        redis = await get_async_redis()
+    except Exception as exc:
+        logger.debug("[OrderFlow] redis client unavailable: %s", exc)
+
+    if redis is not None:
+        try:
+            members = await redis.zrangebyscore(key, since_ms, now_ms)
+            earliest = await redis.zrange(key, 0, 0, withscores=True)
+            size = await redis.zcard(key)
+        except Exception as exc:
+            logger.warning("[OrderFlow] raw buffer read failed for %s: %s", symbol, exc)
+            members, earliest, size = [], [], 0
+        if members:
+            from ..websocket.event_handlers import TRADE_BUFFER_TTL_SECONDS, _trades_buffer_max_per_symbol
+            trades = [t for t in (_parse_buffer_member(m) for m in members) if t]
+            earliest_ms = float(earliest[0][1]) if earliest else None
+            # The buffer keeps every trade younger than its TTL unless the
+            # per-symbol cap evicted older ones first.
+            capped = size >= _trades_buffer_max_per_symbol()
+            covered_from = earliest_ms if capped else now_ms - TRADE_BUFFER_TTL_SECONDS * 1000.0
+            gap_reason = None
+            handover_age = await _read_handover_age(redis)
+            if handover_age is not None:
+                covered_from = max(covered_from, now_ms - handover_age * 1000.0)
+                gap_reason = "ws_leader_handover"
+            alive_slots = None
+            if market_type == "spot":
+                from ..websocket.event_handlers import WS_ALIVE_KEY
+                try:
+                    raw_slots = await redis.zrangebyscore(WS_ALIVE_KEY, since_ms / 1000.0, now_ms / 1000.0)
+                    alive_slots = {int(float(s.decode() if isinstance(s, bytes) else s)) for s in raw_slots}
+                except Exception as exc:
+                    logger.debug("[OrderFlow] WS liveness read failed: %s", exc)
+            return {"trades": trades, "covered_from_ms": covered_from,
+                    "source": f"gate_trades_ws_{market_type}", "gap_reason": gap_reason,
+                    "alive_slots": alive_slots}
+
+    # REST fallback: GET /spot/trades returns the newest trades first.
+    try:
+        rows = await GateAdapter._public_get(
+            f"{GateAdapter.SPOT_BASE}/spot/trades",
+            params={"currency_pair": pair, "limit": "1000"},
+        )
+    except Exception as exc:
+        logger.warning("[OrderFlow] REST raw trades failed for %s: %s", symbol, exc)
+        return {"trades": [], "covered_from_ms": None, "source": "rest_fallback",
+                "gap_reason": "trades_unavailable"}
+    trades = [{
+        "trade_id": r.get("id"), "side": r.get("side"), "amount": r.get("amount"),
+        "price": r.get("price"), "ts_ms": float(r.get("create_time_ms") or 0) or None,
+    } for r in rows or []]
+    stamped = [t["ts_ms"] for t in trades if t["ts_ms"]]
+    covered_from = min(stamped) if stamped else None
+    return {
+        "trades": [t for t in trades if t["ts_ms"] and t["ts_ms"] >= since_ms],
+        "covered_from_ms": covered_from,
+        "source": "rest_fallback",
+        "gap_reason": None if stamped else "no_recent_trades_reported",
+    }
+
+
 async def get_order_flow_data(
     symbol: str,
     window_seconds: int = WINDOW_SECONDS,

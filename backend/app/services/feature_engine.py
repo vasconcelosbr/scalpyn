@@ -145,6 +145,12 @@ class FeatureEngine:
             except Exception as e:
                 logger.exception("volume_spike calculation failed: %s", e)
 
+        if _want("rvol_strict") and self.config.get("rvol_strict", {}).get("enabled", True):
+            try:
+                results.update(self._calc_rvol_strict(df))
+            except Exception as e:
+                logger.exception("rvol_strict calculation failed: %s", e)
+
         if _want("taker_ratio") and self.config.get("taker_ratio", {}).get("enabled", True):
             try:
                 results.update(self._calc_taker_ratio(df))
@@ -937,6 +943,22 @@ class FeatureEngine:
         # Return None (not 1.0) so the envelope tags this as NO_DATA instead of
         # silently reporting "volume exactly at average" when data is absent.
         return {"volume_spike": None}
+
+    def _calc_rvol_strict(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """Relative volume: current candle / mean of the N *previous* candles.
+
+        Unlike ``volume_spike`` the current candle is excluded from its own
+        baseline. Default N=20 mirrors ``volume_spike``; it is read from the
+        ``rvol_strict`` indicator config when present.
+        """
+        lookback = max(int(self.config.get("rvol_strict", {}).get("lookback", 20)), 1)
+        volume = self._base_volume(df)
+        if len(volume) < lookback + 1:
+            return {"rvol_strict": None}
+        baseline = volume.iloc[-(lookback + 1):-1].mean()
+        if pd.notna(baseline) and baseline > 0:
+            return {"rvol_strict": round(float(volume.iloc[-1] / baseline), 4)}
+        return {"rvol_strict": None}
 
     def _calc_taker_ratio(self, df: pd.DataFrame) -> Dict[str, Any]:
         """Taker ratio — STUB: requires real-time taker buy/sell data.

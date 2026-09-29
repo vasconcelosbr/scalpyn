@@ -122,6 +122,8 @@ async def _discover_async():
                 # also run against it. See is_auto_discovery_enabled()'s
                 # docstring for the incident this fixes.
                 text("(overrides->>'radar_enabled')::boolean IS NOT TRUE"),
+                # Same rule for pools fed by the Pump Monitor (REALTIME).
+                text("(overrides->>'pump_monitor_sync_enabled')::boolean IS NOT TRUE"),
             )
         )
         pools = result.scalars().all()

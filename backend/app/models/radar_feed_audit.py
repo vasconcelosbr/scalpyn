@@ -14,6 +14,8 @@ class RadarFeedReceipt(Base):
     status = Column(String(32), nullable=False)
     source_count = Column(Integer, nullable=False)
     reason = Column(String(80), nullable=True)
+    # Which feed produced the receipt: 'radar' (Market Catalyst) or 'pump_monitor'.
+    source_type = Column(String(32), nullable=False, default="radar", server_default="radar")
     __table_args__ = (Index("ix_radar_receipt_pool_time", "pool_id", "received_at"),)
 
 

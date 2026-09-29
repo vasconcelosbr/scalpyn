@@ -27,6 +27,11 @@ from sqlalchemy import String, and_, exists, literal, or_, select, text
 
 from ..utils.symbol_filters import filter_real_assets
 
+# Execution never reads observation-only pools (e.g. REALTIME, fed by the
+# Pump Monitor). SQL predicate over the ``pools`` alias ``p``; shared by every
+# execution-universe query (``execute_buy``, ``evaluate_signals``).
+EXECUTION_POOL_PREDICATE_SQL = "COALESCE((p.overrides->>'observation_only')::boolean, false) = false"
+
 _log = logging.getLogger(__name__)
 
 

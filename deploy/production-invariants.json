@@ -2095,6 +2095,53 @@
           ]
         }
       ]
+    },
+    {
+      "id": "pump-monitor-observation-only",
+      "description": "Pump Monitor is observation only: pools it feeds are observation_only and every execution universe filters them out; flow metrics come from one shared module",
+      "files": [
+        {
+          "path": "backend/app/services/pool_service.py",
+          "contains_all": [
+            "EXECUTION_POOL_PREDICATE_SQL",
+            "observation_only"
+          ]
+        },
+        {
+          "path": "backend/app/tasks/execute_buy.py",
+          "contains_all": [
+            "AND {EXECUTION_POOL_PREDICATE_SQL}"
+          ]
+        },
+        {
+          "path": "backend/app/tasks/evaluate_signals.py",
+          "contains_all": [
+            "AND {EXECUTION_POOL_PREDICATE_SQL}"
+          ]
+        },
+        {
+          "path": "backend/app/services/radar_pool_sync.py",
+          "contains_all": [
+            "pump_monitor_sync_enabled",
+            "result[\"observation_only\"] = True"
+          ]
+        },
+        {
+          "path": "backend/app/services/flow_metrics.py",
+          "contains_all": [
+            "def cvd(",
+            "def estimated_slippage_pct(",
+            "def materialize_buckets("
+          ]
+        },
+        {
+          "path": "backend/tests/test_pump_monitor.py",
+          "contains_all": [
+            "test_cp5_twenty_cycles_at_the_top_n_boundary_produce_zero_flapping",
+            "test_execution_universes_filter_observation_only_pools"
+          ]
+        }
+      ]
     }
   ]
 }

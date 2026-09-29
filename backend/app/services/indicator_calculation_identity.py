@@ -33,6 +33,9 @@ def calculation_identities(config: dict, values: dict) -> dict:
             parameters = {'k': int(cfg.get('k', 14)), 'd': int(cfg.get('d', 3)), 'smooth': int(cfg.get('smooth', 3))}
         elif name == 'volume_spike':
             period = max(int(config.get('volume_spike', {}).get('lookback', 20)), 1)
+        elif name == 'rvol_strict':
+            period = max(int(config.get('rvol_strict', {}).get('lookback', 20)), 1)
+            parameters = {'baseline': 'previous_candles_excluding_current'}
         elif name in {'vwap', 'vwap_distance_pct', 'vwap_reclaim_bool'}:
             parameters = {'reset': 'UTC_DAY'}
         elif name.startswith('ema') and name[3:].isdigit():

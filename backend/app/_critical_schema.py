@@ -103,4 +103,8 @@ CRITICAL_COLUMNS: List[Tuple[str, str]] = [
     ("ai_graph_runs", "dispatch_kind"),
     ("ai_graph_runs", "dispatch_interrupt_id"),
     ("ai_graph_runs", "dispatch_decision_id"),
+    # Added by migration 229. The radar sync writes receipts with this column
+    # and the Pump Monitor cycle reads/writes its buckets every 30 s.
+    ("radar_feed_receipts", "source_type"),
+    ("flow_buckets_1m", "partial"),
 ]

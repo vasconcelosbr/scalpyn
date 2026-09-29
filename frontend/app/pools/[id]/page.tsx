@@ -92,6 +92,13 @@ export default function PoolConfigPage() {
   // Market Catalyst Radar settings (stored in pool.overrides)
   const [radarEnabled, setRadarEnabled] = useState(false);
 
+  // Pump Monitor sync (observation-only pool; stored in pool.overrides)
+  const [pmSync, setPmSync] = useState(false);
+  const [pmParams, setPmParams] = useState({
+    top_n: 10, enter_rank: 8, exit_rank: 15, exit_consecutive_cycles: 3, min_hold_seconds: 300,
+  });
+  const pmValid = pmParams.enter_rank >= 1 && pmParams.enter_rank <= pmParams.top_n && pmParams.top_n <= pmParams.exit_rank;
+
   // Discovery settings (stored in pool.overrides)
   const [maxAssets, setMaxAssets] = useState<number>(0);
 
@@ -162,6 +169,14 @@ export default function PoolConfigPage() {
       setNotifyChanges(Boolean(ov.notify_on_changes));
       setMaxAssets(Number(ov.max_assets) || 0);
       setRadarEnabled(Boolean(ov.radar_enabled));
+      setPmSync(Boolean(ov.pump_monitor_sync_enabled));
+      setPmParams(p => ({
+        top_n: Number(ov.pump_monitor_top_n ?? p.top_n),
+        enter_rank: Number(ov.pump_monitor_enter_rank ?? p.enter_rank),
+        exit_rank: Number(ov.pump_monitor_exit_rank ?? p.exit_rank),
+        exit_consecutive_cycles: Number(ov.pump_monitor_exit_consecutive_cycles ?? p.exit_consecutive_cycles),
+        min_hold_seconds: Number(ov.pump_monitor_min_hold_seconds ?? p.min_hold_seconds),
+      }));
     } catch (e: any) {
       setError(e.message ?? "Failed to load pool.");
     }
@@ -173,6 +188,10 @@ export default function PoolConfigPage() {
   // ── Save pool metadata (includes auto-refresh overrides) ──────────────────
   const handleSave = async () => {
     if (!name.trim()) return;
+    if (pmSync && !pmValid) {
+      setError("Pump Monitor: é preciso enter_rank ≤ TOP-N ≤ exit_rank.");
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -194,6 +213,15 @@ export default function PoolConfigPage() {
             notify_on_changes: notifyChanges,
             max_assets: maxAssets,
             radar_enabled: radarEnabled,
+            pump_monitor_sync_enabled: pmSync,
+            ...(pmSync ? {
+              observation_only: true,
+              pump_monitor_top_n: pmParams.top_n,
+              pump_monitor_enter_rank: pmParams.enter_rank,
+              pump_monitor_exit_rank: pmParams.exit_rank,
+              pump_monitor_exit_consecutive_cycles: pmParams.exit_consecutive_cycles,
+              pump_monitor_min_hold_seconds: pmParams.min_hold_seconds,
+            } : {}),
           },
         }),
       });
@@ -638,8 +666,63 @@ export default function PoolConfigPage() {
         </div>
       )}
 
+      {/* ── Pump Monitor sync (observation only) ── */}
+      {marketType === "spot" && (
+        <div className="card" data-testid="pump-monitor-sync">
+          <div className="card-header">
+            <h3>Pump Monitor</h3>
+            <span style={{ fontSize: "12px", color: "var(--warning, #fbbf24)" }}>
+              Pool de observação — não alimenta execução, L3 nem bots
+            </span>
+          </div>
+          <div className="card-body space-y-3">
+            <div className="flex items-center gap-3">
+              <button type="button" role="switch" aria-checked={pmSync}
+                onClick={() => setPmSync((v) => !v)} className={`toggle ${pmSync ? "active" : ""}`}>
+                <span className="knob" />
+              </button>
+              <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
+                Sincronizar ativos do Pump Monitor
+              </span>
+            </div>
+            {pmSync && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "12px" }}>
+                {([
+                  ["top_n", "TOP-N"], ["enter_rank", "Entra até o rank"], ["exit_rank", "Sai acima do rank"],
+                  ["exit_consecutive_cycles", "Ciclos seguidos para sair"], ["min_hold_seconds", "Permanência mínima (s)"],
+                ] as const).map(([key, label]) => (
+                  <label key={key} style={{ display: "flex", flexDirection: "column", fontSize: "12px", color: "var(--text-secondary)" }}>
+                    {label}
+                    <input className="input" type="number" min={key === "min_hold_seconds" ? 0 : 1} value={pmParams[key]}
+                      onChange={(e) => setPmParams((p) => ({ ...p, [key]: Number(e.target.value) }))}
+                      style={{ width: "140px" }} />
+                  </label>
+                ))}
+              </div>
+            )}
+            {pmSync && !pmValid && (
+              <p role="alert" style={{ fontSize: "12px", color: "var(--warning, #fbbf24)", margin: 0 }}>
+                A histerese exige: Entra até o rank ≤ TOP-N ≤ Sai acima do rank.
+              </p>
+            )}
+            {pmSync && (
+              <div role="status" style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
+                {pool?.overrides?.pump_monitor_feed_health?.status === "healthy"
+                  ? "Sincronizado com o ranking do Pump Monitor (a cada ciclo de 30 s)."
+                  : pool?.overrides?.pump_monitor_feed_health?.status === "unavailable"
+                    ? "Pump Monitor sem dados suficientes. A composição atual foi mantida."
+                    : "Aguardando o primeiro ciclo do Pump Monitor."}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ── Asset List ── */}
       {pool && marketType === "spot" && <RadarFeedHistory poolId={id} poolName={pool.name} />}
+      {pool && marketType === "spot" && pool.overrides?.pump_monitor_sync_enabled && (
+        <RadarFeedHistory poolId={id} poolName={pool.name} source="pump_monitor" />
+      )}
       <div className="card">
         <div className="card-header">
           <h3>Assets</h3>
