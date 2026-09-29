@@ -1333,3 +1333,32 @@ def test_inline_block_threshold_matches_canonical_block_engine(operator, value, 
     evaluated = _evaluate_blocks({'block_rules': section}, registry, registry[1]['market_scope'])
     assert evaluated['contract_reject'] is False
     assert evaluated['blocked'] == expected
+
+
+def _asset_with_rsi_6():
+    asset = _asset()
+    rsi_14 = asset["_merged_indicators"].candidates[1]
+    asset["_merged_indicators"].candidates.append(
+        dict(rsi_14, indicator="rsi_6", period=6, actual=71.2)
+    )
+    return asset
+
+
+def test_rsi_period_6_resolves_only_through_the_produced_rsi_6_series():
+    # Producer names RSI 6 ``rsi_6``; ``rsi`` exists only with period 14.
+    from app.services.profile_config_validation import validate_profile_config
+
+    def evaluate(condition):
+        return _build_resolved(
+            _legacy_profile(condition), _asset_with_rsi_6(),
+            _gate_trace(condition["id"], actual=71.2, target=78),
+        )["sections"]["signals"]["conditions"][0]
+
+    raw = {"id": "rsi6", "indicator": "rsi", "period": 6, "operator": "<",
+           "value": 78, "required": True}
+    assert evaluate(raw)["status"] == "CONTRACT_REJECT"
+    saved = validate_profile_config(_legacy_profile(raw))["signals"]["conditions"][0]
+    assert saved["field"] == "rsi_6"
+    resolved = evaluate(saved)
+    assert resolved["status"] == "PASS"
+    assert resolved["actual"] == 71.2

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  PROFILE_PERIOD_DEFAULTS,
   STRATEGY_PROFILE_INDICATORS,
   indicatorOptionsForSection,
   optionsWithUnsupportedIndicator,
@@ -39,7 +40,7 @@ test("pending indicators expose the required labels, kinds and sections", () => 
     macd_hist_slope_5: ["MACD Histogram Slope 5", ["entry_triggers"]],
     rsi_slope_3: ["RSI Slope 3", ["block_rules"]],
     entry_exhaustion_score: ["Entry Exhaustion Score", ["block_rules"]],
-    rsi_6: ["RSI 6", ["block_rules"]],
+    rsi_6: ["RSI 6", ["filters", "signals", "block_rules", "entry_triggers"]],
   } as const;
   for (const [id, [label, sections]] of Object.entries(expected)) {
     const indicator = byId.get(id);
@@ -69,4 +70,14 @@ test("only EMA distance features explicitly exclude period and parameter metadat
       .map((indicator) => indicator.id),
     ["ema5_distance_pct", "ema9_distance_pct", "ema21_distance_pct", "ema50_distance_pct", "ema200_distance_pct"],
   );
+});
+
+test("RSI periods are fixed to the produced series (no editable period input)", () => {
+  // Only RSI 14 ("rsi") and RSI 6 ("rsi_6") are produced; an editable RSI
+  // period silently evaluated RSI 14 (RealtimeL3, 2026-09-29).
+  const byId = new Map(STRATEGY_PROFILE_INDICATORS.map((indicator) => [indicator.id, indicator]));
+  assert.equal(byId.get("rsi")?.fixedPeriod, 14);
+  assert.equal(byId.get("rsi_6")?.fixedPeriod, 6);
+  assert.equal(PROFILE_PERIOD_DEFAULTS.rsi, undefined);
+  assert.equal(PROFILE_PERIOD_DEFAULTS.rsi_6, undefined);
 });

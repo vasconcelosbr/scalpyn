@@ -74,6 +74,7 @@ def validate_profile_config(
         "logic": entry_triggers.get("logic", "AND").upper(),
         "conditions": entry_triggers.get("conditions", []),
     }
+    _canonicalize_rsi_periods(validated)
 
     if require_feature_identity:
         from .l3_authorization_contract_v3 import validate_profile_contract
@@ -86,6 +87,29 @@ def validate_profile_config(
             )
 
     return validated
+
+
+def _canonicalize_rsi_periods(validated: Dict[str, Any]) -> None:
+    """Persist ``rsi`` + period N as the produced ``rsi_N`` (see
+    ``canonical_rsi_indicator``), so legacy engines and the L3 contract read
+    the same series the operator configured."""
+    from .profile_indicator_contract import canonical_rsi_indicator
+
+    conditions = [
+        *validated["filters"]["conditions"],
+        *validated["signals"]["conditions"],
+        *validated["entry_triggers"]["conditions"],
+    ]
+    for block in validated["block_rules"]["blocks"]:
+        if isinstance(block, dict):
+            conditions.append(block)
+            conditions.extend(block.get("conditions") or [])
+    for condition in conditions:
+        if not isinstance(condition, dict):
+            continue
+        for key in ("field", "indicator"):
+            if condition.get(key) == "rsi":
+                condition[key] = canonical_rsi_indicator("rsi", condition.get("period"))
 
 
 def profile_config_warnings(validated_config: Dict[str, Any]) -> list[str]:

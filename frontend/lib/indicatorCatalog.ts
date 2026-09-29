@@ -79,8 +79,10 @@ export const STRATEGY_PROFILE_INDICATORS: readonly IndicatorCatalogEntry[] = [
   entry("price_change_5m_pct", "Price Change 5m %", "number", "price_position", { noTimeframe: true, unit: "percent" }),
   entry("price_change_15m_pct", "Price Change 15m %", "number", "price_position", { noTimeframe: true, unit: "percent" }),
 
-  entry("rsi", "RSI", "number", "momentum", { defaultPeriod: 14 }),
-  entry("rsi_6", "RSI 6", "number", "momentum", { sections: BLOCK_ONLY, defaultPeriod: 6, fixedPeriod: 6 }),
+  // The producer computes RSI 14 as "rsi" and RSI 6 as "rsi_6" only; any other
+  // "rsi" period has no series (backend saves rsi+6 as rsi_6).
+  entry("rsi", "RSI", "number", "momentum", { defaultPeriod: 14, fixedPeriod: 14 }),
+  entry("rsi_6", "RSI 6", "number", "momentum", { defaultPeriod: 6, fixedPeriod: 6 }),
   entry("rsi_slope_3", "RSI Slope 3", "number", "momentum", { sections: BLOCK_ONLY }),
   entry("macd", "MACD", "number", "momentum", { defaultPeriod: 12 }),
   entry("macd_histogram", "MACD Histogram", "number", "momentum", { defaultPeriod: 12 }),
@@ -158,7 +160,8 @@ export const PRICE_POSITION_INDICATOR_VALUES = new Set(
 );
 export const PROFILE_PERIOD_DEFAULTS: Readonly<Record<string, number>> = Object.fromEntries(
   STRATEGY_PROFILE_INDICATORS
-    .filter((indicator) => indicator.defaultPeriod !== undefined)
+    // A fixed period is not editable, so no period input is offered for it.
+    .filter((indicator) => indicator.defaultPeriod !== undefined && indicator.fixedPeriod === undefined)
     .map((indicator) => [indicator.id, indicator.defaultPeriod as number]),
 );
 export const PROFILE_NO_TIMEFRAME_INDICATORS = new Set(

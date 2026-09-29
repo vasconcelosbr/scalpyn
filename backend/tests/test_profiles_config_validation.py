@@ -526,3 +526,57 @@ async def test_update_valid_l3_profile_cannot_remove_feature_identity(monkeypatc
     assert exc_info.value.status_code == 422
     assert "SOURCE_REQUIRED" in str(exc_info.value.detail)
     assert session.commits == 0
+
+
+# ── RSI period → produced series (2026-09-29, RealtimeL3) ────────────────────
+# The editor let "RSI" carry any period, but only RSI 14 (``rsi``) and RSI 6
+# (``rsi_6``) are produced: legacy engines silently read RSI 14 and the L3
+# contract rejected the identity (FEATURE_IDENTITY_NOT_AVAILABLE).
+
+def test_rsi_with_period_6_is_saved_as_rsi_6_in_every_section():
+    rsi6 = {"operator": "<", "value": 78, "period": 6, "timeframe": "5m"}
+    config = _validate_profile_config({
+        "filters": {"conditions": [{"field": "rsi", **rsi6}]},
+        "signals": {"conditions": [{"indicator": "rsi", **rsi6}]},
+        "entry_triggers": {"conditions": [{"indicator": "rsi", **rsi6}]},
+        "block_rules": {"blocks": [{"id": "b", "conditions": [
+            {"indicator": "rsi", "operator": ">=", "value": 78, "period": 6}]}]},
+    })
+    assert config["filters"]["conditions"][0]["field"] == "rsi_6"
+    assert config["signals"]["conditions"][0]["field"] == "rsi_6"
+    assert config["entry_triggers"]["conditions"][0]["indicator"] == "rsi_6"
+    assert config["block_rules"]["blocks"][0]["conditions"][0]["indicator"] == "rsi_6"
+    assert config["filters"]["conditions"][0]["period"] == 6
+
+
+@pytest.mark.parametrize("period", [None, 14, 7])
+def test_rsi_14_default_and_unproduced_periods_are_left_untouched(period):
+    condition = {"field": "rsi", "operator": "<", "value": 70}
+    if period is not None:
+        condition["period"] = period
+    config = _validate_profile_config({"filters": {"conditions": [condition]}})
+    assert config["filters"]["conditions"][0]["field"] == "rsi"
+
+
+def test_structure_contract_accepts_rsi_6_outside_block_rules_and_pins_rsi_to_14():
+    from app.services.profile_indicator_contract import validate_profile_execution_structure
+
+    def filters(condition):
+        return {"filters": {"conditions": [{"operator": "<", "value": 78, **condition}]}}
+
+    assert validate_profile_execution_structure(filters({"field": "rsi_6", "period": 6})) == []
+    assert validate_profile_execution_structure(filters({"field": "rsi", "period": 14})) == []
+    codes = [e["code"] for e in validate_profile_execution_structure(filters({"field": "rsi", "period": 7}))]
+    assert codes == ["INDICATOR_PERIOD_INVALID"]
+
+
+def test_saved_rsi_6_filter_is_evaluated_against_rsi_6_not_rsi_14():
+    from app.services.profile_engine import ProfileEngine
+
+    config = _validate_profile_config({
+        "default_timeframe": "5m",
+        "filters": {"conditions": [{"field": "rsi", "period": 6, "operator": "<", "value": 78}]},
+    })
+    # RSI 14 = 55 would pass "< 78"; the configured RSI 6 = 80 must not.
+    asset = {"symbol": "T_USDT", "indicators": {"rsi": 55.0, "rsi_6": 80.0}, "rsi": 55.0, "rsi_6": 80.0}
+    assert ProfileEngine(config).evaluate_asset(asset)["passed_filter"] is False
