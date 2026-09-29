@@ -80,6 +80,10 @@ def test_materialize_buckets_distinguishes_zero_flow_from_gap():
     rows = fm.materialize_buckets({}, minutes, covered_from_ms=0, source="ws", alive_slots=alive)
     assert rows[0]["partial"] is False and rows[0]["buy_base"] == 0.0  # real zero
     assert rows[2]["partial"] is True and rows[2]["gap_reason"] == "ws_gap" and rows[2]["buy_base"] is None
+    # CP-3 production finding: a handover long before bucketing still taints its minutes
+    handover = fm.materialize_buckets({}, minutes, covered_from_ms=0, source="ws",
+                                      gap_windows=[(M + 3_509, M + 63_509, "ws_leader_handover")])
+    assert [r["gap_reason"] for r in handover] == [None, "ws_leader_handover", "ws_leader_handover"]
     uncovered = fm.materialize_buckets({}, minutes, covered_from_ms=M, source="rest_fallback")
     assert uncovered[0]["partial"] is True and uncovered[0]["gap_reason"] == "not_covered"
 

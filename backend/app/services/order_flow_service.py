@@ -519,11 +519,17 @@ async def read_raw_trades(symbol: str, since_ms: float, market_type: str = "spot
             # per-symbol cap evicted older ones first.
             capped = size >= _trades_buffer_max_per_symbol()
             covered_from = earliest_ms if capped else now_ms - TRADE_BUFFER_TTL_SECONDS * 1000.0
-            gap_reason = None
-            handover_age = await _read_handover_age(redis)
-            if handover_age is not None:
-                covered_from = max(covered_from, now_ms - handover_age * 1000.0)
-                gap_reason = "ws_leader_handover"
+            # Absolute handover time, not "age at read time": a minute is
+            # tainted by a leader handover no matter when it is bucketed.
+            gap_windows = []
+            try:
+                raw_handover = await redis.get(_HANDOVER_TOMBSTONE_KEY)
+                handover_ms = float(raw_handover) if raw_handover is not None else None
+            except Exception:
+                handover_ms = None
+            if handover_ms is not None:
+                gap_windows.append((handover_ms, handover_ms + _HANDOVER_TAINT_WINDOW_SECONDS * 1000.0,
+                                    "ws_leader_handover"))
             alive_slots = None
             if market_type == "spot":
                 from ..websocket.event_handlers import WS_ALIVE_KEY
@@ -533,8 +539,8 @@ async def read_raw_trades(symbol: str, since_ms: float, market_type: str = "spot
                 except Exception as exc:
                     logger.debug("[OrderFlow] WS liveness read failed: %s", exc)
             return {"trades": trades, "covered_from_ms": covered_from,
-                    "source": f"gate_trades_ws_{market_type}", "gap_reason": gap_reason,
-                    "alive_slots": alive_slots}
+                    "source": f"gate_trades_ws_{market_type}", "gap_reason": None,
+                    "alive_slots": alive_slots, "gap_windows": gap_windows}
 
     # REST fallback: GET /spot/trades returns the newest trades first.
     try:
