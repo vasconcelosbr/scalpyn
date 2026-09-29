@@ -1,4 +1,7 @@
-.page { color: #dce6f5; min-width: 0; }
+/* Tabela larga: esta página usa toda a largura útil (o layout raiz limita <main> a 1440px)
+   e toda a altura do viewport, com a rolagem ficando dentro da tabela. */
+:global(main):has(.page) { max-width: none; }
+.page { color: #dce6f5; min-width: 0; display: flex; flex-direction: column; height: calc(100dvh - 104px); min-height: 420px; }
 .header { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
 .title { font-size: 20px; font-weight: 700; letter-spacing: -.02em; }
 .subtitle { color: #8fa4c2; font-size: 12px; margin-top: 2px; }
@@ -11,8 +14,8 @@
 .segment { min-width: 44px; height: 26px; padding: 0 9px; border-radius: 6px; color: #899bb6; font-size: 11px; }
 .status { color: #8fa4c2; font-size: 11px; margin-left: auto; display: inline-flex; gap: 10px; align-items: center; }
 .stale { color: #f4bd3f; font-weight: 700; }
-.panel { border: 1px solid #233754; border-radius: 8px; background: linear-gradient(150deg, rgba(13,26,43,.98), rgba(9,18,31,.98)); min-width: 0; overflow: hidden; }
-.tableWrap { overflow: auto; max-height: calc(100vh - 230px); }
+.panel { border: 1px solid #233754; border-radius: 8px; background: linear-gradient(150deg, rgba(13,26,43,.98), rgba(9,18,31,.98)); min-width: 0; overflow: hidden; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.tableWrap { overflow: auto; flex: 1; min-height: 0; }
 .table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 11px; }
 .table th { position: sticky; top: 0; z-index: 2; background: #0d1a2c; color: #8699b5; text-align: right; font-weight: 600; padding: 8px 9px; border-bottom: 1px solid #263a56; white-space: nowrap; }
 .table th button { color: inherit; font: inherit; display: inline-flex; align-items: center; gap: 3px; }
@@ -27,12 +30,13 @@
 .gray { color: #5b6c86; }
 .score { font-weight: 800; }
 .alert { display: inline-block; margin-left: 4px; padding: 1px 6px; border-radius: 999px; border: 1px solid #ce9d32; color: #f4bd3f; font-size: 9px; font-family: inherit; }
-.picker { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px; border-bottom: 1px solid #1c2c43; }
+.picker { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px; border-bottom: 1px solid #1c2c43; flex-shrink: 0; max-height: 40%; overflow: auto; }
 .empty { min-height: 200px; display: grid; place-items: center; text-align: center; padding: 28px; color: #8193ad; }
 .error { color: #ff7a7a; padding: 10px 12px; font-size: 12px; }
 .tooltip { white-space: pre-line; }
 @media (max-width: 700px) {
   .title { font-size: 17px; }
   .status { margin-left: 0; width: 100%; }
+  .page { height: auto; min-height: 0; }
   .tableWrap { max-height: none; }
 }
