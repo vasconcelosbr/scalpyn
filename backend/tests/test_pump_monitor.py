@@ -190,45 +190,41 @@ def test_config_versioning_and_validation():
 
 # ── CP-5: hysteresis ─────────────────────────────────────────────────────────
 
-HYST = dict(top_n=10, enter_rank=8, exit_rank=15, exit_consecutive_cycles=3, min_hold_seconds=300)
+HYST = dict(min_score=50.0, exit_consecutive_cycles=3, min_hold_seconds=300)
 
 
-def test_cp5_twenty_cycles_at_the_top_n_boundary_produce_zero_flapping():
-    members = [f"S{i}" for i in range(1, 11)]  # a full TOP-10
-    state = {"members": {s: {"entered_at_ms": 0, "out_count": 0} for s in members}}
-    fillers = [f"Z{i}" for i in range(1, 6)]
-    changes = naive_changes = 0
-    naive_previous = set(members)
+def test_cp5_score_oscillating_around_min_score_produces_zero_flapping():
+    state = eng.advance_membership(None, {"A": 60.0}, now_ms=0, **HYST)
+    changes = 0
     for cycle in range(1, 21):
-        if cycle % 2:   # S1 drops to rank 16, challenger X climbs to rank 10
-            ranked = members[1:] + ["X"] + fillers + ["S1"]
-        else:           # S1 back at rank 1, X falls to rank 11
-            ranked = members + ["X"] + fillers
-        new = eng.advance_membership(state, ranked, now_ms=cycle * 30_000, **HYST)
+        scores = {"A": 45.0 if cycle % 2 else 55.0}  # dips below min_score every other cycle
+        new = eng.advance_membership(state, scores, now_ms=cycle * 30_000, **HYST)
         changes += len(set(new["members"]) ^ set(state["members"]))
         state = new
-        naive = set(ranked[:HYST["top_n"]])  # plain TOP-N, no hysteresis
-        naive_changes += len(naive ^ naive_previous)
-        naive_previous = naive
-    assert naive_changes == 40  # the boundary really oscillates every cycle
-    assert changes == 0 and set(state["members"]) == set(members)
+    assert changes == 0 and "A" in state["members"]
+
+
+def test_entry_requires_min_score_and_has_no_size_cap():
+    scores = {f"S{i}": 50.0 + i for i in range(30)}
+    scores["LOW"] = 49.99
+    state = eng.advance_membership(None, scores, now_ms=0, **HYST)
+    assert set(state["members"]) == {f"S{i}" for i in range(30)}
 
 
 def test_sustained_exit_requires_consecutive_cycles_and_min_hold():
-    state = eng.advance_membership(None, ["A"], now_ms=0, **HYST)
+    state = eng.advance_membership(None, {"A": 70.0}, now_ms=0, **HYST)
     for cycle in range(1, 3):
-        state = eng.advance_membership(state, [], now_ms=cycle * 30_000, **HYST)
-    assert "A" in state["members"]  # 2 cycles out, below 3
-    state = eng.advance_membership(state, [], now_ms=90_000, **HYST)
+        state = eng.advance_membership(state, {"A": 10.0}, now_ms=cycle * 30_000, **HYST)
+    assert "A" in state["members"]  # 2 cycles below, less than 3
+    state = eng.advance_membership(state, {}, now_ms=90_000, **HYST)
     assert "A" in state["members"]  # 3 cycles out but held only 90 s < 300 s
-    state = eng.advance_membership(state, [], now_ms=301_000, **HYST)
+    state = eng.advance_membership(state, {}, now_ms=301_000, **HYST)
     assert "A" not in state["members"]
 
 
-def test_hysteresis_rejects_inconsistent_parameters():
+def test_membership_rejects_min_score_outside_scale():
     with pytest.raises(ValueError):
-        eng.advance_membership(None, [], now_ms=0, top_n=10, enter_rank=12, exit_rank=15,
-                               exit_consecutive_cycles=3, min_hold_seconds=0)
+        eng.advance_membership(None, {}, now_ms=0, min_score=101, exit_consecutive_cycles=3, min_hold_seconds=0)
 
 
 # ── D1: REALTIME is never an execution universe ──────────────────────────────
