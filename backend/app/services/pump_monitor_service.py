@@ -415,13 +415,13 @@ async def _sync_realtime_pools(user_id, rows, config, now_ms, state) -> List[Dic
             entry["skipped"] = "pool_not_observation_only"
             report.append(entry)
             continue
-        eligible = [r for r in scored if r.get("only_rising") or not params["only_rising"]]
-        ranked = [r["symbol"] for r in sorted(eligible, key=lambda r: -r["pump_monitor_score"])]
+        # Membership is decided by the Pump Score alone (no "rising" pre-filter).
+        ranked = [r["symbol"] for r in sorted(scored, key=lambda r: -r["pump_monitor_score"])]
         feed_ok = bool(rows) and len(scored) / len(rows) >= float(params["min_scored_fraction"])
         previous = membership.get(pool_id) or {"members": {}}
         if feed_ok:
             membership[pool_id] = eng.advance_membership(
-                previous, {r["symbol"]: float(r["pump_monitor_score"]) for r in eligible},
+                previous, {r["symbol"]: float(r["pump_monitor_score"]) for r in scored},
                 now_ms=now_ms, min_score=float(params["min_score"]),
                 exit_consecutive_cycles=int(params["exit_consecutive_cycles"]),
                 min_hold_seconds=int(params["min_hold_seconds"]))

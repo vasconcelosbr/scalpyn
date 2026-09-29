@@ -85,7 +85,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # via overrides.pump_monitor_<key>). min_score is on the 0–100 score scale.
     "sync_defaults": {"min_score": 50.0,
                       "exit_consecutive_cycles": 3, "min_hold_seconds": 300,
-                      "only_rising": True, "min_scored_fraction": 0.5},
+                      "min_scored_fraction": 0.5},
     # polarity ∈ higher_better | lower_better | neutral | categorical.
     # Without "bands" an indicator is shown without colour (never invented).
     "indicators": {
