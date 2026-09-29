@@ -82,8 +82,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # Redis always holds the full latest cycle; the table keeps a sample.
     "snapshots": {"retention_hours": 48, "every_n_cycles": 10},
     # Defaults for pools with pump_monitor_sync_enabled (overridable per pool
-    # via overrides.pump_monitor_<key>). enter_rank <= top_n <= exit_rank.
-    "sync_defaults": {"top_n": 10, "enter_rank": 8, "exit_rank": 15,
+    # via overrides.pump_monitor_<key>). min_score is on the 0–100 score scale.
+    "sync_defaults": {"min_score": 50.0,
                       "exit_consecutive_cycles": 3, "min_hold_seconds": 300,
                       "only_rising": True, "min_scored_fraction": 0.5},
     # polarity ∈ higher_better | lower_better | neutral | categorical.
@@ -539,29 +539,27 @@ def new_alerts(previous_types: Iterable[str], active: List[Dict[str, Any]]) -> L
 
 # ── REALTIME membership with hysteresis ──────────────────────────────────────
 
-def advance_membership(state: Optional[Dict[str, Any]], ranked: List[str], *, now_ms: int,
-                       top_n: int, enter_rank: int, exit_rank: int,
-                       exit_consecutive_cycles: int, min_hold_seconds: int) -> Dict[str, Any]:
-    """Anti-flapping membership.
+def advance_membership(state: Optional[Dict[str, Any]], scores: Dict[str, float], *, now_ms: int,
+                       min_score: float, exit_consecutive_cycles: int,
+                       min_hold_seconds: int) -> Dict[str, Any]:
+    """Anti-flapping membership by minimum Pump Score (no size cap).
 
-    Enter: rank <= enter_rank while fewer than top_n members.
-    Exit: rank > exit_rank (or unranked) for ``exit_consecutive_cycles``
-    consecutive cycles AND held for at least ``min_hold_seconds``.
+    Enter: score >= min_score.
+    Exit: score < min_score (or unscored/ineligible) for
+    ``exit_consecutive_cycles`` consecutive cycles AND held for at least
+    ``min_hold_seconds``.
     """
-    if not (1 <= enter_rank <= top_n <= exit_rank):
-        raise ValueError("hysteresis requires 1 <= enter_rank <= top_n <= exit_rank")
+    if not 0 <= min_score <= 100:
+        raise ValueError("min_score must be within [0, 100]")
     members = {s: dict(m) for s, m in ((state or {}).get("members") or {}).items()}
-    ranks = {symbol: index + 1 for index, symbol in enumerate(ranked)}
     for symbol in list(members):
-        rank = ranks.get(symbol)
+        score = scores.get(symbol)
         member = members[symbol]
-        member["out_count"] = 0 if (rank is not None and rank <= exit_rank) else int(member.get("out_count", 0)) + 1
+        member["out_count"] = 0 if (score is not None and score >= min_score) else int(member.get("out_count", 0)) + 1
         held = (now_ms - int(member["entered_at_ms"])) / 1000.0
         if member["out_count"] >= exit_consecutive_cycles and held >= min_hold_seconds:
             del members[symbol]
-    for symbol in ranked:
-        if len(members) >= top_n:
-            break
-        if symbol not in members and ranks[symbol] <= enter_rank:
+    for symbol, score in scores.items():
+        if symbol not in members and score >= min_score:
             members[symbol] = {"entered_at_ms": int(now_ms), "out_count": 0}
     return {"members": members}

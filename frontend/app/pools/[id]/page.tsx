@@ -95,9 +95,9 @@ export default function PoolConfigPage() {
   // Pump Monitor sync (observation-only pool; stored in pool.overrides)
   const [pmSync, setPmSync] = useState(false);
   const [pmParams, setPmParams] = useState({
-    top_n: 10, enter_rank: 8, exit_rank: 15, exit_consecutive_cycles: 3, min_hold_seconds: 300,
+    min_score: 50, exit_consecutive_cycles: 3, min_hold_seconds: 300,
   });
-  const pmValid = pmParams.enter_rank >= 1 && pmParams.enter_rank <= pmParams.top_n && pmParams.top_n <= pmParams.exit_rank;
+  const pmValid = pmParams.min_score >= 0 && pmParams.min_score <= 100;
 
   // Discovery settings (stored in pool.overrides)
   const [maxAssets, setMaxAssets] = useState<number>(0);
@@ -171,9 +171,7 @@ export default function PoolConfigPage() {
       setRadarEnabled(Boolean(ov.radar_enabled));
       setPmSync(Boolean(ov.pump_monitor_sync_enabled));
       setPmParams(p => ({
-        top_n: Number(ov.pump_monitor_top_n ?? p.top_n),
-        enter_rank: Number(ov.pump_monitor_enter_rank ?? p.enter_rank),
-        exit_rank: Number(ov.pump_monitor_exit_rank ?? p.exit_rank),
+        min_score: Number(ov.pump_monitor_min_score ?? p.min_score),
         exit_consecutive_cycles: Number(ov.pump_monitor_exit_consecutive_cycles ?? p.exit_consecutive_cycles),
         min_hold_seconds: Number(ov.pump_monitor_min_hold_seconds ?? p.min_hold_seconds),
       }));
@@ -189,7 +187,7 @@ export default function PoolConfigPage() {
   const handleSave = async () => {
     if (!name.trim()) return;
     if (pmSync && !pmValid) {
-      setError("Pump Monitor: é preciso enter_rank ≤ TOP-N ≤ exit_rank.");
+      setError("Pump Monitor: o score mínimo deve estar entre 0 e 100.");
       return;
     }
     setSaving(true);
@@ -216,9 +214,7 @@ export default function PoolConfigPage() {
             pump_monitor_sync_enabled: pmSync,
             ...(pmSync ? {
               observation_only: true,
-              pump_monitor_top_n: pmParams.top_n,
-              pump_monitor_enter_rank: pmParams.enter_rank,
-              pump_monitor_exit_rank: pmParams.exit_rank,
+              pump_monitor_min_score: pmParams.min_score,
               pump_monitor_exit_consecutive_cycles: pmParams.exit_consecutive_cycles,
               pump_monitor_min_hold_seconds: pmParams.min_hold_seconds,
             } : {}),
@@ -688,12 +684,14 @@ export default function PoolConfigPage() {
             {pmSync && (
               <div style={{ display: "flex", flexWrap: "wrap", gap: "12px" }}>
                 {([
-                  ["top_n", "TOP-N"], ["enter_rank", "Entra até o rank"], ["exit_rank", "Sai acima do rank"],
+                  ["min_score", "Pump Score mínimo"],
                   ["exit_consecutive_cycles", "Ciclos seguidos para sair"], ["min_hold_seconds", "Permanência mínima (s)"],
                 ] as const).map(([key, label]) => (
                   <label key={key} style={{ display: "flex", flexDirection: "column", fontSize: "12px", color: "var(--text-secondary)" }}>
                     {label}
-                    <input className="input" type="number" min={key === "min_hold_seconds" ? 0 : 1} value={pmParams[key]}
+                    <input className="input" type="number" value={pmParams[key]}
+                      min={key === "exit_consecutive_cycles" ? 1 : 0} max={key === "min_score" ? 100 : undefined}
+                      step={key === "min_score" ? "any" : 1}
                       onChange={(e) => setPmParams((p) => ({ ...p, [key]: Number(e.target.value) }))}
                       style={{ width: "140px" }} />
                   </label>
@@ -702,13 +700,13 @@ export default function PoolConfigPage() {
             )}
             {pmSync && !pmValid && (
               <p role="alert" style={{ fontSize: "12px", color: "var(--warning, #fbbf24)", margin: 0 }}>
-                A histerese exige: Entra até o rank ≤ TOP-N ≤ Sai acima do rank.
+                O Pump Score mínimo deve estar entre 0 e 100.
               </p>
             )}
             {pmSync && (
               <div role="status" style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
                 {pool?.overrides?.pump_monitor_feed_health?.status === "healthy"
-                  ? "Sincronizado com o ranking do Pump Monitor (a cada ciclo de 30 s)."
+                  ? "Sincronizado com o Pump Score do Pump Monitor (a cada ciclo de 30 s)."
                   : pool?.overrides?.pump_monitor_feed_health?.status === "unavailable"
                     ? "Pump Monitor sem dados suficientes. A composição atual foi mantida."
                     : "Aguardando o primeiro ciclo do Pump Monitor."}

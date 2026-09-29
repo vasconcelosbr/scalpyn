@@ -421,8 +421,8 @@ async def _sync_realtime_pools(user_id, rows, config, now_ms, state) -> List[Dic
         previous = membership.get(pool_id) or {"members": {}}
         if feed_ok:
             membership[pool_id] = eng.advance_membership(
-                previous, ranked, now_ms=now_ms, top_n=int(params["top_n"]),
-                enter_rank=int(params["enter_rank"]), exit_rank=int(params["exit_rank"]),
+                previous, {r["symbol"]: float(r["pump_monitor_score"]) for r in eligible},
+                now_ms=now_ms, min_score=float(params["min_score"]),
                 exit_consecutive_cycles=int(params["exit_consecutive_cycles"]),
                 min_hold_seconds=int(params["min_hold_seconds"]))
         selected = set(membership.get(pool_id, {}).get("members") or {}) if feed_ok else None
