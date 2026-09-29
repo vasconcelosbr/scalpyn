@@ -630,6 +630,10 @@ async def _process_spot_order(session, order: dict) -> None:
 # ``redis.pipeline(transaction=False)`` so we make one round-trip per
 # Gate frame regardless of the number of trades in it.
 
+WS_ALIVE_KEY: str = "gate_ws:spot_trades_alive_slots"
+WS_ALIVE_SLOT_SECONDS: int = 10
+WS_ALIVE_RETENTION_SECONDS: int = 7200
+
 TRADE_BUFFER_TTL_SECONDS: int = 360
 """Sorted-set TTL (s). Must stay ≥ the largest ``window_seconds`` that any
 caller passes to ``get_order_flow_data`` so the buffer always covers the
@@ -723,13 +727,13 @@ async def handle_spot_trades(result: list[dict]) -> None:
 
         symbol = GateAdapter._normalize_symbol(currency_pair)
         key = _trades_buffer_key(symbol, market_type="spot")
-        # Compact payload — ``order_flow_service`` only consumes side,
-        # amount, and the timestamp (which is also the score).
-        payload = json.dumps({
-            "s": side,
-            "a": str(amount),
-            "t": ts_ms,
-        }, separators=(",", ":")).encode("utf-8")
+        # Compact payload — side, amount and timestamp (also the score).
+        # ``p`` (price) is additive: it lets the Pump Monitor flow buckets
+        # express volume in quote currency; older readers ignore it.
+        fields = {"s": side, "a": str(amount), "t": ts_ms}
+        if trade.get("price") is not None:
+            fields["p"] = str(trade.get("price"))
+        payload = json.dumps(fields, separators=(",", ":")).encode("utf-8")
         # Same (key, member) pair would be deduplicated by ZADD, so make
         # the member unique by prefixing a monotonic suffix per batch.
         # Using the trade ``id`` when present keeps the buffer stable
@@ -762,6 +766,12 @@ async def handle_spot_trades(result: list[dict]) -> None:
                 # ``0, -(cap+1)`` keeps the newest ``cap`` members.
                 pipe.zremrangebyrank(key, 0, -(cap + 1))
                 pipe.expire(key, TRADE_BUFFER_TTL_SECONDS)
+            # Stream liveness (receipt time, 10 s slots): lets flow buckets
+            # tell "no trades" from "WS was down" for a past minute.
+            now_s = datetime.now(timezone.utc).timestamp()
+            slot = int(now_s // WS_ALIVE_SLOT_SECONDS) * WS_ALIVE_SLOT_SECONDS
+            pipe.zadd(WS_ALIVE_KEY, {str(slot): slot})
+            pipe.zremrangebyscore(WS_ALIVE_KEY, 0, now_s - WS_ALIVE_RETENTION_SECONDS)
             await pipe.execute()
     except Exception as exc:
         # Any Redis error is logged but never propagated — _dispatch in

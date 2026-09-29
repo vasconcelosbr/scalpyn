@@ -27,14 +27,15 @@ def display_time(value):
     return value.astimezone(DISPLAY_TZ).strftime("%d/%m/%Y, %H:%M:%S GMT-3")
 
 
-async def record_receipt(db, *, pool_id, assets, received_at, selected_pairs, reason=None):
+async def record_receipt(db, *, pool_id, assets, received_at, selected_pairs, reason=None,
+                         source_type="radar"):
     receipt_id = uuid4()
     rows = assets if assets is not None else []
     db.add(RadarFeedReceipt(
         id=receipt_id, pool_id=pool_id, received_at=received_at,
         expires_at=received_at + RETENTION,
         status="RECEIVED" if assets is not None else "UNAVAILABLE",
-        source_count=len(rows), reason=reason,
+        source_count=len(rows), reason=reason, source_type=source_type,
     ))
     await db.flush()
     # Preserve every returned entry, including filtered pairs and repeated symbols.
@@ -54,7 +55,8 @@ async def complete_receipt(db, receipt_id, *, reconciled, skipped=False):
     receipt.status = "SYNCED" if reconciled and not skipped else "SYNC_FAILED" if not reconciled else "SKIPPED"
     items = (await db.scalars(select(RadarFeedItem).where(RadarFeedItem.receipt_id == receipt_id))).all()
     coins = (await db.scalars(select(PoolCoin).where(PoolCoin.pool_id == receipt.pool_id))).all()
-    present = {c.symbol for c in coins if c.is_active and c.origin == "radar" and not c.held_for_open_position}
+    origin = receipt.source_type or "radar"
+    present = {c.symbol for c in coins if c.is_active and c.origin == origin and not c.held_for_open_position}
     for item in items:
         if item.pool_result != "PENDING":
             continue

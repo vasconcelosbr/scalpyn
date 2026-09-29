@@ -88,6 +88,7 @@ _MICRO_EXPLICIT: frozenset[str] = frozenset({
     "stoch_d",
     # Volume microstructure
     "volume_spike",
+    "rvol_strict",
     "volume_delta",
     "volume_last_candle_base",
     "volume_last_candle_usdt",
@@ -220,6 +221,7 @@ MICROSTRUCTURE_CALC_KEYS: frozenset[str] = frozenset({
     "stochastic",    # fast signal on 5m candles
     "ema",           # runs _calc_ema; micro filters keep only EMA5/9/21
     "volume_spike",
+    "rvol_strict",
     "volume_delta",
     "volume_metrics",
     "taker_ratio",

@@ -11,6 +11,7 @@ from sqlalchemy import select
 
 from ..models.pool import Pool, PoolCoin
 from ..models.pipeline_watchlist import PipelineWatchlist, PipelineWatchlistAsset
+from . import flow_metrics
 from .feature_engine import FeatureEngine
 
 UNIVERSE_SOURCE = "user_pool_pipeline_v1"
@@ -19,6 +20,9 @@ NON_OHLCV = frozenset({
     "volume_delta", "taker_ratio", "buy_pressure", "taker_buy_volume",
     "taker_sell_volume", "orderbook_pressure", "bid_ask_imbalance",
     "orderbook_depth_usdt", "spread_pct", "cvd", "cvd_slope",
+    # Pump Monitor trade-flow metrics need exchange trades, never candles.
+    "delta_norm", "window_delta_norm", "cvd_60m", "buy_persistence",
+    "volume_acceleration", "flow_change",
 })
 ENGINE_VERSION = hashlib.sha256(inspect.getsource(FeatureEngine).replace("\r\n", "\n").encode()).hexdigest()
 
@@ -83,3 +87,20 @@ def reconstruct_indicators(rows, at, timeframe, indicators_config, context_candl
         if key not in NON_OHLCV and isinstance(value, (int, float, bool))
         and math.isfinite(float(value))
     }, history
+
+
+def pump_monitor_candle_measures(history, values):
+    """Pump Monitor measures defined on candles, computed with the live code.
+
+    Kept out of ``reconstruct_indicators`` so existing Pump Radar outputs stay
+    unchanged (D5); calibration of the Pump Monitor score against Pump Radar
+    events calls this with the reconstructed history and indicator values.
+    """
+    if not history:
+        return {}
+    last = history[-1]
+    return {
+        "upper_wick_ratio": flow_metrics.upper_wick_ratio(last.open, last.high, last.low, last.close),
+        "price_extension_atr": flow_metrics.price_extension_atr(
+            values.get("close", values.get("price")), values.get("vwap"), values.get("atr")),
+    }

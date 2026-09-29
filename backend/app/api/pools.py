@@ -28,9 +28,12 @@ async def radar_history(
     pool_id: UUID, symbol: str = Query("", max_length=120),
     offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db), user_id: UUID = Depends(get_current_user_id),
-    response: Response = None,
+    response: Response = None, source: str = Query("", max_length=32),
 ):
-    """Receipt history, isolated by pool owner and bounded by retention."""
+    """Receipt history, isolated by pool owner and bounded by retention.
+
+    ``source`` narrows to one feed ('radar' or 'pump_monitor'); empty = all.
+    """
     from ..models.radar_feed_audit import RadarFeedReceipt as Receipt, RadarFeedItem as Item
     from ..services.radar_feed_audit import display_time
     pool = (await db.scalars(select(Pool).where(Pool.id == pool_id, Pool.user_id == user_id))).first()
@@ -39,16 +42,20 @@ async def radar_history(
     if response is not None:
         response.headers["Cache-Control"] = "private, no-store"
     now = datetime.now(timezone.utc)
-    criteria = [Receipt.pool_id == pool_id, Receipt.expires_at > now]
+    receipt_scope = [Receipt.pool_id == pool_id, Receipt.expires_at > now]
+    source = source.strip() if isinstance(source, str) else ""  # direct calls keep Query default
+    if source:
+        receipt_scope.append(Receipt.source_type == source)
+    criteria = list(receipt_scope)
     if symbol.strip():
         criteria.append(Item.symbol.icontains(symbol.strip(), autoescape=True))
     total = await db.scalar(select(func.count()).select_from(Item).join(Receipt).where(*criteria))
     rows = (await db.execute(select(Item, Receipt).join(Receipt).where(*criteria)
         .order_by(Receipt.received_at.desc(), Receipt.id.desc(), Item.id)
         .offset(offset).limit(limit))).all()
-    latest = (await db.scalars(select(Receipt).where(Receipt.pool_id == pool_id, Receipt.expires_at > now)
+    latest = (await db.scalars(select(Receipt).where(*receipt_scope)
         .order_by(Receipt.received_at.desc()).limit(1))).first()
-    first = await db.scalar(select(func.min(Receipt.received_at)).where(Receipt.pool_id == pool_id, Receipt.expires_at > now))
+    first = await db.scalar(select(func.min(Receipt.received_at)).where(*receipt_scope))
     return {
         "total": total, "offset": offset, "limit": limit,
         "retained_since": display_time(first),
@@ -63,6 +70,7 @@ async def radar_history(
             "source_updated_at": item.source_updated_at.isoformat() if item.source_updated_at else None,
             "source_updated_at_display": display_time(item.source_updated_at),
             "pool_result": item.pool_result, "receipt_status": receipt.status,
+            "source_type": receipt.source_type,
         } for item, receipt in rows],
     }
 
