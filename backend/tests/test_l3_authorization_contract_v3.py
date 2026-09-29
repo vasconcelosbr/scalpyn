@@ -751,6 +751,40 @@ def test_resolver_rejects_ambiguous_exact_feature_identity():
     assert result["authorization_status"] == "CONTRACT_REJECT"
 
 
+def test_block_input_reread_of_a_merged_row_is_not_a_second_provenance():
+    # prepare_block_candle_inputs re-reads the block timeframe; when it equals
+    # the merged timeframe the same row lands in _block_ohlcv_candidates too.
+    asset = _asset()
+    rsi_row = asset["_merged_indicators"].candidates[1]
+    asset["_block_ohlcv_candidates"] = [dict(rsi_row)]
+    registry = build_feature_registry(asset, evaluated_at=NOW)
+    assert len([c for c in registry if c["indicator"] == "rsi"]) == 1
+    condition = {"id": "reread-rsi", "indicator": "rsi", "operator": ">",
+                 "value": 50, "required": True}
+    result = _build_resolved(
+        _legacy_profile(condition), asset,
+        _gate_trace("reread-rsi", actual=58.7, target=50),
+    )
+    evaluated = result["sections"]["signals"]["conditions"][0]
+    assert "FEATURE_PROVENANCE_AMBIGUOUS" not in evaluated["reason_codes"]
+
+
+def test_block_input_with_a_distinct_observation_stays_ambiguous():
+    asset = _asset()
+    # Same clocks and value, but not the same row: a genuine second producer.
+    rival = dict(asset["_merged_indicators"].candidates[1],
+                 available_at=NOW - timedelta(seconds=1))
+    asset["_block_ohlcv_candidates"] = [rival]
+    condition = {"id": "rival-rsi", "indicator": "rsi", "operator": ">",
+                 "value": 50, "required": True}
+    result = _build_resolved(
+        _legacy_profile(condition), asset,
+        _gate_trace("rival-rsi", actual=58.7, target=50),
+    )
+    evaluated = result["sections"]["signals"]["conditions"][0]
+    assert "FEATURE_PROVENANCE_AMBIGUOUS" in evaluated["reason_codes"]
+
+
 def _rsi_asset_with_rival_compute_groups():
     """Same indicator (rsi/5m), same value, computed twice: once by
     ``compute_5m`` (scheduler_group="microstructure") and once — with a
