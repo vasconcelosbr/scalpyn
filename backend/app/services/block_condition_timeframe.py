@@ -1,8 +1,36 @@
 """Resolve governed block inputs independently, without cross-timeframe fallback."""
-from typing import Any
+from typing import Any, Mapping, Optional
 
 
-def block_condition_data(condition: dict, asset: dict) -> dict:
+def pinned_ohlcv_scheduler_group(runtime_policy: Optional[Mapping[str, Any]]) -> Optional[str]:
+    """The OHLCV ``scheduler_group`` the L3 v3 resolver pins for this profile.
+
+    Same gate as ``materialize_runtime_profile_contract``: only an enabled,
+    allowlisted resolver pins a group; otherwise None (no pin).
+    """
+    resolver = (runtime_policy or {}).get("l3_v3_provenance_resolver") or {}
+    profile_id = (runtime_policy or {}).get("profile_id")
+    if not resolver.get("enabled") or profile_id is None:
+        return None
+    if str(profile_id) not in {str(item) for item in resolver.get("profile_allowlist") or []}:
+        return None
+    return ((resolver.get("source_policies") or {}).get("ohlcv") or {}).get("scheduler_group")
+
+
+def in_scheduler_group(candidate: dict, group: Optional[str]) -> bool:
+    """Whether an OHLCV candidate survives a pinned ``scheduler_group``.
+
+    The pin picks one of the two scheduled cadences that write the same
+    series (compute_5m vs compute_structural_5m). A request-bound series
+    (e.g. RSI 6 from closed 1m candles) has a single producer and no rival
+    cadence, so the pin does not apply to it.
+    """
+    if not group or candidate.get("request_bound"):
+        return True
+    return (candidate.get("scheduler_group") or candidate.get("group")) == group
+
+
+def block_condition_data(condition: dict, asset: dict, *, scheduler_group: Optional[str] = None) -> dict:
     # Legacy rules keep their existing compatibility path. Editor-authored
     # identities explicitly declare both source and timeframe.
     references = (
@@ -24,6 +52,10 @@ def block_condition_data(condition: dict, asset: dict) -> dict:
         for key in ("source_provider", "provider_policy_id", "period"):
             if reference.get(key) is not None:
                 matches = [c for c in matches if c.get(key) == reference[key]]
+        # Read the cadence the L3 contract pins, or the contract looks for a
+        # value from the other cadence and rejects (FEATURE_IDENTITY_NOT_AVAILABLE).
+        group = reference.get("scheduler_group") or scheduler_group
+        matches = [c for c in matches if in_scheduler_group(c, group)]
         # Candidate metadata wins over a flat map, including a missing value.
         if matches:
             selected = max(matches, key=lambda c: str(c.get("computed_at") or c.get("source_timestamp") or ""))

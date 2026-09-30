@@ -17,6 +17,7 @@ from decimal import Decimal
 from typing import Any, Iterable, Mapping, Optional
 
 from .block_rule_compiler import compile_block_rule
+from .block_condition_timeframe import in_scheduler_group
 
 
 CONTRACT_VERSION = "l3_authorization_contract_v3"
@@ -314,6 +315,7 @@ def _registry_candidate(raw: dict, *, market_scope: dict, evaluated_at: datetime
         "partial_window": bool(raw.get("partial_window", False)),
         "coverage_pct": raw.get("coverage_pct"),
         **{key: deepcopy(raw[key]) for key in ("reference_window", "dependencies") if key in raw},
+        **({"request_bound": True} if raw.get("request_bound") else {}),
     }
 
 
@@ -712,7 +714,7 @@ def _reference_resolution(
         candidates = [
             candidate for candidate in candidates
             if candidate.get("source") != "ohlcv"
-            or candidate.get("scheduler_group") == configured_group
+            or in_scheduler_group(candidate, configured_group)
         ]
     candidates = _latest_same_identity(candidates)
     if not candidates:

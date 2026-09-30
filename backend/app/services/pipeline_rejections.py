@@ -311,6 +311,8 @@ def _evaluate_block_rule(
     rule_engine: RuleEngine,
     asset: Dict[str, Any],
     block: Dict[str, Any],
+    *,
+    scheduler_group: Optional[str] = None,
 ) -> Dict[str, Any]:
     from .block_condition_timeframe import block_condition_data
     conditions = block.get("conditions", []) or []
@@ -319,7 +321,9 @@ def _evaluate_block_rule(
 
     for condition in conditions:
         status, detail = rule_engine.evaluate_condition_status(
-            condition, block_condition_data(condition, asset), field_key="indicator"
+            condition,
+            block_condition_data(condition, asset, scheduler_group=scheduler_group),
+            field_key="indicator",
         )
         details.append(
             {
@@ -594,8 +598,14 @@ def _build_asset_evaluation_trace(
     trace: List[Dict[str, Any]] = []
     failed_trace: Optional[Dict[str, Any]] = None
 
+    from .block_condition_timeframe import pinned_ohlcv_scheduler_group
+    from .l3_gate_runtime_policy import policy_from_profile
+
+    scheduler_group = pinned_ohlcv_scheduler_group(policy_from_profile(profile_config))
     for index, block in enumerate(block_rules):
-        block_trace = _normalized_trace_item(_evaluate_block_rule(rule_engine, asset, block))
+        block_trace = _normalized_trace_item(_evaluate_block_rule(
+            rule_engine, asset, block, scheduler_group=scheduler_group
+        ))
         trace.append(block_trace)
         if block_trace["status"] == "FAIL" and failed_trace is None:
             # Capture rejection attribution but DO NOT short-circuit the
