@@ -82,6 +82,7 @@ class BlockEngine:
         and_skipped_policy: str = "legacy",
         missing_indicator_policy: str = "warn",
         legacy_range_compiler_enabled: bool = False,
+        ohlcv_scheduler_group: Optional[str] = None,
     ):
         self.config = block_config
         self.blocks = block_config.get("blocks", [])
@@ -90,6 +91,8 @@ class BlockEngine:
         self.and_skipped_policy = and_skipped_policy
         self.missing_indicator_policy = missing_indicator_policy
         self.legacy_range_compiler_enabled = bool(legacy_range_compiler_enabled)
+        # Cadence pinned by the L3 v3 resolver; block inputs read the same one.
+        self.ohlcv_scheduler_group = ohlcv_scheduler_group
         self.rule_engine = RuleEngine(
             zero_is_value=self.zero_is_value,
             missing_indicator_policy=missing_indicator_policy,
@@ -392,7 +395,11 @@ class BlockEngine:
 
         for condition in conditions:
             status, detail = self.rule_engine.evaluate_condition_status(
-                condition, block_condition_data(condition, indicators), field_key="indicator"
+                condition,
+                block_condition_data(
+                    condition, indicators, scheduler_group=self.ohlcv_scheduler_group
+                ),
+                field_key="indicator",
             )
             indicator = str(
                 condition.get("indicator")

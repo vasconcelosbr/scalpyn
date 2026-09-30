@@ -338,6 +338,8 @@ class ProfileEngine:
         self.signal_engine = SignalEngine(signal_config)
 
         # Block engine
+        from .block_condition_timeframe import pinned_ohlcv_scheduler_group
+
         _range_policy = self.l3_gate_runtime_policy.get(
             "l3_global_block_range_compiler"
         ) or {}
@@ -367,6 +369,9 @@ class ProfileEngine:
                 "l3_missing_indicator_policy"
             ],
             legacy_range_compiler_enabled=_range_enabled,
+            ohlcv_scheduler_group=pinned_ohlcv_scheduler_group(
+                self.l3_gate_runtime_policy
+            ),
         )
 
     def _convert_signal_conditions(self, conditions: List[Dict]) -> List[Dict]:
