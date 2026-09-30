@@ -373,6 +373,9 @@ def _compact(row: Dict[str, Any]) -> Dict[str, Any]:
         "values": {k: c.get("value") for k, c in row["indicators"].items()},
         "reasons": {k: c.get("reason") for k, c in row["indicators"].items() if c.get("reason")},
         "components": row["score_components"], "alerts": [a["type"] for a in row["alerts_active"]],
+        "score_pre_veto": row.get("score_pre_veto"), "exhaustion_flag": row.get("exhaustion_flag"),
+        "exhaustion_triggers": row.get("exhaustion_triggers"),
+        "exhaustion_missing": row.get("exhaustion_missing"),
     }
 
 

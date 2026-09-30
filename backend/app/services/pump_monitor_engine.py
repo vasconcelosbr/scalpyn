@@ -69,6 +69,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "upper_wick_ratio": {"weight": 0.5, "lo": 0.4, "hi": 0.8},
             "price_extension_atr": {"weight": 0.5, "lo": 3.0, "hi": 6.0},
         },
+        # Hard cap (never additive): an exhausted asset cannot keep a high score.
+        # Triggers reuse the alert predicates and their thresholds (``alerts``).
+        "exhaustion_veto": {
+            "enabled": False,
+            "extension_min_atr": 3.0,
+            "wick_min": 0.5,
+            "use_wick": True,
+            "use_effort_no_progress": True,
+            "use_breakout_failure": True,
+            "cap": 20,
+        },
     },
     "filters": {"only_rising": {"price_progress_atr_min": 0.25, "delta_norm_min": 0.0}},
     "alerts": {
@@ -220,6 +231,9 @@ def validate_config(body: Dict[str, Any]) -> None:
     for name, spec in {**body["score"]["components"], **body["score"]["penalties"]}.items():
         if float(spec["hi"]) == float(spec["lo"]) or float(spec["weight"]) < 0:
             errors.append(f"score.{name}: hi must differ from lo and weight must be >= 0")
+    veto = body["score"]["exhaustion_veto"]
+    if not 0 <= float(veto["cap"]) <= 100:
+        errors.append("score.exhaustion_veto.cap must be within [0, 100]")
     sync_int = body["display"]["top_n"]
     if int(sync_int) < 0:
         errors.append("display.top_n must be >= 0")
@@ -382,6 +396,7 @@ def build_row(
 
     row = {"symbol": symbol, "indicators": cells}
     row.update(score_row(cells, config))
+    row.update(apply_exhaustion_veto(cells, row["pump_monitor_score"], config))
     row["alerts_active"] = evaluate_alerts(cells, buckets, last_minute_ms, config)
     for name, cell in cells.items():
         cell["color_state"] = color_state(name, cell["value"], config)
@@ -485,6 +500,40 @@ def score_row(cells: Dict[str, Dict[str, Any]], config: Dict[str, Any]) -> Dict[
             "score_version": spec["version"], "score_status": spec["status"], "score_confidence": confidence}
 
 
+def apply_exhaustion_veto(cells: Dict[str, Dict[str, Any]], score: Optional[float],
+                          config: Dict[str, Any]) -> Dict[str, Any]:
+    """Cap the score at ``cap`` when the price is stretched and shows exhaustion.
+
+    The flag is always computed; the cap is applied only when ``enabled``, and
+    it can only lower the score. A trigger with missing input counts as false.
+    """
+    spec = config["score"]["exhaustion_veto"]
+    rules = config["alerts"]
+    v = {k: (cells.get(k) or {}).get("value") for k in
+         ("price_extension_atr", "upper_wick_ratio", "rvol_strict", "buy_persistence",
+          "price_progress_atr", "breakout_hold_ratio", "flow_change")}
+    checks: Dict[str, Optional[bool]] = {}
+    if spec.get("use_wick"):
+        checks["wick"] = None if v["upper_wick_ratio"] is None else v["upper_wick_ratio"] >= float(spec["wick_min"])
+    if spec.get("use_effort_no_progress"):
+        checks["effort_no_progress"] = effort_no_progress_hit(v, rules["effort_no_progress"])
+    if spec.get("use_breakout_failure"):
+        checks["breakout_failure"] = breakout_failure_hit(v, rules["breakout_failure"])
+    missing = [name for name, hit in checks.items() if hit is None]
+    extension = v["price_extension_atr"]
+    if extension is None:
+        missing.insert(0, "price_extension_atr")
+    stretched = extension is not None and extension >= float(spec["extension_min_atr"])
+    triggers = [name for name, hit in checks.items() if hit] if stretched else []
+    flag = bool(triggers)
+    final = score
+    if flag and spec.get("enabled") and score is not None:
+        final = min(score, float(spec["cap"]))
+        cells["pump_monitor_score"]["value"] = final
+    return {"pump_monitor_score": final, "score_pre_veto": score, "exhaustion_flag": flag,
+            "exhaustion_triggers": triggers, "exhaustion_missing": missing}
+
+
 def is_rising(cells: Dict[str, Dict[str, Any]], config: Dict[str, Any]) -> bool:
     rule = config["filters"]["only_rising"]
     progress = (cells.get("price_progress_atr") or {}).get("value")
@@ -496,6 +545,23 @@ def is_rising(cells: Dict[str, Dict[str, Any]], config: Dict[str, Any]) -> bool:
 
 # ── Composite alerts (context, never proof) ──────────────────────────────────
 
+def effort_no_progress_hit(v: Dict[str, Any], rule: Dict[str, Any]) -> Optional[bool]:
+    """Heavy aggressive buying without price progress; None when an input is missing."""
+    if None in (v.get("rvol_strict"), v.get("buy_persistence"), v.get("price_progress_atr")):
+        return None
+    return (v["rvol_strict"] >= rule["rvol_strict_min"]
+            and v["buy_persistence"] >= rule["buy_persistence_min"]
+            and abs(v["price_progress_atr"]) <= rule["abs_price_progress_atr_max"])
+
+
+def breakout_failure_hit(v: Dict[str, Any], rule: Dict[str, Any]) -> Optional[bool]:
+    """Breakout not held while flow turns down; None when an input is missing."""
+    if None in (v.get("breakout_hold_ratio"), v.get("flow_change")):
+        return None
+    return (v["breakout_hold_ratio"] < rule["breakout_hold_ratio_max"]
+            and v["flow_change"] < rule["flow_change_max"])
+
+
 def evaluate_alerts(cells: Dict[str, Dict[str, Any]], buckets: Dict[int, Dict[str, Any]],
                     last_minute_ms: int, config: Dict[str, Any]) -> List[Dict[str, Any]]:
     rules = config["alerts"]
@@ -504,17 +570,12 @@ def evaluate_alerts(cells: Dict[str, Dict[str, Any]], buckets: Dict[int, Dict[st
     active: List[Dict[str, Any]] = []
 
     rule = rules["effort_no_progress"]
-    if (rule.get("enabled") and None not in (v["rvol_strict"], v["buy_persistence"], v["price_progress_atr"])
-            and v["rvol_strict"] >= rule["rvol_strict_min"]
-            and v["buy_persistence"] >= rule["buy_persistence_min"]
-            and abs(v["price_progress_atr"]) <= rule["abs_price_progress_atr_max"]):
+    if rule.get("enabled") and effort_no_progress_hit(v, rule):
         active.append({"type": "effort_no_progress", "inputs": {k: v[k] for k in
                        ("rvol_strict", "buy_persistence", "price_progress_atr")}})
 
     rule = rules["breakout_failure"]
-    if (rule.get("enabled") and None not in (v["breakout_hold_ratio"], v["flow_change"])
-            and v["breakout_hold_ratio"] < rule["breakout_hold_ratio_max"]
-            and v["flow_change"] < rule["flow_change_max"]):
+    if rule.get("enabled") and breakout_failure_hit(v, rule):
         active.append({"type": "breakout_failure", "inputs": {
             "breakout_hold_ratio": v["breakout_hold_ratio"], "flow_change": v["flow_change"],
             "breakout_level": (cells.get("breakout_distance_atr") or {}).get("breakout_level")}})
