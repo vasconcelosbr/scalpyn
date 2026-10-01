@@ -2214,6 +2214,20 @@
         {"path":"backend/app/services/pump_ml_research.py","contains_all":["model.get_booster().save_model(","pump_ml/","applied_delta"]},
         {"path":"deploy/pump-ml-worker.prepared.json","contains_all":["PREPARED_DISABLED","pump_ml","activation_blocker"]}
       ]
+    },
+    {
+      "id":"pump-incremental-label-queue-and-frozen-contracts",
+      "description":"Pump bounded shared reads and immutable listing/feature/cost/temporal contracts; explicit risk and sample uncertainty",
+      "files":[
+        {"path":"backend/alembic/versions/233_pump_label_queue.py","contains_all":["ix_pump_label_due","ON CONFLICT DO NOTHING"]},
+        {"path":"backend/app/services/pump_opportunity_service.py","contains_all":["selected AS MATERIALIZED","max_label_read_points","pg_try_advisory_xact_lock","UPDATE pump_opportunity_label_queue"]},
+        {"path":"backend/app/services/pump_contracts.py","contains_all":["provider_listing_epoch_unavailable","Strict temporal cuts required","Frozen cost policy hash mismatch"]},
+        {"path":"backend/tests/test_pump_contracts.py","contains_all":["test_listing_zero_unknown_no_epoch_invention","test_frozen_manifest_rejects_incompatible_or_ambiguous_contracts"]},
+        {"path":"frontend/components/pump-monitor/PumpOpportunityPanel.tsx","contains_all":["Limites de risco não configurados","Suporte estatístico não validado","Rótulos vencidos na fila"]},
+        {"path":"pump_ml/Dockerfile","contains_all":["kill-after=5s","895s","OMP_NUM_THREADS=1"]},
+        {"path":"pump_ml/job.py","contains_all":["daily_already_recorded","pg_try_advisory_lock","pump_ml_artifacts","production_model_validated"]},
+        {"path":"backend/tests/test_pump_ml_daily_job.py","contains_all":["test_daily_singleton_and_missing_listing_stop_before_training","test_daily_job_cannot_train_micro_sample"]}
+      ]
     }
   ]
 }

@@ -5,7 +5,8 @@ from test_pump_opportunity import NOW,build
 from app.services import pump_opportunity_engine as e
 
 
-def test_exact_batch_never_queries_shared_bars_and_prioritizes_current_contract(monkeypatch):
+@pytest.mark.parametrize("read_exhausted",[False,True])
+def test_exact_batch_shared_reads_queue_and_atomic_completion(monkeypatch,read_exhausted):
     import asyncio,json
     from app import database
     from app.services import pump_opportunity_service as svc
@@ -14,17 +15,19 @@ def test_exact_batch_never_queries_shared_bars_and_prioritizes_current_contract(
         def __init__(self,rows=()):self.rows=rows
         def mappings(self):return self
         def scalars(self):return self
+        def scalar(self):return True
         def all(self):return self.rows
     class DB:
         async def execute(self,query,params=None):
             sql=str(query);queries.append(sql)
             assert 'flow_buckets_1m' not in sql
-            if 'CROSS JOIN' in sql:
-                assert params['current_spec']==e.canonical_hash(p['label_spec'])
-                assert params['batch']==10
+            if 'SELECT o.payload,q.horizon_minutes' in sql:
+                assert params['batch']==512
                 return Result([{'payload':p,'horizon':5}])
-            if 'DISTINCT ON(bucket_start)' in sql:return Result(paths())
-            if 'INSERT INTO' in sql:
+            if 'selected AS MATERIALIZED' in sql:
+                if read_exhausted:return Result([{'exhausted':True,'points':100001,'bytes':20000001}])
+                return Result([{'instrument_id':p['instrument_id'],'payload':path,'points':18,'bytes':2000,'exhausted':False} for path in paths()])
+            if 'INSERT INTO pump_opportunity_labels' in sql:
                 records=json.loads(params['records']);assert len(records)==1
                 assert records[0]['p']['resolution']=='trades_exact_window_v1'
             return Result()
@@ -34,8 +37,11 @@ def test_exact_batch_never_queries_shared_bars_and_prioritizes_current_contract(
     monkeypatch.setattr(svc,'get_config',get_config)
     monkeypatch.setattr(svc,'storage_bytes',storage)
     monkeypatch.setattr(database,'run_db_task',run_db_task)
-    assert asyncio.run(svc.label_batch('fixture'))['written']==1
-    assert any(':current_spec) DESC' in q and '(h.horizon::integer=5) DESC' in q for q in queries)
+    result=asyncio.run(svc.label_batch('fixture'))
+    assert result['written']==(0 if read_exhausted else 1)
+    assert sum('selected AS MATERIALIZED' in q for q in queries)==1
+    assert any('ORDER BY q.ready_at' in q for q in queries)
+    assert any('UPDATE pump_opportunity_label_queue' in q for q in queries) is not read_exhausted
 
 
 def observation():

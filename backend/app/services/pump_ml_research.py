@@ -18,15 +18,18 @@ def selection_metrics(actual,selected):
 
 def train_challenger(rows,*,spec,output_root):
     """All numeric gates, split dates, costs and resource ceilings must be explicit."""
-    required=("features","boundaries","embargo_seconds","min_episodes","min_days","min_instruments",
+    required=("features","feature_spec_hash","producer_config_hash","label_spec","label_spec_hash","reference_policy","cost_policy","boundaries","embargo_seconds","min_episodes","min_days","min_instruments",
               "max_rows","max_threads","params","decision_threshold","cost_policy_hash","support_criteria")
     if any(k not in spec for k in required): raise ValueError("Explicit Pump training manifest required")
+    from .pump_contracts import validate_manifest
+    frozen=validate_manifest(spec)
     if len(rows)>spec["max_rows"] or not 0<spec["max_threads"]<=2:
         raise ValueError("Pump research budget exceeded")
     usable=[r for r in rows if r["manifest"]["listing_certified"] and r.get("target") in (True,False)
             and r.get("label_coverage_complete") and all(eng.number(r["values"].get(f)) for f in spec["features"])]
-    hashes={tuple(r["manifest"][k] for k in ("feature_spec_hash","label_spec_hash","cost_policy_hash")) for r in usable}
-    if len(hashes)!=1 or (hashes and next(iter(hashes))[2]!=spec["cost_policy_hash"]):
+    hashes={tuple(r["manifest"][k] for k in ("feature_spec_hash","label_spec_hash","cost_policy_hash","legacy_config_hash")) for r in usable}
+    expected=(spec["feature_spec_hash"],spec["label_spec_hash"],spec["cost_policy_hash"],spec["producer_config_hash"])
+    if len(hashes)!=1 or (hashes and next(iter(hashes))!=expected):
         raise ValueError("Incompatible Pump contracts or empty validated co cohort")
     if len({r["episode_id"] for r in usable})<spec["min_episodes"] or len({r["decision_at"][:10] for r in usable})<spec["min_days"] or len({r["instrument_id"] for r in usable})<spec["min_instruments"]:
         raise ValueError("Insufficient independent Pump support")
@@ -71,7 +74,7 @@ def train_challenger(rows,*,spec,output_root):
     model.get_booster().save_model(root/"xgboost.json")
     (root/"calibrator.json").write_text(json.dumps({"coef":calibrator.coef_.tolist(),"intercept":calibrator.intercept_.tolist()}),encoding="utf-8")
     manifest={"experiment_id":experiment,"artifact_namespace":f"pump_ml/{experiment}","spec":spec,
-              "contracts":list(next(iter(hashes))),"status":"challenger","auto_promotion":False,"delta":0}
+              "contracts":list(next(iter(hashes))),"frozen_contract":frozen,"status":"challenger","auto_promotion":False,"delta":0}
     (root/"manifest.json").write_text(json.dumps(manifest,sort_keys=True),encoding="utf-8")
     (root/"metrics.json").write_text(json.dumps(metrics,sort_keys=True),encoding="utf-8")
     return {"manifest":manifest,"metrics":metrics}

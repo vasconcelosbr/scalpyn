@@ -22,3 +22,10 @@ def purge():
     from ..database import run_db_task
     from ..services.pump_monitor_service import purge as _purge
     return _run_async(run_db_task(_purge, celery=True))
+
+
+@celery_app.task(name="app.tasks.pump_monitor.refresh_listing_contracts")
+def refresh_listing_contracts():
+    import asyncio
+    from ..services.pump_opportunity_service import refresh_listing_contracts as refresh
+    return _run_async(asyncio.wait_for(refresh(),20))
