@@ -184,7 +184,7 @@ async def _collect_symbol(symbol: str, minutes: List[int], config: Dict[str, Any
             age = None
         book = {"bids": book.get("bids"), "asks": book.get("asks"), "observed_at": observed,
                 "age_seconds": round(age, 1) if age is not None else None}
-    return {"buckets": rows, "book": book}
+    return {"buckets": rows, "book": book, "raw_price_input": raw}
 
 
 # ── Redis state ──────────────────────────────────────────────────────────────

@@ -1,0 +1,16 @@
+{
+  "status": "PREPARED_DISABLED",
+  "namespace": "pump_ml",
+  "queue": "pump_ml",
+  "worker_queues": "pump_ml",
+  "task_module": "app.tasks.pump_ml",
+  "concurrency": 1,
+  "beat_schedule": null,
+  "artifact_prefix": "pump_ml/",
+  "cpu_budget": null,
+  "ram_budget_bytes": null,
+  "activation_blocker": "explicit capacity budget, dataset maturity and model validation approval",
+  "shadow_dependencies": [],
+  "applied_delta": 0,
+  "pool_connected": false
+}

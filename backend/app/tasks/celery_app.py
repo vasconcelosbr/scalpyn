@@ -97,12 +97,13 @@ QUEUE_STRUCTURAL_SCAN = "structural_scan"
 # Pump Monitor 30 s observation cycle — isolated so it never waits behind
 # the 5 m indicator chain or the hour-long pump_radar backfills.
 QUEUE_PUMP_MONITOR = "pump_monitor"
+QUEUE_PUMP_ML = "pump_ml"  # Reserved; no beat schedule or production consumer.
 
 ALL_QUEUES = (
     QUEUE_MICROSTRUCTURE, QUEUE_STRUCTURAL, QUEUE_STRUCTURAL_COMPUTE,
     QUEUE_EXECUTION, QUEUE_AI_ORCHESTRATION, QUEUE_RESEARCH_OHLCV,
     QUEUE_PUMP_RADAR, QUEUE_STRUCTURAL_COLLECT, QUEUE_STRUCTURAL_SCAN,
-    QUEUE_PUMP_MONITOR,
+    QUEUE_PUMP_MONITOR, QUEUE_PUMP_ML,
 )
 
 _ALL_TASK_MODULES = (
@@ -150,6 +151,7 @@ _ALL_TASK_MODULES = (
         "app.tasks.pump_radar",
         "app.tasks.pump_monitor",
         "app.tasks.pump_research",
+        "app.tasks.pump_ml",
 )
 
 
@@ -175,6 +177,8 @@ def _configured_task_modules() -> tuple[str, ...]:
         return ("app.tasks.pump_radar",)
     if queues == (QUEUE_PUMP_MONITOR,):
         return ("app.tasks.pump_monitor",)
+    if queues == (QUEUE_PUMP_ML,):
+        return ("app.tasks.pump_ml",)
     return _ALL_TASK_MODULES
 
 
@@ -282,6 +286,7 @@ TASK_ROUTES = {
     # Pump Monitor — observation only, own queue/worker.
     "app.tasks.pump_monitor.cycle":                      {"queue": QUEUE_PUMP_MONITOR},
     "app.tasks.pump_monitor.purge":                      {"queue": QUEUE_PUMP_MONITOR},
+    "app.tasks.pump_ml.train_challenger":                {"queue": QUEUE_PUMP_ML},
     # Research dataset labels and partitions: research worker, never the monitor worker.
     "app.tasks.pump_research.label":                     {"queue": QUEUE_RESEARCH_OHLCV},
     "app.tasks.pump_research.maintain":                  {"queue": QUEUE_RESEARCH_OHLCV},
@@ -538,6 +543,7 @@ TASK_ANNOTATIONS = {
     "app.tasks.pump_radar.reap_stale_assets": {"time_limit": 120, "soft_time_limit": 90, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.pump_monitor.cycle": {"time_limit": 60, "soft_time_limit": 50, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.pump_monitor.purge": {"time_limit": 300, "soft_time_limit": 270, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.pump_ml.train_challenger": {"time_limit": 30, "soft_time_limit": 20, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.pump_research.label": {"time_limit": 1800, "soft_time_limit": 1740, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.pump_research.maintain": {"time_limit": 300, "soft_time_limit": 270, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
 

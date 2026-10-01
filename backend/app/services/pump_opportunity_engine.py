@@ -16,9 +16,11 @@ DEFAULT_CONFIG = {
     "max_feature_age_seconds": 300, "freshness_seconds": 120,
     "episode_gap_seconds": 180, "visual_exit_cycles": 2,
     "listing_ids": {}, "ml_delta_enabled": False, "pool_connection_enabled": False,
+    "price_paths_enabled": False,
     "labels_enabled": False, "inference_enabled": False, "training_enabled": False,
     "budget": {"max_assets": 100, "write_timeout_seconds": 4, "batch_labels": 100,
-               "label_timeout_seconds": 4, "retention_days": 30, "max_storage_bytes": 1000000000},
+               "label_timeout_seconds": 4, "retention_days": 30, "max_storage_bytes": 1000000000,
+               "max_price_points_per_cycle": 10000, "max_price_points_per_minute": 3000},
     "labels": {"version": "pump_gross_touch_v2", "horizons_minutes": [5,10,15,30,60,120],
                "targets_pct": [0.6,0.8], "downside_pct": -2, "settle_seconds": 3,
                "resolution": "closed_1m_conservative", "cost_policy": None},
@@ -57,7 +59,7 @@ def number(value):
 
 
 def validate_config(c):
-    for key in ("enabled","ui_enabled","labels_enabled","ml_delta_enabled","pool_connection_enabled","training_enabled","inference_enabled"):
+    for key in ("enabled","ui_enabled","labels_enabled","price_paths_enabled","ml_delta_enabled","pool_connection_enabled","training_enabled","inference_enabled"):
         if not isinstance(c[key],bool):raise ValueError(f"Boolean flag required: {key}")
     if c.get("score_unit") != "confirmation_points":
         raise ValueError("SCORE_UNIT_MISMATCH: use confirmation_points; legacy 0-100 is incompatible")
@@ -70,7 +72,7 @@ def validate_config(c):
     for key in ("max_quote_age_seconds","max_feature_age_seconds","freshness_seconds","episode_gap_seconds","visual_exit_cycles"):
         if not number(c[key]) or c[key] <= 0:
             raise ValueError(f"Invalid positive configuration: {key}")
-    for key in ("max_assets","batch_labels","retention_days","max_storage_bytes"):
+    for key in ("max_assets","batch_labels","retention_days","max_storage_bytes","max_price_points_per_cycle","max_price_points_per_minute"):
         if not isinstance(c["budget"][key],int) or c["budget"][key] <= 0:
             raise ValueError(f"Invalid budget: {key}")
     for key in ("write_timeout_seconds","label_timeout_seconds"):
@@ -96,8 +98,11 @@ def validate_config(c):
     for value in c["risks"].values():
         if value is not None and (not number(value) or value <= 0):
             raise ValueError("Risk limits must be positive or null (unconfigured)")
-    if c["labels"]["resolution"] != "closed_1m_conservative":
+    if c["labels"]["resolution"] not in ("closed_1m_conservative","trades_exact_window_v1"):
         raise ValueError("Unsupported label resolution")
+    if c["labels"]["resolution"]=="trades_exact_window_v1":
+        if c["labels"].get("future_price_policy")!="last_trade_asof_endpoint_v1" or not number(c["labels"].get("endpoint_max_age_seconds")) or c["labels"]["endpoint_max_age_seconds"]<=0:
+            raise ValueError("Exact label future-price policy and endpoint age required")
     if not c["labels"]["horizons_minutes"] or any(not isinstance(h,int) or not 0<h<=120 for h in c["labels"]["horizons_minutes"]):
         raise ValueError("Horizons must be integer minutes up to 120")
     if any(not number(t) or t<=0 for t in c["labels"]["targets_pct"]):
@@ -307,3 +312,80 @@ def purged_split(rows,boundary,embargo_seconds,max_horizon_minutes=120):
         if t+timedelta(minutes=max_horizon_minutes)<cut: train.append(r)
         elif t>=cut+timedelta(seconds=embargo_seconds): test.append(r)
     return train,test
+
+
+def price_path(raw,bucket,limit):
+    """Archive every price timestamp in a closed minute, or mark truncation unknown."""
+    start=int(bucket["bucket_start_ms"]);end=start+60000
+    points=[];seen=set();invalid=0
+    for t in sorted(raw.get("trades",[]),key=lambda t:(float(t.get("ts_ms") or 0),str(t.get("trade_id") or ""))):
+        try: stamp=float(t["ts_ms"]);price=float(t["price"])
+        except (KeyError,TypeError,ValueError):invalid+=1;continue
+        if not math.isfinite(stamp):invalid+=1;continue
+        if not start<=stamp<end:continue
+        if not math.isfinite(price) or price<=0:invalid+=1;continue
+        key=str(t.get("trade_id")) if t.get("trade_id") is not None else f"{stamp}:{price}:{t.get('side')}:{t.get('amount')}"
+        if key in seen:continue
+        seen.add(key);points.append([stamp,price,key])
+    reason=bucket.get("gap_reason")
+    if bucket.get("partial"):reason=reason or "partial_source"
+    if str(raw.get("source","")).startswith("gate_trades_ws") and raw.get("alive_slots") is None:
+        reason="ws_liveness_unavailable"
+    if invalid:reason="invalid_raw_trade"
+    if len(points)>limit:reason="price_point_budget_exceeded"
+    # Invalid/truncated revisions remain preserved and never certify absence.
+    return {"bucket_start_ms":start,"bucket_end_ms":end,"points":points[:limit],
+            "reported_points":len(points),"complete":reason is None,"reason":reason,
+            "source":raw.get("source"),"covered_from_ms":raw.get("covered_from_ms"),
+            "gap_windows":list(raw.get("gap_windows") or []),"capture_contract":"pump_raw_price_path_v1"}
+
+
+def exact_gross_label(observation,paths,horizon,now):
+    start=utc(observation["decision_at"]);end=start+timedelta(minutes=horizon)
+    spec=observation["label_spec"];price=observation["reference"]["price"]
+    result={"horizon_minutes":horizon,"label_spec_hash":canonical_hash(spec),"targets":{},"status":"pending",
+            "reason":None,"resolution":spec["resolution"],"future_price_policy":spec["future_price_policy"],
+            "endpoint_at":end.isoformat(),"endpoint_return_pct":None,"net_return_pct":None,
+            "cost_policy":spec["cost_policy"],"mfe_pct":None,"mae_pct":None,"order_ambiguous":False}
+    if utc(now)<end+timedelta(seconds=spec["settle_seconds"]):return result
+    result["status"]="unknown"
+    if not number(price) or price<=0:result["reason"]="reference_unavailable";return result
+    start_ms=start.timestamp()*1000;end_ms=end.timestamp()*1000
+    expected=list(range(int(start_ms//60000)*60000,int(end_ms//60000)*60000+1,60000))
+    by_minute={int(p["bucket_start_ms"]):p for p in paths}
+    gaps=[ts for ts in expected if ts not in by_minute or not by_minute[ts]["complete"]]
+    points=sorted((p for path in paths for p in path["points"] if start_ms<=p[0]<=end_ms),key=lambda p:(p[0],p[2]))
+    complete=not gaps
+    result.update(coverage_complete=complete,expected_minutes=len(expected),observed_minutes=len(expected)-len(gaps),missing_minutes=len(gaps),boundary_ambiguous=False)
+    for target in spec["targets_pct"]:
+        hits=[p for p in points if p[1]>=price*(1+target/100)]
+        first=hits[0] if hits else None
+        censored=bool(first and any(gap<first[0] for gap in gaps))
+        stamp=datetime.fromtimestamp(first[0]/1000,timezone.utc).isoformat() if first else None
+        result["targets"][str(target)]={"hit":True if first else False if complete else None,
+            "first_touch_at":stamp if first and not censored else None,
+            "first_touch_interval":None if not first or censored else [stamp,stamp],
+            "time_to_touch_seconds":(first[0]-start_ms)/1000 if first and not censored else None,
+            "first_touch_censored":censored,"reason":"gap_before_observed_hit" if censored else None}
+    endpoint_candidates=[p for path in paths for p in path["points"] if p[0]<=end_ms]
+    endpoint=max(endpoint_candidates,key=lambda p:(p[0],p[2])) if endpoint_candidates else None
+    endpoint_age=(end_ms-endpoint[0])/1000 if endpoint else None
+    endpoint_gap=any(ts+60000> (endpoint[0] if endpoint else start_ms) for ts in gaps)
+    if endpoint and endpoint_age<=spec["endpoint_max_age_seconds"] and not endpoint_gap:
+        result["endpoint_return_pct"]=(endpoint[1]/price-1)*100
+        result["endpoint_price_at"]=datetime.fromtimestamp(endpoint[0]/1000,timezone.utc).isoformat()
+        result["endpoint_age_seconds"]=endpoint_age
+        if spec["cost_policy"]:
+            result["net_return_pct"]=result["endpoint_return_pct"]-spec["cost_policy"]["roundtrip_pct"]
+    changes=[(p[1]/price-1)*100 for p in points]
+    result["partial_mfe_lower_bound_pct"]=max(changes) if changes else None
+    result["partial_mae_upper_bound_pct"]=min(changes) if changes else None
+    down=next((p for p in points if p[1]<=price*(1+spec["downside_pct"]/100)),None)
+    result["downside"]={"level_pct":spec["downside_pct"],"hit":True if down else False if complete else None}
+    if down:
+        result["order_ambiguous"]=any(p[0]==down[0] and p[1]>=price*(1+max(spec["targets_pct"])/100) for p in points)
+    result["conservative_stop_first"]=True if result["order_ambiguous"] else None
+    if complete and points:
+        result.update(status="known",mfe_pct=max(changes),mae_pct=min(changes))
+    else:result["reason"]="price_gap" if gaps else "no_trades_observed"
+    return result
