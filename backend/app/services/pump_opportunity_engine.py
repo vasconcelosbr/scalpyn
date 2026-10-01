@@ -16,8 +16,10 @@ DEFAULT_CONFIG = {
     "max_feature_age_seconds": 300, "freshness_seconds": 120,
     "episode_gap_seconds": 180, "visual_exit_cycles": 2,
     "listing_ids": {}, "listing_records": {}, "ml_delta_enabled": False, "pool_connection_enabled": False,
+    "listing_evidence_max_age_seconds":86400,
     "price_paths_enabled": False,
     "labels_enabled": False, "inference_enabled": False, "training_enabled": False,
+    "training_job_enabled":False,
     "budget": {"max_assets": 100, "write_timeout_seconds": 4, "batch_labels": 512,
                "label_timeout_seconds": 4, "retention_days": 30, "max_storage_bytes": 1000000000,
                "max_price_points_per_cycle": 10000, "max_price_points_per_minute": 3000,
@@ -60,7 +62,7 @@ def number(value):
 
 
 def validate_config(c):
-    for key in ("enabled","ui_enabled","labels_enabled","price_paths_enabled","ml_delta_enabled","pool_connection_enabled","training_enabled","inference_enabled"):
+    for key in ("enabled","ui_enabled","labels_enabled","price_paths_enabled","ml_delta_enabled","pool_connection_enabled","training_enabled","training_job_enabled","inference_enabled"):
         if not isinstance(c[key],bool):raise ValueError(f"Boolean flag required: {key}")
     if c.get("score_unit") != "confirmation_points":
         raise ValueError("SCORE_UNIT_MISMATCH: use confirmation_points; legacy 0-100 is incompatible")
@@ -74,7 +76,7 @@ def validate_config(c):
     for symbol,record in c["listing_records"].items():
         if not validate_listing(record,symbol):raise ValueError("Pump listing evidence is invalid")
         if c["listing_ids"].get(symbol)!=record["listing_id"]:raise ValueError("Pump listing ID/evidence mismatch")
-    for key in ("max_quote_age_seconds","max_feature_age_seconds","freshness_seconds","episode_gap_seconds","visual_exit_cycles"):
+    for key in ("max_quote_age_seconds","max_feature_age_seconds","freshness_seconds","episode_gap_seconds","visual_exit_cycles","listing_evidence_max_age_seconds"):
         if not number(c[key]) or c[key] <= 0:
             raise ValueError(f"Invalid positive configuration: {key}")
     for key in ("max_assets","batch_labels","retention_days","max_storage_bytes","max_price_points_per_cycle","max_price_points_per_minute","max_label_read_points","max_label_read_bytes"):
@@ -234,10 +236,11 @@ def build_observation(*,user_id,row,book,source_meta,legacy_config,c,decision_at
                "levels":{str(t):price*(1+t/100) if price else None for t in c["labels"]["targets_pct"]}}
     from .pump_contracts import FEATURE_SPEC,validate_listing
     listing_record=c["listing_records"].get(symbol)
+    listing_current=validate_listing(listing_record,symbol) and 0<=(decision-utc(listing_record["captured_at"])).total_seconds()<=c["listing_evidence_max_age_seconds"]
     manifest={"schema_version":CONTRACT_VERSION,"owner_scope":str(user_id),"feature_spec_hash":canonical_hash(FEATURE_SPEC),
               "label_spec_hash":canonical_hash(c["labels"]),"score_config_hash":canonical_hash(c),
               "legacy_config_hash":legacy_config["_meta"]["config_hash"],"cost_policy_hash":canonical_hash(c["labels"]["cost_policy"]),
-              "eligibility_policy":legacy_config["universe_filter"],"listing_certified":validate_listing(listing_record,symbol),
+              "eligibility_policy":legacy_config["universe_filter"],"listing_certified":bool(listing_current),
               "listing_evidence":listing_record,"feature_spec":FEATURE_SPEC,
               "liquidity_reference":{"notional_usdt":legacy_config.get("slippage",{}).get("reference_notional_usdt"),
                   "benchmark":"mid","unit":"percent","fees_included":False},"role":"opportunity"}

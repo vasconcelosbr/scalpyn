@@ -286,6 +286,7 @@ TASK_ROUTES = {
     # Pump Monitor — observation only, own queue/worker.
     "app.tasks.pump_monitor.cycle":                      {"queue": QUEUE_PUMP_MONITOR},
     "app.tasks.pump_monitor.purge":                      {"queue": QUEUE_PUMP_MONITOR},
+    "app.tasks.pump_monitor.refresh_listing_contracts":  {"queue": QUEUE_PUMP_MONITOR},
     "app.tasks.pump_ml.train_challenger":                {"queue": QUEUE_PUMP_ML},
     # Research dataset labels and partitions: research worker, never the monitor worker.
     "app.tasks.pump_research.label":                     {"queue": QUEUE_RESEARCH_OHLCV},
@@ -543,6 +544,7 @@ TASK_ANNOTATIONS = {
     "app.tasks.pump_radar.reap_stale_assets": {"time_limit": 120, "soft_time_limit": 90, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.pump_monitor.cycle": {"time_limit": 60, "soft_time_limit": 50, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.pump_monitor.purge": {"time_limit": 300, "soft_time_limit": 270, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.pump_monitor.refresh_listing_contracts": {"time_limit": 30, "soft_time_limit": 25, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.pump_ml.train_challenger": {"time_limit": 30, "soft_time_limit": 20, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.pump_research.label": {"time_limit": 1800, "soft_time_limit": 1740, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.pump_research.maintain": {"time_limit": 300, "soft_time_limit": 270, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
@@ -820,6 +822,10 @@ celery_app.conf.beat_schedule = {
     "pump_monitor_retention": {
         "task": "app.tasks.pump_monitor.purge",
         "schedule": 3600.0,
+    },
+    "pump_listing_contract_refresh": {
+        "task":"app.tasks.pump_monitor.refresh_listing_contracts",
+        "schedule":21600.0,
     },
     # Research dataset: hourly offline labels (only rows older than t + H_max + settle)
     # and partition upkeep (create days ahead, drop beyond retention).

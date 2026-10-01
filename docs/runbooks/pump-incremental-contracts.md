@@ -62,11 +62,29 @@ option is calibrated, activated or recommended as economically validated.
 Extension and risk penalties also require a recorded decision; no legacy
 Pool/exit thresholds change as part of that choice.
 
-## New training job budget — still disabled
+## Exclusive daily training job — approval updated
 
-Proposed dedicated job:1vCPU/2GB, one daily run <=15min, exit after completion,
-no permanent consumer. Railway's documented monetary hard limit is workspace
-wide and can stop every workload. No hard USD5 limit was applied to the live
-workspace, and no per-service all-charges cap has been verified. Do not create
-or enable the new job under a guaranteed USD5 condition until that gap is
-resolved explicitly; runtime limits/estimated spend are not a billing guarantee.
+The user explicitly confirmed1vCPU/2GB, one daily run <=15min, billing by use
+without a guaranteed monthly monetary cap. No workspace limit is changed.
+Cron06:00UTC avoids the existing weekly03:00 trainer slot; one replica, no
+restart/retry, database singleton and one execution per UTC date. Coreutils
+TERM895s/KILL5s bounds process lifetime to900s. The image has independently
+pinned dependencies and copies only three pure Pump modules; no Shadow model,
+task, queue or artifact module is included. Existing DB binding is reused;
+there is no new credential or bucket. Native model/calibrator/manifest/metrics
+are preserved in owner-scoped Pump registry/artifact tables, with5MB ceiling.
+
+Mechanical challenger floors are explicit and provisional:200 compatible rows,
+100 episodes,10 instruments,1day; each purged temporal cohort needs both target
+outcomes. Cuts are50/70/85% of distinct captured times, with120min embargo and
+max horizon purge. Max10000 rows/one thread/100 depth3 trees. These are compute
+eligibility choices, not evidence of statistical model readiness; no trained
+challenger is promoted or contributes score. Insufficient data produces a
+registered blocked run and clean exit. A native monetary per-service hard cap
+has not been verified; runtime ceilings do not guarantee an invoice amount.
+
+Listing metadata refresh is a bounded public read every6h on the existing Pump
+queue, max10 owners/100 instruments,20s job ceiling. Evidence older than24h is
+uncertified in new observations. Metadata failure cannot alter old raw history
+or enable trading. New identity requires a new instrument/episode; no merging
+of pre-certification samples into the certified training cohort.

@@ -28,7 +28,9 @@ async def storage_bytes(db):
         +pg_total_relation_size('pump_ml_predictions')
         +COALESCE(pg_total_relation_size(to_regclass('pump_opportunity_price_paths')),0)
         +COALESCE(pg_total_relation_size(to_regclass('pump_opportunity_label_queue')),0)
-        +COALESCE(pg_total_relation_size(to_regclass('pump_opportunity_job_runs')),0)"""))).scalar())
+        +COALESCE(pg_total_relation_size(to_regclass('pump_opportunity_job_runs')),0)
+        +COALESCE(pg_total_relation_size(to_regclass('pump_ml_job_runs')),0)
+        +COALESCE(pg_total_relation_size(to_regclass('pump_ml_artifacts')),0)"""))).scalar())
 
 
 async def pending_support_symbols(db,user_id,eligible,minute):
@@ -54,10 +56,41 @@ async def get_config(db,user_id):
 
 async def put_config(db,user_id,requested):
     from .config_service import config_service
-    c=eng.config(eng.merge(await get_config(db,user_id),requested))
+    merged=eng.merge(await get_config(db,user_id),requested)
+    for field in ("listing_ids","listing_records"):
+        if field in requested:merged[field]=requested[field]  # authoritative maps, removals must not retain stale evidence
+    c=eng.config(merged)
     await config_service.update_config(db,CONFIG_TYPE,user_id,c,changed_by=user_id,
         change_description=f"Pump-only observation contract {eng.canonical_hash(c)}; delta=0; disconnected")
     return c
+
+
+async def refresh_listing_contracts():
+    """One bounded public metadata read; Pump-only ConfigService writes."""
+    from ..database import run_db_task
+    from ..exchange_adapters.gate_adapter import GateAdapter
+    from .pump_contracts import gate_listing_record
+    async def owners(db):
+        return list((await db.execute(text("""SELECT DISTINCT user_id FROM config_profiles WHERE config_type=:type
+            AND pool_id IS NULL AND is_active IS NOT FALSE AND config_json->>'enabled'='true' ORDER BY user_id LIMIT 10"""),{"type":CONFIG_TYPE})).scalars().all())
+    users=await run_db_task(owners,celery=True)
+    if not users:return {"status":"disabled","owners":0}
+    pairs=await asyncio.wait_for(GateAdapter._public_get(f"{GateAdapter.SPOT_BASE}/spot/currency_pairs"),5)
+    if not isinstance(pairs,list) or len(pairs)>10000:raise ValueError("Pump listing metadata budget/schema exceeded")
+    pairs={p["id"]:p for p in pairs};captured=datetime.now(timezone.utc);results=[]
+    for user_id in users:
+        async def apply(db):
+            c=await get_config(db,user_id)
+            current=(await db.execute(text("""SELECT DISTINCT symbol FROM pump_opportunity_observations
+                WHERE user_id=:u AND decision_at>=:since ORDER BY symbol LIMIT :max"""),
+                {"u":user_id,"since":captured-timedelta(seconds=c["freshness_seconds"]*2),"max":c["budget"]["max_assets"]})).scalars().all()
+            if not current:return {"owner":str(user_id),"status":"no_current_universe"}
+            records={s:gate_listing_record(pairs.get(s,{}),captured) for s in current}
+            records={s:r for s,r in records.items() if r["certified"]}
+            await put_config(db,user_id,{"listing_records":records,"listing_ids":{s:r["listing_id"] for s,r in records.items()}})
+            return {"owner":str(user_id),"certified":len(records),"unverified":len(current)-len(records)}
+        results.append(await asyncio.wait_for(run_db_task(apply,celery=True),4))
+    return {"status":"ok","source_captured_at":captured.isoformat(),"results":results}
 
 
 async def latest(db,user_id,c=None):
@@ -281,8 +314,12 @@ async def intelligence(db,user_id,conditions=None):
     patterns=[{"pattern":name,**describe(sample)} for name,sample in sorted(groups.items())]
     exploration=describe([r for r in rows if all(eng.condition(r["payload"]["values"],c) is True for c in conditions)]) if conditions else None
     experiments=(await db.execute(text("SELECT experiment_id,created_at,status,manifest,metrics FROM pump_ml_experiments WHERE user_id=:u ORDER BY created_at DESC LIMIT 20"),{"u":user_id})).mappings().all()
+    training_runs=(await db.execute(text("""SELECT run_id,started_at,finished_at,
+        CASE WHEN status='running' AND deadline_at<now() THEN 'deadline_exceeded' ELSE status END AS status,payload
+        FROM pump_ml_job_runs WHERE user_id=:u ORDER BY started_at DESC LIMIT 20"""),{"u":user_id})).mappings().all()
     return {"contract_version":eng.CONTRACT_VERSION,"as_of":datetime.now(timezone.utc).isoformat(),
             "model":{"status":"coletando","algorithm":"XGBoost Pump","delta":0,"probability":None,"auto_promotion":False,
                      "reason":"insufficient_validated_point_in_time_data","shadow_isolation":True},
             "baseline":baseline,"patterns":patterns,"exploration":exploration,"experiments":[dict(e) for e in experiments],
+            "training_runs":[dict(r) for r in training_runs],
             "sample_limit":5000,"sample_policy":"most_recent_all_candidates","target":{"gross_pct":0.8,"horizon_minutes":5}}
