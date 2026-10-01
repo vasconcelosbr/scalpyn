@@ -25,7 +25,8 @@ def test_exact_batch_never_queries_shared_bars_and_prioritizes_current_contract(
                 return Result([{'payload':p,'horizon':5}])
             if 'DISTINCT ON(bucket_start)' in sql:return Result(paths())
             if 'INSERT INTO' in sql:
-                label=json.loads(params['p']);assert label['resolution']=='trades_exact_window_v1'
+                records=json.loads(params['records']);assert len(records)==1
+                assert records[0]['p']['resolution']=='trades_exact_window_v1'
             return Result()
     async def get_config(db,user):return e.config({'labels_enabled':True,'labels':p['label_spec']})
     async def storage(db):return 0
