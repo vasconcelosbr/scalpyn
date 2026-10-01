@@ -111,6 +111,12 @@ def validate_config(c):
     if c["labels"]["resolution"]=="trades_exact_window_v1":
         if c["labels"].get("future_price_policy")!="last_trade_asof_endpoint_v1" or not number(c["labels"].get("endpoint_max_age_seconds")) or c["labels"]["endpoint_max_age_seconds"]<=0:
             raise ValueError("Exact label future-price policy and endpoint age required")
+    pre_touch=c["labels"].get("pre_touch_policy")
+    if c["labels"].get("version")=="pump_gross_touch_v4":
+        if c["labels"]["resolution"]!="trades_exact_window_v1" or pre_touch!="reference_to_first_touch_strict_timestamp_v1":
+            raise ValueError("V4 requires the exact versioned pre-touch policy")
+    elif pre_touch is not None:
+        raise ValueError("Pre-touch policy requires pump_gross_touch_v4")
     if not c["labels"]["horizons_minutes"] or any(not isinstance(h,int) or not 0<h<=120 for h in c["labels"]["horizons_minutes"]):
         raise ValueError("Horizons must be integer minutes up to 120")
     if any(not number(t) or t<=0 for t in c["labels"]["targets_pct"]):
@@ -373,8 +379,12 @@ def exact_gross_label(observation,paths,horizon,now):
     complete=not gaps
     result.update(coverage_complete=complete,expected_minutes=len(expected),observed_minutes=len(expected)-len(gaps),missing_minutes=len(gaps),boundary_ambiguous=False)
     for target in spec["targets_pct"]:
-        hits=[p for p in points if p[1]>=price*(1+target/100)]
-        first=hits[0] if hits else None
+        metric=None
+        if spec.get("version")=="pump_gross_touch_v4":
+            first,metric=first_touch_and_drawdown(points,gaps,price,target,complete,spec["pre_touch_policy"])
+        else:
+            hits=[p for p in points if p[1]>=price*(1+target/100)]
+            first=hits[0] if hits else None
         censored=bool(first and any(gap<first[0] for gap in gaps))
         stamp=datetime.fromtimestamp(first[0]/1000,timezone.utc).isoformat() if first else None
         result["targets"][str(target)]={"hit":True if first else False if complete else None,
@@ -382,6 +392,8 @@ def exact_gross_label(observation,paths,horizon,now):
             "first_touch_interval":None if not first or censored else [stamp,stamp],
             "time_to_touch_seconds":(first[0]-start_ms)/1000 if first and not censored else None,
             "first_touch_censored":censored,"reason":"gap_before_observed_hit" if censored else None}
+        if metric is not None:
+            result["targets"][str(target)]["pre_touch"]=metric
     endpoint_candidates=[p for path in paths for p in path["points"] if p[0]<=end_ms]
     endpoint=max(endpoint_candidates,key=lambda p:(p[0],p[2])) if endpoint_candidates else None
     endpoint_age=(end_ms-endpoint[0])/1000 if endpoint else None
@@ -404,3 +416,41 @@ def exact_gross_label(observation,paths,horizon,now):
         result.update(status="known",mfe_pct=max(changes),mae_pct=min(changes))
     else:result["reason"]="price_gap" if gaps else "no_trades_observed"
     return result
+
+
+def first_touch_and_drawdown(points,gaps,reference,target,complete,policy):
+    """Reference-anchored adverse excursion, excluding the first touch.
+
+    Trade IDs break sorting ties but do not prove exchange execution order.
+    A lower-priced trade at the touch timestamp therefore makes this metric
+    unknown. Later gaps and later drawdowns do not affect the pre-touch prefix.
+    """
+    metric={"policy":policy,"status":"unknown","mae_before_touch_pct":None,
+            "drawdown_before_touch_pct":None,"order_ambiguous":False,"reason":None}
+    first=None;minimum_price=reference;prefix_price=reference;stamp_seen=None;lower_at_stamp=False
+    threshold=reference*(1+target/100)
+    # Find the first hit and the minimum strictly before its timestamp in one
+    # pass. Stop after its tied timestamp group; no additional archive reads.
+    for point in points:
+        stamp=point[0];price=point[1]
+        if first is not None and stamp>first[0]:break
+        if stamp!=stamp_seen:
+            stamp_seen=stamp;prefix_price=minimum_price;lower_at_stamp=False
+        if price>=threshold:
+            if first is None:first=point
+        else:lower_at_stamp=True
+        if price<minimum_price:minimum_price=price
+    if first is None:
+        metric.update(status="not_reached" if complete else "unknown",
+                      reason="target_not_reached" if complete else "price_gap_no_observed_touch")
+        return first,metric
+    if any(gap<=first[0] for gap in gaps):
+        metric["reason"]="gap_before_or_at_observed_touch"
+        return first,metric
+    if lower_at_stamp:
+        metric.update(order_ambiguous=True,reason="touch_timestamp_order_ambiguous")
+        return first,metric
+    minimum=(prefix_price/reference-1)*100
+    metric.update(status="known",mae_before_touch_pct=minimum,
+                  drawdown_before_touch_pct=-minimum if minimum else 0.0)
+    return first,metric
