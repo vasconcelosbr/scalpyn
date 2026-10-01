@@ -5,6 +5,7 @@ import { ArrowDown, ArrowUp, Columns3, RefreshCw, ShieldAlert } from "lucide-rea
 
 import { apiGet, apiPut } from "@/lib/api";
 import styles from "./pump-monitor.module.css";
+import PumpOpportunityPanel from "@/components/pump-monitor/PumpOpportunityPanel";
 
 type Cell = {
   value: number | string | boolean | null;
@@ -111,6 +112,16 @@ function savePreset(columns: string[]) {
 }
 
 export default function PumpMonitorPage() {
+  const [legacy,setLegacy]=useState(false);
+  return <div className={styles.page}>
+    <button type="button" className={styles.control} onClick={()=>setLegacy(v=>!v)}>
+      {legacy?"Abrir radar de continuidade":"Abrir monitor clássico"}
+    </button>
+    {legacy?<LegacyPumpMonitorPage/>:<PumpOpportunityPanel/>}
+  </div>;
+}
+
+function LegacyPumpMonitorPage() {
   const [data, setData] = useState<Response | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);

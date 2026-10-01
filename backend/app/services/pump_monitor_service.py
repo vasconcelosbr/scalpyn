@@ -182,7 +182,7 @@ async def _collect_symbol(symbol: str, minutes: List[int], config: Dict[str, Any
             age = (datetime.now(timezone.utc) - datetime.fromisoformat(observed)).total_seconds()
         except (TypeError, ValueError):
             age = None
-        book = {"bids": book.get("bids"), "asks": book.get("asks"),
+        book = {"bids": book.get("bids"), "asks": book.get("asks"), "observed_at": observed,
                 "age_seconds": round(age, 1) if age is not None else None}
     return {"buckets": rows, "book": book}
 
@@ -243,6 +243,12 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
     minute = datetime.fromtimestamp(last_minute / 1000, tz=timezone.utc)
     symbols, drain_symbols, market_caps = await run_db_task(
         lambda db: select_universe(db, candidates, config, minute), celery=True)
+    try:
+        from .pump_opportunity_service import pending_support_symbols
+        v2_support = await run_db_task(lambda db: pending_support_symbols(db,user_id,symbols,minute),celery=True)
+        drain_symbols = sorted(set(drain_symbols) | set(v2_support))
+    except Exception as exc:
+        logger.warning("[PUMP-OPPORTUNITY] support lookup unavailable reason=%s",type(exc).__name__)
     collection_symbols = sorted(set(symbols) | set(drain_symbols))
     # Even an empty universe publishes a fresh envelope rather than stale ranks.
 
@@ -287,6 +293,7 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
     level_key = config["price"]["breakout_level_key"]
 
     rows: List[Dict[str, Any]] = []
+    opportunity_source_meta = {}
     new_alert_rows: List[Dict[str, Any]] = []
     # Research dataset: one row per asset per minute, built from what this cycle computed.
     research_due = research.is_research_minute(last_minute, state.get("research_last_minute"), config["research"])
@@ -298,6 +305,7 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
         m = merged.get(symbol)
         snapshot = dict(m.as_flat_dict()) if m else {}
         meta = dict(m.meta) if m else {}
+        opportunity_source_meta[symbol] = _json_safe(meta)
         a = alpha.get(symbol)
         if a:
             snapshot.update(a["values"])
@@ -317,6 +325,7 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
             last_minute_ms=last_minute, now_ms=now_ms, config=config)
         row["indicators"]["market_cap_usd"] = {"value": market_caps.get(symbol),
                                                 "source": "market_metadata", "reason": None}
+        row["last_closed_minute"] = _iso(last_minute)
         if symbol in failures:
             row["collection_error"] = failures[symbol]
         for alert in eng.new_alerts(alert_state.get(symbol) or [], row["alerts_active"]):
@@ -422,6 +431,14 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
     logger.info("[PUMP-UNIVERSE] candidates=%d eligible=%d excluded=%d label_drain=%d cap_min_usd=%s cap_freshness=not_certified",
                 len(candidates), len(symbols), len(candidates) - len(symbols), len(drain_symbols),
                 config["universe_filter"]["min_market_cap_usd"])
+    # Pump-only additive capture AFTER the legacy cycle, sync and persistence.
+    # A failure here cannot change any legacy score, membership or Shadow state.
+    try:
+        from . import pump_opportunity_service as opportunities
+        await opportunities.ingest(user_id, rows, collected, opportunity_source_meta, config)
+        await opportunities.label_batch(user_id)
+    except Exception as exc:
+        logger.warning("[PUMP-OPPORTUNITY] isolated capture/label failure user=%s reason=%s", user_id, type(exc).__name__)
     return {"symbols": len(rows), "failed": len(failures), "alerts": len(new_alert_rows),
             "duration_ms": envelope["cycle_duration_ms"]}
 

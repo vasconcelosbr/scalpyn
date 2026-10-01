@@ -21,7 +21,8 @@ from datetime import datetime
 
 def _flatten(row: dict, keys: dict) -> dict:
     out = {k: row[k] for k in row if k not in ("vals", "contributions", "returns", "path", "barriers",
-                                                "categorical", "null_reasons", "value_keys_hash")}
+                                                "categorical", "null_reasons")}
+    out["value_keys_dictionary"] = json.dumps(keys.get(row["value_keys_hash"], ([], [])))
     vk, ck = keys.get(row["value_keys_hash"], ([], []))
     for k, v in zip(vk, row["vals"] or []):
         out[f"v_{k}"] = v
