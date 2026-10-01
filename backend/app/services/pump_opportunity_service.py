@@ -131,6 +131,8 @@ async def ingest(user_id,rows,collected,source_meta,legacy_config):
     # First immutable capture wins. Repeated 30s legacy cycles cannot move references.
     async def _write(db):
         await db.execute(text("SET LOCAL statement_timeout = '3000ms'"))
+        locked=(await db.execute(text("SELECT pg_try_advisory_xact_lock(hashtextextended('pump_capture:'||CAST(:u AS text),0))"),{"u":str(user_id)})).scalar()
+        if not locked:return {"status":"busy","written":0,"price_paths_written":0}
         used=await storage_bytes(db)
         if used>=c["budget"]["max_storage_bytes"]:
             return {"status":"storage_budget_exhausted","used_bytes":used,"limit_bytes":c["budget"]["max_storage_bytes"]}
@@ -139,6 +141,7 @@ async def ingest(user_id,rows,collected,source_meta,legacy_config):
             {"u":user_id,"since":decision-timedelta(seconds=c["episode_gap_seconds"])})).scalars().all()
         previous={p["symbol"]:p for p in sorted(previous,key=lambda p:p["decision_at"])}
         price_paths_written=0
+        paths=[]
         if c["price_paths_enabled"]:
             remaining=c["budget"]["max_price_points_per_cycle"]
             for symbol,data in sorted(collected.items())[:c["budget"]["max_assets"]]:
@@ -147,13 +150,17 @@ async def ingest(user_id,rows,collected,source_meta,legacy_config):
                 path=eng.price_path(data["raw_price_input"],bucket,min(remaining,c["budget"]["max_price_points_per_minute"]))
                 remaining-=len(path["points"])
                 instrument=eng.identity("gate_spot",symbol,c["listing_ids"].get(symbol) or "listing_unverified")
-                result=await db.execute(text("""INSERT INTO pump_opportunity_price_paths
-                    (user_id,instrument_id,symbol,bucket_start,content_hash,complete,payload)
-                    VALUES(:u,CAST(:i AS uuid),:s,:b,:h,:complete,CAST(:p AS jsonb)) ON CONFLICT DO NOTHING"""),
-                    {"u":user_id,"i":instrument,"s":symbol,"b":datetime.fromtimestamp(bucket["bucket_start_ms"]/1000,timezone.utc),
-                     "h":eng.canonical_hash(path),"complete":path["complete"],"p":json.dumps(path,allow_nan=False)})
-                price_paths_written+=result.rowcount
+                paths.append({"i":instrument,"s":symbol,"b":datetime.fromtimestamp(bucket["bucket_start_ms"]/1000,timezone.utc).isoformat(),
+                    "h":eng.canonical_hash(path),"complete":path["complete"],"p":path})
+        if paths:
+            result=await db.execute(text("""INSERT INTO pump_opportunity_price_paths
+                (user_id,instrument_id,symbol,bucket_start,content_hash,complete,payload)
+                SELECT :u,r.i,r.s,r.b,r.h,r.complete,r.p FROM jsonb_to_recordset(CAST(:batch AS jsonb))
+                AS r(i uuid,s text,b timestamptz,h text,complete boolean,p jsonb) ON CONFLICT DO NOTHING"""),
+                {"u":user_id,"batch":json.dumps(paths,allow_nan=False)})
+            price_paths_written=result.rowcount
         written=0; duplicates=0
+        observations=[]
         for row in sorted(rows,key=lambda r:r["symbol"])[:c["budget"]["max_assets"]]:
             old=previous.get(row["symbol"])
             if old and eng.utc(old["slot_at"])>=slot:
@@ -161,13 +168,16 @@ async def ingest(user_id,rows,collected,source_meta,legacy_config):
             p=eng.build_observation(user_id=user_id,row=row,book=(collected.get(row["symbol"]) or {}).get("book"),
                 source_meta=source_meta.get(row["symbol"],{}),legacy_config=legacy_config,c=c,decision_at=decision,previous=old)
             p["published_at"]=datetime.now(timezone.utc).isoformat()
+            observations.append({"id":p["observation_id"],"i":p["instrument_id"],"e":p["episode_id"],"s":p["symbol"],"p":p})
+        if observations:
             result=await db.execute(text("""INSERT INTO pump_opportunity_observations
                 (observation_id,user_id,instrument_id,episode_id,symbol,slot_at,decision_at,contract_hash,payload)
-                VALUES(CAST(:id AS uuid),:u,CAST(:i AS uuid),CAST(:e AS uuid),:s,:slot,:d,:h,CAST(:p AS jsonb))
+                SELECT r.id,:u,r.i,r.e,r.s,:slot,:d,:h,r.p FROM jsonb_to_recordset(CAST(:batch AS jsonb))
+                AS r(id uuid,i uuid,e uuid,s text,p jsonb)
                 ON CONFLICT(user_id,instrument_id,slot_at) DO NOTHING"""),
-                {"id":p["observation_id"],"u":user_id,"i":p["instrument_id"],"e":p["episode_id"],"s":p["symbol"],
-                 "slot":slot,"d":decision,"h":eng.canonical_hash(c),"p":json.dumps(p,allow_nan=False)})
-            written+=result.rowcount
+                {"u":user_id,"slot":slot,"d":decision,"h":eng.canonical_hash(c),"batch":json.dumps(observations,allow_nan=False)})
+            written=result.rowcount
+            duplicates+=len(observations)-written
         # Immutable stored specification schedules each horizon exactly once.
         await db.execute(text("""INSERT INTO pump_opportunity_label_queue
             (observation_id,user_id,label_spec_hash,horizon_minutes,ready_at)

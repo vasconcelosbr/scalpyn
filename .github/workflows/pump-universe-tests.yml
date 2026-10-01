@@ -19,4 +19,4 @@ jobs:
         run: pip install pytest pandas==2.2.2 numpy==1.26.4 'sqlalchemy[asyncio]>=2.0.31' asyncpg fastapi pydantic-settings
       - name: Verify Pump filter and price-support contracts
         working-directory: backend
-        run: python -m pytest tests/test_pump_market_cap_universe.py tests/test_pump_monitor.py tests/test_pump_research.py tests/test_pump_monitor_exhaustion_veto.py tests/test_pool_selection.py tests/test_pump_opportunity.py tests/test_pump_exact_price_paths.py tests/test_pump_pre_touch_drawdown.py tests/test_pump_contracts.py tests/test_pump_ml_daily_job.py -q
+        run: python -m pytest tests/test_pump_market_cap_universe.py tests/test_pump_monitor.py tests/test_pump_research.py tests/test_pump_monitor_exhaustion_veto.py tests/test_pool_selection.py tests/test_pump_opportunity.py tests/test_pump_exact_price_paths.py tests/test_pump_capture_batch.py tests/test_pump_pre_touch_drawdown.py tests/test_pump_contracts.py tests/test_pump_ml_daily_job.py -q
