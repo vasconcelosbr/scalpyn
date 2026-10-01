@@ -26,7 +26,7 @@ def test_empty_cap_map_fails_closed_and_unknown_is_excluded():
     assert universe.eligible_symbols(['A', 'B'], {'A': 1000000000}, 1000000000)[0] == ['A']
 
 
-@pytest.mark.parametrize('minimum', [None, -1, float('nan'), float('inf')])
+@pytest.mark.parametrize('minimum', [None, -1, float('nan'), float('inf'), False, True, 10**1000])
 def test_invalid_threshold_rejected(minimum):
     config = deepcopy(eng.DEFAULT_CONFIG)
     config['universe_filter']['min_market_cap_usd'] = minimum
@@ -85,12 +85,15 @@ def test_drain_query_is_bounded_and_support_cannot_extend_frontier(monkeypatch):
     assert '>= :minute' in captured['sql']  # final endpoint inclusive, next minute stops
 
 
-@pytest.mark.parametrize('eligible,drains', [(['BIG'], ['SMALL']), ([], ['SMALL']), ([], [])])
-def test_cycle_separates_ranking_and_drain_and_clears_empty_envelope(monkeypatch, eligible, drains):
+@pytest.mark.parametrize('eligible,drains,cadence', [
+    (['BIG'], ['SMALL'], 1), ([], ['SMALL'], 1), ([], [], 1),
+    (['BIG'], ['SMALL'], 2), ([], ['SMALL'], 2)])
+def test_cycle_separates_ranking_and_drain_and_clears_empty_envelope(monkeypatch, eligible, drains, cadence):
     from app.services import pump_monitor_service as svc
     from app import database
     captured = {'collected': [], 'built': [], 'records': [], 'synced': None, 'latest': None}
-    config = eng.effective_config({'universe_pool_id': '00000000-0000-0000-0000-000000000001'})
+    config = deepcopy(eng.effective_config({'universe_pool_id': '00000000-0000-0000-0000-000000000001'}))
+    config['research']['every_n_minutes'] = cadence
     now_ms = int(datetime(2026, 10, 1, 12, 2, 10, tzinfo=timezone.utc).timestamp()*1000)
     minute = ((now_ms-3000)//60000)*60000-60000
     bucket = {'bucket_start_ms': minute, 'high_price': 100, 'low_price': 100,
@@ -136,6 +139,8 @@ def test_cycle_separates_ranking_and_drain_and_clears_empty_envelope(monkeypatch
     support = [r for r in captured['records'] if (r.get('categorical') or {}).get('_research_role') == 'label_drain']
     assert [r['symbol'] for r in support] == drains
     assert all(r['score'] is None and not r['pool_member'] for r in support)
+    observations = [r for r in captured['records'] if r not in support]
+    assert len(observations) == (len(eligible) if cadence == 1 else 0)
 
 
 def test_label_targets_and_export_exclude_price_only_support():

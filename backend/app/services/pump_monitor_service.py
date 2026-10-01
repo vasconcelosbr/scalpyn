@@ -290,6 +290,8 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
     new_alert_rows: List[Dict[str, Any]] = []
     # Research dataset: one row per asset per minute, built from what this cycle computed.
     research_due = research.is_research_minute(last_minute, state.get("research_last_minute"), config["research"])
+    support_due = (config["research"].get("enabled") and
+                   state.get("research_support_last_minute") != last_minute)
     research_rows: List[Dict[str, Any]] = []
     research_keys: Dict[str, tuple] = {}
     for symbol in symbols:
@@ -335,7 +337,7 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
 
     # Persist price-only support separately; excluded symbols never build a score,
     # enter the public envelope/ranking/REALTIME sync, or become a label target.
-    if research_due:
+    if support_due:
         for symbol in drain_symbols:
             data = collected.get(symbol) or {}
             bucket = next((b for b in data.get("buckets", [])
@@ -391,14 +393,17 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
                     "score": r["pump_monitor_score"], "row": json.dumps(_compact(r))} for r in rows])
     await run_db_task(_write, celery=True)
 
-    if research_due and research_rows:
+    if research_rows:
         members = set()
         for pool_state in (state.get("membership") or {}).values():
             members |= set((pool_state or {}).get("members") or {})
         for rec in research_rows:
             rec["pool_member"] = rec["symbol"] in members if rec["symbol"] in symbols else False
         if await research.write_safely(run_db_task, research_rows, research_keys):
-            state["research_last_minute"] = last_minute
+            if research_due:
+                state["research_last_minute"] = last_minute
+            if support_due:
+                state["research_support_last_minute"] = last_minute
 
     if redis is not None:
         try:
