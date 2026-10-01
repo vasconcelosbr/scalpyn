@@ -5,6 +5,38 @@ from test_pump_opportunity import NOW,build
 from app.services import pump_opportunity_engine as e
 
 
+def test_exact_batch_never_queries_shared_bars_and_prioritizes_current_contract(monkeypatch):
+    import asyncio,json
+    from app import database
+    from app.services import pump_opportunity_service as svc
+    p=observation();queries=[]
+    class Result:
+        def __init__(self,rows=()):self.rows=rows
+        def mappings(self):return self
+        def scalars(self):return self
+        def all(self):return self.rows
+    class DB:
+        async def execute(self,query,params=None):
+            sql=str(query);queries.append(sql)
+            assert 'flow_buckets_1m' not in sql
+            if 'CROSS JOIN' in sql:
+                assert params['current_spec']==e.canonical_hash(p['label_spec'])
+                assert params['batch']==10
+                return Result([{'payload':p,'horizon':5}])
+            if 'DISTINCT ON(bucket_start)' in sql:return Result(paths())
+            if 'INSERT INTO' in sql:
+                label=json.loads(params['p']);assert label['resolution']=='trades_exact_window_v1'
+            return Result()
+    async def get_config(db,user):return e.config({'labels_enabled':True,'labels':p['label_spec']})
+    async def storage(db):return 0
+    async def run_db_task(fn,**kwargs):return await fn(DB())
+    monkeypatch.setattr(svc,'get_config',get_config)
+    monkeypatch.setattr(svc,'storage_bytes',storage)
+    monkeypatch.setattr(database,'run_db_task',run_db_task)
+    assert asyncio.run(svc.label_batch('fixture'))['written']==1
+    assert any(':current_spec) DESC' in q and '(h.horizon::integer=5) DESC' in q for q in queries)
+
+
 def observation():
     p=build(decision_at=NOW+timedelta(seconds=3))
     p["label_spec"].update(version="pump_gross_touch_v3",resolution="trades_exact_window_v1",

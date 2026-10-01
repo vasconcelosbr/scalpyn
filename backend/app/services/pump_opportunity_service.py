@@ -144,22 +144,24 @@ async def label_batch(user_id):
             WHERE o.user_id=:u AND l.observation_id IS NULL
               AND o.decision_at + make_interval(mins=>h.horizon::integer)
                   + make_interval(secs=>(o.payload->'label_spec'->>'settle_seconds')::double precision)<=:now
-            ORDER BY o.decision_at,h.horizon::integer LIMIT :batch"""),
-            {"u":user_id,"now":now,"batch":c["budget"]["batch_labels"]})).mappings().all()
+            ORDER BY (o.payload->'manifest'->>'label_spec_hash'=:current_spec) DESC,
+                (h.horizon::integer=5) DESC,o.decision_at,h.horizon::integer LIMIT :batch"""),
+            {"u":user_id,"now":now,"current_spec":eng.canonical_hash(c["labels"]),"batch":c["budget"]["batch_labels"]})).mappings().all()
         written=0
         for item in due:
             p=item["payload"]; h=int(item["horizon"]); start=eng.utc(p["decision_at"])
-            bars=(await db.execute(text("""SELECT bucket_start,high_price::double precision,low_price::double precision,
-                close_price::double precision,partial FROM flow_buckets_1m
-                WHERE symbol=:s AND bucket_start>=:start AND bucket_start<=:end ORDER BY bucket_start"""),
-                {"s":p["symbol"],"start":start.replace(second=0,microsecond=0),"end":start+timedelta(minutes=h)})).mappings().all()
             if p["label_spec"]["resolution"]=="trades_exact_window_v1":
                 paths=(await db.execute(text("""SELECT DISTINCT ON(bucket_start) payload FROM pump_opportunity_price_paths
                     WHERE user_id=:u AND instrument_id=CAST(:i AS uuid) AND bucket_start>=:start AND bucket_start<=:end
                     ORDER BY bucket_start,complete DESC,captured_at DESC"""),{"u":user_id,"i":p["instrument_id"],
                     "start":start.replace(second=0,microsecond=0),"end":start+timedelta(minutes=h)})).scalars().all()
                 label=eng.exact_gross_label(p,list(paths),h,now)
-            else:label=eng.gross_label(p,[dict(b) for b in bars],h,now)
+            else:
+                bars=(await db.execute(text("""SELECT bucket_start,high_price::double precision,low_price::double precision,
+                    close_price::double precision,partial FROM flow_buckets_1m
+                    WHERE symbol=:s AND bucket_start>=:start AND bucket_start<=:end ORDER BY bucket_start"""),
+                    {"s":p["symbol"],"start":start.replace(second=0,microsecond=0),"end":start+timedelta(minutes=h)})).mappings().all()
+                label=eng.gross_label(p,[dict(b) for b in bars],h,now)
             await db.execute(text("""INSERT INTO pump_opportunity_labels(observation_id,label_spec_hash,horizon_minutes,payload)
                 VALUES(CAST(:id AS uuid),:hash,:h,CAST(:p AS jsonb)) ON CONFLICT DO NOTHING"""),
                 {"id":p["observation_id"],"hash":label["label_spec_hash"],"h":h,"p":json.dumps(label,allow_nan=False)})

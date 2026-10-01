@@ -47,3 +47,11 @@ Remaining statistical prerequisites include verified listing identities,
 independent episodes/days/regimes, explicit feature/cost/split contracts,
 cluster confidence intervals, ablations and measured resource headroom.
 Never treat a newly captured path as a validated model or promote automatically.
+
+Postdeploy tuning: the initial 100-label batch exceeded the four-second
+budget on production. The default and current observational configuration
+now use ten labels per batch. Due labels from the current frozen contract,
+then its five-minute horizon, take precedence over historical backfill;
+old contracts remain immutable and continue through the same bounded job.
+Exact-path labels never query the shared minute-bar table. Capture continues
+independently when a bounded label transaction times out.
