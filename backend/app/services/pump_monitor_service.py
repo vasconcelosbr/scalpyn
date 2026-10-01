@@ -435,12 +435,19 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
                 config["universe_filter"]["min_market_cap_usd"])
     # Pump-only additive capture AFTER the legacy cycle, sync and persistence.
     # A failure here cannot change any legacy score, membership or Shadow state.
-    try:
-        from . import pump_opportunity_service as opportunities
-        await opportunities.ingest(user_id, rows, collected, opportunity_source_meta, config)
-        await opportunities.label_batch(user_id)
-    except Exception as exc:
-        logger.warning("[PUMP-OPPORTUNITY] isolated capture/label failure user=%s reason=%s", user_id, type(exc).__name__)
+    from . import pump_opportunity_service as opportunities
+    # Independent transactions: a capture timeout must not starve already-due
+    # labels. Each operation keeps its own existing deadline and resource caps.
+    for stage,operation in (
+        ("capture",lambda:opportunities.ingest(user_id, rows, collected, opportunity_source_meta, config)),
+        ("labels",lambda:opportunities.label_batch(user_id)),
+    ):
+        started=time.monotonic()
+        try:
+            await operation()
+        except Exception as exc:
+            logger.warning("[PUMP-OPPORTUNITY] isolated stage failure user=%s stage=%s reason=%s duration_ms=%d",
+                user_id, stage, type(exc).__name__, int((time.monotonic()-started)*1000))
     return {"symbols": len(rows), "failed": len(failures), "alerts": len(new_alert_rows),
             "duration_ms": envelope["cycle_duration_ms"]}
 
