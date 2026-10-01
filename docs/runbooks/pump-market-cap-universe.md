@@ -29,6 +29,8 @@ label job has not run. The label job can then finish from persisted evidence.
 Price support persists every minute with its own successful-write cursor,
 independent of the configurable observation cadence. Failed writes do not
 advance either applicable cursor, allowing a retry within the same minute.
+The support cursor also waits for every drain symbol to produce its minute row;
+a partial collection failure remains retryable after other rows persist.
 No historical rows or existing labels are deleted or recomputed. Missing trades
 still yield nulls; drain is not a promise of tradable prices.
 

@@ -88,10 +88,13 @@ def test_drain_query_is_bounded_and_support_cannot_extend_frontier(monkeypatch):
 @pytest.mark.parametrize('eligible,drains,cadence', [
     (['BIG'], ['SMALL'], 1), ([], ['SMALL'], 1), ([], [], 1),
     (['BIG'], ['SMALL'], 2), ([], ['SMALL'], 2)])
-def test_cycle_separates_ranking_and_drain_and_clears_empty_envelope(monkeypatch, eligible, drains, cadence):
+@pytest.mark.parametrize('fail_first_support', [False, True])
+def test_cycle_separates_ranking_and_drain_and_clears_empty_envelope(monkeypatch, eligible, drains, cadence, fail_first_support):
     from app.services import pump_monitor_service as svc
     from app import database
     captured = {'collected': [], 'built': [], 'records': [], 'synced': None, 'latest': None}
+    redis_values = {}
+    collection_attempts = {}
     config = deepcopy(eng.effective_config({'universe_pool_id': '00000000-0000-0000-0000-000000000001'}))
     config['research']['every_n_minutes'] = cadence
     now_ms = int(datetime(2026, 10, 1, 12, 2, 10, tzinfo=timezone.utc).timestamp()*1000)
@@ -109,6 +112,9 @@ def test_cycle_separates_ranking_and_drain_and_clears_empty_envelope(monkeypatch
         return await fn(DB())
     async def collect(symbol, minutes, cfg):
         captured['collected'].append(symbol)
+        collection_attempts[symbol] = collection_attempts.get(symbol, 0) + 1
+        if fail_first_support and symbol in drains and collection_attempts[symbol] == 1:
+            raise RuntimeError('transient support collection failure')
         return {'buckets': [bucket], 'book': None}
     def build(symbol, **kwargs):
         captured['built'].append(symbol)
@@ -121,8 +127,9 @@ def test_cycle_separates_ranking_and_drain_and_clears_empty_envelope(monkeypatch
         captured['records'] = records
         return True
     class Redis:
-        async def get(self, key): return None
+        async def get(self, key): return redis_values.get(key)
         async def set(self, key, value, ex):
+            redis_values[key] = value
             if ':latest:' in key: captured['latest'] = json.loads(value)
     async def redis(): return Redis()
     monkeypatch.setattr(database, 'run_db_task', run)
@@ -133,6 +140,13 @@ def test_cycle_separates_ranking_and_drain_and_clears_empty_envelope(monkeypatch
     monkeypatch.setattr(svc, '_redis', redis)
     monkeypatch.setattr(research, 'write_safely', write)
     asyncio.run(svc._cycle_for_user('USER', config))
+    if fail_first_support and drains:
+        state = json.loads(redis_values['pump_monitor:state:USER'])
+        assert 'research_support_last_minute' not in state
+        captured['built'] = []
+        captured['collected'] = []
+        asyncio.run(svc._cycle_for_user('USER', config))
+        assert json.loads(redis_values['pump_monitor:state:USER'])['research_support_last_minute'] == minute
     assert captured['built'] == eligible and captured['synced'] == eligible
     assert sorted(captured['collected']) == sorted(set(eligible) | set(drains))
     assert [r['symbol'] for r in captured['latest']['rows']] == eligible
@@ -140,7 +154,7 @@ def test_cycle_separates_ranking_and_drain_and_clears_empty_envelope(monkeypatch
     assert [r['symbol'] for r in support] == drains
     assert all(r['score'] is None and not r['pool_member'] for r in support)
     observations = [r for r in captured['records'] if r not in support]
-    assert len(observations) == (len(eligible) if cadence == 1 else 0)
+    assert len(observations) == (len(eligible) if cadence == 1 and not (fail_first_support and drains) else 0)
 
 
 def test_label_targets_and_export_exclude_price_only_support():

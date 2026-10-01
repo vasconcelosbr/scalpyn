@@ -337,6 +337,7 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
 
     # Persist price-only support separately; excluded symbols never build a score,
     # enter the public envelope/ranking/REALTIME sync, or become a label target.
+    support_symbols_written = set()
     if support_due:
         for symbol in drain_symbols:
             data = collected.get(symbol) or {}
@@ -349,6 +350,7 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
                 config_meta=config["_meta"])
             research_rows.append(rec)
             research_keys[rec["value_keys_hash"]] = (vk, ck)
+            support_symbols_written.add(symbol)
 
     meta = config["_meta"]
     envelope = {
@@ -402,7 +404,7 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
         if await research.write_safely(run_db_task, research_rows, research_keys):
             if research_due:
                 state["research_last_minute"] = last_minute
-            if support_due:
+            if support_due and set(drain_symbols) <= support_symbols_written:
                 state["research_support_last_minute"] = last_minute
 
     if redis is not None:
