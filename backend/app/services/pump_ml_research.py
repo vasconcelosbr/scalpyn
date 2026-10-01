@@ -67,7 +67,8 @@ def train_challenger(rows,*,spec,output_root):
     experiment=eng.canonical_hash({"spec":spec,"observation_ids":[r["observation_id"] for r in usable]})
     root=Path(output_root).resolve()/ARTIFACT_NAMESPACE/experiment
     root.mkdir(parents=True,exist_ok=False)
-    model.save_model(root/"xgboost.json")
+    # Store the native Booster; avoid sklearn wrapper tag/version coupling.
+    model.get_booster().save_model(root/"xgboost.json")
     (root/"calibrator.json").write_text(json.dumps({"coef":calibrator.coef_.tolist(),"intercept":calibrator.intercept_.tolist()}),encoding="utf-8")
     manifest={"experiment_id":experiment,"artifact_namespace":f"pump_ml/{experiment}","spec":spec,
               "contracts":list(next(iter(hashes))),"status":"challenger","auto_promotion":False,"delta":0}

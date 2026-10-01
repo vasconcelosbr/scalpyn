@@ -2204,6 +2204,16 @@
           "contains_all": ["Referência selecionada", "Inteligência e qualidade", "ML em observação"]
         }
       ]
+    },
+    {
+      "id": "pump-exact-price-paths-neutral-ml-preparation",
+      "description": "Owner-scoped raw trade paths resolve minute boundaries; Pump-only trainer remains unpromoted",
+      "files": [
+        {"path":"backend/app/services/pump_opportunity_engine.py","contains_all":["def exact_gross_label(","def price_path(","ws_liveness_unavailable","price_point_budget_exceeded"]},
+        {"path":"backend/tests/test_pump_exact_price_paths.py","contains_all":["test_exact_window_excludes_predecision_and_postendpoint_highs","test_exact_hit_after_gap_is_true_but_first_time_censored","test_raw_ws_without_liveness_never_certifies_absence"]},
+        {"path":"backend/app/services/pump_ml_research.py","contains_all":["model.get_booster().save_model(","pump_ml/","applied_delta"]},
+        {"path":"deploy/pump-ml-worker.prepared.json","contains_all":["PREPARED_DISABLED","pump_ml","activation_blocker"]}
+      ]
     }
   ]
 }

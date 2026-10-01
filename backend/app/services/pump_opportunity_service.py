@@ -15,7 +15,8 @@ CONFIG_TYPE="pump_opportunity"
 async def storage_bytes(db):
     return int((await db.execute(text("""SELECT pg_total_relation_size('pump_opportunity_observations')
         +pg_total_relation_size('pump_opportunity_labels')+pg_total_relation_size('pump_ml_experiments')
-        +pg_total_relation_size('pump_ml_predictions')"""))).scalar())
+        +pg_total_relation_size('pump_ml_predictions')
+        +COALESCE(pg_total_relation_size(to_regclass('pump_opportunity_price_paths')),0)"""))).scalar())
 
 
 async def pending_support_symbols(db,user_id,eligible,minute):
@@ -90,6 +91,21 @@ async def ingest(user_id,rows,collected,source_meta,legacy_config):
             WHERE user_id=:u AND decision_at>=:since ORDER BY instrument_id,decision_at DESC"""),
             {"u":user_id,"since":decision-timedelta(seconds=c["episode_gap_seconds"])})).scalars().all()
         previous={p["symbol"]:p for p in previous}
+        price_paths_written=0
+        if c["price_paths_enabled"]:
+            remaining=c["budget"]["max_price_points_per_cycle"]
+            for symbol,data in sorted(collected.items())[:c["budget"]["max_assets"]]:
+                if not data or not data.get("raw_price_input") or not data.get("buckets"):continue
+                bucket=max(data["buckets"],key=lambda b:b["bucket_start_ms"])
+                path=eng.price_path(data["raw_price_input"],bucket,min(remaining,c["budget"]["max_price_points_per_minute"]))
+                remaining-=len(path["points"])
+                instrument=eng.identity("gate_spot",symbol,c["listing_ids"].get(symbol) or "listing_unverified")
+                result=await db.execute(text("""INSERT INTO pump_opportunity_price_paths
+                    (user_id,instrument_id,symbol,bucket_start,content_hash,complete,payload)
+                    VALUES(:u,CAST(:i AS uuid),:s,:b,:h,:complete,CAST(:p AS jsonb)) ON CONFLICT DO NOTHING"""),
+                    {"u":user_id,"i":instrument,"s":symbol,"b":datetime.fromtimestamp(bucket["bucket_start_ms"]/1000,timezone.utc),
+                     "h":eng.canonical_hash(path),"complete":path["complete"],"p":json.dumps(path,allow_nan=False)})
+                price_paths_written+=result.rowcount
         written=0; duplicates=0
         for row in sorted(rows,key=lambda r:r["symbol"])[:c["budget"]["max_assets"]]:
             old=previous.get(row["symbol"])
@@ -105,7 +121,7 @@ async def ingest(user_id,rows,collected,source_meta,legacy_config):
                 {"id":p["observation_id"],"u":user_id,"i":p["instrument_id"],"e":p["episode_id"],"s":p["symbol"],
                  "slot":slot,"d":decision,"h":eng.canonical_hash(c),"p":json.dumps(p,allow_nan=False)})
             written+=result.rowcount
-        return {"written":written,"duplicates":duplicates,"slot_at":slot.isoformat(),
+        return {"written":written,"duplicates":duplicates,"price_paths_written":price_paths_written,"slot_at":slot.isoformat(),
                 "sampled_assets":min(len(rows),c["budget"]["max_assets"]),"excluded_by_budget":max(0,len(rows)-c["budget"]["max_assets"])}
     result=await asyncio.wait_for(run_db_task(_write,celery=True),c["budget"]["write_timeout_seconds"])
     logger.info("[PUMP-OPPORTUNITY] user=%s result=%s delta=0 connected=false",user_id,result)
@@ -119,6 +135,8 @@ async def label_batch(user_id):
     now=datetime.now(timezone.utc)
     async def _label(db):
         await db.execute(text("SET LOCAL statement_timeout = '3000ms'"))
+        if await storage_bytes(db)>=c["budget"]["max_storage_bytes"]:
+            return {"status":"storage_budget_exhausted"}
         due=(await db.execute(text("""SELECT o.payload,h.horizon FROM pump_opportunity_observations o
             CROSS JOIN LATERAL jsonb_array_elements_text(o.payload->'label_spec'->'horizons_minutes') h(horizon)
             LEFT JOIN pump_opportunity_labels l ON l.observation_id=o.observation_id
@@ -135,7 +153,13 @@ async def label_batch(user_id):
                 close_price::double precision,partial FROM flow_buckets_1m
                 WHERE symbol=:s AND bucket_start>=:start AND bucket_start<=:end ORDER BY bucket_start"""),
                 {"s":p["symbol"],"start":start.replace(second=0,microsecond=0),"end":start+timedelta(minutes=h)})).mappings().all()
-            label=eng.gross_label(p,[dict(b) for b in bars],h,now)
+            if p["label_spec"]["resolution"]=="trades_exact_window_v1":
+                paths=(await db.execute(text("""SELECT DISTINCT ON(bucket_start) payload FROM pump_opportunity_price_paths
+                    WHERE user_id=:u AND instrument_id=CAST(:i AS uuid) AND bucket_start>=:start AND bucket_start<=:end
+                    ORDER BY bucket_start,complete DESC,captured_at DESC"""),{"u":user_id,"i":p["instrument_id"],
+                    "start":start.replace(second=0,microsecond=0),"end":start+timedelta(minutes=h)})).scalars().all()
+                label=eng.exact_gross_label(p,list(paths),h,now)
+            else:label=eng.gross_label(p,[dict(b) for b in bars],h,now)
             await db.execute(text("""INSERT INTO pump_opportunity_labels(observation_id,label_spec_hash,horizon_minutes,payload)
                 VALUES(CAST(:id AS uuid),:hash,:h,CAST(:p AS jsonb)) ON CONFLICT DO NOTHING"""),
                 {"id":p["observation_id"],"hash":label["label_spec_hash"],"h":h,"p":json.dumps(label,allow_nan=False)})
