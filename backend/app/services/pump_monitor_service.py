@@ -20,6 +20,7 @@ from sqlalchemy import text
 
 from . import flow_metrics as fm
 from . import pump_monitor_engine as eng
+from . import pump_research as research
 
 logger = logging.getLogger(__name__)
 
@@ -283,6 +284,10 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
 
     rows: List[Dict[str, Any]] = []
     new_alert_rows: List[Dict[str, Any]] = []
+    # Research dataset: one row per asset per minute, built from what this cycle computed.
+    research_due = research.is_research_minute(last_minute, state.get("research_last_minute"), config["research"])
+    research_rows: List[Dict[str, Any]] = []
+    research_keys: Dict[str, tuple] = {}
     for symbol in symbols:
         m = merged.get(symbol)
         snapshot = dict(m.as_flat_dict()) if m else {}
@@ -311,6 +316,15 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
                                    "inputs": json.dumps(_json_safe({**alert["inputs"], "cycle_at": _iso(now_ms)})),
                                    "triggered_at": datetime.fromtimestamp(now_ms / 1000.0, tz=timezone.utc)})
         alert_state[symbol] = [a["type"] for a in row["alerts_active"]]
+        if research_due:
+            try:
+                rec, value_keys, contribution_keys = research.research_row(
+                    row, minute_ms=last_minute, bucket=last, book=data.get("book"),
+                    cycle_at_ms=now_ms, config_meta=config["_meta"])
+                research_rows.append(rec)
+                research_keys[rec["value_keys_hash"]] = (value_keys, contribution_keys)
+            except Exception as exc:
+                logger.warning("[PUMP-RESEARCH] row build failed symbol=%s: %s", symbol, type(exc).__name__)
         rows.append(_json_safe(row))
 
     meta = config["_meta"]
@@ -349,6 +363,15 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
                     "symbol": r["symbol"], "v": meta["version"], "h": meta["config_hash"],
                     "score": r["pump_monitor_score"], "row": json.dumps(_compact(r))} for r in rows])
     await run_db_task(_write, celery=True)
+
+    if research_due and research_rows:
+        members = set()
+        for pool_state in (state.get("membership") or {}).values():
+            members |= set((pool_state or {}).get("members") or {})
+        for rec in research_rows:
+            rec["pool_member"] = rec["symbol"] in members
+        if await research.write_safely(run_db_task, research_rows, research_keys):
+            state["research_last_minute"] = last_minute
 
     if redis is not None:
         try:

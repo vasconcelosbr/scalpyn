@@ -149,6 +149,7 @@ _ALL_TASK_MODULES = (
         "app.tasks.entry_risk_capture",
         "app.tasks.pump_radar",
         "app.tasks.pump_monitor",
+        "app.tasks.pump_research",
 )
 
 
@@ -168,6 +169,7 @@ def _configured_task_modules() -> tuple[str, ...]:
             "app.tasks.collect_mtf_ohlcv",
             "app.tasks.sample_ohlcv_settlement_latency",
             "app.tasks.ohlcv_backfill",
+            "app.tasks.pump_research",
         )
     if queues == (QUEUE_PUMP_RADAR,):
         return ("app.tasks.pump_radar",)
@@ -280,6 +282,9 @@ TASK_ROUTES = {
     # Pump Monitor — observation only, own queue/worker.
     "app.tasks.pump_monitor.cycle":                      {"queue": QUEUE_PUMP_MONITOR},
     "app.tasks.pump_monitor.purge":                      {"queue": QUEUE_PUMP_MONITOR},
+    # Research dataset labels and partitions: research worker, never the monitor worker.
+    "app.tasks.pump_research.label":                     {"queue": QUEUE_RESEARCH_OHLCV},
+    "app.tasks.pump_research.maintain":                  {"queue": QUEUE_RESEARCH_OHLCV},
 
     # Decision Log Enricher (Module 1)
     "app.tasks.decision_log_enricher.enrich":            {"queue": QUEUE_STRUCTURAL},
@@ -533,6 +538,8 @@ TASK_ANNOTATIONS = {
     "app.tasks.pump_radar.reap_stale_assets": {"time_limit": 120, "soft_time_limit": 90, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.pump_monitor.cycle": {"time_limit": 60, "soft_time_limit": 50, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.pump_monitor.purge": {"time_limit": 300, "soft_time_limit": 270, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.pump_research.label": {"time_limit": 1800, "soft_time_limit": 1740, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.pump_research.maintain": {"time_limit": 300, "soft_time_limit": 270, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
 
     # Decision Log Enricher (Module 1)
     "app.tasks.decision_log_enricher.enrich":            {**_STRUCTURAL_GUARDS, "rate_limit": "6/m"},
@@ -806,6 +813,16 @@ celery_app.conf.beat_schedule = {
     },
     "pump_monitor_retention": {
         "task": "app.tasks.pump_monitor.purge",
+        "schedule": 3600.0,
+    },
+    # Research dataset: hourly offline labels (only rows older than t + H_max + settle)
+    # and partition upkeep (create days ahead, drop beyond retention).
+    "pump_research_label": {
+        "task": "app.tasks.pump_research.label",
+        "schedule": 3600.0,
+    },
+    "pump_research_maintain": {
+        "task": "app.tasks.pump_research.maintain",
         "schedule": 3600.0,
     },
     # Buy execution cycle every 60 seconds
