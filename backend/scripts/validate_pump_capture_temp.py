@@ -55,11 +55,13 @@ async def main():
         args=(owner,rows,collected,{}, {'_meta':{'config_hash':'fixture'},'universe_filter':{'min_market_cap_usd':1e9}})
         mode='before_commit'
         try:await svc.ingest(*args);raise AssertionError('injection_failed')
-        except TimeoutError:pass
+        except TimeoutError as exc:
+            if str(exc)!='before_commit':raise
         assert await counts()==(0,0,0)
         mode='after_commit'
         try:await svc.ingest(*args);raise AssertionError('injection_failed')
-        except TimeoutError:pass
+        except TimeoutError as exc:
+            if str(exc)!='ack_loss':raise
         assert await counts()==(100,100,600)
         async with conn.begin():
             stored=(await conn.execute(text('SELECT observation_id,payload FROM pg_temp.pump_opportunity_observations ORDER BY observation_id'))).all()
