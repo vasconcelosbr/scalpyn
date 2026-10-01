@@ -99,6 +99,9 @@ Labels may be enabled only after bounded runtime measurement of the adapter.
 The UI/API reads never trigger training. Retention configuration is 30 days;
 automatic destructive purge of v2 raw history is intentionally not scheduled
 until the retention policy is reviewed. DB growth must be monitored.
+The total Pump v2 table budget defaults to 1,000,000,000 bytes [config]; when
+exhausted, capture stops and the UI reports storage_budget_exhausted, preserving
+history. This is a conservative provisional ceiling, not measured spare disk.
 
 No new provider service, credential, billable trainer or ML schedule is created.
 Offline Pump XGBoost challenger code requires an explicit resource/support/split

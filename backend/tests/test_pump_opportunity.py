@@ -236,3 +236,21 @@ def test_stale_feature_never_renormalizes_remaining_groups():
 
 def test_unverified_listing_is_explicit_and_excluded_from_ml(tmp_path):
     assert build(c=e.config())["manifest"]["listing_certified"] is False
+
+
+def test_no_active_breakout_is_not_confirmed_rather_than_missing_feed():
+    p=build(); row={"symbol":"BTC_USDT","indicators":{k:{"value":v} for k,v in p["values"].items()}}
+    row["indicators"]["breakout_hold_ratio"]={"value":None,"reason":"no_active_breakout"}
+    p=build(row=row)
+    assert p["score_final"]==20 and p["simulation"]["eligible"] and p["ledger"][2]["result"] is False
+
+
+def test_ema_values_use_the_governed_source_without_touching_legacy_row():
+    row={"symbol":"BTC_USDT","indicators":{},"opportunity_source_values":{"ema9":101}}
+    p=build(row=row)
+    assert p["values"]["ema9"]==101 and not row["indicators"]
+
+
+def test_config_cannot_split_correlated_flow_into_multiple_groups():
+    with pytest.raises(ValueError,match="single capped"):
+        e.config({"groups":{"extra_flow":{"points":10,"conditions":[{"field":"taker_ratio","op":"gt","value":0.5}]}}})

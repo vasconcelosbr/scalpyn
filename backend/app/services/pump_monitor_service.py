@@ -326,6 +326,8 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
         row["indicators"]["market_cap_usd"] = {"value": market_caps.get(symbol),
                                                 "source": "market_metadata", "reason": None}
         row["last_closed_minute"] = _iso(last_minute)
+        row["opportunity_source_values"] = {k: snapshot.get(k) for k in
+            ("ema9", "ema21", "ema50", "ema200", "atr", "vwap", "recent_high_1h_level")}
         if symbol in failures:
             row["collection_error"] = failures[symbol]
         for alert in eng.new_alerts(alert_state.get(symbol) or [], row["alerts_active"]):

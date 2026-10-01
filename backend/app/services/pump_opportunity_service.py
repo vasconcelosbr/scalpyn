@@ -12,6 +12,12 @@ logger=logging.getLogger(__name__)
 CONFIG_TYPE="pump_opportunity"
 
 
+async def storage_bytes(db):
+    return int((await db.execute(text("""SELECT pg_total_relation_size('pump_opportunity_observations')
+        +pg_total_relation_size('pump_opportunity_labels')+pg_total_relation_size('pump_ml_experiments')
+        +pg_total_relation_size('pump_ml_predictions')"""))).scalar())
+
+
 async def pending_support_symbols(db,user_id,eligible,minute):
     c=await get_config(db,user_id)
     if not c["enabled"]: return []
@@ -43,6 +49,7 @@ async def put_config(db,user_id,requested):
 
 async def latest(db,user_id,c=None):
     c=c or await get_config(db,user_id)
+    used=await storage_bytes(db)
     now=datetime.now(timezone.utc)
     rows=(await db.execute(text("""SELECT DISTINCT ON(instrument_id) payload,published_at
         FROM pump_opportunity_observations WHERE user_id=:u
@@ -59,8 +66,9 @@ async def latest(db,user_id,c=None):
         out.append(p)
     out.sort(key=lambda r:(-(r["score_final"] if r["score_final"] is not None else -1),r["symbol"],r["observation_id"]))
     return {"contract_version":eng.CONTRACT_VERSION,"as_of":now.isoformat(),"produced_at":max((p["published_at"] for p in out),default=None),
-            "status":"disabled" if not c["ui_enabled"] else "ready" if out else "collecting",
+            "status":"disabled" if not c["ui_enabled"] else "storage_budget_exhausted" if used>=c["budget"]["max_storage_bytes"] else "ready" if out else "collecting",
             "cadence_seconds":60,"horizon_minutes":5,"rows":out if c["ui_enabled"] else [],
+            "storage":{"used_bytes":used,"limit_bytes":c["budget"]["max_storage_bytes"]},
             "total_eligible":len(out),"total_blocked":sum(bool(r["vetos"]) for r in out),
             "total_stale":sum(r["freshness"]["status"]=="atrasado" for r in out),"config":c,
             "notice":"Observação; score de confirmações não é probabilidade nem ordem"}
@@ -75,6 +83,9 @@ async def ingest(user_id,rows,collected,source_meta,legacy_config):
     # First immutable capture wins. Repeated 30s legacy cycles cannot move references.
     async def _write(db):
         await db.execute(text("SET LOCAL statement_timeout = '3000ms'"))
+        used=await storage_bytes(db)
+        if used>=c["budget"]["max_storage_bytes"]:
+            return {"status":"storage_budget_exhausted","used_bytes":used,"limit_bytes":c["budget"]["max_storage_bytes"]}
         previous=(await db.execute(text("""SELECT DISTINCT ON(instrument_id) payload FROM pump_opportunity_observations
             WHERE user_id=:u AND decision_at>=:since ORDER BY instrument_id,decision_at DESC"""),
             {"u":user_id,"since":decision-timedelta(seconds=c["episode_gap_seconds"])})).scalars().all()

@@ -18,7 +18,7 @@ DEFAULT_CONFIG = {
     "listing_ids": {}, "ml_delta_enabled": False, "pool_connection_enabled": False,
     "labels_enabled": False, "inference_enabled": False, "training_enabled": False,
     "budget": {"max_assets": 100, "write_timeout_seconds": 4, "batch_labels": 100,
-               "label_timeout_seconds": 4, "retention_days": 30},
+               "label_timeout_seconds": 4, "retention_days": 30, "max_storage_bytes": 1000000000},
     "labels": {"version": "pump_gross_touch_v2", "horizons_minutes": [5,10,15,30,60,120],
                "targets_pct": [0.6,0.8], "downside_pct": -2, "settle_seconds": 3,
                "resolution": "closed_1m_conservative", "cost_policy": None},
@@ -57,6 +57,8 @@ def number(value):
 
 
 def validate_config(c):
+    for key in ("enabled","ui_enabled","labels_enabled","ml_delta_enabled","pool_connection_enabled","training_enabled","inference_enabled"):
+        if not isinstance(c[key],bool):raise ValueError(f"Boolean flag required: {key}")
     if c.get("score_unit") != "confirmation_points":
         raise ValueError("SCORE_UNIT_MISMATCH: use confirmation_points; legacy 0-100 is incompatible")
     if c.get("ml_delta_enabled") or c.get("pool_connection_enabled"):
@@ -68,7 +70,7 @@ def validate_config(c):
     for key in ("max_quote_age_seconds","max_feature_age_seconds","freshness_seconds","episode_gap_seconds","visual_exit_cycles"):
         if not number(c[key]) or c[key] <= 0:
             raise ValueError(f"Invalid positive configuration: {key}")
-    for key in ("max_assets","batch_labels","retention_days"):
+    for key in ("max_assets","batch_labels","retention_days","max_storage_bytes"):
         if not isinstance(c["budget"][key],int) or c["budget"][key] <= 0:
             raise ValueError(f"Invalid budget: {key}")
     for key in ("write_timeout_seconds","label_timeout_seconds"):
@@ -132,10 +134,11 @@ def condition(values,rule):
             "lte":lambda:left<=right,"eq":lambda:left==right}[rule["op"]]()
 
 
-def evidence(values,c):
+def evidence(values,c,reasons=None):
+    reasons=reasons or {}
     ledger=[]
     for name,group in c["groups"].items():
-        results=[condition(values,r) for r in group["conditions"]]
+        results=[False if values.get(r["field"]) is None and reasons.get(r["field"])=="no_active_breakout" else condition(values,r) for r in group["conditions"]]
         outcome=None if None in results else all(results)
         ledger.append({"rule_id":name,"group":name,"operator":"AND","conditions":group["conditions"],
                        "inputs":{k:values.get(k) for r in group["conditions"] for k in (r["field"],r.get("other_field")) if k},
@@ -152,7 +155,10 @@ def build_observation(*,user_id,row,book,source_meta,legacy_config,c,decision_at
     listing_id=listing or "listing_unverified"
     instrument=identity("gate_spot",symbol,listing_id)
     observation_id=identity(CONTRACT_VERSION,user_id,instrument,slot.isoformat())
-    cells=row.get("indicators",{})
+    cells=dict(row.get("indicators",{}))
+    for key,value in row.get("opportunity_source_values",{}).items():
+        meta=(source_meta or {}).get(key) or {}
+        cells[key]={"value":value,"source":meta.get("source"),"age_seconds":meta.get("age_seconds")}
     values={}; availability={}; reasons={}
     for key,cell in cells.items():
         meta=(source_meta or {}).get(key) or {}
@@ -187,7 +193,10 @@ def build_observation(*,user_id,row,book,source_meta,legacy_config,c,decision_at
     values["price"]=price
     if price is not None:
         values["spread_pct"]=(price-bid)/((price+bid)/2)*100
-    ledger=evidence(values,c)
+        availability["spread_pct"]={"captured_at":decision.isoformat(),"producer_available_at":None,
+            "source_timestamp":quote_at.isoformat(),"age_seconds":(decision-quote_at).total_seconds(),"source":"gate_book","reason":None}
+        reasons.pop("spread_pct",None)
+    ledger=evidence(values,c,reasons)
     score=sum(e["points"] for e in ledger)
     vetos=[]
     if quote_reason: vetos.append(quote_reason)
