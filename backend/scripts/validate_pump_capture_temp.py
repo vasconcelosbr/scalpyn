@@ -8,7 +8,7 @@ parser.add_argument('--temp-only',action='store_true',required=True)
 parser.parse_args()
 url=os.environ.get('DATABASE_URL')
 if not url:raise SystemExit('Use an existing authorized DATABASE_URL; no credentials are created by this script')
-os.environ['DATABASE_URL']=url.replace('postgresql://','postgresql+asyncpg://')
+os.environ['DATABASE_URL']=url
 os.environ['REDIS_URL']=''
 root=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(root))
@@ -19,7 +19,8 @@ from app.services import pump_opportunity_service as svc,pump_opportunity_engine
 import importlib.util
 
 async def main():
-    engine=create_async_engine(os.environ['DATABASE_URL'],connect_args={'timeout':10},hide_parameters=True)
+    resolved,connect_args=database._resolve_db_url(database.settings.DATABASE_URL)
+    engine=create_async_engine(resolved,connect_args={**connect_args,'timeout':10},hide_parameters=True)
     owner=uuid4();other=uuid4();mode='normal';ddl=[]
     for name in ('231_pump_opportunity_v2.py','232_pump_exact_price_paths.py','233_pump_label_queue.py','234_pump_ml_job_ledger.py','235_pump_label_resource_block.py'):
         spec=importlib.util.spec_from_file_location('fixture',root/'alembic/versions'/name)
@@ -48,6 +49,10 @@ async def main():
             async with conn.begin():
                 return tuple((await conn.execute(text('SELECT (SELECT count(*) FROM pg_temp.pump_opportunity_observations),(SELECT count(*) FROM pg_temp.pump_opportunity_price_paths),(SELECT count(*) FROM pg_temp.pump_opportunity_label_queue)'))).one())
         now=datetime.now(timezone.utc);ms=int(now.timestamp()//60-1)*60000
+        class FixtureClock(datetime):
+            @classmethod
+            def now(cls,tz=None):return now.astimezone(tz) if tz else now.replace(tzinfo=None)
+        svc.datetime=FixtureClock  # fixed capture identity across minute boundaries
         row={'symbol':'ATOMIC_FIXTURE_USDT','indicators':{}}
         collected={row['symbol']:{'book':{'asks':[[100,100]],'bids':[[99.99,100]],'observed_at':now.isoformat()},'raw_price_input':{'source':'rest_fallback','trades':[{'trade_id':'fixture','ts_ms':ms+1000,'price':100}],'covered_from_ms':ms-60000},'buckets':[{'bucket_start_ms':ms,'partial':False}]}}
         rows=[{**row,'symbol':f'ATOMIC{i}_USDT'} for i in range(100)]
