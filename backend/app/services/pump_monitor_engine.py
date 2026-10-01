@@ -20,6 +20,8 @@ SCORE_STATUS = "HYPOTHESIS_NOT_VALIDATED"
 DEFAULT_CONFIG: Dict[str, Any] = {
     "enabled": True,
     "universe_pool_id": None,
+    # Operator-approved PUMPPOOL market_cap >= USD 1B; Pump-only, no pool mutation.
+    "universe_filter": {"min_market_cap_usd": 1_000_000_000, "unknown_policy": "exclude"},
     "cycle_seconds": 30,
     "symbol_timeout_seconds": 8,
     "concurrency": 8,
@@ -232,6 +234,16 @@ def next_config_version(previous: Optional[Dict[str, Any]], requested: Dict[str,
 
 def validate_config(body: Dict[str, Any]) -> None:
     errors: List[str] = []
+    import math
+    universe_filter = body["universe_filter"]
+    try:
+        minimum = float(universe_filter["min_market_cap_usd"])
+        if not math.isfinite(minimum) or minimum < 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        errors.append("universe_filter.min_market_cap_usd must be finite and >= 0")
+    if universe_filter.get("unknown_policy") != "exclude":
+        errors.append("universe_filter.unknown_policy must be exclude")
     if int(body.get("cycle_seconds", 0)) < 10:
         errors.append("cycle_seconds must be >= 10")
     if int(body["flow"]["bucket_seconds"]) != 60:

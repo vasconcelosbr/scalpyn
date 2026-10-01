@@ -2142,6 +2142,44 @@
           ]
         }
       ]
+    },
+    {
+      "id": "pump-market-cap-universe-label-drain",
+      "description": "Pump-only finite USD cap eligibility with excluded-symbol endpoint support isolated from new observations",
+      "files": [
+        {
+          "contains_all": [
+            "def eligible_symbols(",
+            "async def select_universe(",
+            "max(m.ts)",
+            "DRAIN_ROLE = \"label_drain\""
+          ],
+          "path": "backend/app/services/pump_universe.py"
+        },
+        {
+          "contains_all": [
+            "collection_symbols",
+            "research.price_support_row(",
+            "market_cap_freshness"
+          ],
+          "path": "backend/app/services/pump_monitor_service.py"
+        },
+        {
+          "contains_all": [
+            "def price_support_row(",
+            "label_drain"
+          ],
+          "path": "backend/app/services/pump_research.py"
+        },
+        {
+          "contains_all": [
+            "test_billion_boundary_and_invalid_caps",
+            "test_cycle_separates_ranking_and_drain_and_clears_empty_envelope",
+            "test_drain_endpoint_inclusive_then_cleanup_and_labelled_cleanup"
+          ],
+          "path": "backend/tests/test_pump_market_cap_universe.py"
+        }
+      ]
     }
   ]
 }

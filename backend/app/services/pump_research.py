@@ -148,6 +148,15 @@ async def write_safely(run_db_task, records, keys) -> bool:
         return False
 
 
+def price_support_row(symbol, *, minute_ms, bucket, cycle_at_ms, config_meta):
+    """Endpoint evidence only: never a new observation, score or label target."""
+    record, vk, ck = research_row({"symbol": symbol, "indicators": {}},
+                                 minute_ms=minute_ms, bucket=bucket, book=None,
+                                 cycle_at_ms=cycle_at_ms, config_meta=config_meta)
+    record["categorical"] = {"_research_role": "label_drain"}
+    return record, vk, ck
+
+
 # ── Offline labels (pure) ────────────────────────────────────────────────────
 
 def max_horizon_minutes(labels: Dict[str, Any]) -> int:
@@ -274,7 +283,9 @@ async def label_pending(db, research: Dict[str, Any], *, now: Optional[datetime]
     label_hash = _canonical_hash({"labels": labels, "fee_roundtrip_pct": fee})
     pending = (await db.execute(text("""
         SELECT m.symbol, m.ts, m.slippage_buy_pct, m.slippage_sell_pct FROM pump_research_minute m
-         WHERE m.ts <= :cutoff AND NOT EXISTS (
+         WHERE m.ts <= :cutoff
+           AND COALESCE(m.categorical->>'_research_role', '') <> 'label_drain'
+           AND NOT EXISTS (
                SELECT 1 FROM pump_research_labels l
                 WHERE l.symbol = m.symbol AND l.ts = m.ts AND l.label_set_version = :v)
          ORDER BY m.ts LIMIT :n
