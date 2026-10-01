@@ -1,10 +1,10 @@
 name: Pump Universe Contract
 on:
   pull_request:
-    paths: ['pump_ml/**', 'backend/app/services/pump*.py', 'backend/tests/test_pump*.py', 'backend/scripts/export_pump_research.py', '.github/workflows/pump-universe-tests.yml']
+    paths: ['pump_ml/**', 'backend/app/services/pump*.py', 'backend/tests/test_pump*.py', 'backend/scripts/export_pump_research.py', 'backend/scripts/validate_pump_capture_temp.py', '.github/workflows/pump-universe-tests.yml']
   push:
     branches: [main]
-    paths: ['pump_ml/**', 'backend/app/services/pump*.py', 'backend/tests/test_pump*.py', 'backend/scripts/export_pump_research.py', '.github/workflows/pump-universe-tests.yml']
+    paths: ['pump_ml/**', 'backend/app/services/pump*.py', 'backend/tests/test_pump*.py', 'backend/scripts/export_pump_research.py', 'backend/scripts/validate_pump_capture_temp.py', '.github/workflows/pump-universe-tests.yml']
 jobs:
   pump-contract:
     runs-on: ubuntu-latest
