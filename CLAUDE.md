@@ -60,6 +60,16 @@ break-even=80%    | ❌ SEM FONTE         | — PROIBIDO, remover
 
 > Motivo: numa auditoria real, `SL=5%` foi fabricado (config real: `stop_loss_atr_multiplier: 1.5`), gerando break-even de 80% e o veredito "estratégia quase morta". O valor correto era ~49–61%. Uma fabricação inverteu o diagnóstico estratégico.
 
+## Gotcha — L3 Authorization Contract v3: scheduler_group e max_age_seconds (17/09/2026)
+
+`compute_5m` (scheduler_group=`microstructure`, conjunto completo de indicadores) e `compute_structural_5m` (scheduler_group=`structural`, subconjunto redundante numa fila isolada por resiliência) calculam os MESMOS indicadores (adx/rsi/macd_histogram/di_plus/minus) a partir das MESMAS candles de 5m. Isso é intencional (isolamento de fila, não redundância de dado) — mas tem duas armadilhas:
+
+1. **Nunca deixar `l3_v3_provenance_resolver.source_policies.ohlcv.scheduler_group` vazio/None em produção.** Sem esse campo fixado, `l3_authorization_contract_v3.py::_reference_resolution` não discrimina entre os dois grupos e pode misturar indicadores de candles diferentes na MESMA decisão (bug real, confirmado em prod 17/09: decisions 671160/671850/672356/673908). Valor correto: `"microstructure"` (é o conjunto completo/canônico).
+2. **`max_age_seconds` da source `ohlcv` deve vir do `validity_margin_seconds_by_group` do `multilayer_contract` — do grupo `microstructure` (atualmente 741), não do `structural` (717)** — são calibrações parecidas mas não intercambiáveis, e os dois blocos de config (`l3_v3_provenance_resolver` e `multilayer_contract`) não estão sincronizados entre si. Não copiar um valor do outro sem checar qual `scheduler_group` o perfil realmente consome.
+3. `source_timestamp` de um candidato `ohlcv` é a ABERTURA da candle, não o fechamento. O `validity_margin_seconds` calibrado já é medido nessa base (`available_at - source_timestamp(abertura)`) — não somar a duração do timeframe por cima do margin ao portar padrões de `mtf_observation_service.py` (que faz essa soma como margem extra deliberada, não como correção necessária).
+
+Contexto completo: memória `l3-authorization-freshness-scheduler-group-2026-09-17`, fix em PR #165.
+
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
