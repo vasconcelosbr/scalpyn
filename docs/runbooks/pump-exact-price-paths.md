@@ -55,3 +55,7 @@ then its five-minute horizon, take precedence over historical backfill;
 old contracts remain immutable and continue through the same bounded job.
 Exact-path labels never query the shared minute-bar table. Capture continues
 independently when a bounded label transaction times out.
+
+Label persistence uses one atomic JSONB-recordset insert per bounded batch.
+`PUMP-LABELS` logs written pairs and elapsed time, permitting measured tuning
+of the batch without increasing the four-second limit or trading thresholds.

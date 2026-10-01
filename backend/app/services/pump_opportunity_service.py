@@ -147,7 +147,7 @@ async def label_batch(user_id):
             ORDER BY (o.payload->'manifest'->>'label_spec_hash'=:current_spec) DESC,
                 (h.horizon::integer=5) DESC,o.decision_at,h.horizon::integer LIMIT :batch"""),
             {"u":user_id,"now":now,"current_spec":eng.canonical_hash(c["labels"]),"batch":c["budget"]["batch_labels"]})).mappings().all()
-        written=0
+        records=[]
         for item in due:
             p=item["payload"]; h=int(item["horizon"]); start=eng.utc(p["decision_at"])
             if p["label_spec"]["resolution"]=="trades_exact_window_v1":
@@ -162,12 +162,19 @@ async def label_batch(user_id):
                     WHERE symbol=:s AND bucket_start>=:start AND bucket_start<=:end ORDER BY bucket_start"""),
                     {"s":p["symbol"],"start":start.replace(second=0,microsecond=0),"end":start+timedelta(minutes=h)})).mappings().all()
                 label=eng.gross_label(p,[dict(b) for b in bars],h,now)
+            records.append({"id":p["observation_id"],"hash":label["label_spec_hash"],"h":h,"p":label})
+        if records:
+            # One atomic insert rather than one database round trip per label.
             await db.execute(text("""INSERT INTO pump_opportunity_labels(observation_id,label_spec_hash,horizon_minutes,payload)
-                VALUES(CAST(:id AS uuid),:hash,:h,CAST(:p AS jsonb)) ON CONFLICT DO NOTHING"""),
-                {"id":p["observation_id"],"hash":label["label_spec_hash"],"h":h,"p":json.dumps(label,allow_nan=False)})
-            written+=1
-        return {"written":written,"batch_limit":c["budget"]["batch_labels"]}
-    return await asyncio.wait_for(run_db_task(_label,celery=True),c["budget"]["label_timeout_seconds"])
+                SELECT CAST(r.id AS uuid),r.hash,r.h,r.p FROM jsonb_to_recordset(CAST(:records AS jsonb))
+                    AS r(id text,hash text,h integer,p jsonb) ON CONFLICT DO NOTHING"""),
+                {"records":json.dumps(records,allow_nan=False)})
+        return {"written":len(records),"batch_limit":c["budget"]["batch_labels"]}
+    started=datetime.now(timezone.utc)
+    result=await asyncio.wait_for(run_db_task(_label,celery=True),c["budget"]["label_timeout_seconds"])
+    logger.info("[PUMP-LABELS] user=%s result=%s duration_ms=%s",user_id,result,
+        round((datetime.now(timezone.utc)-started).total_seconds()*1000))
+    return result
 
 
 async def observation(db,user_id,observation_id):
