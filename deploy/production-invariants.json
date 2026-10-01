@@ -2230,6 +2230,16 @@
         {"path":"pump_ml/job.py","contains_all":["daily_already_recorded","pg_try_advisory_lock","pump_ml_artifacts","production_model_validated"]},
         {"path":"backend/tests/test_pump_ml_daily_job.py","contains_all":["test_daily_singleton_and_missing_listing_stop_before_training","test_daily_job_cannot_train_micro_sample"]}
       ]
+    },
+    {
+      "id":"pump-versioned-pre-touch-adverse-excursion",
+      "description":"New frozen exact-trade contracts separate per-target adverse excursion, censored prefixes, timestamp order and whole-horizon MAE",
+      "files":[
+        {"path":"backend/app/services/pump_opportunity_engine.py","contains_all":["pump_gross_touch_v4","reference_to_first_touch_strict_timestamp_v1","def first_touch_and_drawdown(","gap_before_or_at_observed_touch","touch_timestamp_order_ambiguous"]},
+        {"path":"backend/app/services/pump_opportunity_service.py","contains_all":["contract_cohorts","label_version"]},
+        {"path":"backend/tests/test_pump_pre_touch_drawdown.py","contains_all":["test_targets_have_distinct_prefixes_and_exclude_later_drawdown","test_v3_output_unchanged_and_v4_contract_hash_is_distinct","test_intelligence_exposes_separate_frozen_contract_support"]},
+        {"path":"frontend/components/pump-monitor/PumpOpportunityPanel.tsx","contains_all":["drawdown_before_touch_pct","MAE total do horizonte","contract_cohorts"]}
+      ]
     }
   ]
 }

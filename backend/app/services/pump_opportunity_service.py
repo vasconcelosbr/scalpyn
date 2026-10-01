@@ -349,8 +349,11 @@ async def intelligence(db,user_id,conditions=None):
                 "to":max((r["payload"]["decision_at"] for r in selected),default=None),
                 "confidence_interval":None,"uncertainty_reason":"clustered_validation_not_available",
                 "out_of_sample":False,"probability_validated":False}
-    baseline=describe(rows);groups={}
+    baseline=describe(rows);groups={};contracts={}
     for r in rows:
+        manifest=r["payload"]["manifest"]
+        contract=(manifest["score_config_hash"],manifest["label_spec_hash"],r["payload"]["label_spec"]["version"])
+        contracts.setdefault(contract,[]).append(r)
         pattern=" + ".join(sorted(e["group"] for e in r["payload"]["ledger"] if e["result"] is True)) or "sem confirmação"
         groups.setdefault(pattern,[]).append(r)
     patterns=[{"pattern":name,**describe(sample)} for name,sample in sorted(groups.items())]
@@ -363,5 +366,7 @@ async def intelligence(db,user_id,conditions=None):
             "model":{"status":"coletando","algorithm":"XGBoost Pump","delta":0,"probability":None,"auto_promotion":False,
                      "reason":"insufficient_validated_point_in_time_data","shadow_isolation":True},
             "baseline":baseline,"patterns":patterns,"exploration":exploration,"experiments":[dict(e) for e in experiments],
+            "contract_cohorts":[{"score_config_hash":key[0],"label_spec_hash":key[1],"label_version":key[2],
+                **describe(sample)} for key,sample in sorted(contracts.items())],
             "training_runs":[dict(r) for r in training_runs],
             "sample_limit":5000,"sample_policy":"most_recent_all_candidates","target":{"gross_pct":0.8,"horizon_minutes":5}}
