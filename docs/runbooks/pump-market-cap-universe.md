@@ -26,6 +26,9 @@ alerts or pool membership. They serve as OHLC endpoint evidence only, never labe
 targets or exported analytical observations. They cannot extend their own drain
 deadline. Collection stops automatically after the endpoint, even if the hourly
 label job has not run. The label job can then finish from persisted evidence.
+Price support persists every minute with its own successful-write cursor,
+independent of the configurable observation cadence. Failed writes do not
+advance either applicable cursor, allowing a retry within the same minute.
 No historical rows or existing labels are deleted or recomputed. Missing trades
 still yield nulls; drain is not a promise of tradable prices.
 

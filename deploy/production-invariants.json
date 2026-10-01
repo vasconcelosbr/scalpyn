@@ -2160,7 +2160,8 @@
           "contains_all": [
             "collection_symbols",
             "research.price_support_row(",
-            "market_cap_freshness"
+            "market_cap_freshness",
+            "research_support_last_minute"
           ],
           "path": "backend/app/services/pump_monitor_service.py"
         },

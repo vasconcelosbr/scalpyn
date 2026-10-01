@@ -237,10 +237,12 @@ def validate_config(body: Dict[str, Any]) -> None:
     import math
     universe_filter = body["universe_filter"]
     try:
+        if isinstance(universe_filter["min_market_cap_usd"], bool):
+            raise ValueError
         minimum = float(universe_filter["min_market_cap_usd"])
         if not math.isfinite(minimum) or minimum < 0:
             raise ValueError
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         errors.append("universe_filter.min_market_cap_usd must be finite and >= 0")
     if universe_filter.get("unknown_policy") != "exclude":
         errors.append("universe_filter.unknown_policy must be exclude")
