@@ -92,6 +92,28 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "display": {"top_n": 10, "top_n_options": [10, 20, 50, 0], "stale_after_cycles": 2},
     # Redis always holds the full latest cycle; the table keeps a sample.
     "snapshots": {"retention_hours": 48, "every_n_cycles": 10},
+    # Research dataset: one narrow row per asset per minute (pump_research_minute)
+    # and offline labels written only after t + max horizon + settle.
+    "research": {
+        "enabled": True,
+        "every_n_minutes": 1,
+        "retention_days": 30,
+        "partition_days_ahead": 3,
+        "labels": {
+            "version": "pump_research_labels_v1",
+            "horizons_minutes": [5, 15, 30, 60],
+            "barriers": {
+                "L1": {"tp_pct": 1.0, "sl_pct": 0.5, "h_minutes": 15},
+                "L2": {"tp_pct": 2.0, "sl_pct": 1.0, "h_minutes": 30},
+                "L3": {"tp_pct": 3.0, "sl_pct": 1.5, "h_minutes": 60},
+            },
+            "settle_seconds": 300,
+            "max_gap_pct": 10.0,
+            # Round-trip fee comes from the governed ML config, never a literal here.
+            "fee_roundtrip_source": {"config_type": "ml", "key": "ml_fee_roundtrip_pct"},
+            "batch_rows": 20000,
+        },
+    },
     # Defaults for pools with pump_monitor_sync_enabled (overridable per pool
     # via overrides.pump_monitor_<key>). min_score is on the 0–100 score scale.
     "sync_defaults": {"min_score": 50.0,
@@ -234,6 +256,17 @@ def validate_config(body: Dict[str, Any]) -> None:
     veto = body["score"]["exhaustion_veto"]
     if not 0 <= float(veto["cap"]) <= 100:
         errors.append("score.exhaustion_veto.cap must be within [0, 100]")
+    research = body["research"]
+    if int(research["every_n_minutes"]) < 1 or int(research["retention_days"]) < 1:
+        errors.append("research.every_n_minutes and research.retention_days must be >= 1")
+    labels = research["labels"]
+    if not labels["horizons_minutes"] or any(int(h) < 1 for h in labels["horizons_minutes"]):
+        errors.append("research.labels.horizons_minutes must be positive")
+    for name, b in labels["barriers"].items():
+        if float(b["tp_pct"]) <= 0 or float(b["sl_pct"]) <= 0 or int(b["h_minutes"]) < 1:
+            errors.append(f"research.labels.barriers.{name}: tp_pct, sl_pct and h_minutes must be > 0")
+    if not 0 <= float(labels["max_gap_pct"]) <= 100:
+        errors.append("research.labels.max_gap_pct must be within [0, 100]")
     sync_int = body["display"]["top_n"]
     if int(sync_int) < 0:
         errors.append("display.top_n must be >= 0")
