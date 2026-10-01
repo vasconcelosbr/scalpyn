@@ -11,7 +11,63 @@ from .config import get_current_user_id
 
 router = APIRouter(prefix="/api/pump-monitor", tags=["Pump Monitor"])
 
-NOT_A_SIGNAL = "OBSERVAÇÃO — não é sinal de entrada"
+NOT_A_SIGNAL = "OBSERVAÇÃO - não é sinal de entrada"
+
+
+@router.get("/opportunities/config")
+async def read_opportunity_config(db: AsyncSession = Depends(get_db), user_id: UUID = Depends(get_current_user_id)):
+    from ..services import pump_opportunity_service as opportunities
+    return await opportunities.get_config(db,user_id)
+
+
+@router.put("/opportunities/config")
+async def write_opportunity_config(payload: Dict[str,Any], db: AsyncSession = Depends(get_db), user_id: UUID = Depends(get_current_user_id)):
+    from ..services import pump_opportunity_service as opportunities
+    try:
+        return await opportunities.put_config(db,user_id,payload)
+    except (ValueError,TypeError,KeyError) as exc:
+        raise HTTPException(status_code=422,detail=str(exc))
+
+
+@router.get("/opportunities")
+async def list_opportunities(response: Response, db: AsyncSession = Depends(get_db), user_id: UUID = Depends(get_current_user_id)):
+    from ..services import pump_opportunity_service as opportunities
+    response.headers["Cache-Control"]="private, no-store"
+    return await opportunities.latest(db,user_id)
+
+
+@router.get("/opportunities/history")
+async def opportunity_history(cursor: Optional[str] = Query(None,max_length=36),limit: int = Query(50,ge=1,le=100),
+                              db: AsyncSession = Depends(get_db),user_id: UUID = Depends(get_current_user_id)):
+    from ..services import pump_opportunity_service as opportunities
+    return await opportunities.history(db,user_id,cursor,limit)
+
+
+@router.get("/opportunities/intelligence")
+async def opportunity_intelligence(db: AsyncSession = Depends(get_db),user_id: UUID = Depends(get_current_user_id)):
+    from ..services import pump_opportunity_service as opportunities
+    return await opportunities.intelligence(db,user_id)
+
+
+@router.post("/opportunities/explore")
+async def explore_opportunity_pattern(payload: Dict[str,Any],db: AsyncSession = Depends(get_db),user_id: UUID = Depends(get_current_user_id)):
+    from ..services import pump_opportunity_service as opportunities
+    conditions=payload.get("conditions",[])
+    if not isinstance(conditions,list) or not 1<=len(conditions)<=20:
+        raise HTTPException(status_code=422,detail="Expected 1-20 AND conditions")
+    try:
+        return await opportunities.intelligence(db,user_id,conditions)
+    except (ValueError,TypeError,KeyError) as exc:
+        raise HTTPException(status_code=422,detail=str(exc))
+
+
+@router.get("/opportunities/{observation_id}")
+async def opportunity_detail(observation_id: UUID,db: AsyncSession = Depends(get_db),user_id: UUID = Depends(get_current_user_id)):
+    from ..services import pump_opportunity_service as opportunities
+    result=await opportunities.observation(db,user_id,observation_id)
+    if result is None:
+        raise HTTPException(status_code=404,detail="Observation not found")
+    return result
 
 
 @router.get("/assets")

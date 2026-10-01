@@ -2182,6 +2182,28 @@
           "path": "backend/tests/test_pump_market_cap_universe.py"
         }
       ]
+    },
+    {
+      "id": "pump-opportunity-v2-observational-isolation",
+      "description": "Immutable current-price Pump outlook, capped confirmations, conservative labels and neutral isolated challenger",
+      "files": [
+        {
+          "path": "backend/app/services/pump_opportunity_engine.py",
+          "contains_all": ["pump_opportunity_v2", "gate_best_ask_v1", "first_touch_censored", "SCORE_UNIT_MISMATCH", "no_validated_pump_model"]
+        },
+        {
+          "path": "backend/app/services/pump_opportunity_service.py",
+          "contains_all": ["ON CONFLICT(user_id,instrument_id,slot_at) DO NOTHING", "user_id=:u AND observation_id=:id", "pending_support_symbols"]
+        },
+        {
+          "path": "backend/tests/test_pump_opportunity.py",
+          "contains_all": ["test_T02_pre_decision_boundary_high_does_not_count", "test_T15_veto_beats_score_and_visual_hysteresis", "test_T26_flags_reject_unapproved_delta_or_pool_connection", "test_T29_hit_after_gap_first_touch_is_censored"]
+        },
+        {
+          "path": "frontend/components/pump-monitor/PumpOpportunityPanel.tsx",
+          "contains_all": ["Referência selecionada", "Inteligência e qualidade", "ML em observação"]
+        }
+      ]
     }
   ]
 }
