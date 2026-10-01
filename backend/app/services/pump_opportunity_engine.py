@@ -18,7 +18,7 @@ DEFAULT_CONFIG = {
     "listing_ids": {}, "ml_delta_enabled": False, "pool_connection_enabled": False,
     "price_paths_enabled": False,
     "labels_enabled": False, "inference_enabled": False, "training_enabled": False,
-    "budget": {"max_assets": 100, "write_timeout_seconds": 4, "batch_labels": 100,
+    "budget": {"max_assets": 100, "write_timeout_seconds": 4, "batch_labels": 10,
                "label_timeout_seconds": 4, "retention_days": 30, "max_storage_bytes": 1000000000,
                "max_price_points_per_cycle": 10000, "max_price_points_per_minute": 3000},
     "labels": {"version": "pump_gross_touch_v2", "horizons_minutes": [5,10,15,30,60,120],
