@@ -14,8 +14,18 @@ insert, rather than queries per pair. Default512 pairs means a theoretical
 and the600/min max admitted by the100-asset capture budget. That is a demand
 calculation, not a substitute for runtime proof. Time stays4s, SQL3s, read
 100000 price points/20MB encoded JSON; raw storage stays1GB. A read-budget
-exhaustion preserves pending work and reports failure; it never manufactures
-unknown/loss outcomes or retries in an unlimited loop. UI/API display due,
+exhaustion fits a complete FIFO prefix within both read limits before sending
+any raw points to Python. Overlapping windows share their chosen revision.
+Only admitted whole horizons receive labels and completion in the same transaction.
+Remaining identities stay pending, with unchanged references and specifications.
+An individual first window larger than either ceiling is paused explicitly in
+`resource_block` (migration235), with required sizes, fixed limits and timestamp.
+Its completion remains null; no label, gap outcome or loss is invented. The
+next cycle can process subsequent feasible work. API/detail/health retain the
+block evidence; UI separates resource-blocked pairs from due/waiting. Reprocessing
+requires explicit review of a resource-safe solution; no automatic limit increase,
+silent truncation, source substitution or destructive queue cleanup is authorized.
+UI/API display due,
 waiting, oldest lag and measured job throughput. Capture does not await labels.
 
 Before deployment, real PostgreSQL TEMP fixture:51 instruments x2 observations
@@ -23,6 +33,13 @@ x6 horizons,6222 paths spanning122minutes. Two jobs drain612pairs:512 in3023ms,
 100 in1847ms; due queue zero, production writes zero. Real production must
 demonstrate backlog decreasing and then remaining bounded while capture grows.
 No capacity claim is made for arbitrary future source density above read caps.
+
+The dense TEMP regression uses25 points/minute:612 pairs drain across complete
+bounded batches (not a promise that all512 fit). A100001-point individual fixture
+stays pending with no label while a following feasible item completes. Controlled
+real PostgreSQL transactions prove rollback before commit, idempotent retry after
+commit acknowledgement loss, and competing-owner-lock exclusion. TEMP fixtures
+use a separate owner and schema-qualified ALTER; no production history is modified.
 
 ## Identity and training manifest
 
@@ -88,3 +105,16 @@ queue, max10 owners/100 instruments,20s job ceiling. Evidence older than24h is
 uncertified in new observations. Metadata failure cannot alter old raw history
 or enable trading. New identity requires a new instrument/episode; no merging
 of pre-certification samples into the certified training cohort.
+
+## Training job release maintenance
+
+`scalpyn-pump-ml` is an upload-source service. Merging main does not update its
+image automatically. `pump_ml/railway.json` is a source blueprint; the deployed
+provider instance has explicitly configured Dockerfile, cron, start command,
+singleton and runtime limits. Future updates must verify canonical clean main,
+review copied module/dependency changes, upload that exact source, verify provider
+configuration/source commit and observe the next intended cron execution. Do not
+re-execute a daily job merely to refresh documentation or test unrelated labels.
+One UTC date/advisory lock and900s process ceiling remain required. The200-row
+floor only gates a computational challenger; it does not establish statistical
+readiness or permit model promotion.
