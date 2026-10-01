@@ -21,6 +21,7 @@ from sqlalchemy import text
 from . import flow_metrics as fm
 from . import pump_monitor_engine as eng
 from . import pump_research as research
+from .pump_universe import select_universe
 
 logger = logging.getLogger(__name__)
 
@@ -238,9 +239,12 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
     minutes = [last_minute - i * 60_000 for i in range(lookback_minutes - 1, -1, -1)]
     pool_id = config["universe_pool_id"]
 
-    symbols = await run_db_task(lambda db: _universe(db, user_id, pool_id), celery=True)
-    if not symbols:
-        return {"symbols": 0}
+    candidates = await run_db_task(lambda db: _universe(db, user_id, pool_id), celery=True)
+    minute = datetime.fromtimestamp(last_minute / 1000, tz=timezone.utc)
+    symbols, drain_symbols, market_caps = await run_db_task(
+        lambda db: select_universe(db, candidates, config, minute), celery=True)
+    collection_symbols = sorted(set(symbols) | set(drain_symbols))
+    # Even an empty universe publishes a fresh envelope rather than stale ranks.
 
     semaphore = asyncio.Semaphore(int(config["concurrency"]))
     timeout = float(config["symbol_timeout_seconds"])
@@ -254,7 +258,7 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
                 failures[symbol] = type(exc).__name__
                 return symbol, None
 
-    collected = dict(await asyncio.gather(*(_one(s) for s in symbols)))
+    collected = dict(await asyncio.gather(*(_one(s) for s in collection_symbols)))
 
     async def _persist(db):
         params = [_bucket_params(sym, row) for sym, data in collected.items() if data
@@ -309,6 +313,8 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
             symbol, snapshot=snapshot, snapshot_meta=_json_safe(meta), buckets=buckets,
             book=data.get("book"), candle=candles.get(symbol), breakout_state=b_state,
             last_minute_ms=last_minute, now_ms=now_ms, config=config)
+        row["indicators"]["market_cap_usd"] = {"value": market_caps.get(symbol),
+                                                "source": "market_metadata", "reason": None}
         if symbol in failures:
             row["collection_error"] = failures[symbol]
         for alert in eng.new_alerts(alert_state.get(symbol) or [], row["alerts_active"]):
@@ -327,6 +333,21 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
                 logger.warning("[PUMP-RESEARCH] row build failed symbol=%s: %s", symbol, type(exc).__name__)
         rows.append(_json_safe(row))
 
+    # Persist price-only support separately; excluded symbols never build a score,
+    # enter the public envelope/ranking/REALTIME sync, or become a label target.
+    if research_due:
+        for symbol in drain_symbols:
+            data = collected.get(symbol) or {}
+            bucket = next((b for b in data.get("buckets", [])
+                           if b.get("bucket_start_ms") == last_minute), None)
+            if bucket is None:
+                continue
+            rec, vk, ck = research.price_support_row(
+                symbol, minute_ms=last_minute, bucket=bucket, cycle_at_ms=now_ms,
+                config_meta=config["_meta"])
+            research_rows.append(rec)
+            research_keys[rec["value_keys_hash"]] = (vk, ck)
+
     meta = config["_meta"]
     envelope = {
         "generated_at": _iso(now_ms),
@@ -341,6 +362,12 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
         "failed_assets": len(failures),
         "cycle_duration_ms": None,
         "rows": rows,
+        "universe_filter": {**config["universe_filter"], "candidate_assets": len(candidates),
+                            "eligible_assets": len(symbols),
+                            "excluded_assets": len(candidates) - len(symbols),
+                            "label_drain_assets": len(drain_symbols),
+                            "market_cap_source": "market_metadata",
+                            "market_cap_freshness": "not_certified"},
     }
 
     sync_report = await _sync_realtime_pools(user_id, rows, config, now_ms, state)
@@ -369,7 +396,7 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
         for pool_state in (state.get("membership") or {}).values():
             members |= set((pool_state or {}).get("members") or {})
         for rec in research_rows:
-            rec["pool_member"] = rec["symbol"] in members
+            rec["pool_member"] = rec["symbol"] in members if rec["symbol"] in symbols else False
         if await research.write_safely(run_db_task, research_rows, research_keys):
             state["research_last_minute"] = last_minute
 
@@ -385,6 +412,9 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
     logger.info("[PUMP-MONITOR] user=%s assets=%d failed=%d alerts=%d duration_ms=%d sampled=%s",
                 user_id, len(rows), len(failures), len(new_alert_rows),
                 envelope["cycle_duration_ms"], sample)
+    logger.info("[PUMP-UNIVERSE] candidates=%d eligible=%d excluded=%d label_drain=%d cap_min_usd=%s cap_freshness=not_certified",
+                len(candidates), len(symbols), len(candidates) - len(symbols), len(drain_symbols),
+                config["universe_filter"]["min_market_cap_usd"])
     return {"symbols": len(rows), "failed": len(failures), "alerts": len(new_alert_rows),
             "duration_ms": envelope["cycle_duration_ms"]}
 

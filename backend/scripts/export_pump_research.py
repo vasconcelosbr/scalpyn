@@ -63,7 +63,9 @@ async def main(args) -> None:
                   FROM pump_research_minute m
                   LEFT JOIN pump_research_labels l
                     ON l.symbol = m.symbol AND l.ts = m.ts AND l.label_set_version = $3
-                 WHERE m.ts >= $1 AND m.ts < $2 AND (cardinality($4::text[]) = 0 OR m.symbol = ANY($4::text[]))
+                 WHERE m.ts >= $1 AND m.ts < $2
+                   AND COALESCE(m.categorical->>'_research_role', '') <> 'label_drain'
+                   AND (cardinality($4::text[]) = 0 OR m.symbol = ANY($4::text[]))
                  ORDER BY m.ts, m.symbol
             """, datetime.fromisoformat(args.start.replace("Z", "+00:00")),
                 datetime.fromisoformat(args.end.replace("Z", "+00:00")), args.label_set, symbols)
