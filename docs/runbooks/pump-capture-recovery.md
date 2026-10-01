@@ -24,7 +24,17 @@ Validation on G5: 178 focused tests passed. Real PostgreSQL TEMP fixture:
 100 observations and 100 paths in 2.2400443999795243 seconds; retry wrote zero
 and reported 100 duplicates, with 606 total horizon pairs including the
 initial one-asset fixture. Outer transaction rollback; zero production
-writes. Command: `python db-validation-capture-temp.py integration`.
+writes. G5 evidence: `pump-capture-batch-temp2.log` and
+`pump-capture-atomic-temp.log` in the execution workspace. The original G5
+helper was local. Maintainers can reproduce the capture atomicity, retry and
+owner-lock checks with the checked-in fixture, from `backend`:
+`python scripts/validate_pump_capture_temp.py --temp-only`, using an existing
+authorized `DATABASE_URL`. It requires the explicit TEMP-only flag, checks
+temporary table resolution, creates no credentials and writes no production
+tables. The fixture tests rollback before commit, lost acknowledgement after
+commit, immutable retry, independent owners and lock release after rollback.
+The cycle regression test also makes ingest raise and checks labels run
+exactly once while ranking and support contracts remain intact.
 The combined capture plus V4 stress fixture first passed capture idempotency
 but later exceeded the existing label deadline; this is retained as failed
 evidence, not reported as a full integration pass.

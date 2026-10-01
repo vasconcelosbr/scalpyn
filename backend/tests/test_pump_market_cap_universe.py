@@ -89,8 +89,10 @@ def test_drain_query_is_bounded_and_support_cannot_extend_frontier(monkeypatch):
     (['BIG'], ['SMALL'], 1), ([], ['SMALL'], 1), ([], [], 1),
     (['BIG'], ['SMALL'], 2), ([], ['SMALL'], 2)])
 @pytest.mark.parametrize('fail_first_support', [False, True])
-def test_cycle_separates_ranking_and_drain_and_clears_empty_envelope(monkeypatch, eligible, drains, cadence, fail_first_support):
+@pytest.mark.parametrize('capture_failure', [False, True])
+def test_cycle_separates_ranking_and_drain_and_clears_empty_envelope(monkeypatch, eligible, drains, cadence, fail_first_support, capture_failure):
     from app.services import pump_monitor_service as svc
+    from app.services import pump_opportunity_service as opportunities
     from app import database
     captured = {'collected': [], 'built': [], 'records': [], 'synced': None, 'latest': None}
     redis_values = {}
@@ -139,13 +141,22 @@ def test_cycle_separates_ranking_and_drain_and_clears_empty_envelope(monkeypatch
     monkeypatch.setattr(svc, '_sync_realtime_pools', sync)
     monkeypatch.setattr(svc, '_redis', redis)
     monkeypatch.setattr(research, 'write_safely', write)
+    stages=[]
+    async def capture(*args):
+        stages.append('capture')
+        if capture_failure:raise TimeoutError('fixture capture failure')
+    async def labels(*args):stages.append('labels')
+    monkeypatch.setattr(opportunities, 'ingest', capture)
+    monkeypatch.setattr(opportunities, 'label_batch', labels)
     asyncio.run(svc._cycle_for_user('USER', config))
+    assert stages==['capture','labels']
     if fail_first_support and drains:
         state = json.loads(redis_values['pump_monitor:state:USER'])
         assert 'research_support_last_minute' not in state
         captured['built'] = []
         captured['collected'] = []
         asyncio.run(svc._cycle_for_user('USER', config))
+        assert stages==['capture','labels','capture','labels']
         assert json.loads(redis_values['pump_monitor:state:USER'])['research_support_last_minute'] == minute
     assert captured['built'] == eligible and captured['synced'] == eligible
     assert sorted(captured['collected']) == sorted(set(eligible) | set(drains))
