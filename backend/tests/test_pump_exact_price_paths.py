@@ -25,8 +25,8 @@ def test_exact_batch_shared_reads_queue_and_atomic_completion(monkeypatch,read_e
                 assert params['batch']==512
                 return Result([{'payload':p,'horizon':5}])
             if 'selected AS MATERIALIZED' in sql:
-                if read_exhausted:return Result([{'exhausted':True,'points':100001,'bytes':20000001}])
-                return Result([{'instrument_id':p['instrument_id'],'payload':path,'points':18,'bytes':2000,'exhausted':False} for path in paths()])
+                if read_exhausted:return Result([{'exhausted':True,'points':0,'bytes':0,'requested_points':100001,'requested_bytes':20000001,'head_points':100001,'head_bytes':20000001,'accepted_count':0}])
+                return Result([{'instrument_id':p['instrument_id'],'payload':path,'points':18,'bytes':2000,'exhausted':False,'accepted_count':1} for path in paths()])
             if 'INSERT INTO pump_opportunity_labels' in sql:
                 records=json.loads(params['records']);assert len(records)==1
                 assert records[0]['p']['resolution']=='trades_exact_window_v1'
@@ -41,7 +41,11 @@ def test_exact_batch_shared_reads_queue_and_atomic_completion(monkeypatch,read_e
     assert result['written']==(0 if read_exhausted else 1)
     assert sum('selected AS MATERIALIZED' in q for q in queries)==1
     assert any('ORDER BY q.ready_at' in q for q in queries)
-    assert any('UPDATE pump_opportunity_label_queue' in q for q in queries) is not read_exhausted
+    assert any('SET completed_at' in q for q in queries) is not read_exhausted
+    if read_exhausted:
+        assert result['reason']=='individual_window_exceeds_read_budget'
+        assert result['resource_block']['retry_policy']=='explicit_review_required'
+        assert any('SET resource_block' in q for q in queries)
 
 
 def observation():
@@ -50,6 +54,44 @@ def observation():
         future_price_policy="last_trade_asof_endpoint_v1",endpoint_max_age_seconds=60,settle_seconds=63)
     p["manifest"]["label_spec_hash"]=e.canonical_hash(p["label_spec"])
     return p
+
+
+def test_budget_prefix_only_completes_admitted_horizons(monkeypatch):
+    import asyncio,json
+    from uuid import UUID
+    from app import database
+    from app.services import pump_opportunity_service as svc
+    original=observation();rows=[];written=[];completed=[]
+    for index in range(3):
+        p=deepcopy(original);p['observation_id']=str(UUID(int=index+1))
+        rows.append({'payload':p,'horizon':5})
+    class Result:
+        def __init__(self,items=()):self.items=items
+        def mappings(self):return self
+        def all(self):return self.items
+        def scalar(self):return True
+    class DB:
+        async def execute(self,query,params=None):
+            sql=str(query)
+            if 'SELECT o.payload,q.horizon_minutes' in sql:return Result(rows)
+            if 'selected AS MATERIALIZED' in sql:
+                assert [r['n'] for r in json.loads(params['requests'])]==[1,2,3]
+                # Only two full windows are admitted; a third stays pending.
+                return Result([{'instrument_id':None,'payload':None,'points':18,'bytes':2000,
+                    'exhausted':False,'accepted_count':2},*[{'instrument_id':original['instrument_id'],
+                    'payload':p,'points':18,'bytes':2000,'exhausted':False,'accepted_count':2} for p in paths()]])
+            if 'INSERT INTO pump_opportunity_labels' in sql:written.extend(json.loads(params['records']))
+            if 'UPDATE pump_opportunity_label_queue' in sql:completed.extend(json.loads(params['records']))
+            return Result()
+    async def get_config(db,user):return e.config({'labels_enabled':True,'labels':original['label_spec']})
+    async def storage(db):return 0
+    async def run(fn,**kwargs):return await fn(DB())
+    monkeypatch.setattr(svc,'get_config',get_config);monkeypatch.setattr(svc,'storage_bytes',storage)
+    monkeypatch.setattr(database,'run_db_task',run)
+    result=asyncio.run(svc.label_batch('fixture'))
+    assert result['requested']==3 and result['accepted']==result['written']==2
+    assert [r['id'] for r in written]==[r['payload']['observation_id'] for r in rows[:2]]
+    assert completed==written and rows[2]['payload']['observation_id'] not in {r['id'] for r in completed}
 
 
 def paths():
