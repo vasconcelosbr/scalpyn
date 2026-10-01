@@ -432,7 +432,7 @@ def first_touch_and_drawdown(points,gaps,reference,target,complete,policy):
     # Find the first hit and the minimum strictly before its timestamp in one
     # pass. Stop after its tied timestamp group; no additional archive reads.
     for point in points:
-        stamp,price=point[:2]
+        stamp=point[0];price=point[1]
         if first is not None and stamp>first[0]:break
         if stamp!=stamp_seen:
             stamp_seen=stamp;prefix_price=minimum_price;lower_at_stamp=False
