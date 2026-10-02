@@ -1,11 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {latestRequestGuard,isIntelligenceStale,preferredCohort,Intelligence,Cohort} from './pump-intelligence';
+import {latestRequestGuard,isIntelligenceStale,preferredCohort,Intelligence,Cohort,Support,executiveTime,targetNarrative,descriptiveComparison} from './pump-intelligence';
 
 test('late horizon or filter responses cannot overwrite newer refresh',()=>{
  const guard=latestRequestGuard();const old=guard.begin();const current=guard.begin();
  assert.equal(guard.isCurrent(old),false);assert.equal(guard.isCurrent(current),true);
  guard.invalidate();assert.equal(guard.isCurrent(current),false);
+});
+
+test('executive summary states seven hits and eight unknown without operational percentage',()=>{
+ const s={observations:15,targets:{'0.8':{hits:7,misses:0,known:7,unknown:8}}} as unknown as Support;
+ const text=targetNarrative(s,'0.8');assert.match(text,/7 atingiram/);assert.match(text,/8 indeterminados/);
+ assert.doesNotMatch(text,/%/);
+});
+test('winner concentration and group hit rate use different denominators',()=>{
+ const s=(hits:number,known:number,observations:number)=>({observations,targets:{'0.8':{hits,known}}} as unknown as Support);
+ const c=descriptiveComparison(s(2,4,10),s(8,20,30),'0.8');
+ assert.equal(c.groupRate,.5);assert.equal(c.baselineRate,.4);assert.equal(c.winnerConcentration,.25);
+ assert.equal(c.knownCoverage,.4);
+ assert.equal(descriptiveComparison(s(0,0,5),s(0,0,10),'0.8').groupRate,null);
+});
+test('GMT minus three is fixed and crosses the calendar date correctly',()=>{
+ const t=executiveTime('2026-01-01T02:30:00Z');assert.match(t,/31\/12\/2025/);assert.match(t,/23:30/);assert.match(t,/GMT−3/);
+ assert.equal(executiveTime(null),'Sem dados');assert.equal(executiveTime('invalid'),'Sem dados');
 });
 test('initial view finds mature V4 support instead of the newest empty cohort',()=>{
  const cohort=(id:string,version:string,known:number)=>({cohort_id:id,label_version:version,baseline:{observations:20,targets:{'0.8':{known}}}} as unknown as Cohort);

@@ -91,7 +91,9 @@ async def read_intelligence(db,user_id,conditions,horizon,refresh=False):
                         ledger=[{'group':e['group'],'result':e['result']} for e in p['ledger']])
                     payload['decision_at']=eng.utc(payload['decision_at']).isoformat()
                     compact.append({'payload':payload,'label':label,'labeled_at':r['labeled_at']})
-                cached={'rows':compact,'at':datetime.now(timezone.utc).isoformat(),'tick':time.monotonic(),
+                from .pump_shadow_context import read_shadow_context
+                shadow=await read_shadow_context(db,user_id,cfg,now,cfg['max_read_bytes']-size)
+                cached={'rows':compact,'shadow':shadow,'at':datetime.now(timezone.utc).isoformat(),'tick':time.monotonic(),
                         'read_bytes':size,'truncated':truncated,'byte_limited':byte_limited,
                         'window_from':(now-timedelta(hours=cfg['window_hours'])).isoformat()}
                 _cache[key]=cached;_failures.pop(key,None);recalculated=True
@@ -112,11 +114,13 @@ async def read_intelligence(db,user_id,conditions,horizon,refresh=False):
                          'age_seconds':round(age,2),'refresh_failed':key in _failures},
             'scope':{'policy':'temporal_buckets_all_candidates','whole_history':False,'sample_limit':cfg['sample_limit'],
                      'sampled_observations':len(rows),'temporal_buckets':cfg['temporal_buckets'],'window_hours':cfg['window_hours'],'window_from':cached['window_from'],
-                     'sample_truncated':cached['truncated'],'byte_limited':cached['byte_limited'],'read_bytes':cached['read_bytes'],'cache_seconds':cfg['cache_seconds'],
+                     'sample_truncated':cached['truncated'],'byte_limited':cached['byte_limited'],'read_bytes':cached['read_bytes'],
+                     'additional_context_read_bytes':cached['shadow']['read_bytes'],
+                     'combined_read_bytes':cached['read_bytes']+cached['shadow']['read_bytes'],'cache_seconds':cfg['cache_seconds'],
                      'horizon_minutes':horizon,'score_edges':cfg['score_edges'],'available_horizons':c['labels']['horizons_minutes'],
                      'capture_freshness_seconds':c['freshness_seconds']},
             'model':{'status':'observational','algorithm':'XGBoost Pump','delta':0,'probability':None,
                      'auto_promotion':False,'reason':'no_validated_model_activation','shadow_isolation':True},
             'gates':{k:c[k] for k in ('training_job_enabled','training_enabled','inference_enabled','ml_delta_enabled','pool_connection_enabled')},
-            'training_runs':[dict(r) for r in training],'cohorts':cohorts,
+            'training_runs':[dict(r) for r in training],'cohorts':cohorts,'shadow_context':cached['shadow'],
             'notice':'Frequências descritivas correlacionadas por episódio; não são probabilidades preditivas ou ordens.'}

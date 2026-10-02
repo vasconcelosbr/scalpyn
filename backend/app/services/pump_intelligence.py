@@ -101,4 +101,6 @@ def summarize(rows, horizon, score_edges, conditions=None):
             "baseline":describe(sample,horizon),"patterns":[{"pattern":k,**describe(v,horizon)} for k,v in sorted(patterns.items())],
             "score_bands":[{"pattern":k,**describe(v,horizon)} for k,v in sorted(scores.items())],
             "exploration":describe([r for r in sample if all(eng.condition(r["payload"]["values"],c) is True for c in conditions)],horizon) if conditions else None})
+        from .pump_executive_insights import executive_groups
+        cohorts[-1]['executive']=executive_groups(sample,horizon,describe)
     return cohorts

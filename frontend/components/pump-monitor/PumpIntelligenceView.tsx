@@ -1,11 +1,12 @@
 "use client";
 import {memo,useCallback,useEffect,useRef,useState} from "react";
 import {apiFetch} from "@/lib/api";
-import {Intelligence,Support,latestRequestGuard,isIntelligenceStale,preferredCohort} from "@/lib/pump-intelligence";
+import {Intelligence,Support,latestRequestGuard,isIntelligenceStale,preferredCohort,executiveTime} from "@/lib/pump-intelligence";
+import PumpExecutiveSummary from "./PumpExecutiveSummary";
 import styles from "./opportunity.module.css";
 
 const fmt=(v:number|null)=>v===null?"Desconhecido":new Intl.NumberFormat("pt-BR",{maximumFractionDigits:3}).format(v);
-const time=(v:string|null)=>v?new Date(v).toLocaleString("pt-BR",{timeZone:"UTC"})+" UTC":"Sem dados";
+const time=executiveTime;
 
 const SupportTable=memo(function SupportTable({rows}:{rows:(Support&{pattern:string})[]}){
  return <div className={styles.scroll}><table><thead><tr>{["Grupo / amostra","Cobertura","+0,60% bruto","+0,80% bruto"].map(x=><th key={x}>{x}</th>)}</tr></thead><tbody>
@@ -54,7 +55,8 @@ export default function PumpIntelligenceView({active=true}:{active?:boolean}){
    <label>Contrato compatível <select aria-label="Contrato da Inteligência" value={cohortId||selected?.cohort_id||""} onChange={e=>setCohortId(e.target.value)}>{cohortId&&!selected&&<option value={cohortId}>Contrato selecionado fora da amostra atual</option>}{data.cohorts.map(c=><option key={c.cohort_id} value={c.cohort_id}>{c.label_version} · score {c.score_config_hash.slice(0,10)} · label {c.label_spec_hash.slice(0,10)} · {c.baseline.observations} observações · {c.baseline.targets["0.8"].known} desfechos conhecidos</option>)}</select></label>
    {cohortId&&!selected&&selectionMatches&&<p>O contrato selecionado não está na amostra recente. Selecione outro para comparar; os contratos não foram combinados.</p>}
    {!data.cohorts.length&&<p>Sem candidatos nessa janela.</p>}
-   {selected&&<><details><summary>Identidade completa do contrato</summary><pre>{JSON.stringify({horizon:selected.horizon_minutes,score:selected.score_config_hash,label:selected.label_spec_hash,features:selected.feature_spec_hash,producer:selected.producer_config_hash,costs:selected.cost_policy_hash,reference:selected.reference_policy},null,2)}</pre></details>
+   {selected&&<><PumpExecutiveSummary cohort={selected} shadow={data.shadow_context} onExplore={rules=>{setDraft(JSON.stringify(rules));guard.current.invalidate();setApplied(rules);}}/>
+    <h3>Detalhes técnicos e suporte</h3><details><summary>Identidade completa do contrato</summary><pre>{JSON.stringify({horizon:selected.horizon_minutes,score:selected.score_config_hash,label:selected.label_spec_hash,features:selected.feature_spec_hash,producer:selected.producer_config_hash,costs:selected.cost_policy_hash,reference:selected.reference_policy},null,2)}</pre></details>
     <p>Conhecidos incluem toques observados; um toque pode ser conhecido apesar de gaps. Desconhecidos e pendentes nunca viram perdas. Tempo e queda usam apenas medições admissíveis; não há interpolação ou mistura de contratos.</p>
     <h3>Taxa-base deste contrato</h3><SupportTable rows={[{pattern:"Todos os candidatos amostrados deste contrato",...selected.baseline}]}/>
     <h3>Faixas de pontos de confirmação</h3><p>Faixas descritivas configuradas: {data.scope.score_edges.join(", ")}. Não são limites novos de admissão.</p><SupportTable rows={selected.score_bands}/>
