@@ -44,11 +44,11 @@ async def opportunity_history(cursor: Optional[str] = Query(None,max_length=36),
 
 
 @router.get("/opportunities/intelligence")
-async def opportunity_intelligence(response: Response,horizon: int = Query(5,ge=1,le=120),db: AsyncSession = Depends(get_db),user_id: UUID = Depends(get_current_user_id)):
+async def opportunity_intelligence(response: Response,horizon: int = Query(5,ge=1,le=120),refresh: bool = Query(False),db: AsyncSession = Depends(get_db),user_id: UUID = Depends(get_current_user_id)):
     from ..services import pump_opportunity_service as opportunities
     response.headers["Cache-Control"]="private, no-store"
     try:
-        return await opportunities.intelligence(db,user_id,horizon=horizon)
+        return await opportunities.intelligence(db,user_id,horizon=horizon,refresh=refresh)
     except ValueError as exc:
         raise HTTPException(status_code=422,detail=str(exc))
 
@@ -63,7 +63,9 @@ async def explore_opportunity_pattern(payload: Dict[str,Any],response: Response,
         response.headers["Cache-Control"]="private, no-store"
         horizon=payload.get("horizon_minutes",5)
         if not isinstance(horizon,int) or isinstance(horizon,bool):raise ValueError("Integer horizon required")
-        return await opportunities.intelligence(db,user_id,conditions,horizon)
+        refresh=payload.get('refresh',False)
+        if not isinstance(refresh,bool):raise ValueError('Boolean refresh required')
+        return await opportunities.intelligence(db,user_id,conditions,horizon,refresh)
     except (ValueError,TypeError,KeyError) as exc:
         raise HTTPException(status_code=422,detail=str(exc))
 

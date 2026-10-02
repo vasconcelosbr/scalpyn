@@ -2243,12 +2243,12 @@
     },
 {
       "id": "pump-descriptive-intelligence-bounded-refresh",
-      "description": "Separate compatible contracts, preserve unknowns/censorship, bounded indexed cache and active-tab refresh with latest-response protection",
+      "description": "Separate compatible contracts, preserve unknowns/censorship, bounded indexed cache and manual historical refresh with latest-response protection",
       "files": [
             {
                   "path": "backend/app/services/pump_intelligence_reader.py",
                   "contains_all": [
-                        "WITH recent AS MATERIALIZED",
+                        "bucket_picks AS MATERIALIZED",
                         "LEFT JOIN LATERAL",
                         "begin_nested",
                         "max_read_bytes",
@@ -2277,7 +2277,7 @@
             {
                   "path": "frontend/components/pump-monitor/PumpIntelligenceView.tsx",
                   "contains_all": [
-                        "60000",
+                        "refresh(true)",
                         "guard.current.isCurrent",
                         "computed_at",
                         "sample_truncated",
@@ -2288,7 +2288,7 @@
                   "path": "frontend/lib/pump-intelligence.test.ts",
                   "contains_all": [
                         "late horizon or filter responses",
-                        "freshness uses its own aggregate"
+                        "historical snapshot does not expire"
                   ]
             }
       ]

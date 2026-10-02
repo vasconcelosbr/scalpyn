@@ -82,7 +82,7 @@ def test_cache_single_flight_reuses_rows_and_failure_preserves_previous_snapshot
                 r=row()
                 item={'source_text':json.dumps(r['payload']),'label_text':json.dumps(r['label']),
                       'has_label':True,'labeled_at':NOW,'slot_at':NOW,'observation_id':'id','requested_rows':1}
-                return Result([{'source_text':None,'requested_rows':1},item])
+                return Result([{'source_text':None,'requested_rows':1,'cumulative_bytes':1},item])
             return Result([])
     async def run():
         db=DB()
@@ -90,7 +90,9 @@ def test_cache_single_flight_reuses_rows_and_failure_preserves_previous_snapshot
         assert db.samples==1 and first['computed_at']==second['computed_at']
         assert second['cohorts'][0]['exploration']['observations']==0
         next(iter(reader._cache.values()))['tick']-=61;db.fail=True
-        stale=await reader.read_intelligence(db,'owner',None,5)
+        ordinary=await reader.read_intelligence(db,'owner',None,5)
+        assert ordinary['computed_at']==first['computed_at'] and db.samples==1 and not ordinary['recalculated']
+        stale=await reader.read_intelligence(db,'owner',None,5,refresh=True)
         retry=await reader.read_intelligence(db,'owner',None,5)
         assert stale['freshness']['refresh_failed'] and retry['computed_at']==first['computed_at'] and db.samples==2
         assert stale['model']['delta']==0 and stale['scope']['whole_history'] is False

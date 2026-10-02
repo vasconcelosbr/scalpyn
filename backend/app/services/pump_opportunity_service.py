@@ -341,6 +341,6 @@ async def history(db,user_id,cursor=None,limit=50):
             "next_cursor":str(rows[limit-1]["observation_id"]) if len(rows)>limit else None}
 
 
-async def intelligence(db,user_id,conditions=None,horizon=5):
+async def intelligence(db,user_id,conditions=None,horizon=5,refresh=False):
     from .pump_intelligence_reader import read_intelligence
-    return await read_intelligence(db,user_id,conditions,horizon)
+    return await read_intelligence(db,user_id,conditions,horizon,refresh)

@@ -1,7 +1,7 @@
 "use client";
 import {memo,useCallback,useEffect,useRef,useState} from "react";
 import {apiFetch} from "@/lib/api";
-import {Intelligence,Support,latestRequestGuard,isIntelligenceStale} from "@/lib/pump-intelligence";
+import {Intelligence,Support,latestRequestGuard,isIntelligenceStale,preferredCohort} from "@/lib/pump-intelligence";
 import styles from "./opportunity.module.css";
 
 const fmt=(v:number|null)=>v===null?"Desconhecido":new Intl.NumberFormat("pt-BR",{maximumFractionDigits:3}).format(v);
@@ -26,32 +26,32 @@ export default function PumpIntelligenceView({active=true}:{active?:boolean}){
  const [data,setData]=useState<Intelligence|null>(null),[error,setError]=useState(""),[loading,setLoading]=useState(false);
  const [horizon,setHorizon]=useState(5),[cohortId,setCohortId]=useState("");
  const [draft,setDraft]=useState('[{"field":"rsi","op":"between","value":[65,76]},{"field":"adx","op":"gt","value":25}]');
- const [applied,setApplied]=useState<unknown[]|null>(null),[lastSuccess,setLastSuccess]=useState<number|null>(null),[now,setNow]=useState(Date.now);
+ const [applied,setApplied]=useState<unknown[]|null>(null),[lastSuccess,setLastSuccess]=useState<number|null>(null);
  const guard=useRef(latestRequestGuard());
- const refresh=useCallback(async()=>{
+ const refresh=useCallback(async(force=false)=>{
   const request=guard.current.begin();setLoading(true);
   try{
-   const result=await apiFetch<Intelligence>(applied?"/pump-monitor/opportunities/explore":`/pump-monitor/opportunities/intelligence?horizon=${horizon}`,
-    {method:applied?"POST":"GET",cache:"no-store",...(applied?{body:JSON.stringify({conditions:applied,horizon_minutes:horizon})}:{})});
+   const result=await apiFetch<Intelligence>(applied?"/pump-monitor/opportunities/explore":`/pump-monitor/opportunities/intelligence?horizon=${horizon}&refresh=${force}`,
+    {method:applied?"POST":"GET",cache:"no-store",...(applied?{body:JSON.stringify({conditions:applied,horizon_minutes:horizon,refresh:force})}:{})});
    if(!guard.current.isCurrent(request))return;
-   setData(result);setLastSuccess(Date.now());setError("");
+   setData(result);setCohortId(current=>current||preferredCohort(result.cohorts)?.cohort_id||"");setLastSuccess(Date.now());setError("");
   }catch{if(guard.current.isCurrent(request))setError("Falha ao atualizar a Inteligência. Os dados anteriores foram preservados e podem estar atrasados.");}
   finally{if(guard.current.isCurrent(request))setLoading(false);}
  },[applied,horizon]);
- useEffect(()=>{if(!active){guard.current.invalidate();return;}void refresh();const timer=window.setInterval(()=>void refresh(),60000);const clock=window.setInterval(()=>setNow(Date.now()),10000);
-  const requestGuard=guard.current;return()=>{clearInterval(timer);clearInterval(clock);requestGuard.invalidate();};},[refresh,active]);
+ useEffect(()=>{if(!active){guard.current.invalidate();return;}void refresh();
+  const requestGuard=guard.current;return()=>{requestGuard.invalidate();};},[refresh,active,horizon]);
  const selectionMatches=data?.scope.horizon_minutes===horizon;
- const selected=selectionMatches?(cohortId?data?.cohorts.find(c=>c.cohort_id===cohortId):data?.cohorts[0]):undefined;
- const stale=isIntelligenceStale(data,now,lastSuccess)||Boolean(error)||!selectionMatches;
+ const selected=selectionMatches?(cohortId?data?.cohorts.find(c=>c.cohort_id===cohortId):preferredCohort(data?.cohorts??[])):undefined;
+ const stale=isIntelligenceStale(data)||Boolean(error)||!selectionMatches;
  const explore=()=>{try{const rules:unknown=JSON.parse(draft);if(!Array.isArray(rules)||!rules.length||rules.length>20)throw Error();guard.current.invalidate();setApplied(rules);}catch{setError("Informe de 1 a 20 condições AND válidas.");}};
  return <section aria-label="Inteligência descritiva Pump">
   <h2>Inteligência e qualidade · ML observacional</h2><p>Frequências descritivas de observações correlacionadas por episódio. Não são probabilidades preditivas, evidência fora da amostra ou ordens. Inferência e contribuição ML permanecem zero.</p>
-  <div className={styles.toolbar}><label>Horizonte <select aria-label="Horizonte da Inteligência" value={horizon} onChange={e=>{guard.current.invalidate();setHorizon(Number(e.target.value));}}>{(data?.scope.available_horizons??[5,10,15,30,60,120]).map(h=><option key={h} value={h}>{h} min</option>)}</select></label>
-   <button onClick={()=>void refresh()} disabled={loading}>{loading?"Atualizando…":"Atualizar Inteligência"}</button><span>Atualização automática enquanto esta aba estiver aberta: 60s.</span></div>
-  <p role="status">{stale?"Dados atrasados / aguardando atualização":"Dados atualizados"} · resposta recebida: {time(lastSuccess?new Date(lastSuccess).toISOString():null)} · agregado calculado: {time(data?.computed_at??null)} · capturas até: {time(data?.data_through??null)} · labels até: {time(data?.labels_through??null)}</p>
-  {error&&<p role="alert" className={styles.error}>{error}</p>}{data?.freshness.refresh_failed&&<p role="alert">A consulta ao banco falhou; agregado anterior preservado. Nova tentativa no próximo ciclo.</p>}
-  {data&&<><p>Escopo: até {data.scope.sample_limit} candidatos recentes, dentro de {data.scope.window_hours} horas, incluindo abaixo do limite. Foram amostradas {data.scope.sampled_observations} observações. {data.scope.sample_truncated?"Limite de amostra atingido; não é toda a janela.":"Amostra retornada dentro da janela."} {data.scope.byte_limited?"A amostra também foi limitada pelo orçamento de bytes.":""} Não representa o histórico inteiro. Cache do agregador: {data.scope.cache_seconds}s.</p>
-   <label>Contrato compatível <select aria-label="Contrato da Inteligência" value={cohortId||selected?.cohort_id||""} onChange={e=>setCohortId(e.target.value)}>{cohortId&&!selected&&<option value={cohortId}>Contrato selecionado fora da amostra atual</option>}{data.cohorts.map(c=><option key={c.cohort_id} value={c.cohort_id}>{c.label_version} · score {c.score_config_hash.slice(0,10)} · label {c.label_spec_hash.slice(0,10)} · {c.baseline.observations} observações</option>)}</select></label>
+  <div className={styles.toolbar}><label>Horizonte <select aria-label="Horizonte da Inteligência" value={horizon} onChange={e=>{guard.current.invalidate();setCohortId("");setHorizon(Number(e.target.value));}}>{(data?.scope.available_horizons??[5,10,15,30,60,120]).map(h=><option key={h} value={h}>{h} min</option>)}</select></label>
+   <button onClick={()=>void refresh(true)} disabled={loading}>{loading?"Atualizando…":"Atualizar Inteligência"}</button><span>Análise histórica estável; atualização manual. O radar mantém sua atualização de 60s.</span></div>
+  <p role="status">{stale?"Dados atrasados / aguardando atualização":"Resultado histórico disponível"} · última consulta: {time(lastSuccess?new Date(lastSuccess).toISOString():null)} · análise calculada: {time(data?.computed_at??null)} · capturas até: {time(data?.data_through??null)} · labels até: {time(data?.labels_through??null)}</p>
+  {error&&<p role="alert" className={styles.error}>{error}</p>}{data?.freshness.refresh_failed&&<p role="alert">A consulta ao banco falhou; agregado anterior preservado. Use Atualizar Inteligência para tentar novamente.</p>}
+  {data&&<><p>Escopo: amostra temporal em {data.scope.temporal_buckets} faixas de uma janela de {data.scope.window_hours} horas, até {data.scope.sample_limit} candidatos, incluindo abaixo do limite. Não são apenas as capturas mais recentes; as faixas vazias não são preenchidas. Foram amostradas {data.scope.sampled_observations} observações. {data.scope.sample_truncated?"Há candidatos fora da amostra; não é toda a janela.":"Amostra retornada dentro da janela."} {data.scope.byte_limited?"A amostra também foi limitada pelo orçamento de bytes.":""} A frequência se refere à amostra temporal exploratória, não ao universo inteiro. N=0 neste contrato/amostra não significa ausência de resultados no histórico. Não representa o histórico inteiro. Intervalo mínimo entre recálculos: {data.scope.cache_seconds}s. {data.recalculated?"Uma análise foi calculada nesta consulta.":"Resultado cacheado reutilizado; esta consulta não recalculou a análise."}</p>
+   <label>Contrato compatível <select aria-label="Contrato da Inteligência" value={cohortId||selected?.cohort_id||""} onChange={e=>setCohortId(e.target.value)}>{cohortId&&!selected&&<option value={cohortId}>Contrato selecionado fora da amostra atual</option>}{data.cohorts.map(c=><option key={c.cohort_id} value={c.cohort_id}>{c.label_version} · score {c.score_config_hash.slice(0,10)} · label {c.label_spec_hash.slice(0,10)} · {c.baseline.observations} observações · {c.baseline.targets["0.8"].known} desfechos conhecidos</option>)}</select></label>
    {cohortId&&!selected&&selectionMatches&&<p>O contrato selecionado não está na amostra recente. Selecione outro para comparar; os contratos não foram combinados.</p>}
    {!data.cohorts.length&&<p>Sem candidatos nessa janela.</p>}
    {selected&&<><details><summary>Identidade completa do contrato</summary><pre>{JSON.stringify({horizon:selected.horizon_minutes,score:selected.score_config_hash,label:selected.label_spec_hash,features:selected.feature_spec_hash,producer:selected.producer_config_hash,costs:selected.cost_policy_hash,reference:selected.reference_policy},null,2)}</pre></details>
