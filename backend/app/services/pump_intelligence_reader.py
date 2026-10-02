@@ -14,23 +14,23 @@ _failures={}
 SAMPLE_SQL="""WITH recent AS MATERIALIZED (
  SELECT observation_id,user_id,decision_at,slot_at FROM pump_opportunity_observations
  WHERE user_id=:u AND slot_at>=:since ORDER BY slot_at DESC,observation_id DESC LIMIT :limit
-), projected AS (
- SELECT jsonb_build_object('episode_id',o.episode_id,'instrument_id',o.instrument_id,'decision_at',o.decision_at,
- 'score_final',o.payload->'score_final','values',o.payload->'values','ledger',
- (SELECT jsonb_agg(jsonb_build_object('group',e->'group','result',e->'result')) FROM jsonb_array_elements(o.payload->'ledger') e),
- 'manifest',(o.payload->'manifest')-ARRAY['listing_evidence','feature_spec','eligibility_policy','liquidity_reference'],
- 'label_version',o.payload->'label_spec'->'version',
- 'reference_policy',o.payload->'reference'->'policy') AS payload,
- jsonb_build_object('status',l.payload->'status','coverage_complete',l.payload->'coverage_complete',
- 'missing_minutes',l.payload->'missing_minutes','boundary_ambiguous',l.payload->'boundary_ambiguous',
- 'order_ambiguous',l.payload->'order_ambiguous','targets',l.payload->'targets') AS label,
+), raw AS MATERIALIZED (
+ SELECT o.payload::text AS source_text,l.payload::text AS label_text,
  l.observation_id IS NOT NULL AS has_label,l.labeled_at,r.slot_at,r.observation_id
  FROM recent r JOIN pump_opportunity_observations o ON o.observation_id=r.observation_id AND o.user_id=r.user_id
  LEFT JOIN LATERAL (SELECT observation_id,payload,labeled_at FROM pump_opportunity_labels
  WHERE observation_id=o.observation_id AND horizon_minutes=:h
  AND label_spec_hash=o.payload->'manifest'->>'label_spec_hash' LIMIT 1) l ON true
+), bounded AS (
+ SELECT *,sum(octet_length(source_text)+COALESCE(octet_length(label_text),0))
+ OVER(ORDER BY slot_at DESC,observation_id DESC) AS cumulative_bytes,count(*) OVER() AS requested_rows
+ FROM raw
 )
-SELECT * FROM projected ORDER BY slot_at DESC,observation_id DESC"""
+SELECT * FROM bounded WHERE cumulative_bytes<=:bytes
+UNION ALL SELECT NULL::text,NULL::text,false,NULL::timestamptz,NULL::timestamptz,NULL::uuid,
+ 0::bigint,count(*) FROM raw
+ORDER BY slot_at DESC NULLS FIRST,observation_id DESC"""
+
 
 
 async def read_intelligence(db,user_id,conditions,horizon):
@@ -61,17 +61,29 @@ async def read_intelligence(db,user_id,conditions,horizon):
                     previous_timeout=await db.scalar(text('SHOW statement_timeout'))
                     await db.execute(text("SELECT set_config('statement_timeout',:v,true)"),{'v':f"{cfg['read_timeout_ms']}ms"})
                     rows=[dict(r) for r in (await db.execute(text(SAMPLE_SQL),{'u':user_id,'h':horizon,
-                        'since':now-timedelta(hours=cfg['window_hours']),'limit':cfg['sample_limit']+1})).mappings()]
+                        'since':now-timedelta(hours=cfg['window_hours']),'limit':cfg['sample_limit']+1,'bytes':cfg['max_read_bytes']})).mappings()]
                     await db.execute(text("SELECT set_config('statement_timeout',:v,true)"),{'v':previous_timeout})
-                truncated=len(rows)>cfg['sample_limit'];rows=rows[:cfg['sample_limit']]
-                size=len(json.dumps(rows,default=str).encode())
-                if size>cfg['max_read_bytes']:raise ValueError('Intelligence projected sample exceeds byte budget')
+                requested_rows=int(next(r['requested_rows'] for r in rows if r['source_text'] is None))
+                rows=[r for r in rows if r['source_text'] is not None]
+                if requested_rows and not rows:raise ValueError('Individual intelligence record exceeds byte budget')
+                truncated=requested_rows>cfg['sample_limit'] or len(rows)<requested_rows
+                byte_limited=len(rows)<requested_rows
+                rows=rows[:cfg['sample_limit']]
+                size=sum(len(r['source_text'].encode())+len((r['label_text'] or '').encode()) for r in rows)
+                if size>cfg['max_read_bytes']:raise ValueError('Intelligence sample exceeds byte budget')
+                compact=[]
                 for r in rows:
-                    if not r.pop('has_label'):r['label']=None
-                    # JSONB timestamp text is normalized before date grouping.
-                    r['payload']['decision_at']=eng.utc(r['payload']['decision_at']).isoformat()
-                cached={'rows':rows,'at':datetime.now(timezone.utc).isoformat(),'tick':time.monotonic(),
-                        'read_bytes':size,'truncated':truncated,'window_from':(now-timedelta(hours=cfg['window_hours'])).isoformat()}
+                    p=json.loads(r.pop('source_text'));label=json.loads(r.pop('label_text')) if r['has_label'] else None
+                    manifest={k:p['manifest'].get(k) for k in ('score_config_hash','label_spec_hash','feature_spec_hash','legacy_config_hash','cost_policy_hash')}
+                    payload={k:p[k] for k in ('episode_id','instrument_id','decision_at','score_final','values')}
+                    payload.update(manifest=manifest,label_version=p.get('label_version') or p.get('label_spec',{}).get('version'),
+                        reference_policy=p.get('reference_policy') or p.get('reference',{}).get('policy'),
+                        ledger=[{'group':e['group'],'result':e['result']} for e in p['ledger']])
+                    payload['decision_at']=eng.utc(payload['decision_at']).isoformat()
+                    compact.append({'payload':payload,'label':label,'labeled_at':r['labeled_at']})
+                cached={'rows':compact,'at':datetime.now(timezone.utc).isoformat(),'tick':time.monotonic(),
+                        'read_bytes':size,'truncated':truncated,'byte_limited':byte_limited,
+                        'window_from':(now-timedelta(hours=cfg['window_hours'])).isoformat()}
                 _cache[key]=cached;_failures.pop(key,None)
             except Exception:
                 _failures[key]={'tick':time.monotonic()}
@@ -89,7 +101,7 @@ async def read_intelligence(db,user_id,conditions,horizon):
                          'age_seconds':round(age,2),'refresh_failed':key in _failures},
             'scope':{'policy':'bounded_recent_all_candidates','whole_history':False,'sample_limit':cfg['sample_limit'],
                      'sampled_observations':len(rows),'window_hours':cfg['window_hours'],'window_from':cached['window_from'],
-                     'sample_truncated':cached['truncated'],'read_bytes':cached['read_bytes'],'cache_seconds':cfg['cache_seconds'],
+                     'sample_truncated':cached['truncated'],'byte_limited':cached['byte_limited'],'read_bytes':cached['read_bytes'],'cache_seconds':cfg['cache_seconds'],
                      'horizon_minutes':horizon,'score_edges':cfg['score_edges'],'available_horizons':c['labels']['horizons_minutes'],
                      'capture_freshness_seconds':c['freshness_seconds']},
             'model':{'status':'observational','algorithm':'XGBoost Pump','delta':0,'probability':None,
