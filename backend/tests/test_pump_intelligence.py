@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import json
 from contextlib import asynccontextmanager
 from datetime import datetime,timezone
 import pytest
@@ -78,8 +79,10 @@ def test_cache_single_flight_reuses_rows_and_failure_preserves_previous_snapshot
             if str(sql)==reader.SAMPLE_SQL:
                 self.samples+=1
                 if self.fail:raise ValueError('simulated query failure')
-                r=row();r.update(has_label=True,labeled_at=NOW,slot_at=NOW,observation_id='id')
-                return Result([r])
+                r=row()
+                item={'source_text':json.dumps(r['payload']),'label_text':json.dumps(r['label']),
+                      'has_label':True,'labeled_at':NOW,'slot_at':NOW,'observation_id':'id','requested_rows':1}
+                return Result([{'source_text':None,'requested_rows':1},item])
             return Result([])
     async def run():
         db=DB()
