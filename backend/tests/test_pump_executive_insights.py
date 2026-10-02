@@ -5,6 +5,15 @@ from datetime import datetime,timezone
 from test_pump_intelligence import row
 from app.services import pump_intelligence as agg,pump_executive_insights as insights
 
+def test_complete_coverage_without_hits_is_five_known_not_zero_coverage():
+    sample=[row(False,True) for _ in range(5)]
+    cohort=agg.summarize(sample,5,[0,10,20,30,40])[0]
+    for support in [cohort['baseline']]+[g['support'] for g in cohort['executive']['groups']]:
+        assert support['coverage']['complete']==5
+        for target in support['targets'].values():
+            assert (target['hits'],target['known'],target['unknown'])==(0,5,0)
+            assert (target['complete_hits'],target['complete_known'])==(0,5)
+
 def test_seven_hits_eight_unknown_never_become_operational_success_rate():
     sample=[row(True,False) for _ in range(7)]+[row(None,False) for _ in range(8)]
     c=agg.summarize(sample,5,[0,10,20,30,40])[0]

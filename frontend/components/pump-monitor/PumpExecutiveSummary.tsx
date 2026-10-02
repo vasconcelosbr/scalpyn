@@ -1,6 +1,6 @@
 "use client";
 import {memo,useState} from "react";
-import {Cohort,ExecutiveGroup,ShadowContext,Support,descriptiveComparison,executiveTime,targetNarrative} from "@/lib/pump-intelligence";
+import {Cohort,ExecutiveGroup,ShadowContext,Support,completeTargetNarrative,descriptiveComparison,executiveTime,targetNarrative} from "@/lib/pump-intelligence";
 import styles from "./opportunity.module.css";
 
 const number=(v:number)=>new Intl.NumberFormat("pt-BR",{maximumFractionDigits:2}).format(v);
@@ -23,7 +23,7 @@ const Insight=memo(function Insight({item,baseline,onExplore}:{item:ExecutiveGro
    <p>{targetNarrative(s,target)}</p>
    <p>Grupo: {t.hits}/{t.known} ({rate(c.groupRate)}). Taxa-base comparável: {b.hits}/{b.known} ({rate(c.baselineRate)}); {b.unknown} indeterminados na base.</p>
    <p>{c.differencePoints===null?"Evidência insuficiente para comparar.":c.differencePoints>0?`Ponto favorável a testar: frequência entre conhecidos ${number(c.differencePoints)} pontos percentuais acima da base nesta amostra.`:c.differencePoints<0?`Risco a investigar: frequência entre conhecidos ${number(-c.differencePoints)} pontos percentuais abaixo da base nesta amostra.`:"Frequência entre conhecidos igual à base nesta amostra."} Cobertura e composição dos episódios podem explicar a diferença.</p>
-   <small>Participação entre os toques da base: {t.hits}/{b.hits} ({c.winnerConcentration===null?"sem toques na base":`${number(c.winnerConcentration*100)}%`}). Essa concentração não é a taxa de acerto do grupo. Cobertura completa: {t.complete_hits}/{t.complete_known} conhecidos no grupo.</small>
+   <small>Participação entre os toques da base: {t.hits}/{b.hits} ({c.winnerConcentration===null?"sem toques na base":`${number(c.winnerConcentration*100)}%`}). Essa concentração não é a taxa de acerto do grupo. {completeTargetNarrative(t)}</small>
   </div>;})}
   {item.observed_range&&<p>Valores observados: {number(item.observed_range[0])} a {number(item.observed_range[1])}. Faixa derivada da mediana da amostra, sem otimizar pelos resultados.</p>}
   <small>Período: {executiveTime(s.from)} → {executiveTime(s.to)}. Mesmo contrato e horizonte da taxa-base; não inclui outros perfis ou produtores.</small>

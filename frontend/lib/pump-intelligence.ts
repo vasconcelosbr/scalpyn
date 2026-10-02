@@ -3,6 +3,10 @@ export type TargetMetrics={hits:number;misses:number;known:number;unknown:number
   complete_hits:number;complete_known:number;first_touch_censored:number;time_to_touch_seconds:Metric;
   time_interval_lower_seconds:Metric;time_interval_upper_seconds:Metric;time_unknown_among_hits:number;
   drawdown_before_touch_pct:Metric;mae_before_touch_pct:Metric;pre_touch_unknown:number;pre_touch_not_reached:number;pre_touch_not_measured:number};
+
+export function completeTargetNarrative(t:TargetMetrics):string {
+ return `Entre os ${t.complete_known} desfechos conhecidos com cobertura completa: ${t.complete_hits} atingiram; ${t.complete_known-t.complete_hits} não atingiram.`;
+}
 export type Support={observations:number;episodes:number;instruments:number;days:number;from:string|null;to:string|null;
   coverage:{complete:number;pending:number;incomplete:number;with_gaps:number;boundary_ambiguous:number;order_ambiguous:number};
   targets:Record<string,TargetMetrics>};

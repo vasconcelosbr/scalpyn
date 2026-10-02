@@ -1,7 +1,7 @@
 "use client";
 import {memo,useCallback,useEffect,useRef,useState} from "react";
 import {apiFetch} from "@/lib/api";
-import {Intelligence,Support,latestRequestGuard,isIntelligenceStale,preferredCohort,executiveTime} from "@/lib/pump-intelligence";
+import {Intelligence,Support,completeTargetNarrative,latestRequestGuard,isIntelligenceStale,preferredCohort,executiveTime} from "@/lib/pump-intelligence";
 import PumpExecutiveSummary from "./PumpExecutiveSummary";
 import styles from "./opportunity.module.css";
 
@@ -14,7 +14,7 @@ const SupportTable=memo(function SupportTable({rows}:{rows:(Support&{pattern:str
    <td>Completa {r.coverage.complete}; pendentes {r.coverage.pending}; incompleta {r.coverage.incomplete}<small>Com gaps {r.coverage.with_gaps}; fronteira ambígua {r.coverage.boundary_ambiguous}; ordem ambígua {r.coverage.order_ambiguous}</small></td>
    {["0.6","0.8"].map(target=>{const t=r.targets[target];return <td key={target}>
     <strong>{t.descriptive_hit_rate===null?"Sem desfechos conhecidos":`${fmt(t.descriptive_hit_rate*100)}% (${t.hits}/${t.known})`}</strong>
-    <small>Toques {t.hits}; não tocou {t.misses}; desconhecidos {t.unknown}. Cobertura completa: {t.complete_hits}/{t.complete_known} desfechos.</small>
+    <small>Toques {t.hits}; não tocou {t.misses}; desconhecidos {t.unknown}. {completeTargetNarrative(t)}</small>
     <small>Tempo exato até alvo: mediana {fmt(t.time_to_touch_seconds.median)} s; média {fmt(t.time_to_touch_seconds.mean)} s (N={t.time_to_touch_seconds.known}).</small>
     <small>Tempo por intervalo: medianas dos limites {fmt(t.time_interval_lower_seconds.median)}–{fmt(t.time_interval_upper_seconds.median)} s (N={t.time_interval_lower_seconds.known}); sem tempo entre hits {t.time_unknown_among_hits}; primeiro toque censurado {t.first_touch_censored}.</small>
     <small>Queda antes do alvo: mediana {fmt(t.drawdown_before_touch_pct.median)}%; média {fmt(t.drawdown_before_touch_pct.mean)}% (N={t.drawdown_before_touch_pct.known}). MAE antes: {fmt(t.mae_before_touch_pct.median)}%.</small>
