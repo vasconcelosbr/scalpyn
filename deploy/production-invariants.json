@@ -2294,6 +2294,14 @@
                   ]
             }
       ]
-}
+},
+    {"id":"pump-executive-observational-insights","description":"Executive counts retain unknowns, fixed GMT-3 start-time exposure, compatible median ranges and separate bounded verified Shadow context",
+    "files":[
+      {"path":"backend/app/services/pump_executive_insights.py","contains_all":["actionable_hour_ranking","sample_median_no_outcome_selection","no_verified_pump_shadow_link","verified_shadow_outcome","entry_price_contract_version","exit_policy_hash"]},
+      {"path":"backend/app/services/pump_shadow_context.py","contains_all":["shadow_trades","read_bytes<=:bytes","begin_nested","shared_read_byte_budget"]},
+      {"path":"frontend/components/pump-monitor/PumpExecutiveSummary.tsx","contains_all":["targetNarrative","taxa operacional","Melhor/pior horário","Cobertura e composição","SL no Shadow"]},
+      {"path":"backend/tests/test_pump_executive_insights.py","contains_all":["test_seven_hits_eight_unknown_never_become_operational_success_rate","test_indicator_ranges_do_not_select_by_outcome_or_fill_missing","test_shadow_invalid_lineage_not_repaired_and_profiles_sources_policies_separate"]},
+      {"path":"frontend/lib/pump-intelligence.test.ts","contains_all":["winner concentration and group hit rate","seven hits and eight unknown","GMT minus three is fixed"]}
+    ]}
   ]
 }
