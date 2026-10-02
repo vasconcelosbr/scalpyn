@@ -1,6 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {latestRequestGuard,isIntelligenceStale,preferredCohort,Intelligence,Cohort,Support,executiveTime,targetNarrative,descriptiveComparison} from './pump-intelligence';
+import {latestRequestGuard,isIntelligenceStale,preferredCohort,Intelligence,Cohort,Support,TargetMetrics,completeTargetNarrative,executiveTime,targetNarrative,descriptiveComparison} from './pump-intelligence';
+
+test('complete coverage counts are not mislabeled as a hit fraction',()=>{
+ const narrative=(hits:number,known:number)=>completeTargetNarrative({complete_hits:hits,complete_known:known} as TargetMetrics);
+ assert.equal(narrative(0,5),'Entre os 5 desfechos conhecidos com cobertura completa: 0 atingiram; 5 não atingiram.');
+ assert.equal(narrative(2,5),'Entre os 5 desfechos conhecidos com cobertura completa: 2 atingiram; 3 não atingiram.');
+ assert.equal(narrative(0,0),'Entre os 0 desfechos conhecidos com cobertura completa: 0 atingiram; 0 não atingiram.');
+ // A hit from an incomplete path belongs to total known outcomes, not this subset.
+ const partial={complete_hits:1,complete_known:2,hits:2,known:3,unknown:2} as TargetMetrics;
+ assert.equal(completeTargetNarrative(partial),'Entre os 2 desfechos conhecidos com cobertura completa: 1 atingiram; 1 não atingiram.');
+});
 
 test('late horizon or filter responses cannot overwrite newer refresh',()=>{
  const guard=latestRequestGuard();const old=guard.begin();const current=guard.begin();
