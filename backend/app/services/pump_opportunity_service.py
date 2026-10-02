@@ -341,42 +341,6 @@ async def history(db,user_id,cursor=None,limit=50):
             "next_cursor":str(rows[limit-1]["observation_id"]) if len(rows)>limit else None}
 
 
-async def intelligence(db,user_id,conditions=None):
-    # Bounded recent sample, all candidates rather than score-selected winners.
-    rows=(await db.execute(text("""SELECT o.payload,l.payload AS label FROM pump_opportunity_observations o
-        LEFT JOIN pump_opportunity_labels l ON l.observation_id=o.observation_id
-          AND l.horizon_minutes=5 AND l.label_spec_hash=o.payload->'manifest'->>'label_spec_hash'
-        WHERE o.user_id=:u ORDER BY o.decision_at DESC LIMIT 5000"""),{"u":user_id})).mappings().all()
-    def describe(selected):
-        known=[r for r in selected if r["label"] and r["label"].get("targets",{}).get("0.8",{}).get("hit") is not None]
-        hits=sum(r["label"]["targets"]["0.8"]["hit"] is True for r in known)
-        rate=hits/len(known) if known else None
-        return {"observations":len(selected),"episodes":len({r["payload"]["episode_id"] for r in selected}),
-                "instruments":len({r["payload"]["instrument_id"] for r in selected}),
-                "days":len({r["payload"]["decision_at"][:10] for r in selected}),"known":len(known),
-                "unknown_or_pending":len(selected)-len(known),"hits":hits,"descriptive_hit_rate":rate,
-                "from":min((r["payload"]["decision_at"] for r in selected),default=None),
-                "to":max((r["payload"]["decision_at"] for r in selected),default=None),
-                "confidence_interval":None,"uncertainty_reason":"clustered_validation_not_available",
-                "out_of_sample":False,"probability_validated":False}
-    baseline=describe(rows);groups={};contracts={}
-    for r in rows:
-        manifest=r["payload"]["manifest"]
-        contract=(manifest["score_config_hash"],manifest["label_spec_hash"],r["payload"]["label_spec"]["version"])
-        contracts.setdefault(contract,[]).append(r)
-        pattern=" + ".join(sorted(e["group"] for e in r["payload"]["ledger"] if e["result"] is True)) or "sem confirmação"
-        groups.setdefault(pattern,[]).append(r)
-    patterns=[{"pattern":name,**describe(sample)} for name,sample in sorted(groups.items())]
-    exploration=describe([r for r in rows if all(eng.condition(r["payload"]["values"],c) is True for c in conditions)]) if conditions else None
-    experiments=(await db.execute(text("SELECT experiment_id,created_at,status,manifest,metrics FROM pump_ml_experiments WHERE user_id=:u ORDER BY created_at DESC LIMIT 20"),{"u":user_id})).mappings().all()
-    training_runs=(await db.execute(text("""SELECT run_id,started_at,finished_at,
-        CASE WHEN status='running' AND deadline_at<now() THEN 'deadline_exceeded' ELSE status END AS status,payload
-        FROM pump_ml_job_runs WHERE user_id=:u ORDER BY started_at DESC LIMIT 20"""),{"u":user_id})).mappings().all()
-    return {"contract_version":eng.CONTRACT_VERSION,"as_of":datetime.now(timezone.utc).isoformat(),
-            "model":{"status":"coletando","algorithm":"XGBoost Pump","delta":0,"probability":None,"auto_promotion":False,
-                     "reason":"insufficient_validated_point_in_time_data","shadow_isolation":True},
-            "baseline":baseline,"patterns":patterns,"exploration":exploration,"experiments":[dict(e) for e in experiments],
-            "contract_cohorts":[{"score_config_hash":key[0],"label_spec_hash":key[1],"label_version":key[2],
-                **describe(sample)} for key,sample in sorted(contracts.items())],
-            "training_runs":[dict(r) for r in training_runs],
-            "sample_limit":5000,"sample_policy":"most_recent_all_candidates","target":{"gross_pct":0.8,"horizon_minutes":5}}
+async def intelligence(db,user_id,conditions=None,horizon=5):
+    from .pump_intelligence_reader import read_intelligence
+    return await read_intelligence(db,user_id,conditions,horizon)
