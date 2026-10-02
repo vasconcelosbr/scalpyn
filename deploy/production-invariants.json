@@ -2220,7 +2220,9 @@
       "description":"Pump bounded shared reads and immutable listing/feature/cost/temporal contracts; explicit risk and sample uncertainty",
       "files":[
         {"path":"backend/alembic/versions/233_pump_label_queue.py","contains_all":["ix_pump_label_due","ON CONFLICT DO NOTHING"]},
-        {"path":"backend/app/services/pump_opportunity_service.py","contains_all":["selected AS MATERIALIZED","prefix AS","accepted_count","individual_window_exceeds_read_budget","resource_block IS NULL","max_label_read_points","pg_try_advisory_xact_lock","UPDATE pump_opportunity_label_queue"]},
+        {"path":"backend/app/services/pump_opportunity_service.py","contains_all":["FIFO_PREFIX_SQL","WITH pending AS MATERIALIZED","admitted_observation_unavailable","accepted_count","individual_window_exceeds_read_budget","resource_block IS NULL","max_label_read_points","pg_try_advisory_xact_lock","UPDATE pump_opportunity_label_queue"]},
+        {"path":"backend/app/services/pump_label_reader.py","contains_all":["WITH RECURSIVE requests AS MATERIALIZED","w.n=w.accepted_count","jsonb_object_agg","admitted AS MATERIALIZED","b.n AS examined_count"]},
+        {"path":"backend/tests/test_pump_fifo_reader_sql.py","contains_all":["test_sql_fifo_prefix_matches_previous_reader","test_sql_never_costs_discarded_suffix","SET TRANSACTION READ ONLY"]},
         {"path":"backend/alembic/versions/235_pump_label_resource_block.py","contains_all":["234_pump_ml_job_ledger","resource_block jsonb"]},
         {"path":"backend/tests/test_pump_exact_price_paths.py","contains_all":["test_budget_prefix_only_completes_admitted_horizons","explicit_review_required"]},
         {"path":"backend/app/services/pump_contracts.py","contains_all":["provider_listing_epoch_unavailable","Strict temporal cuts required","Frozen cost policy hash mismatch"]},

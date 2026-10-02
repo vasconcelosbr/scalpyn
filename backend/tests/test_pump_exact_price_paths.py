@@ -21,12 +21,17 @@ def test_exact_batch_shared_reads_queue_and_atomic_completion(monkeypatch,read_e
         async def execute(self,query,params=None):
             sql=str(query);queries.append(sql)
             assert 'flow_buckets_1m' not in sql
-            if 'SELECT o.payload,q.horizon_minutes' in sql:
+            if 'q.horizon_minutes AS horizon' in sql:
                 assert params['batch']==512
-                return Result([{'payload':p,'horizon':5}])
-            if 'selected AS MATERIALIZED' in sql:
+                return Result([label_metadata(p,5)])
+            if "AS label_spec_hash" in sql:
+                return Result([{'label_spec_hash':p['manifest']['label_spec_hash'],'resolution':p['label_spec']['resolution']}])
+            if 'WITH RECURSIVE requests AS MATERIALIZED' in sql:
                 if read_exhausted:return Result([{'exhausted':True,'points':0,'bytes':0,'requested_points':100001,'requested_bytes':20000001,'head_points':100001,'head_bytes':20000001,'accepted_count':0}])
                 return Result([{'instrument_id':p['instrument_id'],'payload':path,'points':18,'bytes':2000,'exhausted':False,'accepted_count':1} for path in paths()])
+            if 'SELECT observation_id,payload' in sql:
+                assert params['ids']==[p['observation_id']]
+                return Result([{'observation_id':p['observation_id'],'payload':p}])
             if 'INSERT INTO pump_opportunity_labels' in sql:
                 records=json.loads(params['records']);assert len(records)==1
                 assert records[0]['p']['resolution']=='trades_exact_window_v1'
@@ -39,7 +44,7 @@ def test_exact_batch_shared_reads_queue_and_atomic_completion(monkeypatch,read_e
     monkeypatch.setattr(database,'run_db_task',run_db_task)
     result=asyncio.run(svc.label_batch('fixture'))
     assert result['written']==(0 if read_exhausted else 1)
-    assert sum('selected AS MATERIALIZED' in q for q in queries)==1
+    assert sum('WITH RECURSIVE requests AS MATERIALIZED' in q for q in queries)==1
     assert any('ORDER BY q.ready_at' in q for q in queries)
     assert any('SET completed_at' in q for q in queries) is not read_exhausted
     if read_exhausted:
@@ -56,15 +61,16 @@ def observation():
     return p
 
 
-def test_budget_prefix_only_completes_admitted_horizons(monkeypatch):
+@pytest.mark.parametrize('same_observation',[False,True])
+def test_budget_prefix_only_completes_admitted_horizons(monkeypatch,same_observation):
     import asyncio,json
     from uuid import UUID
     from app import database
     from app.services import pump_opportunity_service as svc
     original=observation();rows=[];written=[];completed=[]
     for index in range(3):
-        p=deepcopy(original);p['observation_id']=str(UUID(int=index+1))
-        rows.append({'payload':p,'horizon':5})
+        p=deepcopy(original);p['observation_id']=str(UUID(int=1 if same_observation else index+1))
+        rows.append({'payload':p,'horizon':(5,10,15)[index] if same_observation else 5})
     class Result:
         def __init__(self,items=()):self.items=items
         def mappings(self):return self
@@ -73,13 +79,19 @@ def test_budget_prefix_only_completes_admitted_horizons(monkeypatch):
     class DB:
         async def execute(self,query,params=None):
             sql=str(query)
-            if 'SELECT o.payload,q.horizon_minutes' in sql:return Result(rows)
-            if 'selected AS MATERIALIZED' in sql:
+            if 'q.horizon_minutes AS horizon' in sql:return Result([label_metadata(r['payload'],r['horizon']) for r in rows])
+            if 'AS label_spec_hash' in sql:
+                assert len(params['ids'])==1
+                return Result([{'label_spec_hash':original['manifest']['label_spec_hash'],'resolution':original['label_spec']['resolution']}])
+            if 'WITH RECURSIVE requests AS MATERIALIZED' in sql:
                 assert [r['n'] for r in json.loads(params['requests'])]==[1,2,3]
                 # Only two full windows are admitted; a third stays pending.
                 return Result([{'instrument_id':None,'payload':None,'points':18,'bytes':2000,
                     'exhausted':False,'accepted_count':2},*[{'instrument_id':original['instrument_id'],
                     'payload':p,'points':18,'bytes':2000,'exhausted':False,'accepted_count':2} for p in paths()]])
+            if 'SELECT observation_id,payload' in sql:
+                assert params['ids']==list(dict.fromkeys(r['payload']['observation_id'] for r in rows[:2]))
+                return Result([{'observation_id':r['payload']['observation_id'],'payload':r['payload']} for r in rows[:2]])
             if 'INSERT INTO pump_opportunity_labels' in sql:written.extend(json.loads(params['records']))
             if 'UPDATE pump_opportunity_label_queue' in sql:completed.extend(json.loads(params['records']))
             return Result()
@@ -91,7 +103,8 @@ def test_budget_prefix_only_completes_admitted_horizons(monkeypatch):
     result=asyncio.run(svc.label_batch('fixture'))
     assert result['requested']==3 and result['accepted']==result['written']==2
     assert [r['id'] for r in written]==[r['payload']['observation_id'] for r in rows[:2]]
-    assert completed==written and rows[2]['payload']['observation_id'] not in {r['id'] for r in completed}
+    assert completed==written
+    assert (rows[2]['payload']['observation_id'],rows[2]['horizon']) not in {(r['id'],r['h']) for r in completed}
 
 
 def paths():
@@ -177,3 +190,9 @@ def test_exact_valid_cost_policy_is_contextual_never_an_exit_command():
     p=observation();p["label_spec"]["cost_policy"]={"roundtrip_pct":.2}
     result=e.exact_gross_label(p,paths(),5,NOW+timedelta(minutes=7))
     assert result["net_return_pct"]==pytest.approx(result["endpoint_return_pct"]-.2)
+
+
+def label_metadata(p,horizon):
+    return {**{k:p[k] for k in ('observation_id','instrument_id','symbol','decision_at')},
+            'label_spec_hash':p['manifest']['label_spec_hash'],'horizon':horizon,
+            'resolution':p['label_spec']['resolution']}
