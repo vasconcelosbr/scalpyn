@@ -117,21 +117,16 @@ def test_gap_at_exact_touch_timestamp_never_certifies_pre_touch_prefix():
 
 
 def test_intelligence_exposes_separate_frozen_contract_support():
-    import asyncio
-    from app.services import pump_opportunity_service as svc
+    from app.services.pump_intelligence import summarize
     old=observation();new=v4();ps=paths();ps[1]["points"][0][1]=101
+    for p in (old,new):
+        p["label_version"]=p["label_spec"]["version"]
+        p["reference_policy"]=p["reference"]["policy"]
     rows=[{"payload":old,"label":label(ps,old)},{"payload":new,"label":None}]
-    class Result:
-        def __init__(self,items):self.items=items
-        def mappings(self):return self
-        def all(self):return self.items
-    class DB:
-        async def execute(self,query,params):
-            return Result(rows if "LEFT JOIN pump_opportunity_labels" in str(query) else [])
-    result=asyncio.run(svc.intelligence(DB(),"fixture"))
-    cohorts={c["label_version"]:c for c in result["contract_cohorts"]}
-    assert cohorts["pump_gross_touch_v3"]["known"]==1
-    assert cohorts["pump_gross_touch_v4"]["known"]==0
-    assert cohorts["pump_gross_touch_v4"]["unknown_or_pending"]==1
+    result=summarize(rows,5,[0,10,20,30,40])
+    cohorts={c["label_version"]:c for c in result}
+    assert cohorts["pump_gross_touch_v3"]["baseline"]["known"]==1
+    assert cohorts["pump_gross_touch_v4"]["baseline"]["known"]==0
+    assert cohorts["pump_gross_touch_v4"]["baseline"]["unknown_or_pending"]==1
     assert cohorts["pump_gross_touch_v3"]["label_spec_hash"]!=cohorts["pump_gross_touch_v4"]["label_spec_hash"]
-    assert result["baseline"]["observations"]==2 and not result["baseline"]["probability_validated"]
+    assert all(c["baseline"]["observations"]==1 and not c["baseline"]["probability_validated"] for c in result)

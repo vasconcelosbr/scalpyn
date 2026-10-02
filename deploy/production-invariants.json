@@ -2236,10 +2236,62 @@
       "description":"New frozen exact-trade contracts separate per-target adverse excursion, censored prefixes, timestamp order and whole-horizon MAE",
       "files":[
         {"path":"backend/app/services/pump_opportunity_engine.py","contains_all":["pump_gross_touch_v4","reference_to_first_touch_strict_timestamp_v1","def first_touch_and_drawdown(","gap_before_or_at_observed_touch","touch_timestamp_order_ambiguous"]},
-        {"path":"backend/app/services/pump_opportunity_service.py","contains_all":["contract_cohorts","label_version"]},
+        {"path":"backend/app/services/pump_intelligence.py","contains_all":["contract_key","label_version","score_config_hash","label_spec_hash"]},
         {"path":"backend/tests/test_pump_pre_touch_drawdown.py","contains_all":["test_targets_have_distinct_prefixes_and_exclude_later_drawdown","test_v3_output_unchanged_and_v4_contract_hash_is_distinct","test_intelligence_exposes_separate_frozen_contract_support"]},
-        {"path":"frontend/components/pump-monitor/PumpOpportunityPanel.tsx","contains_all":["drawdown_before_touch_pct","MAE total do horizonte","contract_cohorts"]}
+        {"path":"frontend/components/pump-monitor/PumpOpportunityPanel.tsx","contains_all":["drawdown_before_touch_pct","MAE total do horizonte","PumpIntelligenceView"]}
       ]
-    }
+    },
+{
+      "id": "pump-descriptive-intelligence-bounded-refresh",
+      "description": "Separate compatible contracts, preserve unknowns/censorship, bounded indexed cache and active-tab refresh with latest-response protection",
+      "files": [
+            {
+                  "path": "backend/app/services/pump_intelligence_reader.py",
+                  "contains_all": [
+                        "WITH recent AS MATERIALIZED",
+                        "LEFT JOIN LATERAL",
+                        "begin_nested",
+                        "max_read_bytes",
+                        "whole_history",
+                        "refresh_failed"
+                  ]
+            },
+            {
+                  "path": "backend/app/services/pump_intelligence.py",
+                  "contains_all": [
+                        "contract_key",
+                        "first_touch_censored",
+                        "time_interval_lower_seconds",
+                        "pre_touch_unknown",
+                        "score_bands"
+                  ]
+            },
+            {
+                  "path": "backend/tests/test_pump_intelligence.py",
+                  "contains_all": [
+                        "test_contracts_producers_and_score_bands_never_merge",
+                        "test_cache_single_flight_reuses_rows_and_failure_preserves_previous_snapshot",
+                        "test_censored_time_and_ambiguous_pre_touch_are_never_exact_measurements"
+                  ]
+            },
+            {
+                  "path": "frontend/components/pump-monitor/PumpIntelligenceView.tsx",
+                  "contains_all": [
+                        "60000",
+                        "guard.current.isCurrent",
+                        "computed_at",
+                        "sample_truncated",
+                        "Contrato selecionado fora da amostra atual"
+                  ]
+            },
+            {
+                  "path": "frontend/lib/pump-intelligence.test.ts",
+                  "contains_all": [
+                        "late horizon or filter responses",
+                        "freshness uses its own aggregate"
+                  ]
+            }
+      ]
+}
   ]
 }
