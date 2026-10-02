@@ -205,51 +205,44 @@ async def label_batch(user_id):
             return {"status":"storage_budget_exhausted"}
         locked=(await db.execute(text("SELECT pg_try_advisory_xact_lock(hashtextextended('pump_labels:'||CAST(:u AS text),0))"),{"u":str(user_id)})).scalar()
         if not locked:return {"status":"busy","written":0}
-        due=list((await db.execute(text("""SELECT o.payload,q.horizon_minutes AS horizon FROM pump_opportunity_label_queue q
+        due=list((await db.execute(text("""WITH pending AS MATERIALIZED (
+            SELECT q.observation_id,q.user_id,q.label_spec_hash,q.horizon_minutes,q.ready_at
+            FROM pump_opportunity_label_queue q WHERE q.user_id=:u AND q.completed_at IS NULL
+                AND q.resource_block IS NULL AND q.ready_at<=:now
+            ORDER BY q.ready_at,q.observation_id,q.horizon_minutes LIMIT :batch)
+            SELECT o.observation_id,o.instrument_id,o.symbol,o.decision_at,
+            q.label_spec_hash,q.horizon_minutes AS horizon FROM pending q
             JOIN pump_opportunity_observations o ON o.observation_id=q.observation_id AND o.user_id=q.user_id
-            WHERE q.user_id=:u AND q.completed_at IS NULL AND q.resource_block IS NULL AND q.ready_at<=:now
-            ORDER BY q.ready_at,q.observation_id,q.horizon_minutes LIMIT :batch"""),
+            ORDER BY q.ready_at,q.observation_id,q.horizon_minutes"""),
             {"u":user_id,"now":now,"batch":c["budget"]["batch_labels"]})).mappings().all())
+        # A frozen label hash identifies one immutable spec; decompress one
+        # representative per hash instead of every candidate's full document.
+        representative={}
+        for item in due:representative.setdefault(item["label_spec_hash"],str(item["observation_id"]))
+        specifications=(await db.execute(text("""SELECT payload->'manifest'->>'label_spec_hash' AS label_spec_hash,
+            payload->'label_spec'->>'resolution' AS resolution FROM pump_opportunity_observations
+            WHERE user_id=:u AND observation_id=ANY(CAST(:ids AS uuid[]))"""),
+            {"u":user_id,"ids":list(representative.values())})).mappings().all() if due else []
+        resolutions={r["label_spec_hash"]:r["resolution"] for r in specifications}
+        if set(resolutions)!=set(representative):raise RuntimeError("label_specification_unavailable")
         # Deduplicate overlapping instrument windows; bounded payloads are shared
         # by every observation/horizon in this batch, never queried per label.
         requests=[]
         for ordinal,item in enumerate(due,1):
-            p=item["payload"];start=eng.utc(p["decision_at"])
-            requests.append({"n":ordinal,"i":p["instrument_id"],"s":p["symbol"],"a":start.replace(second=0,microsecond=0).isoformat(),
-                "b":(start+timedelta(minutes=int(item["horizon"]))).isoformat(),"exact":p["label_spec"]["resolution"]=="trades_exact_window_v1"})
+            start=eng.utc(item["decision_at"])
+            requests.append({"n":ordinal,"i":str(item["instrument_id"]),"s":item["symbol"],"a":start.replace(second=0,microsecond=0).isoformat(),
+                "b":(start+timedelta(minutes=int(item["horizon"]))).isoformat(),"exact":resolutions[item["label_spec_hash"]]=="trades_exact_window_v1"})
         params={"u":user_id,"requests":json.dumps(requests),"count":len(requests),"points":c["budget"]["max_label_read_points"],"bytes":c["budget"]["max_label_read_bytes"]}
-        # Each revision matches the same request set by instrument/minute. The
-        # last ordering key identifies its earliest consumer without expanding
-        # payloads into a second window query. Fit an entire FIFO prefix before
-        # returning any points; unfinished horizons retain their exact identity.
-        paths=(await db.execute(text("""WITH requests AS (
-            SELECT * FROM jsonb_to_recordset(CAST(:requests AS jsonb)) AS r(n integer,i uuid,s text,a timestamptz,b timestamptz,exact boolean)),
-            selected AS MATERIALIZED (SELECT DISTINCT ON(p.instrument_id,p.bucket_start) p.instrument_id,p.payload,r.n AS first_request
-                FROM pump_opportunity_price_paths p JOIN requests r ON r.exact AND p.instrument_id=r.i
-                    AND p.bucket_start>=r.a AND p.bucket_start<=r.b
-                WHERE p.user_id=:u ORDER BY p.instrument_id,p.bucket_start,p.complete DESC,p.captured_at DESC,r.n),
-            costs AS (SELECT first_request,sum(jsonb_array_length(payload->'points')) AS points,
-                sum(octet_length(payload::text)) AS bytes FROM selected GROUP BY first_request),
-            cumulative AS (SELECT first_request,sum(points) OVER(ORDER BY first_request) AS points,
-                sum(bytes) OVER(ORDER BY first_request) AS bytes FROM costs),
-            prefix AS (SELECT COALESCE(min(first_request) FILTER(WHERE points>:points OR bytes>:bytes),:count+1)-1 AS accepted_count FROM cumulative),
-            budget AS (SELECT p.accepted_count,
-                COALESCE(sum(jsonb_array_length(s.payload->'points')) FILTER(WHERE s.first_request<=p.accepted_count),0) AS points,
-                COALESCE(sum(octet_length(s.payload::text)) FILTER(WHERE s.first_request<=p.accepted_count),0) AS bytes,
-                COALESCE(sum(jsonb_array_length(s.payload->'points')) FILTER(WHERE s.first_request=1),0) AS head_points,
-                COALESCE(sum(octet_length(s.payload::text)) FILTER(WHERE s.first_request=1),0) AS head_bytes,
-                COALESCE(sum(jsonb_array_length(s.payload->'points')),0) AS requested_points,
-                COALESCE(sum(octet_length(s.payload::text)),0) AS requested_bytes
-                FROM prefix p LEFT JOIN selected s ON true GROUP BY p.accepted_count)
-            SELECT NULL::uuid AS instrument_id,NULL::jsonb AS payload,b.points,b.bytes,b.accepted_count=0 AS exhausted,
-                b.accepted_count,b.requested_points,b.requested_bytes,b.head_points,b.head_bytes FROM budget b
-            UNION ALL SELECT s.instrument_id,s.payload,b.points,b.bytes,false,b.accepted_count,b.requested_points,b.requested_bytes,b.head_points,b.head_bytes
-                FROM selected s CROSS JOIN budget b WHERE s.first_request<=b.accepted_count"""),params)).mappings().all() if requests else []
+        # Cost each unseen minute only until the first over-budget FIFO identity.
+        # Materialize only the admitted prefix in the same statement snapshot;
+        # unfinished horizons retain their exact identity and queue order.
+        from .pump_label_reader import FIFO_PREFIX_SQL
+        paths=(await db.execute(text(FIFO_PREFIX_SQL),params)).mappings().all() if requests else []
         if any(r["exhausted"] for r in paths):
             # The first whole window alone exceeds a fixed resource limit.
             # Pause only that identity, not the following FIFO work. No label,
             # completion, gap outcome or loss is invented; raw data is retained.
-            first=due[0];p=first["payload"]
+            first=due[0]
             block={"reason":"individual_window_exceeds_read_budget","blocked_at":now.isoformat(),
                 "required_points":int(paths[0]["head_points"]),"required_bytes":int(paths[0]["head_bytes"]),
                 "point_limit":c["budget"]["max_label_read_points"],"byte_limit":c["budget"]["max_label_read_bytes"],
@@ -257,13 +250,13 @@ async def label_batch(user_id):
             await db.execute(text("""UPDATE pump_opportunity_label_queue SET resource_block=CAST(:p AS jsonb)
                 WHERE user_id=:u AND observation_id=CAST(:id AS uuid) AND label_spec_hash=:hash
                 AND horizon_minutes=:h AND completed_at IS NULL"""),
-                {"u":user_id,"id":p["observation_id"],"hash":p["manifest"]["label_spec_hash"],
+                {"u":user_id,"id":str(first["observation_id"]),"hash":first["label_spec_hash"],
                  "h":int(first["horizon"]),"p":json.dumps(block)})
             result={"status":"label_read_budget_exhausted","written":0,"batch_limit":len(due),
                 "read_points":0,"read_bytes":0,
-                "requested_read_points":int(paths[0]["requested_points"]),"requested_read_bytes":int(paths[0]["requested_bytes"]),
+                "examined_read_points":int(paths[0]["requested_points"]),"examined_read_bytes":int(paths[0]["requested_bytes"]),
                 "reason":block["reason"],"resource_block":block,
-                "observation_id":p["observation_id"],"horizon_minutes":int(first["horizon"]),
+                "observation_id":str(first["observation_id"]),"horizon_minutes":int(first["horizon"]),
                 "duration_ms":round((datetime.now(timezone.utc)-now).total_seconds()*1000)}
             await db.execute(text("INSERT INTO pump_opportunity_job_runs(run_id,user_id,payload) VALUES(:id,:u,CAST(:p AS jsonb))"),
                 {"id":uuid4(),"u":user_id,"p":json.dumps(result)})
@@ -273,6 +266,15 @@ async def label_batch(user_id):
         due=due[:accepted_count]
         requests=requests[:accepted_count]
         params["requests"]=json.dumps(requests)
+        # Immutable observation documents are needed only by admitted identities.
+        # Read one document per observation, even when multiple horizons fit.
+        observations=(await db.execute(text("""SELECT observation_id,payload
+            FROM pump_opportunity_observations WHERE user_id=:u
+            AND observation_id=ANY(CAST(:ids AS uuid[]))"""),
+            {"u":user_id,"ids":list(dict.fromkeys(str(r["observation_id"]) for r in due))})).mappings().all() if due else []
+        by_observation={str(r["observation_id"]):r["payload"] for r in observations}
+        if len(by_observation)!=len({str(r["observation_id"]) for r in due}):
+            raise RuntimeError("admitted_observation_unavailable")
         grouped={}
         for path in paths:
             if path["payload"] is not None:grouped.setdefault(str(path["instrument_id"]),[]).append(path["payload"])
@@ -285,7 +287,7 @@ async def label_batch(user_id):
         for bar in bars:grouped_bars.setdefault(bar["symbol"],[]).append(dict(bar))
         records=[]
         for item in due:
-            p=item["payload"]; h=int(item["horizon"]); start=eng.utc(p["decision_at"])
+            p=by_observation[str(item["observation_id"])]; h=int(item["horizon"])
             if p["label_spec"]["resolution"]=="trades_exact_window_v1":
                 label=eng.exact_gross_label(p,grouped.get(p["instrument_id"],[]),h,now)
             else:
@@ -303,6 +305,7 @@ async def label_batch(user_id):
                 {"u":user_id,"now":now,"records":json.dumps(records,allow_nan=False)})
         result={"status":"ok","written":len(records),"batch_limit":c["budget"]["batch_labels"],
             "requested":requested_count,"accepted":accepted_count,
+            "examined":int(paths[0].get("examined_count",requested_count)) if paths else 0,
             "read_points":int(paths[0]["points"]) if paths else 0,"read_bytes":int(paths[0]["bytes"]) if paths else 0,
             "duration_ms":round((datetime.now(timezone.utc)-now).total_seconds()*1000)}
         await db.execute(text("INSERT INTO pump_opportunity_job_runs(run_id,user_id,payload) VALUES(:id,:u,CAST(:p AS jsonb))"),
