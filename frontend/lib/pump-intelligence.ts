@@ -12,7 +12,7 @@ export type Cohort={cohort_id:string;score_config_hash:string;label_spec_hash:st
 export type Intelligence={as_of:string;computed_at:string;data_through:string|null;labels_through:string|null;
   freshness:{status:string;age_seconds:number;refresh_failed:boolean};
   scope:{policy:string;whole_history:boolean;sample_limit:number;sampled_observations:number;window_hours:number;
-    window_from:string;sample_truncated:boolean;read_bytes:number;cache_seconds:number;horizon_minutes:number;score_edges:number[];available_horizons:number[]};
+    window_from:string;sample_truncated:boolean;read_bytes:number;cache_seconds:number;horizon_minutes:number;score_edges:number[];available_horizons:number[];capture_freshness_seconds:number};
   model:{status:string;reason:string;delta:number;probability:null;auto_promotion:boolean};gates:Record<string,boolean>;
   cohorts:Cohort[];training_runs:{run_id:string;started_at:string;status:string;payload:{reason?:string;duration_seconds?:number}}[]};
 
@@ -24,5 +24,6 @@ export function latestRequestGuard(){
 
 export function isIntelligenceStale(data:Intelligence|null,now:number,lastSuccess:number|null){
   return !data||data.freshness.status!=="current"||data.freshness.refresh_failed||lastSuccess===null||
-    now-lastSuccess>120000||now-Date.parse(data.computed_at)>data.scope.cache_seconds*2000;
+    now-lastSuccess>120000||now-Date.parse(data.computed_at)>data.scope.cache_seconds*2000||
+    Boolean(data.data_through&&now-Date.parse(data.data_through)>data.scope.capture_freshness_seconds*1000);
 }

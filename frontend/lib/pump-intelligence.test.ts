@@ -14,4 +14,6 @@ test('intelligence freshness uses its own aggregate and fetch timestamps',()=>{
  assert.equal(isIntelligenceStale(data,now+121000,now-1000),true);
  assert.equal(isIntelligenceStale({...data,freshness:{...data.freshness,refresh_failed:true}},now,now),true);
  assert.equal(isIntelligenceStale(null,now,null),true);
+ const feedStale={...data,data_through:new Date(now-180000).toISOString(),scope:{...data.scope,capture_freshness_seconds:120}};
+ assert.equal(isIntelligenceStale(feedStale,now,now),true);
 });
