@@ -20,7 +20,7 @@ DEFAULT_CONFIG = {
     "price_paths_enabled": False,
     "labels_enabled": False, "inference_enabled": False, "training_enabled": False,
     "training_job_enabled":False,
-    "intelligence": {"sample_limit": 100, "temporal_buckets": 10, "window_hours": 24, "cache_seconds": 60,
+    "intelligence": {"sample_limit": 50, "temporal_buckets": 10, "window_hours": 24, "cache_seconds": 60,
                      "read_timeout_ms": 2000, "max_read_bytes": 2000000,
                      "score_edges": [0, 10, 20, 30, 40]},
     "budget": {"max_assets": 100, "write_timeout_seconds": 4, "batch_labels": 512,
