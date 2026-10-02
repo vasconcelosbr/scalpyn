@@ -11,9 +11,14 @@ _cache={}
 _locks={}
 _failures={}
 
-SAMPLE_SQL="""WITH recent AS MATERIALIZED (
- SELECT observation_id,user_id,decision_at,slot_at FROM pump_opportunity_observations
- WHERE user_id=:u AND slot_at>=:since ORDER BY slot_at DESC,observation_id DESC LIMIT :limit
+SAMPLE_SQL="""WITH bucket_picks AS MATERIALIZED (
+ SELECT b.bucket,r.* FROM generate_series(0,:buckets-1) b(bucket)
+ CROSS JOIN LATERAL (SELECT observation_id,user_id,decision_at,slot_at FROM pump_opportunity_observations
+ WHERE user_id=:u AND slot_at>=CAST(:since AS timestamptz)+make_interval(secs=>CAST(:span AS double precision)*b.bucket/:buckets)
+ AND slot_at<CAST(:since AS timestamptz)+make_interval(secs=>CAST(:span AS double precision)*(b.bucket+1)/:buckets)
+ ORDER BY slot_at DESC,observation_id ASC LIMIT :per_bucket_plus_one) r
+), recent AS MATERIALIZED (
+ SELECT *,row_number() OVER(PARTITION BY bucket ORDER BY slot_at DESC,observation_id ASC) AS ordinal FROM bucket_picks
 ), raw AS MATERIALIZED (
  SELECT o.payload::text AS source_text,l.payload::text AS label_text,
  l.observation_id IS NOT NULL AS has_label,l.labeled_at,r.slot_at,r.observation_id
@@ -21,19 +26,20 @@ SAMPLE_SQL="""WITH recent AS MATERIALIZED (
  LEFT JOIN LATERAL (SELECT observation_id,payload,labeled_at FROM pump_opportunity_labels
  WHERE observation_id=o.observation_id AND horizon_minutes=:h
  AND label_spec_hash=o.payload->'manifest'->>'label_spec_hash' LIMIT 1) l ON true
+ WHERE r.ordinal<=:per_bucket
 ), bounded AS (
  SELECT *,sum(octet_length(source_text)+COALESCE(octet_length(label_text),0))
- OVER(ORDER BY slot_at DESC,observation_id DESC) AS cumulative_bytes,count(*) OVER() AS requested_rows
+ OVER(ORDER BY slot_at DESC,observation_id ASC) AS cumulative_bytes,count(*) OVER() AS requested_rows
  FROM raw
 )
 SELECT * FROM bounded WHERE cumulative_bytes<=:bytes
 UNION ALL SELECT NULL::text,NULL::text,false,NULL::timestamptz,NULL::timestamptz,NULL::uuid,
- 0::bigint,count(*) FROM raw
-ORDER BY slot_at DESC NULLS FIRST,observation_id DESC"""
+ (SELECT count(*) FROM raw),(SELECT count(*) FROM bucket_picks)
+ORDER BY slot_at DESC NULLS FIRST,observation_id ASC"""
 
 
 
-async def read_intelligence(db,user_id,conditions,horizon):
+async def read_intelligence(db,user_id,conditions,horizon,refresh=False):
     from .pump_opportunity_service import get_config
     c=await get_config(db,user_id);cfg=c['intelligence']
     if horizon not in c['labels']['horizons_minutes']:raise ValueError('Unsupported configured horizon')
@@ -52,7 +58,8 @@ async def read_intelligence(db,user_id,conditions,horizon):
     async with _locks[key]:
         cached=_cache.get(key);failure=_failures.get(key)
         now=datetime.now(timezone.utc)
-        needs_refresh=not cached or time.monotonic()-cached['tick']>=cfg['cache_seconds']
+        recalculated=False
+        needs_refresh=not cached or (refresh and time.monotonic()-cached['tick']>=cfg['cache_seconds'])
         retry_allowed=not failure or time.monotonic()-failure['tick']>=cfg['cache_seconds']
         if needs_refresh and retry_allowed:
             try:
@@ -61,13 +68,16 @@ async def read_intelligence(db,user_id,conditions,horizon):
                     previous_timeout=await db.scalar(text('SHOW statement_timeout'))
                     await db.execute(text("SELECT set_config('statement_timeout',:v,true)"),{'v':f"{cfg['read_timeout_ms']}ms"})
                     rows=[dict(r) for r in (await db.execute(text(SAMPLE_SQL),{'u':user_id,'h':horizon,
-                        'since':now-timedelta(hours=cfg['window_hours']),'limit':cfg['sample_limit']+1,'bytes':cfg['max_read_bytes']})).mappings()]
+                        'since':now-timedelta(hours=cfg['window_hours']),'span':cfg['window_hours']*3600,
+                        'buckets':cfg['temporal_buckets'],'per_bucket':cfg['sample_limit']//cfg['temporal_buckets'],
+                        'per_bucket_plus_one':cfg['sample_limit']//cfg['temporal_buckets']+1,'bytes':cfg['max_read_bytes']})).mappings()]
                     await db.execute(text("SELECT set_config('statement_timeout',:v,true)"),{'v':previous_timeout})
-                requested_rows=int(next(r['requested_rows'] for r in rows if r['source_text'] is None))
+                header=next(r for r in rows if r['source_text'] is None)
+                requested_rows=int(header['requested_rows']);available_rows=int(header['cumulative_bytes'])
                 rows=[r for r in rows if r['source_text'] is not None]
                 if requested_rows and not rows:raise ValueError('Individual intelligence record exceeds byte budget')
                 truncated=requested_rows>cfg['sample_limit'] or len(rows)<requested_rows
-                byte_limited=len(rows)<requested_rows
+                byte_limited=len(rows)<available_rows
                 rows=rows[:cfg['sample_limit']]
                 size=sum(len(r['source_text'].encode())+len((r['label_text'] or '').encode()) for r in rows)
                 if size>cfg['max_read_bytes']:raise ValueError('Intelligence sample exceeds byte budget')
@@ -84,7 +94,7 @@ async def read_intelligence(db,user_id,conditions,horizon):
                 cached={'rows':compact,'at':datetime.now(timezone.utc).isoformat(),'tick':time.monotonic(),
                         'read_bytes':size,'truncated':truncated,'byte_limited':byte_limited,
                         'window_from':(now-timedelta(hours=cfg['window_hours'])).isoformat()}
-                _cache[key]=cached;_failures.pop(key,None)
+                _cache[key]=cached;_failures.pop(key,None);recalculated=True
             except Exception:
                 _failures[key]={'tick':time.monotonic()}
                 if not cached:raise
@@ -97,10 +107,11 @@ async def read_intelligence(db,user_id,conditions,horizon):
         return {'contract_version':eng.CONTRACT_VERSION,'as_of':datetime.now(timezone.utc).isoformat(),
             'computed_at':cached['at'],'data_through':max((r['payload']['decision_at'] for r in rows),default=None),
             'labels_through':max((r['labeled_at'].isoformat() for r in rows if r['labeled_at']),default=None),
-            'freshness':{'status':'stale' if key in _failures or age>cfg['cache_seconds']*2 else 'current',
+            'recalculated':recalculated,'refresh_requested':refresh,'refresh_policy':'manual',
+            'freshness':{'status':'stale' if key in _failures else 'snapshot',
                          'age_seconds':round(age,2),'refresh_failed':key in _failures},
-            'scope':{'policy':'bounded_recent_all_candidates','whole_history':False,'sample_limit':cfg['sample_limit'],
-                     'sampled_observations':len(rows),'window_hours':cfg['window_hours'],'window_from':cached['window_from'],
+            'scope':{'policy':'temporal_buckets_all_candidates','whole_history':False,'sample_limit':cfg['sample_limit'],
+                     'sampled_observations':len(rows),'temporal_buckets':cfg['temporal_buckets'],'window_hours':cfg['window_hours'],'window_from':cached['window_from'],
                      'sample_truncated':cached['truncated'],'byte_limited':cached['byte_limited'],'read_bytes':cached['read_bytes'],'cache_seconds':cfg['cache_seconds'],
                      'horizon_minutes':horizon,'score_edges':cfg['score_edges'],'available_horizons':c['labels']['horizons_minutes'],
                      'capture_freshness_seconds':c['freshness_seconds']},

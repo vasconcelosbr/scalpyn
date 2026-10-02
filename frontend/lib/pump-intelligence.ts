@@ -9,9 +9,9 @@ export type Support={observations:number;episodes:number;instruments:number;days
 export type Cohort={cohort_id:string;score_config_hash:string;label_spec_hash:string;feature_spec_hash:string;
   producer_config_hash:string;cost_policy_hash:string;label_version:string;reference_policy:string;horizon_minutes:number;
   baseline:Support;patterns:(Support&{pattern:string})[];score_bands:(Support&{pattern:string})[];exploration:Support|null};
-export type Intelligence={as_of:string;computed_at:string;data_through:string|null;labels_through:string|null;
+export type Intelligence={recalculated:boolean;refresh_requested:boolean;refresh_policy:string;as_of:string;computed_at:string;data_through:string|null;labels_through:string|null;
   freshness:{status:string;age_seconds:number;refresh_failed:boolean};
-  scope:{policy:string;whole_history:boolean;sample_limit:number;sampled_observations:number;window_hours:number;
+  scope:{policy:string;whole_history:boolean;sample_limit:number;sampled_observations:number;temporal_buckets:number;window_hours:number;
     window_from:string;sample_truncated:boolean;byte_limited:boolean;read_bytes:number;cache_seconds:number;horizon_minutes:number;score_edges:number[];available_horizons:number[];capture_freshness_seconds:number};
   model:{status:string;reason:string;delta:number;probability:null;auto_promotion:boolean};gates:Record<string,boolean>;
   cohorts:Cohort[];training_runs:{run_id:string;started_at:string;status:string;payload:{reason?:string;duration_seconds?:number}}[]};
@@ -22,8 +22,14 @@ export function latestRequestGuard(){
   return {begin:()=>++sequence,isCurrent:(id:number)=>id===sequence,invalidate:()=>{sequence++;}};
 }
 
-export function isIntelligenceStale(data:Intelligence|null,now:number,lastSuccess:number|null){
-  return !data||data.freshness.status!=="current"||data.freshness.refresh_failed||lastSuccess===null||
-    now-lastSuccess>120000||now-Date.parse(data.computed_at)>data.scope.cache_seconds*2000||
-    Boolean(data.data_through&&now-Date.parse(data.data_through)>data.scope.capture_freshness_seconds*1000);
+/** Prefer supported V4 descriptions; never choose by win rate or merge cohorts. */
+export function preferredCohort(cohorts:Cohort[]){
+  const known=cohorts.filter(c=>c.baseline.targets["0.8"].known>0);
+  const v4=known.filter(c=>c.label_version==="pump_gross_touch_v4");
+  const candidates=v4.length?v4:known.length?known:cohorts;
+  return [...candidates].sort((a,b)=>b.baseline.targets["0.8"].known-a.baseline.targets["0.8"].known||b.baseline.observations-a.baseline.observations)[0];
+}
+
+export function isIntelligenceStale(data:Intelligence|null){
+  return !data||data.freshness.status==="stale"||data.freshness.refresh_failed;
 }

@@ -20,7 +20,7 @@ DEFAULT_CONFIG = {
     "price_paths_enabled": False,
     "labels_enabled": False, "inference_enabled": False, "training_enabled": False,
     "training_job_enabled":False,
-    "intelligence": {"sample_limit": 500, "window_hours": 24, "cache_seconds": 60,
+    "intelligence": {"sample_limit": 100, "temporal_buckets": 10, "window_hours": 24, "cache_seconds": 60,
                      "read_timeout_ms": 2000, "max_read_bytes": 2000000,
                      "score_edges": [0, 10, 20, 30, 40]},
     "budget": {"max_assets": 100, "write_timeout_seconds": 4, "batch_labels": 512,
@@ -66,10 +66,11 @@ def number(value):
 
 def validate_config(c):
     i=c["intelligence"]
-    for key,ceiling in (("sample_limit",1000),("window_hours",168),("cache_seconds",300),("read_timeout_ms",3000),("max_read_bytes",4000000)):
+    for key,ceiling in (("sample_limit",1000),("temporal_buckets",24),("window_hours",168),("cache_seconds",300),("read_timeout_ms",3000),("max_read_bytes",4000000)):
         if not isinstance(i[key],int) or isinstance(i[key],bool) or not 1<=i[key]<=ceiling:
             raise ValueError(f"Invalid bounded intelligence configuration: {key}")
     if i["cache_seconds"]<60:raise ValueError("Intelligence refresh must not exceed once per minute")
+    if i['sample_limit']<i['temporal_buckets']:raise ValueError('Expected at least one candidate per temporal bucket')
     edges=i["score_edges"]
     if not isinstance(edges,list) or not 2<=len(edges)<=12 or not all(number(x) for x in edges) or edges!=sorted(set(edges)):
         raise ValueError("Intelligence score edges must be bounded, numeric and increasing")
