@@ -9,7 +9,7 @@ from app.services.pump_opportunity_engine import canonical_hash,config,utc
 FEATURES=["rsi","adx","delta_norm","buy_persistence","cvd_slope","rvol_strict","price_progress_atr","spread_pct","estimated_slippage_buy_pct"]
 MAX_ROWS=10000
 
-def prepare(rows):
+def prepare(rows,selection=None):
     """Mechanical challenger floors, never a model-validation/promotion gate."""
     if len(rows)<200:raise ValueError("insufficient_compatible_rows_min200_challenger_only")
     rows=sorted(rows,key=lambda r:(r["decision_at"],r["observation_id"]))
@@ -19,6 +19,7 @@ def prepare(rows):
     first=rows[0]["manifest"]
     return {"features":FEATURES,"feature_spec_hash":canonical_hash(FEATURE_SPEC),
         "source_commit":os.environ.get("SOURCE_COMMIT","local_test"),
+        "selection_policy":selection,
         "producer_config_hash":first["legacy_config_hash"],"label_spec":rows[0]["label_spec"],"label_spec_hash":first["label_spec_hash"],
         "reference_policy":"gate_best_ask_v1","cost_policy":rows[0]["label_spec"]["cost_policy"],"cost_policy_hash":first["cost_policy_hash"],
         "boundaries":cuts,"embargo_seconds":7200,"min_episodes":100,"min_days":1,"min_instruments":10,
@@ -45,10 +46,10 @@ async def run_owner(conn,owner):
             'pump_opportunity_label_queue','pump_opportunity_job_runs','pump_ml_experiments','pump_ml_predictions',
             'pump_ml_job_runs','pump_ml_artifacts']) name""")
         if used+5000000>c["budget"]["max_storage_bytes"]:raise ValueError("pump_storage_budget_exhausted")
-        from pump_ml.selection import select_training_rows
-        contract,rows=await select_training_rows(conn,owner,FEATURES,canonical_hash(FEATURE_SPEC),MAX_ROWS,selection)
+        from pump_ml.selection import select_temporal_training_rows
+        contract,rows=await select_temporal_training_rows(conn,owner,FEATURES,canonical_hash(FEATURE_SPEC),MAX_ROWS,selection)
         if not contract:raise ValueError("no_certified_point_in_time_listing_cohort")
-        spec=prepare(rows)
+        spec=prepare(rows,selection.get('policy'))
         from app.services.pump_ml_research import train_challenger
         with tempfile.TemporaryDirectory(prefix="pump_ml_") as staging:
             result=train_challenger(rows,spec=spec,output_root=staging)
@@ -85,7 +86,7 @@ async def main():
         result=await run_owner(conn,owner)
         print(json.dumps({"pump_ml_job":result,"pid":os.getpid(),"threads":1,
             "source_commit":os.environ.get("SOURCE_COMMIT","local_test"),
-            "selection_reader":"chronological_id_batches_v1"},sort_keys=True))
+            "selection_reader":"temporal_equal_duration_v1"},sort_keys=True))
         if result["status"]=="failed":raise SystemExit(1)
     finally:await conn.close()
 
