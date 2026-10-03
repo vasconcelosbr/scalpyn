@@ -33,7 +33,7 @@ async def run_owner(conn,owner):
     if prior:
         await conn.execute("SELECT pg_advisory_unlock(hashtextextended($1,0))",f"pump_ml:{owner}")
         return {"owner":str(owner),"status":"daily_already_recorded","run_id":str(prior)}
-    run_id=uuid4();start=datetime.now(timezone.utc)
+    run_id=uuid4();start=datetime.now(timezone.utc);selection={}
     await conn.execute("INSERT INTO pump_ml_job_runs(run_id,user_id,deadline_at,status,payload) VALUES($1,$2,$3,'running',$4)",
         run_id,owner,start+timedelta(seconds=900),{"cpu":1,"ram_bytes":2000000000,"max_runtime_seconds":900,"threads":1,"applied_delta":0})
     try:
@@ -45,23 +45,9 @@ async def run_owner(conn,owner):
             'pump_opportunity_label_queue','pump_opportunity_job_runs','pump_ml_experiments','pump_ml_predictions',
             'pump_ml_job_runs','pump_ml_artifacts']) name""")
         if used+5000000>c["budget"]["max_storage_bytes"]:raise ValueError("pump_storage_budget_exhausted")
-        contract=await conn.fetchval("SELECT payload->'manifest' FROM pump_opportunity_observations WHERE user_id=$1 AND payload->'manifest'->>'listing_certified'='true' ORDER BY decision_at DESC LIMIT 1",owner)
+        from pump_ml.selection import select_training_rows
+        contract,rows=await select_training_rows(conn,owner,FEATURES,canonical_hash(FEATURE_SPEC),MAX_ROWS,selection)
         if not contract:raise ValueError("no_certified_point_in_time_listing_cohort")
-        rows=await conn.fetch("""SELECT jsonb_build_object('observation_id',o.observation_id,'decision_at',o.decision_at,
-            'episode_id',o.episode_id,'instrument_id',o.instrument_id,'manifest',o.payload->'manifest','label_spec',o.payload->'label_spec',
-            'values',(SELECT jsonb_object_agg(k,v) FROM jsonb_each(o.payload->'values') AS f(k,v) WHERE k=ANY($2::text[])),
-            'simulation',o.payload->'simulation','target',l.payload->'targets'->'0.8'->'hit',
-            'label_coverage_complete',l.payload->'coverage_complete') AS row
-            FROM pump_opportunity_observations o JOIN pump_opportunity_labels l ON l.observation_id=o.observation_id
-                AND l.horizon_minutes=5 AND l.label_spec_hash=o.payload->'manifest'->>'label_spec_hash'
-            WHERE o.user_id=$1 AND o.decision_at>=now()-interval '30 days'
-                AND o.payload->'manifest'->>'listing_certified'='true' AND l.payload->>'coverage_complete'='true'
-                AND l.payload->'targets'->'0.8'->>'hit' IN('true','false')
-                AND o.payload->'manifest'->>'feature_spec_hash'=$3
-                AND o.payload->'manifest'->>'legacy_config_hash'=$4
-                AND o.payload->'manifest'->>'label_spec_hash'=$5
-            ORDER BY o.decision_at DESC,o.observation_id LIMIT $6""",owner,FEATURES,canonical_hash(FEATURE_SPEC),contract["legacy_config_hash"],contract["label_spec_hash"],MAX_ROWS)
-        rows=[r["row"] for r in rows]
         spec=prepare(rows)
         from app.services.pump_ml_research import train_challenger
         with tempfile.TemporaryDirectory(prefix="pump_ml_") as staging:
@@ -85,7 +71,7 @@ async def run_owner(conn,owner):
     finally:
         await conn.execute("SELECT pg_advisory_unlock(hashtextextended($1,0))",f"pump_ml:{owner}")
     outcome.update(run_id=str(run_id),owner=str(owner),source_commit=os.environ.get("SOURCE_COMMIT","local_test"),
-        duration_seconds=round((datetime.now(timezone.utc)-start).total_seconds(),3))
+        duration_seconds=round((datetime.now(timezone.utc)-start).total_seconds(),3),selection=selection)
     await conn.execute("UPDATE pump_ml_job_runs SET finished_at=now(),status=$2,payload=$3 WHERE run_id=$1",run_id,outcome["status"],outcome)
     return outcome
 
