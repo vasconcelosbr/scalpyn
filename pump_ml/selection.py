@@ -1,5 +1,6 @@
 """Pump-only bounded payload reads; retain newest eligible decision ordering."""
 from datetime import timedelta
+from app.services.pump_opportunity_engine import number,utc
 
 IDS_SQL = """SELECT observation_id FROM pump_opportunity_observations
  WHERE user_id=$1 AND ($2::timestamptz IS NULL OR decision_at >= $2)
@@ -59,4 +60,89 @@ async def select_training_rows(conn,owner,features,feature_hash,max_rows,diagnos
                 contract['legacy_config_hash'],contract['label_spec_hash'],ids,max_rows-len(rows))
             rows.extend(r['row'] for r in selected)
         diagnostics.update(phase='selection_complete',selected_rows=len(rows),selection_as_of=cutoff.isoformat())
+    return contract,rows
+
+
+BOUNDED_IDS_SQL = """SELECT observation_id FROM pump_opportunity_observations
+ WHERE user_id=$1 AND decision_at >= $2
+ AND ($3::timestamptz IS NULL OR decision_at < $3 OR ($4 AND decision_at=$3))
+ ORDER BY decision_at DESC,observation_id"""
+EARLIEST_IDS_SQL = BOUNDED_IDS_SQL.replace('decision_at DESC','decision_at ASC')
+TEMPORAL_SELECTION_VERSION='pump_temporal_equal_duration_v1'
+
+def complete_features(row,features):
+    return all(number(row['values'].get(f)) for f in features)
+
+def temporal_windows(first,last,max_rows,bins):
+    """Equal elapsed-time quotas; neither class values nor scores select cuts."""
+    if max_rows<=0 or bins<=0:raise ValueError('Invalid Pump temporal selection bound')
+    first,last=utc(first),utc(last)
+    if last<first:raise ValueError('Invalid Pump selection extent')
+    count=1 if first==last else min(bins,max_rows)
+    quota,remainder=divmod(max_rows,count)
+    return [(first+(last-first)*i/count,first+(last-first)*(i+1)/count,
+        quota+(i<remainder),i==count-1) for i in range(count)]
+
+async def select_temporal_training_rows(conn,owner,features,feature_hash,max_rows,diagnostics,*,batch_size=500,bins=20):
+    """Sample at most max_rows across the complete-feature compatible extent.
+
+    Empty/underfilled windows remain explicit, never filled with newest-only
+    observations or label-aware picks. Original trainer gates still apply.
+    All endpoint and bucket reads share the same snapshot and timeout settings.
+    """
+    if max_rows<=0 or batch_size<=0 or bins<=0:raise ValueError('Invalid Pump temporal selection bound')
+    diagnostics.update(phase='latest_contract',candidate_rows=0,endpoint_candidate_rows=0,batches=0)
+    async with conn.transaction(isolation='repeatable_read',readonly=True):
+        cutoff=await conn.fetchval('SELECT now()')
+        cursor=await conn.cursor(IDS_SQL,owner,None);contract=None
+        while True:
+            ids=[r['observation_id'] for r in await cursor.fetch(batch_size)]
+            if not ids:break
+            contract=await conn.fetchval(CONTRACT_SQL,owner,ids)
+            if contract:break
+        if not contract:return None,[]
+        since=cutoff-timedelta(days=30)
+        async def projected(ids,limit):
+            return [r['row'] for r in await conn.fetch(ROWS_SQL,owner,features,feature_hash,
+                contract['legacy_config_hash'],contract['label_spec_hash'],ids,limit)]
+        async def endpoint(ascending):
+            diagnostics['phase']='earliest_eligible' if ascending else 'latest_eligible'
+            cur=await conn.cursor(EARLIEST_IDS_SQL if ascending else BOUNDED_IDS_SQL,owner,since,None,False)
+            while True:
+                ids=[r['observation_id'] for r in await cur.fetch(batch_size)]
+                if not ids:return None
+                diagnostics['endpoint_candidate_rows']+=len(ids)
+                valid=[r for r in await projected(ids,len(ids)) if complete_features(r,features)]
+                if valid:
+                    times=[utc(r['decision_at']) for r in valid]
+                    return min(times) if ascending else max(times)
+        first=await endpoint(True)
+        if first is None:
+            diagnostics.update(phase='selection_complete',selected_rows=0)
+            return contract,[]
+        last=await endpoint(False)
+        windows=temporal_windows(first,last,max_rows,bins);rows=[];window_evidence=[]
+        for lo,hi,quota,inclusive in windows:
+            diagnostics['phase']='temporal_candidate_ids'
+            cur=await conn.cursor(BOUNDED_IDS_SQL,owner,lo,hi,inclusive)
+            selected=[];candidate_count=0
+            while len(selected)<quota:
+                diagnostics['phase']='temporal_candidate_ids'
+                ids=[r['observation_id'] for r in await cur.fetch(batch_size)]
+                if not ids:break
+                candidate_count+=len(ids);diagnostics['candidate_rows']+=len(ids);diagnostics['batches']+=1
+                diagnostics['phase']='temporal_rows'
+                # Do not apply the remaining quota before feature validation:
+                # invalid numeric features must not displace older eligible rows.
+                valid=[r for r in await projected(ids,len(ids)) if complete_features(r,features)]
+                selected.extend(valid[:quota-len(selected)])
+            rows.extend(selected)
+            window_evidence.append({'from':lo.isoformat(),'to':hi.isoformat(),'last_inclusive':inclusive,
+                'quota':quota,'selected':len(selected),'candidate_rows':candidate_count})
+        rows.sort(key=lambda r:(-utc(r['decision_at']).timestamp(),r['observation_id']))
+        diagnostics.update(phase='selection_complete',selected_rows=len(rows),selection_as_of=cutoff.isoformat(),
+            policy={'version':TEMPORAL_SELECTION_VERSION,'requested_bins':bins,'actual_bins':len(windows),
+                'max_rows':max_rows,'first':first.isoformat(),'last':last.isoformat(),
+                'feature_eligibility_before_sampling':True,'outcome_balancing':False,
+                'empty_window_policy':'leave_underfilled_no_newest_backfill','windows':window_evidence})
     return contract,rows
