@@ -83,7 +83,9 @@ async def main():
     try:
         owner=UUID(os.environ["PUMP_OWNER_ID"])
         result=await run_owner(conn,owner)
-        print(json.dumps({"pump_ml_job":result,"pid":os.getpid(),"threads":1},sort_keys=True))
+        print(json.dumps({"pump_ml_job":result,"pid":os.getpid(),"threads":1,
+            "source_commit":os.environ.get("SOURCE_COMMIT","local_test"),
+            "selection_reader":"chronological_id_batches_v1"},sort_keys=True))
         if result["status"]=="failed":raise SystemExit(1)
     finally:await conn.close()
 

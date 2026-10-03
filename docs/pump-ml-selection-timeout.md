@@ -45,8 +45,8 @@ reducing the embargo or outcome gates is not part of this fix.
 
 ## Publication boundary
 
-The patch is prepared locally only. Merge, production upload and production
-training have not been authorized for this correction. After specific approval:
+The user authorized PR publication, protected merge and a canonical upload to
+the isolated Pump job on October 3. The release procedure is:
 publish a draft PR, pass CI/review, merge normally, verify clean canonical source,
 and upload that exact source to `scalpyn-pump-ml` only. This service uses uploaded
 source, so merging alone does not update its scheduled job. A controlled run must
