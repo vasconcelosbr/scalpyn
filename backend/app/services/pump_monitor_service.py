@@ -21,6 +21,7 @@ from sqlalchemy import text
 from . import flow_metrics as fm
 from . import pump_monitor_engine as eng
 from . import pump_research as research
+from . import pump_score_v1 as v1
 from .pump_universe import select_universe
 
 logger = logging.getLogger(__name__)
@@ -153,6 +154,29 @@ async def _load_candles(db, symbols: List[str], timeframe: str) -> Dict[str, Dic
                           "low": _float(r["low"]), "close": _float(r["close"])} for r in rows}
 
 
+_TF_SQL_INTERVAL = {"1m": "1 minute", "5m": "5 minutes", "15m": "15 minutes", "1h": "1 hour"}
+
+
+async def _load_candle_series(db, symbols: List[str], timeframe: str, count: int) -> Dict[str, List[Dict[str, Any]]]:
+    """Last ``count`` CLOSED spot candles per symbol, ascending. One row per timestamp:
+    Gate is preferred when another exchange wrote the same candle (fallback rows keep
+    their ``exchange`` as provenance)."""
+    rows = (await db.execute(text("""
+        SELECT DISTINCT ON (symbol, time) symbol, time, exchange, open, high, low, close, volume
+          FROM ohlcv
+         WHERE symbol = ANY(CAST(:s AS text[])) AND timeframe = :tf
+           AND market_type = 'spot' AND is_closed IS TRUE
+           AND time >= now() - (CAST(:interval AS interval) * :n)
+         ORDER BY symbol, time, CASE WHEN exchange ILIKE 'gate%' THEN 0 ELSE 1 END
+    """), {"s": symbols, "tf": timeframe, "interval": _TF_SQL_INTERVAL[timeframe], "n": int(count) + 2})).mappings().all()
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for r in rows:
+        out.setdefault(r["symbol"], []).append({
+            "time_ms": int(r["time"].timestamp() * 1000), "exchange": r["exchange"],
+            **{k: _float(r[k]) for k in ("open", "high", "low", "close", "volume")}})
+    return {sym: series[-int(count):] for sym, series in out.items()}
+
+
 async def _load_alpha(db, symbols: List[str]) -> Dict[str, Dict[str, Any]]:
     rows = (await db.execute(text("""
         SELECT DISTINCT ON (symbol) symbol, time, score, liquidity_score, momentum_score
@@ -277,12 +301,18 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
                          int(flow["persistence_buckets"]), int(config["price"]["breakout_max_age_minutes"]))
     since = last_minute - (window_minutes + 1) * 60_000
 
+    v1_spec = config["score_v1"]
+    v1_ref = v1_spec["regime"]["reference_symbol"]
+
     async def _load(db):
         return (await _load_buckets(db, symbols, since),
                 await get_merged_indicators(db, symbols),
                 await _load_candles(db, symbols, config["price"]["wick_timeframe"]),
-                await _load_alpha(db, symbols))
-    buckets_by_symbol, merged, candles, alpha = await run_db_task(_load, celery=True)
+                await _load_alpha(db, symbols),
+                await _load_candle_series(db, sorted(set(symbols) | {v1_ref}),
+                                          v1_spec["structure"]["timeframe"],
+                                          int(v1_spec["structure"]["lookback_candles"])))
+    buckets_by_symbol, merged, candles, alpha, series = await run_db_task(_load, celery=True)
 
     redis = await _redis()
     state_key = _STATE_KEY.format(user_id=user_id)
@@ -301,6 +331,7 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
                    state.get("research_support_last_minute") != last_minute)
     research_rows: List[Dict[str, Any]] = []
     research_keys: Dict[str, tuple] = {}
+    research_inputs: Dict[str, tuple] = {}
     for symbol in symbols:
         m = merged.get(symbol)
         snapshot = dict(m.as_flat_dict()) if m else {}
@@ -335,16 +366,35 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
                                    "inputs": json.dumps(_json_safe({**alert["inputs"], "cycle_at": _iso(now_ms)})),
                                    "triggered_at": datetime.fromtimestamp(now_ms / 1000.0, tz=timezone.utc)})
         alert_state[symbol] = [a["type"] for a in row["alerts_active"]]
-        if research_due:
-            try:
-                rec, value_keys, contribution_keys = research.research_row(
-                    row, minute_ms=last_minute, bucket=last, book=data.get("book"),
-                    cycle_at_ms=now_ms, config_meta=config["_meta"])
-                research_rows.append(rec)
-                research_keys[rec["value_keys_hash"]] = (value_keys, contribution_keys)
-            except Exception as exc:
-                logger.warning("[PUMP-RESEARCH] row build failed symbol=%s: %s", symbol, type(exc).__name__)
+        research_inputs[symbol] = (last, data.get("book"))
         rows.append(_json_safe(row))
+
+    # Pump Score v1 runs in parallel with v0 on the same rows; ``engines.active``
+    # only chooses which one is displayed and drives the REALTIME sync.
+    engine = eng.active_engine(config)
+    v1_state = state.get("score_v1") or {}
+    v1_out = {"regime": None, "results": {}}
+    try:
+        structures = {sym: v1.structure_metrics(series.get(sym) or [], v1_spec, now_ms)
+                      for sym in set(symbols) | {v1_ref}}
+        v1_out = v1.evaluate_universe(rows, structures, structures.get(v1_ref), v1_state,
+                                      minute_ms=last_minute, spec=v1_spec)
+    except Exception:
+        logger.exception("[PUMP-SCORE-V1] evaluation failed user=%s", user_id)
+    apply_engines(rows, v1_out, engine, v1_spec)
+
+    for row in rows:
+        if not research_due:
+            break
+        try:
+            last, book = research_inputs.get(row["symbol"]) or (None, None)
+            rec, value_keys, contribution_keys = research.research_row(
+                row, minute_ms=last_minute, bucket=last, book=book,
+                cycle_at_ms=now_ms, config_meta=config["_meta"])
+            research_rows.append(rec)
+            research_keys[rec["value_keys_hash"]] = (value_keys, contribution_keys)
+        except Exception as exc:
+            logger.warning("[PUMP-RESEARCH] row build failed symbol=%s: %s", row["symbol"], type(exc).__name__)
 
     # Persist price-only support separately; excluded symbols never build a score,
     # enter the public envelope/ranking/REALTIME sync, or become a label target.
@@ -370,8 +420,13 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
         "cycle_seconds": int(config["cycle_seconds"]),
         "config_version": meta["version"],
         "config_hash": meta["config_hash"],
-        "score_version": config["score"]["version"],
-        "score_status": config["score"]["status"],
+        "score_version": v1_spec["version"] if engine == "v1" else config["score"]["version"],
+        "score_status": v1_spec["status"] if engine == "v1" else config["score"]["status"],
+        "active_engine": engine,
+        "engines": {"v0": {"version": config["score"]["version"], "status": config["score"]["status"]},
+                    "v1": {"version": v1_spec["version"], "status": v1_spec["status"],
+                           "regime": _json_safe(v1_out.get("regime")),
+                           "members": v1.members(v1_out.get("results") or {})}},
         "pool_id": str(pool_id),
         "total_assets": len(rows),
         "failed_assets": len(failures),
@@ -385,7 +440,8 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
                             "market_cap_freshness": "not_certified"},
     }
 
-    sync_report = await _sync_realtime_pools(user_id, rows, config, now_ms, state)
+    sync_report = await _sync_realtime_pools(user_id, rows, config, now_ms, state,
+                                             engine=engine, v1_results=v1_out.get("results") or {})
     envelope["cycle_duration_ms"] = int((time.monotonic() - started) * 1000)
     envelope["realtime_sync"] = sync_report
 
@@ -422,7 +478,8 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
         try:
             ttl = int(config["cycle_seconds"]) * 10
             await redis.set(_LATEST_KEY.format(user_id=user_id), json.dumps(envelope), ex=ttl)
-            state.update(breakout=breakout_state, alerts=alert_state, cycle_index=cycle_index)
+            state.update(breakout=breakout_state, alerts=alert_state, cycle_index=cycle_index,
+                         score_v1=v1_state)
             await redis.set(state_key, json.dumps(state), ex=86_400)
         except Exception as exc:
             logger.warning("[PUMP-MONITOR] redis write failed: %s", exc)
@@ -450,6 +507,45 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
                 user_id, stage, type(exc).__name__, int((time.monotonic()-started)*1000))
     return {"symbols": len(rows), "failed": len(failures), "alerts": len(new_alert_rows),
             "duration_ms": envelope["cycle_duration_ms"]}
+
+
+V1_CELL_KEYS = ("progress_atr", "rs_atr", "extension_atr", "efficiency_short", "efficiency_long", "consistency",
+                "higher_lows", "concentration", "wick", "rvol_5m", "volume_spike_max", "compression_ratio",
+                "progress_1m_atr")
+
+
+def apply_engines(rows: List[Dict[str, Any]], v1_out: Dict[str, Any], engine: str, v1_spec: Dict[str, Any]) -> None:
+    """Attach v1 to each row and set the displayed Pump Score cell.
+
+    v0 top-level fields (``pump_monitor_score``, ``score_components``, exhaustion)
+    are never touched: the research dataset and the continuity contract keep
+    reading v0. Only ``indicators.pump_monitor_score`` (the displayed cell) and
+    ``only_rising`` follow the active engine.
+    """
+    results = v1_out.get("results") or {}
+    for row in rows:
+        cells = row["indicators"]
+        v0_cell = dict(cells.get("pump_monitor_score") or {})
+        cells["pump_score_v0"] = {**v0_cell, "source": "pump_monitor_score_v0"}
+        res = results.get(row["symbol"])
+        if res is None:
+            cells["pump_score_v1"] = {"value": None, "reason": "v1_unavailable", "source": v1_spec["version"],
+                                      "status": "NO_DATA"}
+            row["score_v1"] = None
+        else:
+            safe = _json_safe(res)
+            row["score_v1"] = safe
+            cells["pump_score_v1"] = {"value": safe["score"], "reason": safe["reason"], "source": v1_spec["version"],
+                                      "status": "VALID" if safe["score"] is not None else "NO_DATA",
+                                      "state": safe["state"], "condition": safe["condition"]}
+            for key in V1_CELL_KEYS:
+                value = (safe.get("values") or {}).get(key)
+                cells[f"v1_{key}"] = {"value": value, "reason": None if value is not None else safe.get("structure_reason"),
+                                      "source": f"{v1_spec['version']}:{v1_spec['structure']['timeframe']}_closed"}
+        if engine == "v1":
+            shown = cells["pump_score_v1"]
+            cells["pump_monitor_score"] = {**shown, "color_state": v0_cell.get("color_state")}
+            row["only_rising"] = bool(res) and (res["state"] in v1.LISTED_STATES or res["condition"] == "subindo")
 
 
 def _compact(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -481,7 +577,8 @@ def _json_safe(value):
 
 # ── REALTIME sync (extends the Market Catalyst radar sync) ───────────────────
 
-async def _sync_realtime_pools(user_id, rows, config, now_ms, state) -> List[Dict[str, Any]]:
+async def _sync_realtime_pools(user_id, rows, config, now_ms, state, *, engine: str = "v0",
+                               v1_results: Optional[Dict[str, Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     from ..database import run_db_task
     from .radar_feed_audit import record_receipt, complete_receipt
     from .radar_pool_sync import reconcile_radar_pool
@@ -499,21 +596,33 @@ async def _sync_realtime_pools(user_id, rows, config, now_ms, state) -> List[Dic
     for pool in pools:
         pool_id, overrides = str(pool["id"]), dict(pool["overrides"] or {})
         params = {k: overrides.get(f"pump_monitor_{k}", v) for k, v in config["sync_defaults"].items()}
-        entry = {"pool_id": pool_id, "pool_name": pool["name"]}
+        entry = {"pool_id": pool_id, "pool_name": pool["name"], "engine": engine}
         if overrides.get("observation_only") is not True:
             entry["skipped"] = "pool_not_observation_only"
             report.append(entry)
             continue
-        # Membership is decided by the Pump Score alone (no "rising" pre-filter).
-        ranked = [r["symbol"] for r in sorted(scored, key=lambda r: -r["pump_monitor_score"])]
-        feed_ok = bool(rows) and len(scored) / len(rows) >= float(params["min_scored_fraction"])
         previous = membership.get(pool_id) or {"members": {}}
-        if feed_ok:
-            membership[pool_id] = eng.advance_membership(
-                previous, {r["symbol"]: float(r["pump_monitor_score"]) for r in scored},
-                now_ms=now_ms, min_score=float(params["min_score"]),
-                exit_consecutive_cycles=int(params["exit_consecutive_cycles"]),
-                min_hold_seconds=int(params["min_hold_seconds"]))
+        if engine == "v1":
+            # v1 owns its hysteresis (state machine): members = ativo | enfraquecendo.
+            results = v1_results or {}
+            evaluated = [s for s, r in results.items() if r.get("structure_reason") is None]
+            feed_ok = bool(rows) and len(evaluated) / len(rows) >= float(params["min_scored_fraction"])
+            listed = [s for s in v1.members(results)]
+            ranked = sorted(listed, key=lambda s: -(results[s].get("score") or 0.0))
+            if feed_ok:
+                kept = previous.get("members") or {}
+                membership[pool_id] = {"members": {s: kept.get(s) or {"entered_at_ms": int(now_ms), "out_count": 0}
+                                                   for s in listed}}
+        else:
+            # Membership is decided by the Pump Score alone (no "rising" pre-filter).
+            ranked = [r["symbol"] for r in sorted(scored, key=lambda r: -r["pump_monitor_score"])]
+            feed_ok = bool(rows) and len(scored) / len(rows) >= float(params["min_scored_fraction"])
+            if feed_ok:
+                membership[pool_id] = eng.advance_membership(
+                    previous, {r["symbol"]: float(r["pump_monitor_score"]) for r in scored},
+                    now_ms=now_ms, min_score=float(params["min_score"]),
+                    exit_consecutive_cycles=int(params["exit_consecutive_cycles"]),
+                    min_hold_seconds=int(params["min_hold_seconds"]))
         selected = set(membership.get(pool_id, {}).get("members") or {}) if feed_ok else None
         health = state.setdefault("sync_health", {})
         was_unavailable = health.get(pool_id) == "unavailable"
@@ -597,7 +706,9 @@ def select_rows(envelope: Dict[str, Any], *, limit: int, sort: str, order: str,
 
     def _key(r):
         if sort == "pump_monitor_score":
-            v = r.get("pump_monitor_score")
+            # the displayed cell carries the active engine's score (v0 or v1)
+            cell = (r.get("indicators") or {}).get("pump_monitor_score") or {}
+            v = cell.get("value") if "value" in cell else r.get("pump_monitor_score")
         elif sort == "symbol":
             return (0, r.get("symbol") or "")
         else:
@@ -613,6 +724,10 @@ def select_rows(envelope: Dict[str, Any], *, limit: int, sort: str, order: str,
         rows = present + missing  # nulls always last, never ranked as zero
     if limit:
         rows = rows[:limit]
+    if envelope.get("active_engine") == "v1":
+        rows = [{**r, "score_version": envelope.get("score_version"), "score_confidence": None,
+                 "score_components": v1.display_components(r["score_v1"])} if r.get("score_v1") else r
+                for r in rows]
     if columns:
         wanted = _expand_columns(columns, config)
         rows = [{**r, "indicators": {k: v for k, v in (r.get("indicators") or {}).items() if k in wanted}}

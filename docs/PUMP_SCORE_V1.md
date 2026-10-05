@@ -1,0 +1,53 @@
+# Pump Score v1 — radar de tendências estáveis (10–15 min)
+
+Status: `HYPOTHESIS_NOT_VALIDATED`. Observação apenas. Roda em paralelo com o v0 a cada ciclo;
+`engines.active` escolhe qual engine aparece na coluna **Pump Score** e conduz o sync REALTIME.
+
+## Objetivo
+
+Indicar ativos **subindo de fato**, em tendência limpa de 10–15 min, e excluir micro pumps.
+Um ativo em queda, esticado, sem estrutura ou caro de executar **não pontua** (célula nula, nunca zero).
+
+## Camadas (código: `backend/app/services/pump_score_v1.py`)
+
+| Camada | O que faz | Config |
+|---|---|---|
+| 1. Estrutura | Candles **5m fechados** (Gate preferida): ATR(14) 5m, progresso 15 min, eficiência 30/60 min, % candles verdes, fundos ascendentes, concentração, pavio, RVOL 5m, pico de volume, compressão prévia | `score_v1.structure` |
+| 2. Regime | Progresso 5m do BTC + amplitude (% do universo com progresso > 0) → favorável / neutro / desfavorável. Força relativa `rs = (ret − β·ret_btc) / ATR%`, β = 1 na v1 | `score_v1.regime` |
+| 3. Portões (AND) | progresso 5m, fluxo 1m (janela 15 min + CVD slope), acima do VWAP, < 3 ATR(5m), sem pavio, eficiência, não concentrado, sem pico de volume, slippage, profundidade ask 1 %, regime/RS. Entrada ausente = reprova | `score_v1.gates` |
+| 4. Força | Só para quem passou: média **geométrica** de fluxo, preço (progresso + RS), qualidade da tendência e participação; penalidades de extensão e custo. Fatores normalizados pelo percentil do próprio ativo (média/variância exponenciais) após aquecimento; antes disso, lo/hi absolutos | `score_v1.factors`, `normalization`, `blocks`, `penalties` |
+| 5. Estabilidade | EMA do score, passo uma vez por minuto fechado. Entrada após `enter_cycles` acima de `enter_score`; saída lenta após `exit_cycles` abaixo de `stay_score` **e** `min_hold_minutes`; saída imediata por queda, esticamento, falta de dados ou queda rápida no 1m; cooldown | `score_v1.stability` |
+
+Condições instantâneas: `subindo`, `neutro`, `absorcao` (compra absorvida sem avanço — saída lenta),
+`caindo`, `esticado`, `sem_dados` (as três últimas encerram o sinal na hora).
+Estados exibidos: `candidato`, `ativo`, `enfraquecendo`; `fora` mostra célula nula.
+
+## O que não muda
+
+- Layout da tela: a coluna Pump Score mostra o engine ativo; o tooltip mostra o ledger do v1.
+- Contrato v0: `pump_monitor_score`, `score_components` e exaustão no topo da linha continuam v0
+  (dataset de pesquisa, continuidade e ML). As células `pump_score_v0`, `pump_score_v1` e `v1_*`
+  vão para o dataset de pesquisa automaticamente.
+- Hash do produtor (`_meta.producer_config_hash`) ignora `engines` e `score_v1`: ativar o v1 não
+  divide coortes do Pump ML.
+
+## Ativar e reverter
+
+```http
+PUT /api/pump-monitor/config   {"engines": {"active": "v1"}}   # ativa
+PUT /api/pump-monitor/config   {"engines": {"active": "v0"}}   # rollback, vale no próximo ciclo
+```
+
+O v1 aquece desde o deploy (estatísticas por ativo e estado no Redis), então a troca não entra "fria".
+
+## Critério de rollback (definir antes de ativar)
+
+Comparar v0 e v1 nos **mesmos instantes** (ambos gravados no dataset de pesquisa):
+taxa de toque em +0,6 % em 10/15 min do topo de cada ranking vs. média do slot, rotatividade
+(trocas/hora, tempo médio na lista) e sinais por dia. Inferência por bootstrap por dia.
+
+## Lacunas conhecidas
+
+- Limiares são hipóteses iniciais; nenhuma validação estatística foi feita.
+- Pesos e β = 1 devem ser revistos com dados (ablação por portão e bloco).
+- Regime depende de candles 5m do BTC; sem eles o portão de regime reprova (fail-closed).
