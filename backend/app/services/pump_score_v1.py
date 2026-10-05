@@ -44,6 +44,8 @@ DEFAULT_V1: Dict[str, Any] = {
         "long_candles": 12,            # 60 min
         "progress_candles": 3,         # 15 min
         "rvol_baseline_candles": 20,
+        "rvol_recent_candles": 3,      # participation = mean of the last 3 closed candles vs baseline
+        "vwap_candles": 12,            # rolling 60-min VWAP: the extension reference for a 10–15 min radar
         "compression_base_candles": 12,
     },
     "regime": {
@@ -57,10 +59,10 @@ DEFAULT_V1: Dict[str, Any] = {
     },
     "gates": {
         "progress_atr_min": 0.25,
-        "window_delta_norm_min": 0.0,
+        "window_delta_norm_min": -0.1,  # flow must not be net selling (tiny noise tolerated)
         "cvd_slope_min": 0.0,
-        "extension_atr_min": 0.0,      # price above VWAP
-        "extension_atr_max": 3.0,
+        "extension_atr_min": 0.0,      # price above the rolling 60-min VWAP
+        "extension_atr_max": 6.0,      # vs 60-min VWAP: a steady ~1 ATR/candle hour sits ~5.5 ATR above it
         "wick_max": 0.5,
         "efficiency_min": 0.3,
         "concentration_max": 0.5,      # one 5m candle cannot carry > 50 % of the 30-min move
@@ -76,18 +78,20 @@ DEFAULT_V1: Dict[str, Any] = {
         "window_delta_norm": {"lo": 0.0, "hi": 0.5},
         "progress_atr": {"lo": 0.25, "hi": 2.0},
         "rs_atr": {"lo": -0.5, "hi": 1.5},
-        "rvol_5m": {"lo": 1.0, "hi": 3.0},
+        "rvol_5m": {"lo": 0.3, "hi": 1.5},
     },
     "normalization": {"mode": "asset_adaptive", "halflife_minutes": 1440, "min_observations": 240},
     "blocks": {"flow": 1.0, "price": 1.0, "quality": 1.0, "participation": 0.5, "compression": 0.0},
+    # A block at exactly 0 would zero the geometric mean; the floor keeps it heavily penalised but finite.
+    "block_floor": 0.05,
     "penalties": {
-        "extension_atr": {"weight": 0.5, "lo": 1.5, "hi": 3.0},
+        "extension_atr": {"weight": 0.5, "lo": 3.0, "hi": 6.0},
         "slippage_buy_pct": {"weight": 0.5, "lo": 0.1, "hi": 0.2},
     },
     "stability": {
         "ema_alpha": 0.2,
-        "enter_score": 60.0,
-        "stay_score": 45.0,
+        "enter_score": 50.0,
+        "stay_score": 35.0,
         "enter_cycles": 3,
         "exit_cycles": 3,
         "min_hold_minutes": 15,
@@ -117,11 +121,14 @@ def validate(spec: Dict[str, Any], errors: List[str]) -> None:
     if s["timeframe"] not in _TF_MS:
         errors.append(f"score_v1.structure.timeframe must be one of {sorted(_TF_MS)}")
     need = max(int(s["atr_period"]) + 1, int(s["long_candles"]) + 1,
-               int(s["rvol_baseline_candles"]) + 1,
+               int(s["rvol_baseline_candles"]) + int(s["rvol_recent_candles"]),
+               int(s["vwap_candles"]),
                int(s["long_candles"]) + int(s["compression_base_candles"]))
     if int(s["lookback_candles"]) < need:
         errors.append(f"score_v1.structure.lookback_candles must be >= {need}")
-    for key in ("short_candles", "progress_candles", "atr_period"):
+    if not 0 <= float(spec.get("block_floor", 0.0)) < 1:
+        errors.append("score_v1.block_floor must be within [0, 1)")
+    for key in ("short_candles", "progress_candles", "atr_period", "rvol_recent_candles", "vwap_candles"):
         if int(s[key]) < 1:
             errors.append(f"score_v1.structure.{key} must be >= 1")
     for name, f in spec["factors"].items():
@@ -159,7 +166,7 @@ def structure_metrics(candles: Sequence[Dict[str, Any]], spec: Dict[str, Any], n
     tf_ms = _TF_MS[s["timeframe"]]
     keys = ("atr", "atr_pct", "progress_atr", "ret_pct", "efficiency_short", "efficiency_long",
             "consistency", "higher_lows", "concentration", "wick", "rvol_5m", "volume_spike_max",
-            "compression_ratio", "close", "candle_close_ms")
+            "compression_ratio", "vwap", "extension_atr", "close", "candle_close_ms")
     rows = [c for c in candles if all(_finite(c.get(k)) is not None for k in ("open", "high", "low", "close"))]
     atr_n, short, long_, prog = (int(s["atr_period"]), int(s["short_candles"]),
                                  int(s["long_candles"]), int(s["progress_candles"]))
@@ -203,16 +210,25 @@ def structure_metrics(candles: Sequence[Dict[str, Any]], spec: Dict[str, Any], n
     out["wick"] = (h[-1] - max(o[-1], c[-1])) / rng if rng > 0 else None
 
     vol = [_finite(r.get("volume")) for r in rows]
-    if len(vol) >= rv_n + 1 and all(v is not None for v in vol[-(rv_n + short):]):
-        def ratio(i: int) -> Optional[float]:
-            base = vol[i - rv_n:i]
-            if len(base) < rv_n or any(v is None for v in base):
-                return None
-            mean = sum(base) / rv_n
-            return vol[i] / mean if mean > 0 else None
-        out["rvol_5m"] = ratio(len(vol) - 1)
-        spikes = [r for r in (ratio(i) for i in range(len(vol) - short, len(vol))) if r is not None]
-        out["volume_spike_max"] = max(spikes) if spikes else None
+    recent_n = int(s["rvol_recent_candles"])
+
+    def ratio(i: int, n: int = 1) -> Optional[float]:
+        """Mean volume of the ``n`` candles ending at ``i`` vs the ``rv_n`` candles before them."""
+        window, base = vol[i - n + 1:i + 1], vol[i - n + 1 - rv_n:i - n + 1]
+        if len(window) < n or len(base) < rv_n or any(v is None for v in window + base):
+            return None
+        mean = sum(base) / rv_n
+        return (sum(window) / n) / mean if mean > 0 else None
+
+    out["rvol_5m"] = ratio(len(vol) - 1, recent_n)
+    spikes = [r for r in (ratio(i) for i in range(len(vol) - short, len(vol))) if r is not None]
+    out["volume_spike_max"] = max(spikes) if spikes else None
+
+    vw_n = int(s["vwap_candles"])
+    pv = [((h[i] + lo[i] + c[i]) / 3.0, vol[i]) for i in range(len(c) - vw_n, len(c))]
+    if all(v is not None for _, v in pv) and sum(v for _, v in pv) > 0:
+        out["vwap"] = sum(p * v for p, v in pv) / sum(v for _, v in pv)
+        out["extension_atr"] = (c[-1] - out["vwap"]) / atr
 
     if len(c) >= long_ + base_n:
         ranges = [h[i] - lo[i] for i in range(len(c))]
@@ -374,7 +390,8 @@ def strength_score(v: Dict[str, Any], stats: Dict[str, Any], spec: Dict[str, Any
     if missing:
         return {"score": None, "reason": "missing_block", "ledger": ledger}
     eps = 1e-9
-    geo = math.exp(sum(w * math.log(max(blocks[k], eps)) for k, w in weights.items()) / sum(weights.values()))
+    floor = max(float(spec.get("block_floor", 0.0)), eps)
+    geo = math.exp(sum(w * math.log(max(blocks[k], floor)) for k, w in weights.items()) / sum(weights.values()))
     score = 100.0 * geo
     for value in penalties.values():
         if value is not None:
@@ -393,8 +410,13 @@ def step_state(prev: Optional[Dict[str, Any]], *, condition: str, gates_ok: bool
         return s
     alpha = float(st["ema_alpha"])
     prior = s.get("score_s")
-    current = raw_score if (gates_ok and raw_score is not None) else 0.0
-    s["score_s"] = round(current if prior is None else alpha * current + (1 - alpha) * float(prior), 2)
+    passing = gates_ok and raw_score is not None
+    if s.get("state", "fora") not in MEMBER_STATES and not passing:
+        # not listed and not passing: no memory, so a later entry starts from its own score
+        s["score_s"] = None
+    else:
+        current = raw_score if passing else 0.0
+        s["score_s"] = round(current if prior is None else alpha * current + (1 - alpha) * float(prior), 2)
     s["last_step_ms"] = minute_ms
     hard = condition in HARD_CONDITIONS or fast_exit
     state = s.get("state", "fora")
@@ -407,7 +429,7 @@ def step_state(prev: Optional[Dict[str, Any]], *, condition: str, gates_ok: bool
         if hard:
             leave()
             s["exit_reason"] = f"hard:{'fast_exit_1m' if fast_exit else condition}"
-        elif gates_ok and s["score_s"] >= float(st["stay_score"]):
+        elif gates_ok and (s["score_s"] or 0.0) >= float(st["stay_score"]):
             s.update(state="ativo", out_count=0)
         else:
             s["out_count"] = int(s.get("out_count", 0)) + 1
@@ -418,7 +440,7 @@ def step_state(prev: Optional[Dict[str, Any]], *, condition: str, gates_ok: bool
         return s
 
     cooling = s.get("exited_ms") is not None and (minute_ms - int(s["exited_ms"])) < int(st["cooldown_minutes"]) * 60_000
-    if not cooling and gates_ok and not hard and s["score_s"] >= float(st["enter_score"]):
+    if not cooling and gates_ok and not hard and s["score_s"] is not None and s["score_s"] >= float(st["enter_score"]):
         s["in_count"] = int(s.get("in_count", 0)) + 1
         if s["in_count"] >= int(st["enter_cycles"]):
             s.update(state="ativo", entered_ms=minute_ms, out_count=0, exit_reason=None)
@@ -451,13 +473,9 @@ def evaluate_universe(rows: List[Dict[str, Any]], structures: Dict[str, Dict[str
         source = row.get("opportunity_source_values") or {}
         atr = st.get("atr")
         atr_snapshot = _finite(source.get("atr"))
-        # v0 cells are in the snapshot ATR unit; rescale them to ATR(5m). The price used
-        # by v0 extension is the last closed 1m trade close (fallback: snapshot price).
+        # v0 1m progress is in the snapshot ATR unit; rescale it to ATR(5m) for the fast exit.
         to_5m = (lambda x: None if None in (x, atr_snapshot, atr) or not atr else x * atr_snapshot / atr)
-        extension = to_5m(val("price_extension_atr"))
-        if extension is None:
-            price, vwap = val("price"), _finite(source.get("vwap"))
-            extension = (price - vwap) / atr if None not in (price, vwap, atr) and atr else None
+        extension = st.get("extension_atr")  # vs rolling 60-min VWAP of closed 5m candles
         v = {
             "progress_atr": st.get("progress_atr"), "ret_pct": st.get("ret_pct"), "atr_pct": st.get("atr_pct"),
             "efficiency_short": st.get("efficiency_short"), "efficiency_long": st.get("efficiency_long"),

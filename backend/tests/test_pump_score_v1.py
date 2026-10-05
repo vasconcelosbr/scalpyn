@@ -92,7 +92,7 @@ def test_rising_asset_passes_every_gate_and_scores():
 @pytest.mark.parametrize("change,expected", [
     ({"progress_atr": -0.8, "extension_atr": -2.5}, "caindo"),        # the v0 failure: falling with buying
     ({"progress_atr": -0.1, "window_delta_norm": 0.6}, "absorcao"),   # buying absorbed, price not moving
-    ({"extension_atr": 3.4}, "esticado"),
+    ({"extension_atr": 6.4}, "esticado"),
     ({"wick": 0.6}, "esticado"),
 ])
 def test_falling_absorbed_or_stretched_assets_cannot_score(change, expected):
@@ -134,8 +134,9 @@ def test_score_is_non_compensatory():
     broken = v1.strength_score(good_values(efficiency_short=0.0, consistency=0.0, higher_lows=0.0), {}, spec())
     blocks, weights = broken["ledger"]["blocks"], broken["ledger"]["weights"]
     arithmetic = 100 * sum(weights[k] * blocks[k] for k in weights) / sum(weights.values())
-    # one dead block cannot be compensated: a weighted sum of the same blocks would still be ~41
-    assert strong["score"] > 50 and broken["score"] < 1 and arithmetic > 30
+    # one dead block cannot be compensated: it is held at block_floor and still halves the score,
+    # while a weighted sum of the same blocks would barely move
+    assert strong["score"] > 50 and broken["score"] < strong["score"] / 2 and broken["score"] < arithmetic
 
 
 def test_penalties_only_lower_the_score():
@@ -323,3 +324,31 @@ def test_candle_series_query_binds_datetime_not_text_interval():
     assert out == {}
     assert isinstance(captured["since"], datetime) and captured["since"].tzinfo is not None
     assert all(not isinstance(v, str) or k == "tf" for k, v in captured.items() if k != "s")
+
+
+def test_extension_uses_rolling_60min_vwap_of_closed_candles():
+    closes = [100.0] * 36 + [100 + 0.25 * i for i in range(1, 13)]
+    s = candles(closes, wick=0.2)  # realistic ranges: wicks wider than the net move per candle
+    st = v1.structure_metrics(s, spec(), now_after(s))
+    typical = [((max(o, c) + 0.21) + (min(o, c) - 0.01) + c) / 3
+               for o, c in zip([closes[i - 1] for i in range(36, 48)], closes[36:48])]
+    assert st["vwap"] == pytest.approx(sum(typical) / 12)
+    assert st["extension_atr"] == pytest.approx((closes[-1] - st["vwap"]) / st["atr"])
+    assert 0 < st["extension_atr"] < spec()["gates"]["extension_atr_max"]  # steady hour is not "stretched"
+
+
+def test_participation_averages_recent_candles_not_only_the_last():
+    vols = [100.0] * 45 + [150.0, 150.0, 30.0]  # last candle thin, previous two active
+    s = candles([100.0] * 48, vols=vols)
+    st = v1.structure_metrics(s, spec(), now_after(s))
+    assert st["rvol_5m"] == pytest.approx((150 + 150 + 30) / 3 / 100)
+
+
+def test_ema_restarts_from_the_first_passing_minute_after_being_out():
+    s = spec(stability__ema_alpha=0.2, stability__enter_cycles=1, stability__enter_score=50)
+    st = v1.step_state(None, condition="neutro", gates_ok=False, raw_score=None, fast_exit=False,
+                       minute_ms=M1, spec=s)
+    assert st["score_s"] is None and st["state"] == "fora"
+    st = v1.step_state(st, condition="subindo", gates_ok=True, raw_score=70, fast_exit=False,
+                       minute_ms=2 * M1, spec=s)
+    assert st["score_s"] == 70 and st["state"] == "ativo"  # not dragged towards 0 by past minutes
