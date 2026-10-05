@@ -107,7 +107,7 @@ def test_cycle_separates_ranking_and_drain_and_clears_empty_envelope(monkeypatch
         async def execute(self, *args, **kwargs): return None
     async def run(fn, celery=False):
         if fn.__name__ == '_load':
-            return ({s: {minute: bucket} for s in eligible}, {}, {}, {}, {})
+            return ({s: {minute: bucket} for s in eligible}, {}, {}, {})
         if '_universe' in fn.__code__.co_names: return ['BIG', 'SMALL']
         if 'select_universe' in fn.__code__.co_names:
             return eligible, drains, {'BIG': 1000000000}

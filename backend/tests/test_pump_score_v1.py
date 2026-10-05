@@ -298,3 +298,28 @@ def test_engine_config_defaults_to_v0_validates_and_keeps_producer_hash():
         eng.next_config_version(cfg, {"score_v1": {"stability": {"stay_score": 90}}}, changed_by="t", now_iso="x")
     ok = eng.next_config_version(cfg, {"engines": {"active": "v1"}}, changed_by="t", now_iso="x")
     assert ok["engines"]["active"] == "v1"
+
+
+def test_candle_series_query_binds_datetime_not_text_interval():
+    """asyncpg binds timestamptz/interval only from Python datetime/timedelta (prod incident 2026-10-05)."""
+    import asyncio
+    from datetime import datetime
+
+    captured = {}
+
+    class Result:
+        def mappings(self):
+            return self
+
+        def all(self):
+            return []
+
+    class DB:
+        async def execute(self, statement, params):
+            captured.update(params)
+            return Result()
+
+    out = asyncio.run(svc._load_candle_series(DB(), ["AAA_USDT"], "5m", 48))
+    assert out == {}
+    assert isinstance(captured["since"], datetime) and captured["since"].tzinfo is not None
+    assert all(not isinstance(v, str) or k == "tf" for k, v in captured.items() if k != "s")
