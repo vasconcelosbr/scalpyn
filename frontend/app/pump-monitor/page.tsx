@@ -38,6 +38,8 @@ type Response = {
   config_version: number;
   config_hash: string;
   score_status: string;
+  score_version?: string;
+  active_engine?: "v0" | "v1";
   pool_id: string | null;
   total_assets: number;
   rows: Row[];
