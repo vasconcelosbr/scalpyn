@@ -65,3 +65,10 @@ Observado em produção com o v1 ativo: nenhum ativo listado, mesmo com regime f
 | Limiar de entrada alto para normalização absoluta | `enter_score` 50, `stay_score` 35 |
 
 Os valores antigos estão gravados na config de produção (versão 28) e precisam ser atualizados por `PUT /api/pump-monitor/config` com o bloco `score_v1` após o deploy.
+
+## Calibração v1.2 (2026-10-05, 15:35 BRT)
+
+| Problema observado em produção | Ajuste |
+|---|---|
+| Concentração = maior movimento / movimento **líquido**: em caminhos ruidosos explodia (mediana 1,07; 46 de 51 reprovados) | Concentração = maior candle de alta / soma das altas nos últimos 30 min (limitada a 0–1) |
+| Participação baixa no universo inteiro (RVOL médio de 3 candles ~0,3) ainda derrubava ativos em tendência limpa (ZEC: preço 0,98, qualidade 0,71, score 39,9) | Bloco de participação com peso 0,25 e lo 0; tendência estável com volume comum não é vetada |
