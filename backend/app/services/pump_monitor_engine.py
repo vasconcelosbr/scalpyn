@@ -13,6 +13,7 @@ from copy import deepcopy
 from typing import Any, Dict, Iterable, List, Optional
 
 from . import flow_metrics as fm
+from . import pump_score_v1 as v1
 
 SCORE_STATUS = "HYPOTHESIS_NOT_VALIDATED"
 
@@ -83,6 +84,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "cap": 20,
         },
     },
+    # Both engines run every cycle; ``active`` drives the displayed Pump Score and the
+    # REALTIME sync. Rollback = set active back to "v0" (applies on the next cycle).
+    "engines": {"active": "v0"},
+    "score_v1": deepcopy(v1.DEFAULT_V1),
     "filters": {"only_rising": {"price_progress_atr_min": 0.25, "delta_norm_min": 0.0}},
     "alerts": {
         "effort_no_progress": {"enabled": True, "rvol_strict_min": 2.0,
@@ -212,12 +217,29 @@ def config_hash(config: Dict[str, Any]) -> str:
     return canonical_hash(config_body(config))
 
 
+# Keys that select/configure the v1 engine. They do not change any v0 producer value
+# (cells, v0 score, exhaustion flag), so the producer hash used by the continuity
+# contract and the Pump ML cohorts ignores them: adding v1 or flipping the active
+# engine never splits an existing ML cohort.
+ENGINE_ONLY_KEYS = ("engines", "score_v1")
+
+
+def producer_config_hash(config: Dict[str, Any]) -> str:
+    from .profile_runtime_config import canonical_hash
+    return canonical_hash({k: v for k, v in config_body(config).items() if k not in ENGINE_ONLY_KEYS})
+
+
+def active_engine(config: Dict[str, Any]) -> str:
+    return (config.get("engines") or {}).get("active") or "v0"
+
+
 def effective_config(stored: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Stored config over the seed; ``_meta`` carries version + hash."""
     body = _merge(DEFAULT_CONFIG, config_body(stored or {}))
     meta = dict((stored or {}).get("_meta") or {})
     meta.setdefault("version", 0)
     meta["config_hash"] = config_hash(body)
+    meta["producer_config_hash"] = producer_config_hash(body)
     return {**body, "_meta": meta}
 
 
@@ -281,6 +303,9 @@ def validate_config(body: Dict[str, Any]) -> None:
             errors.append(f"research.labels.barriers.{name}: tp_pct, sl_pct and h_minutes must be > 0")
     if not 0 <= float(labels["max_gap_pct"]) <= 100:
         errors.append("research.labels.max_gap_pct must be within [0, 100]")
+    if body["engines"].get("active") not in v1.ENGINES:
+        errors.append(f"engines.active must be one of {list(v1.ENGINES)}")
+    v1.validate(body["score_v1"], errors)
     sync_int = body["display"]["top_n"]
     if int(sync_int) < 0:
         errors.append("display.top_n must be >= 0")

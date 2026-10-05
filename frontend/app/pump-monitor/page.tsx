@@ -230,7 +230,7 @@ function LegacyPumpMonitorPage() {
         <div>
           <div className={styles.title}>Pump Monitor</div>
           <div className={styles.subtitle}>
-            Fluxo, liquidez executável e preço dos ativos do pool monitorado · score {data?.score_status === "HYPOTHESIS_NOT_VALIDATED" ? "v0 (hipótese, não calibrado)" : data?.score_status ?? "—"}
+            Fluxo, liquidez executável e preço dos ativos do pool monitorado · score {data?.score_version === "pump_score_v1" ? "v1" : "v0"} {data?.score_status === "HYPOTHESIS_NOT_VALIDATED" ? "(hipótese, não calibrado)" : data?.score_status ?? "—"}
           </div>
         </div>
         <span className={styles.notice} data-testid="observation-badge">

@@ -282,7 +282,7 @@ def build_observation(*,user_id,row,book,source_meta,legacy_config,c,decision_at
     listing_current=validate_listing(listing_record,symbol) and 0<=(decision-utc(listing_record["captured_at"])).total_seconds()<=c["listing_evidence_max_age_seconds"]
     manifest={"schema_version":CONTRACT_VERSION,"owner_scope":str(user_id),"feature_spec_hash":canonical_hash(FEATURE_SPEC),
               "label_spec_hash":canonical_hash(c["labels"]),"score_config_hash":canonical_hash(c),
-              "legacy_config_hash":legacy_config["_meta"]["config_hash"],"cost_policy_hash":canonical_hash(c["labels"]["cost_policy"]),
+              "legacy_config_hash":legacy_config["_meta"].get("producer_config_hash") or legacy_config["_meta"]["config_hash"],"cost_policy_hash":canonical_hash(c["labels"]["cost_policy"]),
               "eligibility_policy":legacy_config["universe_filter"],"listing_certified":bool(listing_current),
               "listing_evidence":listing_record,"feature_spec":FEATURE_SPEC,
               "liquidity_reference":{"notional_usdt":legacy_config.get("slippage",{}).get("reference_notional_usdt"),
