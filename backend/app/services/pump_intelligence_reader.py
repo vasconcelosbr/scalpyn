@@ -4,6 +4,7 @@ import json
 import time
 from datetime import datetime,timedelta,timezone
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 from . import pump_opportunity_engine as eng
 from .pump_intelligence import summarize
 
@@ -13,7 +14,7 @@ _failures={}
 
 SAMPLE_SQL="""WITH bucket_picks AS MATERIALIZED (
  SELECT b.bucket,r.* FROM generate_series(0,:buckets-1) b(bucket)
- CROSS JOIN LATERAL (SELECT observation_id,user_id,decision_at,slot_at FROM pump_opportunity_observations
+ CROSS JOIN LATERAL (SELECT observation_id,user_id,slot_at FROM pump_opportunity_observations
  WHERE user_id=:u AND slot_at>=CAST(:since AS timestamptz)+make_interval(secs=>CAST(:span AS double precision)*b.bucket/:buckets)
  AND slot_at<CAST(:since AS timestamptz)+make_interval(secs=>CAST(:span AS double precision)*(b.bucket+1)/:buckets)
  ORDER BY slot_at DESC,observation_id ASC LIMIT :per_bucket_plus_one) r
@@ -97,9 +98,12 @@ async def read_intelligence(db,user_id,conditions,horizon,refresh=False):
                         'read_bytes':size,'truncated':truncated,'byte_limited':byte_limited,
                         'window_from':(now-timedelta(hours=cfg['window_hours'])).isoformat()}
                 _cache[key]=cached;_failures.pop(key,None);recalculated=True
-            except Exception:
+            except Exception as exc:
                 _failures[key]={'tick':time.monotonic()}
-                if not cached:raise
+                if not cached:
+                    if isinstance(exc,DBAPIError) and getattr(exc.orig,'sqlstate',None)=='57014':
+                        raise ValueError('Intelligence refresh temporarily unavailable within read budget') from exc
+                    raise
         if not cached:raise ValueError('Intelligence refresh temporarily unavailable')
         age=max(0,(datetime.now(timezone.utc)-eng.utc(cached['at'])).total_seconds())
         rows=cached['rows'];cohorts=summarize(rows,horizon,cfg['score_edges'],conditions)

@@ -4,10 +4,40 @@ import json
 from contextlib import asynccontextmanager
 from datetime import datetime,timezone
 import pytest
+from sqlalchemy.exc import DBAPIError
 from app.services import pump_opportunity_engine as eng,pump_opportunity_service as svc
 from app.services import pump_intelligence as agg,pump_intelligence_reader as reader
 
 NOW=datetime(2026,10,2,12,tzinfo=timezone.utc)
+
+
+def test_temporal_picks_are_covered_by_existing_owner_slot_index():
+    picks=reader.SAMPLE_SQL.split('), recent AS MATERIALIZED',1)[0]
+    assert 'SELECT observation_id,user_id,slot_at FROM' in picks
+    assert 'decision_at' not in picks
+
+
+def test_cold_timeout_is_bounded_unavailability_and_does_not_repeat_query(monkeypatch):
+    reader._cache.clear();reader._locks.clear();reader._failures.clear()
+    async def config(*args):return eng.config({'enabled':True})
+    monkeypatch.setattr(svc,'get_config',config)
+    class Cancelled(Exception):sqlstate='57014'
+    class DB:
+        samples=0
+        async def scalar(self,sql):return '0'
+        @asynccontextmanager
+        async def begin_nested(self):yield
+        async def execute(self,sql,params=None):
+            if str(sql)==reader.SAMPLE_SQL:
+                self.samples+=1
+                raise DBAPIError(str(sql),None,Cancelled('statement timeout'))
+    async def run():
+        db=DB()
+        for _ in range(2):
+            with pytest.raises(ValueError,match='temporarily unavailable'):
+                await reader.read_intelligence(db,'cold-owner',None,5)
+        assert db.samples==1 and not reader._cache
+    asyncio.run(run())
 
 def row(hit=True,complete=True,version='v4',score=20):
     target={'hit':hit,'first_touch_censored':False,'time_to_touch_seconds':45,
