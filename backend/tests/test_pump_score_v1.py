@@ -103,7 +103,7 @@ def test_falling_absorbed_or_stretched_assets_cannot_score(change, expected):
 
 @pytest.mark.parametrize("field,value", [
     ("concentration", 0.8), ("volume_spike_max", 6.0), ("efficiency_short", 0.1),
-    ("slippage_buy_pct", 0.5), ("cvd_slope", -0.1), ("ask_depth_1pct", None),
+    ("slippage_buy_pct", 0.5), ("cvd_slope", -0.1), ("ask_depth_1pct", 0.0),
 ])
 def test_micro_pump_chop_cost_and_missing_inputs_fail_closed(field, value):
     v = good_values(**{field: value})
@@ -361,3 +361,12 @@ def test_concentration_is_share_of_gross_up_movement_and_stays_bounded_on_noisy_
     ups = [0.4, 0.4, 0.4, 0.1]
     assert st["concentration"] == pytest.approx(max(ups) / sum(ups))
     assert 0 < st["concentration"] <= 1
+
+
+def test_deep_book_without_1pct_band_passes_when_slippage_is_measured():
+    deep = good_values(ask_depth_1pct=None, slippage_buy_pct=0.002)  # BTC-like: 100 levels inside 1 %
+    gate = next(g for g in v1.evaluate_gates(deep, "favoravel", spec()) if g["gate"] == "ask_depth_1pct")
+    assert gate["result"] is True
+    blind = good_values(ask_depth_1pct=None, slippage_buy_pct=None)  # no book at all: still fail-closed
+    gate = next(g for g in v1.evaluate_gates(blind, "favoravel", spec()) if g["gate"] == "ask_depth_1pct")
+    assert gate["result"] is None

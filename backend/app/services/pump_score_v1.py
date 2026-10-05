@@ -65,7 +65,7 @@ DEFAULT_V1: Dict[str, Any] = {
         "extension_atr_max": 6.0,      # vs 60-min VWAP: a steady ~1 ATR/candle hour sits ~5.5 ATR above it
         "wick_max": 0.5,
         "efficiency_min": 0.3,
-        "concentration_max": 0.5,      # one 5m candle cannot carry > 50 % of the 30-min upward movement
+        "concentration_max": 0.6,      # one 5m candle cannot carry > 60 % of the 30-min upward movement
         "volume_spike_max": 4.0,       # one 5m candle volume vs its 20-candle baseline
         "slippage_buy_max_pct": 0.2,
         "require_ask_depth_1pct": True,
@@ -301,8 +301,12 @@ def evaluate_gates(v: Dict[str, Any], regime_state: str, spec: Dict[str, Any]) -
               cmp(v.get("slippage_buy_pct"), lambda x: x <= float(g["slippage_buy_max_pct"]))),
     ]
     if g.get("require_ask_depth_1pct"):
-        depth = v.get("ask_depth_1pct")
-        gates.append(_gate("ask_depth_1pct", depth, None if depth is None else depth > 0))
+        depth, slippage = v.get("ask_depth_1pct"), v.get("slippage_buy_pct")
+        # The 1 % band is null when the 100-level book does not even reach 1 % from mid,
+        # i.e. on the DEEPEST books (BTC, XRP). A measured buy slippage for the reference
+        # notional already proves the ask side absorbs the order, so it satisfies the gate.
+        ok = (depth > 0) if depth is not None else (True if slippage is not None else None)
+        gates.append(_gate("ask_depth_1pct", depth, ok))
     rs = v.get("rs_atr")
     if regime_state in ("desligado", "favoravel"):
         regime_ok: Optional[bool] = True
