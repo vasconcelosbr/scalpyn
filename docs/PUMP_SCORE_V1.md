@@ -72,3 +72,12 @@ Os valores antigos estão gravados na config de produção (versão 28) e precis
 |---|---|
 | Concentração = maior movimento / movimento **líquido**: em caminhos ruidosos explodia (mediana 1,07; 46 de 51 reprovados) | Concentração = maior candle de alta / soma das altas nos últimos 30 min (limitada a 0–1) |
 | Participação baixa no universo inteiro (RVOL médio de 3 candles ~0,3) ainda derrubava ativos em tendência limpa (ZEC: preço 0,98, qualidade 0,71, score 39,9) | Bloco de participação com peso 0,25 e lo 0; tendência estável com volume comum não é vetada |
+
+## Calibração v1.3 (2026-10-05, 15:45 BRT)
+
+| Problema observado em produção | Ajuste |
+|---|---|
+| BTC e XRP reprovados por "profundidade ask 1 % ausente": nos books mais profundos os 100 níveis não chegam a 1 % do mid e a banda fica nula | O portão de profundidade aceita o slippage de compra medido para o nocional de referência; sem book continua reprovando |
+| Concentração 0,5 rígida para 6 candles com 3–4 altas | Limite 0,6 |
+
+Após isto, sem novos ajustes de limiar até haver dados acumulados (comparação v0 × v1 nos mesmos instantes).
