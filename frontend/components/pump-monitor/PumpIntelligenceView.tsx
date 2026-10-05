@@ -9,9 +9,10 @@ const fmt=(v:number|null)=>v===null?"Desconhecido":new Intl.NumberFormat("pt-BR"
 const time=executiveTime;
 
 const SupportTable=memo(function SupportTable({rows}:{rows:(Support&{pattern:string})[]}){
- return <div className={styles.scroll}><table><thead><tr>{["Grupo / amostra","Cobertura","+0,60% bruto","+0,80% bruto"].map(x=><th key={x}>{x}</th>)}</tr></thead><tbody>
+ return <div className={styles.scroll}><table><thead><tr>{["Grupo / amostra","Cobertura","Direção no endpoint","+0,60% bruto","+0,80% bruto"].map(x=><th key={x}>{x}</th>)}</tr></thead><tbody>
   {rows.map(r=><tr key={r.pattern}><td>{r.pattern}<small>{r.observations} observações · {r.episodes} episódios · {r.instruments} ativos · {r.days} dias</small><small>{time(r.from)} → {time(r.to)}</small></td>
    <td>Completa {r.coverage.complete}; pendentes {r.coverage.pending}; incompleta {r.coverage.incomplete}<small>Com gaps {r.coverage.with_gaps}; fronteira ambígua {r.coverage.boundary_ambiguous}; ordem ambígua {r.coverage.order_ambiguous}</small></td>
+   <td>{r.directional?<><strong>Alta {r.directional.up}; queda {r.directional.down}</strong><small>Sem variação {r.directional.flat}; desconhecidos ou pendentes {r.directional.unknown_or_pending}.</small><small>{r.directional.nonflat_known} desfechos não nulos em {r.directional.nonflat_episodes} episódios. Frequência histórica de alta: {r.directional.descriptive_up_frequency_nonflat===null?"indisponível":`${fmt(r.directional.descriptive_up_frequency_nonflat*100)}%`}.</small><small>Amostra descritiva; frequência não é probabilidade preditiva validada.</small></>:"Sem dados direcionais"}</td>
    {["0.6","0.8"].map(target=>{const t=r.targets[target];return <td key={target}>
     <strong>{t.descriptive_hit_rate===null?"Sem desfechos conhecidos":`${fmt(t.descriptive_hit_rate*100)}% (${t.hits}/${t.known})`}</strong>
     <small>Toques {t.hits}; não tocou {t.misses}; desconhecidos {t.unknown}. {completeTargetNarrative(t)}</small>
@@ -46,6 +47,7 @@ export default function PumpIntelligenceView({active=true}:{active?:boolean}){
  const stale=isIntelligenceStale(data)||Boolean(error)||!selectionMatches;
  const explore=()=>{try{const rules:unknown=JSON.parse(draft);if(!Array.isArray(rules)||!rules.length||rules.length>20)throw Error();guard.current.invalidate();setApplied(rules);}catch{setError("Informe de 1 a 20 condições AND válidas.");}};
  return <section aria-label="Inteligência descritiva Pump">
+  <p>Objetivo do ML: reconhecer combinações de indicadores associadas a alta ou queda. A nota direcional depende de validação temporal independente; tocar um alvo bruto não é a mesma pergunta. As tabelas abaixo preservam a exploração histórica anterior.</p>
   <h2>Inteligência e qualidade · ML observacional</h2><p>Frequências descritivas de observações correlacionadas por episódio. Não são probabilidades preditivas, evidência fora da amostra ou ordens. Inferência e contribuição ML permanecem zero.</p>
   <div className={styles.toolbar}><label>Horizonte <select aria-label="Horizonte da Inteligência" value={horizon} onChange={e=>{guard.current.invalidate();setCohortId("");setHorizon(Number(e.target.value));}}>{(data?.scope.available_horizons??[5,10,15,30,60,120]).map(h=><option key={h} value={h}>{h} min</option>)}</select></label>
    <button onClick={()=>void refresh(true)} disabled={loading}>{loading?"Atualizando…":"Atualizar Inteligência"}</button><span>Análise histórica estável; atualização manual. O radar mantém sua atualização de 60s.</span></div>

@@ -110,6 +110,10 @@ async def latest(db,user_id,c=None):
         if age>c["freshness_seconds"]:
             p["simulation"]={**p["simulation"],"eligible":False}
             p["vetos"]=[*p["vetos"],"feed_stale"]
+        p['directional_ml']={'objective':c['research']['objective'],'status':'abstained',
+                             'reason':'feed_stale' if age>c['freshness_seconds'] else 'no_independently_validated_directional_model',
+                             'direction':None,'score':None,'probability':None,'applied_delta':0,
+                             'available_horizons':c['labels']['horizons_minutes']}
         out.append(p)
     out.sort(key=lambda r:(-(r["score_final"] if r["score_final"] is not None else -1),r["symbol"],r["observation_id"]))
     return {"contract_version":eng.CONTRACT_VERSION,"as_of":now.isoformat(),"produced_at":max((p["published_at"] for p in out),default=None),

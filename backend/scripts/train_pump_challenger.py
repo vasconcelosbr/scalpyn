@@ -11,6 +11,7 @@ def load_rows(path,spec):
             item=json.loads(line);p=item["observation"]
             label=next((l for l in item["labels"] if l["horizon_minutes"]==5 and l["label_spec_hash"]==p["manifest"]["label_spec_hash"]),None)
             rows.append({**p,"target":label.get("targets",{}).get("0.8",{}).get("hit") if label else None,
+                         "label_status":label.get("status") if label else None,
                          "label_coverage_complete":label.get("coverage_complete") is True if label else False})
             if len(rows)>spec["max_rows"]:raise ValueError("Pump dataset exceeds declared row budget")
     return rows

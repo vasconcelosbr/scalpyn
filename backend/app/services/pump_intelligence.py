@@ -71,6 +71,21 @@ def describe(rows, horizon):
         "instruments":len({r["payload"]["instrument_id"] for r in rows}),"days":len({t[:10] for t in times}),
         "from":min(times,default=None),"to":max(times,default=None),"coverage":coverage,"targets":targets,
         "confidence_interval":None,"out_of_sample":False,"probability_validated":False}
+    # Endpoint direction is a separate question from maximum favorable touch.
+    directional=[(r,l['endpoint_return_pct']) for r,l in zip(rows,labels)
+                 if l and l.get('status')=='known' and l.get('coverage_complete') is True
+                 and eng.number(l.get('endpoint_return_pct'))]
+    up=sum(v>0 for _,v in directional);down=sum(v<0 for _,v in directional);flat=sum(v==0 for _,v in directional)
+    by_episode=defaultdict(list)
+    for r,v in directional:
+        if v!=0:by_episode[r['payload']['episode_id']].append(v>0)
+    support['directional']={'horizon_minutes':horizon,'up':up,'down':down,'flat':flat,
+                            'unknown_or_pending':len(rows)-len(directional),'nonflat_known':up+down,
+                            'descriptive_up_frequency_nonflat':up/(up+down) if up+down else None,
+                            'episode_weighted_up_frequency_nonflat':sum(sum(v)/len(v) for v in by_episode.values())/len(by_episode) if by_episode else None,
+                            'known_episodes':len({r['payload']['episode_id'] for r,_ in directional}),
+                            'nonflat_episodes':len(by_episode),'endpoint_return_pct':metric([v for _,v in directional]),
+                            'reference_policy':'gate_best_ask_v1','probability_validated':False,'confidence_interval':None}
     # Compatibility fields are descriptive 0.8/5m only, never total history.
     support.update(known=targets["0.8"]["known"],unknown_or_pending=targets["0.8"]["unknown"],
                    hits=targets["0.8"]["hits"],descriptive_hit_rate=targets["0.8"]["descriptive_hit_rate"])

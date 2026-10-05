@@ -37,6 +37,16 @@ def test_each_target_uses_its_own_hit_time_and_pre_touch_support():
     assert s['0.6']['drawdown_before_touch_pct']['known']==1
     assert s['0.8']['drawdown_before_touch_pct']['known']==0
 
+
+def test_endpoint_direction_is_not_touch_and_preserves_flat_unknown():
+    rows=[row(True),row(True),row(False),row(False),row(True,False)]
+    for r,v in zip(rows,[-.2,.1,0,None,.5]):r['label']['endpoint_return_pct']=v
+    d=agg.describe(rows,10)['directional']
+    assert (d['up'],d['down'],d['flat'],d['unknown_or_pending'])==(1,1,1,2)
+    assert d['nonflat_known']==2 and d['descriptive_up_frequency_nonflat']==.5
+    assert d['known_episodes']==1 and d['nonflat_episodes']==1
+    assert d['confidence_interval'] is None and d['probability_validated'] is False
+
 def test_censored_time_and_ambiguous_pre_touch_are_never_exact_measurements():
     r=row();t=r['label']['targets']['0.8'];t['first_touch_censored']=True;t['pre_touch']['order_ambiguous']=True
     s=agg.describe([r],5)['targets']['0.8']

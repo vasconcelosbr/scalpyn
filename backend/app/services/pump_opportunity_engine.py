@@ -20,6 +20,12 @@ DEFAULT_CONFIG = {
     "price_paths_enabled": False,
     "labels_enabled": False, "inference_enabled": False, "training_enabled": False,
     "training_job_enabled":False,
+    "research": {"objective":"endpoint_direction_v1", "max_rows":10000,
+                 "features":["rsi","adx","delta_norm","buy_persistence","cvd_slope","rvol_strict","price_progress_atr","spread_pct","estimated_slippage_buy_pct"],
+                 "min_rows_per_horizon":200, "min_episodes":100, "min_days":2, "min_instruments":10,
+                 "temporal_bins":20, "bootstrap_repetitions":200, "reliability_bins":10,
+                 "calibration_C":1.0, "calibration_max_iter":1000,
+                 "params":{"n_estimators":100,"max_depth":3,"random_state":20261001}},
     "intelligence": {"sample_limit": 50, "temporal_buckets": 10, "window_hours": 24, "cache_seconds": 60,
                      "read_timeout_ms": 2000, "max_read_bytes": 2000000,
                      "score_edges": [0, 10, 20, 30, 40]},
@@ -65,6 +71,25 @@ def number(value):
 
 
 def validate_config(c):
+    research=c['research']
+    if research['objective']!='endpoint_direction_v1':raise ValueError('Unsupported Pump research objective')
+    from .pump_contracts import FEATURE_SPEC
+    features=research['features']
+    if not isinstance(features,list) or not features or any(not isinstance(f,str) or f not in FEATURE_SPEC['fields'] for f in features) or len(features)!=len(set(features)):
+        raise ValueError('Unique configured point-in-time research features required')
+    for key,ceiling in (('max_rows',10000),('min_rows_per_horizon',10000),('min_episodes',10000),
+                        ('min_days',30),('min_instruments',100),('temporal_bins',24),
+                        ('bootstrap_repetitions',1000),('reliability_bins',20),('calibration_max_iter',1000)):
+        if type(research[key]) is not int or not 1<=research[key]<=ceiling:
+            raise ValueError(f'Invalid bounded directional research configuration: {key}')
+    if research['reliability_bins']<2 or not number(research['calibration_C']) or not 0<research['calibration_C']<=100:
+        raise ValueError('Invalid directional calibration configuration')
+    if research['min_rows_per_horizon']<200:raise ValueError('Directional challenger retains the existing 200-row floor')
+    params=research['params']
+    if set(params)!= {'n_estimators','max_depth','random_state'} or any(type(v) is not int for v in params.values()):
+        raise ValueError('Explicit bounded directional model parameters required')
+    if not 1<=params['n_estimators']<=100 or not 1<=params['max_depth']<=3 or not 0<=params['random_state']<2**32:
+        raise ValueError('Directional model exceeds existing resource ceiling')
     i=c["intelligence"]
     for key,ceiling in (("sample_limit",1000),("temporal_buckets",24),("window_hours",168),("cache_seconds",300),("read_timeout_ms",3000),("max_read_bytes",4000000)):
         if not isinstance(i[key],int) or isinstance(i[key],bool) or not 1<=i[key]<=ceiling:

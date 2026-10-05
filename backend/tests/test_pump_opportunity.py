@@ -169,7 +169,7 @@ def test_T21_120min_label_crossing_cut_is_purged():
 
 
 def test_T22_many_minutes_do_not_replace_independent_support(tmp_path):
-    p=build();p.update(target=True,label_coverage_complete=True)
+    p=build();p.update(target=True,label_coverage_complete=True,label_status='known')
     p["manifest"]["listing_certified"]=True  # synthetic eligibility only
     spec={"features":["rsi"],"feature_spec_hash":p["manifest"]["feature_spec_hash"],
           "producer_config_hash":p["manifest"]["legacy_config_hash"],"label_spec":p["label_spec"],"label_spec_hash":p["manifest"]["label_spec_hash"],"reference_policy":"gate_best_ask_v1",
@@ -177,6 +177,8 @@ def test_T22_many_minutes_do_not_replace_independent_support(tmp_path):
           "min_episodes":2,"min_days":1,"min_instruments":1,"max_rows":100,"max_threads":1,
           "params":{},"decision_threshold":0.5,"cost_policy":None,"cost_policy_hash":p["manifest"]["cost_policy_hash"],"support_criteria":{"test_only":True}}
     with pytest.raises(ValueError,match="independent Pump support"):train_challenger([p]*50,spec=spec,output_root=tmp_path)
+    p['label_status']='unknown';p['target']=False
+    with pytest.raises(ValueError,match='empty validated'):train_challenger([p]*50,spec=spec,output_root=tmp_path)
     assert not list(tmp_path.iterdir())
 
 
