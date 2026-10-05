@@ -118,13 +118,12 @@ async def test_live_rejections_empty_universe_returns_empty_list():
 
 
 @pytest.mark.asyncio
-async def test_live_rejections_excludes_held_for_open_position_symbols(monkeypatch):
-    """2026-09-27 regression: a held_for_open_position symbol (real open L3
-    trade, kept propagating through POOL/L1/L2/L3 by the pipeline_scan.py
-    fix so it stays visible in Aprovado/Consolidado) is not a rejected
-    candidate -- it already has a position. Without this exclusion it
-    reappears in Rejeitados every cycle its fresh filter evaluation fails,
-    confirmed live for ZEC_USDT/ONDO_USDT/LINK_USDT."""
+async def test_live_rejections_include_symbols_with_open_shadow(monkeypatch):
+    """2026-10-05: classification is independent of open Shadows. The former
+    open-position exclusion (2026-09-27) hid held symbols whose authorization
+    had lapsed from BOTH tabs (BTC_USDT/TAO_USDT live in RealtimeL2, absent
+    from RealtimeL3 Approved and Rejected). A held symbol whose current
+    evaluation does not authorize it is Rejected."""
     from app.services import l3_public_authorization
 
     watchlist_id = uuid4()
@@ -151,7 +150,98 @@ async def test_live_rejections_excludes_held_for_open_position_symbols(monkeypat
     result = await load_live_l3_rejections(db, user_id=uuid4(), l3_watchlist_id=watchlist_id)
 
     symbols = {item["symbol"] for item in result}
-    assert symbols == {"ETH_USDT"}
+    assert symbols == {"ONDO_USDT", "ETH_USDT"}
+
+
+@pytest.mark.asyncio
+async def test_rejections_payload_excludes_symbols_shown_in_approved(monkeypatch):
+    """Approved and Rejected are mutually exclusive: a symbol in Approved
+    (live authorization or the recent-shadow visibility floor) is dropped
+    from Rejected, including stale persisted rows."""
+    wl = SimpleNamespace(
+        id=uuid4(), level="L3", market_mode="spot", profile_id=uuid4(),
+        source_pool_id=None, auto_refresh=True, user_id=uuid4(),
+    )
+
+    async def _fake_profile_config(_wl, _db):
+        return {}
+
+    async def _empty(*_a, **_k):
+        return []
+
+    async def _floor(_db, _user_id):
+        return 300
+
+    async def _fake_rejections(_db, *, user_id, l3_watchlist_id):
+        return [{"symbol": s, "profile_id": wl.profile_id, "watchlist_id": wl.id}
+                for s in ("ETH_USDT", "BTC_USDT", "SOL_USDT")]
+
+    async def _fake_live_candidates(_db, *, user_id):
+        item = SimpleNamespace(symbol="BTC_USDT", watchlist_id=wl.id)
+        return [SimpleNamespace(contributors=(item,))]
+
+    async def _fake_recent(_db, *, user_id, floor_seconds, l3_watchlist_id):
+        return [SimpleNamespace(symbol="SOL_USDT", watchlist_id=wl.id)]
+
+    persisted = SimpleNamespace(
+        symbol="BTC_USDT", profile_id=wl.profile_id, recorded_at=datetime.now(timezone.utc),
+        analysis_snapshot=None, evaluation_trace=None, stage="L3", failed_type="block_rule",
+        failed_indicator="RSI", condition_text=None, current_value=None, expected_value=None,
+    )
+
+    class _Rows:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return self._rows
+
+        def fetchall(self):
+            return []
+
+    class _NullAsyncCtx:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _Db:
+        def __init__(self):
+            self.calls = 0
+
+        async def execute(self, *args, **kwargs):
+            self.calls += 1
+            return _Rows([persisted] if self.calls == 1 else [])
+
+        def begin_nested(self):
+            return _NullAsyncCtx()
+
+    monkeypatch.setattr(watchlists, "_load_watchlist_profile_config", _fake_profile_config)
+    monkeypatch.setattr(watchlists, "_load_active_watchlist_assets", _empty)
+    monkeypatch.setattr(watchlists, "_load_user_score_rules", _empty)
+    monkeypatch.setattr(watchlists, "_fetch_indicators_map", lambda *a, **k: _empty_map())
+    monkeypatch.setattr(watchlists, "_l3_public_visibility_floor_seconds", _floor)
+    monkeypatch.setattr(watchlists, "_intersect_assets_with_active_parent", lambda _wl, rows, _db: _identity(rows))
+    monkeypatch.setattr("app.services.pipeline_live_candidates.load_live_l3_rejections", _fake_rejections)
+    monkeypatch.setattr("app.services.pipeline_live_candidates.load_live_l3_candidates", _fake_live_candidates)
+    monkeypatch.setattr("app.services.pipeline_live_candidates.load_recently_authorized_l3_shadows", _fake_recent)
+
+    payload = await watchlists._get_watchlist_rejections_payload(wl, uuid4(), _Db())
+
+    assert {item["symbol"] for item in payload["items"]} == {"ETH_USDT"}
+    assert payload["metrics"]["approved_count"] == 2
+
+
+async def _empty_map():
+    return {}
+
+
+async def _identity(rows):
+    return rows
 
 
 def test_get_watchlist_assets_l3_branch_iterates_live_contributions_not_stale_table():
@@ -174,9 +264,14 @@ async def test_rejections_payload_fills_gap_with_live_complement_for_l3_spot(mon
     without duplicating anything already persisted."""
     wl = SimpleNamespace(
         id=uuid4(), level="L3", market_mode="spot", profile_id=uuid4(),
-        source_pool_id=None, auto_refresh=True, user_id=uuid4(),
+        source_pool_id=None, source_watchlist_id=None, auto_refresh=True, user_id=uuid4(),
     )
     user_id = uuid4()
+
+    async def _no_floor(_db, _user_id):
+        return 0
+
+    monkeypatch.setattr(watchlists, "_l3_public_visibility_floor_seconds", _no_floor)
 
     async def _fake_profile_config(_wl, _db):
         return {}

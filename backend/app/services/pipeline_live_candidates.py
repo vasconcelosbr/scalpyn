@@ -347,10 +347,14 @@ async def load_live_l3_rejections(
     ``pipeline_watchlist_rejections`` (which spot L3 is exempted from
     refreshing on every read for the same reason POOL/L1/L2 are not: cost).
 
-    Radar candidates follow current feed membership even with a shadow
-    already open. A fresh rejection must remain visible on reappearance;
-    duplicate-shadow prevention belongs to consolidation, not this display.
-    Non-radar watchlists retain their existing open-position display policy.
+    Classification is independent of open Shadow positions (2026-10-05):
+    a symbol live in L2 is Approved when its current L3 evaluation authorizes
+    it, Rejected otherwise -- never hidden because a Shadow is open. The
+    previous open-position exclusion (2026-09-27) combined with the Approved
+    tab's "executable authorization" requirement made held symbols whose
+    authorization had lapsed invisible in both tabs (BTC_USDT/TAO_USDT in
+    RealtimeL3). Duplicate-shadow prevention belongs to consolidation
+    (ACTIVE_TRADE_ALREADY_EXISTS), not to this display.
     """
     statement = _l3_symbol_universe_statement(user_id=user_id, l3_watchlist_id=l3_watchlist_id)
     rows = (await db.execute(statement)).mappings().all()
@@ -366,25 +370,11 @@ async def load_live_l3_rejections(
             return []
     from .l3_public_authorization import load_public_authorizations
     authorizations = await load_public_authorizations(db, user_id=user_id, candidates=rows)
-    symbols = {str(row["symbol"]).upper() for row in rows}
-    held_rows = [] if l3_watchlist_id in radar_memberships else (await db.execute(
-        text("""
-            SELECT DISTINCT symbol
-            FROM shadow_trades
-            WHERE user_id = :user_id
-              AND symbol = ANY(:symbols)
-              AND source = 'L3'
-              AND direction = 'SPOT'
-              AND status IN ('PENDING', 'RUNNING')
-        """),
-        {"user_id": user_id, "symbols": list(symbols)},
-    )).fetchall()
-    held_symbols = {r.symbol.upper() for r in held_rows}
     seen_symbols: set[str] = set()
     rejected: list[dict] = []
     for row in rows:
         symbol = str(row["symbol"]).upper()
-        if symbol in seen_symbols or symbol in held_symbols:
+        if symbol in seen_symbols:
             continue
         seen_symbols.add(symbol)
         if authorizations.get((row["watchlist_id"], row["symbol"])) is not None:

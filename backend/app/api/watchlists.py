@@ -3311,10 +3311,23 @@ async def _get_watchlist_rejections_payload(
         from ..services.pipeline_live_candidates import load_live_l3_candidates, load_live_l3_rejections
         _persisted_symbols = {row.symbol for row in rows}
         _live_rejected = await load_live_l3_rejections(db, user_id=user_id, l3_watchlist_id=wl.id)
-        _l3_live_approved_count = sum(
-            1 for candidate in await load_live_l3_candidates(db, user_id=user_id)
+        # Approved and Rejected are mutually exclusive and together cover the
+        # L2 parent (2026-10-05). Approved = live executable authorization
+        # plus the public visibility floor (same sources as get_watchlist_assets).
+        _approved_symbols = {
+            item.symbol for candidate in await load_live_l3_candidates(db, user_id=user_id)
             for item in candidate.contributors if item.watchlist_id == wl.id
-        )
+        }
+        _floor_seconds = await _l3_public_visibility_floor_seconds(db, user_id)
+        if _floor_seconds > 0:
+            try:
+                from ..services.pipeline_live_candidates import load_recently_authorized_l3_shadows
+                _approved_symbols |= {item.symbol for item in await load_recently_authorized_l3_shadows(
+                    db, user_id=user_id, floor_seconds=_floor_seconds, l3_watchlist_id=wl.id)}
+            except Exception as exc:
+                logger.warning("[Pipeline] recent-L3-shadow exclusion failed for %s: %s", wl.id, exc)
+        _l3_live_approved_count = len(_approved_symbols)
+        rows = [row for row in rows if str(row.symbol).upper() not in _approved_symbols]
         _now = datetime.now(timezone.utc)
         rows = list(rows) + [
             SimpleNamespace(
@@ -3323,7 +3336,8 @@ async def _get_watchlist_rejections_payload(
                 failed_type=None, failed_indicator=None, condition_text=None,
                 current_value=None, expected_value=None,
             )
-            for item in _live_rejected if item["symbol"] not in _persisted_symbols
+            for item in _live_rejected
+            if item["symbol"] not in _persisted_symbols and item["symbol"] not in _approved_symbols
         ]
 
     # REJECTED_PARENT_MEMBERSHIP: saved rejections are historical evidence,
