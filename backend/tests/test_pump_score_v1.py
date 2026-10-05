@@ -352,3 +352,12 @@ def test_ema_restarts_from_the_first_passing_minute_after_being_out():
     st = v1.step_state(st, condition="subindo", gates_ok=True, raw_score=70, fast_exit=False,
                        minute_ms=2 * M1, spec=s)
     assert st["score_s"] == 70 and st["state"] == "ativo"  # not dragged towards 0 by past minutes
+
+
+def test_concentration_is_share_of_gross_up_movement_and_stays_bounded_on_noisy_paths():
+    noisy = [100.0] * 42 + [100.0, 100.4, 100.1, 100.5, 100.2, 100.6, 100.7]  # zig-zag up, small net
+    s = candles(noisy[-48:])
+    st = v1.structure_metrics(s, spec(), now_after(s))
+    ups = [0.4, 0.4, 0.4, 0.1]
+    assert st["concentration"] == pytest.approx(max(ups) / sum(ups))
+    assert 0 < st["concentration"] <= 1

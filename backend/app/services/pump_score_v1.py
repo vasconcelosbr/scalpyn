@@ -65,7 +65,7 @@ DEFAULT_V1: Dict[str, Any] = {
         "extension_atr_max": 6.0,      # vs 60-min VWAP: a steady ~1 ATR/candle hour sits ~5.5 ATR above it
         "wick_max": 0.5,
         "efficiency_min": 0.3,
-        "concentration_max": 0.5,      # one 5m candle cannot carry > 50 % of the 30-min move
+        "concentration_max": 0.5,      # one 5m candle cannot carry > 50 % of the 30-min upward movement
         "volume_spike_max": 4.0,       # one 5m candle volume vs its 20-candle baseline
         "slippage_buy_max_pct": 0.2,
         "require_ask_depth_1pct": True,
@@ -78,10 +78,11 @@ DEFAULT_V1: Dict[str, Any] = {
         "window_delta_norm": {"lo": 0.0, "hi": 0.5},
         "progress_atr": {"lo": 0.25, "hi": 2.0},
         "rs_atr": {"lo": -0.5, "hi": 1.5},
-        "rvol_5m": {"lo": 0.3, "hi": 1.5},
+        "rvol_5m": {"lo": 0.0, "hi": 1.5},
     },
     "normalization": {"mode": "asset_adaptive", "halflife_minutes": 1440, "min_observations": 240},
-    "blocks": {"flow": 1.0, "price": 1.0, "quality": 1.0, "participation": 0.5, "compression": 0.0},
+    # Participation is context, not a veto: stable trends often run on ordinary volume.
+    "blocks": {"flow": 1.0, "price": 1.0, "quality": 1.0, "participation": 0.25, "compression": 0.0},
     # A block at exactly 0 would zero the geometric mean; the floor keeps it heavily penalised but finite.
     "block_floor": 0.05,
     "penalties": {
@@ -203,9 +204,11 @@ def structure_metrics(candles: Sequence[Dict[str, Any]], spec: Dict[str, Any], n
     out["efficiency_long"] = efficiency(long_)
     out["consistency"] = sum(1 for i in range(len(c) - short, len(c)) if c[i] > o[i]) / short
     out["higher_lows"] = sum(1 for i in range(len(c) - short, len(c)) if lo[i] > lo[i - 1]) / short
-    net = c[-1] - c[-1 - short]
-    biggest = max(abs(c[i] - c[i - 1]) for i in range(len(c) - short, len(c)))
-    out["concentration"] = biggest / net if net > 0 else None
+    # Share of the gross upward movement carried by the single biggest up-candle (30 min).
+    # A steady staircase spreads it (~1/6); a micro pump puts most of it in one candle.
+    # (Dividing by the NET move exploded on noisy paths: median > 1 in production.)
+    ups = [c[i] - c[i - 1] for i in range(len(c) - short, len(c)) if c[i] > c[i - 1]]
+    out["concentration"] = max(ups) / sum(ups) if ups else None
     rng = h[-1] - lo[-1]
     out["wick"] = (h[-1] - max(o[-1], c[-1])) / rng if rng > 0 else None
 
