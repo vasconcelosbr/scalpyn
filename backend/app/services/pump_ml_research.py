@@ -26,7 +26,7 @@ def train_challenger(rows,*,spec,output_root):
     if len(rows)>spec["max_rows"] or not 0<spec["max_threads"]<=2:
         raise ValueError("Pump research budget exceeded")
     usable=[r for r in rows if r["manifest"]["listing_certified"] and r.get("target") in (True,False)
-            and r.get("label_coverage_complete") and all(eng.number(r["values"].get(f)) for f in spec["features"])]
+            and r.get('label_status')=='known' and r.get("label_coverage_complete") and all(eng.number(r["values"].get(f)) for f in spec["features"])]
     hashes={tuple(r["manifest"][k] for k in ("feature_spec_hash","label_spec_hash","cost_policy_hash","legacy_config_hash")) for r in usable}
     expected=(spec["feature_spec_hash"],spec["label_spec_hash"],spec["cost_policy_hash"],spec["producer_config_hash"])
     if len(hashes)!=1 or (hashes and next(iter(hashes))!=expected):

@@ -9,7 +9,7 @@ export function completeTargetNarrative(t:TargetMetrics):string {
 }
 export type Support={observations:number;episodes:number;instruments:number;days:number;from:string|null;to:string|null;
   coverage:{complete:number;pending:number;incomplete:number;with_gaps:number;boundary_ambiguous:number;order_ambiguous:number};
-  targets:Record<string,TargetMetrics>};
+  targets:Record<string,TargetMetrics>;directional?:{horizon_minutes:number;up:number;down:number;flat:number;unknown_or_pending:number;nonflat_known:number;known_episodes:number;nonflat_episodes:number;descriptive_up_frequency_nonflat:number|null;episode_weighted_up_frequency_nonflat:number|null;probability_validated:false}};
 export type ExecutiveGroup={kind:string;condition:string;field?:string;hour?:number;observed_range?:number[];
  condition_rule?:{field:string;op:string;value:number};support:Support};
 export type Executive={status:string;timezone:string;hour_basis:string;local_days:number;actionable_hour_ranking:false;groups:ExecutiveGroup[];
@@ -25,7 +25,7 @@ export type Intelligence={recalculated:boolean;refresh_requested:boolean;refresh
   freshness:{status:string;age_seconds:number;refresh_failed:boolean};
   scope:{policy:string;whole_history:boolean;sample_limit:number;sampled_observations:number;temporal_buckets:number;window_hours:number;
     window_from:string;sample_truncated:boolean;byte_limited:boolean;read_bytes:number;cache_seconds:number;horizon_minutes:number;score_edges:number[];available_horizons:number[];capture_freshness_seconds:number};
-  model:{status:string;reason:string;delta:number;probability:null;auto_promotion:boolean};gates:Record<string,boolean>;
+  model:{status:string;reason:string;delta:number;probability:null;auto_promotion:boolean;objective?:string;directional_horizons?:number[];directional_status?:string;score_semantics?:string};gates:Record<string,boolean>;
   cohorts:Cohort[];shadow_context?:ShadowContext;training_runs:{run_id:string;started_at:string;status:string;payload:{reason?:string;duration_seconds?:number}}[]};
 
 /** Fixed UTC-03:00, without daylight-saving transitions. */

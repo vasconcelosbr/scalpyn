@@ -5,6 +5,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 coreut
 COPY pump_ml/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY pump_ml/ /app/pump_ml/
-COPY backend/app/services/pump_opportunity_engine.py backend/app/services/pump_contracts.py backend/app/services/pump_ml_research.py /app/app/services/
+COPY backend/app/services/pump_opportunity_engine.py backend/app/services/pump_contracts.py backend/app/services/pump_ml_research.py backend/app/services/pump_directional_research.py /app/app/services/
 # Includes process startup: TERM at895s, forced KILL after5s; no permanent worker.
 CMD ["timeout","--signal=TERM","--kill-after=5s","895s","python","-m","pump_ml.job"]
