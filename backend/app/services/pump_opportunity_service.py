@@ -12,6 +12,10 @@ from . import pump_opportunity_engine as eng
 logger=logging.getLogger(__name__)
 CONFIG_TYPE="pump_opportunity"
 
+# Captures persist slot_at = decision_at floored to its UTC minute. Keep the
+# exact decision predicate; the conservative slot bound uses the owner/slot
+# index instead of reading every historical payload in a short lookback.
+
 
 async def label_health(db,user_id):
     counts=(await db.execute(text("""SELECT count(*) FILTER(WHERE ready_at<=now() AND resource_block IS NULL) AS due,
@@ -39,6 +43,7 @@ async def pending_support_symbols(db,user_id,eligible,minute):
     if not c["enabled"]: return []
     return list((await db.execute(text("""SELECT DISTINCT symbol FROM pump_opportunity_observations o
         WHERE user_id=:u AND decision_at>=:lo AND decision_at<=:minute
+          AND slot_at>=date_trunc('minute',CAST(:lo AS timestamptz))
           AND NOT(symbol=ANY(CAST(:eligible AS text[])))
           AND EXISTS(SELECT 1 FROM jsonb_array_elements_text(o.payload->'label_spec'->'horizons_minutes') h(value)
             WHERE decision_at + make_interval(mins=>h.value::integer)>=:minute
@@ -83,7 +88,8 @@ async def refresh_listing_contracts():
         async def apply(db):
             c=await get_config(db,user_id)
             current=(await db.execute(text("""SELECT DISTINCT symbol FROM pump_opportunity_observations
-                WHERE user_id=:u AND decision_at>=:since ORDER BY symbol LIMIT :max"""),
+                WHERE user_id=:u AND decision_at>=:since
+                  AND slot_at>=date_trunc('minute',CAST(:since AS timestamptz)) ORDER BY symbol LIMIT :max"""),
                 {"u":user_id,"since":captured-timedelta(seconds=c["freshness_seconds"]*2),"max":c["budget"]["max_assets"]})).scalars().all()
             if not current:return {"owner":str(user_id),"status":"no_current_universe"}
             records={s:gate_listing_record(pairs.get(s,{}),captured) for s in current}
@@ -100,7 +106,8 @@ async def latest(db,user_id,c=None):
     now=datetime.now(timezone.utc)
     rows=(await db.execute(text("""SELECT DISTINCT ON(instrument_id) payload,published_at
         FROM pump_opportunity_observations WHERE user_id=:u
-          AND decision_at>=:since ORDER BY instrument_id,decision_at DESC"""),
+          AND decision_at>=:since
+          AND slot_at>=date_trunc('minute',CAST(:since AS timestamptz)) ORDER BY instrument_id,decision_at DESC"""),
         {"u":user_id,"since":now-timedelta(seconds=c["episode_gap_seconds"]+c["freshness_seconds"])})).mappings().all()
     out=[]
     for r in rows:
@@ -141,7 +148,8 @@ async def ingest(user_id,rows,collected,source_meta,legacy_config):
         if used>=c["budget"]["max_storage_bytes"]:
             return {"status":"storage_budget_exhausted","used_bytes":used,"limit_bytes":c["budget"]["max_storage_bytes"]}
         previous=(await db.execute(text("""SELECT DISTINCT ON(instrument_id) payload FROM pump_opportunity_observations
-            WHERE user_id=:u AND decision_at>=:since ORDER BY instrument_id,decision_at DESC"""),
+            WHERE user_id=:u AND decision_at>=:since
+              AND slot_at>=date_trunc('minute',CAST(:since AS timestamptz)) ORDER BY instrument_id,decision_at DESC"""),
             {"u":user_id,"since":decision-timedelta(seconds=c["episode_gap_seconds"])})).scalars().all()
         previous={p["symbol"]:p for p in sorted(previous,key=lambda p:p["decision_at"])}
         price_paths_written=0
