@@ -14,7 +14,7 @@ Um ativo em queda, esticado, sem estrutura ou caro de executar **não pontua** (
 |---|---|---|
 | 1. Estrutura | Candles **5m fechados** (Gate preferida): ATR(14) 5m, progresso 15 min, eficiência 30/60 min, % candles verdes, fundos ascendentes, concentração, pavio, RVOL 5m, pico de volume, compressão prévia | `score_v1.structure` |
 | 2. Regime | Progresso 5m do BTC + amplitude (% do universo com progresso > 0) → favorável / neutro / desfavorável. Força relativa `rs = (ret − β·ret_btc) / ATR%`, β = 1 na v1 | `score_v1.regime` |
-| 3. Portões (AND) | progresso 5m, fluxo 1m (janela 15 min + CVD slope), acima do VWAP, < 3 ATR(5m), sem pavio, eficiência, não concentrado, sem pico de volume, slippage, profundidade ask 1 %, regime/RS. Entrada ausente = reprova | `score_v1.gates` |
+| 3. Portões (AND) | progresso 5m, fluxo 1m (janela 15 min não vendedora + CVD slope), acima do VWAP móvel de 60 min, < 6 ATR(5m) dele, sem pavio, eficiência, não concentrado, sem pico de volume, slippage, profundidade ask 1 %, regime/RS. Entrada ausente = reprova | `score_v1.gates` |
 | 4. Força | Só para quem passou: média **geométrica** de fluxo, preço (progresso + RS), qualidade da tendência e participação; penalidades de extensão e custo. Fatores normalizados pelo percentil do próprio ativo (média/variância exponenciais) após aquecimento; antes disso, lo/hi absolutos | `score_v1.factors`, `normalization`, `blocks`, `penalties` |
 | 5. Estabilidade | EMA do score, passo uma vez por minuto fechado. Entrada após `enter_cycles` acima de `enter_score`; saída lenta após `exit_cycles` abaixo de `stay_score` **e** `min_hold_minutes`; saída imediata por queda, esticamento, falta de dados ou queda rápida no 1m; cooldown | `score_v1.stability` |
 
@@ -51,3 +51,17 @@ taxa de toque em +0,6 % em 10/15 min do topo de cada ranking vs. média do slot,
 - Limiares são hipóteses iniciais; nenhuma validação estatística foi feita.
 - Pesos e β = 1 devem ser revistos com dados (ablação por portão e bloco).
 - Regime depende de candles 5m do BTC; sem eles o portão de regime reprova (fail-closed).
+
+## Calibração v1.1 (2026-10-05, após a primeira hora em produção)
+
+Observado em produção com o v1 ativo: nenhum ativo listado, mesmo com regime favorável.
+
+| Problema observado | Ajuste |
+|---|---|
+| Distância medida contra o VWAP **diário** em ATR(5m): ativos em recuperação ficavam "abaixo do VWAP" e tendências de horas ficavam "esticadas" | VWAP **móvel de 60 min** dos candles 5m fechados (`structure.vwap_candles`); limite 6 ATR(5m), penalidade de 3 a 6 |
+| RVOL do último candle muito baixo no universo inteiro zerava o bloco de participação | Participação = média dos 3 últimos candles vs base de 20 (`rvol_recent_candles`), lo/hi 0,3–1,5; piso de bloco 0,05 (`block_floor`) |
+| Fluxo de janela levemente negativo (ex.: −0,03) reprovava uma escada perfeita | Portão de fluxo exige "não vendedor": `window_delta_norm > −0,1`; CVD slope continua > 0 |
+| EMA ancorada em 0 enquanto o ativo estava fora: entrar levava ~9+ min | Fora da lista e sem passar nos portões, a EMA zera a memória; a entrada parte do próprio score |
+| Limiar de entrada alto para normalização absoluta | `enter_score` 50, `stay_score` 35 |
+
+Os valores antigos estão gravados na config de produção (versão 28) e precisam ser atualizados por `PUT /api/pump-monitor/config` com o bloco `score_v1` após o deploy.
