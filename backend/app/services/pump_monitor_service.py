@@ -154,7 +154,7 @@ async def _load_candles(db, symbols: List[str], timeframe: str) -> Dict[str, Dic
                           "low": _float(r["low"]), "close": _float(r["close"])} for r in rows}
 
 
-_TF_SQL_INTERVAL = {"1m": "1 minute", "5m": "5 minutes", "15m": "15 minutes", "1h": "1 hour"}
+_TF_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}
 
 
 async def _load_candle_series(db, symbols: List[str], timeframe: str, count: int) -> Dict[str, List[Dict[str, Any]]]:
@@ -166,9 +166,11 @@ async def _load_candle_series(db, symbols: List[str], timeframe: str, count: int
           FROM ohlcv
          WHERE symbol = ANY(CAST(:s AS text[])) AND timeframe = :tf
            AND market_type = 'spot' AND is_closed IS TRUE
-           AND time >= now() - (CAST(:interval AS interval) * :n)
+           AND time >= :since
          ORDER BY symbol, time, CASE WHEN exchange ILIKE 'gate%' THEN 0 ELSE 1 END
-    """), {"s": symbols, "tf": timeframe, "interval": _TF_SQL_INTERVAL[timeframe], "n": int(count) + 2})).mappings().all()
+    """), {"s": symbols, "tf": timeframe,
+           # asyncpg binds timestamptz from datetime only (no text/interval casting)
+           "since": datetime.now(timezone.utc) - timedelta(seconds=_TF_SECONDS[timeframe] * (int(count) + 2))})).mappings().all()
     out: Dict[str, List[Dict[str, Any]]] = {}
     for r in rows:
         out.setdefault(r["symbol"], []).append({
@@ -308,11 +310,17 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
         return (await _load_buckets(db, symbols, since),
                 await get_merged_indicators(db, symbols),
                 await _load_candles(db, symbols, config["price"]["wick_timeframe"]),
-                await _load_alpha(db, symbols),
-                await _load_candle_series(db, sorted(set(symbols) | {v1_ref}),
-                                          v1_spec["structure"]["timeframe"],
-                                          int(v1_spec["structure"]["lookback_candles"])))
-    buckets_by_symbol, merged, candles, alpha, series = await run_db_task(_load, celery=True)
+                await _load_alpha(db, symbols))
+    buckets_by_symbol, merged, candles, alpha = await run_db_task(_load, celery=True)
+
+    # v1 input in its own transaction: a v1 read failure must never stop the v0 cycle.
+    try:
+        series = await run_db_task(lambda db: _load_candle_series(
+            db, sorted(set(symbols) | {v1_ref}), v1_spec["structure"]["timeframe"],
+            int(v1_spec["structure"]["lookback_candles"])), celery=True)
+    except Exception as exc:
+        logger.warning("[PUMP-SCORE-V1] candle series unavailable user=%s reason=%s", user_id, type(exc).__name__)
+        series = {}
 
     redis = await _redis()
     state_key = _STATE_KEY.format(user_id=user_id)
