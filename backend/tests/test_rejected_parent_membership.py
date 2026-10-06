@@ -55,6 +55,9 @@ async def test_rejected_payload_respects_entire_parent_chain_without_deleting_hi
     monkeypatch.setattr(pipeline_live_candidates,'load_live_l3_rejections',AsyncMock(return_value=[
         {'symbol':'LIVE_USDT','profile_id':wl.profile_id}]))
     monkeypatch.setattr(pipeline_live_candidates,'load_live_l3_candidates',AsyncMock(return_value=[]))
+    monkeypatch.setattr(pipeline_live_candidates,'classify_live_l3_for_display',AsyncMock(return_value=([],[
+        {'symbol':'LIVE_USDT','profile_id':wl.profile_id}])))
+    monkeypatch.setattr(api,'_l3_public_visibility_floor_seconds',AsyncMock(return_value=300))
     monkeypatch.setattr(l3_flow_diagnostics,'load_flow_checks',AsyncMock(return_value={}))
     result=await api._get_watchlist_rejections_payload(wl,user,db)
     assert {r['symbol'] for r in result['items']}==({'KEEP_USDT'} if removed_at else {'KEEP_USDT','AVAX_USDT'})

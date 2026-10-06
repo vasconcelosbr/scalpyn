@@ -85,4 +85,5 @@ def test_watchlist_api_wires_candle_preparation_into_all_mutable_trace_paths():
             assert any(k.arg=='block_inputs' for k in call.keywords)
     # Spot L3 approvals must retain frozen authorization, never live recomputation.
     source=ast.unparse(funcs['get_watchlist_assets'])
-    assert source.index('load_live_l3_candidates') < source.index('prepare_block_candle_inputs')
+    # 2026-10-06: the persisted-authority read is classify_live_l3_for_display.
+    assert source.index('classify_live_l3_for_display') < source.index('prepare_block_candle_inputs')
