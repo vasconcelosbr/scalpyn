@@ -71,7 +71,15 @@ ACTIVE_TRADE_PROCESSING_RESULT = "SUPPRESSED/ACTIVE_TRADE_ALREADY_EXISTS"
 
 
 def public_authorization(decision, event, shadow, *, watchlist_id, profile_version=None, now=None,
-                          ignore_expiry=False):
+                          ignore_expiry=False, display_floor_seconds=None):
+    """Strict projection by default. ``display_floor_seconds`` (not None)
+    switches to the DISPLAY classification used only by the per-watchlist
+    Approved/Rejected tabs (2026-10-06): a valid ALLOW of the latest L3
+    evaluation is shown as approved regardless of outbox/consolidation state,
+    and stays visible for at least ``display_floor_seconds`` after evaluation
+    even if the feature TTL ran out first. The result always carries the
+    strict ``executable`` flag; execution callers never pass this argument."""
+    display = display_floor_seconds is not None
     now = now or datetime.now(timezone.utc)
     contract = (decision.metrics or {}).get("l3_authorization_contract_v3") or {}
     if (decision.decision != "ALLOW" or contract.get("valid") is not True
@@ -89,10 +97,12 @@ def public_authorization(decision, event, shadow, *, watchlist_id, profile_versi
     digest = body.pop("authorization_contract_hash", None)
     if not digest or canonical_hash(body) != digest:
         return None
-    if event is None or event.authorization_contract_hash != digest:
+    if event is not None and event.authorization_contract_hash != digest:
         return None
-    payload = event.payload or {}
-    if not (payload.get("shadow_creation_required") or payload.get("consolidation_required")):
+    if event is None and not display:
+        return None
+    payload = (event.payload or {}) if event is not None else {}
+    if not display and not (payload.get("shadow_creation_required") or payload.get("consolidation_required")):
         return None
     expiry = authorization_expiry(contract)
     evaluated = utc(contract.get("evaluated_at"))
@@ -104,18 +114,25 @@ def public_authorization(decision, event, shadow, *, watchlist_id, profile_versi
     # creation/consolidation (pipeline_scan, the outbox service, trade
     # consolidation, on-demand publish) keeps calling authorization_expiry()
     # directly and is untouched by this flag.
-    if not ignore_expiry and now >= expiry:
+    expired = now >= expiry
+    if display:
+        if expired and now >= evaluated + timedelta(seconds=max(0, int(display_floor_seconds))):
+            return None
+    elif not ignore_expiry and expired:
         return None
     result = payload.get("processing_result")
     active_trade_covered = result == ACTIVE_TRADE_PROCESSING_RESULT and shadow is not None
-    if (event.status == "PROCESSED" and result != "CREATED_OR_RECONCILED"
-            and not active_trade_covered):
+    status = event.status if event is not None else None
+    suppressed = (status == "PROCESSED" and result != "CREATED_OR_RECONCILED"
+                  and not active_trade_covered)
+    if suppressed and not display:
         return None
     shadow_status = (
         "STARTED" if result == "CREATED_OR_RECONCILED" or active_trade_covered else
-        "RETRY" if event.status == "RETRY" else "PENDING"
+        "SUPPRESSED" if suppressed else
+        "RETRY" if status == "RETRY" else "PENDING"
     )
-    if event.status not in {"PENDING", "RETRY", "PROCESSED"}:
+    if status not in {"PENDING", "RETRY", "PROCESSED"} and not display:
         return None
     metrics = decision.metrics or {}
     from .l3_trade_consolidation import candidate_from_decision, candidate_rank_key
@@ -134,17 +151,18 @@ def public_authorization(decision, event, shadow, *, watchlist_id, profile_versi
     # nothing forced a caller to actually check that. A confirmed Shadow —
     # not just a valid, unexpired contract — is now required to call an
     # opportunity ``executable``; PENDING/RETRY stay tracking-only states.
-    executable = shadow_status == "STARTED" and shadow is not None
+    executable = shadow_status == "STARTED" and shadow is not None and not (display and expired)
     return {
         "decision_id": decision.id,
         "authorization_id": digest,
         "authorization_status": "ALLOW",
         "evaluated_at": evaluated.isoformat(),
         "expires_at": expiry.isoformat(),
+        "authorization_expired": expired,
         "shadow_status": shadow_status,
         "shadow_id": str(shadow.id) if shadow is not None else None,
         "executable": executable,
-        "shadow_reason": result or ("SHADOW_RETRY_PENDING" if event.status == "RETRY" else None),
+        "shadow_reason": result or ("SHADOW_RETRY_PENDING" if status == "RETRY" else None),
         "alpha_score": metrics.get("final_score") if metrics.get("final_score") is not None else decision.score,
         "current_price": metrics.get("price"),
         "_indicators": {key: value.get("value") if isinstance(value, dict) else value
@@ -154,8 +172,12 @@ def public_authorization(decision, event, shadow, *, watchlist_id, profile_versi
     }
 
 
-async def load_public_authorizations(db, *, user_id, candidates):
-    """Latest decision first, THEN validity: an old ALLOW never masks BLOCK."""
+async def load_public_authorizations(db, *, user_id, candidates, display_floor_seconds=None):
+    """Latest decision first, THEN validity: an old ALLOW never masks BLOCK.
+
+    ``display_floor_seconds`` (not None) returns the DISPLAY classification
+    (every valid latest ALLOW, executable or not) for the per-watchlist tabs;
+    execution callers must leave it unset (executable-only result)."""
     if not candidates:
         return {}
     pairs = {(item["profile_id"], item["symbol"]) for item in candidates}
@@ -172,7 +194,11 @@ async def load_public_authorizations(db, *, user_id, candidates):
         select(DecisionLog.id)
         .where(DecisionLog.user_id == user_id,
                tuple_(DecisionLog.profile_id, DecisionLog.symbol).in_(pairs),
-               DecisionLog.event_type != "PROFILE_CONSOLIDATION")
+               # 2026-10-06: the rejected lane's audit rows
+               # (PROFILE_CONSOLIDATION_REJECTED) carry the profile_id too and
+               # equally must never become "latest" over a real evaluation.
+               DecisionLog.event_type.notin_(
+                   ("PROFILE_CONSOLIDATION", "PROFILE_CONSOLIDATION_REJECTED")))
         .distinct(DecisionLog.profile_id, DecisionLog.symbol)
         .order_by(DecisionLog.profile_id, DecisionLog.symbol,
                   DecisionLog.created_at.desc(), DecisionLog.id.desc())
@@ -263,7 +289,12 @@ async def load_public_authorizations(db, *, user_id, candidates):
                 (row.symbol, (row.direction or "SPOT").upper())
             )
         auth = public_authorization(row, event, shadow, watchlist_id=item["watchlist_id"],
-                                    profile_version=item.get("profile_version"), now=now)
+                                    profile_version=item.get("profile_version"), now=now,
+                                    display_floor_seconds=display_floor_seconds)
+        if display_floor_seconds is not None:
+            if auth:
+                result[(item["watchlist_id"], item["symbol"])] = auth
+            continue
         # S0.3: only a confirmed Shadow makes an opportunity part of the
         # executable population. PENDING/RETRY (contract valid, Shadow not
         # yet confirmed) are real states worth surfacing elsewhere for

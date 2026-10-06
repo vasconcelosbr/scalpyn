@@ -144,7 +144,7 @@ async def test_latest_block_is_not_filtered_out_before_latest_decision_selection
     # masked by its own later suppression audit row.
     sql_literal = str(main_query.compile(
         dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
-    assert "event_type != 'PROFILE_CONSOLIDATION'" in sql_literal
+    assert "event_type NOT IN ('PROFILE_CONSOLIDATION', 'PROFILE_CONSOLIDATION_REJECTED')" in sql_literal
 
 
 @pytest.mark.asyncio
@@ -342,6 +342,9 @@ async def test_empty_l3_get_never_runs_a_producer_or_commits(monkeypatch):
     monkeypatch.setattr(watchlists, "_load_active_watchlist_assets", AsyncMock(return_value=[]))
     monkeypatch.setattr(watchlists, "_intersect_assets_with_active_parent", AsyncMock(return_value=[]))
     monkeypatch.setattr(watchlists, "load_live_l3_candidates", AsyncMock(return_value=[]))
+    monkeypatch.setattr("app.services.pipeline_live_candidates.classify_live_l3_for_display",
+                        AsyncMock(return_value=([], [])))
+    monkeypatch.setattr(watchlists, "_l3_public_visibility_floor_seconds", AsyncMock(return_value=300))
     monkeypatch.setattr(watchlists, "_auto_refresh_watchlist_assets_if_needed", producer)
     tasks, response = BackgroundTasks(), Response()
     result = await watchlists.get_watchlist_assets(watchlist_id=wl.id, background_tasks=tasks,
@@ -402,3 +405,59 @@ async def test_on_demand_persists_decision_outbox_and_membership_atomically(monk
     outbox = next(row for row in db.added if isinstance(row, L3AuthorizationOutbox))
     assert outbox.payload["shadow_creation_required"] or outbox.payload["consolidation_required"]
     assert outbox.decision_id == result[0]["analysis_snapshot"]["decision_id"]
+
+
+# ── 2026-10-06: display classification (per-watchlist Approved/Rejected) ─────
+
+def test_display_shows_valid_allow_regardless_of_outbox_state():
+    """NEAR_USDT in RealtimeL3: ALLOW at 20:13:34/20:13:51 sat in Rejected while
+    the outbox was PENDING and after a same-profile SAME_SYMBOL_LOWER_PRIORITY
+    suppression. Display mode shows the ALLOW; ``executable`` stays strict."""
+    now, wl, decision, event, shadow, _ = objects()
+    pending = public_authorization(decision, event, None, watchlist_id=wl, now=now, display_floor_seconds=300)
+    assert pending["shadow_status"] == "PENDING" and pending["executable"] is False
+    no_event = public_authorization(decision, None, None, watchlist_id=wl, now=now, display_floor_seconds=300)
+    assert no_event["shadow_status"] == "PENDING" and no_event["executable"] is False
+    event.status = "PROCESSED"
+    event.payload["processing_result"] = "SUPPRESSED/SAME_SYMBOL_LOWER_PRIORITY"
+    assert public_authorization(decision, event, None, watchlist_id=wl, now=now) is None
+    suppressed = public_authorization(decision, event, None, watchlist_id=wl, now=now, display_floor_seconds=300)
+    assert suppressed["shadow_status"] == "SUPPRESSED" and suppressed["executable"] is False
+
+
+def test_display_never_shows_block_invalid_or_foreign_contract():
+    now, wl, decision, event, shadow, body = objects()
+    assert public_authorization(decision, event, None, watchlist_id=uuid4(), now=now, display_floor_seconds=300) is None
+    event.authorization_contract_hash = "other"
+    assert public_authorization(decision, event, None, watchlist_id=wl, now=now, display_floor_seconds=300) is None
+    event.authorization_contract_hash = body["authorization_contract_hash"]
+    decision.decision = "BLOCK"
+    assert public_authorization(decision, event, None, watchlist_id=wl, now=now, display_floor_seconds=300) is None
+
+
+def test_display_floor_keeps_expired_allow_visible_but_not_executable():
+    now, wl, decision, event, _shadow, _ = objects()
+    event.status = "PROCESSED"
+    event.payload["processing_result"] = "CREATED_OR_RECONCILED"
+    shadow = Obj(id=uuid4())
+    later = now + timedelta(seconds=290)  # feature TTL (300 - 20 s) already over
+    assert public_authorization(decision, event, shadow, watchlist_id=wl, now=later) is None
+    shown = public_authorization(decision, event, shadow, watchlist_id=wl, now=later, display_floor_seconds=600)
+    assert shown["authorization_expired"] is True and shown["executable"] is False
+    assert public_authorization(decision, event, shadow, watchlist_id=wl, now=now + timedelta(seconds=700),
+                                display_floor_seconds=600) is None
+    fresh = public_authorization(decision, event, shadow, watchlist_id=wl, now=now, display_floor_seconds=600)
+    assert fresh["executable"] is True and fresh["authorization_expired"] is False
+
+
+@pytest.mark.asyncio
+async def test_load_public_authorizations_display_returns_non_executable():
+    now, wl, decision, event, shadow, _ = objects()
+    db = Obj(execute=AsyncMock(side_effect=[
+        Obj(all=lambda: [(decision, event, None)]),
+        _no_pool_ancestry(),
+    ]))
+    result = await load_public_authorizations(db, user_id=uuid4(), candidates=[{
+        "profile_id": decision.profile_id, "symbol": decision.symbol, "watchlist_id": wl}],
+        display_floor_seconds=300)
+    assert result[(wl, decision.symbol)]["executable"] is False

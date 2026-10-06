@@ -337,6 +337,7 @@ async def load_live_l3_rejections(
     *,
     user_id: UUID,
     l3_watchlist_id: UUID,
+    display_floor_seconds: Optional[int] = None,
 ) -> list[dict]:
     """Symbols live-active in this L3 profile's L2 parent but not authorized.
 
@@ -356,10 +357,32 @@ async def load_live_l3_rejections(
     RealtimeL3). Duplicate-shadow prevention belongs to consolidation
     (ACTIVE_TRADE_ALREADY_EXISTS), not to this display.
     """
+    _, rejected = await classify_live_l3_for_display(
+        db, user_id=user_id, l3_watchlist_id=l3_watchlist_id, display_floor_seconds=display_floor_seconds,
+    )
+    return rejected
+
+
+async def classify_live_l3_for_display(
+    db: AsyncSession,
+    *,
+    user_id: UUID,
+    l3_watchlist_id: UUID,
+    display_floor_seconds: Optional[int] = None,
+) -> tuple[list[LiveL3Contribution], list[dict]]:
+    """Split one L3 watchlist's live L2 universe into (approved, rejected).
+
+    With ``display_floor_seconds`` (the per-watchlist tabs, 2026-10-06) a
+    symbol is approved when its LATEST L3 evaluation is a valid ALLOW,
+    regardless of outbox/consolidation progress (PENDING, SUPPRESSED by a
+    same-profile duplicate, ...) -- each approved item keeps the strict
+    ``executable`` flag for execution consumers. Without it, the strict
+    executable-only projection is used. Never feeds execution.
+    """
     statement = _l3_symbol_universe_statement(user_id=user_id, l3_watchlist_id=l3_watchlist_id)
     rows = (await db.execute(statement)).mappings().all()
     if not rows:
-        return []
+        return [], []
     from .pool_service import load_radar_watchlist_eligibility
     radar_memberships = await load_radar_watchlist_eligibility(
         db, user_id=user_id, watchlist_ids=[l3_watchlist_id],
@@ -367,24 +390,45 @@ async def load_live_l3_rejections(
     if l3_watchlist_id in radar_memberships:
         rows = [row for row in rows if row["symbol"] in radar_memberships[l3_watchlist_id]]
         if not rows:
-            return []
+            return [], []
     from .l3_public_authorization import load_public_authorizations
-    authorizations = await load_public_authorizations(db, user_id=user_id, candidates=rows)
+    if display_floor_seconds is None:
+        authorizations = await load_public_authorizations(db, user_id=user_id, candidates=rows)
+    else:
+        authorizations = await load_public_authorizations(
+            db, user_id=user_id, candidates=rows, display_floor_seconds=display_floor_seconds)
     seen_symbols: set[str] = set()
+    approved: list[LiveL3Contribution] = []
     rejected: list[dict] = []
     for row in rows:
         symbol = str(row["symbol"]).upper()
         if symbol in seen_symbols:
             continue
         seen_symbols.add(symbol)
-        if authorizations.get((row["watchlist_id"], row["symbol"])) is not None:
+        authority = authorizations.get((row["watchlist_id"], row["symbol"]))
+        minimum = float((row.get("watchlist_filters") or {}).get("min_alpha_score") or 0)
+        if authority is not None and minimum > 0 and (
+                authority.get("alpha_score") is None or float(authority["alpha_score"]) < minimum):
+            authority = None
+        if authority is not None:
+            approved.append(LiveL3Contribution(
+                asset_id=row["asset_id"],
+                watchlist_id=row["watchlist_id"],
+                profile_id=row["profile_id"],
+                profile_name=str(row["profile_name"]),
+                symbol=symbol,
+                alpha_score=float(authority["alpha_score"]) if authority.get("alpha_score") is not None else None,
+                current_price=float(authority["current_price"]) if authority.get("current_price") is not None else None,
+                refreshed_at=authority.get("evaluated_at"),
+                authorization=authority,
+            ))
             continue
         rejected.append({
             "symbol": symbol,
             "profile_id": row["profile_id"],
             "watchlist_id": row["watchlist_id"],
         })
-    return rejected
+    return approved, rejected
 
 
 async def load_recently_authorized_l3_shadows(

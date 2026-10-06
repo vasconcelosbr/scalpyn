@@ -2732,20 +2732,15 @@ async def get_watchlist_assets(
         # always empty. Gating this loop on ``assets`` silently hid every
         # authorized symbol regardless of how many valid authorizations
         # existed (2026-09-18 shadow-trade collapse fix, part 3).
+        # 2026-10-06: display classification by the LATEST L3 evaluation --
+        # a valid ALLOW is Approved whatever the outbox/consolidation state
+        # (each item keeps the strict ``executable`` flag). The same split
+        # feeds the Rejected tab, so the two tabs are complementary.
         from types import SimpleNamespace
-        contributions = [item for candidate in await load_live_l3_candidates(db, user_id=user_id)
-                         for item in candidate.contributors if item.watchlist_id == wl.id]
+        from ..services.pipeline_live_candidates import classify_live_l3_for_display
         floor_seconds = await _l3_public_visibility_floor_seconds(db, user_id)
-        if floor_seconds > 0:
-            try:
-                from ..services.pipeline_live_candidates import load_recently_authorized_l3_shadows
-                present_symbols = {item.symbol for item in contributions}
-                recent = await load_recently_authorized_l3_shadows(
-                    db, user_id=user_id, floor_seconds=floor_seconds, l3_watchlist_id=wl.id)
-                contributions.extend(item for item in recent if item.symbol not in present_symbols)
-            except Exception as exc:
-                logger.warning("[Pipeline] recent-L3-shadow visibility merge failed for %s: %s", wl.id, exc)
-                floor_seconds = 0
+        contributions, _ = await classify_live_l3_for_display(
+            db, user_id=user_id, l3_watchlist_id=wl.id, display_floor_seconds=floor_seconds)
         enriched, approved_items = [], []
         _asset_column_keys = [column.key for column in PipelineWatchlistAsset.__table__.columns]
         for contribution in contributions:
@@ -2771,7 +2766,8 @@ async def get_watchlist_assets(
         return {"assets": enriched, "approved_items": approved_items, "total": len(enriched),
                 "profile_indicators": _extract_profile_indicator_fields(profile_config),
                 "show_score": True, "market_mode": "spot", "is_futures": False,
-                "authorization_contract": "L3_PUBLIC_AUTHORIZATION_V1"}
+                "authorization_contract": "L3_PUBLIC_AUTHORIZATION_V1",
+                "display_classification": "L3_LATEST_EVALUATION_V1"}
 
     # Resolve dynamic columns from the profile's Score tab (selected_rule_ids).
     _global_rules_assets = await _load_user_score_rules(db, user_id)
@@ -3308,24 +3304,15 @@ async def _get_watchlist_rejections_payload(
         # (2026-09-18 shadow-trade collapse fix, part 3), without touching
         # or duplicating already-persisted symbols.
         from types import SimpleNamespace
-        from ..services.pipeline_live_candidates import load_live_l3_candidates, load_live_l3_rejections
+        from ..services.pipeline_live_candidates import classify_live_l3_for_display
         _persisted_symbols = {row.symbol for row in rows}
-        _live_rejected = await load_live_l3_rejections(db, user_id=user_id, l3_watchlist_id=wl.id)
         # Approved and Rejected are mutually exclusive and together cover the
-        # L2 parent (2026-10-05). Approved = live executable authorization
-        # plus the public visibility floor (same sources as get_watchlist_assets).
-        _approved_symbols = {
-            item.symbol for candidate in await load_live_l3_candidates(db, user_id=user_id)
-            for item in candidate.contributors if item.watchlist_id == wl.id
-        }
+        # L2 parent: one display classification (latest L3 evaluation) feeds
+        # both tabs (2026-10-06, same call as get_watchlist_assets).
         _floor_seconds = await _l3_public_visibility_floor_seconds(db, user_id)
-        if _floor_seconds > 0:
-            try:
-                from ..services.pipeline_live_candidates import load_recently_authorized_l3_shadows
-                _approved_symbols |= {item.symbol for item in await load_recently_authorized_l3_shadows(
-                    db, user_id=user_id, floor_seconds=_floor_seconds, l3_watchlist_id=wl.id)}
-            except Exception as exc:
-                logger.warning("[Pipeline] recent-L3-shadow exclusion failed for %s: %s", wl.id, exc)
+        _approved, _live_rejected = await classify_live_l3_for_display(
+            db, user_id=user_id, l3_watchlist_id=wl.id, display_floor_seconds=_floor_seconds)
+        _approved_symbols = {item.symbol for item in _approved}
         _l3_live_approved_count = len(_approved_symbols)
         rows = [row for row in rows if str(row.symbol).upper() not in _approved_symbols]
         _now = datetime.now(timezone.utc)

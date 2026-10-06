@@ -230,6 +230,14 @@ async def test_rejections_payload_excludes_symbols_shown_in_approved(monkeypatch
     monkeypatch.setattr("app.services.pipeline_live_candidates.load_live_l3_candidates", _fake_live_candidates)
     monkeypatch.setattr("app.services.pipeline_live_candidates.load_recently_authorized_l3_shadows", _fake_recent)
 
+    async def _fake_classify(_db, *, user_id, l3_watchlist_id, display_floor_seconds=None):
+        assert display_floor_seconds == 300
+        approved = [SimpleNamespace(symbol="BTC_USDT", watchlist_id=wl.id),
+                    SimpleNamespace(symbol="SOL_USDT", watchlist_id=wl.id)]
+        return approved, [{"symbol": "ETH_USDT", "profile_id": wl.profile_id, "watchlist_id": wl.id}]
+
+    monkeypatch.setattr("app.services.pipeline_live_candidates.classify_live_l3_for_display", _fake_classify)
+
     payload = await watchlists._get_watchlist_rejections_payload(wl, uuid4(), _Db())
 
     assert {item["symbol"] for item in payload["items"]} == {"ETH_USDT"}
@@ -327,6 +335,13 @@ async def test_rejections_payload_fills_gap_with_live_complement_for_l3_spot(mon
     )
     monkeypatch.setattr(
         "app.services.pipeline_live_candidates.load_live_l3_candidates", _fake_live_candidates
+    )
+
+    async def _fake_classify(_db, *, user_id, l3_watchlist_id, display_floor_seconds=None):
+        return [], await _fake_rejections(_db, user_id=user_id, l3_watchlist_id=l3_watchlist_id)
+
+    monkeypatch.setattr(
+        "app.services.pipeline_live_candidates.classify_live_l3_for_display", _fake_classify
     )
 
     payload = await watchlists._get_watchlist_rejections_payload(wl, user_id, _NoopDb())
