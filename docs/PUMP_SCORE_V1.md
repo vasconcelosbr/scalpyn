@@ -135,3 +135,44 @@ Seta de direção (`score_v1.direction`), só exibição: ▲ quando progresso 5
 - Regime: média de p no universo (≥ 10 ativos) < 0,45 → no máximo neutro; < 0,40 → desfavorável. Só piora o regime.
 
 Features: as 9 do contrato congelado (`pump_numeric_features_v1`). A versão com campos v1/perp/capital exige um novo contrato de features e coorte própria.
+
+**Primeiro treino (07/10 14:58 UTC, manual):** 15 min reprovado — AUC 0,538; Brier 0,379 contra 0,232 da taxa base; IC95 do ganho [−0,196; −0,093]; 103 episódios de teste. O modelo ficou pior que a taxa base com significância, padrão de calibração confiante e errada.
+
+## v1.7 — Contexto v1 no ML, calibração contida, métricas por horizonte (2026-10-07)
+
+**Variáveis de contexto (opcionais):** dicionário separado `pump_context_features_v1` (`CONTEXT_FEATURE_SPEC`), para não alterar o hash do contrato congelado que todas as observações já gravadas carregam. São 22 colunas (`pump_opportunity.research.context_features`):
+- estrutura v1 de 5 min (`v1_*`, 13 colunas);
+- perp da Gate (`perp_*`, 4 colunas);
+- regime de preço e fluxo de capital do universo (`ctx_breadth`, `ctx_ref_progress_atr`, `ctx_ref_ret_pct`, `ctx_capital_ratio`, `ctx_capital_z`).
+
+Regras:
+- Valor ausente entra como NaN, no treino e na inferência. Nunca é inventado e nunca elimina a linha. As 9 variáveis centrais continuam obrigatórias.
+- Nenhuma variável de contexto depende do próprio ML: usa o regime de preço, nunca o regime limitado pelo ML, e nunca o score v1.
+- Na inferência, o ciclo roda uma pré-avaliação do v1 sem ML, sobre uma cópia do estado, para que o modelo veja as mesmas células que as observações gravam. A função única `context_cells` serve às duas pontas.
+
+Disponibilidade, sem preenchimento retroativo (snapshot imutável):
+
+| Grupo | Gravado desde |
+|---|---|
+| `v1_*` | 05/10 (~18h UTC) |
+| `perp_*` | 07/10 (~13h30 UTC) |
+| `ctx_*` | deploy da v1.7 |
+
+O bloco de treino (o mais antigo) recebe essas variáveis por último, então o efeito delas aparece com dias de acúmulo. A janela de histórico é configurável: `research.lookback_days`, padrão 30.
+
+**Calibração:**
+- `research.calibration_pool = validation_and_calibration`: a validação nunca ajusta nem interrompe o modelo, então é fora da amostra também para a calibração. Isso dobra o bloco de calibração.
+- `research.calibration_method = platt_bounded`: a inclinação fica limitada a [0; `calibration_max_slope`=1] e o intercepto é reajustado.
+  - Inclinação acima de 1 amplificava a confiança do booster.
+  - Inclinação negativa (modelo invertido) vira a taxa base do bloco, em vez de uma probabilidade confiante e errada.
+- Cortes temporais configuráveis em `research.cohort_cuts = [0,5; 0,65; 0,8]`, antes fixos em (0,5; 0,7; 0,85): teste com 20 % do período, antes 15 %.
+- Modelos antigos, sem esses campos, continuam com Platt livre (`platt`).
+
+**Métricas novas por modelo:**
+- frequência de alta em cada bloco (treino, validação, calibração, teste);
+- probabilidade média no teste;
+- parâmetros da calibração, incluindo a inclinação antes do limite;
+- cobertura das variáveis de contexto por bloco;
+- importância por ganho.
+
+**Painel:** o chip "ML" agora abre a tabela de todos os horizontes treinados, servida por `GET /api/pump-monitor/ml/models`. Para cada um: status, AUC, Brier contra a base, alta no teste contra alta no treino, episódios, calibração e as variáveis mais usadas. O horizonte aplicado continua sendo `score_v1.ml.horizon_minutes`.

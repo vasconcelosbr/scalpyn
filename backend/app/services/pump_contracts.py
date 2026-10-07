@@ -10,6 +10,25 @@ FEATURE_SPEC={"version":"pump_numeric_features_v1","availability":"captured_by_d
         "rvol_strict":"volume_ratio","price_progress_atr":"atr_units","breakout_hold_ratio":"fraction_0_1",
         "price_extension_atr":"atr_units","upper_wick_ratio":"fraction_0_1","ask_depth_usdt_1pct":"USDT"}}
 
+# Optional context features (2026-10-07). Kept OUT of FEATURE_SPEC on purpose:
+# every stored observation manifest carries canonical_hash(FEATURE_SPEC), so
+# editing it would orphan the whole history. These cells are written by the
+# Pump Score v1 cycle (structure 5m, Gate perp contract_stats, universe regime
+# and USDT capital tide) and exist only in observations captured after each
+# producer shipped; absent values enter the model as missing (NaN), never as a
+# guess, and never gate row eligibility. None of them depends on the ML itself.
+CONTEXT_FEATURE_SPEC={"version":"pump_context_features_v1","availability":"captured_by_decision_optional_missing_as_nan",
+    "fields":{"v1_progress_atr":"atr5m_units","v1_rs_atr":"atr5m_units_vs_reference","v1_extension_atr":"atr5m_units",
+        "v1_efficiency_short":"fraction_0_1","v1_efficiency_long":"fraction_0_1","v1_consistency":"fraction_0_1",
+        "v1_higher_lows":"fraction_0_1","v1_concentration":"fraction_0_1","v1_wick":"fraction_0_1",
+        "v1_rvol_5m":"volume_ratio","v1_volume_spike_max":"volume_ratio","v1_compression_ratio":"range_ratio",
+        "v1_progress_1m_atr":"atr5m_units",
+        "perp_perp_flow_norm":"normalized_signed_flow","perp_oi_change_pct":"percent","perp_funding_rate":"rate_per_period",
+        "perp_short_liq_oi_bps":"bps_of_open_interest",
+        "ctx_breadth":"fraction_0_1_universe_progress_positive","ctx_ref_progress_atr":"atr5m_units_reference",
+        "ctx_ref_ret_pct":"percent_reference","ctx_capital_ratio":"net_over_gross_usdt_taker_flow",
+        "ctx_capital_z":"zscore_vs_ew_history"}}
+
 def gate_listing_record(pair,captured_at):
     """Only provider-declared nonzero trading starts certify this epoch.
 
@@ -48,6 +67,12 @@ def validate_manifest(spec):
     features=spec.get("features",[])
     if not features or len(features)!=len(set(features)) or any(f not in FEATURE_SPEC["fields"] for f in features):
         raise ValueError("Pump feature names must be unique and defined by the frozen dictionary")
+    context=spec.get("context_features",[])
+    if not isinstance(context,list) or len(context)!=len(set(context)) or set(context)&set(features) \
+            or any(f not in CONTEXT_FEATURE_SPEC["fields"] for f in context):
+        raise ValueError("Pump context features must be unique and defined by the context dictionary")
+    if context and spec.get("context_feature_spec_hash")!=canonical_hash(CONTEXT_FEATURE_SPEC):
+        raise ValueError("Pump context dictionary mismatch")
     if spec.get("feature_spec_hash")!=canonical_hash(FEATURE_SPEC):raise ValueError("Pump feature dictionary mismatch")
     cuts=spec.get("boundaries",[])
     if len(cuts)!=3 or not all(utc(a)<utc(b) for a,b in zip(cuts,cuts[1:])):raise ValueError("Strict temporal cuts required")

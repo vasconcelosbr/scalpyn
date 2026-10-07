@@ -59,6 +59,8 @@ def train_directional(rows, *, spec, output_root):
     if type(options['reliability_bins']) is not int or not 2 <= options['reliability_bins'] <= 20:
         raise ValueError('Bounded reliability bins required')
     features = spec['features']
+    context = list(spec.get('context_features') or [])
+    columns = model_columns(spec)
     keys = ('feature_spec_hash', 'label_spec_hash', 'cost_policy_hash', 'legacy_config_hash')
     expected = (spec['feature_spec_hash'], spec['label_spec_hash'], spec['cost_policy_hash'], spec['producer_config_hash'])
     usable = []
@@ -95,7 +97,12 @@ def train_directional(rows, *, spec, output_root):
     from sklearn.linear_model import LogisticRegression
     from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score, average_precision_score,balanced_accuracy_score
     def xy(c):
-        return np.array([[r['values'][f] for f in features] for r in c]), np.array([int(r['target']) for r in c])
+        # Core features are complete by eligibility; optional context is NaN when absent.
+        def cell(r, f):
+            v = (r.get('values') or {}).get(f)
+            return float(v) if eng.number(v) else np.nan
+        return (np.array([[cell(r, f) for f in columns] for r in c], dtype=float).reshape(len(c), len(columns)),
+                np.array([int(r['target']) for r in c]))
     x, y = xy(train); vx, vy = xy(val); cx, cy = xy(cal); tx, ty = xy(test)
     tw = np.array(episode_weights(train)); cw = np.array(episode_weights(cal)); ew = np.array(episode_weights(test))
     model = xgb.XGBClassifier(**{**spec['params'], 'n_jobs': spec['max_threads'], 'objective': 'binary:logistic'})
@@ -103,12 +110,19 @@ def train_directional(rows, *, spec, output_root):
     def logit(p):
         p = np.clip(p, 1e-6, 1-1e-6)
         return np.log(p/(1-p)).reshape(-1, 1)
-    calibration = LogisticRegression(C=options['calibration_C'], max_iter=options['calibration_max_iter'],
-                                     random_state=spec['params']['random_state'])
-    calibration.fit(logit(model.predict_proba(cx)[:, 1]), cy, sample_weight=cw)
-    p = calibration.predict_proba(logit(model.predict_proba(tx)[:, 1]))[:, 1]
+    pool = options.get('calibration_pool', 'calibration')
+    if pool == 'validation_and_calibration':
+        # Validation is never used to fit or stop the booster, so it is out-of-sample
+        # for calibration too; pooling doubles the calibration evidence.
+        kx = np.vstack([vx, cx]); ky = np.concatenate([vy, cy])
+        kw = np.concatenate([np.array(episode_weights(val)), cw])
+    else:
+        kx, ky, kw = cx, cy, cw
+    calibration_fit = fit_calibration(logit(model.predict_proba(kx)[:, 1]).ravel(), ky, kw, options,
+                                      spec['params']['random_state'])
+    p = apply_calibration(model.predict_proba(tx)[:, 1], calibration_fit)
     prior = float(np.average(y, weights=tw)); baseline = np.full(len(ty), prior)
-    calibration_prior=float(np.average(cy,weights=cw));recent_baseline=np.full(len(ty),calibration_prior)
+    calibration_prior=float(np.average(ky,weights=kw));recent_baseline=np.full(len(ty),calibration_prior)
     def measure(weights):
         return {'brier': float(brier_score_loss(ty, p, sample_weight=weights)),
                 'baseline_brier': float(brier_score_loss(ty, baseline, sample_weight=weights)),
@@ -152,6 +166,15 @@ def train_directional(rows, *, spec, output_root):
                'paired_episode_brier_improvement_vs_calibration_prior':float(recent_losses.mean()),
                'paired_episode_brier_ci95_vs_calibration_prior':np.quantile(recent_boot,[.025,.975]).tolist(),
                'test_predicted_up_observations':int(sum(p>=.5)),
+               'calibration': {k: calibration_fit[k] for k in ('method', 'pool', 'slope', 'intercept',
+                                                               'unbounded_slope', 'bounded')}
+                              | {'pool': pool, 'rows': int(len(ky))},
+               'cohort_up_frequency': [float(np.average(y, weights=tw)), float(np.average(vy, weights=episode_weights(val))),
+                                       float(np.average(cy, weights=cw)), float(np.average(ty, weights=ew))],
+               'test_mean_probability': float(np.average(p, weights=ew)),
+               'context_coverage': {name: {f: float(np.mean(~np.isnan(m[:, len(features)+i]))) for i, f in enumerate(context)}
+                                    for name, m in (('train', x), ('calibration', kx), ('test', tx))} if context else {},
+               'feature_importance_gain': _importance(model, columns),
                'interval_scope': 'conditional_on_test_period_not_independent_regimes',
                'applied_delta': 0, 'auto_promotion': False}
     versions={'xgboost':xgb.__version__,'numpy':np.__version__,'scikit_learn':sklearn.__version__}
@@ -164,12 +187,74 @@ def train_directional(rows, *, spec, output_root):
                 'status': 'challenger', 'auto_promotion': False, 'delta': 0,
                 'library_versions':versions,
                 'probability_event':'positive_endpoint_return_conditional_on_known_nonzero_endpoint',
-                'feature_bounds': {f: {'min': float(x[:, i].min()), 'max': float(x[:, i].max())} for i, f in enumerate(features)}}
-    calibrator = {'input': 'clipped_logit', 'clip': 1e-6, 'coef': calibration.coef_.tolist(),
-                  'intercept': calibration.intercept_.tolist()}
+                'feature_bounds': _bounds(x, columns)}
+    calibrator = {'input': 'clipped_logit', 'clip': 1e-6, 'coef': [[calibration_fit['slope']]],
+                  'intercept': [calibration_fit['intercept']], 'method': calibration_fit['method'], 'pool': pool}
     for name, data in [('manifest.json', manifest), ('calibrator.json', calibrator), ('metrics.json', metrics)]:
         (folder/name).write_text(json.dumps(data, sort_keys=True, allow_nan=False), encoding='utf-8')
     return {'manifest': manifest, 'metrics': metrics}
+
+
+def _bounds(x, columns):
+    """Training range per column; context columns use observed (non-NaN) values only."""
+    import numpy as np
+    out = {}
+    for i, f in enumerate(columns):
+        col = x[:, i][~np.isnan(x[:, i])]
+        out[f] = {'min': float(col.min()), 'max': float(col.max())} if col.size else None
+    return out
+
+
+def _importance(model, columns):
+    gain = model.get_booster().get_score(importance_type='total_gain')
+    total = sum(gain.values()) or 1.0
+    return {f: round(float(gain.get(f'f{i}', 0.0)) / total, 6) for i, f in enumerate(columns)}
+
+
+def fit_calibration(z, y, w, options, random_state):
+    """Platt scaling on the booster logit.
+
+    ``platt``: unconstrained logistic fit (the 07/10 behaviour).
+    ``platt_bounded``: slope clipped to [0, calibration_max_slope] with the
+    intercept refit for the clipped slope. A slope above 1 amplifies the
+    booster's confidence; a negative slope would invert it. Clipping to 0
+    degrades to the pooled base rate instead of a confidently wrong model.
+    """
+    import numpy as np
+    from sklearn.linear_model import LogisticRegression
+    reg = LogisticRegression(C=options['calibration_C'], max_iter=options['calibration_max_iter'],
+                             random_state=random_state)
+    reg.fit(z.reshape(-1, 1), y, sample_weight=w)
+    slope, intercept = float(reg.coef_[0][0]), float(reg.intercept_[0])
+    method = options.get('calibration_method', 'platt')
+    out = {'method': method, 'pool': options.get('calibration_pool', 'calibration'),
+           'unbounded_slope': slope, 'bounded': False}
+    if method == 'platt_bounded':
+        hi = float(options.get('calibration_max_slope', 1.0))
+        clipped = min(max(slope, 0.0), hi)
+        if clipped != slope:
+            # Newton steps on the intercept only (convex 1-D weighted log loss).
+            b = intercept
+            for _ in range(50):
+                q = 1 / (1 + np.exp(-np.clip(clipped * z + b, -700, 700)))
+                grad = float(np.sum(w * (q - y))); hess = float(np.sum(w * q * (1 - q))) + 1e-12
+                step = grad / hess; b -= step
+                if abs(step) < 1e-10: break
+            slope, intercept = clipped, float(b)
+            out['bounded'] = True
+    return {**out, 'slope': slope, 'intercept': intercept}
+
+
+def apply_calibration(raw, fit, clip=1e-6):
+    import numpy as np
+    p = np.clip(raw, clip, 1 - clip)
+    z = fit['slope'] * np.log(p / (1 - p)) + fit['intercept']
+    return 1 / (1 + np.exp(-np.clip(z, -700, 700)))
+
+
+def model_columns(spec):
+    """Booster column order: frozen core features, then optional context."""
+    return list(spec['features']) + [f for f in (spec.get('context_features') or []) if f not in spec['features']]
 
 
 def directional_preview(values, manifest, predict_up):
@@ -183,9 +268,11 @@ def directional_preview(values, manifest, predict_up):
     if any(not eng.number(values.get(f)) for f in spec['features']):
         return {**result, 'reason': 'missing_or_invalid_features'}
     bounds = manifest['feature_bounds']
-    if any(not bounds[f]['min'] <= values[f] <= bounds[f]['max'] for f in spec['features']):
+    columns = model_columns(spec)
+    present = [f for f in columns if eng.number(values.get(f))]
+    if any(bounds.get(f) is not None and not bounds[f]['min'] <= values[f] <= bounds[f]['max'] for f in present):
         return {**result, 'reason': 'outside_training_feature_range'}
-    p = predict_up([values[f] for f in spec['features']])
+    p = predict_up([float(values[f]) if eng.number(values.get(f)) else float('nan') for f in columns])
     if not eng.number(p) or not 0 <= p <= 1:
         return {**result, 'reason': 'invalid_model_output'}
     # Candidate values are visibly separated from any validated operational note.
@@ -193,7 +280,7 @@ def directional_preview(values, manifest, predict_up):
             'research_only': {'candidate_direction': 'up' if p > .5 else 'down' if p < .5 else 'undetermined',
                               'candidate_ordinal_score': 100*p, 'estimated_up_probability': p,
                               'score_semantics': 'research_scale_0_down_50_neutral_100_up_not_validated',
-                              'features_at_decision': {f: values[f] for f in spec['features']}}}
+                              'features_at_decision': {f: values.get(f) for f in model_columns(spec)}}}
 
 
 def load_directional_preview(values, folder):
@@ -219,8 +306,9 @@ def load_directional_preview(values, folder):
                         'probability_event':manifest.get('probability_event'),
                         'note':'Univariate range checks cannot certify support for every joint combination'}
     if 'research_only' in result:
-        vector=np.array([[values[f] for f in manifest['spec']['features']]])
+        columns=model_columns(manifest['spec'])
+        vector=np.array([[float(values[f]) if eng.number(values.get(f)) else np.nan for f in columns]])
         contribution=model.predict(xgb.DMatrix(vector),pred_contribs=True)[0]
-        result['research_only']['joint_model_contributions_log_odds']={f:float(contribution[i]) for i,f in enumerate(manifest['spec']['features'])}
+        result['research_only']['joint_model_contributions_log_odds']={f:float(contribution[i]) for i,f in enumerate(columns)}
         result['research_only']['explanation_scope']='conditional model contributions, not independent confirmations or causal effects'
     return result

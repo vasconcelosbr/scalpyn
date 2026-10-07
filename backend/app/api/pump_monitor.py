@@ -80,6 +80,19 @@ async def trigger_ml_training(user_id: UUID = Depends(get_current_user_id)):
             "note": "Resultado em GET /api/pump-monitor/opportunities/intelligence (training_runs)."}
 
 
+@router.get("/ml/models")
+async def ml_models(response: Response, db: AsyncSession = Depends(get_db),
+                    user_id: UUID = Depends(get_current_user_id)):
+    """Newest directional model per trained horizon, with test metrics and the quality gate."""
+    from ..services import pump_ml_inference
+    response.headers["Cache-Control"] = "private, no-store"
+    config = await svc.get_config(db, user_id)
+    try:
+        return await pump_ml_inference.models_summary(db, user_id, config["score_v1"])
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"ml_models_unavailable:{type(exc).__name__}")
+
+
 @router.get("/capital-flow/history")
 async def capital_flow_history(response: Response,
                                days: int = Query(7, ge=1, le=30),

@@ -54,7 +54,90 @@ const QUALITY_REASON: Record<string, string> = {
   too_few_test_episodes: "poucos episódios no teste",
 };
 
+type MlModelRow = {
+  horizon_minutes: number;
+  applied: boolean;
+  status: "approved" | "quality_gate_failed" | "no_recent_model";
+  experiment_id?: string;
+  created_at?: string;
+  quality?: { approved: boolean; reasons: string[]; auc: number | null; brier: number | null;
+    baseline_brier: number | null; brier_ci95?: number[] | null; test_episodes: number };
+  diagnostics?: {
+    test_up_frequency: number | null; train_up_frequency: number | null; calibration_up_frequency: number | null;
+    test_mean_probability: number | null; direction_accuracy: number | null;
+    cohort_rows: number[] | null; cohort_episodes: number[] | null; cohort_days: number[] | null;
+    calibration: { method: string; pool: string; slope: number; unbounded_slope: number; bounded: boolean; rows: number } | null;
+    features: number; context_features: number;
+    context_coverage_test: Record<string, number>;
+    top_features: [string, number][];
+  };
+};
+type MlModels = { enabled: boolean; applied_horizon_minutes: number; models: MlModelRow[]; note: string };
+
+const f3 = (v?: number | null) => (v === null || v === undefined ? "—" : v.toFixed(3));
+const pc = (v?: number | null) => (v === null || v === undefined ? "—" : `${(v * 100).toFixed(0)}%`);
+
+function MlModelsPanel({ data, error }: { data: MlModels | null; error: string }) {
+  if (error) return <div className={styles.error}>{error}</div>;
+  if (!data) return <div className={styles.muted}>Carregando modelos…</div>;
+  return (
+    <>
+      <div className={styles.heading}>Modelos por horizonte (teste fora da amostra)</div>
+      <div className={styles.mlTable} role="table">
+        <div className={styles.mlHead} role="row">
+          <span>Horizonte</span><span>Status</span><span>AUC</span><span>Brier / base</span>
+          <span>Alta teste / treino</span><span>Episódios</span>
+        </div>
+        {data.models.map(m => {
+          const q = m.quality; const d = m.diagnostics;
+          const ctxCov = d ? Object.values(d.context_coverage_test ?? {}) : [];
+          const avgCov = ctxCov.length ? ctxCov.reduce((a, b) => a + b, 0) / ctxCov.length : null;
+          return (
+            <div key={m.horizon_minutes} className={styles.mlBlock}>
+              <div className={styles.mlRow} role="row">
+                <span>{m.horizon_minutes} min{m.applied ? " ●" : ""}</span>
+                <span className={m.status === "approved" ? styles.inText : m.status === "no_recent_model" ? styles.muted : styles.outText}>
+                  {m.status === "approved" ? "Aprovado" : m.status === "no_recent_model" ? "Sem modelo" : "Reprovado"}
+                </span>
+                <span>{f3(q?.auc)}</span>
+                <span>{q ? `${f3(q.brier)} / ${f3(q.baseline_brier)}` : "—"}</span>
+                <span>{d ? `${pc(d.test_up_frequency)} / ${pc(d.train_up_frequency)}` : "—"}</span>
+                <span>{q?.test_episodes ?? "—"}</span>
+              </div>
+              {q && !q.approved && q.reasons.length > 0 && (
+                <div className={styles.muted}>Motivo: {q.reasons.map(r => QUALITY_REASON[r] ?? r).join(", ")}</div>
+              )}
+              {d && (
+                <div className={styles.muted}>
+                  Calibração {d.calibration?.method ?? "—"} ({d.calibration?.rows ?? "—"} linhas
+                  {d.calibration ? `, inclinação ${d.calibration.slope.toFixed(2)}${d.calibration.bounded ? ` limitada de ${d.calibration.unbounded_slope.toFixed(2)}` : ""}` : ""})
+                  {" · "}prob. média no teste {pc(d.test_mean_probability)}
+                  {" · "}{d.features}+{d.context_features} variáveis
+                  {avgCov !== null ? ` (contexto presente em ${pc(avgCov)} do teste)` : ""}
+                  {d.top_features?.length ? ` · mais usadas: ${d.top_features.slice(0, 4).map(([n]) => n).join(", ")}` : ""}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <div className={styles.muted}>● horizonte aplicado no v1. {data.note}</div>
+    </>
+  );
+}
+
 export function MlStatusChip({ ml }: { ml?: MlRegime | null }) {
+  const [open, setOpen] = useState(false);
+  const [models, setModels] = useState<MlModels | null>(null);
+  const [error, setError] = useState("");
+  const load = useCallback(async () => {
+    try {
+      setModels(await apiGet<MlModels>("/pump-monitor/ml/models"));
+      setError("");
+    } catch {
+      setError("Métricas dos modelos indisponíveis no momento.");
+    }
+  }, []);
   if (!ml) return null;
   const q = ml.model?.quality;
   const h = ml.model?.horizon_minutes ?? 15;
@@ -67,13 +150,19 @@ export function MlStatusChip({ ml }: { ml?: MlRegime | null }) {
     ml.active && ml.mean_up_probability != null ? `Média do universo: ${(ml.mean_up_probability * 100).toFixed(0)}% de alta (${ml.assets} ativos)${ml.cap ? ` → regime limitado a ${ml.cap}` : ""}` : "",
   ].filter(Boolean).join("\n");
   return (
-    <span className={`${styles.chip} ${styles.mlChip} ${ml.active ? styles.in : styles.flat}`} title={lines} data-testid="ml-status">
-      <span className={styles.label}>ML {h}m</span>
-      <strong>{ml.active ? "Ativo" : "Sem efeito"}</strong>
-      {ml.active && ml.mean_up_probability != null && (
-        <span className={styles.metric}>{(ml.mean_up_probability * 100).toFixed(0)}% alta</span>
-      )}
-    </span>
+    <div className={styles.wrap}>
+      <button type="button" className={`${styles.chip} ${styles.mlChip} ${ml.active ? styles.in : styles.flat}`}
+        title={lines} data-testid="ml-status" aria-expanded={open}
+        onClick={() => { if (!open) void load(); setOpen(v => !v); }}>
+        <span className={styles.label}>ML {h}m</span>
+        <strong>{ml.active ? "Ativo" : "Sem efeito"}</strong>
+        {ml.active && ml.mean_up_probability != null && (
+          <span className={styles.metric}>{(ml.mean_up_probability * 100).toFixed(0)}% alta</span>
+        )}
+        <HistoryIcon size={13} className={styles.historyIcon} />
+      </button>
+      {open && <div className={styles.panel}><MlModelsPanel data={models} error={error} /></div>}
+    </div>
   );
 }
 
