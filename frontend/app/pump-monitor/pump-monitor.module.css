@@ -29,6 +29,8 @@
 .red { color: #ff7a7a; }
 .gray { color: #5b6c86; }
 .score { font-weight: 800; }
+.arrow { display: inline-block; width: 14px; margin-right: 6px; font-size: 10px; opacity: .55; text-align: center; }
+.arrowStrong { opacity: 1; font-size: 12px; text-shadow: 0 0 6px currentColor; }
 .alert { display: inline-block; margin-left: 4px; padding: 1px 6px; border-radius: 999px; border: 1px solid #ce9d32; color: #f4bd3f; font-size: 9px; font-family: inherit; }
 .picker { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px; border-bottom: 1px solid #1c2c43; flex-shrink: 0; max-height: 40%; overflow: auto; }
 .empty { min-height: 200px; display: grid; place-items: center; text-align: center; padding: 28px; color: #8193ad; }

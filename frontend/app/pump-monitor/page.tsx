@@ -29,6 +29,7 @@ type Row = {
   only_rising: boolean;
   data_age_seconds: number | null;
   collection_error?: string;
+  direction?: { direction: "long" | "short" | "neutral"; strength: "forte" | "normal" | null; reason: string } | null;
 };
 type Spec = { group?: string; polarity?: string };
 type Response = {
@@ -114,6 +115,32 @@ function savePreset(columns: string[]) {
   } catch {
     /* per-viewer convenience only */
   }
+}
+
+const DIRECTION_REASON: Record<string, string> = {
+  perp_confirma: "perpétuo confirma (OI subindo, sem sinal de fragilidade)",
+  so_spot: "só o spot confirma (sem perpétuo ou perpétuo neutro)",
+  vendidos_abrindo: "vendidos abrindo posição no perpétuo (OI subindo, fluxo vendedor)",
+  sem_tendencia: "sem tendência clara",
+  sem_dados: "sem dados suficientes",
+};
+
+function DirectionArrow({ direction }: { direction?: Row["direction"] }) {
+  if (!direction || direction.direction === "neutral") {
+    return <span className={`${styles.arrow} ${styles.gray}`} title={`Direção: neutra — ${DIRECTION_REASON[direction?.reason ?? ""] ?? direction?.reason ?? "sem dado"}`}>•</span>;
+  }
+  const long = direction.direction === "long";
+  const strong = direction.strength === "forte";
+  const reason = direction.reason.startsWith("fragil:")
+    ? `alta frágil no perpétuo (${direction.reason.slice(7)})`
+    : DIRECTION_REASON[direction.reason] ?? direction.reason;
+  return (
+    <span className={`${styles.arrow} ${long ? styles.green : styles.red} ${strong ? styles.arrowStrong : ""}`}
+      title={`Direção: ${long ? "tendência de alta (long)" : "tendência de baixa (short)"}${strong ? " — forte" : ""}\n${reason}\nObservação: não é sinal de entrada.`}
+      data-testid="direction-arrow">
+      {long ? "▲" : "▼"}
+    </span>
+  );
 }
 
 export default function PumpMonitorPage() {
@@ -315,7 +342,9 @@ function LegacyPumpMonitorPage() {
               <tbody>
                 {data.rows.map(row => (
                   <tr key={row.symbol}>
-                    <td className={styles.symbol} title={row.collection_error ? `falha na coleta: ${row.collection_error}` : undefined}>{row.symbol}</td>
+                    <td className={styles.symbol} title={row.collection_error ? `falha na coleta: ${row.collection_error}` : undefined}>
+                      <DirectionArrow direction={row.direction} />{row.symbol}
+                    </td>
                     {grouped.flatMap(g => g.keys).map(k => {
                       const cell = row.indicators[k];
                       const color = cell?.color_state ? styles[cell.color_state] : "";
