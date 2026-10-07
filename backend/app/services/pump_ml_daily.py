@@ -139,19 +139,17 @@ async def run_directional_horizons(conn, owner, c, diagnostics, staging, start, 
     return results
 
 
-FORCE_MIN_INTERVAL_MINUTES = 60
-
-
-async def run_owner(conn, owner, *, horizons: List[int], force: bool = False) -> Dict[str, Any]:
+async def run_owner(conn, owner, *, horizons: List[int], force: bool = False,
+                    min_interval_minutes: int = 5) -> Dict[str, Any]:
     """``force`` (manual trigger) skips the one-run-per-UTC-day rule but never the
     singleton lock, and refuses while a run is in progress or one started less
-    than ``FORCE_MIN_INTERVAL_MINUTES`` ago."""
+    than ``min_interval_minutes`` ago (``score_v1.ml.training.manual_min_interval_minutes``)."""
     if not await conn.fetchval("SELECT pg_try_advisory_lock(hashtextextended($1,0))", f"pump_ml:{owner}"):
         return {"owner": str(owner), "status": "singleton_busy"}
     if force:
         prior = await conn.fetchval(
             "SELECT run_id FROM pump_ml_job_runs WHERE user_id=$1 AND (status='running' AND deadline_at>now() "
-            f"OR started_at>=now()-interval '{FORCE_MIN_INTERVAL_MINUTES} minutes') LIMIT 1", owner)
+            "OR started_at>=now()-make_interval(mins=>$2)) LIMIT 1", owner, int(min_interval_minutes))
         skip_status = "recent_run_exists"
     else:
         prior = await conn.fetchval(
@@ -268,7 +266,8 @@ async def run_daily(*, owner: str = None, force: bool = False) -> Dict[str, Any]
                 continue
             await conn.execute(f"SET statement_timeout = {int(training['statement_timeout_ms'])}")
             out[str(owner_id)] = await run_owner(conn, owner_id, horizons=[int(h) for h in training["horizons_minutes"]],
-                                                 force=force)
+                                                 force=force,
+                                                 min_interval_minutes=int(training.get("manual_min_interval_minutes", 5)))
         return out
     finally:
         await conn.close()
