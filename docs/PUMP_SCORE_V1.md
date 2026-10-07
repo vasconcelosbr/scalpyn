@@ -81,3 +81,21 @@ Os valores antigos estão gravados na config de produção (versão 28) e precis
 | Concentração 0,5 rígida para 6 candles com 3–4 altas | Limite 0,6 |
 
 Após isto, sem novos ajustes de limiar até haver dados acumulados (comparação v0 × v1 nos mesmos instantes).
+
+## v1.4 — Regime de capital (2026-10-07)
+
+Maré de capital do universo inteiro, medida pelo fluxo taker em USDT dos buckets de 1m já coletados da Gate (sem fornecedor externo). Não pontua ativo nenhum: mexe na barreira de entrada e pode limitar o regime de preço.
+
+| Item | Definição | Config (`score_v1.capital_flow`) |
+|---|---|---|
+| Janela | Últimos 15 min fechados, só pares `_USDT`, só buckets completos | `window_minutes`, `quote_suffix`, `exclude_symbols`, `min_coverage` (0,8) |
+| Medida | `ratio = (compra − venda) / (compra + venda)` em USDT | — |
+| Normalização | z-score do ratio contra média/variância exponenciais (meia-vida 1 dia) após 240 minutos; antes disso, limiares absolutos do ratio | `halflife_minutes`, `min_observations`, `z_levels`, `ratio_levels` |
+| Níveis | forte_entrada · entrada · neutro · saida · forte_saida; `desconhecido` sem cobertura (sem efeito) | — |
+| Efeito 1 | `enter_score` += delta (−5, −2, 0, +5, +10), limitado a [stay_score, 100] | `enter_score_delta` |
+| Efeito 2 | Teto do regime: forte_saida → no máximo desfavorável; saida → no máximo neutro. Nunca melhora o regime | `regime_cap` |
+| Histórico | Tabela `pump_capital_flow_1m` (um registro por minuto), retenção 30 dias; endpoint `GET /api/pump-monitor/capital-flow/history` com horas de maior entrada/saída e média por hora do dia | `history_retention_days` |
+
+Tela: indicador "Capital 15m" no cabeçalho do monitor clássico, com o efeito no v1 (regime e barreira de entrada) e o painel de histórico.
+
+Limiares e deltas são hipóteses iniciais. Validar com o histórico gravado: taxa de toque em +0,6 % em 10/15 min dos ativos listados, separada por nível de capital.
