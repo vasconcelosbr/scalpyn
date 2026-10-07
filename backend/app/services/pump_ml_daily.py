@@ -123,22 +123,36 @@ async def run_directional_horizons(conn, owner, c, diagnostics, staging, start, 
     return results
 
 
-async def run_owner(conn, owner, *, horizons: List[int]) -> Dict[str, Any]:
+FORCE_MIN_INTERVAL_MINUTES = 60
+
+
+async def run_owner(conn, owner, *, horizons: List[int], force: bool = False) -> Dict[str, Any]:
+    """``force`` (manual trigger) skips the one-run-per-UTC-day rule but never the
+    singleton lock, and refuses while a run is in progress or one started less
+    than ``FORCE_MIN_INTERVAL_MINUTES`` ago."""
     if not await conn.fetchval("SELECT pg_try_advisory_lock(hashtextextended($1,0))", f"pump_ml:{owner}"):
         return {"owner": str(owner), "status": "singleton_busy"}
-    prior = await conn.fetchval(
-        "SELECT run_id FROM pump_ml_job_runs WHERE user_id=$1 AND "
-        "started_at>=date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' LIMIT 1", owner)
+    if force:
+        prior = await conn.fetchval(
+            "SELECT run_id FROM pump_ml_job_runs WHERE user_id=$1 AND (status='running' AND deadline_at>now() "
+            f"OR started_at>=now()-interval '{FORCE_MIN_INTERVAL_MINUTES} minutes') LIMIT 1", owner)
+        skip_status = "recent_run_exists"
+    else:
+        prior = await conn.fetchval(
+            "SELECT run_id FROM pump_ml_job_runs WHERE user_id=$1 AND "
+            "started_at>=date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' LIMIT 1", owner)
+        skip_status = "daily_already_recorded"
     if prior:
         await conn.execute("SELECT pg_advisory_unlock(hashtextextended($1,0))", f"pump_ml:{owner}")
-        return {"owner": str(owner), "status": "daily_already_recorded", "run_id": str(prior)}
+        return {"owner": str(owner), "status": skip_status, "run_id": str(prior)}
     run_id = uuid4()
     start = datetime.now(timezone.utc)
     selection: Dict[str, Any] = {}
     await conn.execute(
         "INSERT INTO pump_ml_job_runs(run_id,user_id,deadline_at,status,payload) VALUES($1,$2,$3,'running',$4)",
         run_id, owner, start + timedelta(seconds=MAX_RUNTIME_SECONDS + 60),
-        {"runner": "celery", "threads": 1, "max_runtime_seconds": MAX_RUNTIME_SECONDS, "applied_delta": 0})
+        {"runner": "celery", "trigger": "manual" if force else "schedule", "threads": 1,
+         "max_runtime_seconds": MAX_RUNTIME_SECONDS, "applied_delta": 0})
     try:
         raw = await conn.fetchval(
             "SELECT config_json FROM config_profiles WHERE user_id=$1 AND config_type='pump_opportunity' "
@@ -191,7 +205,7 @@ async def run_owner(conn, owner, *, horizons: List[int]) -> Dict[str, Any]:
         outcome = {"status": "failed", "reason": type(exc).__name__, "detail": str(exc)[:300], "applied_delta": 0}
     finally:
         await conn.execute("SELECT pg_advisory_unlock(hashtextextended($1,0))", f"pump_ml:{owner}")
-    outcome.update(run_id=str(run_id), owner=str(owner), runner="celery",
+    outcome.update(run_id=str(run_id), owner=str(owner), runner="celery", trigger="manual" if force else "schedule",
                    source_commit=os.environ.get("RAILWAY_GIT_COMMIT_SHA") or os.environ.get("SOURCE_COMMIT", "local_test"),
                    duration_seconds=round((datetime.now(timezone.utc) - start).total_seconds(), 3),
                    selection=selection)
@@ -216,7 +230,7 @@ async def _training_spec(conn, owner) -> Dict[str, Any]:
     return eng.effective_config(stored)["score_v1"]["ml"]["training"]
 
 
-async def run_daily() -> Dict[str, Any]:
+async def run_daily(*, owner: str = None, force: bool = False) -> Dict[str, Any]:
     import asyncpg
     url = os.environ["DATABASE_URL"].replace("postgresql+asyncpg://", "postgresql://")
     out: Dict[str, Any] = {}
@@ -224,13 +238,19 @@ async def run_daily() -> Dict[str, Any]:
     for kind in ("json", "jsonb"):
         await conn.set_type_codec(kind, encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
     try:
-        for owner in await _owners(conn):
-            training = await _training_spec(conn, owner)
+        owners = await _owners(conn)
+        if owner is not None:
+            owners = [o for o in owners if str(o) == str(owner)]
+            if not owners:
+                return {str(owner): {"status": "skipped", "reason": "training_job_disabled_or_unknown_owner"}}
+        for owner_id in owners:
+            training = await _training_spec(conn, owner_id)
             if not training.get("enabled", True):
-                out[str(owner)] = {"status": "skipped", "reason": "score_v1.ml.training.enabled=false"}
+                out[str(owner_id)] = {"status": "skipped", "reason": "score_v1.ml.training.enabled=false"}
                 continue
             await conn.execute(f"SET statement_timeout = {int(training['statement_timeout_ms'])}")
-            out[str(owner)] = await run_owner(conn, owner, horizons=[int(h) for h in training["horizons_minutes"]])
+            out[str(owner_id)] = await run_owner(conn, owner_id, horizons=[int(h) for h in training["horizons_minutes"]],
+                                                 force=force)
         return out
     finally:
         await conn.close()
