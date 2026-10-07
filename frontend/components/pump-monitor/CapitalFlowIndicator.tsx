@@ -26,7 +26,8 @@ export type MlRegime = {
   mean_up_probability?: number | null;
   assets?: number;
   cap?: string | null;
-  model?: { experiment_id: string; created_at: string; horizon_minutes: number;
+  regime_effect?: string;
+  model?: { experiment_id?: string; created_at?: string; horizon_minutes: number; objective?: string;
     quality?: { approved: boolean; reasons: string[]; auc: number | null; brier: number | null;
       baseline_brier: number | null; test_episodes: number } } | null;
 };
@@ -72,7 +73,7 @@ type MlModelRow = {
     top_features: [string, number][];
   };
 };
-type MlModels = { enabled: boolean; applied_horizon_minutes: number; models: MlModelRow[]; note: string };
+type MlModels = { enabled: boolean; applied_horizon_minutes: number; objective?: string; models: MlModelRow[]; note: string };
 
 const f3 = (v?: number | null) => (v === null || v === undefined ? "—" : v.toFixed(3));
 const pc = (v?: number | null) => (v === null || v === undefined ? "—" : `${(v * 100).toFixed(0)}%`);
@@ -82,11 +83,13 @@ function MlModelsPanel({ data, error }: { data: MlModels | null; error: string }
   if (!data) return <div className={styles.muted}>Carregando modelos…</div>;
   return (
     <>
-      <div className={styles.heading}>Modelos por horizonte (teste fora da amostra)</div>
+      <div className={styles.heading}>
+        Modelos por horizonte (teste fora da amostra) · {data.objective === "pump_endpoint_direction_v1" ? "direção absoluta" : "acima do mercado (ajustado por beta)"}
+      </div>
       <div className={styles.mlTable} role="table">
         <div className={styles.mlHead} role="row">
           <span>Horizonte</span><span>Status</span><span>AUC</span><span>Brier / base</span>
-          <span>Alta teste / treino</span><span>Episódios</span>
+          <span>{data.objective === "pump_endpoint_direction_v1" ? "Alta teste / treino" : "Acima teste / treino"}</span><span>Episódios</span>
         </div>
         {data.models.map(m => {
           const q = m.quality; const d = m.diagnostics;
@@ -141,13 +144,18 @@ export function MlStatusChip({ ml }: { ml?: MlRegime | null }) {
   if (!ml) return null;
   const q = ml.model?.quality;
   const h = ml.model?.horizon_minutes ?? 15;
+  const relative = (ml.model?.objective ?? "pump_relative_direction_v1") === "pump_relative_direction_v1";
   const lines = [
-    `XGBoost — probabilidade de o preço terminar acima em ${h} min (direção, sem alvo de %).`,
-    ml.active ? "Ativo: ajusta score (±15%), seta de direção e regime." : `Sem efeito: ${ML_REASON[ml.reason ?? ""] ?? ml.reason ?? "—"}`,
+    relative
+      ? `XGBoost — probabilidade de o ativo terminar acima do mercado em ${h} min (retorno descontado do beta × mediana do universo, sem alvo de %).`
+      : `XGBoost — probabilidade de o preço terminar acima em ${h} min (direção absoluta, sem alvo de %).`,
+    ml.active
+      ? (relative ? "Ativo: ajusta score (±15%) e confirma a seta; regime não é afetado (objetivo relativo)." : "Ativo: ajusta score (±15%), seta de direção e regime.")
+      : `Sem efeito: ${ML_REASON[ml.reason ?? ""] ?? ml.reason ?? "—"}`,
     q ? `Teste fora da amostra: AUC ${q.auc?.toFixed(3) ?? "—"} · Brier ${q.brier?.toFixed(4) ?? "—"} vs base ${q.baseline_brier?.toFixed(4) ?? "—"} · ${q.test_episodes} episódios` : "",
     q && !q.approved ? `Reprovado: ${q.reasons.map(r => QUALITY_REASON[r] ?? r).join(", ")}` : "",
-    ml.model ? `Modelo de ${new Date(ml.model.created_at).toLocaleString("pt-BR")}` : "",
-    ml.active && ml.mean_up_probability != null ? `Média do universo: ${(ml.mean_up_probability * 100).toFixed(0)}% de alta (${ml.assets} ativos)${ml.cap ? ` → regime limitado a ${ml.cap}` : ""}` : "",
+    ml.model?.created_at ? `Modelo de ${new Date(ml.model.created_at).toLocaleString("pt-BR")}` : "",
+    ml.active && !relative && ml.mean_up_probability != null ? `Média do universo: ${(ml.mean_up_probability * 100).toFixed(0)}% de alta (${ml.assets} ativos)${ml.cap ? ` → regime limitado a ${ml.cap}` : ""}` : "",
   ].filter(Boolean).join("\n");
   return (
     <div className={styles.wrap}>
@@ -156,7 +164,7 @@ export function MlStatusChip({ ml }: { ml?: MlRegime | null }) {
         onClick={() => { if (!open) void load(); setOpen(v => !v); }}>
         <span className={styles.label}>ML {h}m</span>
         <strong>{ml.active ? "Ativo" : "Sem efeito"}</strong>
-        {ml.active && ml.mean_up_probability != null && (
+        {ml.active && !relative && ml.mean_up_probability != null && (
           <span className={styles.metric}>{(ml.mean_up_probability * 100).toFixed(0)}% alta</span>
         )}
         <HistoryIcon size={13} className={styles.historyIcon} />

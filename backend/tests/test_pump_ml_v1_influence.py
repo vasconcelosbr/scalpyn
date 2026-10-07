@@ -88,7 +88,7 @@ def test_inactive_ml_has_zero_effect():
 
 def test_active_ml_caps_regime_and_reports_probability():
     rows = [{"symbol": f"S{i}_USDT", "indicators": {}} for i in range(12)]
-    out = v1.evaluate_universe(rows, {}, None, {}, minute_ms=60_000, spec=spec(),
+    out = v1.evaluate_universe(rows, {}, None, {}, minute_ms=60_000, spec=spec(objective="absolute"),
                                ml={"active": True, "probabilities": {r["symbol"]: 0.35 for r in rows}})
     assert out["regime"]["ml"]["cap"] == "desfavoravel"
     assert out["results"]["S0_USDT"]["ml_up_probability"] == 0.35
@@ -174,7 +174,7 @@ def test_load_model_gates_newest_and_caches(monkeypatch, tmp_path):
     files = {n: (folder / n).read_bytes() for n in ("xgboost.json", "calibrator.json")}
     calls = {"n": 0}
 
-    async def fetch(db, user_id, horizon, max_age_days):
+    async def fetch(db, user_id, horizon, max_age_days, **_):
         calls["n"] += 1
         return {"experiment_id": "x", "created_at": created, "manifest": result["manifest"],
                 "metrics": metrics}, files

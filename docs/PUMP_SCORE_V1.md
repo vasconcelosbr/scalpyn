@@ -176,3 +176,38 @@ O bloco de treino (o mais antigo) recebe essas variáveis por último, então o 
 - importância por ganho.
 
 **Painel:** o chip "ML" agora abre a tabela de todos os horizontes treinados, servida por `GET /api/pump-monitor/ml/models`. Para cada um: status, AUC, Brier contra a base, alta no teste contra alta no treino, episódios, calibração e as variáveis mais usadas. O horizonte aplicado continua sendo `score_v1.ml.horizon_minutes`.
+
+**Retreino com a v1.7 (07/10 16:22 UTC):**
+- 10 min: AUC 0,500. A calibração zerou a inclinação, que tinha saído −0,068, ou seja, o modelo estava invertido.
+- 15 min: AUC 0,470.
+- Ambos reprovados.
+- A frequência de alta por bloco no 15 min foi [0,60; 0,73; 0,74; 0,41]. A direção absoluta em 10 a 15 min é dominada pela maré do dia.
+
+## v1.8 — Objetivo relativo ao mercado, ajustado por beta (2026-10-07)
+
+**Pergunta do modelo:** "este ativo vai terminar o horizonte acima do mercado?". Continua sendo direção, sem alvo de %. Objetivo `pump_relative_direction_v1`; `score_v1.ml.objective = relative` é o padrão e `absolute` mantém o comportamento anterior. Os dois objetivos nunca se misturam na inferência.
+
+**Rótulo:**
+1. `r_i` = retorno do ativo até o fim do horizonte, referenciado no **mid** (mid = ask / (1 + spread/200)). O rótulo gravado usa o melhor ask, que embute cerca de meio spread de perda e cresce com a iliquidez. Sem essa correção, o modelo aprenderia o spread.
+2. `β_i` = inclinação MQO dos retornos de 5 min do ativo contra a mediana do universo, nas 288 velas fechadas **antes** da decisão (`ohlcv`, Gate preferida; mínimo de 200 pontos).
+3. `e_i = r_i − β_i · mediana(r)`. O rótulo é `e_i > mediana(e)` no mesmo minuto, considerando todos os ativos rotulados naquele minuto. Empate exato é excluído, e o minuto precisa de pelo menos 10 ativos (`research.relative_min_assets`).
+
+**Por que o beta (velas de 5 min da Gate, universo atual de 50 ativos, 01/10 22:00 a 07/10):** nos minutos claramente direcionais (|mediana| ≥ 0,3 %), a mediana entre ativos de |P(supera | mercado cai) − P(supera | mercado sobe)| é:
+
+| Rótulo | Diferença mediana |
+|---|---|
+| relativo simples | 0,553 |
+| normalizado por volatilidade | 0,338 |
+| resíduo com beta | 0,111 |
+
+No rótulo simples, RLUSD e TRX superam o mercado em 100 % das quedas e em 0 % das altas.
+
+**Efeitos no v1 com modelo aprovado:**
+- score × [0,85; 1,15];
+- confirma ou rebaixa a seta, sem nunca inverter;
+- **sem efeito no regime**: a média das probabilidades relativas fica perto de 0,5 por construção. O regime continua com preço e capital.
+
+Config:
+- `research.target_mode` (`relative_universe_median` | `absolute`);
+- `research.relative_min_assets`;
+- `research.relative_beta` = `{enabled, timeframe, window_candles, min_points}`.

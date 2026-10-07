@@ -70,6 +70,7 @@ def prepare(rows, selection=None, *, features, cuts=(.5, .7, .85)):
 
 
 def prepare_directional(rows, horizon, research, selection):
+    from .pump_directional_research import target_contract
     if len(rows) < research["min_rows_per_horizon"]:
         raise ValueError("insufficient_directional_rows")
     spec = prepare(rows, selection, features=research["features"], cuts=tuple(research["cohort_cuts"]))
@@ -79,9 +80,9 @@ def prepare_directional(rows, horizon, research, selection):
                 context_feature_spec_hash=canonical_hash(CONTEXT_FEATURE_SPEC) if context else None,
                 cohort_cuts=list(research["cohort_cuts"]),
                 min_days=research["min_days"], min_instruments=research["min_instruments"], params=research["params"],
-                directional_target={"version": "pump_endpoint_direction_v1", "horizon_minutes": horizon,
-                                    "reference_policy": "gate_best_ask_v1", "flat_policy": "exclude_exact_zero",
-                                    "unknown_policy": "exclude", "return_policy": "endpoint_gross"},
+                directional_target=target_contract(horizon, research.get("target_mode") == "relative_universe_median",
+                                                   int(research.get("relative_min_assets") or 10),
+                                                   bool((research.get("relative_beta") or {}).get("enabled"))),
                 directional_evaluation={k: research[k] for k in ("bootstrap_repetitions", "reliability_bins",
                                                                   "calibration_C", "calibration_max_iter",
                                                                   "calibration_method", "calibration_pool",
@@ -113,7 +114,9 @@ async def run_directional_horizons(conn, owner, c, diagnostics, staging, start, 
             conn, owner, research["features"], canonical_hash(FEATURE_SPEC), quota, diagnostic,
             bins=research["temporal_bins"], horizon_minutes=h,
             extra_features=list(research.get("context_features") or []),
-            lookback_days=int(research.get("lookback_days") or 30))
+            lookback_days=int(research.get("lookback_days") or 30),
+            benchmark=research.get("target_mode") == "relative_universe_median",
+            beta=research.get("relative_beta") if (research.get("relative_beta") or {}).get("enabled") else None)
         if not contract:
             raise ValueError("no_certified_point_in_time_listing_cohort")
         try:
@@ -198,7 +201,9 @@ async def run_owner(conn, owner, *, horizons: List[int], force: bool = False) ->
                                 "VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING",
                                 experiment, f"{manifest['artifact_namespace']}/{name}",
                                 hashlib.sha256(content).hexdigest(), content)
-        outcome = {"status": "challenger" if results else "blocked", "objective": "endpoint_direction_v1",
+        outcome = {"status": "challenger" if results else "blocked",
+                   "objective": "relative_direction_v1" if (c.get("research") or {}).get("target_mode") == "relative_universe_median"
+                   else "endpoint_direction_v1",
                    "reason": None if results else "no_horizon_with_sufficient_directional_support",
                    "experiments": [{"experiment_id": str(uuid5(NAMESPACE_URL,
                                                                f"pump_registry:{owner}:{r['manifest']['experiment_id']}")),
