@@ -78,6 +78,29 @@ DEFAULT_V1: Dict[str, Any] = {
         "regime_cap": {"forte_saida": "desfavoravel", "saida": "neutro"},
         "history_retention_days": 30,
     },
+    # Spot × perpetual (v1.5): who drives the move and with what money, from Gate
+    # futures ``contract_stats`` (5m). A "fragile" up-move (perp-led, hot funding,
+    # short squeeze, OI unwinding) fails the derivatives gate. No perpetual or stale
+    # data → the gate passes (``missing_policy``): absence never penalises.
+    "derivatives": {
+        "enabled": True,
+        "interval": "5m",
+        "window_intervals": 3,          # 15 min, same window as the spot flow
+        "max_age_seconds": 900,
+        "missing_policy": "pass",
+        "lead_margin": 0.15,            # perp flow above spot flow by this → perp-led
+        "spot_flow_max_for_perp_led": 0.05,
+        "funding_hot": 0.0005,          # 0.05 % per funding period
+        "squeeze_short_liq_oi_bps": 10.0,  # short liquidations / OI over the window, in bps
+        "oi_drop_pct": -1.0,
+        "block_flags_min": 1,
+    },
+    # Per-asset direction arrow (display + ledger, never an order): ▲ long bias,
+    # ▼ short/bearish bias from 5m progress + spot flow; "forte" when the perp confirms.
+    "direction": {
+        "progress_min_atr": 0.25,
+        "flow_min": 0.0,
+    },
     "gates": {
         "progress_atr_min": 0.25,
         "window_delta_norm_min": -0.1,  # flow must not be net selling (tiny noise tolerated)
@@ -189,6 +212,16 @@ def validate(spec: Dict[str, Any], errors: List[str]) -> None:
                 errors.append("score_v1.capital_flow.regime_cap: level -> favoravel|neutro|desfavoravel")
         if int(cf["history_retention_days"]) < 1:
             errors.append("score_v1.capital_flow.history_retention_days must be >= 1")
+    dv = spec.get("derivatives") or {}
+    if dv:
+        if int(dv["window_intervals"]) < 1 or int(dv["max_age_seconds"]) < 60:
+            errors.append("score_v1.derivatives: window_intervals >= 1 and max_age_seconds >= 60")
+        if dv["missing_policy"] not in ("pass", "fail"):
+            errors.append("score_v1.derivatives.missing_policy must be pass|fail")
+        if dv["interval"] not in _TF_MS or int(dv["block_flags_min"]) < 1:
+            errors.append(f"score_v1.derivatives: interval in {sorted(_TF_MS)} and block_flags_min >= 1")
+    if float((spec.get("direction") or {}).get("progress_min_atr", 0)) < 0:
+        errors.append("score_v1.direction.progress_min_atr must be >= 0")
     norm = spec["normalization"]
     if norm["mode"] not in ("asset_adaptive", "absolute"):
         errors.append("score_v1.normalization.mode must be asset_adaptive|absolute")
@@ -380,6 +413,80 @@ def effective_stability(spec: Dict[str, Any], capital: Optional[Dict[str, Any]])
     return {**spec, "stability": st}
 
 
+def derivative_metrics(stats: Optional[Sequence[Dict[str, Any]]], spec: Dict[str, Any], now_ms: int) -> Dict[str, Any]:
+    """Perp context from Gate ``contract_stats`` rows (oldest first, ``time`` in seconds)."""
+    d = spec.get("derivatives") or {}
+    if not d.get("enabled"):
+        return {"available": False, "reason": "disabled"}
+    if stats is None:
+        return {"available": False, "reason": "no_data"}
+    rows = sorted([r for r in (stats or []) if _finite(r.get("time")) is not None], key=lambda r: float(r["time"]))
+    if not rows:
+        return {"available": False, "reason": "no_perpetual"}
+    last_ms = float(rows[-1]["time"]) * 1000
+    if now_ms - last_ms > int(d["max_age_seconds"]) * 1000:
+        return {"available": False, "reason": "stale"}
+    n = int(d["window_intervals"])
+    win = rows[-n:]
+    longs = sum(_finite(r.get("long_taker_size")) or 0.0 for r in win)
+    shorts = sum(_finite(r.get("short_taker_size")) or 0.0 for r in win)
+    oi = [_finite(r.get("open_interest_usd")) for r in rows[-(n + 1):]]
+    oi_first, oi_last = oi[0], oi[-1]
+    short_liq = sum(_finite(r.get("short_liq_usd")) or 0.0 for r in win)
+    long_liq = sum(_finite(r.get("long_liq_usd")) or 0.0 for r in win)
+    oi_change = ((oi_last - oi_first) / oi_first * 100.0) if oi_first and oi_last is not None and len(oi) > 1 else None
+    return {
+        "available": True, "reason": None, "intervals": len(win),
+        "perp_flow_norm": round((longs - shorts) / (longs + shorts), 5) if longs + shorts > 0 else None,
+        "oi_usd": oi_last, "oi_change_pct": round(oi_change, 4) if oi_change is not None else None,
+        "funding_rate": _finite(rows[-1].get("last_funding_rate")),
+        "short_liq_usd": round(short_liq, 2), "long_liq_usd": round(long_liq, 2),
+        "short_liq_oi_bps": round(short_liq / oi_last * 10_000, 3) if oi_last else None,
+        "lsr_taker": _finite(rows[-1].get("lsr_taker")),
+    }
+
+
+def derivative_flags(v: Dict[str, Any], deriv: Dict[str, Any], spec: Dict[str, Any]) -> List[str]:
+    """Fragility of an UP move only (a falling asset is already rejected elsewhere)."""
+    if not deriv.get("available") or (v.get("progress_atr") or 0) <= 0:
+        return []
+    d = spec["derivatives"]
+    flags = []
+    spot, perp = v.get("window_delta_norm"), deriv.get("perp_flow_norm")
+    if spot is not None and perp is not None and perp - spot >= float(d["lead_margin"]) \
+            and spot <= float(d["spot_flow_max_for_perp_led"]):
+        flags.append("perp_led")
+    funding = deriv.get("funding_rate")
+    if funding is not None and funding >= float(d["funding_hot"]):
+        flags.append("funding_hot")
+    oi_change = deriv.get("oi_change_pct")
+    bps = deriv.get("short_liq_oi_bps")
+    if bps is not None and bps >= float(d["squeeze_short_liq_oi_bps"]) and (oi_change is None or oi_change <= 0):
+        flags.append("short_squeeze")
+    if oi_change is not None and oi_change <= float(d["oi_drop_pct"]):
+        flags.append("oi_unwinding")
+    return flags
+
+
+def direction_signal(v: Dict[str, Any], deriv: Dict[str, Any], flags: List[str], spec: Dict[str, Any]) -> Dict[str, Any]:
+    """▲ long / ▼ short / neutral bias for display. Never an order (spot cannot short)."""
+    cfg = spec.get("direction") or {}
+    pm, fmin = float(cfg.get("progress_min_atr", 0.25)), float(cfg.get("flow_min", 0.0))
+    progress, flow, cvd = v.get("progress_atr"), v.get("window_delta_norm"), v.get("cvd_slope")
+    if None in (progress, flow, cvd):
+        return {"direction": "neutral", "strength": None, "reason": "sem_dados"}
+    perp, oi = deriv.get("perp_flow_norm"), deriv.get("oi_change_pct")
+    if progress >= pm and flow > fmin and cvd > 0:
+        strong = bool(deriv.get("available") and not flags and oi is not None and oi > 0 and (perp or 0) >= 0)
+        return {"direction": "long", "strength": "forte" if strong else "normal",
+                "reason": "perp_confirma" if strong else ("fragil:" + ",".join(flags) if flags else "so_spot")}
+    if progress <= -pm and flow < -fmin and cvd < 0:
+        strong = bool(deriv.get("available") and oi is not None and oi > 0 and perp is not None and perp < 0)
+        return {"direction": "short", "strength": "forte" if strong else "normal",
+                "reason": "vendidos_abrindo" if strong else "so_spot"}
+    return {"direction": "neutral", "strength": None, "reason": "sem_tendencia"}
+
+
 def relative_strength_atr(ret_pct: Optional[float], ref_ret_pct: Optional[float], atr_pct: Optional[float],
                           beta: float) -> Optional[float]:
     if None in (ret_pct, ref_ret_pct, atr_pct) or not atr_pct:
@@ -393,7 +500,8 @@ def _gate(name: str, value: Optional[float], ok: Optional[bool]) -> Dict[str, An
     return {"gate": name, "value": value, "result": ok, "reason": None if ok is not None else "missing_input"}
 
 
-def evaluate_gates(v: Dict[str, Any], regime_state: str, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+def evaluate_gates(v: Dict[str, Any], regime_state: str, spec: Dict[str, Any],
+                   deriv: Optional[Dict[str, Any]] = None, flags: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     g, r = spec["gates"], spec["regime"]
 
     def cmp(value, fn):
@@ -435,6 +543,16 @@ def evaluate_gates(v: Dict[str, Any], regime_state: str, spec: Dict[str, Any]) -
     else:
         regime_ok = None
     gates.append(_gate(f"regime:{regime_state}", rs, regime_ok))
+    d = spec.get("derivatives") or {}
+    if d.get("enabled") and deriv is not None:
+        if deriv.get("available"):
+            gates.append({"gate": "derivatives_healthy", "value": len(flags or []),
+                          "result": len(flags or []) < int(d["block_flags_min"]),
+                          "reason": ",".join(flags) if flags else None})
+        else:
+            ok = d.get("missing_policy", "pass") == "pass"
+            gates.append({"gate": "derivatives_healthy", "value": None, "result": ok,
+                          "reason": f"no_data:{deriv.get('reason')}"})
     return gates
 
 
@@ -581,7 +699,9 @@ def step_state(prev: Optional[Dict[str, Any]], *, condition: str, gates_ok: bool
 def evaluate_universe(rows: List[Dict[str, Any]], structures: Dict[str, Dict[str, Any]],
                       reference: Optional[Dict[str, Any]], state: Dict[str, Any], *,
                       minute_ms: int, spec: Dict[str, Any],
-                      capital_minutes: Optional[Sequence[Dict[str, Any]]] = None) -> Dict[str, Any]:
+                      capital_minutes: Optional[Sequence[Dict[str, Any]]] = None,
+                      derivatives: Optional[Dict[str, Sequence[Dict[str, Any]]]] = None,
+                      now_ms: Optional[int] = None) -> Dict[str, Any]:
     """Evaluate v1 for every row, mutate ``state`` (per-symbol stats + stability).
 
     Returns ``{"regime": ..., "results": {symbol: result}}``. Rows are only read.
@@ -622,8 +742,12 @@ def evaluate_universe(rows: List[Dict[str, Any]], structures: Dict[str, Dict[str
         }
         v["rs_atr"] = relative_strength_atr(v["ret_pct"], reg.get("reference_ret_pct"), v["atr_pct"],
                                             float(spec["regime"]["beta"]))
-        gates = evaluate_gates(v, reg["state"], spec)
+        deriv = (derivative_metrics((derivatives or {}).get(symbol), spec, now_ms if now_ms is not None else minute_ms)
+                 if derivatives is not None else {"available": False, "reason": "not_collected"})
+        flags = derivative_flags(v, deriv, spec)
+        gates = evaluate_gates(v, reg["state"], spec, deriv if derivatives is not None else None, flags)
         condition = classify(v, gates, spec)
+        direction = direction_signal(v, deriv, flags, spec)
         gates_ok = condition == "subindo"
         stats = stats_all.get(symbol) or {}
         strength = strength_score(v, stats, spec) if gates_ok else {"score": None, "reason": f"condition:{condition}",
@@ -643,6 +767,7 @@ def evaluate_universe(rows: List[Dict[str, Any]], structures: Dict[str, Dict[str
             "reason": None if listed else f"{stab['state']}:{condition}",
             "gates": gates, "values": v, "structure_reason": st.get("reason"),
             "strength": strength.get("ledger"), "stability": stab, "fast_exit": fast_exit,
+            "derivatives": {**deriv, "flags": flags}, "direction": direction,
         }
     known = set(results)
     for symbol in list(stab_all):
@@ -671,4 +796,12 @@ def display_components(result: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         out[f"bloco:{name}"] = {"value": value, "contribution": (ledger.get("weights") or {}).get(name)}
     for name, value in (ledger.get("penalties") or {}).items():
         out[f"penalidade:{name}"] = {"value": value, "contribution": None}
+    direction = result.get("direction") or {}
+    if direction:
+        out["direção"] = {"value": direction.get("direction"), "contribution": direction.get("strength"),
+                          "reason": direction.get("reason")}
+    deriv = result.get("derivatives") or {}
+    if deriv.get("available"):
+        for key in ("perp_flow_norm", "oi_change_pct", "funding_rate", "short_liq_oi_bps"):
+            out[f"perp:{key}"] = {"value": deriv.get(key), "contribution": None}
     return out

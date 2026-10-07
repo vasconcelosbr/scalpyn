@@ -307,6 +307,81 @@ async def capital_flow_history(db, user_id, *, days: int, top: int, tz_offset_mi
             "note": "ratio = (compra − venda) / (compra + venda) a mercado em USDT do universo; horas com >= 30 min de dado"}
 
 
+# ── Spot × perpetual context (v1.5) ──────────────────────────────────────────
+
+GATE_FUTURES_URL = "https://api.gateio.ws/api/v4/futures/usdt"
+_PERPS_KEY = "pump_monitor:perp_contracts"
+_PERP_STATS_KEY = "pump_monitor:perp_stats:{symbol}"
+
+
+async def _perp_contracts(redis, client) -> Optional[set]:
+    """Active USDT perpetual names, cached for a day (one public call)."""
+    cached = await _read_json(redis, _PERPS_KEY)
+    if cached and isinstance(cached.get("names"), list):
+        return set(cached["names"])
+    resp = await client.get(f"{GATE_FUTURES_URL}/contracts")
+    resp.raise_for_status()
+    names = sorted(c["name"] for c in resp.json() if c.get("name") and not c.get("in_delisting"))
+    if redis is not None and names:
+        try:
+            await redis.set(_PERPS_KEY, json.dumps({"names": names}), ex=86_400)
+        except Exception as exc:
+            logger.warning("[PUMP-PERP] contract cache write failed: %s", exc)
+    return set(names)
+
+
+async def load_derivatives(symbols: List[str], spec: Dict[str, Any], now_ms: int,
+                           concurrency: int) -> Dict[str, Optional[List[Dict[str, Any]]]]:
+    """``{symbol: contract_stats rows}``: ``[]`` = no perpetual, ``None`` = fetch failed.
+
+    One Gate call per perpetual per closed interval; between interval closes the
+    Redis copy is reused, so the 30 s cycle does not multiply requests."""
+    import httpx
+    d = spec.get("derivatives") or {}
+    if not d.get("enabled") or not symbols:
+        return {}
+    interval = str(d["interval"])
+    slot_ms = (now_ms // v1._TF_MS[interval]) * v1._TF_MS[interval]
+    limit = int(d["window_intervals"]) + 1
+    redis = await _redis()
+    out: Dict[str, Optional[List[Dict[str, Any]]]] = {}
+    async with httpx.AsyncClient(timeout=10) as client:
+        perps = await _perp_contracts(redis, client)
+        semaphore = asyncio.Semaphore(max(1, concurrency))
+
+        async def _one(symbol):
+            if symbol not in perps:
+                out[symbol] = []
+                return
+            key = _PERP_STATS_KEY.format(symbol=symbol)
+            cached = await _read_json(redis, key)
+            if cached and cached.get("slot_ms") == slot_ms:
+                out[symbol] = cached.get("rows") or []
+                return
+            async with semaphore:
+                try:
+                    resp = await client.get(f"{GATE_FUTURES_URL}/contract_stats",
+                                            params={"contract": symbol, "interval": interval, "limit": limit})
+                    resp.raise_for_status()
+                    keep = ("time", "long_taker_size", "short_taker_size", "open_interest_usd",
+                            "short_liq_usd", "long_liq_usd", "last_funding_rate", "lsr_taker", "mark_price")
+                    rows = [{k: r.get(k) for k in keep} for r in resp.json()]
+                except Exception as exc:
+                    logger.warning("[PUMP-PERP] stats failed symbol=%s reason=%s", symbol, type(exc).__name__)
+                    out[symbol] = None
+                    return
+            out[symbol] = rows
+            if redis is not None:
+                try:
+                    await redis.set(key, json.dumps({"slot_ms": slot_ms, "rows": rows}),
+                                    ex=v1._TF_MS[interval] // 1000 * 3)
+                except Exception:
+                    pass
+
+        await asyncio.gather(*(_one(s) for s in symbols))
+    return out
+
+
 # ── Redis state ──────────────────────────────────────────────────────────────
 
 async def _redis():
@@ -481,11 +556,17 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
         cap_minutes = capital_minutes(buckets_by_symbol, symbols, last_minute, v1_spec)
     except Exception:
         logger.exception("[PUMP-CAPITAL] aggregation failed user=%s", user_id)
+    derivatives: Optional[Dict[str, Any]] = None
+    try:
+        derivatives = await load_derivatives(symbols, v1_spec, now_ms, int(config["concurrency"]))
+    except Exception as exc:  # perp context is optional: the cycle never depends on it
+        logger.warning("[PUMP-PERP] unavailable user=%s reason=%s", user_id, type(exc).__name__)
     try:
         structures = {sym: v1.structure_metrics(series.get(sym) or [], v1_spec, now_ms)
                       for sym in set(symbols) | {v1_ref}}
         v1_out = v1.evaluate_universe(rows, structures, structures.get(v1_ref), v1_state,
-                                      minute_ms=last_minute, spec=v1_spec, capital_minutes=cap_minutes)
+                                      minute_ms=last_minute, spec=v1_spec, capital_minutes=cap_minutes,
+                                      derivatives=derivatives, now_ms=now_ms)
     except Exception:
         logger.exception("[PUMP-SCORE-V1] evaluation failed user=%s", user_id)
     capital = (v1_out.get("regime") or {}).get("capital")
@@ -663,6 +744,11 @@ def apply_engines(rows: List[Dict[str, Any]], v1_out: Dict[str, Any], engine: st
                 value = (safe.get("values") or {}).get(key)
                 cells[f"v1_{key}"] = {"value": value, "reason": None if value is not None else safe.get("structure_reason"),
                                       "source": f"{v1_spec['version']}:{v1_spec['structure']['timeframe']}_closed"}
+            deriv = safe.get("derivatives") or {}
+            for key in ("perp_flow_norm", "oi_change_pct", "funding_rate", "short_liq_oi_bps"):
+                cells[f"perp_{key}"] = {"value": deriv.get(key), "reason": None if deriv.get(key) is not None
+                                        else (deriv.get("reason") or "no_data"), "source": "gate_futures_contract_stats"}
+            row["direction"] = safe.get("direction")
         if engine == "v1":
             shown = cells["pump_score_v1"]
             cells["pump_monitor_score"] = {**shown, "color_state": v0_cell.get("color_state")}

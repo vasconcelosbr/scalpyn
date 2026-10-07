@@ -99,3 +99,18 @@ Maré de capital do universo inteiro, medida pelo fluxo taker em USDT dos bucket
 Tela: indicador "Capital 15m" no cabeçalho do monitor clássico, com o efeito no v1 (regime e barreira de entrada) e o painel de histórico.
 
 Limiares e deltas são hipóteses iniciais. Validar com o histórico gravado: taxa de toque em +0,6 % em 10/15 min dos ativos listados, separada por nível de capital.
+
+## v1.5 — Spot × perpétuo e seta de direção (2026-10-07)
+
+Contexto do perpétuo USDT da Gate (`GET /futures/usdt/contract_stats`, 5m), consultado uma vez por intervalo fechado por ativo (cache em Redis). Cobertura no universo em 07/10: 46 de 50 ativos (sem perpétuo: HTX, LEO, RAIN, RLUSD).
+
+| Métrica | Definição | Config (`score_v1.derivatives`) |
+|---|---|---|
+| Fluxo do perp | `(long_taker − short_taker) / soma` nos últimos 3 intervalos (15 min) | `window_intervals` |
+| OI | variação % de `open_interest_usd` na janela | — |
+| Funding | `last_funding_rate` | — |
+| Squeeze | liquidação de vendidos na janela / OI, em bps | — |
+
+Sinais de alta frágil (só avaliados com progresso > 0): `perp_led` (perp ≥ spot + 0,15 com spot ≤ 0,05), `funding_hot` (≥ 0,05 %), `short_squeeze` (≥ 10 bps com OI sem subir), `oi_unwinding` (OI ≤ −1 %). Com `block_flags_min` (1) ou mais sinais, o portão `derivatives_healthy` reprova: o ativo não entra e, se listado, enfraquece pela histerese. Sem perpétuo, dado velho ou falha de coleta → o portão passa (`missing_policy: pass`).
+
+Seta de direção (`score_v1.direction`), só exibição: ▲ quando progresso 5m ≥ 0,25 ATR com fluxo spot e CVD positivos; ▼ no espelho. "Forte" quando o perp confirma (alta: OI subindo, fluxo do perp ≥ 0, sem fragilidade; baixa: OI subindo com fluxo do perp vendedor). Não é ordem: o spot não vende a descoberto.
