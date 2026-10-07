@@ -835,6 +835,12 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.pump_monitor.train_ml_daily",
         "schedule": crontab(hour=5, minute=40),
     },
+    # Candle-history family (2026-10-07): own lock/ledger family and runtime budget.
+    "pump_ml_candle_daily_training": {
+        "task": "app.tasks.pump_monitor.train_ml_daily",
+        "schedule": crontab(hour=6, minute=10),
+        "kwargs": {"family": "candle"},
+    },
     # Research dataset: hourly offline labels (only rows older than t + H_max + settle)
     # and partition upkeep (create days ahead, drop beyond retention).
     "pump_research_label": {

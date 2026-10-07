@@ -37,6 +37,12 @@ DEFAULT_CONFIG = {
                  "max_rows_per_minute":5,
                  # Rolling-origin evaluation: each UTC day is a test fold once (trained on the past only).
                  "walk_forward":{"enabled":True,"min_train_days":2,"calibration_fraction":0.2,"economic_quantile":0.1},
+                 # Candle-history family: price-only relative model trained on closed ohlcv candles.
+                 "candle":{"enabled":True,"timeframe":"5m","step_seconds":300,"lookback_days":30,
+                           "horizons_minutes":[10,15],"prev_windows":[1,3,6,12],"vol_short":12,
+                           "beta_window":288,"beta_min_points":200,"max_rows":40000,"max_rows_per_time":5,
+                           "min_assets":10,"label_mode":"path_mean","compare_label_modes":["endpoint","path_mean"],
+                           "embargo_seconds":1800},
                  "lookback_days":30, "cohort_cuts":[0.5,0.65,0.8],
                  # 2026-10-07: label = asset endpoint return vs the median endpoint return of
                  # every labelled asset captured in the same minute (same horizon).
@@ -128,6 +134,18 @@ def validate_config(c):
             or not 0.05<=wf['calibration_fraction']<=0.5 or not number(wf.get('economic_quantile')) \
             or not 0.01<=wf['economic_quantile']<=0.5:
         raise ValueError('walk_forward: {enabled bool, min_train_days 1-20, calibration_fraction 0.05-0.5, economic_quantile 0.01-0.5}')
+    cd=research.get('candle')
+    if not isinstance(cd,dict) or not isinstance(cd.get('enabled'),bool) or cd.get('timeframe') not in ('1m','5m','15m') \
+            or cd.get('step_seconds')!={'1m':60,'5m':300,'15m':900}[cd.get('timeframe')] \
+            or type(cd.get('lookback_days')) is not int or not 2<=cd['lookback_days']<=365 \
+            or not cd.get('horizons_minutes') or any(type(h) is not int or h<=0 or (h*60)%cd['step_seconds'] for h in cd['horizons_minutes']) \
+            or not cd.get('prev_windows') or any(type(k) is not int or not 1<=k<=288 for k in cd['prev_windows']) \
+            or any(type(cd.get(k)) is not int or cd[k]<=0 for k in ('vol_short','beta_window','beta_min_points','max_rows','max_rows_per_time','min_assets','embargo_seconds')) \
+            or cd['beta_min_points']>cd['beta_window'] or cd['max_rows']>200000 \
+            or cd.get('label_mode') not in ('endpoint','path_mean') \
+            or any(m not in ('endpoint','path_mean') for m in cd.get('compare_label_modes') or []) \
+            or cd['embargo_seconds']<max(cd['horizons_minutes'])*60:
+        raise ValueError('Invalid research.candle configuration')
     rb=research.get('relative_beta')
     if not isinstance(rb,dict) or not isinstance(rb.get('enabled'),bool) or rb.get('timeframe') not in ('1m','5m','15m') \
             or type(rb.get('window_candles')) is not int or not 24<=rb['window_candles']<=2016 \

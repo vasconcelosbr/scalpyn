@@ -248,8 +248,8 @@ def validate(spec: Dict[str, Any], errors: List[str]) -> None:
             errors.append(f"score_v1.derivatives: interval in {sorted(_TF_MS)} and block_flags_min >= 1")
     ml = spec.get("ml") or {}
     if ml:
-        if ml.get("objective", "relative") not in ("relative", "absolute"):
-            errors.append("score_v1.ml.objective must be relative|absolute")
+        if ml.get("objective", "relative") not in ("relative", "absolute", "relative_candle"):
+            errors.append("score_v1.ml.objective must be relative|absolute|relative_candle")
         if not 0 <= float(ml["score"]["max_adjust"]) <= 0.5:
             errors.append("score_v1.ml.score.max_adjust must be within [0, 0.5]")
         if not 0 <= float(ml["direction"]["confirm_down"]) < 0.5 < float(ml["direction"]["confirm_up"]) <= 1:
@@ -845,7 +845,7 @@ def evaluate_universe(rows: List[Dict[str, Any]], structures: Dict[str, Dict[str
     ml_active = bool(ml.get("active")) and bool((spec.get("ml") or {}).get("enabled"))
     ml_probs: Dict[str, Optional[float]] = (ml.get("probabilities") or {}) if ml_active else {}
     ml_reg = ml_regime_cap(ml_probs, spec) if ml_active else {"mean_up_probability": None, "cap": None}
-    if ml_active and (spec.get("ml") or {}).get("objective", "relative") == "relative":
+    if ml_active and (spec.get("ml") or {}).get("objective", "relative") in ("relative", "relative_candle"):
         # Relative probabilities average ~0.5 by construction: they rank assets
         # against each other and carry no market-direction information → no regime cap.
         ml_reg = {**ml_reg, "cap": None, "regime_effect": "disabled_relative_objective"}

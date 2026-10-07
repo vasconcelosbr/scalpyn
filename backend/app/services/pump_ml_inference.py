@@ -30,9 +30,20 @@ OBJECTIVE = "pump_endpoint_direction_v1"
 RELATIVE_OBJECTIVE = "pump_relative_direction_v1"
 
 
+CANDLE_OBJECTIVE = "pump_relative_candle_v1"
+_OBJECTIVES = {"relative": RELATIVE_OBJECTIVE, "absolute": OBJECTIVE, "relative_candle": CANDLE_OBJECTIVE}
+
+
 def objective_for(spec: Dict[str, Any]) -> str:
-    """``score_v1.ml.objective``: relative (default) or absolute. Never mixes the two."""
-    return OBJECTIVE if (spec.get("ml") or {}).get("objective", "relative") == "absolute" else RELATIVE_OBJECTIVE
+    """``score_v1.ml.objective``: relative (default) | absolute | relative_candle. Never mixed."""
+    return _OBJECTIVES.get((spec.get("ml") or {}).get("objective", "relative"), RELATIVE_OBJECTIVE)
+
+
+def candle_params(predictor) -> Optional[Dict[str, Any]]:
+    """Candle-family feature parameters frozen in the model manifest."""
+    if predictor is None or predictor.manifest.get("objective") != CANDLE_OBJECTIVE:
+        return None
+    return (predictor.manifest.get("spec") or {}).get("candle")
 _CACHE: Dict[str, Dict[str, Any]] = {}
 _REFRESH_SECONDS = 600
 
@@ -229,12 +240,19 @@ async def models_summary(db, user_id, spec: Dict[str, Any]) -> Dict[str, Any]:
     panel show every horizon, not only the applied one."""
     cfg = spec.get("ml") or {}
     applied = int(cfg["horizon_minutes"])
+    applied_objective = objective_for(spec)
     horizons = sorted({applied, *[int(h) for h in (cfg.get("training") or {}).get("horizons_minutes") or []]})
     models = []
-    for h in horizons:
-        row, _ = await _fetch_newest(db, user_id, h, int(cfg["max_model_age_days"]), with_files=False,
-                                     objective=objective_for(spec))
-        models.append(_summary_row(h, row, spec, applied))
+    families = [("observation", RELATIVE_OBJECTIVE if applied_objective != OBJECTIVE else OBJECTIVE),
+                ("candle", CANDLE_OBJECTIVE)]
+    for family, objective in families:
+        for h in horizons:
+            row, _ = await _fetch_newest(db, user_id, h, int(cfg["max_model_age_days"]), with_files=False,
+                                         objective=objective)
+            item = _summary_row(h, row, spec, applied)
+            item.update(family=family, objective=objective,
+                        applied=(h == applied and objective == applied_objective))
+            models.append(item)
     return {"enabled": bool(cfg.get("enabled")), "applied_horizon_minutes": applied,
             "objective": objective_for(spec),
             "quality_spec": cfg.get("quality"), "max_model_age_days": cfg.get("max_model_age_days"),

@@ -584,6 +584,26 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
                                        derivatives=derivatives, now_ms=now_ms, ml=None)
             ctx = context_cells(pre, v1_spec)
             ml_rows = [{**r, "indicators": {**(r.get("indicators") or {}), **ctx.get(r["symbol"], {})}} for r in rows]
+        cparams = pump_ml_inference.candle_params(predictor) if loaded.get("active") else None
+        if cparams:
+            # Candle family: same build_frame as training, params frozen in the manifest,
+            # cached per closed candle.
+            from . import pump_ml_candles
+            cstep = int(cparams["step_seconds"])
+            cslot = (now_ms // 1000 // cstep) * cstep
+            ckey = f"pump_monitor:ml_candlectx:{user_id}:{cslot}"
+            redis_c = await _redis()
+            ccells = await _read_json(redis_c, ckey)
+            if ccells is None:
+                ccells = await run_db_task(lambda db: pump_ml_candles.candle_context(
+                    db, [r["symbol"] for r in rows], cparams, cslot), celery=True)
+                if redis_c is not None:
+                    try:
+                        await redis_c.set(ckey, json.dumps(_json_safe(ccells)), ex=2 * cstep)
+                    except Exception:
+                        pass
+            ml_rows = [{**r, "indicators": {**(r.get("indicators") or {}), **(ccells.get(r["symbol"]) or {})}}
+                       for r in ml_rows]
         params = pump_ml_inference.relative_params(predictor) if loaded.get("active") else None
         if params:
             # Derived relative features (previous-window beta residual, 24h beta), same

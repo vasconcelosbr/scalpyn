@@ -56,6 +56,7 @@ const QUALITY_REASON: Record<string, string> = {
 };
 
 type MlModelRow = {
+  family?: "observation" | "candle";
   horizon_minutes: number;
   applied: boolean;
   status: "approved" | "quality_gate_failed" | "no_recent_model";
@@ -104,9 +105,9 @@ function MlModelsPanel({ data, error }: { data: MlModels | null; error: string }
           const ctxCov = d ? Object.values(d.context_coverage_test ?? {}) : [];
           const avgCov = ctxCov.length ? ctxCov.reduce((a, b) => a + b, 0) / ctxCov.length : null;
           return (
-            <div key={m.horizon_minutes} className={styles.mlBlock}>
+            <div key={`${m.family ?? "observation"}-${m.horizon_minutes}`} className={styles.mlBlock}>
               <div className={styles.mlRow} role="row">
-                <span>{m.horizon_minutes} min{m.applied ? " ●" : ""}</span>
+                <span>{m.horizon_minutes} min{m.family === "candle" ? " · velas" : ""}{m.applied ? " ●" : ""}</span>
                 <span className={m.status === "approved" ? styles.inText : m.status === "no_recent_model" ? styles.muted : styles.outText}>
                   {m.status === "approved" ? "Aprovado" : m.status === "no_recent_model" ? "Sem modelo" : "Reprovado"}
                 </span>
