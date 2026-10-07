@@ -208,7 +208,29 @@ def test_force_skips_daily_rule_but_not_recent_or_running_runs():
     conn = _skip_conn(lambda sql: "x" if "date_trunc('day'" in sql else None)
     assert asyncio.run(daily.run_owner(conn, UUID(int=1), horizons=[10]))["status"] == "daily_already_recorded"
     # force: today's old run does not block, a recent/running one does
-    conn = _skip_conn(lambda sql: "y" if "interval '60 minutes'" in sql and "status='running'" in sql else None)
+    conn = _skip_conn(lambda sql: "y" if "make_interval(mins=>$2)" in sql and "status='running'" in sql else None)
     out = asyncio.run(daily.run_owner(conn, UUID(int=1), horizons=[10], force=True))
     assert out["status"] == "recent_run_exists"
     assert not any("INSERT INTO pump_ml_job_runs" in q for q in conn.sql)
+
+
+
+def test_manual_interval_comes_from_config():
+    assert v1.DEFAULT_V1["ml"]["training"]["manual_min_interval_minutes"] == 5
+    seen = []
+
+    class Conn:
+        async def fetchval(self, sql, *args):
+            if "pg_try_advisory_lock" in sql: return True
+            if "SELECT run_id" in sql:
+                seen.append(args)
+                return "z"
+            return None
+        async def execute(self, sql, *args): return None
+
+    out = asyncio.run(daily.run_owner(Conn(), UUID(int=1), horizons=[10], force=True, min_interval_minutes=5))
+    assert out["status"] == "recent_run_exists" and seen[0][1] == 5
+    bad = deepcopy(v1.DEFAULT_V1); bad["ml"]["training"]["manual_min_interval_minutes"] = 0
+    errors = []
+    v1.validate(bad, errors)
+    assert errors

@@ -73,7 +73,7 @@ async def explore_opportunity_pattern(payload: Dict[str,Any],response: Response,
 @router.post("/ml/train", status_code=202)
 async def trigger_ml_training(user_id: UUID = Depends(get_current_user_id)):
     """Manual Pump ML training for the caller only. Bypasses the one-run-per-day
-    rule but keeps the singleton lock and a 60-minute minimum interval."""
+    rule but keeps the singleton lock and score_v1.ml.training.manual_min_interval_minutes (default 5)."""
     from ..tasks.pump_monitor import train_ml_daily
     result = train_ml_daily.apply_async(kwargs={"owner": str(user_id), "force": True})
     return {"status": "queued", "task_id": result.id, "owner": str(user_id),
