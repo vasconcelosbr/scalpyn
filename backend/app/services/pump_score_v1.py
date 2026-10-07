@@ -57,6 +57,27 @@ DEFAULT_V1: Dict[str, Any] = {
         "rs_min_neutral_atr": 0.0,
         "rs_min_unfavorable_atr": 0.5,
     },
+    # Capital-flow regime (v1.4): net taker flow in USDT of the WHOLE universe,
+    # built from the 1m flow buckets already collected from Gate trades. It is a
+    # market tide, not a per-asset factor: it never adds points to an asset, it
+    # moves the entry bar and can cap the price regime.
+    "capital_flow": {
+        "enabled": True,
+        "window_minutes": 15,
+        "min_coverage": 0.8,            # share of universe symbol-minutes with a complete bucket
+        "quote_suffix": "_USDT",        # only pairs quoted in USDT enter the sum
+        "exclude_symbols": [],
+        "halflife_minutes": 1440,       # EW stats of the window ratio (net/gross)
+        "min_observations": 240,        # before this, absolute ratio thresholds are used
+        "z_levels": {"forte_entrada": 1.5, "entrada": 0.5, "saida": -0.5, "forte_saida": -1.5},
+        "ratio_levels": {"forte_entrada": 0.10, "entrada": 0.03, "saida": -0.03, "forte_saida": -0.10},
+        # Added to stability.enter_score (clamped to [stay_score, 100]).
+        "enter_score_delta": {"forte_entrada": -5.0, "entrada": -2.0, "neutro": 0.0,
+                              "saida": 5.0, "forte_saida": 10.0},
+        # The price regime can never be better than this while the tide is out.
+        "regime_cap": {"forte_saida": "desfavoravel", "saida": "neutro"},
+        "history_retention_days": 30,
+    },
     "gates": {
         "progress_atr_min": 0.25,
         "window_delta_norm_min": -0.1,  # flow must not be net selling (tiny noise tolerated)
@@ -101,6 +122,8 @@ DEFAULT_V1: Dict[str, Any] = {
 }
 
 _TF_MS = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000}
+CAPITAL_LEVELS = ("forte_entrada", "entrada", "neutro", "saida", "forte_saida")
+_REGIME_ORDER = {"desfavoravel": 0, "neutro": 1, "favoravel": 2}
 
 
 def _null(reason: str) -> Dict[str, Any]:
@@ -148,6 +171,24 @@ def validate(spec: Dict[str, Any], errors: List[str]) -> None:
     for key in ("enter_cycles", "exit_cycles"):
         if int(st[key]) < 1:
             errors.append(f"score_v1.stability.{key} must be >= 1")
+    cf = spec.get("capital_flow") or {}
+    if cf:
+        if int(cf["window_minutes"]) < 1 or not 0 < float(cf["min_coverage"]) <= 1:
+            errors.append("score_v1.capital_flow: window_minutes >= 1 and 0 < min_coverage <= 1")
+        if float(cf["halflife_minutes"]) <= 0 or int(cf["min_observations"]) < 2:
+            errors.append("score_v1.capital_flow: halflife_minutes > 0 and min_observations >= 2")
+        for key in ("z_levels", "ratio_levels"):
+            lv = cf[key]
+            if not (float(lv["forte_entrada"]) > float(lv["entrada"]) >= 0 >= float(lv["saida"])
+                    > float(lv["forte_saida"])):
+                errors.append(f"score_v1.capital_flow.{key}: forte_entrada > entrada >= 0 >= saida > forte_saida")
+        if set(cf["enter_score_delta"]) - set(CAPITAL_LEVELS):
+            errors.append(f"score_v1.capital_flow.enter_score_delta keys must be in {list(CAPITAL_LEVELS)}")
+        for level, cap in (cf.get("regime_cap") or {}).items():
+            if level not in CAPITAL_LEVELS or cap not in _REGIME_ORDER:
+                errors.append("score_v1.capital_flow.regime_cap: level -> favoravel|neutro|desfavoravel")
+        if int(cf["history_retention_days"]) < 1:
+            errors.append("score_v1.capital_flow.history_retention_days must be >= 1")
     norm = spec["normalization"]
     if norm["mode"] not in ("asset_adaptive", "absolute"):
         errors.append("score_v1.normalization.mode must be asset_adaptive|absolute")
@@ -260,6 +301,83 @@ def regime(reference: Optional[Dict[str, Any]], universe_progress: Sequence[Opti
     wide = breadth >= float(r["breadth_min"])
     state = "favoravel" if up and wide else "desfavoravel" if not up and not wide else "neutro"
     return {**out, "state": state}
+
+
+def capital_flow(minutes: Sequence[Dict[str, Any]], stats: Optional[Dict[str, Any]],
+                 spec: Dict[str, Any]) -> Dict[str, Any]:
+    """Universe capital tide over the last ``window_minutes`` closed minutes.
+
+    ``minutes``: per-minute universe aggregates ``{minute_ms, buy_usdt, sell_usdt,
+    symbols, complete_symbols}`` (oldest first). ratio = net / gross ∈ [-1, 1];
+    z = (ratio − EW mean) / EW std once warmed up, otherwise absolute ratio levels.
+    Missing or thin data → ``desconhecido`` (no effect), never a guessed level.
+    """
+    cf = spec.get("capital_flow") or {}
+    base = {"state": "desligado", "net_usdt": None, "gross_usdt": None, "ratio": None, "z": None,
+            "method": None, "coverage": None, "window_minutes": int(cf.get("window_minutes") or 0),
+            "enter_score_delta": 0.0, "regime_cap": None}
+    if not cf.get("enabled"):
+        return base
+    window = list(minutes)[-int(cf["window_minutes"]):]
+    expected = sum(int(m.get("symbols") or 0) for m in window)
+    complete = sum(int(m.get("complete_symbols") or 0) for m in window)
+    coverage = complete / expected if expected else None
+    buy = sum(float(m.get("buy_usdt") or 0.0) for m in window)
+    sell = sum(float(m.get("sell_usdt") or 0.0) for m in window)
+    gross = buy + sell
+    out = {**base, "coverage": round(coverage, 4) if coverage is not None else None,
+           "net_usdt": round(buy - sell, 2), "gross_usdt": round(gross, 2), "buy_usdt": round(buy, 2),
+           "sell_usdt": round(sell, 2), "minutes_counted": len(window)}
+    if (len(window) < int(cf["window_minutes"]) or coverage is None or coverage < float(cf["min_coverage"])
+            or gross <= 0):
+        return {**out, "state": "desconhecido", "reason": "insufficient_coverage"}
+    ratio = (buy - sell) / gross
+    out["ratio"] = round(ratio, 5)
+    n = int((stats or {}).get("n", 0))
+    var = float((stats or {}).get("var", 0.0))
+    if n >= int(cf["min_observations"]) and var > 0:
+        z = (ratio - float(stats["mean"])) / math.sqrt(var)
+        levels, x, method = cf["z_levels"], z, "z_score"
+        out["z"] = round(z, 3)
+    else:
+        levels, x, method = cf["ratio_levels"], ratio, "absolute_ratio"
+    if x >= float(levels["forte_entrada"]):
+        state = "forte_entrada"
+    elif x >= float(levels["entrada"]):
+        state = "entrada"
+    elif x <= float(levels["forte_saida"]):
+        state = "forte_saida"
+    elif x <= float(levels["saida"]):
+        state = "saida"
+    else:
+        state = "neutro"
+    return {**out, "state": state, "method": method,
+            "enter_score_delta": float((cf.get("enter_score_delta") or {}).get(state, 0.0)),
+            "regime_cap": (cf.get("regime_cap") or {}).get(state)}
+
+
+def update_capital_stats(stats: Optional[Dict[str, Any]], ratio: Optional[float],
+                         spec: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    cf = spec.get("capital_flow") or {}
+    return update_stats(stats, ratio, {"normalization": {"halflife_minutes": cf.get("halflife_minutes", 1440)}})
+
+
+def apply_capital_cap(price_state: str, capital: Optional[Dict[str, Any]]) -> str:
+    """The tide can only make the regime worse (cap), never better."""
+    cap = (capital or {}).get("regime_cap")
+    if cap in _REGIME_ORDER and price_state in _REGIME_ORDER and _REGIME_ORDER[cap] < _REGIME_ORDER[price_state]:
+        return cap
+    return price_state
+
+
+def effective_stability(spec: Dict[str, Any], capital: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Spec copy whose enter_score carries the capital delta, clamped to [stay_score, 100]."""
+    delta = float((capital or {}).get("enter_score_delta") or 0.0)
+    if not delta:
+        return spec
+    st = dict(spec["stability"])
+    st["enter_score"] = max(float(st["stay_score"]), min(100.0, float(st["enter_score"]) + delta))
+    return {**spec, "stability": st}
 
 
 def relative_strength_atr(ret_pct: Optional[float], ref_ret_pct: Optional[float], atr_pct: Optional[float],
@@ -462,15 +580,23 @@ def step_state(prev: Optional[Dict[str, Any]], *, condition: str, gates_ok: bool
 
 def evaluate_universe(rows: List[Dict[str, Any]], structures: Dict[str, Dict[str, Any]],
                       reference: Optional[Dict[str, Any]], state: Dict[str, Any], *,
-                      minute_ms: int, spec: Dict[str, Any]) -> Dict[str, Any]:
+                      minute_ms: int, spec: Dict[str, Any],
+                      capital_minutes: Optional[Sequence[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Evaluate v1 for every row, mutate ``state`` (per-symbol stats + stability).
 
     Returns ``{"regime": ..., "results": {symbol: result}}``. Rows are only read.
     """
     reg = regime(reference, [(structures.get(r["symbol"]) or {}).get("progress_atr") for r in rows], spec)
+    stepped = state.get("last_step_ms") != minute_ms
+    capital = capital_flow(capital_minutes or [], state.get("capital_stats"), spec)
+    if stepped and capital.get("ratio") is not None:
+        state["capital_stats"] = update_capital_stats(state.get("capital_stats"), capital["ratio"], spec)
+    capped = apply_capital_cap(reg["state"], capital)
+    reg = {**reg, "price_state": reg["state"], "state": capped, "capital": capital,
+           "enter_score": effective_stability(spec, capital)["stability"]["enter_score"]}
+    stab_spec = effective_stability(spec, capital)
     stats_all = state.setdefault("stats", {})
     stab_all = state.setdefault("stability", {})
-    stepped = state.get("last_step_ms") != minute_ms
     results: Dict[str, Dict[str, Any]] = {}
     for row in rows:
         symbol = row["symbol"]
@@ -505,7 +631,7 @@ def evaluate_universe(rows: List[Dict[str, Any]], structures: Dict[str, Dict[str
         fast_exit = (v["progress_1m_atr"] is not None
                      and v["progress_1m_atr"] < float(spec["gates"]["fast_exit_progress_1m_atr"]))
         stab = step_state(stab_all.get(symbol), condition=condition, gates_ok=gates_ok,
-                          raw_score=strength["score"], fast_exit=fast_exit, minute_ms=minute_ms, spec=spec)
+                          raw_score=strength["score"], fast_exit=fast_exit, minute_ms=minute_ms, spec=stab_spec)
         stab_all[symbol] = stab
         if stepped:
             stats_all[symbol] = {k: update_stats(stats.get(k), v.get(k), spec)

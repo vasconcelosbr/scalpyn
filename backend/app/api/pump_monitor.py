@@ -70,6 +70,22 @@ async def explore_opportunity_pattern(payload: Dict[str,Any],response: Response,
         raise HTTPException(status_code=422,detail=str(exc))
 
 
+@router.get("/capital-flow/history")
+async def capital_flow_history(response: Response,
+                               days: int = Query(7, ge=1, le=30),
+                               top: int = Query(5, ge=1, le=24),
+                               tz_offset_minutes: int = Query(-180, ge=-720, le=840),
+                               db: AsyncSession = Depends(get_db),
+                               user_id: UUID = Depends(get_current_user_id)):
+    """Hourly USDT capital tide of the monitored universe (Gate taker flow)."""
+    response.headers["Cache-Control"] = "private, no-store"
+    try:
+        return await svc.capital_flow_history(db, user_id, days=days, top=top,
+                                              tz_offset_minutes=tz_offset_minutes)
+    except Exception as exc:  # table not migrated yet → explicit, never a 500 loop
+        raise HTTPException(status_code=503, detail=f"capital_flow_history_unavailable:{type(exc).__name__}")
+
+
 @router.get("/opportunities/{observation_id}")
 async def opportunity_detail(observation_id: UUID,db: AsyncSession = Depends(get_db),user_id: UUID = Depends(get_current_user_id)):
     from ..services import pump_opportunity_service as opportunities

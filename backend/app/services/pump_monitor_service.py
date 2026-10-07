@@ -213,6 +213,100 @@ async def _collect_symbol(symbol: str, minutes: List[int], config: Dict[str, Any
     return {"buckets": rows, "book": book, "raw_price_input": raw}
 
 
+# ── Capital-flow regime (v1.4) ───────────────────────────────────────────────
+
+def capital_minutes(buckets_by_symbol: Dict[str, Dict[int, Dict[str, Any]]], symbols: List[str],
+                    last_minute_ms: int, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Per-minute USDT taker flow of the whole universe (oldest first).
+
+    Only USDT-quoted, non-excluded symbols; a symbol-minute counts only when its
+    bucket is complete (same usability rule as every flow metric)."""
+    cf = spec.get("capital_flow") or {}
+    suffix = str(cf.get("quote_suffix") or "_USDT")
+    excluded = set(cf.get("exclude_symbols") or [])
+    universe = [s for s in symbols if s.endswith(suffix) and s not in excluded]
+    count = int(cf.get("window_minutes") or 0)
+    out = []
+    for i in range(count - 1, -1, -1):
+        minute = last_minute_ms - i * 60_000
+        buy = sell = 0.0
+        complete = 0
+        for symbol in universe:
+            bucket = (buckets_by_symbol.get(symbol) or {}).get(minute)
+            if bucket is None or bucket.get("partial"):
+                continue
+            complete += 1
+            buy += float(bucket.get("buy_quote") or 0.0)
+            sell += float(bucket.get("sell_quote") or 0.0)
+        out.append({"minute_ms": minute, "buy_usdt": buy, "sell_usdt": sell,
+                    "symbols": len(universe), "complete_symbols": complete})
+    return out
+
+
+_UPSERT_CAPITAL = text("""
+    INSERT INTO pump_capital_flow_1m (user_id, minute, buy_usdt, sell_usdt, net_usdt, symbols,
+        complete_symbols, window_minutes, window_net_usdt, window_ratio, z, state, method,
+        config_version, computed_at)
+    VALUES (CAST(:user_id AS uuid), :minute, :buy_usdt, :sell_usdt, :net_usdt, :symbols,
+        :complete_symbols, :window_minutes, :window_net_usdt, :window_ratio, :z, :state, :method,
+        :config_version, now())
+    ON CONFLICT (user_id, minute) DO UPDATE SET
+        buy_usdt = EXCLUDED.buy_usdt, sell_usdt = EXCLUDED.sell_usdt, net_usdt = EXCLUDED.net_usdt,
+        symbols = EXCLUDED.symbols, complete_symbols = EXCLUDED.complete_symbols,
+        window_minutes = EXCLUDED.window_minutes, window_net_usdt = EXCLUDED.window_net_usdt,
+        window_ratio = EXCLUDED.window_ratio, z = EXCLUDED.z, state = EXCLUDED.state,
+        method = EXCLUDED.method, config_version = EXCLUDED.config_version, computed_at = now()
+""")
+
+
+def capital_row(user_id, minute: Dict[str, Any], capital: Dict[str, Any], config_version: int) -> Dict[str, Any]:
+    return {
+        "user_id": str(user_id),
+        "minute": datetime.fromtimestamp(minute["minute_ms"] / 1000.0, tz=timezone.utc),
+        "buy_usdt": round(minute["buy_usdt"], 2), "sell_usdt": round(minute["sell_usdt"], 2),
+        "net_usdt": round(minute["buy_usdt"] - minute["sell_usdt"], 2),
+        "symbols": minute["symbols"], "complete_symbols": minute["complete_symbols"],
+        "window_minutes": capital.get("window_minutes"), "window_net_usdt": capital.get("net_usdt"),
+        "window_ratio": capital.get("ratio"), "z": capital.get("z"), "state": capital.get("state"),
+        "method": capital.get("method"), "config_version": config_version,
+    }
+
+
+async def capital_flow_history(db, user_id, *, days: int, top: int, tz_offset_minutes: int) -> Dict[str, Any]:
+    """Hourly capital tide history: strongest inflow/outflow hours and the
+    hour-of-day profile. Hours are bucketed in the caller's local time
+    (``tz_offset_minutes``, e.g. -180 for BRT) so the profile reads naturally."""
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    offset = timedelta(minutes=tz_offset_minutes)
+    rows = (await db.execute(text("""
+        SELECT date_trunc('hour', (minute AT TIME ZONE 'UTC') + CAST(:off AS interval)) AS local_hour,
+               SUM(buy_usdt) AS buy, SUM(sell_usdt) AS sell, SUM(net_usdt) AS net,
+               COUNT(*) AS minutes, AVG(complete_symbols::float / NULLIF(symbols, 0)) AS coverage
+          FROM pump_capital_flow_1m
+         WHERE user_id = CAST(:u AS uuid) AND minute >= :since
+         GROUP BY 1 ORDER BY 1
+    """), {"u": str(user_id), "since": since, "off": offset})).mappings().all()
+    hours = []
+    for r in rows:
+        buy, sell = _float(r["buy"]) or 0.0, _float(r["sell"]) or 0.0
+        gross = buy + sell
+        hours.append({"hour": r["local_hour"].isoformat(timespec="minutes"),
+                      "buy_usdt": round(buy, 2), "sell_usdt": round(sell, 2),
+                      "net_usdt": round(buy - sell, 2), "ratio": round((buy - sell) / gross, 5) if gross else None,
+                      "minutes": int(r["minutes"]), "coverage": round(_float(r["coverage"]) or 0.0, 4)})
+    complete = [h for h in hours if h["minutes"] >= 30 and h["ratio"] is not None]
+    by_ratio = sorted(complete, key=lambda h: h["ratio"])
+    profile: Dict[int, List[float]] = {}
+    for h in complete:
+        profile.setdefault(int(h["hour"][11:13]), []).append(h["ratio"])
+    hour_of_day = [{"hour": hr, "avg_ratio": round(sum(v) / len(v), 5), "days": len(v)}
+                   for hr, v in sorted(profile.items())]
+    return {"days": days, "tz_offset_minutes": tz_offset_minutes, "hours": hours,
+            "top_inflow": list(reversed(by_ratio[-top:])), "top_outflow": by_ratio[:top],
+            "hour_of_day": hour_of_day,
+            "note": "ratio = (compra − venda) / (compra + venda) a mercado em USDT do universo; horas com >= 30 min de dado"}
+
+
 # ── Redis state ──────────────────────────────────────────────────────────────
 
 async def _redis():
@@ -382,13 +476,19 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
     engine = eng.active_engine(config)
     v1_state = state.get("score_v1") or {}
     v1_out = {"regime": None, "results": {}}
+    cap_minutes: List[Dict[str, Any]] = []
+    try:
+        cap_minutes = capital_minutes(buckets_by_symbol, symbols, last_minute, v1_spec)
+    except Exception:
+        logger.exception("[PUMP-CAPITAL] aggregation failed user=%s", user_id)
     try:
         structures = {sym: v1.structure_metrics(series.get(sym) or [], v1_spec, now_ms)
                       for sym in set(symbols) | {v1_ref}}
         v1_out = v1.evaluate_universe(rows, structures, structures.get(v1_ref), v1_state,
-                                      minute_ms=last_minute, spec=v1_spec)
+                                      minute_ms=last_minute, spec=v1_spec, capital_minutes=cap_minutes)
     except Exception:
         logger.exception("[PUMP-SCORE-V1] evaluation failed user=%s", user_id)
+    capital = (v1_out.get("regime") or {}).get("capital")
     apply_engines(rows, v1_out, engine, v1_spec)
 
     for row in rows:
@@ -435,6 +535,7 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
                     "v1": {"version": v1_spec["version"], "status": v1_spec["status"],
                            "regime": _json_safe(v1_out.get("regime")),
                            "members": v1.members(v1_out.get("results") or {})}},
+        "capital_flow": _json_safe(capital),
         "pool_id": str(pool_id),
         "total_assets": len(rows),
         "failed_assets": len(failures),
@@ -469,6 +570,18 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
                     "symbol": r["symbol"], "v": meta["version"], "h": meta["config_hash"],
                     "score": r["pump_monitor_score"], "row": json.dumps(_compact(r))} for r in rows])
     await run_db_task(_write, celery=True)
+
+    # Capital-flow history in its own transaction: a missing table (migration not
+    # yet applied) or any write failure never breaks the cycle.
+    if capital and cap_minutes and capital.get("state") not in (None, "desligado"):
+        try:
+            last_cap = cap_minutes[-1]
+
+            async def _write_capital(db):
+                await db.execute(_UPSERT_CAPITAL, capital_row(user_id, last_cap, capital, int(meta["version"])))
+            await run_db_task(_write_capital, celery=True)
+        except Exception as exc:
+            logger.warning("[PUMP-CAPITAL] history write failed user=%s reason=%s", user_id, type(exc).__name__)
 
     if research_rows:
         members = set()
@@ -677,7 +790,18 @@ async def purge(db) -> Dict[str, int]:
     now = datetime.now(timezone.utc)
     b = await db.execute(text("DELETE FROM flow_buckets_1m WHERE bucket_start < :t"), {"t": now - timedelta(days=days)})
     s = await db.execute(text("DELETE FROM pump_monitor_snapshots WHERE cycle_at < :t"), {"t": now - timedelta(hours=hours)})
-    return {"buckets": b.rowcount, "snapshots": s.rowcount}
+    cap_days = max([int(((c.get("score_v1") or {}).get("capital_flow") or {}).get("history_retention_days") or 0)
+                    for _, c in configs]
+                   or [int(v1.DEFAULT_V1["capital_flow"]["history_retention_days"])])
+    try:
+        async with db.begin_nested():
+            cf = await db.execute(text("DELETE FROM pump_capital_flow_1m WHERE minute < :t"),
+                                  {"t": now - timedelta(days=max(1, cap_days))})
+        capital_purged = cf.rowcount
+    except Exception as exc:
+        logger.warning("[PUMP-CAPITAL] retention skipped reason=%s", type(exc).__name__)
+        capital_purged = None
+    return {"buckets": b.rowcount, "snapshots": s.rowcount, "capital_flow": capital_purged}
 
 
 # ── API reads ────────────────────────────────────────────────────────────────

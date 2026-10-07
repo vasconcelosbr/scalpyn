@@ -1,0 +1,31 @@
+.wrap { position: relative; margin-top: 8px; }
+.chip { display: inline-flex; align-items: center; gap: 8px; min-height: 30px; padding: 0 12px; border-radius: 999px; border: 1px solid #253a57; background: #101d2f; color: #b8c7dc; font-size: 11px; cursor: pointer; flex-wrap: wrap; }
+.chip strong { font-weight: 800; letter-spacing: .02em; }
+.label { color: #8fa4c2; text-transform: uppercase; letter-spacing: .06em; font-size: 10px; }
+.metric { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.effect { color: #8fa4c2; border-left: 1px solid #253a57; padding-left: 8px; }
+.historyIcon { opacity: .7; }
+.strongIn { border-color: #2fae86; color: #59ddb0; background: rgba(47, 174, 134, .12); }
+.in { border-color: #2a7f66; color: #8fe3c6; }
+.flat { color: #b8c7dc; }
+.out { border-color: #8a4b4b; color: #ffaaaa; }
+.strongOut { border-color: #c45454; color: #ff7a7a; background: rgba(196, 84, 84, .12); }
+.panel { position: absolute; z-index: 20; top: calc(100% + 6px); left: 0; width: min(560px, 92vw); padding: 12px; border: 1px solid #233754; border-radius: 8px; background: #0d1a2c; box-shadow: 0 12px 32px rgba(0, 0, 0, .45); font-size: 11px; color: #dce6f5; }
+.columns { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 10px; }
+.heading { color: #8699b5; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 6px; }
+.row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; padding: 3px 0; border-bottom: 1px solid #1a2c44; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.inText { color: #59ddb0; }
+.outText { color: #ff7a7a; }
+.bars { display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; height: 70px; margin-bottom: 8px; }
+.barCell { display: flex; flex-direction: column; align-items: center; min-width: 0; }
+.barTrack { position: relative; width: 100%; flex: 1; border-bottom: 1px dashed transparent; background: linear-gradient(transparent calc(50% - .5px), #253a57 calc(50% - .5px), #253a57 calc(50% + .5px), transparent calc(50% + .5px)); }
+.bar { position: absolute; left: 15%; width: 70%; border-radius: 2px; }
+.barIn { background: #59ddb0; }
+.barOut { background: #ff7a7a; }
+.barLabel { font-size: 9px; color: #6f82a0; height: 12px; }
+.muted { color: #6f82a0; font-size: 10px; }
+.error { color: #ff7a7a; }
+@media (max-width: 700px) {
+  .columns { grid-template-columns: 1fr; }
+  .effect { border-left: 0; padding-left: 0; }
+}

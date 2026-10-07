@@ -6,6 +6,7 @@ import { ArrowDown, ArrowUp, Columns3, RefreshCw, ShieldAlert } from "lucide-rea
 import { apiGet, apiPut } from "@/lib/api";
 import styles from "./pump-monitor.module.css";
 import PumpOpportunityPanel from "@/components/pump-monitor/PumpOpportunityPanel";
+import CapitalFlowIndicator, { type CapitalFlow, type V1Regime } from "@/components/pump-monitor/CapitalFlowIndicator";
 
 type Cell = {
   value: number | string | boolean | null;
@@ -40,6 +41,8 @@ type Response = {
   score_status: string;
   score_version?: string;
   active_engine?: "v0" | "v1";
+  capital_flow?: CapitalFlow | null;
+  engines?: { v1?: { regime?: V1Regime | null } };
   pool_id: string | null;
   total_assets: number;
   rows: Row[];
@@ -234,6 +237,7 @@ function LegacyPumpMonitorPage() {
           <div className={styles.subtitle}>
             Fluxo, liquidez executável e preço dos ativos do pool monitorado · score {data?.score_version === "pump_score_v1" ? "v1" : "v0"} {data?.score_status === "HYPOTHESIS_NOT_VALIDATED" ? "(hipótese, não calibrado)" : data?.score_status ?? "—"}
           </div>
+          <CapitalFlowIndicator capital={data?.capital_flow} regime={data?.engines?.v1?.regime} />
         </div>
         <span className={styles.notice} data-testid="observation-badge">
           <ShieldAlert size={14} /> OBSERVAÇÃO — não é sinal de entrada
