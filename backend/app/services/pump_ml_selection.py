@@ -1,7 +1,9 @@
 """Pump-only bounded payload reads; retain newest eligible decision ordering.
 
 Backend copy of ``pump_ml/selection.py`` (2026-10-07) so the daily trainer can run
-in the Celery worker image, which only ships ``backend/``. Keep both in sync."""
+in the Celery worker image, which only ships ``backend/``. Since 2026-10-07 this copy
+is the source of truth (optional context projection, configurable lookback); the
+Railway ``pump_ml`` service is superseded by the Celery runner."""
 from datetime import timedelta
 from app.services.pump_opportunity_engine import number,utc
 
@@ -90,7 +92,7 @@ DIRECTIONAL_ROWS_SQL = DIRECTIONAL_ROWS_SQL.replace(
     "AND o.payload->'reference'->>'policy'='gate_best_ask_v1'")
 
 def complete_features(row,features):
-    return all(number(row['values'].get(f)) for f in features)
+    return all(number((row['values'] or {}).get(f)) for f in features)
 
 def temporal_windows(first,last,max_rows,bins):
     """Equal elapsed-time quotas; neither class values nor scores select cuts."""
@@ -102,7 +104,8 @@ def temporal_windows(first,last,max_rows,bins):
     return [(first+(last-first)*i/count,first+(last-first)*(i+1)/count,
         quota+(i<remainder),i==count-1) for i in range(count)]
 
-async def select_temporal_training_rows(conn,owner,features,feature_hash,max_rows,diagnostics,*,batch_size=500,bins=20,horizon_minutes=None):
+async def select_temporal_training_rows(conn,owner,features,feature_hash,max_rows,diagnostics,*,batch_size=500,bins=20,horizon_minutes=None,
+                                        extra_features=(),lookback_days=30):
     """Sample at most max_rows across the complete-feature compatible extent.
 
     Empty/underfilled windows remain explicit, never filled with newest-only
@@ -122,9 +125,11 @@ async def select_temporal_training_rows(conn,owner,features,feature_hash,max_row
             contract=await conn.fetchval(CONTRACT_SQL,owner,ids)
             if contract:break
         if not contract:return None,[]
-        since=cutoff-timedelta(days=30)
+        since=cutoff-timedelta(days=lookback_days)
+        # Optional context keys are projected but never required (missing → NaN in the trainer).
+        projection=list(features)+[f for f in extra_features if f not in features]
         async def projected(ids,limit):
-            args=(owner,features,feature_hash,contract['legacy_config_hash'],contract['label_spec_hash'],ids,limit)
+            args=(owner,projection,feature_hash,contract['legacy_config_hash'],contract['label_spec_hash'],ids,limit)
             sql=ROWS_SQL
             if horizon_minutes is not None:
                 sql=DIRECTIONAL_ROWS_SQL;args=(*args,horizon_minutes,cutoff)
@@ -166,7 +171,8 @@ async def select_temporal_training_rows(conn,owner,features,feature_hash,max_row
         rows.sort(key=lambda r:(-utc(r['decision_at']).timestamp(),r['observation_id']))
         diagnostics.update(phase='selection_complete',selected_rows=len(rows),selection_as_of=cutoff.isoformat(),
             policy={'version':TEMPORAL_SELECTION_VERSION,'requested_bins':bins,'actual_bins':len(windows),
-                'max_rows':max_rows,'first':first.isoformat(),'last':last.isoformat(),
+                'max_rows':max_rows,'first':first.isoformat(),'last':last.isoformat(),'lookback_days':lookback_days,
+                'optional_context_features':len(projection)-len(features),
                 'feature_eligibility_before_sampling':True,'outcome_balancing':False,
                 'objective':'endpoint_direction_v1' if horizon_minutes is not None else 'legacy_touch',
                 'horizon_minutes':horizon_minutes,

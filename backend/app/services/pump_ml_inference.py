@@ -8,7 +8,9 @@ per symbol. Every failure path returns ``active=False`` (zero effect).
 
 Features are the same indicator cells the training observations stored
 (``build_observation`` copies ``row["indicators"][k]["value"]``); missing, stale
-or out-of-training-range features abstain for that symbol.
+or out-of-training-range CORE features abstain for that symbol. Optional context
+features (v1 structure, perp, regime, capital) enter as NaN when missing, as in
+training; the cycle computes them in a v1 pre-pass before prediction.
 """
 from __future__ import annotations
 
@@ -37,7 +39,9 @@ class DirectionalModel:
         self.manifest = manifest
         self.metrics = metrics
         self.created_at = created_at
-        self.features: List[str] = list(manifest["spec"]["features"])
+        self.core: List[str] = list(manifest["spec"]["features"])
+        self.features: List[str] = self.core + [f for f in (manifest["spec"].get("context_features") or [])
+                                                if f not in self.core]
         self.bounds: Dict[str, Dict[str, float]] = manifest.get("feature_bounds") or {}
         self.calibrator = calibrator
         if calibrator.get("input") != "clipped_logit":
@@ -48,21 +52,32 @@ class DirectionalModel:
         self.booster = booster
 
     def vector(self, cells: Dict[str, Any], max_age_seconds: float) -> Optional[List[float]]:
+        """Core features: missing/stale/out-of-range → abstain (None).
+        Context features: missing/stale → NaN, exactly as in training; a present
+        value outside the training range still abstains."""
         out = []
+        core = set(self.core)
         for f in self.features:
             cell = cells.get(f) or {}
             value = cell.get("value")
-            if cell.get("reason") or isinstance(value, bool) or not isinstance(value, (int, float)) \
-                    or not math.isfinite(float(value)):
-                return None
             age = cell.get("age_seconds")
-            if isinstance(age, (int, float)) and age > max_age_seconds:
-                return None
+            missing = (cell.get("reason") or isinstance(value, bool) or not isinstance(value, (int, float))
+                       or not math.isfinite(float(value))
+                       or (isinstance(age, (int, float)) and age > max_age_seconds))
+            if missing:
+                if f in core:
+                    return None
+                out.append(float("nan"))
+                continue
             b = self.bounds.get(f)
             if b and not (float(b["min"]) <= float(value) <= float(b["max"])):
                 return None
             out.append(float(value))
         return out
+
+    @property
+    def uses_context(self) -> bool:
+        return len(self.features) > len(self.core)
 
     def predict(self, vectors: List[List[float]]) -> List[float]:
         import numpy as np
@@ -76,7 +91,7 @@ class DirectionalModel:
         return [float(x) for x in 1 / (1 + np.exp(-np.clip(z, -700, 700)))]
 
 
-async def _fetch_newest(db, user_id, horizon: int, max_age_days: int):
+async def _fetch_newest(db, user_id, horizon: int, max_age_days: int, *, with_files: bool = True):
     row = (await db.execute(text("""
         SELECT experiment_id, created_at, manifest, metrics FROM pump_ml_experiments
          WHERE user_id = CAST(:u AS uuid) AND manifest->>'objective' = :obj
@@ -86,6 +101,8 @@ async def _fetch_newest(db, user_id, horizon: int, max_age_days: int):
     """), {"u": str(user_id), "obj": OBJECTIVE, "h": int(horizon), "d": int(max_age_days)})).mappings().first()
     if row is None:
         return None, {}
+    if not with_files:
+        return row, {}
     files = (await db.execute(text(
         "SELECT path, content FROM pump_ml_artifacts WHERE experiment_id = :e"),
         {"e": row["experiment_id"]})).mappings().all()
@@ -150,3 +167,55 @@ def predict_rows(loaded: Dict[str, Any], rows: List[Dict[str, Any]], spec: Dict[
         logger.warning("[PUMP-ML] prediction failed reason=%s", type(exc).__name__)
         return {**out, "active": False, "reason": f"predict_failed:{type(exc).__name__}", "probabilities": {}}
     return {**out, "probabilities": probs, "covered": len(probs), "universe": len(rows)}
+
+
+def _summary_row(horizon: int, row, spec: Dict[str, Any], applied: int) -> Dict[str, Any]:
+    if row is None:
+        return {"horizon_minutes": horizon, "applied": horizon == applied, "status": "no_recent_model"}
+    metrics = _as_dict(row["metrics"])
+    manifest = _as_dict(row["manifest"])
+    test = metrics.get("episode_weighted_test") or {}
+    model_spec = manifest.get("spec") or {}
+    importance = metrics.get("feature_importance_gain") or {}
+    coverage = (metrics.get("context_coverage") or {}).get("test") or {}
+    quality = v1.ml_quality(metrics, spec)
+    return {
+        "horizon_minutes": horizon, "applied": horizon == applied,
+        "status": "approved" if quality["approved"] else "quality_gate_failed",
+        "experiment_id": str(row["experiment_id"]), "created_at": row["created_at"].isoformat(),
+        "quality": quality,
+        "diagnostics": {
+            "test_up_frequency": test.get("observed_up_frequency"),
+            "train_up_frequency": test.get("baseline_train_up_frequency"),
+            "calibration_up_frequency": test.get("baseline_calibration_up_frequency"),
+            "test_mean_probability": metrics.get("test_mean_probability"),
+            "calibration_prior_brier": test.get("calibration_prior_brier"),
+            "direction_accuracy": test.get("direction_accuracy"),
+            "balanced_direction_accuracy": test.get("balanced_direction_accuracy"),
+            "cohort_rows": metrics.get("cohort_rows"), "cohort_episodes": metrics.get("cohort_episodes"),
+            "cohort_days": metrics.get("cohort_days"), "cohort_up_frequency": metrics.get("cohort_up_frequency"),
+            "calibration": metrics.get("calibration"),
+            "features": len(model_spec.get("features") or []),
+            "context_features": len(model_spec.get("context_features") or []),
+            "context_coverage_test": coverage,
+            "top_features": sorted(importance.items(), key=lambda kv: -kv[1])[:8],
+        },
+    }
+
+
+async def models_summary(db, user_id, spec: Dict[str, Any]) -> Dict[str, Any]:
+    """Newest model per trained horizon with its out-of-time metrics and gate result.
+
+    Read-only; the applied horizon is ``score_v1.ml.horizon_minutes``. Lets the
+    panel show every horizon, not only the applied one."""
+    cfg = spec.get("ml") or {}
+    applied = int(cfg["horizon_minutes"])
+    horizons = sorted({applied, *[int(h) for h in (cfg.get("training") or {}).get("horizons_minutes") or []]})
+    models = []
+    for h in horizons:
+        row, _ = await _fetch_newest(db, user_id, h, int(cfg["max_model_age_days"]), with_files=False)
+        models.append(_summary_row(h, row, spec, applied))
+    return {"enabled": bool(cfg.get("enabled")), "applied_horizon_minutes": applied,
+            "quality_spec": cfg.get("quality"), "max_model_age_days": cfg.get("max_model_age_days"),
+            "models": models,
+            "note": "Métricas fora da amostra (bloco de teste temporal, ponderado por episódio)."}

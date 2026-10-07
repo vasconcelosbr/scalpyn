@@ -25,6 +25,16 @@ DEFAULT_CONFIG = {
                  "min_rows_per_horizon":200, "min_episodes":100, "min_days":2, "min_instruments":10,
                  "temporal_bins":20, "bootstrap_repetitions":200, "reliability_bins":10,
                  "calibration_C":1.0, "calibration_max_iter":1000,
+                 # 2026-10-07: optional v1/perp/regime/capital context (NaN when absent),
+                 # history window, temporal cohort cuts and a less aggressive calibration.
+                 "context_features":["v1_progress_atr","v1_rs_atr","v1_extension_atr","v1_efficiency_short",
+                     "v1_efficiency_long","v1_consistency","v1_higher_lows","v1_concentration","v1_wick",
+                     "v1_rvol_5m","v1_volume_spike_max","v1_compression_ratio","v1_progress_1m_atr",
+                     "perp_perp_flow_norm","perp_oi_change_pct","perp_funding_rate","perp_short_liq_oi_bps",
+                     "ctx_breadth","ctx_ref_progress_atr","ctx_ref_ret_pct","ctx_capital_ratio","ctx_capital_z"],
+                 "lookback_days":30, "cohort_cuts":[0.5,0.65,0.8],
+                 "calibration_method":"platt_bounded", "calibration_pool":"validation_and_calibration",
+                 "calibration_max_slope":1.0,
                  "params":{"n_estimators":100,"max_depth":3,"random_state":20261001}},
     "intelligence": {"sample_limit": 50, "temporal_buckets": 10, "window_hours": 24, "cache_seconds": 60,
                      "read_timeout_ms": 2000, "max_read_bytes": 2000000,
@@ -85,6 +95,23 @@ def validate_config(c):
     if research['reliability_bins']<2 or not number(research['calibration_C']) or not 0<research['calibration_C']<=100:
         raise ValueError('Invalid directional calibration configuration')
     if research['min_rows_per_horizon']<200:raise ValueError('Directional challenger retains the existing 200-row floor')
+    from .pump_contracts import CONTEXT_FEATURE_SPEC
+    context=research.get('context_features',[])
+    if not isinstance(context,list) or len(context)!=len(set(context)) or set(context)&set(features) \
+            or any(not isinstance(f,str) or f not in CONTEXT_FEATURE_SPEC['fields'] for f in context):
+        raise ValueError('Unique context features from the context dictionary required')
+    if type(research.get('lookback_days')) is not int or not 1<=research['lookback_days']<=30:
+        raise ValueError('Invalid directional lookback_days (1-30, bounded by retention)')
+    cuts=research.get('cohort_cuts')
+    if not isinstance(cuts,list) or len(cuts)!=3 or not all(number(x) for x in cuts) \
+            or not 0.3<=cuts[0]<cuts[1]<cuts[2]<=0.9:
+        raise ValueError('cohort_cuts must be three increasing fractions in [0.3, 0.9]')
+    if research.get('calibration_method') not in ('platt','platt_bounded'):
+        raise ValueError('calibration_method must be platt or platt_bounded')
+    if research.get('calibration_pool') not in ('calibration','validation_and_calibration'):
+        raise ValueError('calibration_pool must be calibration or validation_and_calibration')
+    if not number(research.get('calibration_max_slope')) or not 0<research['calibration_max_slope']<=5:
+        raise ValueError('calibration_max_slope must be in (0, 5]')
     params=research['params']
     if set(params)!= {'n_estimators','max_depth','random_state'} or any(type(v) is not int for v in params.values()):
         raise ValueError('Explicit bounded directional model parameters required')

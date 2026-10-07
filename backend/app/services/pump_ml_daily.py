@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
-from .pump_contracts import FEATURE_SPEC
+from .pump_contracts import CONTEXT_FEATURE_SPEC, FEATURE_SPEC
 from .pump_opportunity_engine import canonical_hash, config, utc
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ STORAGE_SQL = """SELECT sum(pg_total_relation_size(name::regclass)) FROM unnest(
     'pump_ml_job_runs','pump_ml_artifacts']) name"""
 
 
-def prepare(rows, selection=None, *, features):
+def prepare(rows, selection=None, *, features, cuts=(.5, .7, .85)):
     """Mechanical challenger floors, never a model-validation/promotion gate."""
     if len(rows) < 200:
         raise ValueError("insufficient_compatible_rows_min200_challenger_only")
@@ -50,7 +50,7 @@ def prepare(rows, selection=None, *, features):
     times = sorted({utc(r["decision_at"]) for r in rows})
     if len(times) < 8:
         raise ValueError("insufficient_distinct_temporal_captures")
-    cuts = [times[int(len(times) * f)].isoformat() for f in (.5, .7, .85)]
+    cuts = [times[int(len(times) * f)].isoformat() for f in cuts]
     first = rows[0]["manifest"]
     return {"features": features, "feature_spec_hash": canonical_hash(FEATURE_SPEC),
             "source_commit": os.environ.get("RAILWAY_GIT_COMMIT_SHA") or os.environ.get("SOURCE_COMMIT", "local_test"),
@@ -72,14 +72,20 @@ def prepare(rows, selection=None, *, features):
 def prepare_directional(rows, horizon, research, selection):
     if len(rows) < research["min_rows_per_horizon"]:
         raise ValueError("insufficient_directional_rows")
-    spec = prepare(rows, selection, features=research["features"])
+    spec = prepare(rows, selection, features=research["features"], cuts=tuple(research["cohort_cuts"]))
+    context = list(research.get("context_features") or [])
     spec.update(features=research["features"], max_rows=research["max_rows"], min_episodes=research["min_episodes"],
+                context_features=context,
+                context_feature_spec_hash=canonical_hash(CONTEXT_FEATURE_SPEC) if context else None,
+                cohort_cuts=list(research["cohort_cuts"]),
                 min_days=research["min_days"], min_instruments=research["min_instruments"], params=research["params"],
                 directional_target={"version": "pump_endpoint_direction_v1", "horizon_minutes": horizon,
                                     "reference_policy": "gate_best_ask_v1", "flat_policy": "exclude_exact_zero",
                                     "unknown_policy": "exclude", "return_policy": "endpoint_gross"},
                 directional_evaluation={k: research[k] for k in ("bootstrap_repetitions", "reliability_bins",
-                                                                  "calibration_C", "calibration_max_iter")})
+                                                                  "calibration_C", "calibration_max_iter",
+                                                                  "calibration_method", "calibration_pool",
+                                                                  "calibration_max_slope")})
     return spec
 
 
@@ -105,7 +111,9 @@ async def run_directional_horizons(conn, owner, c, diagnostics, staging, start, 
         diagnostics["horizons"][str(h)] = diagnostic
         contract, rows = await select_temporal_training_rows(
             conn, owner, research["features"], canonical_hash(FEATURE_SPEC), quota, diagnostic,
-            bins=research["temporal_bins"], horizon_minutes=h)
+            bins=research["temporal_bins"], horizon_minutes=h,
+            extra_features=list(research.get("context_features") or []),
+            lookback_days=int(research.get("lookback_days") or 30))
         if not contract:
             raise ValueError("no_certified_point_in_time_listing_cohort")
         try:

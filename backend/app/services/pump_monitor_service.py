@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
+from copy import deepcopy
 import logging
 import time
 from datetime import datetime, timedelta, timezone
@@ -561,16 +563,31 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
         derivatives = await load_derivatives(symbols, v1_spec, now_ms, int(config["concurrency"]))
     except Exception as exc:  # perp context is optional: the cycle never depends on it
         logger.warning("[PUMP-PERP] unavailable user=%s reason=%s", user_id, type(exc).__name__)
+    structures: Dict[str, Any] = {}
+    try:
+        structures = {sym: v1.structure_metrics(series.get(sym) or [], v1_spec, now_ms)
+                      for sym in set(symbols) | {v1_ref}}
+    except Exception:
+        logger.exception("[PUMP-SCORE-V1] structure metrics failed user=%s", user_id)
     ml_payload: Dict[str, Any] = {"active": False, "reason": "not_loaded", "probabilities": {}}
     try:
         from . import pump_ml_inference
         loaded = await run_db_task(lambda db: pump_ml_inference.load_model(db, user_id, v1_spec), celery=True)
-        ml_payload = pump_ml_inference.predict_rows(loaded, rows, v1_spec)
+        ml_rows = rows
+        predictor = loaded.get("predictor")
+        if loaded.get("active") and predictor is not None and predictor.uses_context:
+            # ML-independent v1 pre-pass on a throwaway state copy: the model sees the
+            # same context cells (v1 structure, perp, regime, capital) the observations
+            # store, without stepping the real v1 state twice.
+            pre = v1.evaluate_universe(rows, structures, structures.get(v1_ref), deepcopy(v1_state),
+                                       minute_ms=last_minute, spec=v1_spec, capital_minutes=cap_minutes,
+                                       derivatives=derivatives, now_ms=now_ms, ml=None)
+            ctx = context_cells(pre, v1_spec)
+            ml_rows = [{**r, "indicators": {**(r.get("indicators") or {}), **ctx.get(r["symbol"], {})}} for r in rows]
+        ml_payload = pump_ml_inference.predict_rows(loaded, ml_rows, v1_spec)
     except Exception as exc:  # the ML is optional: no model → zero effect, never a broken cycle
         logger.warning("[PUMP-ML] inference unavailable user=%s reason=%s", user_id, type(exc).__name__)
     try:
-        structures = {sym: v1.structure_metrics(series.get(sym) or [], v1_spec, now_ms)
-                      for sym in set(symbols) | {v1_ref}}
         v1_out = v1.evaluate_universe(rows, structures, structures.get(v1_ref), v1_state,
                                       minute_ms=last_minute, spec=v1_spec, capital_minutes=cap_minutes,
                                       derivatives=derivatives, now_ms=now_ms, ml=ml_payload)
@@ -723,6 +740,40 @@ V1_CELL_KEYS = ("progress_atr", "rs_atr", "extension_atr", "efficiency_short", "
                 "progress_1m_atr")
 
 
+def context_cells(v1_out: Dict[str, Any], v1_spec: Dict[str, Any]) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    """ML-independent v1 context per symbol, as indicator cells.
+
+    Single source for both the stored observations (via ``apply_engines``) and
+    the ML pre-pass, so training and inference read identical values. Uses the
+    PRICE regime and raw capital tide, never the ML-capped regime or score.
+    """
+    results = v1_out.get("results") or {}
+    reg = v1_out.get("regime") or {}
+    cap = reg.get("capital") or {}
+    universe = {"ctx_breadth": reg.get("breadth"), "ctx_ref_progress_atr": reg.get("reference_progress_atr"),
+                "ctx_ref_ret_pct": reg.get("reference_ret_pct"), "ctx_capital_ratio": cap.get("ratio"),
+                "ctx_capital_z": cap.get("z")}
+    out: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for symbol, res in results.items():
+        safe = _json_safe(res)
+        cells: Dict[str, Dict[str, Any]] = {}
+        for key in V1_CELL_KEYS:
+            value = (safe.get("values") or {}).get(key)
+            cells[f"v1_{key}"] = {"value": value, "reason": None if value is not None else safe.get("structure_reason"),
+                                  "source": f"{v1_spec['version']}:{v1_spec['structure']['timeframe']}_closed"}
+        deriv = safe.get("derivatives") or {}
+        for key in ("perp_flow_norm", "oi_change_pct", "funding_rate", "short_liq_oi_bps"):
+            cells[f"perp_{key}"] = {"value": deriv.get(key), "reason": None if deriv.get(key) is not None
+                                    else (deriv.get("reason") or "no_data"), "source": "gate_futures_contract_stats"}
+        for key, value in universe.items():
+            value = _json_safe(value)
+            ok = isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
+            cells[key] = {"value": value if ok else None, "reason": None if ok else "regime_unavailable",
+                          "source": f"{v1_spec['version']}:universe_regime"}
+        out[symbol] = cells
+    return out
+
+
 def apply_engines(rows: List[Dict[str, Any]], v1_out: Dict[str, Any], engine: str, v1_spec: Dict[str, Any]) -> None:
     """Attach v1 to each row and set the displayed Pump Score cell.
 
@@ -732,6 +783,7 @@ def apply_engines(rows: List[Dict[str, Any]], v1_out: Dict[str, Any], engine: st
     ``only_rising`` follow the active engine.
     """
     results = v1_out.get("results") or {}
+    context = context_cells(v1_out, v1_spec)
     for row in rows:
         cells = row["indicators"]
         v0_cell = dict(cells.get("pump_monitor_score") or {})
@@ -747,14 +799,7 @@ def apply_engines(rows: List[Dict[str, Any]], v1_out: Dict[str, Any], engine: st
             cells["pump_score_v1"] = {"value": safe["score"], "reason": safe["reason"], "source": v1_spec["version"],
                                       "status": "VALID" if safe["score"] is not None else "NO_DATA",
                                       "state": safe["state"], "condition": safe["condition"]}
-            for key in V1_CELL_KEYS:
-                value = (safe.get("values") or {}).get(key)
-                cells[f"v1_{key}"] = {"value": value, "reason": None if value is not None else safe.get("structure_reason"),
-                                      "source": f"{v1_spec['version']}:{v1_spec['structure']['timeframe']}_closed"}
-            deriv = safe.get("derivatives") or {}
-            for key in ("perp_flow_norm", "oi_change_pct", "funding_rate", "short_liq_oi_bps"):
-                cells[f"perp_{key}"] = {"value": deriv.get(key), "reason": None if deriv.get(key) is not None
-                                        else (deriv.get("reason") or "no_data"), "source": "gate_futures_contract_stats"}
+            cells.update(context.get(row["symbol"]) or {})
             row["direction"] = safe.get("direction")
             p_up = safe.get("ml_up_probability")
             cells["ml_up_probability"] = {"value": p_up, "reason": None if p_up is not None else "ml_inactive_or_abstained",
