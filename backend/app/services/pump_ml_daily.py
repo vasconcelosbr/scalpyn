@@ -77,6 +77,10 @@ def prepare_directional(rows, horizon, research, selection):
     context = list(research.get("context_features") or [])
     spec.update(features=research["features"], max_rows=research["max_rows"], min_episodes=research["min_episodes"],
                 context_features=context,
+                # Parameters of the derived relative features, frozen into the manifest so
+                # live inference recomputes them identically.
+                relative_beta=(research.get("relative_beta") if (research.get("relative_beta") or {}).get("enabled")
+                               and research.get("target_mode") == "relative_universe_median" else None),
                 context_feature_spec_hash=canonical_hash(CONTEXT_FEATURE_SPEC) if context else None,
                 cohort_cuts=list(research["cohort_cuts"]),
                 min_days=research["min_days"], min_instruments=research["min_instruments"], params=research["params"],
@@ -116,7 +120,8 @@ async def run_directional_horizons(conn, owner, c, diagnostics, staging, start, 
             extra_features=list(research.get("context_features") or []),
             lookback_days=int(research.get("lookback_days") or 30),
             benchmark=research.get("target_mode") == "relative_universe_median",
-            beta=research.get("relative_beta") if (research.get("relative_beta") or {}).get("enabled") else None)
+            beta=research.get("relative_beta") if (research.get("relative_beta") or {}).get("enabled") else None,
+            max_rows_per_minute=int(research.get("max_rows_per_minute") or 0))
         if not contract:
             raise ValueError("no_certified_point_in_time_listing_cohort")
         try:

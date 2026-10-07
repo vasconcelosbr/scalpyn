@@ -231,3 +231,50 @@ async def models_summary(db, user_id, spec: Dict[str, Any]) -> Dict[str, Any]:
             "quality_spec": cfg.get("quality"), "max_model_age_days": cfg.get("max_model_age_days"),
             "models": models,
             "note": "Métricas fora da amostra (bloco de teste temporal, ponderado por episódio)."}
+
+
+DERIVED_RELATIVE = ("rel_prev15_resid", "beta_24h")
+
+
+def relative_params(predictor) -> Optional[Dict[str, Any]]:
+    """Derived-feature parameters frozen in the model manifest, when the model uses them."""
+    if predictor is None or not any(f in predictor.features for f in DERIVED_RELATIVE):
+        return None
+    return (predictor.manifest.get("spec") or {}).get("relative_beta")
+
+
+_CANDLES = text("""
+    SELECT DISTINCT ON (symbol, time) symbol, time, close FROM ohlcv
+     WHERE symbol = ANY(CAST(:s AS text[])) AND timeframe = :tf AND market_type = 'spot'
+       AND is_closed IS TRUE AND time >= :lo AND time < :hi
+     ORDER BY symbol, time, CASE WHEN exchange ILIKE 'gate%' THEN 0 ELSE 1 END
+""")
+
+
+async def relative_context(db, symbols: List[str], params: Dict[str, Any], now_s: int) -> Dict[str, Dict[str, Any]]:
+    """Live ``rel_prev15_resid`` / ``beta_24h`` cells, from the SAME function training
+    uses (``pump_ml_selection.relative_features`` + ``residual_prev``) on closed ohlcv
+    candles at ``now_s``. Missing values become reasoned cells (→ NaN in the model)."""
+    from datetime import datetime, timedelta, timezone
+    from .pump_ml_selection import _TF_SECONDS, relative_features, residual_prev
+    step = _TF_SECONDS[params["timeframe"]]
+    window = int(params["window_candles"])
+    hi = datetime.fromtimestamp(now_s, timezone.utc)
+    lo = hi - timedelta(seconds=step * (window + 2))
+    rows = (await db.execute(_CANDLES, {"s": list(symbols), "tf": params["timeframe"], "lo": lo, "hi": hi})).all()
+    closes: Dict[str, Dict[int, float]] = {}
+    for sym, t, close in rows:
+        if close is not None:
+            closes.setdefault(sym, {})[int(t.timestamp())] = float(close)
+    feats = relative_features(closes, {(s, now_s) for s in symbols}, step_seconds=step, window=window,
+                              min_points=int(params["min_points"]), prev_candles=int(params.get("prev_candles", 3)))
+    resid = residual_prev({s: feats[(s, now_s)] for s in symbols if (s, now_s) in feats})
+    out = {}
+    for s in symbols:
+        b = (feats.get((s, now_s)) or {}).get("beta")
+        r = resid.get(s)
+        out[s] = {"rel_prev15_resid": {"value": r, "reason": None if r is not None else "relative_context_unavailable",
+                                       "source": "ohlcv_closed_relative_v1"},
+                  "beta_24h": {"value": b, "reason": None if b is not None else "beta_unavailable",
+                               "source": "ohlcv_closed_relative_v1"}}
+    return out

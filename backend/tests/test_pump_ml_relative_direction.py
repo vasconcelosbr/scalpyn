@@ -38,7 +38,8 @@ def test_relative_target_beats_the_market_not_the_zero_line():
 def test_default_config_is_relative():
     r = eng.config(None)["research"]
     assert r["target_mode"] == "relative_universe_median" and r["relative_min_assets"] == 10
-    assert r["relative_beta"] == {"enabled": True, "timeframe": "5m", "window_candles": 288, "min_points": 200}
+    assert r["relative_beta"] == {"enabled": True, "timeframe": "5m", "window_candles": 288, "min_points": 200,
+                                  "prev_candles": 3}
     with pytest.raises(ValueError):
         eng.config({"research": {"relative_beta": {"enabled": True, "timeframe": "5m", "window_candles": 288,
                                                    "min_points": 500}}})
@@ -117,13 +118,14 @@ def test_beta_residual_benchmark_removes_market_direction():
              "label_status": "known", "label_coverage_complete": True, "values": {"spread_pct": 0.0}}]
     diag = {}
     import app.services.pump_ml_selection as mod
-    orig = mod.rolling_betas
-    mod.rolling_betas = lambda closes, needed, **kw: {(s, int(t0.timestamp())): betas[s] for s, _ in cross}
+    orig = mod.relative_features
+    mod.relative_features = lambda closes, needed, **kw: {(s, int(t0.timestamp())): {"beta": betas[s], "r_prev": None}
+                                                          for s, _ in cross}
     try:
         asyncio.run(sel.attach_universe_benchmark(Conn(), "u", rows, 15, "h", t0, diag,
                                                   beta={"timeframe": "5m", "window_candles": 288, "min_points": 200}))
     finally:
-        mod.rolling_betas = orig
+        mod.relative_features = orig
     # plain median = −3.0; residuals: HI 0, M1 0, M2 +0.1, LO +0.2, X −0.1 → median 0
     lo, m2 = rows
     assert lo["beta"] == 0.2 and lo["benchmark_assets"] == 5

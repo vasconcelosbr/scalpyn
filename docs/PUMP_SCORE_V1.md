@@ -211,3 +211,26 @@ Config:
 - `research.target_mode` (`relative_universe_median` | `absolute`);
 - `research.relative_min_assets`;
 - `research.relative_beta` = `{enabled, timeframe, window_candles, min_points}`.
+
+**Primeiro treino relativo (07/10 17:42 UTC):**
+- AUC 0,499 em 10 min e 0,500 em 15 min, os dois reprovados.
+- A frequência de "acima" por bloco ficou entre 0,43 e 0,57; antes oscilava entre 0,25 e 0,74.
+- As cerca de 4,3 mil linhas vieram de só 168 e 162 minutos distintos.
+
+## v1.9 — Amostragem por minuto e momento relativo (2026-10-07)
+
+**Amostragem:** `research.max_rows_per_minute = 5`.
+- Cada minuto de decisão contribui com no máximo 5 ativos, escolhidos por hash determinístico do `observation_id`, sem olhar o resultado.
+- O corte é aplicado antes da projeção JSON, usando o índice `(user_id, decision_at, observation_id)`.
+- O mesmo orçamento de linhas passa a cobrir cerca de 5× mais momentos de mercado.
+- A mediana do mercado em cada minuto continua sendo calculada com todos os ativos rotulados daquele minuto.
+
+**Variáveis derivadas** (dicionário de contexto):
+- `rel_prev15_resid`: resíduo relativo das 3 velas fechadas anteriores, `(r_prev − β·mediana(r_prev)) − mediana(...)`. É a mesma construção do rótulo, aplicada à janela anterior.
+- `beta_24h`: o próprio beta.
+
+Regras:
+- As duas são calculadas a partir de `ohlcv` 5m fechado no momento da decisão.
+- No treino, são recalculadas em memória, sem gravar nada no snapshot imutável.
+- Na inferência, o ciclo usa a mesma função (`relative_features` + `residual_prev`) com os parâmetros congelados no manifesto do modelo (`spec.relative_beta`), com cache por vela fechada.
+- Motivação (velas de 5 min da Gate, 02 a 07/10, 72.493 pares): P(próximo acima | anterior acima) = 0,4774 contra 0,5225 quando o anterior ficou abaixo. É uma reversão leve.
