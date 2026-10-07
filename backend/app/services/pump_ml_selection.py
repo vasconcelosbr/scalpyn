@@ -130,15 +130,19 @@ DIRECTIONAL_ROWS_SQL = DIRECTIONAL_ROWS_SQL.replace(
 #     |P(beat | mkt down) - P(beat | mkt up)| = 0.553 raw vs 0.111 beta-adjusted).
 #   * residual e_j = r_j - beta_j * median(r); benchmark for row i = beta_i * median(r)
 #     + median(e), so (own - benchmark) = e_i - median(e).
+# LATERAL ... LIMIT 1 forces one primary-key probe per observation (same pattern as
+# ROWS_SQL). A plain JOIN over ~50k observations let the planner hash-scan the whole
+# label table and hit the statement timeout (07/10 19:51 UTC, QueryCanceledError).
 CROSS_SECTION_SQL = """SELECT o.slot_at, o.symbol,
  ((1+(l.payload->>'endpoint_return_pct')::float8/100)*(1+(o.payload->'values'->>'spread_pct')::float8/200)-1)*100 AS r
  FROM pump_opportunity_observations o
- JOIN pump_opportunity_labels l ON l.observation_id=o.observation_id
-  AND l.horizon_minutes=$3 AND l.label_spec_hash=$4 AND l.labeled_at<=$5
+ CROSS JOIN LATERAL (SELECT payload FROM pump_opportunity_labels
+   WHERE observation_id=o.observation_id AND horizon_minutes=$3 AND label_spec_hash=$4 AND labeled_at<=$5
+   LIMIT 1) l
  WHERE o.user_id=$1 AND o.slot_at=ANY($2::timestamptz[])
+  AND jsonb_typeof(o.payload->'values'->'spread_pct')='number'
   AND l.payload->>'status'='known' AND l.payload->>'coverage_complete'='true'
-  AND jsonb_typeof(l.payload->'endpoint_return_pct')='number'
-  AND jsonb_typeof(o.payload->'values'->'spread_pct')='number'"""
+  AND jsonb_typeof(l.payload->'endpoint_return_pct')='number'"""
 CANDLES_SQL = """SELECT DISTINCT ON (symbol, time) symbol, time, close::float8 AS close FROM ohlcv
  WHERE symbol=ANY($1::text[]) AND timeframe=$2 AND market_type='spot' AND is_closed IS TRUE
   AND time>=$3 AND time<$4
@@ -221,7 +225,7 @@ def rolling_betas(closes,needed,*,step_seconds,window,min_points):
 
 
 async def attach_universe_benchmark(conn,owner,rows,horizon_minutes,label_hash,cutoff,diagnostics,*,
-                                    beta=None,chunk=500):
+                                    beta=None,chunk=100):
     """Adds ``benchmark_return_pct`` / ``benchmark_assets`` / ``beta`` to each row
     (None/0 when the minute or the asset's beta is unavailable). Runs inside the
     caller's snapshot. ``beta=None`` → plain same-minute median (no beta)."""
@@ -343,9 +347,12 @@ async def select_temporal_training_rows(conn,owner,features,feature_hash,max_row
             diagnostics['phase']='temporal_candidate_ids'
             cur=await conn.cursor(WINDOW_IDS_SQL,owner,lo,hi,inclusive)
             selected=[];candidate_count=0;minute_counts={}
+            # With the per-minute cap only a few ids per minute are projected, so the
+            # (index-only) id scan reads larger batches to cut round trips ~10x.
+            id_batch=batch_size*10 if max_rows_per_minute>0 else batch_size
             while len(selected)<quota:
                 diagnostics['phase']='temporal_candidate_ids'
-                records=await cur.fetch(batch_size)
+                records=await cur.fetch(id_batch)
                 if not records:break
                 candidate_count+=len(records);diagnostics['candidate_rows']+=len(records);diagnostics['batches']+=1
                 ids=cap_per_minute(records,minute_counts,max_rows_per_minute)
