@@ -234,3 +234,68 @@ Regras:
 - No treino, são recalculadas em memória, sem gravar nada no snapshot imutável.
 - Na inferência, o ciclo usa a mesma função (`relative_features` + `residual_prev`) com os parâmetros congelados no manifesto do modelo (`spec.relative_beta`), com cache por vela fechada.
 - Motivação (velas de 5 min da Gate, 02 a 07/10, 72.493 pares): P(próximo acima | anterior acima) = 0,4774 contra 0,5225 quando o anterior ficou abaixo. É uma reversão leve.
+
+**Treino com amostragem e momento relativo (07/10 20:16 UTC):**
+- Os dados vieram de 1.438 minutos distintos no horizonte de 10 min e 1.370 no de 15 min.
+- 10 min: AUC 0,520, com `beta_24h` e `rel_prev15_resid` como as variáveis mais usadas. O intervalo de confiança cruza zero.
+- 15 min: AUC 0,487.
+- Os dois foram reprovados.
+
+## v1.10 — Avaliação walk-forward por dia e métrica econômica (2026-10-07)
+
+`research.walk_forward = {enabled, min_train_days: 2, calibration_fraction: 0.2, economic_quantile: 0.1}`
+
+**Como funciona:**
+- Cada dia UTC com pelo menos 2 dias anteriores vira teste uma vez.
+- O modelo daquele dia treina só com o passado, até o início do dia menos o embargo, e descarta episódios que tocam o dia de teste.
+- A calibração usa a última fração desse passado, com o mesmo Platt limitado.
+- As previsões feitas fora do treino são agrupadas e geram:
+  - AUC e Brier ponderados por episódio, comparados à taxa base do treino de cada dia, com IC por bootstrap de episódios;
+  - AUC de cada dia (estabilidade);
+  - a métrica econômica: retorno excedente médio (pp) dos 10% de maior probabilidade menos o dos 10% de menor.
+
+**Portão de qualidade:** `score_v1.ml.quality.source = walk_forward`. Os mesmos critérios (AUC ≥ 0,55, Brier melhor que a taxa base, IC positivo, episódios mínimos) passam a ser aplicados ao resultado agrupado. Modelos sem walk-forward continuam avaliados pelo holdout.
+
+**Cobertura de velas:** `GET /api/pump-monitor/ml/candle-coverage` é somente leitura. Mostra o histórico de velas de 1 e 5 min por ativo do universo e dimensiona o futuro dataset histórico montado a partir de velas.
+
+## v1.11 — Família "velas": histórico a partir de `ohlcv` (2026-10-07)
+
+**Por quê:** o dataset de observações só começa em 01/10, e o bloco de treino de cada modelo enxergava cerca de 2 dias. Tudo o que o objetivo relativo precisa sai de velas fechadas:
+- beta;
+- resíduos relativos;
+- o movimento do BTC à frente das altcoins (lead);
+- o retorno do mercado;
+- o próprio rótulo.
+
+Por isso um modelo só de preço pode aprender com todo o histórico de velas desde já. O fluxo de ordens (delta, CVD, persistência compradora) existe só ao vivo e não entra nesta família.
+
+**Construção:** `pump_ml_candles.build_frame` é uma função única e vetorizada, usada tanto no treino (todas as decisões) quanto na inferência ao vivo (última vela fechada). Uma decisão no fechamento da vela t usa apenas velas até t.
+
+Variáveis:
+- `beta_24h`;
+- `rel_resid_{1,3,6,12}`: resíduo relativo de 5, 15, 30 e 60 min;
+- `vol_ratio`: volatilidade de 1h dividida pela de 24h;
+- `btc_ret_{1,3}`;
+- `lag_gap_{1,3}`: β × retorno do BTC menos o retorno do ativo, ou seja, o quanto ainda falta o ativo acompanhar;
+- `mkt_ret_{1,3}`.
+
+Rótulo: resíduo com beta acima da mediana do minuto. Há dois modos:
+- `endpoint`: no fim do horizonte;
+- `path_mean`: média do resíduo ao longo do horizonte, menos ruidosa e usada como padrão.
+
+Os dois modos são avaliados com o mesmo walk-forward, em `metrics.label_variants`.
+
+**Amostragem:** no máximo 5 ativos por instante (hash) e até 40 mil linhas, com instantes espaçados de forma uniforme.
+
+**Execução:**
+- família própria no ledger (`payload.family = candle`), com lock próprio, regra diária própria e orçamento de 840 s;
+- treino agendado às 06:10 UTC;
+- disparo manual em `POST /api/pump-monitor/ml/train?family=candle`;
+- configuração em `research.candle`.
+
+**Aplicação:** `score_v1.ml.objective = relative_candle` faz o v1 usar o modelo de velas, que recalcula as variáveis no ciclo com os parâmetros do manifesto. O padrão continua `relative` até a família de velas passar no portão de qualidade.
+
+**Limites conhecidos:**
+- viés de sobrevivência: o universo usado é o das últimas 24h de observações;
+- o histórico depende do que o coletor gravou em `ohlcv` (ver `GET /ml/candle-coverage`);
+- a decisão ao vivo ocorre a cada minuto, mas as variáveis só mudam a cada vela fechada.

@@ -56,6 +56,7 @@ const QUALITY_REASON: Record<string, string> = {
 };
 
 type MlModelRow = {
+  family?: "observation" | "candle";
   horizon_minutes: number;
   applied: boolean;
   status: "approved" | "quality_gate_failed" | "no_recent_model";
@@ -71,6 +72,14 @@ type MlModelRow = {
     features: number; context_features: number;
     context_coverage_test: Record<string, number>;
     top_features: [string, number][];
+    walk_forward?: {
+      scored_days: number;
+      pooled: {
+        auc: number; episodes: number; days_auc_above_half: number;
+        economic?: { quantile: number; top_mean: number; bottom_mean: number; top_minus_bottom: number;
+          top_minus_bottom_ci95: number[] };
+      } | null;
+    } | null;
   };
 };
 type MlModels = { enabled: boolean; applied_horizon_minutes: number; objective?: string; models: MlModelRow[]; note: string };
@@ -96,9 +105,9 @@ function MlModelsPanel({ data, error }: { data: MlModels | null; error: string }
           const ctxCov = d ? Object.values(d.context_coverage_test ?? {}) : [];
           const avgCov = ctxCov.length ? ctxCov.reduce((a, b) => a + b, 0) / ctxCov.length : null;
           return (
-            <div key={m.horizon_minutes} className={styles.mlBlock}>
+            <div key={`${m.family ?? "observation"}-${m.horizon_minutes}`} className={styles.mlBlock}>
               <div className={styles.mlRow} role="row">
-                <span>{m.horizon_minutes} min{m.applied ? " ●" : ""}</span>
+                <span>{m.horizon_minutes} min{m.family === "candle" ? " · velas" : ""}{m.applied ? " ●" : ""}</span>
                 <span className={m.status === "approved" ? styles.inText : m.status === "no_recent_model" ? styles.muted : styles.outText}>
                   {m.status === "approved" ? "Aprovado" : m.status === "no_recent_model" ? "Sem modelo" : "Reprovado"}
                 </span>
@@ -110,6 +119,15 @@ function MlModelsPanel({ data, error }: { data: MlModels | null; error: string }
               {q && !q.approved && q.reasons.length > 0 && (
                 <div className={styles.muted}>Motivo: {q.reasons.map(r => QUALITY_REASON[r] ?? r).join(", ")}</div>
               )}
+              {d?.walk_forward?.pooled && (() => {
+                const w = d.walk_forward.pooled; const e = w.economic;
+                return (
+                  <div className={styles.muted}>
+                    Walk-forward: {d.walk_forward.scored_days} dia(s) testados um a um · AUC {f3(w.auc)} · dias com AUC &gt; 0,5: {w.days_auc_above_half}/{d.walk_forward.scored_days}
+                    {e ? ` · top ${Math.round(e.quantile * 100)}% − bottom ${Math.round(e.quantile * 100)}%: ${e.top_minus_bottom >= 0 ? "+" : ""}${e.top_minus_bottom.toFixed(3)} pp (IC95 ${e.top_minus_bottom_ci95.map(x => x.toFixed(3)).join(" a ")})` : ""}
+                  </div>
+                );
+              })()}
               {d && (
                 <div className={styles.muted}>
                   Calibração {d.calibration?.method ?? "—"} ({d.calibration?.rows ?? "—"} linhas

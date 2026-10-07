@@ -71,12 +71,13 @@ async def explore_opportunity_pattern(payload: Dict[str,Any],response: Response,
 
 
 @router.post("/ml/train", status_code=202)
-async def trigger_ml_training(user_id: UUID = Depends(get_current_user_id)):
+async def trigger_ml_training(family: str = Query("observation", pattern="^(observation|candle)$"),
+                              user_id: UUID = Depends(get_current_user_id)):
     """Manual Pump ML training for the caller only. Bypasses the one-run-per-day
     rule but keeps the singleton lock and score_v1.ml.training.manual_min_interval_minutes (default 5)."""
     from ..tasks.pump_monitor import train_ml_daily
-    result = train_ml_daily.apply_async(kwargs={"owner": str(user_id), "force": True})
-    return {"status": "queued", "task_id": result.id, "owner": str(user_id),
+    result = train_ml_daily.apply_async(kwargs={"owner": str(user_id), "force": True, "family": family})
+    return {"status": "queued", "task_id": result.id, "owner": str(user_id), "family": family,
             "note": "Resultado em GET /api/pump-monitor/opportunities/intelligence (training_runs)."}
 
 
@@ -91,6 +92,35 @@ async def ml_models(response: Response, db: AsyncSession = Depends(get_db),
         return await pump_ml_inference.models_summary(db, user_id, config["score_v1"])
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"ml_models_unavailable:{type(exc).__name__}")
+
+
+@router.get("/ml/candle-coverage")
+async def ml_candle_coverage(response: Response, db: AsyncSession = Depends(get_db),
+                             user_id: UUID = Depends(get_current_user_id)):
+    """Read-only: closed spot 1m/5m candle history in ``ohlcv`` for the monitored
+    universe (sizes the candle-based historical dataset)."""
+    from sqlalchemy import text
+    response.headers["Cache-Control"] = "private, no-store"
+    envelope = await svc.latest_envelope(db, user_id)
+    symbols = sorted({r["symbol"] for r in (envelope or {}).get("rows") or []})
+    if not symbols:
+        return {"symbols": 0, "rows": []}
+    try:
+        await db.execute(text("SET LOCAL statement_timeout = '20000ms'"))
+        rows = (await db.execute(text("""
+            SELECT symbol, timeframe, min(time) AS first, max(time) AS last, count(*) AS candles
+              FROM ohlcv
+             WHERE symbol = ANY(CAST(:s AS text[])) AND timeframe IN ('1m', '5m')
+               AND market_type = 'spot' AND is_closed IS TRUE
+             GROUP BY symbol, timeframe
+        """), {"s": symbols})).mappings().all()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"candle_coverage_unavailable:{type(exc).__name__}")
+    return {"symbols": len(symbols),
+            "rows": [{"symbol": r["symbol"], "timeframe": r["timeframe"],
+                      "first": r["first"].isoformat() if r["first"] else None,
+                      "last": r["last"].isoformat() if r["last"] else None,
+                      "candles": int(r["candles"])} for r in rows]}
 
 
 @router.get("/capital-flow/history")

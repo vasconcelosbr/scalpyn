@@ -164,7 +164,7 @@ def test_models_summary_reports_every_horizon(monkeypatch):
     spec = deepcopy(v1.DEFAULT_V1)
     spec["ml"]["training"]["horizons_minutes"] = [10, 15, 30]
     out = asyncio.run(inf.models_summary(None, "u", spec))
-    by_h = {m["horizon_minutes"]: m for m in out["models"]}
+    by_h = {m["horizon_minutes"]: m for m in out["models"] if m["family"] == "observation"}
     assert out["applied_horizon_minutes"] == 15 and by_h[15]["applied"] is True
     assert by_h[10]["quality"]["approved"] is True and by_h[15]["quality"]["approved"] is False
     assert by_h[30]["status"] == "no_recent_model"

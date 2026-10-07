@@ -77,6 +77,7 @@ def prepare_directional(rows, horizon, research, selection):
     context = list(research.get("context_features") or [])
     spec.update(features=research["features"], max_rows=research["max_rows"], min_episodes=research["min_episodes"],
                 context_features=context,
+                walk_forward=research.get("walk_forward"),
                 # Parameters of the derived relative features, frozen into the manifest so
                 # live inference recomputes them identically.
                 relative_beta=(research.get("relative_beta") if (research.get("relative_beta") or {}).get("enabled")
@@ -139,25 +140,40 @@ async def run_directional_horizons(conn, owner, c, diagnostics, staging, start, 
     return results
 
 
+FAMILIES = ("observation", "candle")
+# Ledger rows without ``family`` predate 2026-10-07 and belong to the observation family.
+_FAMILY_SQL = "AND coalesce(payload->>'family','observation')=$3"
+
+
+def _lock_key(owner, family: str) -> str:
+    return f"pump_ml:{owner}" if family == "observation" else f"pump_ml:{family}:{owner}"
+
+
 async def run_owner(conn, owner, *, horizons: List[int], force: bool = False,
-                    min_interval_minutes: int = 5) -> Dict[str, Any]:
+                    min_interval_minutes: int = 5, family: str = "observation") -> Dict[str, Any]:
     """``force`` (manual trigger) skips the one-run-per-UTC-day rule but never the
     singleton lock, and refuses while a run is in progress or one started less
-    than ``min_interval_minutes`` ago (``score_v1.ml.training.manual_min_interval_minutes``)."""
-    if not await conn.fetchval("SELECT pg_try_advisory_lock(hashtextextended($1,0))", f"pump_ml:{owner}"):
-        return {"owner": str(owner), "status": "singleton_busy"}
+    than ``min_interval_minutes`` ago (``score_v1.ml.training.manual_min_interval_minutes``).
+    Each ``family`` (observation | candle) has its own lock, daily rule and budget."""
+    if family not in FAMILIES:
+        raise ValueError(f"unknown_family:{family}")
+    lock = _lock_key(owner, family)
+    if not await conn.fetchval("SELECT pg_try_advisory_lock(hashtextextended($1,0))", lock):
+        return {"owner": str(owner), "status": "singleton_busy", "family": family}
     if force:
         prior = await conn.fetchval(
             "SELECT run_id FROM pump_ml_job_runs WHERE user_id=$1 AND (status='running' AND deadline_at>now() "
-            "OR started_at>=now()-make_interval(mins=>$2)) LIMIT 1", owner, int(min_interval_minutes))
+            f"OR started_at>=now()-make_interval(mins=>$2)) {_FAMILY_SQL} LIMIT 1", owner, int(min_interval_minutes),
+            family)
         skip_status = "recent_run_exists"
     else:
         prior = await conn.fetchval(
             "SELECT run_id FROM pump_ml_job_runs WHERE user_id=$1 AND "
-            "started_at>=date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' LIMIT 1", owner)
+            "started_at>=date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' "
+            "AND coalesce(payload->>'family','observation')=$2 LIMIT 1", owner, family)
         skip_status = "daily_already_recorded"
     if prior:
-        await conn.execute("SELECT pg_advisory_unlock(hashtextextended($1,0))", f"pump_ml:{owner}")
+        await conn.execute("SELECT pg_advisory_unlock(hashtextextended($1,0))", lock)
         return {"owner": str(owner), "status": skip_status, "run_id": str(prior)}
     run_id = uuid4()
     start = datetime.now(timezone.utc)
@@ -165,7 +181,7 @@ async def run_owner(conn, owner, *, horizons: List[int], force: bool = False,
     await conn.execute(
         "INSERT INTO pump_ml_job_runs(run_id,user_id,deadline_at,status,payload) VALUES($1,$2,$3,'running',$4)",
         run_id, owner, start + timedelta(seconds=MAX_RUNTIME_SECONDS + 60),
-        {"runner": "celery", "trigger": "manual" if force else "schedule", "threads": 1,
+        {"runner": "celery", "trigger": "manual" if force else "schedule", "threads": 1, "family": family,
          "max_runtime_seconds": MAX_RUNTIME_SECONDS, "applied_delta": 0})
     try:
         raw = await conn.fetchval(
@@ -181,7 +197,14 @@ async def run_owner(conn, owner, *, horizons: List[int], force: bool = False,
         if (used or 0) + 5_000_000 > c["budget"]["max_storage_bytes"]:
             raise ValueError("pump_storage_budget_exhausted")
         with tempfile.TemporaryDirectory(prefix="pump_ml_") as staging:
-            results = await run_directional_horizons(conn, owner, c, selection, staging, start, configured)
+            if family == "candle":
+                from .pump_ml_candles import run_candle_horizons
+                if not c["research"]["candle"]["enabled"]:
+                    raise ValueError("candle_family_disabled")
+                results = await run_candle_horizons(conn, owner, c, selection, staging,
+                                                    start + timedelta(seconds=MAX_RUNTIME_SECONDS))
+            else:
+                results = await run_directional_horizons(conn, owner, c, selection, staging, start, configured)
             artifacts = []
             for result in results:
                 for p in (Path(staging) / result["manifest"]["artifact_namespace"]).iterdir():
@@ -205,8 +228,9 @@ async def run_owner(conn, owner, *, horizons: List[int], force: bool = False,
                                 experiment, f"{manifest['artifact_namespace']}/{name}",
                                 hashlib.sha256(content).hexdigest(), content)
         outcome = {"status": "challenger" if results else "blocked",
-                   "objective": "relative_direction_v1" if (c.get("research") or {}).get("target_mode") == "relative_universe_median"
-                   else "endpoint_direction_v1",
+                   "objective": ("relative_candle_v1" if family == "candle" else
+                                 "relative_direction_v1" if (c.get("research") or {}).get("target_mode") == "relative_universe_median"
+                                 else "endpoint_direction_v1"),
                    "reason": None if results else "no_horizon_with_sufficient_directional_support",
                    "experiments": [{"experiment_id": str(uuid5(NAMESPACE_URL,
                                                                f"pump_registry:{owner}:{r['manifest']['experiment_id']}")),
@@ -220,8 +244,9 @@ async def run_owner(conn, owner, *, horizons: List[int], force: bool = False,
         logger.exception("[PUMP-ML] daily run failed owner=%s", owner)
         outcome = {"status": "failed", "reason": type(exc).__name__, "detail": str(exc)[:300], "applied_delta": 0}
     finally:
-        await conn.execute("SELECT pg_advisory_unlock(hashtextextended($1,0))", f"pump_ml:{owner}")
+        await conn.execute("SELECT pg_advisory_unlock(hashtextextended($1,0))", lock)
     outcome.update(run_id=str(run_id), owner=str(owner), runner="celery", trigger="manual" if force else "schedule",
+                   family=family,
                    source_commit=os.environ.get("RAILWAY_GIT_COMMIT_SHA") or os.environ.get("SOURCE_COMMIT", "local_test"),
                    duration_seconds=round((datetime.now(timezone.utc) - start).total_seconds(), 3),
                    selection=selection)
@@ -246,7 +271,7 @@ async def _training_spec(conn, owner) -> Dict[str, Any]:
     return eng.effective_config(stored)["score_v1"]["ml"]["training"]
 
 
-async def run_daily(*, owner: str = None, force: bool = False) -> Dict[str, Any]:
+async def run_daily(*, owner: str = None, force: bool = False, family: str = "observation") -> Dict[str, Any]:
     import asyncpg
     url = os.environ["DATABASE_URL"].replace("postgresql+asyncpg://", "postgresql://")
     out: Dict[str, Any] = {}
@@ -266,7 +291,7 @@ async def run_daily(*, owner: str = None, force: bool = False) -> Dict[str, Any]
                 continue
             await conn.execute(f"SET statement_timeout = {int(training['statement_timeout_ms'])}")
             out[str(owner_id)] = await run_owner(conn, owner_id, horizons=[int(h) for h in training["horizons_minutes"]],
-                                                 force=force,
+                                                 force=force, family=family,
                                                  min_interval_minutes=int(training.get("manual_min_interval_minutes", 5)))
         return out
     finally:

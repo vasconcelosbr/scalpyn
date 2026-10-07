@@ -114,7 +114,10 @@ DEFAULT_V1: Dict[str, Any] = {
         "max_model_age_days": 7,
         "max_feature_age_seconds": 120,
         "quality": {"min_auc": 0.55, "require_brier_better": True, "require_ci_positive": True,
-                    "min_test_episodes": 30},
+                    "min_test_episodes": 30,
+                    # "walk_forward" (every day tested once, past-only training) when the model
+                    # carries it; "holdout" = the single last temporal block (pre-2026-10-07 models).
+                    "source": "walk_forward"},
         "score": {"max_adjust": 0.15},          # score × [1 − 0.15, 1 + 0.15] linear in (2p − 1)
         "direction": {"confirm_up": 0.60, "confirm_down": 0.40},
         "regime": {"min_assets": 10,
@@ -245,12 +248,14 @@ def validate(spec: Dict[str, Any], errors: List[str]) -> None:
             errors.append(f"score_v1.derivatives: interval in {sorted(_TF_MS)} and block_flags_min >= 1")
     ml = spec.get("ml") or {}
     if ml:
-        if ml.get("objective", "relative") not in ("relative", "absolute"):
-            errors.append("score_v1.ml.objective must be relative|absolute")
+        if ml.get("objective", "relative") not in ("relative", "absolute", "relative_candle"):
+            errors.append("score_v1.ml.objective must be relative|absolute|relative_candle")
         if not 0 <= float(ml["score"]["max_adjust"]) <= 0.5:
             errors.append("score_v1.ml.score.max_adjust must be within [0, 0.5]")
         if not 0 <= float(ml["direction"]["confirm_down"]) < 0.5 < float(ml["direction"]["confirm_up"]) <= 1:
             errors.append("score_v1.ml.direction: 0 <= confirm_down < 0.5 < confirm_up <= 1")
+        if ml["quality"].get("source", "walk_forward") not in ("walk_forward", "holdout"):
+            errors.append("score_v1.ml.quality.source must be walk_forward|holdout")
         if not 0.5 <= float(ml["quality"]["min_auc"]) <= 1:
             errors.append("score_v1.ml.quality.min_auc must be within [0.5, 1]")
         for cap in ml["regime"]["caps"]:
@@ -531,6 +536,9 @@ def ml_quality(metrics: Optional[Dict[str, Any]], spec: Dict[str, Any]) -> Dict[
     """Out-of-time test gate on the model's stored metrics (episode-weighted)."""
     q = (spec.get("ml") or {}).get("quality") or {}
     m = metrics or {}
+    pooled = (m.get("walk_forward") or {}).get("pooled")
+    if q.get("source", "walk_forward") == "walk_forward" and pooled:
+        return _wf_quality(pooled, q, m.get("walk_forward") or {})
     test = m.get("episode_weighted_test") or {}
     reasons = []
     auc = _finite(test.get("auc"))
@@ -549,6 +557,26 @@ def ml_quality(metrics: Optional[Dict[str, Any]], spec: Dict[str, Any]) -> Dict[
         reasons.append("too_few_test_episodes")
     return {"approved": not reasons, "reasons": reasons, "auc": auc, "brier": brier,
             "baseline_brier": _finite(test.get("baseline_brier")), "brier_ci95": ci, "test_episodes": episodes}
+
+
+def _wf_quality(pooled: Dict[str, Any], q: Dict[str, Any], wf: Dict[str, Any]) -> Dict[str, Any]:
+    reasons = []
+    auc = _finite(pooled.get("auc"))
+    if auc is None or auc < float(q.get("min_auc", 0.55)):
+        reasons.append("auc_below_min")
+    brier, base = _finite(pooled.get("brier")), _finite(pooled.get("baseline_brier"))
+    if q.get("require_brier_better", True) and (brier is None or base is None or brier >= base):
+        reasons.append("brier_not_better_than_base_rate")
+    ci = pooled.get("paired_episode_brier_ci95") or []
+    if q.get("require_ci_positive", True) and (len(ci) != 2 or (_finite(ci[0]) or 0) <= 0):
+        reasons.append("brier_improvement_ci_includes_zero")
+    episodes = int(pooled.get("episodes") or 0)
+    if episodes < int(q.get("min_test_episodes", 30)):
+        reasons.append("too_few_test_episodes")
+    return {"approved": not reasons, "reasons": reasons, "auc": auc, "brier": brier, "baseline_brier": base,
+            "brier_ci95": ci, "test_episodes": episodes, "source": "walk_forward",
+            "scored_days": wf.get("scored_days"), "days_auc_above_half": pooled.get("days_auc_above_half"),
+            "economic": pooled.get("economic")}
 
 
 def ml_score_multiplier(p: Optional[float], spec: Dict[str, Any]) -> float:
@@ -817,7 +845,7 @@ def evaluate_universe(rows: List[Dict[str, Any]], structures: Dict[str, Dict[str
     ml_active = bool(ml.get("active")) and bool((spec.get("ml") or {}).get("enabled"))
     ml_probs: Dict[str, Optional[float]] = (ml.get("probabilities") or {}) if ml_active else {}
     ml_reg = ml_regime_cap(ml_probs, spec) if ml_active else {"mean_up_probability": None, "cap": None}
-    if ml_active and (spec.get("ml") or {}).get("objective", "relative") == "relative":
+    if ml_active and (spec.get("ml") or {}).get("objective", "relative") in ("relative", "relative_candle"):
         # Relative probabilities average ~0.5 by construction: they rank assets
         # against each other and carry no market-direction information → no regime cap.
         ml_reg = {**ml_reg, "cap": None, "regime_effect": "disabled_relative_objective"}
