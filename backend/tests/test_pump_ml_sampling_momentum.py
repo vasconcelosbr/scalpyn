@@ -113,3 +113,10 @@ def test_config_and_dictionary():
     for bad in ({"max_rows_per_minute": -1}, {"relative_beta": {**r["relative_beta"], "prev_candles": 0}}):
         with pytest.raises(ValueError):
             eng.config({"research": bad})
+
+
+def test_cross_section_probes_labels_by_key_in_small_chunks():
+    """Regression 07/10 19:51 UTC: the JOIN form timed out (QueryCanceledError)."""
+    import inspect
+    assert "CROSS JOIN LATERAL" in sel.CROSS_SECTION_SQL and "LIMIT 1" in sel.CROSS_SECTION_SQL
+    assert inspect.signature(sel.attach_universe_benchmark).parameters["chunk"].default <= 100
