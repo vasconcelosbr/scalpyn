@@ -35,6 +35,8 @@ DEFAULT_CONFIG = {
                      "rel_prev15_resid","beta_24h"],
                  # Spread the row budget over many minutes: at most N assets per decision minute.
                  "max_rows_per_minute":5,
+                 # Rolling-origin evaluation: each UTC day is a test fold once (trained on the past only).
+                 "walk_forward":{"enabled":True,"min_train_days":2,"calibration_fraction":0.2,"economic_quantile":0.1},
                  "lookback_days":30, "cohort_cuts":[0.5,0.65,0.8],
                  # 2026-10-07: label = asset endpoint return vs the median endpoint return of
                  # every labelled asset captured in the same minute (same horizon).
@@ -120,6 +122,12 @@ def validate_config(c):
         raise ValueError('relative_min_assets must be an integer in [3, 500]')
     if type(research.get('max_rows_per_minute')) is not int or not 0<=research['max_rows_per_minute']<=500:
         raise ValueError('max_rows_per_minute must be an integer in [0, 500] (0 = no cap)')
+    wf=research.get('walk_forward')
+    if not isinstance(wf,dict) or not isinstance(wf.get('enabled'),bool) or type(wf.get('min_train_days')) is not int \
+            or not 1<=wf['min_train_days']<=20 or not number(wf.get('calibration_fraction')) \
+            or not 0.05<=wf['calibration_fraction']<=0.5 or not number(wf.get('economic_quantile')) \
+            or not 0.01<=wf['economic_quantile']<=0.5:
+        raise ValueError('walk_forward: {enabled bool, min_train_days 1-20, calibration_fraction 0.05-0.5, economic_quantile 0.01-0.5}')
     rb=research.get('relative_beta')
     if not isinstance(rb,dict) or not isinstance(rb.get('enabled'),bool) or rb.get('timeframe') not in ('1m','5m','15m') \
             or type(rb.get('window_candles')) is not int or not 24<=rb['window_candles']<=2016 \

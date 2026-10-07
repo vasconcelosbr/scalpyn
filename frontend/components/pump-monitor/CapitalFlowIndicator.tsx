@@ -71,6 +71,14 @@ type MlModelRow = {
     features: number; context_features: number;
     context_coverage_test: Record<string, number>;
     top_features: [string, number][];
+    walk_forward?: {
+      scored_days: number;
+      pooled: {
+        auc: number; episodes: number; days_auc_above_half: number;
+        economic?: { quantile: number; top_mean: number; bottom_mean: number; top_minus_bottom: number;
+          top_minus_bottom_ci95: number[] };
+      } | null;
+    } | null;
   };
 };
 type MlModels = { enabled: boolean; applied_horizon_minutes: number; objective?: string; models: MlModelRow[]; note: string };
@@ -110,6 +118,15 @@ function MlModelsPanel({ data, error }: { data: MlModels | null; error: string }
               {q && !q.approved && q.reasons.length > 0 && (
                 <div className={styles.muted}>Motivo: {q.reasons.map(r => QUALITY_REASON[r] ?? r).join(", ")}</div>
               )}
+              {d?.walk_forward?.pooled && (() => {
+                const w = d.walk_forward.pooled; const e = w.economic;
+                return (
+                  <div className={styles.muted}>
+                    Walk-forward: {d.walk_forward.scored_days} dia(s) testados um a um · AUC {f3(w.auc)} · dias com AUC &gt; 0,5: {w.days_auc_above_half}/{d.walk_forward.scored_days}
+                    {e ? ` · top ${Math.round(e.quantile * 100)}% − bottom ${Math.round(e.quantile * 100)}%: ${e.top_minus_bottom >= 0 ? "+" : ""}${e.top_minus_bottom.toFixed(3)} pp (IC95 ${e.top_minus_bottom_ci95.map(x => x.toFixed(3)).join(" a ")})` : ""}
+                  </div>
+                );
+              })()}
               {d && (
                 <div className={styles.muted}>
                   Calibração {d.calibration?.method ?? "—"} ({d.calibration?.rows ?? "—"} linhas
