@@ -29,3 +29,4 @@
   .columns { grid-template-columns: 1fr; }
   .effect { border-left: 0; padding-left: 0; }
 }
+.mlChip { margin-top: 8px; cursor: help; }

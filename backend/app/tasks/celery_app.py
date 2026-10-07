@@ -287,6 +287,7 @@ TASK_ROUTES = {
     "app.tasks.pump_monitor.cycle":                      {"queue": QUEUE_PUMP_MONITOR},
     "app.tasks.pump_monitor.purge":                      {"queue": QUEUE_PUMP_MONITOR},
     "app.tasks.pump_monitor.refresh_listing_contracts":  {"queue": QUEUE_PUMP_MONITOR},
+    "app.tasks.pump_monitor.train_ml_daily":             {"queue": QUEUE_PUMP_MONITOR},
     "app.tasks.pump_ml.train_challenger":                {"queue": QUEUE_PUMP_ML},
     # Research dataset labels and partitions: research worker, never the monitor worker.
     "app.tasks.pump_research.label":                     {"queue": QUEUE_RESEARCH_OHLCV},
@@ -545,6 +546,7 @@ TASK_ANNOTATIONS = {
     "app.tasks.pump_monitor.cycle": {"time_limit": 60, "soft_time_limit": 50, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.pump_monitor.purge": {"time_limit": 300, "soft_time_limit": 270, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.pump_monitor.refresh_listing_contracts": {"time_limit": 30, "soft_time_limit": 25, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.pump_monitor.train_ml_daily": {"time_limit": 900, "soft_time_limit": 870, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.pump_ml.train_challenger": {"time_limit": 30, "soft_time_limit": 20, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.pump_research.label": {"time_limit": 1800, "soft_time_limit": 1740, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.pump_research.maintain": {"time_limit": 300, "soft_time_limit": 270, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
@@ -826,6 +828,12 @@ celery_app.conf.beat_schedule = {
     "pump_listing_contract_refresh": {
         "task":"app.tasks.pump_monitor.refresh_listing_contracts",
         "schedule":21600.0,
+    },
+    # Pump ML daily directional challenger (05:40 UTC, before the legacy 06:00
+    # Railway cron, which then records daily_already_recorded). One run per day.
+    "pump_ml_daily_training": {
+        "task": "app.tasks.pump_monitor.train_ml_daily",
+        "schedule": crontab(hour=5, minute=40),
     },
     # Research dataset: hourly offline labels (only rows older than t + H_max + settle)
     # and partition upkeep (create days ahead, drop beyond retention).

@@ -6,7 +6,7 @@ import { ArrowDown, ArrowUp, Columns3, RefreshCw, ShieldAlert } from "lucide-rea
 import { apiGet, apiPut } from "@/lib/api";
 import styles from "./pump-monitor.module.css";
 import PumpOpportunityPanel from "@/components/pump-monitor/PumpOpportunityPanel";
-import CapitalFlowIndicator, { type CapitalFlow, type V1Regime } from "@/components/pump-monitor/CapitalFlowIndicator";
+import CapitalFlowIndicator, { MlStatusChip, type CapitalFlow, type V1Regime } from "@/components/pump-monitor/CapitalFlowIndicator";
 
 type Cell = {
   value: number | string | boolean | null;
@@ -131,9 +131,12 @@ function DirectionArrow({ direction }: { direction?: Row["direction"] }) {
   }
   const long = direction.direction === "long";
   const strong = direction.strength === "forte";
-  const reason = direction.reason.startsWith("fragil:")
-    ? `alta frágil no perpétuo (${direction.reason.slice(7)})`
-    : DIRECTION_REASON[direction.reason] ?? direction.reason;
+  const [base, ml] = direction.reason.split("+");
+  const baseText = base.startsWith("fragil:")
+    ? `alta frágil no perpétuo (${base.slice(7)})`
+    : DIRECTION_REASON[base] ?? base;
+  const reason = ml === "ml_confirma" ? `${baseText}\nML confirma a direção`
+    : ml === "ml_contradiz" ? `${baseText}\nML contradiz a direção (rebaixada)` : baseText;
   return (
     <span className={`${styles.arrow} ${long ? styles.green : styles.red} ${strong ? styles.arrowStrong : ""}`}
       title={`Direção: ${long ? "tendência de alta (long)" : "tendência de baixa (short)"}${strong ? " — forte" : ""}\n${reason}\nObservação: não é sinal de entrada.`}
@@ -264,7 +267,10 @@ function LegacyPumpMonitorPage() {
           <div className={styles.subtitle}>
             Fluxo, liquidez executável e preço dos ativos do pool monitorado · score {data?.score_version === "pump_score_v1" ? "v1" : "v0"} {data?.score_status === "HYPOTHESIS_NOT_VALIDATED" ? "(hipótese, não calibrado)" : data?.score_status ?? "—"}
           </div>
-          <CapitalFlowIndicator capital={data?.capital_flow} regime={data?.engines?.v1?.regime} />
+          <div className={styles.regimeRow}>
+            <CapitalFlowIndicator capital={data?.capital_flow} regime={data?.engines?.v1?.regime} />
+            <MlStatusChip ml={data?.engines?.v1?.regime?.ml} />
+          </div>
         </div>
         <span className={styles.notice} data-testid="observation-badge">
           <ShieldAlert size={14} /> OBSERVAÇÃO — não é sinal de entrada
