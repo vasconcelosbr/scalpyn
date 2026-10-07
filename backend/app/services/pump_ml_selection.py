@@ -74,6 +74,32 @@ BOUNDED_IDS_SQL = """SELECT observation_id FROM pump_opportunity_observations
  AND ($3::timestamptz IS NULL OR decision_at < $3 OR ($4 AND decision_at=$3))
  ORDER BY decision_at DESC,observation_id"""
 EARLIEST_IDS_SQL = BOUNDED_IDS_SQL.replace('decision_at DESC','decision_at ASC')
+# Same window scan with the decision time (covered by ix_pump_opportunity_owner_decision),
+# so the per-minute cap is applied BEFORE the expensive JSON projection.
+WINDOW_IDS_SQL = BOUNDED_IDS_SQL.replace('SELECT observation_id FROM','SELECT observation_id, decision_at FROM')
+
+
+def minute_rank(observation_id):
+    """Deterministic, outcome-blind order of assets inside one minute."""
+    import hashlib
+    return hashlib.md5(str(observation_id).encode()).hexdigest()
+
+
+def cap_per_minute(records,counts,cap):
+    """Keep at most ``cap`` ids per decision minute (hash order); ``counts`` persists
+    across batches. cap<=0 → no cap. Spreads a fixed row budget over many more
+    market moments (the relative label compares assets within the same minute)."""
+    if cap<=0:return [r['observation_id'] for r in records]
+    by_minute={}
+    for r in records:
+        by_minute.setdefault(utc(r['decision_at']).replace(second=0,microsecond=0),[]).append(r['observation_id'])
+    kept=[]
+    for minute,ids in by_minute.items():
+        room=cap-counts.get(minute,0)
+        if room<=0:continue
+        chosen=sorted(ids,key=minute_rank)[:room]
+        counts[minute]=counts.get(minute,0)+len(chosen);kept.extend(chosen)
+    return kept
 TEMPORAL_SELECTION_VERSION='pump_temporal_equal_duration_v1'
 
 # Direction is endpoint return relative to the captured reference, never touch.
@@ -125,41 +151,73 @@ def _median(values):
     return None if not n else (v[n//2] if n%2 else (v[n//2-1]+v[n//2])/2)
 
 
-def rolling_betas(closes,needed,*,step_seconds,window,min_points):
+def relative_features(closes,needed,*,step_seconds,window,min_points,prev_candles=3):
     """``closes``: {symbol: {open_epoch: close}}; ``needed``: {(symbol, decision_epoch)}.
-    Beta from candles CLOSED at or before the decision (open + step <= decision), over
-    the previous ``window`` candles. Prefix sums make each lookup O(1)."""
+    Only candles CLOSED by the decision (open + step <= decision) are used.
+    Returns {(symbol, decision): {'beta': OLS slope of the asset 5m return on the
+    universe-median 5m return over the previous ``window`` candles (None below
+    ``min_points``), 'r_prev': return over the last ``prev_candles`` closed candles}}.
+    Prefix sums make each lookup O(1). Shared by training and the live cycle."""
     import numpy as np
     grid=sorted({t for series in closes.values() for t in series})
     if len(grid)<2:return {}
     index={t:i for i,t in enumerate(grid)}
-    ret={}
+    ret={};px={}
     for sym,series in closes.items():
-        y=np.full(len(grid),np.nan)
-        for t,c in series.items():
+        y=np.full(len(grid),np.nan);c=np.full(len(grid),np.nan)
+        for t,v in series.items():
+            if v and v>0:c[index[t]]=v
             prev=series.get(t-step_seconds)
-            if prev and prev>0 and c and c>0:y[index[t]]=(c/prev-1)*100
-        ret[sym]=y
+            if prev and prev>0 and v and v>0:y[index[t]]=(v/prev-1)*100
+        ret[sym]=y;px[sym]=c
     mat=np.vstack(list(ret.values()))
     with np.errstate(all='ignore'):
-        mkt=np.nanmedian(mat,axis=0)
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore',RuntimeWarning)
+            mkt=np.nanmedian(mat,axis=0)
+    by_symbol={}
+    for s,dec in needed:by_symbol.setdefault(s,[]).append(dec)
     out={}
-    for sym,y in ret.items():
+    cs=lambda a:np.concatenate([[0.0],np.cumsum(a)])
+    for sym,decs in by_symbol.items():
+        if sym not in ret:continue
+        y=ret[sym];c=px[sym]
         ok=~np.isnan(y)&~np.isnan(mkt)
         x=np.where(ok,mkt,0.0);yy=np.where(ok,y,0.0)
-        cs=lambda a:np.concatenate([[0.0],np.cumsum(a)])
         n,sx,sy,sxx,sxy=cs(ok.astype(float)),cs(x),cs(yy),cs(x*x),cs(x*yy)
-        for (s,dec) in needed:
-            if s!=sym:continue
-            # last candle closed by the decision: open <= dec - step
-            hi=int(np.searchsorted(grid,dec-step_seconds,side='right'))
-            lo=max(0,hi-window)
-            cnt=n[hi]-n[lo]
-            if cnt<min_points:continue
-            vx=(sxx[hi]-sxx[lo])-(sx[hi]-sx[lo])**2/cnt
-            if vx<=0:continue
-            out[(s,dec)]=float(((sxy[hi]-sxy[lo])-(sx[hi]-sx[lo])*(sy[hi]-sy[lo])/cnt)/vx)
+        for dec in decs:
+            hi=int(np.searchsorted(grid,dec-step_seconds,side='right'))   # candles [0, hi) closed
+            lo=max(0,hi-window);cnt=n[hi]-n[lo]
+            b=None
+            if cnt>=min_points:
+                vx=(sxx[hi]-sxx[lo])-(sx[hi]-sx[lo])**2/cnt
+                if vx>0:b=float(((sxy[hi]-sxy[lo])-(sx[hi]-sx[lo])*(sy[hi]-sy[lo])/cnt)/vx)
+            r_prev=None
+            if hi-1-prev_candles>=0:
+                a,z=c[hi-1-prev_candles],c[hi-1]
+                if not np.isnan(a) and not np.isnan(z) and a>0:r_prev=float((z/a-1)*100)
+            out[(sym,dec)]={'beta':b,'r_prev':r_prev}
     return out
+
+
+def residual_prev(feats):
+    """Cross-section of one decision: {symbol: {'beta','r_prev'}} → {symbol: residual}
+    = (r_prev - beta * median(r_prev)) - median of that over the cross-section.
+    Same construction as the relative label, applied to the PREVIOUS window."""
+    prev=[f['r_prev'] for f in feats.values() if f.get('r_prev') is not None]
+    if len(prev)<3:return {}
+    m=_median(prev)
+    e={s:f['r_prev']-f['beta']*m for s,f in feats.items() if f.get('r_prev') is not None and f.get('beta') is not None}
+    if len(e)<3:return {}
+    me=_median(list(e.values()))
+    return {s:v-me for s,v in e.items()}
+
+
+def rolling_betas(closes,needed,*,step_seconds,window,min_points):
+    """Beta-only view of ``relative_features`` (kept for callers/tests)."""
+    return {k:v['beta'] for k,v in relative_features(closes,needed,step_seconds=step_seconds,window=window,
+                                                     min_points=min_points).items() if v['beta'] is not None}
 
 
 async def attach_universe_benchmark(conn,owner,rows,horizon_minutes,label_hash,cutoff,diagnostics,*,
@@ -173,7 +231,7 @@ async def attach_universe_benchmark(conn,owner,rows,horizon_minutes,label_hash,c
     for i in range(0,len(slots),chunk):
         for rec in await conn.fetch(CROSS_SECTION_SQL,owner,slots[i:i+chunk],horizon_minutes,label_hash,cutoff):
             if rec['r'] is not None:cross.setdefault(utc(rec['slot_at']),[]).append((rec['symbol'],float(rec['r'])))
-    betas={}
+    betas={};prev_resid={}
     if beta and cross:
         diagnostics['phase']='universe_betas'
         step=_TF_SECONDS[beta['timeframe']];window=int(beta['window_candles'])
@@ -183,7 +241,14 @@ async def attach_universe_benchmark(conn,owner,rows,horizon_minutes,label_hash,c
         for rec in await conn.fetch(CANDLES_SQL,symbols,beta['timeframe'],lo,hi):
             closes.setdefault(rec['symbol'],{})[int(utc(rec['time']).timestamp())]=rec['close']
         needed={(s,int(t.timestamp())) for t,xs in cross.items() for s,_ in xs}
-        betas=rolling_betas(closes,needed,step_seconds=step,window=window,min_points=int(beta['min_points']))
+        feats=relative_features(closes,needed,step_seconds=step,window=window,min_points=int(beta['min_points']),
+                                prev_candles=int(beta.get('prev_candles',3)))
+        betas={k:v['beta'] for k,v in feats.items() if v['beta'] is not None}
+        # Derived point-in-time features (in memory, never written back to the snapshot).
+        prev_resid={}
+        for t,xs in cross.items():
+            dec=int(t.timestamp())
+            prev_resid[t]=residual_prev({s:feats[(s,dec)] for s,_ in xs if (s,dec) in feats})
     bench={}
     for t,xs in cross.items():
         m=_median([r for _,r in xs])
@@ -195,6 +260,10 @@ async def attach_universe_benchmark(conn,owner,rows,horizon_minutes,label_hash,c
         if resid:bench[t]=(m,_median(resid),len(resid),b)
     for r in rows:
         t=utc(r['slot_at']) if r.get('slot_at') else None
+        if beta and t is not None:
+            values=r.get('values') or {};r['values']=values
+            values['rel_prev15_resid']=(prev_resid.get(t) or {}).get(r.get('symbol'))
+            values['beta_24h']=betas.get((r.get('symbol'),int(t.timestamp())))
         hit=bench.get(t)
         bi=hit[3].get(r.get('symbol')) if hit else None
         if hit and bi is not None:
@@ -224,7 +293,7 @@ def temporal_windows(first,last,max_rows,bins):
         quota+(i<remainder),i==count-1) for i in range(count)]
 
 async def select_temporal_training_rows(conn,owner,features,feature_hash,max_rows,diagnostics,*,batch_size=500,bins=20,horizon_minutes=None,
-                                        extra_features=(),lookback_days=30,benchmark=False,beta=None):
+                                        extra_features=(),lookback_days=30,benchmark=False,beta=None,max_rows_per_minute=0):
     """Sample at most max_rows across the complete-feature compatible extent.
 
     Empty/underfilled windows remain explicit, never filled with newest-only
@@ -272,13 +341,15 @@ async def select_temporal_training_rows(conn,owner,features,feature_hash,max_row
         windows=temporal_windows(first,last,max_rows,bins);rows=[];window_evidence=[]
         for lo,hi,quota,inclusive in windows:
             diagnostics['phase']='temporal_candidate_ids'
-            cur=await conn.cursor(BOUNDED_IDS_SQL,owner,lo,hi,inclusive)
-            selected=[];candidate_count=0
+            cur=await conn.cursor(WINDOW_IDS_SQL,owner,lo,hi,inclusive)
+            selected=[];candidate_count=0;minute_counts={}
             while len(selected)<quota:
                 diagnostics['phase']='temporal_candidate_ids'
-                ids=[r['observation_id'] for r in await cur.fetch(batch_size)]
-                if not ids:break
-                candidate_count+=len(ids);diagnostics['candidate_rows']+=len(ids);diagnostics['batches']+=1
+                records=await cur.fetch(batch_size)
+                if not records:break
+                candidate_count+=len(records);diagnostics['candidate_rows']+=len(records);diagnostics['batches']+=1
+                ids=cap_per_minute(records,minute_counts,max_rows_per_minute)
+                if not ids:continue
                 diagnostics['phase']='temporal_rows'
                 # Do not apply the remaining quota before feature validation:
                 # invalid numeric features must not displace older eligible rows.
@@ -286,7 +357,8 @@ async def select_temporal_training_rows(conn,owner,features,feature_hash,max_row
                 selected.extend(valid[:quota-len(selected)])
             rows.extend(selected)
             window_evidence.append({'from':lo.isoformat(),'to':hi.isoformat(),'last_inclusive':inclusive,
-                'quota':quota,'selected':len(selected),'candidate_rows':candidate_count})
+                'quota':quota,'selected':len(selected),'candidate_rows':candidate_count,
+                'minutes':len({utc(r['decision_at']).replace(second=0,microsecond=0) for r in selected})})
         if benchmark and horizon_minutes is not None and rows:
             await attach_universe_benchmark(conn,owner,rows,horizon_minutes,contract['label_spec_hash'],cutoff,diagnostics,
                                             beta=beta)
@@ -294,7 +366,8 @@ async def select_temporal_training_rows(conn,owner,features,feature_hash,max_row
         diagnostics.update(phase='selection_complete',selected_rows=len(rows),selection_as_of=cutoff.isoformat(),
             policy={'version':TEMPORAL_SELECTION_VERSION,'requested_bins':bins,'actual_bins':len(windows),
                 'max_rows':max_rows,'first':first.isoformat(),'last':last.isoformat(),'lookback_days':lookback_days,
-                'optional_context_features':len(projection)-len(features),
+                'optional_context_features':len(projection)-len(features),'max_rows_per_minute':max_rows_per_minute,
+                'distinct_minutes':len({utc(r['decision_at']).replace(second=0,microsecond=0) for r in rows}),
                 'feature_eligibility_before_sampling':True,'outcome_balancing':False,
                 'objective':'endpoint_direction_v1' if horizon_minutes is not None else 'legacy_touch',
                 'horizon_minutes':horizon_minutes,

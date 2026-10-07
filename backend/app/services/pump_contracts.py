@@ -27,7 +27,13 @@ CONTEXT_FEATURE_SPEC={"version":"pump_context_features_v1","availability":"captu
         "perp_short_liq_oi_bps":"bps_of_open_interest",
         "ctx_breadth":"fraction_0_1_universe_progress_positive","ctx_ref_progress_atr":"atr5m_units_reference",
         "ctx_ref_ret_pct":"percent_reference","ctx_capital_ratio":"net_over_gross_usdt_taker_flow",
-        "ctx_capital_z":"zscore_vs_ew_history"}}
+        "ctx_capital_z":"zscore_vs_ew_history",
+        # 2026-10-07: derived from closed 5m ohlcv at the decision (training: recomputed
+        # point-in-time in memory; live: same function in the cycle). Previous 15 min
+        # beta-adjusted return vs the universe (Gate 5m 02-07/10: P(next above | prev
+        # above) 0.4774 vs 0.5225 | prev below, n=72,493 pairs) and the 24h beta itself.
+        "rel_prev15_resid":"pp_beta_adjusted_vs_universe_median_previous_window",
+        "beta_24h":"ols_slope_vs_universe_median_5m_returns"}}
 
 def gate_listing_record(pair,captured_at):
     """Only provider-declared nonzero trading starts certify this epoch.

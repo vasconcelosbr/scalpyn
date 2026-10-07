@@ -584,6 +584,25 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
                                        derivatives=derivatives, now_ms=now_ms, ml=None)
             ctx = context_cells(pre, v1_spec)
             ml_rows = [{**r, "indicators": {**(r.get("indicators") or {}), **ctx.get(r["symbol"], {})}} for r in rows]
+        params = pump_ml_inference.relative_params(predictor) if loaded.get("active") else None
+        if params:
+            # Derived relative features (previous-window beta residual, 24h beta), same
+            # function and frozen parameters as training; cached per closed candle.
+            step = pump_ml_inference_step(params)
+            slot = (now_ms // 1000 // step) * step
+            cache_key = f"pump_monitor:ml_relctx:{user_id}:{slot}"
+            redis = await _redis()
+            rel = await _read_json(redis, cache_key)
+            if rel is None:
+                rel = await run_db_task(lambda db: pump_ml_inference.relative_context(
+                    db, [r["symbol"] for r in rows], params, slot), celery=True)
+                if redis is not None:
+                    try:
+                        await redis.set(cache_key, json.dumps(_json_safe(rel)), ex=2 * step)
+                    except Exception:
+                        pass
+            ml_rows = [{**r, "indicators": {**(r.get("indicators") or {}), **(rel.get(r["symbol"]) or {})}}
+                       for r in ml_rows]
         ml_payload = pump_ml_inference.predict_rows(loaded, ml_rows, v1_spec)
     except Exception as exc:  # the ML is optional: no model → zero effect, never a broken cycle
         logger.warning("[PUMP-ML] inference unavailable user=%s reason=%s", user_id, type(exc).__name__)
@@ -738,6 +757,10 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
 V1_CELL_KEYS = ("progress_atr", "rs_atr", "extension_atr", "efficiency_short", "efficiency_long", "consistency",
                 "higher_lows", "concentration", "wick", "rvol_5m", "volume_spike_max", "compression_ratio",
                 "progress_1m_atr")
+
+
+def pump_ml_inference_step(params: Dict[str, Any]) -> int:
+    return _TF_SECONDS[params["timeframe"]]
 
 
 def context_cells(v1_out: Dict[str, Any], v1_spec: Dict[str, Any]) -> Dict[str, Dict[str, Dict[str, Any]]]:
