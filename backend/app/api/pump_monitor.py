@@ -70,6 +70,16 @@ async def explore_opportunity_pattern(payload: Dict[str,Any],response: Response,
         raise HTTPException(status_code=422,detail=str(exc))
 
 
+@router.post("/ml/train", status_code=202)
+async def trigger_ml_training(user_id: UUID = Depends(get_current_user_id)):
+    """Manual Pump ML training for the caller only. Bypasses the one-run-per-day
+    rule but keeps the singleton lock and a 60-minute minimum interval."""
+    from ..tasks.pump_monitor import train_ml_daily
+    result = train_ml_daily.apply_async(kwargs={"owner": str(user_id), "force": True})
+    return {"status": "queued", "task_id": result.id, "owner": str(user_id),
+            "note": "Resultado em GET /api/pump-monitor/opportunities/intelligence (training_runs)."}
+
+
 @router.get("/capital-flow/history")
 async def capital_flow_history(response: Response,
                                days: int = Query(7, ge=1, le=30),

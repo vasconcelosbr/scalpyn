@@ -189,3 +189,26 @@ def test_load_model_gates_newest_and_caches(monkeypatch, tmp_path):
     metrics = {**deepcopy(GOOD), "episode_weighted_test": {**GOOD["episode_weighted_test"], "auc": 0.5}}
     rejected = asyncio.run(inf.load_model(None, "u2", spec(), now=1000.0))
     assert rejected["active"] is False and rejected["reason"] == "quality_gate_failed"
+
+
+def _skip_conn(prior_for):
+    class Conn:
+        def __init__(self): self.sql = []
+        async def fetchval(self, sql, *args):
+            self.sql.append(sql)
+            if "pg_try_advisory_lock" in sql: return True
+            if "SELECT run_id" in sql: return prior_for(sql)
+            return None
+        async def execute(self, sql, *args): self.sql.append(sql)
+    return Conn()
+
+
+def test_force_skips_daily_rule_but_not_recent_or_running_runs():
+    # schedule: any run today blocks
+    conn = _skip_conn(lambda sql: "x" if "date_trunc('day'" in sql else None)
+    assert asyncio.run(daily.run_owner(conn, UUID(int=1), horizons=[10]))["status"] == "daily_already_recorded"
+    # force: today's old run does not block, a recent/running one does
+    conn = _skip_conn(lambda sql: "y" if "interval '60 minutes'" in sql and "status='running'" in sql else None)
+    out = asyncio.run(daily.run_owner(conn, UUID(int=1), horizons=[10], force=True))
+    assert out["status"] == "recent_run_exists"
+    assert not any("INSERT INTO pump_ml_job_runs" in q for q in conn.sql)
