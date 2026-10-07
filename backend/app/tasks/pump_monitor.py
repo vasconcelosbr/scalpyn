@@ -29,3 +29,14 @@ def refresh_listing_contracts():
     import asyncio
     from ..services.pump_opportunity_service import refresh_listing_contracts as refresh
     return _run_async(asyncio.wait_for(refresh(),20))
+
+
+@celery_app.task(name="app.tasks.pump_monitor.train_ml_daily")
+def train_ml_daily():
+    """Daily Pump directional challenger (2026-10-07), formerly the Railway
+    ``scalpyn-pump-ml`` upload-source cron. Same ledger, lock and one-run-per-UTC-day
+    rule: if the Railway job runs first it owns the day and this one no-ops."""
+    from ..services.pump_ml_daily import run_daily
+    result = _run_async(run_daily())
+    logger.info("[PUMP-ML] daily run result=%s", {k: (v or {}).get("status") for k, v in (result or {}).items()})
+    return result

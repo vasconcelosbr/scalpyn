@@ -101,6 +101,23 @@ DEFAULT_V1: Dict[str, Any] = {
         "progress_min_atr": 0.25,
         "flow_min": 0.0,
     },
+    # Pump ML (v1.6): XGBoost endpoint-DIRECTION model (P(price ends above the
+    # reference at ``horizon_minutes``), no fixed % target). It acts only while the
+    # newest model passes ``quality`` on its stored out-of-time test; otherwise every
+    # effect is zero. Bounded effects on score, direction arrow and regime.
+    "ml": {
+        "enabled": True,
+        "horizon_minutes": 15,
+        "max_model_age_days": 7,
+        "max_feature_age_seconds": 120,
+        "quality": {"min_auc": 0.55, "require_brier_better": True, "require_ci_positive": True,
+                    "min_test_episodes": 30},
+        "score": {"max_adjust": 0.15},          # score × [1 − 0.15, 1 + 0.15] linear in (2p − 1)
+        "direction": {"confirm_up": 0.60, "confirm_down": 0.40},
+        "regime": {"min_assets": 10,
+                   "caps": [{"below": 0.40, "cap": "desfavoravel"}, {"below": 0.45, "cap": "neutro"}]},
+        "training": {"enabled": True, "horizons_minutes": [10, 15], "statement_timeout_ms": 120000},
+    },
     "gates": {
         "progress_atr_min": 0.25,
         "window_delta_norm_min": -0.1,  # flow must not be net selling (tiny noise tolerated)
@@ -220,6 +237,21 @@ def validate(spec: Dict[str, Any], errors: List[str]) -> None:
             errors.append("score_v1.derivatives.missing_policy must be pass|fail")
         if dv["interval"] not in _TF_MS or int(dv["block_flags_min"]) < 1:
             errors.append(f"score_v1.derivatives: interval in {sorted(_TF_MS)} and block_flags_min >= 1")
+    ml = spec.get("ml") or {}
+    if ml:
+        if not 0 <= float(ml["score"]["max_adjust"]) <= 0.5:
+            errors.append("score_v1.ml.score.max_adjust must be within [0, 0.5]")
+        if not 0 <= float(ml["direction"]["confirm_down"]) < 0.5 < float(ml["direction"]["confirm_up"]) <= 1:
+            errors.append("score_v1.ml.direction: 0 <= confirm_down < 0.5 < confirm_up <= 1")
+        if not 0.5 <= float(ml["quality"]["min_auc"]) <= 1:
+            errors.append("score_v1.ml.quality.min_auc must be within [0.5, 1]")
+        for cap in ml["regime"]["caps"]:
+            if cap.get("cap") not in _REGIME_ORDER or not 0 < float(cap.get("below", 0)) < 1:
+                errors.append("score_v1.ml.regime.caps: {below: (0,1), cap: favoravel|neutro|desfavoravel}")
+        tr = ml["training"]
+        if not tr["horizons_minutes"] or any(int(h) <= 0 for h in tr["horizons_minutes"]) \
+                or int(tr["statement_timeout_ms"]) < 1000:
+            errors.append("score_v1.ml.training: positive horizons and statement_timeout_ms >= 1000")
     if float((spec.get("direction") or {}).get("progress_min_atr", 0)) < 0:
         errors.append("score_v1.direction.progress_min_atr must be >= 0")
     norm = spec["normalization"]
@@ -487,6 +519,65 @@ def direction_signal(v: Dict[str, Any], deriv: Dict[str, Any], flags: List[str],
     return {"direction": "neutral", "strength": None, "reason": "sem_tendencia"}
 
 
+def ml_quality(metrics: Optional[Dict[str, Any]], spec: Dict[str, Any]) -> Dict[str, Any]:
+    """Out-of-time test gate on the model's stored metrics (episode-weighted)."""
+    q = (spec.get("ml") or {}).get("quality") or {}
+    m = metrics or {}
+    test = m.get("episode_weighted_test") or {}
+    reasons = []
+    auc = _finite(test.get("auc"))
+    if auc is None or auc < float(q.get("min_auc", 0.55)):
+        reasons.append("auc_below_min")
+    brier = _finite(test.get("brier"))
+    if q.get("require_brier_better", True) and (
+            brier is None or brier >= (_finite(test.get("baseline_brier")) or 0)
+            or brier >= (_finite(test.get("calibration_prior_brier")) or 0)):
+        reasons.append("brier_not_better_than_base_rate")
+    ci = m.get("paired_episode_brier_ci95") or []
+    if q.get("require_ci_positive", True) and (len(ci) != 2 or (_finite(ci[0]) or 0) <= 0):
+        reasons.append("brier_improvement_ci_includes_zero")
+    episodes = (m.get("cohort_episodes") or [0, 0, 0, 0])[-1]
+    if int(episodes or 0) < int(q.get("min_test_episodes", 30)):
+        reasons.append("too_few_test_episodes")
+    return {"approved": not reasons, "reasons": reasons, "auc": auc, "brier": brier,
+            "baseline_brier": _finite(test.get("baseline_brier")), "brier_ci95": ci, "test_episodes": episodes}
+
+
+def ml_score_multiplier(p: Optional[float], spec: Dict[str, Any]) -> float:
+    if p is None:
+        return 1.0
+    k = float(spec["ml"]["score"]["max_adjust"])
+    return max(1.0 - k, min(1.0 + k, 1.0 + k * (2.0 * float(p) - 1.0)))
+
+
+def ml_regime_cap(probs: Dict[str, float], spec: Dict[str, Any]) -> Dict[str, Any]:
+    r = spec["ml"]["regime"]
+    values = [p for p in probs.values() if p is not None]
+    if len(values) < int(r["min_assets"]):
+        return {"mean_up_probability": None, "assets": len(values), "cap": None}
+    mean = sum(values) / len(values)
+    cap = None
+    for rule in sorted(r["caps"], key=lambda x: float(x["below"])):
+        if mean < float(rule["below"]):
+            cap = rule["cap"]
+            break
+    return {"mean_up_probability": round(mean, 4), "assets": len(values), "cap": cap}
+
+
+def ml_direction(direction: Dict[str, Any], p: Optional[float], spec: Dict[str, Any]) -> Dict[str, Any]:
+    """The model confirms (→ forte) or contradicts (→ normal) the arrow; never flips it."""
+    if p is None or direction.get("direction") not in ("long", "short"):
+        return direction
+    d = spec["ml"]["direction"]
+    up, down = float(d["confirm_up"]), float(d["confirm_down"])
+    long = direction["direction"] == "long"
+    if (long and p >= up) or (not long and p <= down):
+        return {**direction, "strength": "forte", "reason": f"{direction['reason']}+ml_confirma"}
+    if (long and p <= down) or (not long and p >= up):
+        return {**direction, "strength": "normal", "reason": f"{direction['reason']}+ml_contradiz"}
+    return direction
+
+
 def relative_strength_atr(ret_pct: Optional[float], ref_ret_pct: Optional[float], atr_pct: Optional[float],
                           beta: float) -> Optional[float]:
     if None in (ret_pct, ref_ret_pct, atr_pct) or not atr_pct:
@@ -701,7 +792,8 @@ def evaluate_universe(rows: List[Dict[str, Any]], structures: Dict[str, Dict[str
                       minute_ms: int, spec: Dict[str, Any],
                       capital_minutes: Optional[Sequence[Dict[str, Any]]] = None,
                       derivatives: Optional[Dict[str, Sequence[Dict[str, Any]]]] = None,
-                      now_ms: Optional[int] = None) -> Dict[str, Any]:
+                      now_ms: Optional[int] = None,
+                      ml: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Evaluate v1 for every row, mutate ``state`` (per-symbol stats + stability).
 
     Returns ``{"regime": ..., "results": {symbol: result}}``. Rows are only read.
@@ -712,7 +804,14 @@ def evaluate_universe(rows: List[Dict[str, Any]], structures: Dict[str, Dict[str
     if stepped and capital.get("ratio") is not None:
         state["capital_stats"] = update_capital_stats(state.get("capital_stats"), capital["ratio"], spec)
     capped = apply_capital_cap(reg["state"], capital)
+    # ML acts only with an approved model (``ml["active"]``); otherwise zero effect.
+    ml = ml or {}
+    ml_active = bool(ml.get("active")) and bool((spec.get("ml") or {}).get("enabled"))
+    ml_probs: Dict[str, Optional[float]] = (ml.get("probabilities") or {}) if ml_active else {}
+    ml_reg = ml_regime_cap(ml_probs, spec) if ml_active else {"mean_up_probability": None, "cap": None}
+    capped = apply_capital_cap(capped, {"regime_cap": ml_reg.get("cap")})
     reg = {**reg, "price_state": reg["state"], "state": capped, "capital": capital,
+           "ml": {"active": ml_active, "model": ml.get("model"), "reason": ml.get("reason"), **ml_reg},
            "enter_score": effective_stability(spec, capital)["stability"]["enter_score"]}
     stab_spec = effective_stability(spec, capital)
     stats_all = state.setdefault("stats", {})
@@ -752,6 +851,14 @@ def evaluate_universe(rows: List[Dict[str, Any]], structures: Dict[str, Dict[str
         stats = stats_all.get(symbol) or {}
         strength = strength_score(v, stats, spec) if gates_ok else {"score": None, "reason": f"condition:{condition}",
                                                                       "ledger": None}
+        p_up = ml_probs.get(symbol)
+        if p_up is not None:
+            direction = ml_direction(direction, p_up, spec)
+            if strength.get("score") is not None:
+                mult = ml_score_multiplier(p_up, spec)
+                strength = {**strength, "score": round(max(0.0, min(100.0, strength["score"] * mult)), 2),
+                            "ledger": {**(strength.get("ledger") or {}), "ml_multiplier": round(mult, 4),
+                                       "ml_up_probability": round(p_up, 4)}}
         fast_exit = (v["progress_1m_atr"] is not None
                      and v["progress_1m_atr"] < float(spec["gates"]["fast_exit_progress_1m_atr"]))
         stab = step_state(stab_all.get(symbol), condition=condition, gates_ok=gates_ok,
@@ -768,6 +875,7 @@ def evaluate_universe(rows: List[Dict[str, Any]], structures: Dict[str, Dict[str
             "gates": gates, "values": v, "structure_reason": st.get("reason"),
             "strength": strength.get("ledger"), "stability": stab, "fast_exit": fast_exit,
             "derivatives": {**deriv, "flags": flags}, "direction": direction,
+            "ml_up_probability": round(p_up, 4) if p_up is not None else None,
         }
     known = set(results)
     for symbol in list(stab_all):
@@ -800,6 +908,9 @@ def display_components(result: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     if direction:
         out["direção"] = {"value": direction.get("direction"), "contribution": direction.get("strength"),
                           "reason": direction.get("reason")}
+    if result.get("ml_up_probability") is not None:
+        out["ml:prob_alta"] = {"value": result["ml_up_probability"],
+                               "contribution": ((result.get("strength") or {}).get("ml_multiplier"))}
     deriv = result.get("derivatives") or {}
     if deriv.get("available"):
         for key in ("perp_flow_norm", "oi_change_pct", "funding_rate", "short_liq_oi_bps"):

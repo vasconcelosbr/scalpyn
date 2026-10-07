@@ -29,6 +29,7 @@
 .red { color: #ff7a7a; }
 .gray { color: #5b6c86; }
 .score { font-weight: 800; }
+.regimeRow { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; }
 .arrow { display: inline-block; width: 14px; margin-right: 6px; font-size: 10px; opacity: .55; text-align: center; }
 .arrowStrong { opacity: 1; font-size: 12px; text-shadow: 0 0 6px currentColor; }
 .alert { display: inline-block; margin-left: 4px; padding: 1px 6px; border-radius: 999px; border: 1px solid #ce9d32; color: #f4bd3f; font-size: 9px; font-family: inherit; }

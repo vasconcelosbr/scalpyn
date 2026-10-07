@@ -561,12 +561,19 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
         derivatives = await load_derivatives(symbols, v1_spec, now_ms, int(config["concurrency"]))
     except Exception as exc:  # perp context is optional: the cycle never depends on it
         logger.warning("[PUMP-PERP] unavailable user=%s reason=%s", user_id, type(exc).__name__)
+    ml_payload: Dict[str, Any] = {"active": False, "reason": "not_loaded", "probabilities": {}}
+    try:
+        from . import pump_ml_inference
+        loaded = await run_db_task(lambda db: pump_ml_inference.load_model(db, user_id, v1_spec), celery=True)
+        ml_payload = pump_ml_inference.predict_rows(loaded, rows, v1_spec)
+    except Exception as exc:  # the ML is optional: no model → zero effect, never a broken cycle
+        logger.warning("[PUMP-ML] inference unavailable user=%s reason=%s", user_id, type(exc).__name__)
     try:
         structures = {sym: v1.structure_metrics(series.get(sym) or [], v1_spec, now_ms)
                       for sym in set(symbols) | {v1_ref}}
         v1_out = v1.evaluate_universe(rows, structures, structures.get(v1_ref), v1_state,
                                       minute_ms=last_minute, spec=v1_spec, capital_minutes=cap_minutes,
-                                      derivatives=derivatives, now_ms=now_ms)
+                                      derivatives=derivatives, now_ms=now_ms, ml=ml_payload)
     except Exception:
         logger.exception("[PUMP-SCORE-V1] evaluation failed user=%s", user_id)
     capital = (v1_out.get("regime") or {}).get("capital")
@@ -749,6 +756,9 @@ def apply_engines(rows: List[Dict[str, Any]], v1_out: Dict[str, Any], engine: st
                 cells[f"perp_{key}"] = {"value": deriv.get(key), "reason": None if deriv.get(key) is not None
                                         else (deriv.get("reason") or "no_data"), "source": "gate_futures_contract_stats"}
             row["direction"] = safe.get("direction")
+            p_up = safe.get("ml_up_probability")
+            cells["ml_up_probability"] = {"value": p_up, "reason": None if p_up is not None else "ml_inactive_or_abstained",
+                                          "source": "pump_ml_directional"}
         if engine == "v1":
             shown = cells["pump_score_v1"]
             cells["pump_monitor_score"] = {**shown, "color_state": v0_cell.get("color_state")}

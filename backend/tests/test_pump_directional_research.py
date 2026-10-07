@@ -57,7 +57,8 @@ def test_directional_native_fit_and_preview_are_not_activated(tmp_path):
     assert sum(b['observations'] for b in m['reliability'])==m['cohort_rows'][-1]
     assert all('observed_up_frequency' in b for b in m['reliability'])
     assert len(m['paired_episode_brier_ci95'])==2
-    assert manifest['artifact_namespace'].startswith('pump_directional/')
+    # 2026-10-07: must satisfy the pump_ml_% CHECK constraints (CheckViolationError on 06/10)
+    assert manifest['artifact_namespace'].startswith('pump_ml/directional/')
     p=load_directional_preview(rows[0]['values'],tmp_path/manifest['artifact_namespace'])
     assert p['score'] is None and p['probability'] is None and p['direction'] is None
     assert p['applied_delta']==0 and p['status']=='abstained'

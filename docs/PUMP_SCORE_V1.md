@@ -114,3 +114,24 @@ Contexto do perpétuo USDT da Gate (`GET /futures/usdt/contract_stats`, 5m), con
 Sinais de alta frágil (só avaliados com progresso > 0): `perp_led` (perp ≥ spot + 0,15 com spot ≤ 0,05), `funding_hot` (≥ 0,05 %), `short_squeeze` (≥ 10 bps com OI sem subir), `oi_unwinding` (OI ≤ −1 %). Com `block_flags_min` (1) ou mais sinais, o portão `derivatives_healthy` reprova: o ativo não entra e, se listado, enfraquece pela histerese. Sem perpétuo, dado velho ou falha de coleta → o portão passa (`missing_policy: pass`).
 
 Seta de direção (`score_v1.direction`), só exibição: ▲ quando progresso 5m ≥ 0,25 ATR com fluxo spot e CVD positivos; ▼ no espelho. "Forte" quando o perp confirma (alta: OI subindo, fluxo do perp ≥ 0, sem fragilidade; baixa: OI subindo com fluxo do perp vendedor). Não é ordem: o spot não vende a descoberto.
+
+## v1.6 — Pump ML (XGBoost) ligado ao v1 (2026-10-07)
+
+**Objetivo do modelo:** direção — P(preço termina acima da referência no horizonte), sem alvo fixo de %. Treinado por horizonte (`score_v1.ml.training.horizons_minutes`, padrão 10 e 15 min); o v1 usa o de `score_v1.ml.horizon_minutes` (15).
+
+**Treino:** task Celery `app.tasks.pump_monitor.train_ml_daily` (fila `pump_monitor`, 05:40 UTC, limite 900 s). Mesmo ledger (`pump_ml_job_runs`), lock e regra de um treino por dia UTC do antigo serviço Railway `scalpyn-pump-ml`, que passa a registrar `daily_already_recorded` e pode ser desligado. Correções do diagnóstico de 07/10:
+
+| Falha em produção | Causa | Correção |
+|---|---|---|
+| 06/10 `CheckViolationError` | artefatos em `pump_directional/…`; tabelas exigem `pump_ml/%` | namespace `pump_ml/directional/…` |
+| 03/10 e 07/10 `QueryCanceledError` | cursores `ORDER BY decision_at` sem índice, `statement_timeout` 30 s | índice `ix_pump_opportunity_owner_decision` (migração 237) e timeout configurável (120 s) |
+| Merge não atualizava o treino | serviço Railway de upload | treino no worker Celery, atualiza a cada deploy |
+
+**Portão de qualidade (na inferência, sobre as métricas de teste fora da amostra do modelo mais recente):** AUC ≥ 0,55, Brier melhor que a taxa base e que o prior de calibração, IC 95 % do ganho de Brier por episódio acima de zero, ≥ 30 episódios no teste (`score_v1.ml.quality`). Modelo mais novo sempre substitui o anterior; reprovado ou ausente → efeito zero.
+
+**Efeitos (só com modelo aprovado):**
+- Score: × [0,85; 1,15], linear em (2p − 1) (`score_v1.ml.score.max_adjust`).
+- Seta: p ≥ 0,60 confirma ▲ (forte), p ≤ 0,40 confirma ▼; o contrário rebaixa para normal; nunca inverte.
+- Regime: média de p no universo (≥ 10 ativos) < 0,45 → no máximo neutro; < 0,40 → desfavorável. Só piora o regime.
+
+Features: as 9 do contrato congelado (`pump_numeric_features_v1`). A versão com campos v1/perp/capital exige um novo contrato de features e coorte própria.

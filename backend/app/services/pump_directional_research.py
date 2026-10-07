@@ -156,10 +156,10 @@ def train_directional(rows, *, spec, output_root):
                'applied_delta': 0, 'auto_promotion': False}
     versions={'xgboost':xgb.__version__,'numpy':np.__version__,'scikit_learn':sklearn.__version__}
     experiment = eng.canonical_hash({'spec': spec, 'ids': [r['observation_id'] for r in usable],'library_versions':versions})
-    folder = Path(output_root).resolve() / 'pump_directional' / experiment
+    folder = Path(output_root).resolve() / 'pump_ml' / 'directional' / experiment
     folder.mkdir(parents=True, exist_ok=False)
     model.get_booster().save_model(folder/'xgboost.json')
-    manifest = {'experiment_id': experiment, 'artifact_namespace': f'pump_directional/{experiment}',
+    manifest = {'experiment_id': experiment, 'artifact_namespace': f'pump_ml/directional/{experiment}',
                 'objective': OBJECTIVE, 'spec': spec, 'frozen_contract': frozen,
                 'status': 'challenger', 'auto_promotion': False, 'delta': 0,
                 'library_versions':versions,

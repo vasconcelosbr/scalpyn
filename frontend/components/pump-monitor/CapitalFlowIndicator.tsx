@@ -20,12 +20,62 @@ export type CapitalFlow = {
   reason?: string;
 };
 
+export type MlRegime = {
+  active: boolean;
+  reason?: string | null;
+  mean_up_probability?: number | null;
+  assets?: number;
+  cap?: string | null;
+  model?: { experiment_id: string; created_at: string; horizon_minutes: number;
+    quality?: { approved: boolean; reasons: string[]; auc: number | null; brier: number | null;
+      baseline_brier: number | null; test_episodes: number } } | null;
+};
+
 export type V1Regime = {
   state?: string;
   price_state?: string;
   enter_score?: number;
   capital?: CapitalFlow;
+  ml?: MlRegime;
 };
+
+const ML_REASON: Record<string, string> = {
+  no_recent_model: "nenhum modelo treinado nos últimos dias",
+  quality_gate_failed: "modelo mais recente não passou no teste de qualidade",
+  artifacts_missing: "arquivos do modelo ausentes",
+  ml_disabled: "ML desligado na configuração",
+  not_loaded: "ML ainda não carregado",
+};
+
+const QUALITY_REASON: Record<string, string> = {
+  auc_below_min: "AUC abaixo do mínimo",
+  brier_not_better_than_base_rate: "não supera a taxa base (Brier)",
+  brier_improvement_ci_includes_zero: "ganho sobre a taxa base não é significativo",
+  too_few_test_episodes: "poucos episódios no teste",
+};
+
+export function MlStatusChip({ ml }: { ml?: MlRegime | null }) {
+  if (!ml) return null;
+  const q = ml.model?.quality;
+  const h = ml.model?.horizon_minutes ?? 15;
+  const lines = [
+    `XGBoost — probabilidade de o preço terminar acima em ${h} min (direção, sem alvo de %).`,
+    ml.active ? "Ativo: ajusta score (±15%), seta de direção e regime." : `Sem efeito: ${ML_REASON[ml.reason ?? ""] ?? ml.reason ?? "—"}`,
+    q ? `Teste fora da amostra: AUC ${q.auc?.toFixed(3) ?? "—"} · Brier ${q.brier?.toFixed(4) ?? "—"} vs base ${q.baseline_brier?.toFixed(4) ?? "—"} · ${q.test_episodes} episódios` : "",
+    q && !q.approved ? `Reprovado: ${q.reasons.map(r => QUALITY_REASON[r] ?? r).join(", ")}` : "",
+    ml.model ? `Modelo de ${new Date(ml.model.created_at).toLocaleString("pt-BR")}` : "",
+    ml.active && ml.mean_up_probability != null ? `Média do universo: ${(ml.mean_up_probability * 100).toFixed(0)}% de alta (${ml.assets} ativos)${ml.cap ? ` → regime limitado a ${ml.cap}` : ""}` : "",
+  ].filter(Boolean).join("\n");
+  return (
+    <span className={`${styles.chip} ${styles.mlChip} ${ml.active ? styles.in : styles.flat}`} title={lines} data-testid="ml-status">
+      <span className={styles.label}>ML {h}m</span>
+      <strong>{ml.active ? "Ativo" : "Sem efeito"}</strong>
+      {ml.active && ml.mean_up_probability != null && (
+        <span className={styles.metric}>{(ml.mean_up_probability * 100).toFixed(0)}% alta</span>
+      )}
+    </span>
+  );
+}
 
 type HistoryHour = { hour: string; net_usdt: number; ratio: number | null; minutes: number };
 type CapitalHistory = {

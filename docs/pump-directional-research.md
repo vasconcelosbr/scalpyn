@@ -58,7 +58,7 @@ changes to `research.features`.
 
 ## Artifacts and per-asset inference
 
-Native artifacts use `pump_directional/<experiment-hash>`, isolated from legacy
+Native artifacts use `pump_ml/directional/<experiment-hash>` (required by the `pump_ml/%` CHECK constraints), isolated from legacy
 touch artifacts and all Shadow resources. The manifest freezes the directional
 event, horizon, features, preprocessing, selection, temporal cuts and evaluation
 options. Native inference checks numeric inputs and training feature ranges,
