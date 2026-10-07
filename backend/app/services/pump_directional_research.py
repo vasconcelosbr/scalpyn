@@ -217,6 +217,9 @@ def train_directional(rows, *, spec, output_root):
                'context_coverage': {name: {f: float(np.mean(~np.isnan(m[:, len(features)+i]))) for i, f in enumerate(context)}
                                     for name, m in (('train', x), ('calibration', kx), ('test', tx))} if context else {},
                'feature_importance_gain': _importance(model, columns),
+               'walk_forward': (walk_forward_evaluation(usable, columns=columns, spec=spec, options=options,
+                                                        relative=relative)
+                                if (spec.get('walk_forward') or {}).get('enabled') else None),
                'interval_scope': 'conditional_on_test_period_not_independent_regimes',
                'applied_delta': 0, 'auto_promotion': False}
     versions={'xgboost':xgb.__version__,'numpy':np.__version__,'scikit_learn':sklearn.__version__}
@@ -293,6 +296,123 @@ def apply_calibration(raw, fit, clip=1e-6):
     p = np.clip(raw, clip, 1 - clip)
     z = fit['slope'] * np.log(p / (1 - p)) + fit['intercept']
     return 1 / (1 + np.exp(-np.clip(z, -700, 700)))
+
+
+def excess_return(row, relative):
+    """Economic outcome in pp: relative → mid-referenced excess over the beta-adjusted
+    same-minute benchmark (what the label signs); absolute → ask-referenced return."""
+    if relative:
+        own = mid_return(row.get('endpoint_return_pct'), (row.get('values') or {}).get('spread_pct'))
+        bench = row.get('benchmark_return_pct')
+        return None if own is None or not eng.number(bench) else own - bench
+    v = row.get('endpoint_return_pct')
+    return float(v) if eng.number(v) else None
+
+
+def walk_forward_evaluation(usable, *, columns, spec, options, relative):
+    """Rolling-origin evaluation: every UTC day with >= ``min_train_days`` earlier days
+    is a test fold once. Fold model = same booster params, trained on rows before
+    (day start - embargo), calibrated on the last ``calibration_fraction`` of that
+    past (same bounded Platt), never on the test day. Episodes that touch the test
+    day are removed from the fold's past. Pools out-of-fold predictions:
+      * episode-weighted AUC / Brier vs each fold's train base rate, paired
+        episode bootstrap CI (same construction as the holdout metrics);
+      * per-day AUC (stability) and the economic spread: mean excess return (pp)
+        of the top vs bottom ``economic_quantile`` of predicted probability."""
+    import numpy as np
+    import xgboost as xgb
+    from datetime import timedelta
+    from sklearn.metrics import brier_score_loss, roc_auc_score
+    wf = spec.get('walk_forward') or {}
+    min_days = int(wf.get('min_train_days', 2)); frac = float(wf.get('calibration_fraction', 0.2))
+    q = float(wf.get('economic_quantile', 0.1)); embargo = timedelta(seconds=int(spec['embargo_seconds']))
+    rows = sorted(usable, key=lambda r: eng.utc(r['decision_at']))
+    days = sorted({eng.utc(r['decision_at']).date() for r in rows})
+    def matrix(c):
+        def cell(r, f):
+            v = (r.get('values') or {}).get(f)
+            return float(v) if eng.number(v) else np.nan
+        return np.array([[cell(r, f) for f in columns] for r in c], dtype=float).reshape(len(c), len(columns))
+    folds = []; P = []; Y = []; W = []; E = []; G = []; PRIOR = []
+    for i, day in enumerate(days):
+        if i < min_days:
+            continue
+        test = [r for r in rows if eng.utc(r['decision_at']).date() == day]
+        start = min(eng.utc(r['decision_at']) for r in test)
+        test_eps = {r['episode_id'] for r in test}
+        past = [r for r in rows if eng.utc(r['decision_at']) < start - embargo and r['episode_id'] not in test_eps]
+        if len(past) < 100 or len({r['target'] for r in past}) < 2 or len({r['target'] for r in test}) < 2:
+            folds.append({'day': day.isoformat(), 'skipped': 'insufficient_past_or_single_class',
+                          'test_rows': len(test), 'past_rows': len(past)})
+            continue
+        cut = eng.utc(past[int(len(past) * (1 - frac))]['decision_at'])
+        fit = [r for r in past if eng.utc(r['decision_at']) < cut - embargo]
+        cal = [r for r in past if eng.utc(r['decision_at']) >= cut]
+        cal_eps = {r['episode_id'] for r in cal}
+        fit = [r for r in fit if r['episode_id'] not in cal_eps]
+        if len(fit) < 50 or len({r['target'] for r in fit}) < 2 or len({r['target'] for r in cal}) < 2:
+            folds.append({'day': day.isoformat(), 'skipped': 'insufficient_fit_or_calibration', 'test_rows': len(test)})
+            continue
+        fx, fy = matrix(fit), np.array([int(r['target']) for r in fit])
+        fw = np.array(episode_weights(fit))
+        model = xgb.XGBClassifier(**{**spec['params'], 'n_jobs': spec['max_threads'], 'objective': 'binary:logistic'})
+        model.fit(fx, fy, sample_weight=fw, verbose=False)
+        def logit(p):
+            p = np.clip(p, 1e-6, 1 - 1e-6)
+            return np.log(p / (1 - p))
+        cy = np.array([int(r['target']) for r in cal]); cw = np.array(episode_weights(cal))
+        fitc = fit_calibration(logit(model.predict_proba(matrix(cal))[:, 1]), cy, cw, options,
+                               spec['params']['random_state'])
+        p = apply_calibration(model.predict_proba(matrix(test))[:, 1], fitc)
+        ty = np.array([int(r['target']) for r in test]); tw = np.array(episode_weights(test))
+        prior = float(np.average(fy, weights=fw))
+        auc = float(roc_auc_score(ty, p, sample_weight=tw))
+        folds.append({'day': day.isoformat(), 'test_rows': len(test), 'test_episodes': len(test_eps),
+                      'fit_rows': len(fit), 'calibration_rows': len(cal), 'auc': auc,
+                      'brier': float(brier_score_loss(ty, p, sample_weight=tw)),
+                      'baseline_brier': float(brier_score_loss(ty, np.full(len(ty), prior), sample_weight=tw)),
+                      'up_frequency': float(np.average(ty, weights=tw)), 'train_prior': prior,
+                      'calibration_slope': fitc['slope']})
+        P.extend(p.tolist()); Y.extend(ty.tolist()); W.extend(tw.tolist()); PRIOR.extend([prior] * len(ty))
+        E.extend([excess_return(r, relative) for r in test]); G.extend([f"{day}:{r['episode_id']}" for r in test])
+    scored = [f for f in folds if 'auc' in f]
+    out = {'version': 'pump_walk_forward_daily_v1', 'min_train_days': min_days, 'calibration_fraction': frac,
+           'folds': folds, 'scored_days': len(scored)}
+    if not scored:
+        return {**out, 'pooled': None}
+    P, Y, W, PRIOR = map(np.array, (P, Y, W, PRIOR))
+    groups = {}
+    for i, g in enumerate(G): groups.setdefault(g, []).append(i)
+    losses = np.array([float(np.mean((Y[idx] - PRIOR[idx]) ** 2 - (Y[idx] - P[idx]) ** 2)) for idx in groups.values()])
+    rng = np.random.default_rng(spec['params']['random_state'])
+    reps = int(options['bootstrap_repetitions'])
+    boot = [float(rng.choice(losses, len(losses), replace=True).mean()) for _ in range(reps)]
+    pooled = {'auc': float(roc_auc_score(Y, P, sample_weight=W)),
+              'brier': float(np.average((Y - P) ** 2, weights=W)),
+              'baseline_brier': float(np.average((Y - PRIOR) ** 2, weights=W)),
+              'paired_episode_brier_improvement': float(losses.mean()),
+              'paired_episode_brier_ci95': np.quantile(boot, [.025, .975]).tolist(),
+              'episodes': len(groups), 'rows': int(len(Y)),
+              'days_auc_above_half': sum(f['auc'] > 0.5 for f in scored),
+              'day_auc_min': min(f['auc'] for f in scored), 'day_auc_max': max(f['auc'] for f in scored)}
+    # Economic spread: excess return of the most vs least favoured predictions.
+    ex = np.array([np.nan if e is None else e for e in E], dtype=float)
+    ok = ~np.isnan(ex)
+    if ok.sum() >= 20:
+        pp, ee = P[ok], ex[ok]
+        hi, lo = np.quantile(pp, 1 - q), np.quantile(pp, q)
+        top, bottom = ee[pp >= hi], ee[pp <= lo]
+        def mean_ci(v):
+            b = [float(rng.choice(v, len(v), replace=True).mean()) for _ in range(reps)]
+            return float(v.mean()), np.quantile(b, [.025, .975]).tolist()
+        tm, tci = mean_ci(top); bm, bci = mean_ci(bottom)
+        diffs = [float(rng.choice(top, len(top)).mean() - rng.choice(bottom, len(bottom)).mean()) for _ in range(reps)]
+        pooled['economic'] = {'quantile': q, 'unit': 'pp_excess_over_benchmark' if relative else 'pp_endpoint_return',
+                              'all_mean': float(ee.mean()), 'top_mean': tm, 'top_ci95': tci, 'top_rows': int(len(top)),
+                              'bottom_mean': bm, 'bottom_ci95': bci, 'bottom_rows': int(len(bottom)),
+                              'top_minus_bottom': tm - bm, 'top_minus_bottom_ci95': np.quantile(diffs, [.025, .975]).tolist(),
+                              'note': 'row-level bootstrap; rows within a minute are correlated'}
+    return {**out, 'pooled': pooled}
 
 
 def model_columns(spec):

@@ -179,6 +179,14 @@ def predict_rows(loaded: Dict[str, Any], rows: List[Dict[str, Any]], spec: Dict[
     return {**out, "probabilities": probs, "covered": len(probs), "universe": len(rows)}
 
 
+def _wf_summary(wf: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not wf:
+        return None
+    return {"scored_days": wf.get("scored_days"), "pooled": wf.get("pooled"),
+            "days": [{k: f.get(k) for k in ("day", "auc", "brier", "baseline_brier", "up_frequency",
+                                              "test_rows", "test_episodes", "skipped")} for f in wf.get("folds") or []]}
+
+
 def _summary_row(horizon: int, row, spec: Dict[str, Any], applied: int) -> Dict[str, Any]:
     if row is None:
         return {"horizon_minutes": horizon, "applied": horizon == applied, "status": "no_recent_model"}
@@ -209,6 +217,7 @@ def _summary_row(horizon: int, row, spec: Dict[str, Any], applied: int) -> Dict[
             "context_features": len(model_spec.get("context_features") or []),
             "context_coverage_test": coverage,
             "top_features": sorted(importance.items(), key=lambda kv: -kv[1])[:8],
+            "walk_forward": _wf_summary(metrics.get("walk_forward")),
         },
     }
 

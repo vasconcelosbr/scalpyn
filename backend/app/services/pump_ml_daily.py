@@ -77,6 +77,7 @@ def prepare_directional(rows, horizon, research, selection):
     context = list(research.get("context_features") or [])
     spec.update(features=research["features"], max_rows=research["max_rows"], min_episodes=research["min_episodes"],
                 context_features=context,
+                walk_forward=research.get("walk_forward"),
                 # Parameters of the derived relative features, frozen into the manifest so
                 # live inference recomputes them identically.
                 relative_beta=(research.get("relative_beta") if (research.get("relative_beta") or {}).get("enabled")
