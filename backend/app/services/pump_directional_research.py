@@ -10,6 +10,45 @@ from . import pump_opportunity_engine as eng
 from .pump_contracts import validate_manifest
 
 OBJECTIVE = 'pump_endpoint_direction_v1'
+# 2026-10-07: direction RELATIVE to the market. Label = asset endpoint return minus
+# the median endpoint return of every labelled asset captured in the same minute
+# (same horizon). Removes the shared daily drift that dominated the absolute label
+# (up-frequency 0.25-0.74 between consecutive temporal blocks on 07/10).
+RELATIVE_OBJECTIVE = 'pump_relative_direction_v1'
+OBJECTIVES = (OBJECTIVE, RELATIVE_OBJECTIVE)
+BENCHMARK_POLICY = 'universe_beta_residual_median_mid_v1'
+PLAIN_BENCHMARK_POLICY = 'universe_median_same_slot_mid_v1'
+
+
+def mid_return(endpoint_return_pct, spread_pct):
+    """Ask-referenced endpoint return → mid-referenced (mid = ask / (1 + spread/200))."""
+    if not eng.number(endpoint_return_pct) or not eng.number(spread_pct) or spread_pct < 0:
+        return None
+    return ((1 + endpoint_return_pct / 100) * (1 + spread_pct / 200) - 1) * 100
+
+
+def target_contract(horizon, relative=False, min_assets=10, beta=True):
+    base = {'version': OBJECTIVE, 'horizon_minutes': horizon, 'reference_policy': 'gate_best_ask_v1',
+            'flat_policy': 'exclude_exact_zero', 'unknown_policy': 'exclude', 'return_policy': 'endpoint_gross'}
+    if not relative:
+        return base
+    return {**base, 'version': RELATIVE_OBJECTIVE, 'benchmark_policy': BENCHMARK_POLICY if beta else PLAIN_BENCHMARK_POLICY,
+            'min_benchmark_assets': min_assets, 'flat_policy': 'exclude_exact_tie_with_benchmark'}
+
+
+def relative_target(row, min_assets):
+    """Above (True) / below (False) the same-minute universe median, both mid-referenced;
+    None when unknown."""
+    own = mid_return(row.get('endpoint_return_pct'), (row.get('values') or {}).get('spread_pct'))
+    bench = row.get('benchmark_return_pct')
+    if row.get('label_status') != 'known' or row.get('label_coverage_complete') is not True:
+        return None
+    if not eng.number(own) or own <= -100 or not eng.number(bench):
+        return None
+    if type(row.get('benchmark_assets')) is not int or row['benchmark_assets'] < min_assets:
+        return None
+    diff = own - bench
+    return None if abs(diff) < 1e-9 else diff > 0   # tie (float-tolerant) → excluded
 
 
 class DirectionalSupportError(ValueError):
@@ -45,10 +84,12 @@ def train_directional(rows, *, spec, output_root):
     frozen = validate_manifest(spec)
     target = spec.get('directional_target', {})
     horizon = target.get('horizon_minutes')
-    if target != {'version': OBJECTIVE, 'horizon_minutes': horizon,
-                  'reference_policy': 'gate_best_ask_v1', 'flat_policy': 'exclude_exact_zero',
-                  'unknown_policy': 'exclude', 'return_policy': 'endpoint_gross'}:
+    relative = target.get('version') == RELATIVE_OBJECTIVE
+    min_assets = target.get('min_benchmark_assets')
+    if target != target_contract(horizon, relative, min_assets, target.get('benchmark_policy') != PLAIN_BENCHMARK_POLICY):
         raise ValueError('Explicit directional target contract required')
+    if relative and (type(min_assets) is not int or min_assets < 3):
+        raise ValueError('Relative target requires min_benchmark_assets >= 3')
     if type(horizon) is not int or horizon not in spec['label_spec']['horizons_minutes']:
         raise ValueError('Directional horizon must exist in frozen labels')
     if len(rows) > spec['max_rows'] or not 0 < spec['max_threads'] <= 2:
@@ -65,8 +106,9 @@ def train_directional(rows, *, spec, output_root):
     expected = (spec['feature_spec_hash'], spec['label_spec_hash'], spec['cost_policy_hash'], spec['producer_config_hash'])
     usable = []
     for r in rows:
-        y = directional_target({'status': r.get('label_status'), 'coverage_complete': r.get('label_coverage_complete'),
-                                'endpoint_return_pct': r.get('endpoint_return_pct')})
+        y = relative_target(r, min_assets) if relative else directional_target(
+            {'status': r.get('label_status'), 'coverage_complete': r.get('label_coverage_complete'),
+             'endpoint_return_pct': r.get('endpoint_return_pct')})
         if y is None or r.get('horizon_minutes') != horizon or not all(eng.number(r['values'].get(f)) for f in features):
             continue
         reference=r.get('reference') or {}
@@ -183,10 +225,11 @@ def train_directional(rows, *, spec, output_root):
     folder.mkdir(parents=True, exist_ok=False)
     model.get_booster().save_model(folder/'xgboost.json')
     manifest = {'experiment_id': experiment, 'artifact_namespace': f'pump_ml/directional/{experiment}',
-                'objective': OBJECTIVE, 'spec': spec, 'frozen_contract': frozen,
+                'objective': RELATIVE_OBJECTIVE if relative else OBJECTIVE, 'spec': spec, 'frozen_contract': frozen,
                 'status': 'challenger', 'auto_promotion': False, 'delta': 0,
                 'library_versions':versions,
-                'probability_event':'positive_endpoint_return_conditional_on_known_nonzero_endpoint',
+                'probability_event':('endpoint_return_above_same_minute_universe_median' if relative
+                                     else 'positive_endpoint_return_conditional_on_known_nonzero_endpoint'),
                 'feature_bounds': _bounds(x, columns)}
     calibrator = {'input': 'clipped_logit', 'clip': 1e-6, 'coef': [[calibration_fit['slope']]],
                   'intercept': [calibration_fit['intercept']], 'method': calibration_fit['method'], 'pool': pool}
@@ -260,10 +303,10 @@ def model_columns(spec):
 def directional_preview(values, manifest, predict_up):
     """Research-only per-asset output. Never grants validation or effective score."""
     spec = manifest['spec']
-    result = {'objective': OBJECTIVE, 'horizon_minutes': spec['directional_target']['horizon_minutes'],
+    result = {'objective': manifest.get('objective'), 'horizon_minutes': spec['directional_target']['horizon_minutes'],
               'status': 'abstained', 'direction': None, 'score': None, 'probability': None,
               'applied_delta': 0, 'model_id': manifest['experiment_id'], 'validation': manifest['status']}
-    if manifest.get('objective') != OBJECTIVE:
+    if manifest.get('objective') not in OBJECTIVES:
         return {**result, 'reason': 'incompatible_model_objective'}
     if any(not eng.number(values.get(f)) for f in spec['features']):
         return {**result, 'reason': 'missing_or_invalid_features'}
@@ -287,7 +330,7 @@ def load_directional_preview(values, folder):
     """Offline/native inference from a directional artifact, with local evidence."""
     folder=Path(folder)
     manifest=json.loads((folder/'manifest.json').read_text(encoding='utf-8'))
-    if manifest.get('objective')!=OBJECTIVE:raise ValueError('Not a directional Pump artifact')
+    if manifest.get('objective') not in OBJECTIVES:raise ValueError('Not a directional Pump artifact')
     import numpy as np
     import xgboost as xgb
     calibration=json.loads((folder/'calibrator.json').read_text(encoding='utf-8'))

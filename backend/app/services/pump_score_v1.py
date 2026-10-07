@@ -107,6 +107,9 @@ DEFAULT_V1: Dict[str, Any] = {
     # effect is zero. Bounded effects on score, direction arrow and regime.
     "ml": {
         "enabled": True,
+        # "relative" (2026-10-07): P(asset ends above the universe median return at the
+        # horizon) — removes the market's daily drift. "absolute": P(price ends up).
+        "objective": "relative",
         "horizon_minutes": 15,
         "max_model_age_days": 7,
         "max_feature_age_seconds": 120,
@@ -239,6 +242,8 @@ def validate(spec: Dict[str, Any], errors: List[str]) -> None:
             errors.append(f"score_v1.derivatives: interval in {sorted(_TF_MS)} and block_flags_min >= 1")
     ml = spec.get("ml") or {}
     if ml:
+        if ml.get("objective", "relative") not in ("relative", "absolute"):
+            errors.append("score_v1.ml.objective must be relative|absolute")
         if not 0 <= float(ml["score"]["max_adjust"]) <= 0.5:
             errors.append("score_v1.ml.score.max_adjust must be within [0, 0.5]")
         if not 0 <= float(ml["direction"]["confirm_down"]) < 0.5 < float(ml["direction"]["confirm_up"]) <= 1:
@@ -809,6 +814,10 @@ def evaluate_universe(rows: List[Dict[str, Any]], structures: Dict[str, Dict[str
     ml_active = bool(ml.get("active")) and bool((spec.get("ml") or {}).get("enabled"))
     ml_probs: Dict[str, Optional[float]] = (ml.get("probabilities") or {}) if ml_active else {}
     ml_reg = ml_regime_cap(ml_probs, spec) if ml_active else {"mean_up_probability": None, "cap": None}
+    if ml_active and (spec.get("ml") or {}).get("objective", "relative") == "relative":
+        # Relative probabilities average ~0.5 by construction: they rank assets
+        # against each other and carry no market-direction information → no regime cap.
+        ml_reg = {**ml_reg, "cap": None, "regime_effect": "disabled_relative_objective"}
     capped = apply_capital_cap(capped, {"regime_cap": ml_reg.get("cap")})
     reg = {**reg, "price_state": reg["state"], "state": capped, "capital": capital,
            "ml": {"active": ml_active, "model": ml.get("model"), "reason": ml.get("reason"), **ml_reg},

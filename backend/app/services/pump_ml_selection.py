@@ -81,6 +81,7 @@ DIRECTIONAL_ROWS_SQL = ROWS_SQL.replace(
     "'simulation',o.payload->'simulation','target',l.payload->'targets'->'0.8'->'hit',",
     "'simulation',o.payload->'simulation',"
     "'reference',o.payload->'reference','endpoint_return_pct',l.payload->'endpoint_return_pct','horizon_minutes',$8::int,"
+    "'slot_at',o.slot_at,'symbol',o.symbol,"
     "'target',(l.payload->>'endpoint_return_pct')::numeric>0,")
 DIRECTIONAL_ROWS_SQL = DIRECTIONAL_ROWS_SQL.replace('horizon_minutes=5', 'horizon_minutes=$8 AND labeled_at<=$9')
 DIRECTIONAL_ROWS_SQL = DIRECTIONAL_ROWS_SQL.replace(
@@ -90,6 +91,124 @@ DIRECTIONAL_ROWS_SQL = DIRECTIONAL_ROWS_SQL.replace(
     "AND jsonb_typeof(o.payload->'reference'->'price')='number' "
     "AND (o.payload->'reference'->>'price')::numeric>0 "
     "AND o.payload->'reference'->>'policy'='gate_best_ask_v1'")
+
+# Relative objective benchmark (2026-10-07). For each minute of the selected rows:
+#   * cross-section = MID-referenced endpoint return of EVERY labelled asset captured in
+#     that minute (certified or not: it is the market), same horizon/label spec,
+#     labelled by the snapshot cutoff. The stored label is referenced to the best ASK,
+#     which embeds ~half the spread as a loss growing with illiquidity;
+#     mid = ask / (1 + spread/200) removes it.
+#   * beta_i = OLS slope of asset 5m returns on the universe-median 5m return over the
+#     ``window`` closed candles BEFORE the decision (ohlcv, Gate preferred). Without it
+#     the relative label is mostly beta x market direction (Gate 5m, 02-07/10: median
+#     |P(beat | mkt down) - P(beat | mkt up)| = 0.553 raw vs 0.111 beta-adjusted).
+#   * residual e_j = r_j - beta_j * median(r); benchmark for row i = beta_i * median(r)
+#     + median(e), so (own - benchmark) = e_i - median(e).
+CROSS_SECTION_SQL = """SELECT o.slot_at, o.symbol,
+ ((1+(l.payload->>'endpoint_return_pct')::float8/100)*(1+(o.payload->'values'->>'spread_pct')::float8/200)-1)*100 AS r
+ FROM pump_opportunity_observations o
+ JOIN pump_opportunity_labels l ON l.observation_id=o.observation_id
+  AND l.horizon_minutes=$3 AND l.label_spec_hash=$4 AND l.labeled_at<=$5
+ WHERE o.user_id=$1 AND o.slot_at=ANY($2::timestamptz[])
+  AND l.payload->>'status'='known' AND l.payload->>'coverage_complete'='true'
+  AND jsonb_typeof(l.payload->'endpoint_return_pct')='number'
+  AND jsonb_typeof(o.payload->'values'->'spread_pct')='number'"""
+CANDLES_SQL = """SELECT DISTINCT ON (symbol, time) symbol, time, close::float8 AS close FROM ohlcv
+ WHERE symbol=ANY($1::text[]) AND timeframe=$2 AND market_type='spot' AND is_closed IS TRUE
+  AND time>=$3 AND time<$4
+ ORDER BY symbol, time, CASE WHEN exchange ILIKE 'gate%' THEN 0 ELSE 1 END"""
+_TF_SECONDS={'1m':60,'5m':300,'15m':900}
+
+
+def _median(values):
+    v=sorted(values);n=len(v)
+    return None if not n else (v[n//2] if n%2 else (v[n//2-1]+v[n//2])/2)
+
+
+def rolling_betas(closes,needed,*,step_seconds,window,min_points):
+    """``closes``: {symbol: {open_epoch: close}}; ``needed``: {(symbol, decision_epoch)}.
+    Beta from candles CLOSED at or before the decision (open + step <= decision), over
+    the previous ``window`` candles. Prefix sums make each lookup O(1)."""
+    import numpy as np
+    grid=sorted({t for series in closes.values() for t in series})
+    if len(grid)<2:return {}
+    index={t:i for i,t in enumerate(grid)}
+    ret={}
+    for sym,series in closes.items():
+        y=np.full(len(grid),np.nan)
+        for t,c in series.items():
+            prev=series.get(t-step_seconds)
+            if prev and prev>0 and c and c>0:y[index[t]]=(c/prev-1)*100
+        ret[sym]=y
+    mat=np.vstack(list(ret.values()))
+    with np.errstate(all='ignore'):
+        mkt=np.nanmedian(mat,axis=0)
+    out={}
+    for sym,y in ret.items():
+        ok=~np.isnan(y)&~np.isnan(mkt)
+        x=np.where(ok,mkt,0.0);yy=np.where(ok,y,0.0)
+        cs=lambda a:np.concatenate([[0.0],np.cumsum(a)])
+        n,sx,sy,sxx,sxy=cs(ok.astype(float)),cs(x),cs(yy),cs(x*x),cs(x*yy)
+        for (s,dec) in needed:
+            if s!=sym:continue
+            # last candle closed by the decision: open <= dec - step
+            hi=int(np.searchsorted(grid,dec-step_seconds,side='right'))
+            lo=max(0,hi-window)
+            cnt=n[hi]-n[lo]
+            if cnt<min_points:continue
+            vx=(sxx[hi]-sxx[lo])-(sx[hi]-sx[lo])**2/cnt
+            if vx<=0:continue
+            out[(s,dec)]=float(((sxy[hi]-sxy[lo])-(sx[hi]-sx[lo])*(sy[hi]-sy[lo])/cnt)/vx)
+    return out
+
+
+async def attach_universe_benchmark(conn,owner,rows,horizon_minutes,label_hash,cutoff,diagnostics,*,
+                                    beta=None,chunk=500):
+    """Adds ``benchmark_return_pct`` / ``benchmark_assets`` / ``beta`` to each row
+    (None/0 when the minute or the asset's beta is unavailable). Runs inside the
+    caller's snapshot. ``beta=None`` → plain same-minute median (no beta)."""
+    slots=sorted({utc(r['slot_at']) for r in rows if r.get('slot_at')})
+    cross={}
+    diagnostics['phase']='universe_cross_section'
+    for i in range(0,len(slots),chunk):
+        for rec in await conn.fetch(CROSS_SECTION_SQL,owner,slots[i:i+chunk],horizon_minutes,label_hash,cutoff):
+            if rec['r'] is not None:cross.setdefault(utc(rec['slot_at']),[]).append((rec['symbol'],float(rec['r'])))
+    betas={}
+    if beta and cross:
+        diagnostics['phase']='universe_betas'
+        step=_TF_SECONDS[beta['timeframe']];window=int(beta['window_candles'])
+        symbols=sorted({s for xs in cross.values() for s,_ in xs})
+        lo=min(cross)-timedelta(seconds=step*(window+2));hi=max(cross)+timedelta(seconds=step)
+        closes={}
+        for rec in await conn.fetch(CANDLES_SQL,symbols,beta['timeframe'],lo,hi):
+            closes.setdefault(rec['symbol'],{})[int(utc(rec['time']).timestamp())]=rec['close']
+        needed={(s,int(t.timestamp())) for t,xs in cross.items() for s,_ in xs}
+        betas=rolling_betas(closes,needed,step_seconds=step,window=window,min_points=int(beta['min_points']))
+    bench={}
+    for t,xs in cross.items():
+        m=_median([r for _,r in xs])
+        if beta:
+            b={s:betas.get((s,int(t.timestamp()))) for s,_ in xs}
+            resid=[r-b[s]*m for s,r in xs if b[s] is not None]
+        else:
+            b={s:0.0 for s,_ in xs};resid=[r for _,r in xs]
+        if resid:bench[t]=(m,_median(resid),len(resid),b)
+    for r in rows:
+        t=utc(r['slot_at']) if r.get('slot_at') else None
+        hit=bench.get(t)
+        bi=hit[3].get(r.get('symbol')) if hit else None
+        if hit and bi is not None:
+            r['benchmark_return_pct'],r['benchmark_assets'],r['beta']=bi*hit[0]+hit[1],hit[2],bi
+        else:
+            r['benchmark_return_pct'],r['benchmark_assets'],r['beta']=None,0,None
+    sizes=[v[2] for v in bench.values()]
+    diagnostics['benchmark']={'policy':'universe_beta_residual_median_mid_v1' if beta else 'universe_median_same_slot_mid_v1',
+        'slots':len(slots),'slots_with_benchmark':len(bench),'betas':len(betas),
+        'rows_with_benchmark':sum(r['benchmark_assets']>0 for r in rows),
+        'min_assets':min(sizes) if sizes else None,'median_assets':sorted(sizes)[len(sizes)//2] if sizes else None,
+        'beta':beta}
+    return rows
+
 
 def complete_features(row,features):
     return all(number((row['values'] or {}).get(f)) for f in features)
@@ -105,7 +224,7 @@ def temporal_windows(first,last,max_rows,bins):
         quota+(i<remainder),i==count-1) for i in range(count)]
 
 async def select_temporal_training_rows(conn,owner,features,feature_hash,max_rows,diagnostics,*,batch_size=500,bins=20,horizon_minutes=None,
-                                        extra_features=(),lookback_days=30):
+                                        extra_features=(),lookback_days=30,benchmark=False,beta=None):
     """Sample at most max_rows across the complete-feature compatible extent.
 
     Empty/underfilled windows remain explicit, never filled with newest-only
@@ -168,6 +287,9 @@ async def select_temporal_training_rows(conn,owner,features,feature_hash,max_row
             rows.extend(selected)
             window_evidence.append({'from':lo.isoformat(),'to':hi.isoformat(),'last_inclusive':inclusive,
                 'quota':quota,'selected':len(selected),'candidate_rows':candidate_count})
+        if benchmark and horizon_minutes is not None and rows:
+            await attach_universe_benchmark(conn,owner,rows,horizon_minutes,contract['label_spec_hash'],cutoff,diagnostics,
+                                            beta=beta)
         rows.sort(key=lambda r:(-utc(r['decision_at']).timestamp(),r['observation_id']))
         diagnostics.update(phase='selection_complete',selected_rows=len(rows),selection_as_of=cutoff.isoformat(),
             policy={'version':TEMPORAL_SELECTION_VERSION,'requested_bins':bins,'actual_bins':len(windows),

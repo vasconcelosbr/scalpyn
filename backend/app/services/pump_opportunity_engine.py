@@ -33,6 +33,11 @@ DEFAULT_CONFIG = {
                      "perp_perp_flow_norm","perp_oi_change_pct","perp_funding_rate","perp_short_liq_oi_bps",
                      "ctx_breadth","ctx_ref_progress_atr","ctx_ref_ret_pct","ctx_capital_ratio","ctx_capital_z"],
                  "lookback_days":30, "cohort_cuts":[0.5,0.65,0.8],
+                 # 2026-10-07: label = asset endpoint return vs the median endpoint return of
+                 # every labelled asset captured in the same minute (same horizon).
+                 "target_mode":"relative_universe_median", "relative_min_assets":10,
+                 # Beta-adjusted residual (24h of closed 5m candles before the decision).
+                 "relative_beta":{"enabled":True,"timeframe":"5m","window_candles":288,"min_points":200},
                  "calibration_method":"platt_bounded", "calibration_pool":"validation_and_calibration",
                  "calibration_max_slope":1.0,
                  "params":{"n_estimators":100,"max_depth":3,"random_state":20261001}},
@@ -106,6 +111,15 @@ def validate_config(c):
     if not isinstance(cuts,list) or len(cuts)!=3 or not all(number(x) for x in cuts) \
             or not 0.3<=cuts[0]<cuts[1]<cuts[2]<=0.9:
         raise ValueError('cohort_cuts must be three increasing fractions in [0.3, 0.9]')
+    if research.get('target_mode') not in ('absolute','relative_universe_median'):
+        raise ValueError('target_mode must be absolute or relative_universe_median')
+    if type(research.get('relative_min_assets')) is not int or not 3<=research['relative_min_assets']<=500:
+        raise ValueError('relative_min_assets must be an integer in [3, 500]')
+    rb=research.get('relative_beta')
+    if not isinstance(rb,dict) or not isinstance(rb.get('enabled'),bool) or rb.get('timeframe') not in ('1m','5m','15m') \
+            or type(rb.get('window_candles')) is not int or not 24<=rb['window_candles']<=2016 \
+            or type(rb.get('min_points')) is not int or not 12<=rb['min_points']<=rb['window_candles']:
+        raise ValueError('relative_beta: {enabled bool, timeframe 1m|5m|15m, window_candles 24-2016, 12<=min_points<=window}')
     if research.get('calibration_method') not in ('platt','platt_bounded'):
         raise ValueError('calibration_method must be platt or platt_bounded')
     if research.get('calibration_pool') not in ('calibration','validation_and_calibration'):

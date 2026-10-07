@@ -27,6 +27,12 @@ from . import pump_score_v1 as v1
 logger = logging.getLogger(__name__)
 
 OBJECTIVE = "pump_endpoint_direction_v1"
+RELATIVE_OBJECTIVE = "pump_relative_direction_v1"
+
+
+def objective_for(spec: Dict[str, Any]) -> str:
+    """``score_v1.ml.objective``: relative (default) or absolute. Never mixes the two."""
+    return OBJECTIVE if (spec.get("ml") or {}).get("objective", "relative") == "absolute" else RELATIVE_OBJECTIVE
 _CACHE: Dict[str, Dict[str, Any]] = {}
 _REFRESH_SECONDS = 600
 
@@ -91,14 +97,15 @@ class DirectionalModel:
         return [float(x) for x in 1 / (1 + np.exp(-np.clip(z, -700, 700)))]
 
 
-async def _fetch_newest(db, user_id, horizon: int, max_age_days: int, *, with_files: bool = True):
+async def _fetch_newest(db, user_id, horizon: int, max_age_days: int, *, with_files: bool = True,
+                        objective: str = RELATIVE_OBJECTIVE):
     row = (await db.execute(text("""
         SELECT experiment_id, created_at, manifest, metrics FROM pump_ml_experiments
          WHERE user_id = CAST(:u AS uuid) AND manifest->>'objective' = :obj
            AND (manifest->'spec'->'directional_target'->>'horizon_minutes')::int = :h
            AND created_at >= now() - make_interval(days => :d)
          ORDER BY created_at DESC LIMIT 1
-    """), {"u": str(user_id), "obj": OBJECTIVE, "h": int(horizon), "d": int(max_age_days)})).mappings().first()
+    """), {"u": str(user_id), "obj": objective, "h": int(horizon), "d": int(max_age_days)})).mappings().first()
     if row is None:
         return None, {}
     if not with_files:
@@ -119,19 +126,22 @@ async def load_model(db, user_id, spec: Dict[str, Any], *, now: Optional[float] 
     if not cfg.get("enabled"):
         return {"active": False, "reason": "ml_disabled"}
     now = now if now is not None else time.time()
-    key = f"{user_id}:{cfg['horizon_minutes']}"
+    objective = objective_for(spec)
+    key = f"{user_id}:{objective}:{cfg['horizon_minutes']}"
     cached = _CACHE.get(key)
     if cached and now - cached["fetched_at"] < _REFRESH_SECONDS:
         return cached["value"]
     try:
-        row, files = await _fetch_newest(db, user_id, int(cfg["horizon_minutes"]), int(cfg["max_model_age_days"]))
+        row, files = await _fetch_newest(db, user_id, int(cfg["horizon_minutes"]), int(cfg["max_model_age_days"]),
+                                         objective=objective)
         if row is None:
-            value = {"active": False, "reason": "no_recent_model"}
+            value = {"active": False, "reason": "no_recent_model", "model": {"objective": objective,
+                     "horizon_minutes": int(cfg["horizon_minutes"])}}
         else:
             metrics = _as_dict(row["metrics"])
             quality = v1.ml_quality(metrics, spec)
             meta = {"experiment_id": str(row["experiment_id"]), "created_at": row["created_at"].isoformat(),
-                    "horizon_minutes": int(cfg["horizon_minutes"]), "quality": quality}
+                    "horizon_minutes": int(cfg["horizon_minutes"]), "quality": quality, "objective": objective}
             if not quality["approved"]:
                 value = {"active": False, "reason": "quality_gate_failed", "model": meta}
             elif "xgboost.json" not in files or "calibrator.json" not in files:
@@ -213,9 +223,11 @@ async def models_summary(db, user_id, spec: Dict[str, Any]) -> Dict[str, Any]:
     horizons = sorted({applied, *[int(h) for h in (cfg.get("training") or {}).get("horizons_minutes") or []]})
     models = []
     for h in horizons:
-        row, _ = await _fetch_newest(db, user_id, h, int(cfg["max_model_age_days"]), with_files=False)
+        row, _ = await _fetch_newest(db, user_id, h, int(cfg["max_model_age_days"]), with_files=False,
+                                     objective=objective_for(spec))
         models.append(_summary_row(h, row, spec, applied))
     return {"enabled": bool(cfg.get("enabled")), "applied_horizon_minutes": applied,
+            "objective": objective_for(spec),
             "quality_spec": cfg.get("quality"), "max_model_age_days": cfg.get("max_model_age_days"),
             "models": models,
             "note": "Métricas fora da amostra (bloco de teste temporal, ponderado por episódio)."}
