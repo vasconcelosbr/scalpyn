@@ -196,3 +196,41 @@ def test_ablation_marks_variants_that_do_not_fit_the_budget(monkeypatch):
     conn, c = _ablation_env(monkeypatch, wf_calls)
     out = asyncio.run(pc.run_candle_ablation(conn, UUID(int=1), c, {}, datetime.now(timezone.utc)))
     assert wf_calls == [] and all(v == {"blocked_reason": "runtime_budget_exhausted"} for v in out["variants"].values())
+
+
+def test_every_final_status_is_allowed_by_the_database_constraint():
+    """2026-10-08: 'ablation' violated pump_job_status and runs stayed 'running'."""
+    import re
+    from pathlib import Path
+    versions = Path(__file__).resolve().parents[1] / "alembic" / "versions"
+    latest = (versions / "242_pump_job_status_ablation.py").read_text()
+    allowed = set(re.search(r'STATUSES = \(([^)]*)\)', latest).group(1).replace('"', "").replace(" ", "").split(","))
+    src = (Path(__file__).resolve().parents[1] / "app" / "services" / "pump_ml_daily.py").read_text()
+    # statuses that reach the table: INSERT 'running', every ``outcome = {"status": ...}`` and the fallback
+    produced = set(re.findall(r'outcome = \{"status": "(\w+)"', src)) | {"challenger", "blocked", "running", "failed"}
+    assert "ablation" in produced
+    assert produced <= allowed, produced - allowed
+
+
+def test_finalize_failure_never_leaves_the_run_running(monkeypatch):
+    calls = []
+
+    class Conn:
+        async def fetchval(self, sql, *args):
+            if "pg_try_advisory_lock" in sql: return True
+            if "SELECT run_id" in sql: return None
+            if "config_json" in sql: return {"enabled": True, "training_job_enabled": True}
+            return 0
+        async def execute(self, sql, *args):
+            calls.append((sql, args))
+            if "SET finished_at=now(),status=$2" in sql:
+                raise RuntimeError("check violation")
+
+    async def fake(conn, owner, c, diag, deadline, progress=None):
+        return {"variants": {}}
+
+    monkeypatch.setattr(pc, "run_candle_ablation", fake)
+    out = asyncio.run(daily.run_owner(Conn(), UUID(int=1), horizons=[15], force=True, family="candle_ablation"))
+    assert out["status"] == "failed" and out["finalize_error"] == "RuntimeError"
+    fallback = [a for q, a in calls if "status='failed'" in q]
+    assert fallback and fallback[0][1]["intended_status"] == "ablation"
