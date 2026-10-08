@@ -62,7 +62,9 @@ def test_live_cells_equal_training_values_at_the_same_decision():
     class DB:
         async def execute(self, stmt, binds):
             lo, hi = binds["lo"].timestamp(), binds["hi"].timestamp()
-            data = [(s, datetime.fromtimestamp(t, timezone.utc), c) for s in binds["s"]
+            bars_query = "open, high, low" in str(stmt)          # candle_structure on → live OHLC path
+            data = [((s, datetime.fromtimestamp(t, timezone.utc), c, c * 1.001, c * 0.999, c, 1.0) if bars_query
+                     else (s, datetime.fromtimestamp(t, timezone.utc), c)) for s in binds["s"]
                     for t, c in closes.get(s, {}).items() if lo <= t < hi]
             return type("R", (), {"all": lambda self: data})()
 

@@ -49,7 +49,11 @@ DEFAULT_CONFIG = {
                            "embargo_seconds":1800,
                            # v1.18: optional groups (btc_beta, candle_structure, volume, pool_context);
                            # [] = the original 12 price-only columns. Adopt a group only after ablation.
-                           "feature_groups":[],
+                           # 2026-10-08: candle_structure adopted after the full ablation (100k rows x 30 days,
+                           # same rows/days): day-median AUC 0.5558 -> 0.5654, better on 22/30 days (sign test
+                           # p=0.0081 < 0.05/5 Bonferroni), Brier 0.0018 -> 0.0026, top-bottom 0.0545 -> 0.0674 pp.
+                           # btc_beta / volume / pool_context did not pass (18, 14, 16 of 30 days).
+                           "feature_groups":["candle_structure"],
                            # Manual ablation (family candle_ablation): same rows/days, one group at a time.
                            # Same size as the production model (2026-10-08: ~9 s/variant measured in production
                            # at 60k x 15; the earlier "timeout" was a status CHECK violation, see v1.18.2).
