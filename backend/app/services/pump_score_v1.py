@@ -109,7 +109,9 @@ DEFAULT_V1: Dict[str, Any] = {
         "enabled": True,
         # "relative" (2026-10-07): P(asset ends above the universe median return at the
         # horizon) — removes the market's daily drift. "absolute": P(price ends up).
-        "objective": "relative",
+        # "relative_candle" (2026-10-08): same target, price-only model built from closed 5m
+        # candles; its 15-min model passed the day-level walk-forward gate on 2026-10-08.
+        "objective": "relative_candle",
         "horizon_minutes": 15,
         "max_model_age_days": 7,
         "max_feature_age_seconds": 120,
@@ -120,7 +122,9 @@ DEFAULT_V1: Dict[str, Any] = {
                     # "walk_forward" (every day tested once, past-only training) when the model
                     # carries it; "holdout" = the single last temporal block (pre-2026-10-07 models).
                     "source": "walk_forward"},
-        "score": {"max_adjust": 0.15},          # score × [1 − 0.15, 1 + 0.15] linear in (2p − 1)
+        # score × [1 − a, 1 + a] linear in (2p − 1). 2026-10-08: 0.15 → 0.05 while the candle model's
+        # effect is small (day-median AUC 0.558) and unproven live.
+        "score": {"max_adjust": 0.05},
         "direction": {"confirm_up": 0.60, "confirm_down": 0.40},
         "regime": {"min_assets": 10,
                    "caps": [{"below": 0.40, "cap": "desfavoravel"}, {"below": 0.45, "cap": "neutro"}]},

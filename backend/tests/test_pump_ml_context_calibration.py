@@ -163,9 +163,19 @@ def test_models_summary_reports_every_horizon(monkeypatch):
     monkeypatch.setattr(inf, "_fetch_newest", newest)
     spec = deepcopy(v1.DEFAULT_V1)
     spec["ml"]["training"]["horizons_minutes"] = [10, 15, 30]
+    spec["ml"]["objective"] = "relative"  # observation family applied (default is relative_candle since v1.13)
     out = asyncio.run(inf.models_summary(None, "u", spec))
     by_h = {m["horizon_minutes"]: m for m in out["models"] if m["family"] == "observation"}
     assert out["applied_horizon_minutes"] == 15 and by_h[15]["applied"] is True
     assert by_h[10]["quality"]["approved"] is True and by_h[15]["quality"]["approved"] is False
     assert by_h[30]["status"] == "no_recent_model"
     assert by_h[10]["diagnostics"]["test_up_frequency"] == 0.4
+
+
+def test_default_objective_applies_the_candle_family(monkeypatch):
+    async def newest(db, user_id, horizon, max_age_days, **_):
+        return None, {}
+    monkeypatch.setattr(inf, "_fetch_newest", newest)
+    out = asyncio.run(inf.models_summary(None, "u", deepcopy(v1.DEFAULT_V1)))
+    applied = [(m["family"], m["horizon_minutes"]) for m in out["models"] if m["applied"]]
+    assert out["objective"] == inf.CANDLE_OBJECTIVE and applied == [("candle", 15)]
