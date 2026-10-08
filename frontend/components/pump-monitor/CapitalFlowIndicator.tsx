@@ -27,6 +27,8 @@ export type MlRegime = {
   assets?: number;
   cap?: string | null;
   regime_effect?: string;
+  objective?: "relative" | "absolute" | "relative_candle";
+  max_adjust?: number;
   model?: { experiment_id?: string; created_at?: string; horizon_minutes: number; objective?: string;
     quality?: { approved: boolean; reasons: string[]; auc: number | null; brier: number | null;
       baseline_brier: number | null; test_episodes: number } } | null;
@@ -179,13 +181,18 @@ export function MlStatusChip({ ml }: { ml?: MlRegime | null }) {
   if (!ml) return null;
   const q = ml.model?.quality;
   const h = ml.model?.horizon_minutes ?? 15;
-  const relative = (ml.model?.objective ?? "pump_relative_direction_v1") === "pump_relative_direction_v1";
+  // Relative objectives (observation or candle family) rank assets against the market;
+  // only the absolute one speaks about price direction. Unknown → relative (never claim "alta").
+  const objective = ml.objective ?? (ml.model?.objective === "pump_endpoint_direction_v1" ? "absolute" : "relative");
+  const relative = objective !== "absolute";
+  const candle = objective === "relative_candle" || ml.model?.objective === "pump_relative_candle_v1";
+  const adj = ml.max_adjust != null ? `±${Math.round(ml.max_adjust * 100)}%` : "limite da config";
   const lines = [
     relative
-      ? `XGBoost — probabilidade de o ativo terminar acima do mercado em ${h} min (retorno descontado do beta × mediana do universo, sem alvo de %).`
+      ? `XGBoost${candle ? " (velas de 5 min, só preço)" : ""} — probabilidade de o ativo terminar acima do mercado em ${h} min (retorno descontado do beta × mediana do universo, sem alvo de %).`
       : `XGBoost — probabilidade de o preço terminar acima em ${h} min (direção absoluta, sem alvo de %).`,
     ml.active
-      ? (relative ? "Ativo: ajusta score (±15%) e confirma a seta; regime não é afetado (objetivo relativo)." : "Ativo: ajusta score (±15%), seta de direção e regime.")
+      ? (relative ? `Ativo: ajusta o score (${adj}) e confirma a seta só com convicção; regime não é afetado (objetivo relativo).` : `Ativo: ajusta o score (${adj}), seta de direção e regime.`)
       : `Sem efeito: ${ML_REASON[ml.reason ?? ""] ?? ml.reason ?? "—"}`,
     q ? `Teste fora da amostra: AUC ${q.auc?.toFixed(3) ?? "—"} · Brier ${q.brier?.toFixed(4) ?? "—"} vs base ${q.baseline_brier?.toFixed(4) ?? "—"} · ${q.test_episodes} episódios` : "",
     q && !q.approved ? `Reprovado: ${q.reasons.map(r => QUALITY_REASON[r] ?? r).join(", ")}` : "",
