@@ -140,7 +140,7 @@ async def run_directional_horizons(conn, owner, c, diagnostics, staging, start, 
     return results
 
 
-FAMILIES = ("observation", "candle", "candle_ablation")
+FAMILIES = ("observation", "candle", "candle_ablation", "taker_flow_ablation")
 
 
 class _noop:
@@ -207,16 +207,16 @@ async def run_owner(conn, owner, *, horizons: List[int], force: bool = False,
             raise ValueError("pump_storage_budget_exhausted")
         ablation = None
         with tempfile.TemporaryDirectory(prefix="pump_ml_") as staging:
-            if family == "candle_ablation":
-                from .pump_ml_candles import run_candle_ablation
+            if family in ("candle_ablation", "taker_flow_ablation"):
+                from .pump_ml_candles import run_candle_ablation, run_taker_flow_ablation
                 async def _progress(partial):
                     # Persist after every variant: a hard kill keeps what was measured.
                     await conn.execute(
                         "UPDATE pump_ml_job_runs SET payload = payload || $2::jsonb WHERE run_id=$1",
                         run_id, {"ablation": partial, "selection": selection})
-                ablation = await run_candle_ablation(conn, owner, c, selection,
-                                                     start + timedelta(seconds=MAX_RUNTIME_SECONDS),
-                                                     progress=_progress)
+                runner = run_candle_ablation if family == "candle_ablation" else run_taker_flow_ablation
+                ablation = await runner(conn, owner, c, selection, start + timedelta(seconds=MAX_RUNTIME_SECONDS),
+                                        progress=_progress)
                 results = []
             elif family == "candle":
                 from .pump_ml_candles import run_candle_horizons

@@ -71,7 +71,7 @@ async def explore_opportunity_pattern(payload: Dict[str,Any],response: Response,
 
 
 @router.post("/ml/train", status_code=202)
-async def trigger_ml_training(family: str = Query("observation", pattern="^(observation|candle|candle_ablation)$"),
+async def trigger_ml_training(family: str = Query("observation", pattern="^(observation|candle|candle_ablation|taker_flow_ablation)$"),
                               user_id: UUID = Depends(get_current_user_id)):
     """Manual Pump ML training for the caller only. Bypasses the one-run-per-day
     rule but keeps the singleton lock and score_v1.ml.training.manual_min_interval_minutes (default 5)."""
@@ -126,17 +126,20 @@ async def flow_history_coverage(response: Response, db: AsyncSession = Depends(g
 
 
 @router.get("/ml/ablation")
-async def ml_ablation(response: Response, db: AsyncSession = Depends(get_db),
-                      user_id: UUID = Depends(get_current_user_id)):
-    """Read-only: latest feature-group ablation run (family candle_ablation, v1.18)."""
+async def ml_ablation(response: Response,
+                      family: str = Query("candle_ablation", pattern="^(candle_ablation|taker_flow_ablation)$"),
+                      db: AsyncSession = Depends(get_db), user_id: UUID = Depends(get_current_user_id)):
+    """Read-only: latest ablation run (candle_ablation v1.18 | taker_flow_ablation v1.20).
+    A taker-flow run refused by the usable-history gate is 'blocked' with the readiness
+    table under payload.selection.taker_flow."""
     from sqlalchemy import text
     response.headers["Cache-Control"] = "private, no-store"
     row = (await db.execute(text("""
         SELECT run_id, started_at, finished_at,
                CASE WHEN status='running' AND deadline_at<now() THEN 'deadline_exceeded' ELSE status END AS status,
                payload FROM pump_ml_job_runs
-         WHERE user_id = :u AND payload->>'family' = 'candle_ablation'
-         ORDER BY started_at DESC LIMIT 1"""), {"u": user_id})).mappings().first()
+         WHERE user_id = :u AND payload->>'family' = :f
+         ORDER BY started_at DESC LIMIT 1"""), {"u": user_id, "f": family})).mappings().first()
     if row is None:
         return {"status": "no_ablation_run"}
     return {"run_id": str(row["run_id"]), "started_at": row["started_at"].isoformat(),
