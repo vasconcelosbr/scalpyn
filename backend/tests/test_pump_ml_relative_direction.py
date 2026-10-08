@@ -173,3 +173,19 @@ def test_inference_loads_only_the_configured_objective(monkeypatch):
     absolute = deepcopy(v1.DEFAULT_V1); absolute["ml"]["objective"] = "absolute"
     asyncio.run(inf.load_model(None, "u", absolute, now=1.0))
     assert asked[-1] == inf.OBJECTIVE
+
+
+def test_score_tooltip_names_the_ml_line_after_the_objective():
+    """A relative model gives P(beats the universe), never P(price up) (v1.15)."""
+    res = {"state": "fora", "condition": "neutro", "raw_score": None, "gates": [], "strength": None,
+           "direction": None, "ml_up_probability": 0.47}
+    assert "ml:acima_do_mercado" in v1.display_components(res, "relative_candle")
+    assert "ml:acima_do_mercado" in v1.display_components(res, "relative")
+    assert "ml:prob_alta" in v1.display_components(res, "absolute")
+    assert not any(k == "ml:prob_alta" for k in v1.display_components(res))
+
+
+def test_ml_probability_is_a_selectable_column():
+    from app.services import pump_monitor_engine as me
+    spec = me.DEFAULT_CONFIG["indicators"]["ml_up_probability"]
+    assert spec["group"] == "scores" and spec["bands"] == {"type": "sign", "center": 0.5}

@@ -1068,8 +1068,9 @@ def select_rows(envelope: Dict[str, Any], *, limit: int, sort: str, order: str,
     if limit:
         rows = rows[:limit]
     if envelope.get("active_engine") == "v1":
+        objective = (((config or {}).get("score_v1") or {}).get("ml") or {}).get("objective", "relative")
         rows = [{**r, "score_version": envelope.get("score_version"), "score_confidence": None,
-                 "score_components": v1.display_components(r["score_v1"])} if r.get("score_v1") else r
+                 "score_components": v1.display_components(r["score_v1"], objective)} if r.get("score_v1") else r
                 for r in rows]
     if columns:
         wanted = _expand_columns(columns, config)

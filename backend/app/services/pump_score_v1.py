@@ -951,8 +951,15 @@ def members(results: Dict[str, Dict[str, Any]]) -> List[str]:
     return sorted(s for s, r in results.items() if r["state"] in MEMBER_STATES)
 
 
-def display_components(result: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    """Tooltip ledger in the v0 ``score_components`` shape (value → contribution)."""
+ML_COMPONENT_LABEL = {"absolute": "ml:prob_alta", "relative": "ml:acima_do_mercado",
+                      "relative_candle": "ml:acima_do_mercado"}
+
+
+def display_components(result: Dict[str, Any], objective: str = "relative") -> Dict[str, Dict[str, Any]]:
+    """Tooltip ledger in the v0 ``score_components`` shape (value → contribution).
+
+    The ML line is named after the objective: a relative model gives P(asset beats the
+    universe), never P(price goes up)."""
     out: Dict[str, Dict[str, Any]] = {
         "estado": {"value": result["state"], "contribution": None},
         "condição": {"value": result["condition"], "contribution": None},
@@ -971,7 +978,7 @@ def display_components(result: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         out["direção"] = {"value": direction.get("direction"), "contribution": direction.get("strength"),
                           "reason": direction.get("reason")}
     if result.get("ml_up_probability") is not None:
-        out["ml:prob_alta"] = {"value": result["ml_up_probability"],
+        out[ML_COMPONENT_LABEL.get(objective, "ml:acima_do_mercado")] = {"value": result["ml_up_probability"],
                                "contribution": ((result.get("strength") or {}).get("ml_multiplier"))}
     deriv = result.get("derivatives") or {}
     if deriv.get("available"):

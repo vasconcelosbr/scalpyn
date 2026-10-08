@@ -63,7 +63,7 @@ const GROUPS: { key: string; label: string }[] = [
 ];
 
 const LABELS: Record<string, string> = {
-  pump_monitor_score: "Pump Score", delta_norm: "Delta norm", window_delta_norm: "Delta norm (janela)",
+  pump_monitor_score: "Pump Score", ml_up_probability: "ML acima do mercado", delta_norm: "Delta norm", window_delta_norm: "Delta norm (janela)",
   cvd_60m: "CVD 60m", cvd_slope: "CVD slope", buy_persistence: "Persist. compra",
   volume_acceleration: "Acel. volume", flow_change: "Flow change", rvol_strict: "RVOL",
   volume_spike: "Volume spike", taker_ratio: "Taker ratio", volume_delta: "Volume delta", obv: "OBV",
