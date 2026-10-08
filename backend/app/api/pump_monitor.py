@@ -94,6 +94,20 @@ async def ml_models(response: Response, db: AsyncSession = Depends(get_db),
         raise HTTPException(status_code=503, detail=f"ml_models_unavailable:{type(exc).__name__}")
 
 
+@router.get("/ml/live-evaluation")
+async def ml_live_evaluation(response: Response, days: int = Query(14, ge=1, le=30),
+                             db: AsyncSession = Depends(get_db), user_id: UUID = Depends(get_current_user_id)):
+    """Read-only: live AUC of the applied candle model (pump_ml_live_predictions × realised
+    label from ohlcv, same build_frame as training) — compare with the walk-forward metrics."""
+    from ..services import pump_ml_live
+    response.headers["Cache-Control"] = "private, no-store"
+    config = await svc.get_config(db, user_id)
+    try:
+        return await pump_ml_live.live_evaluation(db, user_id, config["score_v1"], days=days)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"ml_live_evaluation_unavailable:{type(exc).__name__}")
+
+
 @router.get("/ml/candle-coverage")
 async def ml_candle_coverage(response: Response, db: AsyncSession = Depends(get_db),
                              user_id: UUID = Depends(get_current_user_id)):

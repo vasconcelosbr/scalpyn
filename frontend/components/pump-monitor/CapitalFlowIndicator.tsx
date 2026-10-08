@@ -92,13 +92,30 @@ type MlModelRow = {
     } | null>;
   };
 };
+type MlLive = {
+  status: string; days: number; mature?: number; pending?: number; predictions?: number;
+  day_auc_median?: number | null; pooled_auc?: number; days_scored?: number; days_auc_above_half?: number;
+  sign_test_p?: number | null; economic?: { top_minus_bottom: number } | null;
+};
 type MlModels = { enabled: boolean; applied_horizon_minutes: number; objective?: string; models: MlModelRow[]; note: string };
 
 const f3 = (v?: number | null) => (v === null || v === undefined ? "—" : v.toFixed(3));
 const sgn = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(3)}`;
 const pc = (v?: number | null) => (v === null || v === undefined ? "—" : `${(v * 100).toFixed(0)}%`);
 
-function MlModelsPanel({ data, error }: { data: MlModels | null; error: string }) {
+function liveLine(l: MlLive | null): string {
+  if (!l) return "";
+  if (l.status === "no_predictions") return "Ao vivo: nenhuma previsão registrada ainda.";
+  if (l.status !== "ok") return "";
+  if (l.pooled_auc === undefined) return `Ao vivo: ${l.mature ?? 0} previsões maduras, ${l.pending ?? 0} aguardando o horizonte — ainda sem amostra.`;
+  const auc = l.day_auc_median ?? l.pooled_auc;
+  return `Ao vivo (${l.days} d): AUC ${l.day_auc_median != null ? "mediana diária " : ""}${f3(auc)}`
+    + (l.days_scored ? ` · ${l.days_auc_above_half}/${l.days_scored} dias > 0,5${l.sign_test_p != null ? ` (p ${l.sign_test_p.toFixed(3)})` : ""}` : "")
+    + (l.economic ? ` · top − bottom ${sgn(l.economic.top_minus_bottom)} pp` : "")
+    + ` · ${l.mature} previsões maduras`;
+}
+
+function MlModelsPanel({ data, error, live }: { data: MlModels | null; error: string; live?: MlLive | null }) {
   if (error) return <div className={styles.error}>{error}</div>;
   if (!data) return <div className={styles.muted}>Carregando modelos…</div>;
   return (
@@ -140,6 +157,7 @@ function MlModelsPanel({ data, error }: { data: MlModels | null; error: string }
                   </div>
                 );
               })()}
+              {m.applied && liveLine(live ?? null) && <div className={styles.muted}>{liveLine(live ?? null)}</div>}
               {d?.label_variants && Object.keys(d.label_variants).length > 1 && (
                 <div className={styles.muted}>
                   Rótulos comparados: {Object.entries(d.label_variants).map(([mode, v]) => v
@@ -169,6 +187,7 @@ function MlModelsPanel({ data, error }: { data: MlModels | null; error: string }
 export function MlStatusChip({ ml }: { ml?: MlRegime | null }) {
   const [open, setOpen] = useState(false);
   const [models, setModels] = useState<MlModels | null>(null);
+  const [live, setLive] = useState<MlLive | null>(null);
   const [error, setError] = useState("");
   const load = useCallback(async () => {
     try {
@@ -176,6 +195,11 @@ export function MlStatusChip({ ml }: { ml?: MlRegime | null }) {
       setError("");
     } catch {
       setError("Métricas dos modelos indisponíveis no momento.");
+    }
+    try {
+      setLive(await apiGet<MlLive>("/pump-monitor/ml/live-evaluation?days=14"));
+    } catch {
+      setLive(null);  // optional line: absent table or timeout never hides the panel
     }
   }, []);
   if (!ml) return null;
@@ -211,7 +235,7 @@ export function MlStatusChip({ ml }: { ml?: MlRegime | null }) {
         )}
         <HistoryIcon size={13} className={styles.historyIcon} />
       </button>
-      {open && <div className={styles.panel}><MlModelsPanel data={models} error={error} /></div>}
+      {open && <div className={styles.panel}><MlModelsPanel data={models} error={error} live={live} /></div>}
     </div>
   );
 }

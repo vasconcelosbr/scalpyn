@@ -624,6 +624,21 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
             ml_rows = [{**r, "indicators": {**(r.get("indicators") or {}), **(rel.get(r["symbol"]) or {})}}
                        for r in ml_rows]
         ml_payload = pump_ml_inference.predict_rows(loaded, ml_rows, v1_spec)
+        live_log = (v1_spec.get("ml") or {}).get("live_log") or {}
+        if cparams and ml_payload.get("active") and live_log.get("enabled"):
+            # v1.14: one row per closed candle (decision = close of the candle the features
+            # used); duplicates within the slot are ignored. Never breaks the cycle.
+            from . import pump_ml_live
+            batch = pump_ml_live.prediction_rows(
+                loaded.get("model") or {}, pump_ml_inference.CANDLE_OBJECTIVE,
+                int(v1_spec["ml"]["horizon_minutes"]), cslot, ml_payload.get("probabilities") or {},
+                applied=bool((v1_spec.get("ml") or {}).get("enabled")))
+            if batch:
+                try:
+                    await run_db_task(lambda db: db.execute(text(pump_ml_live.INSERT_SQL), {
+                        "u": str(user_id), "batch": json.dumps(batch, allow_nan=False)}), celery=True)
+                except Exception as exc:
+                    logger.warning("[PUMP-ML] live log skipped user=%s reason=%s", user_id, type(exc).__name__)
     except Exception as exc:  # the ML is optional: no model → zero effect, never a broken cycle
         logger.warning("[PUMP-ML] inference unavailable user=%s reason=%s", user_id, type(exc).__name__)
     try:
@@ -985,7 +1000,19 @@ async def purge(db) -> Dict[str, int]:
     except Exception as exc:
         logger.warning("[PUMP-CAPITAL] retention skipped reason=%s", type(exc).__name__)
         capital_purged = None
-    return {"buckets": b.rowcount, "snapshots": s.rowcount, "capital_flow": capital_purged}
+    live_days = max([int((((c.get("score_v1") or {}).get("ml") or {}).get("live_log") or {}).get("retention_days") or 0)
+                     for _, c in configs]
+                    or [int(v1.DEFAULT_V1["ml"]["live_log"]["retention_days"])])
+    try:
+        async with db.begin_nested():
+            lp = await db.execute(text("DELETE FROM pump_ml_live_predictions WHERE decision_at < :t"),
+                                  {"t": now - timedelta(days=max(1, live_days))})
+        live_purged = lp.rowcount
+    except Exception as exc:
+        logger.warning("[PUMP-ML] live log retention skipped reason=%s", type(exc).__name__)
+        live_purged = None
+    return {"buckets": b.rowcount, "snapshots": s.rowcount, "capital_flow": capital_purged,
+            "ml_live_predictions": live_purged}
 
 
 # ── API reads ────────────────────────────────────────────────────────────────

@@ -348,3 +348,32 @@ A seta de direção praticamente não muda, porque `direction.confirm_up` é 0,6
 **Reversão:** voltar `objective` para `relative` e `max_adjust` para 0,15, por config ou por `git revert`.
 
 **Próximo passo:** comparar, durante 1 a 2 semanas, a AUC ao vivo das previsões aplicadas com o 0,558 do walk-forward.
+
+## v1.14 — Avaliação ao vivo do modelo aplicado (2026-10-08)
+
+**Problema:** a probabilidade aplicada pelo ML não era gravada de forma durável:
+- as observações de pesquisa excluem o ML de propósito, para não contaminar o dataset de treino;
+- `pump_monitor_snapshots` guarda só amostras (1 a cada 10 ciclos) e só por 48h.
+
+Sem esse registro, não havia como comparar o desempenho ao vivo com o 0,558 do walk-forward.
+
+**Registro (`pump_ml_live_predictions`, migration `238_pump_ml_live_predictions`):**
+- a tabela é só de inserção, com uma linha por experimento × horizonte × decisão × ativo, e repetições ignoradas;
+- a cada ciclo em que o modelo de velas aplicado está ativo, o v1 grava a probabilidade de cada ativo do pool;
+- `decision_at` é o fechamento da vela que alimentou as variáveis.
+
+Configuração em `score_v1.ml.live_log`: `{enabled: true, retention_days: 120}`. A limpeza diária usa `retention_days`. Se a gravação falhar, o ciclo segue normalmente e só um aviso vai para o log.
+
+**Avaliação (`GET /api/pump-monitor/ml/live-evaluation?days=14`, só leitura):**
+- o rótulo realizado é recalculado a partir de `ohlcv` com o mesmo `build_frame` e o mesmo `label_mode` do manifesto do modelo, e com o mesmo mínimo de ativos por instante que o treino;
+- uma previsão só entra na conta quando o horizonte inteiro já fechou; antes disso fica como pendente.
+
+Métricas reportadas:
+- AUC agregada e AUC mediana por dia;
+- número de dias com AUC > 0,5 e o p do teste de sinal;
+- Brier;
+- spread entre o top e o bottom 10%, com o mesmo `economic_quantile` do walk-forward.
+
+O painel do ML mostra uma linha "Ao vivo" no modelo aplicado.
+
+**Limite conhecido:** se o coletor gravar a vela fechada com atraso, as variáveis daquela janela de 5 min ficam uma vela atrasadas, mas a decisão continua registrada no fechamento esperado. A avaliação mede exatamente o que o sistema fez, inclusive esse atraso.
