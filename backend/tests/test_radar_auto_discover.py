@@ -15,7 +15,9 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.models.pool import Pool, PoolAssetExclusion, PoolCoin
 from app.services.pool_service import radar_pool_coin_is_candidate
-from app.services.radar_pool_sync import operator_pool_overrides, reconcile_radar_pool
+from app.services.radar_pool_sync import (
+    RADAR_MIN_HOLD_SECONDS_DEFAULT, operator_pool_overrides, radar_min_hold_seconds, reconcile_radar_pool,
+)
 from app.services.radar_service import validated_radar_assets
 
 
@@ -69,8 +71,10 @@ async def radar_db():
             """))
         async with sessions() as db, db.begin():
             db.add_all([
+                # 0 = strict "only while in the feed": the lifecycle tests below
+                # pin that behaviour; the minimum-hold tests set their window.
                 Pool(id=ids["pump"], user_id=ids["user"], name="PUMP",
-                     overrides={"radar_enabled": True}),
+                     overrides={"radar_enabled": True, "radar_min_hold_seconds": 0}),
                 Pool(id=ids["spot"], user_id=ids["user"], name="POOLSPOT",
                      overrides={"auto_refresh_enabled": True}),
             ])
@@ -372,3 +376,102 @@ async def test_settings_routes_persist_only_worker_health(radar_db, route):
     async with sessions() as db:
         persisted = (await db.get(Pool, ids["pump"])).overrides
         assert persisted == {"radar_enabled": True}
+
+
+# ── Minimum hold after the last sighting (2026-10-08) ─────────────────────────
+
+async def _set_hold(sessions, ids, seconds):
+    async with sessions() as db, db.begin():
+        pool = await db.get(Pool, ids["pump"])
+        pool.overrides = {**(pool.overrides or {}), "radar_min_hold_seconds": seconds}
+
+
+async def _candidates(sessions, ids):
+    async with sessions() as db:
+        return sorted((await db.scalars(select(PoolCoin.symbol).join(
+            Pool, Pool.id == PoolCoin.pool_id,
+        ).where(Pool.id == ids["pump"], radar_pool_coin_is_candidate(Pool, PoolCoin)))).all())
+
+
+def test_min_hold_default_and_validation():
+    assert RADAR_MIN_HOLD_SECONDS_DEFAULT == 300
+    assert radar_min_hold_seconds({}) == 300 and radar_min_hold_seconds(None) == 300
+    assert radar_min_hold_seconds({"radar_min_hold_seconds": 0}) == 0
+    assert radar_min_hold_seconds({"radar_min_hold_seconds": "120"}) == 120
+    for bad in (-1, 3601, "x", True, None):
+        assert radar_min_hold_seconds({"radar_min_hold_seconds": bad}) == 300
+
+
+@pytest.mark.asyncio
+async def test_minute_signal_stays_a_candidate_for_the_minimum_hold(radar_db):
+    """LTC case: in the feed for 3 minutes, then gone; the scan must still see it."""
+    sessions, ids = radar_db
+    await _set_hold(sessions, ids, 300)
+    t0 = datetime(2026, 10, 8, 22, 10, tzinfo=timezone.utc)
+    for minute in range(3):
+        await _sync(sessions, ids, {"LTC_USDT"}, now=t0 + timedelta(minutes=minute))
+    last_seen = t0 + timedelta(minutes=2)
+    stats = await _sync(sessions, ids, set(), now=last_seen + timedelta(seconds=299))
+    assert stats["lingering"] == 1 and stats["removed"] == 0
+    assert await _candidates(sessions, ids) == ["LTC_USDT"]
+    coin = (await _coins(sessions, ids["pump"]))[0]
+    assert coin.radar_last_seen_at == last_seen               # absence never refreshes the clock
+    async with sessions() as db:
+        directions = dict((await db.execute(text(
+            "SELECT watchlist_id, level_direction FROM pipeline_watchlist_assets"))).all())
+        assert directions[ids["pump_l3"]] == "up"            # not invalidated while it lingers
+    stats = await _sync(sessions, ids, set(), now=last_seen + timedelta(seconds=300))
+    assert stats["removed"] == 1 and await _coins(sessions, ids["pump"]) == []
+
+
+@pytest.mark.asyncio
+async def test_open_shadow_does_not_hide_a_fresh_signal_during_the_hold(radar_db):
+    sessions, ids = radar_db
+    await _set_hold(sessions, ids, 300)
+    t0 = datetime(2026, 10, 8, 22, 10, tzinfo=timezone.utc)
+    await _sync(sessions, ids, {"AAVE_USDT"}, now=t0 - timedelta(days=2))
+    async with sessions() as db, db.begin():
+        shadow_id = await _open_shadow(db, ids, "AAVE_USDT")
+    assert (await _sync(sessions, ids, set(), now=t0 - timedelta(days=1)))["held"] == 1
+    assert await _candidates(sessions, ids) == []            # old position: held, not a candidate
+    await _sync(sessions, ids, {"AAVE_USDT"}, now=t0)        # the radar signals it again
+    stats = await _sync(sessions, ids, set(), now=t0 + timedelta(seconds=120))
+    assert stats["lingering"] == 1 and stats["held"] == 0
+    assert await _candidates(sessions, ids) == ["AAVE_USDT"]  # flows to L3 despite the open Shadow
+    stats = await _sync(sessions, ids, set(), now=t0 + timedelta(seconds=301))
+    assert stats["held"] == 1
+    coin = (await _coins(sessions, ids["pump"]))[0]
+    assert coin.held_for_open_position and await _candidates(sessions, ids) == []
+    async with sessions() as db:                              # the Shadow itself is never touched
+        assert (await db.execute(text("SELECT id, status FROM shadow_trades"))).all() == [
+            (shadow_id, "RUNNING")]
+
+
+@pytest.mark.asyncio
+async def test_hold_never_overrides_an_outage_or_an_exclusion(radar_db):
+    sessions, ids = radar_db
+    await _set_hold(sessions, ids, 300)
+    t0 = datetime(2026, 10, 8, 22, 10, tzinfo=timezone.utc)
+    await _sync(sessions, ids, {"BTC_USDT", "ETH_USDT"}, now=t0)
+    await _sync(sessions, ids, None, reason="fetch_failed", now=t0 + timedelta(seconds=30))
+    assert await _candidates(sessions, ids) == []            # unhealthy feed blocks eligibility
+    async with sessions() as db, db.begin():
+        db.add(PoolAssetExclusion(pool_id=ids["pump"], symbol="ETH_USDT"))
+    stats = await _sync(sessions, ids, set(), now=t0 + timedelta(seconds=60))
+    assert stats["lingering"] == 1 and stats["removed"] == 1  # BTC lingers, excluded ETH goes
+    assert await _candidates(sessions, ids) == ["BTC_USDT"]
+
+
+@pytest.mark.asyncio
+async def test_pump_monitor_feed_has_no_radar_hold(radar_db):
+    sessions, ids = radar_db
+    await _set_hold(sessions, ids, 300)
+    async with sessions() as db, db.begin():
+        pool = await db.get(Pool, ids["pump"])
+        pool.overrides = {**pool.overrides, "pump_monitor_sync_enabled": True}
+    t0 = datetime(2026, 10, 8, 22, 10, tzinfo=timezone.utc)
+    kw = dict(origin="pump_monitor", enabled_key="pump_monitor_sync_enabled",
+              health_key="pump_monitor_feed_health", hold_open_positions=False)
+    await _sync(sessions, ids, {"CRO_USDT"}, now=t0, **kw)
+    stats = await _sync(sessions, ids, set(), now=t0 + timedelta(seconds=30), **kw)
+    assert stats["lingering"] == 0 and stats["removed"] == 1

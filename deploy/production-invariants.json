@@ -1758,7 +1758,7 @@
     },
     {
       "id": "radar-membership-separate-from-shadow-collection",
-      "description": "Healthy radar presence alone authorizes PUMP candidacy; absence hides every watchlist while all open shadows retain collection and entry is serialized with sync.",
+      "description": "Healthy radar presence, or a last sighting within the pool's radar_min_hold_seconds (default 300 s, 0 = strict), authorizes PUMP candidacy even with an open shadow; afterwards absence hides every watchlist while all open shadows retain collection and entry is serialized with sync.",
       "files": [
         {
           "path": "backend/app/services/radar_pool_sync.py",
@@ -1767,7 +1767,9 @@
             "radar_feed_health",
             "symbols_with_open_shadow_trades",
             "cascade_invalidate_removed_symbols",
-            ".with_for_update()"
+            ".with_for_update()",
+            "radar_min_hold_seconds",
+            "RADAR_MIN_HOLD_SECONDS_DEFAULT"
           ]
         },
         {
