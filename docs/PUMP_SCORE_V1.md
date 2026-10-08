@@ -299,3 +299,23 @@ Os dois modos são avaliados com o mesmo walk-forward, em `metrics.label_variant
 - viés de sobrevivência: o universo usado é o das últimas 24h de observações;
 - o histórico depende do que o coletor gravou em `ohlcv` (ver `GET /ml/candle-coverage`);
 - a decisão ao vivo ocorre a cada minuto, mas as variáveis só mudam a cada vela fechada.
+
+## v1.12 — Portão por dia, histórico de 90 dias e comparação de rótulos (2026-10-07)
+
+**Motivo:** a AUC agregada de todas as linhas pode parecer boa mesmo quando o modelo erra na maioria dos dias. Na família de observações, 15 min, a AUC agregada foi 0,526 com 0 de 4 dias acima de 0,5. Por isso, o portão agora mede a consistência entre dias.
+
+**Walk-forward (`pump_walk_forward_daily_v2`):**
+- `pooled.auc` passa a ser a **mediana das AUCs diárias** (`auc_statistic = day_median`). A AUC agregada fica só como referência, em `pooled_auc_reference_only`.
+- `sign_test_p` é um teste binomial unilateral sobre o número de dias com AUC > 0,5.
+- O ganho de Brier é a média diária (`brier_improvement_day_mean`). O IC95 vem de bootstrap sobre **dias**, não sobre linhas (`ci_scope = bootstrap_over_days`), porque linhas do mesmo dia são correlacionadas.
+- Métrica econômica: os cortes de decil usam todas as previsões fora da amostra. O IC95 do spread top − bottom vem de bootstrap sobre dias. Os campos `days_spread_positive` e `days_with_spread` mostram em quantos dias o spread foi positivo.
+- `walk_forward.max_folds` (padrão 30) limita o número de dias avaliados, para que o treino caiba no orçamento de tempo.
+
+**Portão de qualidade:** `score_v1.ml.quality.max_sign_test_p` (padrão 0,05). Se o p do teste de sinal passar desse valor, o modelo é reprovado com o motivo `days_not_consistently_above_half`, mesmo com bons números agregados.
+
+**Histórico:** `research.candle.lookback_days` passou de 30 para 90.
+
+**Painel:** cada modelo mostra:
+- a AUC mediana diária, com o p do teste de sinal;
+- o spread com IC95 por dias e o número de dias positivos;
+- na família de velas, a linha "Rótulos comparados", com `endpoint` vs `path_mean`. A métrica econômica dos dois usa o mesmo retorno residual no ponto final, por isso é comparável.

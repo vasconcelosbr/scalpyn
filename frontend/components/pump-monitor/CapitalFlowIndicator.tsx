@@ -53,7 +53,10 @@ const QUALITY_REASON: Record<string, string> = {
   brier_not_better_than_base_rate: "não supera a taxa base (Brier)",
   brier_improvement_ci_includes_zero: "ganho sobre a taxa base não é significativo",
   too_few_test_episodes: "poucos episódios no teste",
+  days_not_consistently_above_half: "acerto não se repete dia a dia (teste de sinal)",
 };
+
+const LABEL_MODE: Record<string, string> = { endpoint: "ponto final", path_mean: "média do caminho" };
 
 type MlModelRow = {
   family?: "observation" | "candle";
@@ -75,16 +78,22 @@ type MlModelRow = {
     walk_forward?: {
       scored_days: number;
       pooled: {
-        auc: number; episodes: number; days_auc_above_half: number;
+        auc: number; episodes: number; days_auc_above_half: number; sign_test_p?: number;
+        auc_statistic?: string; pooled_auc_reference_only?: number;
         economic?: { quantile: number; top_mean: number; bottom_mean: number; top_minus_bottom: number;
-          top_minus_bottom_ci95: number[] };
+          top_minus_bottom_ci95: number[] | null; days_spread_positive?: number; days_with_spread?: number };
       } | null;
     } | null;
+    label_variants?: Record<string, {
+      auc: number | null; day_auc_median?: number | null; days_auc_above_half: number | null; sign_test_p: number | null;
+      top_minus_bottom: number | null; top_minus_bottom_ci95: number[] | null;
+    } | null>;
   };
 };
 type MlModels = { enabled: boolean; applied_horizon_minutes: number; objective?: string; models: MlModelRow[]; note: string };
 
 const f3 = (v?: number | null) => (v === null || v === undefined ? "—" : v.toFixed(3));
+const sgn = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(3)}`;
 const pc = (v?: number | null) => (v === null || v === undefined ? "—" : `${(v * 100).toFixed(0)}%`);
 
 function MlModelsPanel({ data, error }: { data: MlModels | null; error: string }) {
@@ -123,11 +132,19 @@ function MlModelsPanel({ data, error }: { data: MlModels | null; error: string }
                 const w = d.walk_forward.pooled; const e = w.economic;
                 return (
                   <div className={styles.muted}>
-                    Walk-forward: {d.walk_forward.scored_days} dia(s) testados um a um · AUC {f3(w.auc)} · dias com AUC &gt; 0,5: {w.days_auc_above_half}/{d.walk_forward.scored_days}
-                    {e ? ` · top ${Math.round(e.quantile * 100)}% − bottom ${Math.round(e.quantile * 100)}%: ${e.top_minus_bottom >= 0 ? "+" : ""}${e.top_minus_bottom.toFixed(3)} pp (IC95 ${e.top_minus_bottom_ci95.map(x => x.toFixed(3)).join(" a ")})` : ""}
+                    Walk-forward: {d.walk_forward.scored_days} dia(s) testados um a um · AUC {w.auc_statistic === "day_median" ? "mediana diária " : ""}{f3(w.auc)} · dias com AUC &gt; 0,5: {w.days_auc_above_half}/{d.walk_forward.scored_days}
+                    {w.sign_test_p !== undefined ? ` (p ${w.sign_test_p.toFixed(4)})` : ""}
+                    {e ? ` · top ${Math.round(e.quantile * 100)}% − bottom ${Math.round(e.quantile * 100)}%: ${sgn(e.top_minus_bottom)} pp${e.top_minus_bottom_ci95 ? ` (IC95 por dias ${e.top_minus_bottom_ci95.map(x => x.toFixed(3)).join(" a ")})` : ""}${e.days_with_spread ? ` · ${e.days_spread_positive}/${e.days_with_spread} dias positivos` : ""}` : ""}
                   </div>
                 );
               })()}
+              {d?.label_variants && Object.keys(d.label_variants).length > 1 && (
+                <div className={styles.muted}>
+                  Rótulos comparados: {Object.entries(d.label_variants).map(([mode, v]) => v
+                    ? `${LABEL_MODE[mode] ?? mode} AUC ${f3(v.day_auc_median ?? v.auc)}, ${v.days_auc_above_half ?? "—"} dias > 0,5${v.sign_test_p != null ? ` (p ${v.sign_test_p.toFixed(4)})` : ""}, spread ${v.top_minus_bottom != null ? sgn(v.top_minus_bottom) : "—"} pp`
+                    : `${LABEL_MODE[mode] ?? mode} —`).join(" · ")}
+                </div>
+              )}
               {d && (
                 <div className={styles.muted}>
                   Calibração {d.calibration?.method ?? "—"} ({d.calibration?.rows ?? "—"} linhas

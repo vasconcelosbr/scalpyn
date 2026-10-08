@@ -36,9 +36,10 @@ DEFAULT_CONFIG = {
                  # Spread the row budget over many minutes: at most N assets per decision minute.
                  "max_rows_per_minute":5,
                  # Rolling-origin evaluation: each UTC day is a test fold once (trained on the past only).
-                 "walk_forward":{"enabled":True,"min_train_days":2,"calibration_fraction":0.2,"economic_quantile":0.1},
+                 "walk_forward":{"enabled":True,"min_train_days":2,"calibration_fraction":0.2,"economic_quantile":0.1,
+                                  "max_folds":30},
                  # Candle-history family: price-only relative model trained on closed ohlcv candles.
-                 "candle":{"enabled":True,"timeframe":"5m","step_seconds":300,"lookback_days":30,
+                 "candle":{"enabled":True,"timeframe":"5m","step_seconds":300,"lookback_days":90,
                            "horizons_minutes":[10,15],"prev_windows":[1,3,6,12],"vol_short":12,
                            "beta_window":288,"beta_min_points":200,"max_rows":40000,"max_rows_per_time":5,
                            "min_assets":10,"label_mode":"path_mean","compare_label_modes":["endpoint","path_mean"],
@@ -132,7 +133,8 @@ def validate_config(c):
     if not isinstance(wf,dict) or not isinstance(wf.get('enabled'),bool) or type(wf.get('min_train_days')) is not int \
             or not 1<=wf['min_train_days']<=20 or not number(wf.get('calibration_fraction')) \
             or not 0.05<=wf['calibration_fraction']<=0.5 or not number(wf.get('economic_quantile')) \
-            or not 0.01<=wf['economic_quantile']<=0.5:
+            or not 0.01<=wf['economic_quantile']<=0.5 \
+            or type(wf.get('max_folds',30)) is not int or not 3<=wf.get('max_folds',30)<=120:
         raise ValueError('walk_forward: {enabled bool, min_train_days 1-20, calibration_fraction 0.05-0.5, economic_quantile 0.01-0.5}')
     cd=research.get('candle')
     if not isinstance(cd,dict) or not isinstance(cd.get('enabled'),bool) or cd.get('timeframe') not in ('1m','5m','15m') \

@@ -190,6 +190,15 @@ def predict_rows(loaded: Dict[str, Any], rows: List[Dict[str, Any]], spec: Dict[
     return {**out, "probabilities": probs, "covered": len(probs), "universe": len(rows)}
 
 
+def _variant(p: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not p:
+        return None
+    eco = p.get("economic") or {}
+    return {k: p.get(k) for k in ("auc", "day_auc_median", "days_auc_above_half", "sign_test_p",
+                                  "brier_improvement_day_mean", "paired_episode_brier_ci95", "episodes")} | {
+        "top_minus_bottom": eco.get("top_minus_bottom"), "top_minus_bottom_ci95": eco.get("top_minus_bottom_ci95")}
+
+
 def _wf_summary(wf: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not wf:
         return None
@@ -229,6 +238,7 @@ def _summary_row(horizon: int, row, spec: Dict[str, Any], applied: int) -> Dict[
             "context_coverage_test": coverage,
             "top_features": sorted(importance.items(), key=lambda kv: -kv[1])[:8],
             "walk_forward": _wf_summary(metrics.get("walk_forward")),
+            "label_variants": {mode: _variant(v) for mode, v in (metrics.get("label_variants") or {}).items()},
         },
     }
 
