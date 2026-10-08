@@ -865,7 +865,9 @@ def evaluate_universe(rows: List[Dict[str, Any]], structures: Dict[str, Dict[str
         ml_reg = {**ml_reg, "cap": None, "regime_effect": "disabled_relative_objective"}
     capped = apply_capital_cap(capped, {"regime_cap": ml_reg.get("cap")})
     reg = {**reg, "price_state": reg["state"], "state": capped, "capital": capital,
-           "ml": {"active": ml_active, "model": ml.get("model"), "reason": ml.get("reason"), **ml_reg},
+           "ml": {"active": ml_active, "model": ml.get("model"), "reason": ml.get("reason"),
+                  "objective": (spec.get("ml") or {}).get("objective", "relative"),
+                  "max_adjust": float(((spec.get("ml") or {}).get("score") or {}).get("max_adjust", 0.0)), **ml_reg},
            "enter_score": effective_stability(spec, capital)["stability"]["enter_score"]}
     stab_spec = effective_stability(spec, capital)
     stats_all = state.setdefault("stats", {})

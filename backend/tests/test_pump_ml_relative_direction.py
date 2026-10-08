@@ -147,6 +147,8 @@ def test_relative_ml_never_caps_the_regime():
     rel = v1.evaluate_universe(rows, {}, None, {}, minute_ms=60_000, spec=deepcopy(v1.DEFAULT_V1), ml=payload)
     assert rel["regime"]["ml"]["cap"] is None
     assert rel["regime"]["ml"]["regime_effect"] == "disabled_relative_objective"
+    # The panel reads the objective and the live score cap from the payload (no hardcoded ±15 %).
+    assert rel["regime"]["ml"]["objective"] == "relative_candle" and rel["regime"]["ml"]["max_adjust"] == 0.05
     absolute = deepcopy(v1.DEFAULT_V1); absolute["ml"]["objective"] = "absolute"
     out = v1.evaluate_universe(rows, {}, None, {}, minute_ms=60_000, spec=absolute, ml=payload)
     assert out["regime"]["ml"]["cap"] == "desfavoravel"
