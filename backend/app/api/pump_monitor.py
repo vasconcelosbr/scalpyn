@@ -132,7 +132,9 @@ async def ml_ablation(response: Response, db: AsyncSession = Depends(get_db),
     from sqlalchemy import text
     response.headers["Cache-Control"] = "private, no-store"
     row = (await db.execute(text("""
-        SELECT run_id, started_at, finished_at, status, payload FROM pump_ml_job_runs
+        SELECT run_id, started_at, finished_at,
+               CASE WHEN status='running' AND deadline_at<now() THEN 'deadline_exceeded' ELSE status END AS status,
+               payload FROM pump_ml_job_runs
          WHERE user_id = :u AND payload->>'family' = 'candle_ablation'
          ORDER BY started_at DESC LIMIT 1"""), {"u": user_id})).mappings().first()
     if row is None:

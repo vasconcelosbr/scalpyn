@@ -209,8 +209,14 @@ async def run_owner(conn, owner, *, horizons: List[int], force: bool = False,
         with tempfile.TemporaryDirectory(prefix="pump_ml_") as staging:
             if family == "candle_ablation":
                 from .pump_ml_candles import run_candle_ablation
+                async def _progress(partial):
+                    # Persist after every variant: a hard kill keeps what was measured.
+                    await conn.execute(
+                        "UPDATE pump_ml_job_runs SET payload = payload || $2::jsonb WHERE run_id=$1",
+                        run_id, {"ablation": partial, "selection": selection})
                 ablation = await run_candle_ablation(conn, owner, c, selection,
-                                                     start + timedelta(seconds=MAX_RUNTIME_SECONDS))
+                                                     start + timedelta(seconds=MAX_RUNTIME_SECONDS),
+                                                     progress=_progress)
                 results = []
             elif family == "candle":
                 from .pump_ml_candles import run_candle_horizons

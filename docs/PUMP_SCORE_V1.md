@@ -459,3 +459,21 @@ Detalhes:
 - Uso pretendido: filtro de execução e variáveis de liquidez, depois de semanas de histórico.
 
 **Critério de adoção de um grupo:** só entra em `feature_groups` se melhorar a AUC diária contra a base de forma consistente entre os dias, com teste de sinal significativo, e sem piorar o spread econômico.
+
+### v1.18.1 — Ablação que não perde resultado (2026-10-08)
+
+**O que aconteceu:** a primeira ablação em produção (17:52 UTC) passou do orçamento e foi encerrada pelo limite rígido da tarefa (`deadline_exceeded`), sem gravar nada.
+
+**Causas:**
+- **Estimativa de tempo errada.** No perfil local em tamanho de produção (51 ativos, 100 mil linhas, 20 dias), cada variante levou cerca de 65 a 70 s. Com 6 variantes, e a produção rodando aproximadamente 1,7 a 2× mais devagar que o ambiente local, o tempo passa dos 840 s.
+- **Resultado gravado só no fim.** Ao ser encerrada, a execução perdeu todas as variantes que já tinham terminado.
+- **Trabalho pesado fora do controle de tempo.** A montagem das linhas e a conversão das velas rodavam no laço principal, onde a verificação de prazo não consegue interromper.
+
+**Correção:**
+- `progress`: o resultado parcial é gravado em `pump_ml_job_runs.payload` depois de cada variante.
+- O tempo de cada fase fica registrado: carga, montagem do frame e montagem das linhas.
+- A montagem das linhas e a conversão das velas passam a rodar fora do laço principal.
+- Uma variante só começa se o tempo restante for maior que 1,3 × a variante mais lenta já concluída. As que não couberem ficam marcadas como `runtime_budget_exhausted`.
+- O tamanho de triagem passa a ser 60 mil linhas × 15 dias.
+- Uma família aprovada na triagem é confirmada numa segunda execução, só com ela (`ablation.groups = [família]`) e com mais dias.
+- `GET /ml/ablation` mostra `deadline_exceeded` e o resultado parcial já gravado.
