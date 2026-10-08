@@ -132,6 +132,9 @@ DEFAULT_V1: Dict[str, Any] = {
                      # Manual trigger: minimum minutes since the last run STARTED (a run still
                      # in progress always blocks). 2026-10-07: 60 → 5 at Ricardo's request.
                      "manual_min_interval_minutes": 5},
+        # v1.14 (2026-10-08): append the applied candle model's probabilities once per closed
+        # candle to pump_ml_live_predictions, so live AUC can be compared with walk-forward.
+        "live_log": {"enabled": True, "retention_days": 120},
     },
     "gates": {
         "progress_atr_min": 0.25,
@@ -271,6 +274,9 @@ def validate(spec: Dict[str, Any], errors: List[str]) -> None:
         if not tr["horizons_minutes"] or any(int(h) <= 0 for h in tr["horizons_minutes"]) \
                 or int(tr["statement_timeout_ms"]) < 1000 or not 1 <= int(tr.get("manual_min_interval_minutes", 5)) <= 1440:
             errors.append("score_v1.ml.training: positive horizons and statement_timeout_ms >= 1000")
+        ll = ml.get("live_log") or {}
+        if ll and not 1 <= int(ll.get("retention_days", 0)) <= 3650:
+            errors.append("score_v1.ml.live_log.retention_days must be within [1, 3650]")
     if float((spec.get("direction") or {}).get("progress_min_atr", 0)) < 0:
         errors.append("score_v1.direction.progress_min_atr must be >= 0")
     norm = spec["normalization"]
