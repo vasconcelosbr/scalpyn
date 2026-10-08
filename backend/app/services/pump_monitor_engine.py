@@ -130,6 +130,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # Without "bands" an indicator is shown without colour (never invented).
     "indicators": {
         "pump_monitor_score": {"group": "scores", "polarity": "higher_better"},
+        # v1.15: probability the applied ML gives the asset (relative objectives: beating the
+        # universe over the horizon, not price up). 0.5 = no edge.
+        "ml_up_probability": {"group": "scores", "polarity": "higher_better", "bands": {"type": "sign", "center": 0.5}},
         "delta_norm": {"group": "flow", "polarity": "higher_better", "bands": {"type": "sign", "center": 0.0}},
         "window_delta_norm": {"group": "flow", "polarity": "higher_better", "bands": {"type": "sign", "center": 0.0}},
         "cvd_60m": {"group": "flow", "polarity": "higher_better", "bands": {"type": "sign", "center": 0.0}},
