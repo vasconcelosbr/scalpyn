@@ -273,8 +273,17 @@ async def run_owner(conn, owner, *, horizons: List[int], force: bool = False,
                    source_commit=os.environ.get("RAILWAY_GIT_COMMIT_SHA") or os.environ.get("SOURCE_COMMIT", "local_test"),
                    duration_seconds=round((datetime.now(timezone.utc) - start).total_seconds(), 3),
                    selection=selection)
-    await conn.execute("UPDATE pump_ml_job_runs SET finished_at=now(),status=$2,payload=$3 WHERE run_id=$1",
-                       run_id, outcome["status"], outcome)
+    try:
+        await conn.execute("UPDATE pump_ml_job_runs SET finished_at=now(),status=$2,payload=$3 WHERE run_id=$1",
+                           run_id, outcome["status"], outcome)
+    except Exception as exc:
+        # Never leave a finished run 'running' (2026-10-08: a CHECK violation did exactly that).
+        logger.exception("[PUMP-ML] finalize failed owner=%s run=%s", owner, run_id)
+        await conn.execute(
+            "UPDATE pump_ml_job_runs SET finished_at=now(),status='failed',payload=payload || $2::jsonb WHERE run_id=$1",
+            run_id, {"finalize_error": type(exc).__name__, "finalize_detail": str(exc)[:300],
+                     "intended_status": outcome.get("status")})
+        outcome = {**outcome, "status": "failed", "finalize_error": type(exc).__name__}
     return outcome
 
 

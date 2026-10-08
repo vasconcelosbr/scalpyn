@@ -477,3 +477,16 @@ Detalhes:
 - O tamanho de triagem passa a ser 60 mil linhas × 15 dias.
 - Uma família aprovada na triagem é confirmada numa segunda execução, só com ela (`ablation.groups = [família]`) e com mais dias.
 - `GET /ml/ablation` mostra `deadline_exceeded` e o resultado parcial já gravado.
+
+### v1.18.2 — Correção do diagnóstico: violação de CHECK, não estouro de tempo (2026-10-08)
+
+**O diagnóstico da v1.18.1 estava errado.** As duas execuções de ablação (17:52 e 18:24 UTC) terminaram os cálculos: a segunda gravou as 6 variantes, com cerca de 9 a 10 s por variante. O que falhou foi a escrita final:
+- O status `ablation` viola a constraint `pump_job_status`, que só aceita `running`, `blocked`, `challenger` e `failed` (migration 234).
+- Por isso o `UPDATE` final falhou e a execução ficou em `running` até o prazo vencer.
+- Reproduzido num Postgres 16 local: antes da migration, o banco retorna `CheckViolationError`.
+
+**Correção:**
+- **Migration `242_pump_job_status_ablation`:** amplia a constraint para aceitar `ablation`. O downgrade converte as linhas com `ablation` em `failed`.
+- **A finalização nunca deixa uma execução em `running`:** se o `UPDATE` final falhar, a linha é gravada como `failed`, com `finalize_error` e `intended_status`.
+- **Teste novo:** compara os status gravados pelo código com a constraint da migration.
+- **Tamanho da ablação:** volta para 100 mil linhas × 30 dias, o mesmo do modelo de produção. A redução para 60 mil × 15 da v1.18.1 partia do diagnóstico errado. Continuam valendo a gravação progressiva e a proteção de orçamento.
