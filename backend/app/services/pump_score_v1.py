@@ -115,6 +115,8 @@ DEFAULT_V1: Dict[str, Any] = {
         "max_feature_age_seconds": 120,
         "quality": {"min_auc": 0.55, "require_brier_better": True, "require_ci_positive": True,
                     "min_test_episodes": 30,
+                    # Walk-forward only: one-sided sign test over days (AUC > 0.5); None disables.
+                    "max_sign_test_p": 0.05,
                     # "walk_forward" (every day tested once, past-only training) when the model
                     # carries it; "holdout" = the single last temporal block (pre-2026-10-07 models).
                     "source": "walk_forward"},
@@ -565,8 +567,15 @@ def _wf_quality(pooled: Dict[str, Any], q: Dict[str, Any], wf: Dict[str, Any]) -
     if auc is None or auc < float(q.get("min_auc", 0.55)):
         reasons.append("auc_below_min")
     brier, base = _finite(pooled.get("brier")), _finite(pooled.get("baseline_brier"))
-    if q.get("require_brier_better", True) and (brier is None or base is None or brier >= base):
+    day_gain = _finite(pooled.get("brier_improvement_day_mean"))
+    if day_gain is None:   # v1 walk-forward (pooled only)
+        day_gain = None if brier is None or base is None else base - brier
+    if q.get("require_brier_better", True) and (day_gain is None or day_gain <= 0):
         reasons.append("brier_not_better_than_base_rate")
+    p_sign = _finite(pooled.get("sign_test_p"))
+    max_p = q.get("max_sign_test_p", 0.05)
+    if max_p is not None and (p_sign is None or p_sign > float(max_p)):
+        reasons.append("days_not_consistently_above_half")
     ci = pooled.get("paired_episode_brier_ci95") or []
     if q.get("require_ci_positive", True) and (len(ci) != 2 or (_finite(ci[0]) or 0) <= 0):
         reasons.append("brier_improvement_ci_includes_zero")
@@ -576,6 +585,7 @@ def _wf_quality(pooled: Dict[str, Any], q: Dict[str, Any], wf: Dict[str, Any]) -
     return {"approved": not reasons, "reasons": reasons, "auc": auc, "brier": brier, "baseline_brier": base,
             "brier_ci95": ci, "test_episodes": episodes, "source": "walk_forward",
             "scored_days": wf.get("scored_days"), "days_auc_above_half": pooled.get("days_auc_above_half"),
+            "sign_test_p": pooled.get("sign_test_p"), "auc_statistic": pooled.get("auc_statistic", "pooled"),
             "economic": pooled.get("economic")}
 
 

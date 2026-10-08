@@ -9,7 +9,7 @@ from app.services import pump_score_v1 as v1
 from app.services.pump_directional_research import train_directional, walk_forward_evaluation, model_columns
 from tests.test_pump_directional_research import fixture
 
-WF = {"enabled": True, "min_train_days": 2, "calibration_fraction": 0.2, "economic_quantile": 0.1}
+WF = {"enabled": True, "min_train_days": 2, "calibration_fraction": 0.2, "economic_quantile": 0.1, "max_folds": 30}
 
 
 def wf_fixture():
@@ -69,7 +69,8 @@ def test_quality_gate_reads_walk_forward_when_present():
                                                             "episodes": 900, "days_auc_above_half": 3}}}
     q = v1.ml_quality({**holdout_good, **wf_bad}, spec)
     assert q["source"] == "walk_forward" and not q["approved"]
-    assert set(q["reasons"]) == {"auc_below_min", "brier_improvement_ci_includes_zero"}
+    assert set(q["reasons"]) == {"auc_below_min", "brier_improvement_ci_includes_zero",
+                                 "days_not_consistently_above_half"}
     spec["ml"]["quality"]["source"] = "holdout"
     assert v1.ml_quality({**holdout_good, **wf_bad}, spec)["approved"] is True
     spec["ml"]["quality"]["source"] = "walk_forward"
@@ -84,3 +85,39 @@ def test_config_validation():
     errors = []
     v1.validate(bad, errors)
     assert errors
+
+
+
+def test_verdict_is_day_level_not_pooled(tmp_path):
+    """Regression 2026-10-08: pooled AUC 0.526 with 0/4 days above 0.5 (observation 15m)."""
+    from app.services.pump_directional_research import sign_test_p
+    rows, spec = wf_fixture()
+    wf = train_directional(rows, spec=spec, output_root=tmp_path)["metrics"]["walk_forward"]
+    pooled = wf["pooled"]
+    aucs = sorted(f["auc"] for f in wf["folds"] if "auc" in f)
+    import statistics
+    assert pooled["auc"] == pytest.approx(statistics.median(aucs)) and pooled["auc_statistic"] == "day_median"
+    assert pooled["sign_test_p"] == pytest.approx(sign_test_p(pooled["days_auc_above_half"], len(aucs)))
+    assert pooled["ci_scope"] == "bootstrap_over_days" and pooled["economic"]["ci_scope"] == "bootstrap_over_days"
+    assert "pooled_auc_reference_only" in pooled
+    assert sign_test_p(23, 28) == pytest.approx(0.000456, abs=1e-6)
+    assert sign_test_p(0, 4) == 1.0
+
+
+def test_gate_rejects_inconsistent_days_even_with_good_pooled_numbers():
+    spec = deepcopy(v1.DEFAULT_V1)
+    pooled = {"auc": 0.60, "brier_improvement_day_mean": 0.01, "paired_episode_brier_ci95": [0.001, 0.02],
+              "episodes": 500, "days_auc_above_half": 2, "sign_test_p": 0.6875, "brier": 0.2, "baseline_brier": 0.21}
+    q = v1.ml_quality({"walk_forward": {"scored_days": 4, "pooled": pooled}}, spec)
+    assert q["reasons"] == ["days_not_consistently_above_half"]
+    q2 = v1.ml_quality({"walk_forward": {"scored_days": 4, "pooled": {**pooled, "sign_test_p": 0.01}}}, spec)
+    assert q2["approved"] is True
+
+
+def test_max_folds_caps_evaluated_days():
+    rows, spec = wf_fixture()
+    usable = [{**r, "target": r["endpoint_return_pct"] > 0} for r in rows]
+    spec = {**spec, "walk_forward": {**WF, "max_folds": 3}}
+    wf = walk_forward_evaluation(usable, columns=model_columns(spec), spec=spec,
+                                 options=spec["directional_evaluation"], relative=False)
+    assert len(wf["folds"]) == 3

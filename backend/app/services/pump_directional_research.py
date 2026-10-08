@@ -309,16 +309,29 @@ def excess_return(row, relative):
     return float(v) if eng.number(v) else None
 
 
+def sign_test_p(successes, n):
+    """One-sided binomial P(X >= successes | n, 0.5)."""
+    from math import comb
+    if n <= 0:
+        return None
+    return sum(comb(n, i) for i in range(successes, n + 1)) / 2 ** n
+
+
 def walk_forward_evaluation(usable, *, columns, spec, options, relative):
     """Rolling-origin evaluation: every UTC day with >= ``min_train_days`` earlier days
-    is a test fold once. Fold model = same booster params, trained on rows before
-    (day start - embargo), calibrated on the last ``calibration_fraction`` of that
-    past (same bounded Platt), never on the test day. Episodes that touch the test
-    day are removed from the fold's past. Pools out-of-fold predictions:
-      * episode-weighted AUC / Brier vs each fold's train base rate, paired
-        episode bootstrap CI (same construction as the holdout metrics);
-      * per-day AUC (stability) and the economic spread: mean excess return (pp)
-        of the top vs bottom ``economic_quantile`` of predicted probability."""
+    is a test fold once (at most ``max_folds`` evenly spaced days). Fold model = same
+    booster params, trained on rows before (day start - embargo), calibrated on the
+    last ``calibration_fraction`` of that past (same bounded Platt), never on the test
+    day. Episodes that touch the test day are removed from the fold's past.
+
+    The verdict is DAY-LEVEL (2026-10-08): pooling days rewards matching day-to-day
+    base-rate shifts, not ranking assets within a day (observation 15m: pooled AUC
+    0.526 with 0/4 days above 0.5). Reported:
+      * median per-day AUC and a one-sided sign test over days (AUC > 0.5);
+      * per-day paired Brier improvement vs the fold's base rate, CI by resampling DAYS;
+      * economic spread (top vs bottom ``economic_quantile`` excess return, pp), CI by
+        resampling DAYS (rows within a day/minute move together);
+      * pooled AUC/Brier kept for reference only."""
     import numpy as np
     import xgboost as xgb
     from datetime import timedelta
@@ -326,94 +339,120 @@ def walk_forward_evaluation(usable, *, columns, spec, options, relative):
     wf = spec.get('walk_forward') or {}
     min_days = int(wf.get('min_train_days', 2)); frac = float(wf.get('calibration_fraction', 0.2))
     q = float(wf.get('economic_quantile', 0.1)); embargo = timedelta(seconds=int(spec['embargo_seconds']))
+    max_folds = int(wf.get('max_folds', 30))
     rows = sorted(usable, key=lambda r: eng.utc(r['decision_at']))
-    days = sorted({eng.utc(r['decision_at']).date() for r in rows})
-    def matrix(c):
-        def cell(r, f):
-            v = (r.get('values') or {}).get(f)
-            return float(v) if eng.number(v) else np.nan
-        return np.array([[cell(r, f) for f in columns] for r in c], dtype=float).reshape(len(c), len(columns))
-    folds = []; P = []; Y = []; W = []; E = []; G = []; PRIOR = []
-    for i, day in enumerate(days):
-        if i < min_days:
-            continue
-        test = [r for r in rows if eng.utc(r['decision_at']).date() == day]
-        start = min(eng.utc(r['decision_at']) for r in test)
-        test_eps = {r['episode_id'] for r in test}
-        past = [r for r in rows if eng.utc(r['decision_at']) < start - embargo and r['episode_id'] not in test_eps]
-        if len(past) < 100 or len({r['target'] for r in past}) < 2 or len({r['target'] for r in test}) < 2:
+    times = np.array([eng.utc(r['decision_at']).timestamp() for r in rows])
+    dates = [eng.utc(r['decision_at']).date() for r in rows]
+    eps = np.array([r['episode_id'] for r in rows], dtype=object)
+    Y = np.array([int(r['target']) for r in rows])
+    def cell(r, f):
+        v = (r.get('values') or {}).get(f)
+        return float(v) if eng.number(v) else np.nan
+    X = np.array([[cell(r, f) for f in columns] for r in rows], dtype=float).reshape(len(rows), len(columns))
+    EX = np.array([np.nan if (e := excess_return(r, relative)) is None else e for r in rows], dtype=float)
+    days = sorted(set(dates))
+    eligible = days[min_days:]
+    if len(eligible) > max_folds:
+        pick = np.linspace(0, len(eligible) - 1, max_folds).round().astype(int)
+        eligible = [eligible[i] for i in sorted(set(pick.tolist()))]
+    date_arr = np.array(dates, dtype=object)
+    def weights(mask):
+        e = eps[mask]
+        _, inv, counts = np.unique(e, return_inverse=True, return_counts=True)
+        return 1.0 / counts[inv]
+    def logit(p):
+        p = np.clip(p, 1e-6, 1 - 1e-6)
+        return np.log(p / (1 - p))
+    folds = []; per_day = []
+    for day in eligible:
+        tmask = date_arr == day
+        start = times[tmask].min()
+        test_eps = set(eps[tmask].tolist())
+        pmask = (times < start - embargo.total_seconds()) & ~np.isin(eps, list(test_eps))
+        if pmask.sum() < 100 or len(set(Y[pmask])) < 2 or len(set(Y[tmask])) < 2:
             folds.append({'day': day.isoformat(), 'skipped': 'insufficient_past_or_single_class',
-                          'test_rows': len(test), 'past_rows': len(past)})
+                          'test_rows': int(tmask.sum()), 'past_rows': int(pmask.sum())})
             continue
-        cut = eng.utc(past[int(len(past) * (1 - frac))]['decision_at'])
-        fit = [r for r in past if eng.utc(r['decision_at']) < cut - embargo]
-        cal = [r for r in past if eng.utc(r['decision_at']) >= cut]
-        cal_eps = {r['episode_id'] for r in cal}
-        fit = [r for r in fit if r['episode_id'] not in cal_eps]
-        if len(fit) < 50 or len({r['target'] for r in fit}) < 2 or len({r['target'] for r in cal}) < 2:
-            folds.append({'day': day.isoformat(), 'skipped': 'insufficient_fit_or_calibration', 'test_rows': len(test)})
+        ptimes = np.sort(times[pmask])
+        cut = ptimes[int(len(ptimes) * (1 - frac))]
+        cmask = pmask & (times >= cut)
+        cal_eps = set(eps[cmask].tolist())
+        fmask = pmask & (times < cut - embargo.total_seconds()) & ~np.isin(eps, list(cal_eps))
+        if fmask.sum() < 50 or len(set(Y[fmask])) < 2 or len(set(Y[cmask])) < 2:
+            folds.append({'day': day.isoformat(), 'skipped': 'insufficient_fit_or_calibration',
+                          'test_rows': int(tmask.sum())})
             continue
-        fx, fy = matrix(fit), np.array([int(r['target']) for r in fit])
-        fw = np.array(episode_weights(fit))
+        fw = weights(fmask)
         model = xgb.XGBClassifier(**{**spec['params'], 'n_jobs': spec['max_threads'], 'objective': 'binary:logistic'})
-        model.fit(fx, fy, sample_weight=fw, verbose=False)
-        def logit(p):
-            p = np.clip(p, 1e-6, 1 - 1e-6)
-            return np.log(p / (1 - p))
-        cy = np.array([int(r['target']) for r in cal]); cw = np.array(episode_weights(cal))
-        fitc = fit_calibration(logit(model.predict_proba(matrix(cal))[:, 1]), cy, cw, options,
+        model.fit(X[fmask], Y[fmask], sample_weight=fw, verbose=False)
+        fitc = fit_calibration(logit(model.predict_proba(X[cmask])[:, 1]), Y[cmask], weights(cmask), options,
                                spec['params']['random_state'])
-        p = apply_calibration(model.predict_proba(matrix(test))[:, 1], fitc)
-        ty = np.array([int(r['target']) for r in test]); tw = np.array(episode_weights(test))
-        prior = float(np.average(fy, weights=fw))
+        p = apply_calibration(model.predict_proba(X[tmask])[:, 1], fitc)
+        ty = Y[tmask]; tw = weights(tmask)
+        prior = float(np.average(Y[fmask], weights=fw))
         auc = float(roc_auc_score(ty, p, sample_weight=tw))
-        folds.append({'day': day.isoformat(), 'test_rows': len(test), 'test_episodes': len(test_eps),
-                      'fit_rows': len(fit), 'calibration_rows': len(cal), 'auc': auc,
-                      'brier': float(brier_score_loss(ty, p, sample_weight=tw)),
-                      'baseline_brier': float(brier_score_loss(ty, np.full(len(ty), prior), sample_weight=tw)),
+        brier = float(brier_score_loss(ty, p, sample_weight=tw))
+        base = float(brier_score_loss(ty, np.full(len(ty), prior), sample_weight=tw))
+        folds.append({'day': day.isoformat(), 'test_rows': int(tmask.sum()), 'test_episodes': len(test_eps),
+                      'fit_rows': int(fmask.sum()), 'calibration_rows': int(cmask.sum()), 'auc': auc,
+                      'brier': brier, 'baseline_brier': base, 'brier_improvement': base - brier,
                       'up_frequency': float(np.average(ty, weights=tw)), 'train_prior': prior,
                       'calibration_slope': fitc['slope']})
-        P.extend(p.tolist()); Y.extend(ty.tolist()); W.extend(tw.tolist()); PRIOR.extend([prior] * len(ty))
-        E.extend([excess_return(r, relative) for r in test]); G.extend([f"{day}:{r['episode_id']}" for r in test])
+        per_day.append({'p': p, 'y': ty, 'w': tw, 'prior': prior, 'ex': EX[tmask], 'n_eps': len(test_eps)})
     scored = [f for f in folds if 'auc' in f]
-    out = {'version': 'pump_walk_forward_daily_v1', 'min_train_days': min_days, 'calibration_fraction': frac,
-           'folds': folds, 'scored_days': len(scored)}
+    out = {'version': 'pump_walk_forward_daily_v2', 'min_train_days': min_days, 'calibration_fraction': frac,
+           'max_folds': max_folds, 'folds': folds, 'scored_days': len(scored)}
     if not scored:
         return {**out, 'pooled': None}
-    P, Y, W, PRIOR = map(np.array, (P, Y, W, PRIOR))
-    groups = {}
-    for i, g in enumerate(G): groups.setdefault(g, []).append(i)
-    losses = np.array([float(np.mean((Y[idx] - PRIOR[idx]) ** 2 - (Y[idx] - P[idx]) ** 2)) for idx in groups.values()])
     rng = np.random.default_rng(spec['params']['random_state'])
     reps = int(options['bootstrap_repetitions'])
-    boot = [float(rng.choice(losses, len(losses), replace=True).mean()) for _ in range(reps)]
-    pooled = {'auc': float(roc_auc_score(Y, P, sample_weight=W)),
-              'brier': float(np.average((Y - P) ** 2, weights=W)),
-              'baseline_brier': float(np.average((Y - PRIOR) ** 2, weights=W)),
-              'paired_episode_brier_improvement': float(losses.mean()),
-              'paired_episode_brier_ci95': np.quantile(boot, [.025, .975]).tolist(),
-              'episodes': len(groups), 'rows': int(len(Y)),
-              'days_auc_above_half': sum(f['auc'] > 0.5 for f in scored),
-              'day_auc_min': min(f['auc'] for f in scored), 'day_auc_max': max(f['auc'] for f in scored)}
-    # Economic spread: excess return of the most vs least favoured predictions.
-    ex = np.array([np.nan if e is None else e for e in E], dtype=float)
-    ok = ~np.isnan(ex)
-    if ok.sum() >= 20:
-        pp, ee = P[ok], ex[ok]
-        hi, lo = np.quantile(pp, 1 - q), np.quantile(pp, q)
-        top, bottom = ee[pp >= hi], ee[pp <= lo]
-        def mean_ci(v):
-            b = [float(rng.choice(v, len(v), replace=True).mean()) for _ in range(reps)]
-            return float(v.mean()), np.quantile(b, [.025, .975]).tolist()
-        tm, tci = mean_ci(top); bm, bci = mean_ci(bottom)
-        diffs = [float(rng.choice(top, len(top)).mean() - rng.choice(bottom, len(bottom)).mean()) for _ in range(reps)]
+    n = len(scored)
+    aucs = np.array([f['auc'] for f in scored]); imps = np.array([f['brier_improvement'] for f in scored])
+    above = int((aucs > 0.5).sum())
+    boot_idx = [rng.integers(0, n, n) for _ in range(reps)]
+    imp_boot = [float(imps[i].mean()) for i in boot_idx]
+    P = np.concatenate([d['p'] for d in per_day]); Yp = np.concatenate([d['y'] for d in per_day])
+    W = np.concatenate([d['w'] for d in per_day]); PR = np.concatenate([np.full(len(d['y']), d['prior']) for d in per_day])
+    pooled = {'auc_statistic': 'day_median',
+              'auc': float(np.median(aucs)), 'day_auc_median': float(np.median(aucs)),
+              'day_auc_mean': float(aucs.mean()), 'day_auc_min': float(aucs.min()), 'day_auc_max': float(aucs.max()),
+              'days_auc_above_half': above, 'sign_test_p': sign_test_p(above, n),
+              'brier_improvement_day_mean': float(imps.mean()),
+              'paired_episode_brier_ci95': np.quantile(imp_boot, [.025, .975]).tolist(),
+              'ci_scope': 'bootstrap_over_days',
+              'brier': float(np.average((Yp - P) ** 2, weights=W)),
+              'baseline_brier': float(np.average((Yp - PR) ** 2, weights=W)),
+              'pooled_auc_reference_only': float(roc_auc_score(Yp, P, sample_weight=W)),
+              'episodes': int(sum(d['n_eps'] for d in per_day)), 'rows': int(len(Yp))}
+    # Economic spread with thresholds from all out-of-fold predictions, CI over days.
+    allp = np.concatenate([d['p'][~np.isnan(d['ex'])] for d in per_day]) if per_day else np.array([])
+    if allp.size >= 20:
+        hi, lo = np.quantile(allp, 1 - q), np.quantile(allp, q)
+        sums = []
+        for d in per_day:
+            ok = ~np.isnan(d['ex'])
+            pp, ee = d['p'][ok], d['ex'][ok]
+            t, b = ee[pp >= hi], ee[pp <= lo]
+            sums.append((t.sum(), len(t), b.sum(), len(b), ee.sum(), len(ee)))
+        S = np.array(sums, dtype=float)
+        def spread(idx):
+            s = S[idx].sum(axis=0)
+            if s[1] == 0 or s[3] == 0:
+                return np.nan
+            return s[0] / s[1] - s[2] / s[3]
+        tot = S.sum(axis=0)
+        diffs = np.array([spread(i) for i in boot_idx]); diffs = diffs[~np.isnan(diffs)]
+        day_spreads = np.array([spread(np.array([i])) for i in range(len(S))])
+        day_spreads = day_spreads[~np.isnan(day_spreads)]
         pooled['economic'] = {'quantile': q, 'unit': 'pp_excess_over_benchmark' if relative else 'pp_endpoint_return',
-                              'all_mean': float(ee.mean()), 'top_mean': tm, 'top_ci95': tci, 'top_rows': int(len(top)),
-                              'bottom_mean': bm, 'bottom_ci95': bci, 'bottom_rows': int(len(bottom)),
-                              'top_minus_bottom': tm - bm, 'top_minus_bottom_ci95': np.quantile(diffs, [.025, .975]).tolist(),
-                              'note': 'row-level bootstrap; rows within a minute are correlated'}
+                              'all_mean': float(tot[4] / tot[5]) if tot[5] else None,
+                              'top_mean': float(tot[0] / tot[1]) if tot[1] else None, 'top_rows': int(tot[1]),
+                              'bottom_mean': float(tot[2] / tot[3]) if tot[3] else None, 'bottom_rows': int(tot[3]),
+                              'top_minus_bottom': float(spread(np.arange(len(S)))),
+                              'top_minus_bottom_ci95': np.quantile(diffs, [.025, .975]).tolist() if diffs.size else None,
+                              'days_spread_positive': int((day_spreads > 0).sum()), 'days_with_spread': int(day_spreads.size),
+                              'ci_scope': 'bootstrap_over_days'}
     return {**out, 'pooled': pooled}
-
 
 def model_columns(spec):
     """Booster column order: frozen core features, then optional context."""
