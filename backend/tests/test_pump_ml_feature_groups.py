@@ -33,8 +33,10 @@ def bars_for(closes, seed=1):
 
 
 def test_base_columns_and_order_are_unchanged_for_stored_models():
-    assert pc.feature_names(CFG) == BASE
+    stored = {k: v for k, v in CFG.items() if k != "feature_groups"}   # manifests saved before v1.18
+    assert pc.feature_names(stored) == BASE
     assert pc.feature_names({**CFG, "feature_groups": []}) == BASE
+    assert pc.feature_names(CFG) == BASE + pc.GROUP_FEATURES["candle_structure"]   # default since v1.19
 
 
 def test_btc_beta_replaces_the_pool_beta_lag_gap_never_both():
@@ -126,7 +128,7 @@ def test_ablation_family_saves_no_model_and_reports_variants(monkeypatch):
 
 def test_feature_group_and_ablation_config_is_validated():
     cd = eng.config(None)["research"]["candle"]
-    assert cd["feature_groups"] == [] and cd["ablation"]["groups"] == list(pc.GROUPS)
+    assert cd["feature_groups"] == ["candle_structure"] and cd["ablation"]["groups"] == list(pc.GROUPS)
     for bad in ({"feature_groups": ["rsi"]}, {"feature_groups": ["volume", "volume"]},
                 {"ablation": {**cd["ablation"], "groups": []}}, {"ablation": {**cd["ablation"], "max_folds": 2}},
                 {"ablation": {**cd["ablation"], "horizon_minutes": 7}}):

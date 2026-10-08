@@ -490,3 +490,30 @@ Detalhes:
 - **A finalização nunca deixa uma execução em `running`:** se o `UPDATE` final falhar, a linha é gravada como `failed`, com `finalize_error` e `intended_status`.
 - **Teste novo:** compara os status gravados pelo código com a constraint da migration.
 - **Tamanho da ablação:** volta para 100 mil linhas × 30 dias, o mesmo do modelo de produção. A redução para 60 mil × 15 da v1.18.1 partia do diagnóstico errado. Continuam valendo a gravação progressiva e a proteção de orçamento.
+
+## v1.19 — Grupo `candle_structure` adotado (2026-10-08)
+
+**Evidência:** ablação completa de 19:10 UTC. Horizonte de 15 min, 100 mil linhas, walk-forward em 30 dias, com as mesmas linhas e os mesmos dias para todas as variantes. Tempo total: 566 s.
+
+| Variante | AUC mediana diária | Dias melhores que a base (p) | Brier | Topo − fundo (pp) |
+|---|---|---|---|---|
+| base (12 colunas) | 0,5558 | — | 0,0018 [0,0010; 0,0026] | 0,0545 [0,037; 0,076] |
+| **candle_structure** | **0,5654** | **22/30 (p = 0,0081)** | 0,0026 [0,0013; 0,0036] | 0,0674 [0,050; 0,086] |
+| btc_beta | 0,5499 | 18/30 (p = 0,18) | 0,0018 | 0,0438 |
+| volume | 0,5507 | 14/30 (p = 0,71) | 0,0020 | 0,0521 |
+| pool_context | 0,5512 | 16/30 (p = 0,43) | 0,0018 | 0,0551 |
+| todos os grupos | 0,5643 | 23/30 (p = 0,0026) | 0,0026 | 0,0579 |
+
+**Critério:** melhora consistente dia a dia, com teste de sinal abaixo de 0,05/5 (correção de Bonferroni pelos 5 grupos comparados), e sem piorar o spread econômico.
+- Só `candle_structure` passa.
+- "Todos os grupos" fica empatado com ele e usa mais colunas, então fica o grupo mais simples.
+
+**Ressalvas:**
+- Os 30 dias do teste estão dentro da mesma janela de 90 dias usada para escolher o grupo. A confirmação fora da amostra vem da avaliação ao vivo (`/ml/live-evaluation`).
+- Na triagem anterior (60 mil linhas × 15 dias) o grupo tinha ficado em 8 de 15 dias: aquela amostra era mais ruidosa.
+
+**Efeito:**
+- `research.candle.feature_groups = ["candle_structure"]`.
+- O próximo treino de velas (diário às 06:10 UTC, ou manual) gera o modelo com 19 colunas, que precisa passar pelo portão de qualidade.
+- A inferência ao vivo passa a ler OHLC do `ohlcv`.
+- O ajuste no score continua limitado a ±5%.
