@@ -46,7 +46,13 @@ DEFAULT_CONFIG = {
                            "horizons_minutes":[15,10],"prev_windows":[1,3,6,12],"vol_short":12,
                            "beta_window":288,"beta_min_points":200,"max_rows":100000,"max_rows_per_time":12,
                            "min_assets":10,"label_mode":"path_mean","compare_label_modes":["path_mean"],
-                           "embargo_seconds":1800},
+                           "embargo_seconds":1800,
+                           # v1.18: optional groups (btc_beta, candle_structure, volume, pool_context);
+                           # [] = the original 12 price-only columns. Adopt a group only after ablation.
+                           "feature_groups":[],
+                           # Manual ablation (family candle_ablation): same rows/days, one group at a time.
+                           "ablation":{"groups":["btc_beta","candle_structure","volume","pool_context"],
+                                       "horizon_minutes":15,"max_folds":20,"max_rows":100000,"include_all":True}},
                  "lookback_days":30, "cohort_cuts":[0.5,0.65,0.8],
                  # 2026-10-07: label = asset endpoint return vs the median endpoint return of
                  # every labelled asset captured in the same minute (same horizon).
@@ -177,6 +183,17 @@ def validate_config(c):
             or any(m not in ('endpoint','path_mean') for m in cd.get('compare_label_modes') or []) \
             or cd['embargo_seconds']<max(cd['horizons_minutes'])*60:
         raise ValueError('Invalid research.candle configuration')
+    from .pump_ml_candles import GROUPS as _CANDLE_GROUPS
+    fg=cd.get('feature_groups',[])
+    if not isinstance(fg,list) or len(fg)!=len(set(fg)) or any(g not in _CANDLE_GROUPS for g in fg):
+        raise ValueError(f'research.candle.feature_groups must be unique values from {list(_CANDLE_GROUPS)}')
+    ab=cd.get('ablation') or {}
+    if ab and (not isinstance(ab.get('groups'),list) or not ab['groups'] or any(g not in _CANDLE_GROUPS for g in ab['groups'])
+               or type(ab.get('horizon_minutes')) is not int or ab['horizon_minutes']<=0
+               or (ab['horizon_minutes']*60)%cd['step_seconds'] or type(ab.get('max_folds')) is not int
+               or not 3<=ab['max_folds']<=60 or type(ab.get('max_rows')) is not int or not 1000<=ab['max_rows']<=200000
+               or not isinstance(ab.get('include_all',False),bool)):
+        raise ValueError('Invalid research.candle.ablation configuration')
     rb=research.get('relative_beta')
     if not isinstance(rb,dict) or not isinstance(rb.get('enabled'),bool) or rb.get('timeframe') not in ('1m','5m','15m') \
             or type(rb.get('window_candles')) is not int or not 24<=rb['window_candles']<=2016 \

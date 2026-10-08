@@ -49,7 +49,7 @@ def test_write_issues_flow_and_perp_upserts():
 
     out = asyncio.run(fh.write(DB(), ["B_USDT", "A_USDT"], {"A_USDT": [{"time": 1_790_000_100}]},
                                1_790_000_400_000, {"step_seconds": 300}, "5m"))
-    assert out == {"flow": 7, "perp": 7}
+    assert out == {"flow": 7, "perp": 7, "book": 0}                          # no cycle rows → no book write
     assert "pump_flow_5m" in calls[0][0] and calls[0][1]["s"] == ["A_USDT", "B_USDT"] and calls[0][1]["step"] == 300
     assert "pump_perp_stats_5m" in calls[1][0] and json.loads(calls[1][1]["batch"])[0]["s"] == "A_USDT"
     calls.clear()

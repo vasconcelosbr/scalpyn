@@ -86,11 +86,11 @@ def perp_rows(derivatives: Optional[Dict[str, Optional[List[Dict[str, Any]]]]], 
 
 
 async def write(db, symbols: List[str], derivatives: Optional[Dict[str, Any]], now_ms: int,
-                cfg: Dict[str, Any], interval: str) -> Dict[str, int]:
+                cfg: Dict[str, Any], interval: str, rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, int]:
     import json
     from sqlalchemy import text
     step = int(cfg["step_seconds"])
-    written = {"flow": 0, "perp": 0}
+    written = {"flow": 0, "perp": 0, "book": 0}
     if symbols:
         res = await db.execute(text(FLOW_5M_SQL), {"s": sorted(symbols), "step": step, **flow_window(now_ms, step)})
         written["flow"] = res.rowcount or 0
@@ -98,7 +98,50 @@ async def write(db, symbols: List[str], derivatives: Optional[Dict[str, Any]], n
     if batch:
         res = await db.execute(text(PERP_SQL), {"batch": json.dumps(batch, allow_nan=False)})
         written["perp"] = res.rowcount or 0
+    book = book_rows(rows, now_ms, step)
+    if book:
+        res = await db.execute(text(BOOK_SQL), {"batch": json.dumps(book, allow_nan=False)})
+        written["book"] = res.rowcount or 0
     return written
+
+
+# v1.18: order-book state per 5-minute bucket (the LAST cycle snapshot inside the bucket;
+# ``observed_at`` = cycle time, ``computed_at`` = receipt). Kept for liquidity / execution
+# features; pump_research_minute holds these only for its 30-day retention.
+BOOK_FIELDS = (("sp", "spread_pct"), ("bd", "bid_depth_usdt_1pct"), ("ad", "ask_depth_usdt_1pct"),
+               ("im", "depth_imbalance_1pct"), ("sb", "estimated_slippage_buy_pct"),
+               ("ss", "estimated_slippage_sell_pct"))
+
+BOOK_SQL = """
+    INSERT INTO pump_book_5m (symbol, bucket_start, observed_at, spread_pct, bid_depth_1pct_usdt,
+        ask_depth_1pct_usdt, depth_imbalance_1pct, slippage_buy_pct, slippage_sell_pct, computed_at)
+    SELECT r.s, to_timestamp(r.b), to_timestamp(r.o), r.sp, r.bd, r.ad, r.im, r.sb, r.ss, now()
+      FROM jsonb_to_recordset(CAST(:batch AS jsonb))
+        AS r(s text, b bigint, o double precision, sp double precision, bd double precision,
+             ad double precision, im double precision, sb double precision, ss double precision)
+    ON CONFLICT (symbol, bucket_start) DO UPDATE SET
+        observed_at = EXCLUDED.observed_at, spread_pct = EXCLUDED.spread_pct,
+        bid_depth_1pct_usdt = EXCLUDED.bid_depth_1pct_usdt, ask_depth_1pct_usdt = EXCLUDED.ask_depth_1pct_usdt,
+        depth_imbalance_1pct = EXCLUDED.depth_imbalance_1pct, slippage_buy_pct = EXCLUDED.slippage_buy_pct,
+        slippage_sell_pct = EXCLUDED.slippage_sell_pct, computed_at = now()
+     WHERE pump_book_5m.observed_at <= EXCLUDED.observed_at
+"""
+
+
+def book_rows(rows: Optional[List[Dict[str, Any]]], now_ms: int, step_seconds: int) -> List[Dict[str, Any]]:
+    """Batch for ``BOOK_SQL`` from the cycle rows (``indicators[field].value``); the bucket is
+    the one OPEN at ``now_ms``, so its final value is the last snapshot before it closes.
+    Assets with no book value at all add nothing; individual missing fields stay NULL."""
+    now_s = int(now_ms) / 1000.0
+    bucket = (int(now_s) // step_seconds) * step_seconds
+    out = []
+    for row in rows or []:
+        cells = row.get("indicators") or {}
+        vals = {k: _num((cells.get(src) or {}).get("value")) for k, src in BOOK_FIELDS}
+        if all(v is None for v in vals.values()):
+            continue
+        out.append({"s": row["symbol"], "b": bucket, "o": now_s, **vals})
+    return out
 
 
 COVERAGE_SQL = """
@@ -106,6 +149,8 @@ COVERAGE_SQL = """
            min(bucket_start) AS first, max(bucket_start) AS last FROM pump_flow_5m
     UNION ALL
     SELECT 'perp', count(DISTINCT symbol), count(*), min(stat_time), max(stat_time) FROM pump_perp_stats_5m
+    UNION ALL
+    SELECT 'book', count(DISTINCT symbol), count(*), min(bucket_start), max(bucket_start) FROM pump_book_5m
 """
 
 
