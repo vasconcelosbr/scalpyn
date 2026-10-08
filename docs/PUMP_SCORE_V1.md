@@ -408,3 +408,23 @@ Regras:
 **Cobertura:** `GET /api/pump-monitor/flow-history/coverage`.
 
 **Próximo passo:** com 3 a 4 semanas de histórico, adicionar variáveis de fluxo e perpétuo à família de velas e comparar no walk-forward com o modelo atual.
+
+## v1.17 — A config de oportunidades guarda só as alterações (2026-10-08)
+
+**Defeito:**
+- `put_config` gravava a config inteira já mesclada com os padrões.
+- A tarefa `refresh_listing_contracts` chama `put_config` a cada 6 horas, só para atualizar a lista de ativos certificados.
+- Cada execução congelava todos os padrões daquele momento, e mudanças posteriores nos padrões de `research.*` nunca chegavam ao usuário. Exemplo: a v1.16 (100 mil linhas, horizontes [15, 10]) não entrou em produção.
+
+**Correção:**
+- `put_config` passa a gravar `eng.overrides(c)`: só os valores que diferem do `DEFAULT_CONFIG`, mais `PERSIST_ALWAYS`. Esse segundo grupo é gravado sempre porque tarefas leem esses campos direto do JSON por SQL. Ele inclui:
+  - as flags de topo, como `enabled` e `training_job_enabled`;
+  - os mapas `listing_*`.
+- A leitura não muda: `config(stored)` continua mesclando os padrões com o que está gravado.
+- **Efeito colateral aceito:** um valor escolhido de propósito igual ao padrão passa a acompanhar o padrão se o padrão mudar.
+
+**Limpeza (migration `240_pump_unfreeze_candle`):**
+- Remove de `research.candle` só as chaves que ainda têm exatamente os padrões antigos: `max_rows` 40000, `max_rows_per_time` 5, `horizons_minutes` [10, 15] e `compare_label_modes` ["endpoint", "path_mean"].
+- Qualquer outro valor fica intacto.
+- Cada linha alterada ganha um registro em `config_audit_log`, com o JSON anterior.
+- Rodar de novo não altera nada.

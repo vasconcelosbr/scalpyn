@@ -66,7 +66,8 @@ async def put_config(db,user_id,requested):
     for field in ("listing_ids","listing_records"):
         if field in requested:merged[field]=requested[field]  # authoritative maps, removals must not retain stale evidence
     c=eng.config(merged)
-    await config_service.update_config(db,CONFIG_TYPE,user_id,c,changed_by=user_id,
+    # Persist only the overrides: defaults keep flowing to the user (see eng.overrides).
+    await config_service.update_config(db,CONFIG_TYPE,user_id,eng.overrides(c),changed_by=user_id,
         change_description=f"Pump-only observation contract {eng.canonical_hash(c)}; delta=0; disconnected")
     return c
 
