@@ -58,7 +58,23 @@ DEFAULT_CONFIG = {
                            # Same size as the production model (2026-10-08: ~9 s/variant measured in production
                            # at 60k x 15; the earlier "timeout" was a status CHECK violation, see v1.18.2).
                            "ablation":{"groups":["btc_beta","candle_structure","volume","pool_context"],
-                                       "horizon_minutes":15,"max_folds":30,"max_rows":100000,"include_all":True}},
+                                       "horizon_minutes":15,"max_folds":30,"max_rows":100000,"include_all":True},
+                           # v1.20: spot taker-flow imbalance (B−S)/(B+S) from point-in-time snapshots
+                           # (pump_flow_asof). features=[] → not in the model; adoption only after the
+                           # pre-registered ablation (family taker_flow_ablation) and a manual review.
+                           # Thresholds below are pre-registered choices, not measured values.
+                           "taker_flow":{"windows_minutes":[5,15],"min_coverage_pct":80,"max_lag_seconds":90,
+                                         "min_assets":10,"features":[],
+                                         "readiness":{"min_test_days":20,"min_decision_share":0.9,
+                                                      "min_row_coverage":0.8},
+                                         "criterion":{"primary_metric":"day_auc_delta","direction":"greater",
+                                                      "alpha":0.05,"correction":"bonferroni","tie_epsilon":1e-9,
+                                                      "block_days":3,"bootstrap_repetitions":2000,"seed":20261008,
+                                                      "calibration_margin_frac":0.1},
+                                         "ablation":{"horizon_minutes":15,"max_folds":30,"max_rows":100000,
+                                                     "variants":{"raw_5":["tf_imb_5"],"raw_15":["tf_imb_15"],
+                                                                 "rel_5":["tf_imb_rel_5"],"rel_15":["tf_imb_rel_15"]},
+                                                     "controls":{"missing_5":["tf_missing_5"]}}}},
                  "lookback_days":30, "cohort_cuts":[0.5,0.65,0.8],
                  # 2026-10-07: label = asset endpoint return vs the median endpoint return of
                  # every labelled asset captured in the same minute (same horizon).
@@ -138,6 +154,39 @@ def number(value):
     return isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value)
 
 
+def _validate_taker_flow(cd):
+    """research.candle.taker_flow (v1.20): every threshold of the pre-registered test."""
+    tf=cd.get('taker_flow')
+    if tf is None:
+        return
+    from .pump_ml_candles import flow_catalog
+    def ints(v,lo,hi): return type(v) is int and lo<=v<=hi
+    def num(v,lo,hi): return number(v) and lo<=float(v)<=hi
+    w=tf.get('windows_minutes')
+    rd=tf.get('readiness') or {}; cr=tf.get('criterion') or {}; ab=tf.get('ablation') or {}
+    ok=(isinstance(w,list) and w and len(w)==len(set(w)) and all(ints(x,1,60) and (x*60)%cd['step_seconds']==0 for x in w)
+        and num(tf.get('min_coverage_pct'),1,100) and num(tf.get('max_lag_seconds'),1,cd['step_seconds'])
+        and ints(tf.get('min_assets'),2,1000) and isinstance(tf.get('features'),list)
+        and ints(rd.get('min_test_days'),5,365) and num(rd.get('min_decision_share'),0.1,1)
+        and num(rd.get('min_row_coverage'),0.1,1)
+        and cr.get('primary_metric')=='day_auc_delta' and cr.get('direction')=='greater'
+        and cr.get('correction')=='bonferroni' and num(cr.get('alpha'),0.0001,0.2)
+        and num(cr.get('tie_epsilon'),0,0.01) and ints(cr.get('block_days'),1,30)
+        and ints(cr.get('bootstrap_repetitions'),200,20000) and type(cr.get('seed')) is int
+        and num(cr.get('calibration_margin_frac'),0,1)
+        and ints(ab.get('horizon_minutes'),1,240) and (ab['horizon_minutes']*60)%cd['step_seconds']==0
+        and ints(ab.get('max_folds'),3,60) and ints(ab.get('max_rows'),1000,200000)
+        and isinstance(ab.get('variants'),dict) and ab['variants'] and isinstance(ab.get('controls',{}),dict))
+    if not ok:
+        raise ValueError('Invalid research.candle.taker_flow configuration')
+    catalog=set(flow_catalog(cd))
+    for name,cols in list(ab['variants'].items())+list((ab.get('controls') or {}).items()):
+        if not isinstance(cols,list) or not cols or any(c not in catalog for c in cols):
+            raise ValueError(f'research.candle.taker_flow.ablation: {name} must list columns from {sorted(catalog)}')
+    if any(f not in catalog for f in tf['features']) or len(tf['features'])!=len(set(tf['features'])):
+        raise ValueError(f'research.candle.taker_flow.features must be unique columns from {sorted(catalog)}')
+
+
 def validate_config(c):
     research=c['research']
     if research['objective']!='endpoint_direction_v1':raise ValueError('Unsupported Pump research objective')
@@ -200,6 +249,7 @@ def validate_config(c):
                or not 3<=ab['max_folds']<=60 or type(ab.get('max_rows')) is not int or not 1000<=ab['max_rows']<=200000
                or not isinstance(ab.get('include_all',False),bool)):
         raise ValueError('Invalid research.candle.ablation configuration')
+    _validate_taker_flow(cd)
     rb=research.get('relative_beta')
     if not isinstance(rb,dict) or not isinstance(rb.get('enabled'),bool) or rb.get('timeframe') not in ('1m','5m','15m') \
             or type(rb.get('window_candles')) is not int or not 24<=rb['window_candles']<=2016 \

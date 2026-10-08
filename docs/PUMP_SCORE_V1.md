@@ -517,3 +517,51 @@ Detalhes:
 - O próximo treino de velas (diário às 06:10 UTC, ou manual) gera o modelo com 19 colunas, que precisa passar pelo portão de qualidade.
 - A inferência ao vivo passa a ler OHLC do `ohlcv`.
 - O ajuste no score continua limitado a ±5%.
+
+## v1.20 — Fluxo agressor: snapshots no instante da decisão e ablação pré-registrada (2026-10-08)
+
+**Pergunta:** o desequilíbrio agressor `(B − S) / (B + S)` acrescenta poder preditivo ao modelo de velas? A variável já entra no score v1 (`window_delta_norm`, bloco `flow`), mas isso mostra integração, não ganho incremental. Nada vai para o modelo de produção nesta versão.
+
+**Dados no instante da decisão (`pump_flow_asof`, migração 243):**
+- `pump_flow_5m` é regravado quando minutos chegam atrasados, então não serve para treino.
+- No fechamento de cada vela de 5 min, o primeiro ciclo cujos minutos já assentaram (`flow.settle_seconds`) grava, para cada ativo do universo e cada janela (`flow_history.asof_windows_minutes = [5, 15]`), o que `flow_buckets_1m` continha naquele momento:
+  - B e S somados só nos minutos não parciais;
+  - minutos utilizáveis e minutos presentes;
+  - `computed_at`, que é o instante de disponibilidade.
+- As linhas são imutáveis: `ON CONFLICT DO NOTHING`, e um trigger rejeita `UPDATE`. Ativos sem dados também ganham linha (0 minutos), para que a ausência fique auditável.
+- Treino e inferência ao vivo leem as mesmas linhas, pelas mesmas funções (`flow_imbalance`, `FlowSnapshots`).
+
+**Regra por linha** (a mesma de `window_delta_norm`), com o valor indisponível (NaN) quando:
+- a cobertura fica abaixo de `min_coverage_pct` (80 %);
+- B + S = 0;
+- o snapshot foi gravado mais de `max_lag_seconds` (90 s) depois da decisão.
+
+**Colunas:**
+- `tf_imb_{5,15}`: valor bruto.
+- `tf_imb_rel_{5,15}`: bruto menos a mediana do universo **daquele instante**, calculada com todos os ativos do snapshot que têm valor, inclusive os que já saíram do pool. Fica NaN quando há menos de `min_assets` valores.
+  - Subtrair a mesma mediana não muda a ordenação naquele instante. A hipótese é que a versão relativa fique comparável entre contextos de mercado.
+- `tf_missing_{5,15}`: indicador de ausência, usado só como controle.
+
+**Ao vivo:** com flow adotado (`taker_flow.features ≠ []`), estas regras valem.
+- As colunas de flow são `context_features` do manifesto: NaN ao vivo, como no treino. As colunas de vela continuam sendo núcleo (abstenção).
+- Se o snapshot da decisão ainda pode chegar dentro de `max_lag_seconds`, o modelo espera em vez de prever sem ele. Nada é cacheado nem registrado no log ao vivo enquanto isso.
+
+**Prontidão por histórico utilizável, não por data:** a família `taker_flow_ablation` recusa rodar (`blocked`, `insufficient_usable_flow_history`) até que existam `min_train_days` (2) + `min_test_days` (20) dias **utilizáveis**. Um dia é utilizável quando:
+- está completo;
+- pelo menos 90 % das decisões têm snapshot dentro do prazo;
+- em cada janela, pelo menos 80 % das linhas dão valor.
+
+`review_estimate` é uma data para olhar de novo, que supõe todos os dias futuros utilizáveis. Não é uma liberação automática. Dias iguais não garantem poder igual, então o resultado também informa linhas, decisões e a ausência por dia de cada coluna.
+
+**Família pré-registrada** (`research.candle.taker_flow`; o hash vai no payload antes de qualquer resultado):
+- Candidatas, k = 4: `raw_5`, `raw_15`, `rel_5`, `rel_15`. Cada uma é a base de produção mais uma coluna.
+- Controle, fora do k: `missing_5`, a base mais o indicador de ausência. Se "passar", a ausência sozinha carrega sinal e há risco de vazamento pelo padrão de coleta.
+- Ficam para uma rodada posterior: `trade_count` e encolhimento. A constante do encolhimento teria unidade de volume e reduziria o efeito de pouco volume, não necessariamente o de poucos negócios.
+
+**Critério**, sobre as mesmas linhas e os mesmos dias de teste. A candidata passa só se cumprir **todos**:
+1. Teste de sinal unilateral (métrica principal: AUC diária da variante menos AUC da base) com p < α/k = 0,05/4. Empates (|Δ| ≤ 1e-9) saem do teste e são contados.
+2. Bootstrap de blocos móveis sobre os dias (bloco de 3 dias, 2000 repetições, semente fixa): o quantil α/k da média de Δ precisa ser maior que 0. O teste de sinal supõe dias independentes; os blocos preservam a dependência serial.
+3. Calibração não pior: o quantil 1 − α/k da média por dia de Brier(variante) − Brier(base) precisa ser ≤ 0,1 × o ganho de Brier da base.
+4. Pelo menos `min_test_days` dias pareados.
+
+**Ativação:** `activation = manual_only_after_review`. Nenhum limiar acima foi medido. São escolhas declaradas antes dos dados.

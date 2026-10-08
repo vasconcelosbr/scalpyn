@@ -55,7 +55,142 @@ def feature_names(cfg: Dict[str, Any]) -> List[str]:
     for g in GROUPS:
         if g in groups:
             names += GROUP_FEATURES[g]
+    names += [f for f in flow_features(cfg) if f not in names]   # [] unless adopted after the test
     return names
+
+
+# ── Spot taker flow (v1.20) ───────────────────────────────────────────────────
+# Read ONLY from point-in-time snapshots (pump_flow_asof): the row of a decision holds
+# what flow_buckets_1m contained when that decision was taken, never later revisions.
+# Live inference reads the same rows through the same functions.
+FLOW_KINDS = ("raw", "rel", "missing")
+
+
+def flow_settings(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    return cfg.get("taker_flow") or {}
+
+
+def flow_column(kind: str, window: int) -> str:
+    return {"raw": f"tf_imb_{window}", "rel": f"tf_imb_rel_{window}", "missing": f"tf_missing_{window}"}[kind]
+
+
+def flow_catalog(cfg: Dict[str, Any]) -> List[str]:
+    return [flow_column(k, int(w)) for w in flow_settings(cfg).get("windows_minutes") or [] for k in FLOW_KINDS]
+
+
+def flow_features(cfg: Dict[str, Any]) -> List[str]:
+    """Flow columns used by the model (``taker_flow.features``, [] by default)."""
+    return list(flow_settings(cfg).get("features") or [])
+
+
+def needs_flow(cfg: Dict[str, Any]) -> bool:
+    return bool(flow_features(cfg))
+
+
+def flow_imbalance(buy, sell, usable_minutes, lag_seconds, window: int, tf: Dict[str, Any]):
+    """(value, reason) for one snapshot row. Same rule as ``flow_metrics.window_delta_norm``
+    (usable = non-partial minutes, coverage >= min_coverage_pct) plus availability: a
+    snapshot written more than ``max_lag_seconds`` after the decision is unavailable."""
+    if lag_seconds is None or lag_seconds > float(tf["max_lag_seconds"]) or lag_seconds < 0:
+        return None, "flow_snapshot_late"
+    if usable_minutes is None or float(usable_minutes) * 100.0 < float(tf["min_coverage_pct"]) * int(window):
+        return None, "flow_insufficient_coverage"
+    if buy is None or sell is None:
+        return None, "flow_no_volume"
+    b, s_ = float(buy), float(sell)
+    if not (b >= 0 and s_ >= 0) or b + s_ <= 0:
+        return None, "flow_no_volume"
+    return (b - s_) / (b + s_), None
+
+
+class FlowSnapshots:
+    """Imbalance per (symbol, decision, window) from snapshot rows, plus presence.
+
+    ``ingest`` takes rows (symbol, decision epoch s, window, buy, sell, usable, lag s);
+    the per-row rule is ``flow_imbalance`` for training and live alike."""
+
+    def __init__(self, decisions: Sequence[int], windows: Sequence[int], tf: Dict[str, Any]):
+        import numpy as np
+        self.tf = tf
+        self.decisions = np.array(sorted(int(d) for d in decisions), dtype=np.int64)
+        self.windows = [int(w) for w in windows]
+        self._d = {int(d): j for j, d in enumerate(self.decisions)}
+        self._w = {w: k for k, w in enumerate(self.windows)}
+        self.syms: List[str] = []
+        self._s: Dict[str, int] = {}
+        self._imb: List[Any] = []        # per symbol: float32 [D, W] (NaN = unavailable)
+        self._present: List[Any] = []    # per symbol: bool [D, W] (a snapshot row exists)
+        self.on_time = np.zeros(len(self.decisions), dtype=bool)   # any row within max_lag
+
+    def _row(self, sym: str) -> int:
+        import numpy as np
+        i = self._s.get(sym)
+        if i is None:
+            i = self._s[sym] = len(self.syms)
+            self.syms.append(sym)
+            self._imb.append(np.full((len(self.decisions), len(self.windows)), np.nan, dtype=np.float32))
+            self._present.append(np.zeros((len(self.decisions), len(self.windows)), dtype=bool))
+        return i
+
+    def ingest(self, rows) -> None:
+        for sym, d, w, buy, sell, usable, lag in rows:
+            j = self._d.get(int(d)); k = self._w.get(int(w))
+            if j is None or k is None:
+                continue
+            i = self._row(sym)
+            self._present[i][j, k] = True
+            if lag is not None and 0 <= float(lag) <= float(self.tf["max_lag_seconds"]):
+                self.on_time[j] = True
+            v, _ = flow_imbalance(buy, sell, usable, lag, int(w), self.tf)
+            if v is not None:
+                self._imb[i][j, k] = v
+
+    def matrices(self):
+        """(imb [S, D, W] float64, present [S, D, W] bool) over every snapshot symbol."""
+        import numpy as np
+        if not self.syms:
+            shape = (0, len(self.decisions), len(self.windows))
+            return np.zeros(shape), np.zeros(shape, dtype=bool)
+        return np.stack(self._imb).astype(float), np.stack(self._present)
+
+
+def _flow_features(f: Dict[str, Any], names: Sequence[str], flow: Optional["FlowSnapshots"], syms, grid,
+                   cfg: Dict[str, Any]) -> None:
+    """Flow columns aligned to the candle grid: column t = decision at grid[t] + step.
+    ``rel`` subtracts the median over EVERY symbol with an available value in the
+    snapshot of that decision (the universe at that time, not today's), NaN when fewer
+    than ``min_assets`` values exist; ``missing`` = 1 when the raw value is unavailable."""
+    import numpy as np
+    step = int(cfg["step_seconds"]); tf = flow_settings(cfg)
+    shape = (len(syms), len(grid))
+    if flow is None or not len(flow.decisions):
+        for n in names:
+            f[n] = np.ones(shape) if n.startswith("tf_missing_") else np.full(shape, np.nan)
+        return
+    imb, _ = flow.matrices()
+    col = np.array([flow._d.get(int(t) + step, -1) for t in grid], dtype=np.int64)
+    has = col >= 0
+    row = np.array([flow._s.get(s, -1) for s in syms], dtype=np.int64)
+    min_assets = int(tf.get("min_assets") or cfg["min_assets"])
+    for w in flow.windows:
+        k = flow._w[w]
+        full = np.full((len(flow.syms), len(grid)), np.nan)
+        if len(flow.syms):
+            full[:, has] = imb[:, col[has], k]
+        raw = np.full(shape, np.nan)
+        ok = row >= 0
+        raw[ok] = full[row[ok]]
+        cnt = np.sum(np.isfinite(full), axis=0)
+        med = _nanmedian(full, axis=0) if len(flow.syms) else np.full(len(grid), np.nan)
+        med = np.where(cnt >= min_assets, med, np.nan)
+        cols = {flow_column("raw", w): raw, flow_column("rel", w): raw - med[None, :],
+                flow_column("missing", w): np.where(np.isfinite(raw), 0.0, 1.0)}
+        for n, arr in cols.items():
+            if n in names:
+                f[n] = arr
+    for n in names:                       # declared window without snapshots → unavailable
+        if n not in f:
+            f[n] = np.ones(shape) if n.startswith("tf_missing_") else np.full(shape, np.nan)
 
 
 def all_feature_names(cfg: Dict[str, Any]) -> List[str]:
@@ -212,14 +347,17 @@ def _group_features(f: Dict[str, Any], groups, C, R1, beta, syms, grid, cfg, bar
 
 def build_frame(closes: Dict[str, Dict[int, float]], cfg: Dict[str, Any], *,
                 horizons_candles: Sequence[int] = (), bars: Optional[Dict[str, Dict[int, Sequence[float]]]] = None,
-                all_groups: bool = False) -> Dict[str, Any]:
+                all_groups: bool = False, flow: Optional[FlowSnapshots] = None,
+                flow_all: bool = False) -> Dict[str, Any]:
     """Features (and, for training, labels) on the regular candle grid.
 
     Returns ``{syms, grid(open epochs), features{name:[S,T]}, labels{(k,mode):[S,T]},
     excess{k:[S,T]}, assets{k:[T]}}``. Value at column t = decision at the CLOSE of
     candle t (uses candles <= t). ``bars`` = {symbol: {open_epoch: (open, high, low,
     quote_volume)}} for the groups that need them; ``all_groups`` computes every group
-    (ablation), otherwise only ``cfg['feature_groups']``."""
+    (ablation), otherwise only ``cfg['feature_groups']``. ``flow`` = point-in-time
+    taker-flow snapshots; ``flow_all`` computes every declared flow column (ablation),
+    otherwise only ``taker_flow.features``."""
     import numpy as np
     step = int(cfg["step_seconds"])
     syms, grid, C = _matrix(closes, step)
@@ -247,6 +385,9 @@ def build_frame(closes: Dict[str, Dict[int, float]], cfg: Dict[str, Any], *,
     groups = set(GROUPS) if all_groups else set(cfg.get("feature_groups") or [])
     if groups:
         _group_features(f, groups, C, R1, beta, syms, grid, cfg, bars)
+    flow_names = flow_catalog(cfg) if flow_all else flow_features(cfg)
+    if flow_names:
+        _flow_features(f, flow_names, flow, syms, grid, cfg)
     for k in horizons_candles:
         resid_end, e_end = _residual(_fwd(C, int(k)), beta)
         out["excess"][k] = resid_end
@@ -283,10 +424,11 @@ def live_cells(frame: Dict[str, Any], cfg: Dict[str, Any], now_s: int) -> Dict[s
 
 
 def training_rows(frame: Dict[str, Any], cfg: Dict[str, Any], k: int, mode: str,
-                  names: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+                  names: Optional[List[str]] = None, allowed_days: Optional[set] = None) -> List[Dict[str, Any]]:
     """Deterministic, outcome-blind subsample: at most ``max_rows_per_time`` assets per
     decision time (hash order), then evenly spaced times down to ``max_rows``.
-    ``names`` overrides the stored columns (ablation keeps every group's columns)."""
+    ``names`` overrides the stored columns (ablation keeps every group's columns);
+    ``allowed_days`` (UTC dates of the decision) restricts rows BEFORE the subsample."""
     import numpy as np
     names = names or feature_names(cfg)
     label = frame["labels"][(k, mode)]; excess = frame["excess"][k]; assets = frame["assets"][k]
@@ -295,6 +437,9 @@ def training_rows(frame: Dict[str, Any], cfg: Dict[str, Any], k: int, mode: str,
     by_time = []
     for t, open_epoch in enumerate(frame["grid"]):
         if assets[t] < min_assets:
+            continue
+        if allowed_days is not None and \
+                datetime.fromtimestamp(int(open_epoch) + step, timezone.utc).date() not in allowed_days:
             continue
         cand = [i for i in range(len(frame["syms"]))
                 if np.isfinite(label[i, t]) and abs(label[i, t]) > 1e-9 and np.isfinite(beta[i, t])
@@ -336,7 +481,11 @@ def train_candle_model(rows: List[Dict[str, Any]], *, cfg: Dict[str, Any], horiz
     rows = sorted(rows, key=lambda r: r["decision_at"])
     if len(rows) < 500 or len({r["target"] for r in rows}) < 2:
         raise ValueError("insufficient_candle_rows")
-    spec = {"features": names, "context_features": [], "params": params, "max_threads": 1,
+    flow = [n for n in names if n in set(flow_features(cfg))]
+    # Flow columns are context features: an unavailable value is NaN live, exactly as in
+    # training (core columns abstain). They are appended last, so the order is unchanged.
+    spec = {"features": [n for n in names if n not in flow], "context_features": flow,
+            "params": params, "max_threads": 1,
             "embargo_seconds": int(cfg["embargo_seconds"]), "walk_forward": cfg["walk_forward"],
             "directional_target": {"version": CANDLE_OBJECTIVE, "horizon_minutes": int(horizon_minutes),
                                    "label_mode": cfg["label_mode"], "benchmark_policy": "universe_beta_residual_median_close_v1"},
@@ -593,9 +742,40 @@ _LIVE_CANDLES = """
 """
 
 
-async def candle_context(db, symbols: List[str], cfg: Dict[str, Any], now_s: int) -> Dict[str, Dict[str, Any]]:
+LIVE_FLOW_SQL = """
+    SELECT symbol, CAST(extract(epoch FROM decision_at) AS bigint) AS d, window_minutes, buy_quote, sell_quote,
+           usable_minutes, extract(epoch FROM computed_at - decision_at) AS lag
+      FROM pump_flow_asof
+     WHERE decision_at > :lo AND decision_at <= :hi AND window_minutes = ANY(CAST(:w AS integer[]))
+"""
+
+
+async def live_flow(db, cfg: Dict[str, Any], now_s: int, wall_s: Optional[float] = None):
+    """Snapshots of the last decisions (every symbol: the relative median needs the whole
+    universe), or ``"pending"`` while the snapshot of ``now_s`` can still arrive within
+    ``max_lag_seconds`` — the caller then waits instead of predicting without it."""
+    import time
+    from sqlalchemy import text
+    step = int(cfg["step_seconds"]); tf = flow_settings(cfg)
+    decisions = [int(now_s) - j * step for j in range(3)]
+    rows = (await db.execute(text(LIVE_FLOW_SQL), {
+        "lo": datetime.fromtimestamp(decisions[-1] - step, timezone.utc),
+        "hi": datetime.fromtimestamp(int(now_s), timezone.utc),
+        "w": [int(w) for w in tf["windows_minutes"]]})).all()
+    flow = FlowSnapshots(decisions, tf["windows_minutes"], tf)
+    flow.ingest([tuple(r) for r in rows])
+    current = any(int(r[1]) == int(now_s) for r in rows)
+    wall = time.time() if wall_s is None else float(wall_s)
+    if not current and wall - int(now_s) < float(tf["max_lag_seconds"]):
+        return "pending"
+    return flow
+
+
+async def candle_context(db, symbols: List[str], cfg: Dict[str, Any], now_s: int,
+                         wall_s: Optional[float] = None) -> Dict[str, Dict[str, Any]]:
     """Live candle-family cells for ``symbols`` (SQLAlchemy session), via the same
-    ``build_frame`` used in training; ``cfg`` comes from the model manifest."""
+    ``build_frame`` used in training; ``cfg`` comes from the model manifest.
+    Returns {} while a needed flow snapshot is still pending (never cached)."""
     from sqlalchemy import text
     step = int(cfg["step_seconds"])
     need = int(cfg["beta_window"]) + max(int(k) for k in cfg["prev_windows"]) + 3
@@ -616,6 +796,263 @@ async def candle_context(db, symbols: List[str], cfg: Dict[str, Any], now_s: int
         for sym, t, close in rows:
             if close is not None:
                 closes.setdefault(sym, {})[int(t.timestamp())] = float(close)
-    frame = build_frame(closes, cfg, bars=bars)
+    flow = None
+    if needs_flow(cfg):
+        flow = await live_flow(db, cfg, now_s, wall_s)
+        if flow == "pending":
+            return {}
+    frame = build_frame(closes, cfg, bars=bars, flow=flow)
     cells = live_cells(frame, cfg, now_s)
     return {s: cells[s] for s in symbols if s in cells}
+
+
+# ── Taker-flow ablation (v1.20): readiness, pre-registered test, runner ───────
+FLOW_RANGE_SQL = """SELECT min(decision_at) AS lo, max(decision_at) AS hi FROM pump_flow_asof
+ WHERE window_minutes = ANY($1::int[])"""
+
+FLOW_ROWS_SQL = """SELECT symbol, CAST(extract(epoch FROM decision_at) AS bigint) AS d, window_minutes,
+       buy_quote, sell_quote, usable_minutes, CAST(extract(epoch FROM computed_at - decision_at) AS float8) AS lag
+  FROM pump_flow_asof
+ WHERE decision_at >= $1 AND decision_at < $2 AND window_minutes = ANY($3::int[])"""
+
+
+async def load_flow(conn, cfg: Dict[str, Any], lo: datetime, hi: datetime) -> FlowSnapshots:
+    """Snapshots with decision in [lo, hi), one UTC day per query, ingested off the loop."""
+    import asyncio
+    import math
+    step = int(cfg["step_seconds"]); tf = flow_settings(cfg)
+    first = int(math.ceil(lo.timestamp() / step) * step)
+    flow = FlowSnapshots(range(first, int(hi.timestamp()), step), tf["windows_minutes"], tf)
+    windows = [int(w) for w in tf["windows_minutes"]]
+    day = lo
+    while day < hi:
+        nxt = min(hi, day + timedelta(days=1))
+        records = await conn.fetch(FLOW_ROWS_SQL, day, nxt, windows)
+        await asyncio.to_thread(flow.ingest, records)
+        day = nxt
+    return flow
+
+
+def flow_readiness(flow: FlowSnapshots, cfg: Dict[str, Any], min_train_days: int, today) -> Dict[str, Any]:
+    """Usable-history gate (pre-registered thresholds in ``taker_flow.readiness``).
+
+    A UTC day is usable when it is complete (before ``today``), at least
+    ``min_decision_share`` of its decision times have an on-time snapshot, and for every
+    window at least ``min_row_coverage`` of the snapshot rows give a value. Ready when
+    usable days >= walk-forward ``min_train_days`` + ``min_test_days``. This is a
+    necessary minimum, not a power guarantee; ``review_estimate`` is a date to look
+    again (it assumes every future day is usable), never an automatic release."""
+    import numpy as np
+    tf = flow_settings(cfg); rd = tf["readiness"]; step = int(cfg["step_seconds"])
+    per_day_expected = 86400 // step
+    imb, present = flow.matrices()
+    days: Dict[Any, Dict[str, Any]] = {}
+    dates = [datetime.fromtimestamp(int(d), timezone.utc).date() for d in flow.decisions]
+    for j, day in enumerate(dates):
+        rec = days.setdefault(day, {"on_time": 0, "rows": [0] * len(flow.windows), "usable": [0] * len(flow.windows)})
+        rec["on_time"] += int(flow.on_time[j])
+        if present.shape[0]:
+            for k in range(len(flow.windows)):
+                rec["rows"][k] += int(present[:, j, k].sum())
+                rec["usable"][k] += int(np.isfinite(imb[:, j, k]).sum())
+    table, usable = [], []
+    for day in sorted(days):
+        r = days[day]
+        share = r["on_time"] / per_day_expected
+        cov = {str(w): (r["usable"][k] / r["rows"][k] if r["rows"][k] else 0.0) for k, w in enumerate(flow.windows)}
+        reasons = []
+        if day >= today:
+            reasons.append("incomplete_day")
+        if share < float(rd["min_decision_share"]):
+            reasons.append("decision_share_below_min")
+        if any(v < float(rd["min_row_coverage"]) for v in cov.values()):
+            reasons.append("row_coverage_below_min")
+        if not reasons:
+            usable.append(day)
+        table.append({"day": day.isoformat(), "decision_share": round(share, 4),
+                      "row_coverage": {k: round(v, 4) for k, v in cov.items()}, "usable": not reasons,
+                      "reasons": reasons})
+    required = int(min_train_days) + int(rd["min_test_days"])
+    out = {"usable_days": len(usable), "required_days": required, "ready": len(usable) >= required,
+           "min_train_days": int(min_train_days), "thresholds": dict(rd), "days": table,
+           "usable_day_list": [d.isoformat() for d in usable]}
+    if not out["ready"]:
+        out["review_estimate"] = {"date": (today + timedelta(days=required - len(usable))).isoformat(),
+                                  "assumption": "every future day usable; a date to review, not a release"}
+    return out
+
+
+def _block_means(x, block: int, reps: int, seed: int):
+    """Moving-block bootstrap of the mean of ``x`` (day order kept inside blocks)."""
+    import numpy as np
+    n = len(x); L = max(1, min(int(block), n))
+    starts = n - L + 1
+    nb = -(-n // L)
+    rng = np.random.default_rng(int(seed))
+    idx = rng.integers(0, starts, size=(int(reps), nb))
+    take = (idx[:, :, None] + np.arange(L)[None, None, :]).reshape(int(reps), -1)[:, :n]
+    return np.asarray(x)[take].mean(axis=1)
+
+
+def preregistered_test(base_wf: Dict[str, Any], wf: Dict[str, Any], crit: Dict[str, Any], k: int,
+                       base_brier_gain: Optional[float], min_days: int) -> Dict[str, Any]:
+    """Pre-registered comparison on the SAME test days (``taker_flow.criterion``).
+
+    Primary metric: per-day AUC(variant) − AUC(base), direction greater, family-wise
+    alpha / k (Bonferroni over the declared candidates). Passing requires ALL of:
+    (1) one-sided sign test p < alpha/k over non-tied days (|Δ| <= tie_epsilon excluded
+    and counted); (2) moving-block bootstrap over days: the alpha/k quantile of the mean
+    Δ > 0 (the sign test assumes independent days; blocks keep serial dependence);
+    (3) calibration not worse: the 1 − alpha/k quantile of the block-bootstrap mean of
+    per-day Brier(variant) − Brier(base) <= calibration_margin_frac × base Brier gain
+    (0 when the base gains nothing); (4) at least ``min_days`` paired days."""
+    import numpy as np
+    from .pump_directional_research import sign_test_p
+    a = {f["day"]: f for f in (base_wf.get("folds") or []) if "auc" in f}
+    b = {f["day"]: f for f in (wf.get("folds") or []) if "auc" in f}
+    days = sorted(set(a) & set(b))
+    level = float(crit["alpha"]) / max(1, int(k))
+    out: Dict[str, Any] = {"days": len(days), "alpha": float(crit["alpha"]), "k": int(k), "level": level,
+                           "primary_metric": crit["primary_metric"], "direction": crit["direction"]}
+    if len(days) < 2:
+        return {**out, "passes": False, "failed": ["insufficient_paired_days"]}
+    d = np.array([b[x]["auc"] - a[x]["auc"] for x in days])
+    e = np.array([b[x]["brier"] - a[x]["brier"] for x in days])
+    eps = float(crit["tie_epsilon"])
+    ties = int((np.abs(d) <= eps).sum())
+    better = int((d > eps).sum())
+    n_eff = len(days) - ties
+    p = sign_test_p(better, n_eff) if n_eff else None
+    reps, block, seed = int(crit["bootstrap_repetitions"]), int(crit["block_days"]), int(crit["seed"])
+    auc_lo = float(np.quantile(_block_means(d, block, reps, seed), level))
+    margin = float(crit["calibration_margin_frac"]) * max(0.0, float(base_brier_gain or 0.0))
+    brier_hi = float(np.quantile(_block_means(e, block, reps, seed + 1), 1 - level))
+    failed = []
+    if len(days) < int(min_days):
+        failed.append("insufficient_paired_days")
+    if p is None or not p < level:
+        failed.append("sign_test")
+    if not auc_lo > 0:
+        failed.append("block_bootstrap_auc")
+    if not brier_hi <= margin:
+        failed.append("calibration_worse")
+    return {**out, "median_auc_delta": float(np.median(d)), "mean_auc_delta": float(d.mean()),
+            "days_better": better, "ties": ties, "sign_test_p": p,
+            "block_bootstrap": {"block_days": block, "repetitions": reps,
+                                "auc_delta_lower": auc_lo, "brier_delta_upper": brier_hi, "brier_margin": margin},
+            "mean_brier_delta": float(e.mean()), "passes": not failed, "failed": failed}
+
+
+def taker_flow_preregistration(cfg: Dict[str, Any], research: Dict[str, Any]) -> Dict[str, Any]:
+    from . import pump_opportunity_engine as eng
+    tf = flow_settings(cfg); ab = tf["ablation"]
+    body = {"variants": ab["variants"], "controls": ab.get("controls") or {}, "criterion": tf["criterion"],
+            "readiness": tf["readiness"], "windows_minutes": tf["windows_minutes"],
+            "min_coverage_pct": tf["min_coverage_pct"], "max_lag_seconds": tf["max_lag_seconds"],
+            "horizon_minutes": ab["horizon_minutes"], "label_mode": cfg["label_mode"],
+            "base_columns": feature_names({**cfg, "taker_flow": {**tf, "features": []}}),
+            "min_train_days": int(research["walk_forward"]["min_train_days"])}
+    return {**body, "k": len(ab["variants"]), "hash": eng.canonical_hash(body)}
+
+
+async def run_taker_flow_ablation(conn, owner, c: Dict[str, Any], diagnostics: Dict[str, Any],
+                                  deadline: datetime, progress=None) -> Dict[str, Any]:
+    """Taker-flow ablation (no model saved or applied). Refuses (ValueError
+    ``insufficient_usable_flow_history``) until the usable-history gate passes. Rows =
+    usable days only, identical for every variant; base = production candle columns;
+    each declared variant adds its flow columns; controls (missingness indicator) are
+    reported but never candidates. Verdicts follow ``preregistered_test``."""
+    import asyncio
+    import time
+    import numpy as np
+    from .pump_directional_research import walk_forward_evaluation
+    research = c["research"]; cand = research["candle"]; tf = flow_settings(cand); ab = tf["ablation"]
+    cfg = {**cand, "max_rows": int(ab["max_rows"]), "taker_flow": {**tf, "features": []},
+           "walk_forward": {**research["walk_forward"], "max_folds": int(ab["max_folds"])}}
+    prereg = taker_flow_preregistration(cfg, research)
+    diag: Dict[str, Any] = {"preregistration_hash": prereg["hash"]}
+    diagnostics["taker_flow"] = diag
+    windows = [int(w) for w in tf["windows_minutes"]]
+    rng = await conn.fetchrow(FLOW_RANGE_SQL, windows)
+    now = datetime.now(timezone.utc); today = now.date()
+    if not rng or rng["lo"] is None:
+        diag["readiness"] = {"ready": False, "usable_days": 0, "reason": "no_snapshots"}
+        raise ValueError("insufficient_usable_flow_history")
+    tick = time.monotonic()
+    first_day = datetime(rng["lo"].year, rng["lo"].month, rng["lo"].day, tzinfo=timezone.utc)
+    flow = await load_flow(conn, cfg, first_day, datetime(today.year, today.month, today.day, tzinfo=timezone.utc))
+    ready = flow_readiness(flow, cfg, int(research["walk_forward"]["min_train_days"]), today)
+    diag["readiness"] = {k: v for k, v in ready.items() if k != "days"} | {"days": ready["days"][-40:]}
+    if not ready["ready"]:
+        raise ValueError("insufficient_usable_flow_history")
+    usable = {datetime.fromisoformat(d).date() for d in ready["usable_day_list"]}
+    step = int(cfg["step_seconds"]); h = int(ab["horizon_minutes"]); k = h // (step // 60)
+    symbols = sorted({r["symbol"] for r in await conn.fetch(UNIVERSE_SQL, owner)} | {REFERENCE})
+    lo = datetime.combine(min(usable), datetime.min.time(), timezone.utc) - timedelta(
+        seconds=step * (int(cfg["beta_window"]) + max(int(x) for x in cfg["prev_windows"]) + 3))
+    hi = min(now, datetime.combine(max(usable), datetime.min.time(), timezone.utc) + timedelta(days=1, minutes=h + 10))
+    closes, bars = await load_bars(conn, symbols, cfg["timeframe"], lo, hi)
+    timings = {"load_seconds": round(time.monotonic() - tick, 1)}; tick = time.monotonic()
+    frame = await asyncio.to_thread(build_frame, closes, cfg, horizons_candles=[k], bars=bars, flow=flow,
+                                    flow_all=True)
+    base_cols = prereg["base_columns"]
+    extra = []
+    for cols in list(ab["variants"].values()) + list((ab.get("controls") or {}).values()):
+        extra += [x for x in cols if x not in extra]
+    rows = await asyncio.to_thread(training_rows, frame, cfg, k, cfg["label_mode"], base_cols + extra, usable)
+    timings["frame_rows_seconds"] = round(time.monotonic() - tick, 1)
+    by_day: Dict[str, List[Dict[str, Any]]] = {}
+    for r in rows:
+        by_day.setdefault(r["decision_at"].date().isoformat(), []).append(r)
+    missing = {}
+    for col in extra:
+        if col.startswith("tf_missing_"):
+            continue
+        shares = [sum(r["values"].get(col) is None for r in rs) / len(rs) for rs in by_day.values() if rs]
+        missing[col] = {"overall": round(sum(r["values"].get(col) is None for r in rows) / max(1, len(rows)), 4),
+                        "day_min": round(min(shares), 4) if shares else None,
+                        "day_median": round(float(np.median(shares)), 4) if shares else None,
+                        "day_max": round(max(shares), 4) if shares else None}
+    diag.update(rows=len(rows), days=len(by_day), symbols=len(symbols), **timings)
+    spec = {"params": research["params"], "max_threads": 1, "embargo_seconds": int(cfg["embargo_seconds"]),
+            "walk_forward": cfg["walk_forward"]}
+    options = {k2: research[k2] for k2 in ("calibration_C", "calibration_max_iter", "calibration_method",
+                                           "calibration_max_slope", "bootstrap_repetitions")}
+    out: Dict[str, Any] = {"horizon_minutes": h, "rows": len(rows), "days": len(by_day),
+                           "decision_times": len({r["episode_id"] for r in rows}),
+                           "preregistration": prereg, "readiness": diag["readiness"],
+                           "missing_share": missing, "timings": timings, "variants": {}}
+    if progress:
+        await progress(out)
+    plan = [("base", [], "base")] + [(n, cols, "candidate") for n, cols in ab["variants"].items()] + \
+           [(n, cols, "control") for n, cols in (ab.get("controls") or {}).items()]
+    base_wf = None; slowest = 0.0
+    for name, cols_extra, role in plan:
+        remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
+        if remaining < max(60.0, 1.3 * slowest):
+            out["variants"][name] = {"role": role, "blocked_reason": "runtime_budget_exhausted"}
+            continue
+        cols = base_cols + list(cols_extra)
+        t0 = time.monotonic()
+        wf = await asyncio.wait_for(asyncio.to_thread(
+            walk_forward_evaluation, rows, columns=cols, spec=spec, options=options, relative=False),
+            timeout=max(1, remaining))
+        took = time.monotonic() - t0; slowest = max(slowest, took)
+        item = {"role": role, "features": len(cols), "added": list(cols_extra), "seconds": round(took, 1),
+                **_summary(wf)}
+        if name == "base":
+            base_wf = wf
+        elif base_wf is not None:
+            gain = ((base_wf.get("pooled") or {}).get("brier_improvement_day_mean"))
+            item["test"] = preregistered_test(base_wf, wf, tf["criterion"], prereg["k"], gain,
+                                              int(tf["readiness"]["min_test_days"]))
+            if role == "control":
+                item["test"]["interpretation"] = ("missingness alone carries signal: collection pattern may leak"
+                                                  if item["test"]["passes"] else "no evidence that missingness alone helps")
+        out["variants"][name] = item
+        if progress:
+            await progress(out)
+    out["candidates_passing"] = [n for n, v in out["variants"].items()
+                                 if v.get("role") == "candidate" and (v.get("test") or {}).get("passes")]
+    out["activation"] = "manual_only_after_review"
+    return out

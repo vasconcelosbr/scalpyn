@@ -101,7 +101,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "snapshots": {"retention_hours": 48, "every_n_cycles": 10},
     # v1.16: long-lived 5-minute spot flow + perpetual stats for future model features
     # (flow_buckets_1m keeps only flow.retention_days). Collection only.
-    "flow_history": {"enabled": True, "step_seconds": 300, "retention_days": 180},
+    # v1.20: ``asof_windows_minutes`` = point-in-time taker-flow snapshots (pump_flow_asof)
+    # per candle close; the ML reads only these (never the revisable 5-minute aggregate).
+    "flow_history": {"enabled": True, "step_seconds": 300, "retention_days": 180,
+                     "asof_windows_minutes": [5, 15]},
     # Research dataset: one narrow row per asset per minute (pump_research_minute)
     # and offline labels written only after t + max horizon + settle.
     "research": {
@@ -280,6 +283,9 @@ def validate_config(body: Dict[str, Any]) -> None:
     if fh and (int(fh.get("step_seconds", 0)) <= 0 or int(fh["step_seconds"]) % 60
                or not 1 <= int(fh.get("retention_days", 0)) <= 3650):
         errors.append("flow_history: step_seconds multiple of 60 and retention_days within [1, 3650]")
+    aw = fh.get("asof_windows_minutes", []) if fh else []
+    if not isinstance(aw, list) or len(aw) != len(set(aw)) or any(type(w) is not int or not 1 <= w <= 60 for w in aw):
+        errors.append("flow_history.asof_windows_minutes: unique integers within [1, 60]")
     if int(body["flow"]["bucket_seconds"]) != 60:
         errors.append("flow.bucket_seconds is fixed at 60 (1-minute buckets)")
     if body["flow"]["volume_unit"] not in ("quote", "base"):

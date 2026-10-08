@@ -15,6 +15,11 @@ beyond a couple of days. Every cycle this module upserts:
   (only rows with ``stat_time`` <= decision − interval), never by guessing.
 
 Collection only: no model reads these tables yet. Failures never touch the cycle.
+
+v1.20 adds ``pump_flow_asof``: point-in-time taker-flow snapshots (one immutable row per
+symbol × decision time × window, written by the first cycle whose settled minutes cover
+the whole window). ``pump_flow_5m`` stays as the long-lived aggregate; the ML reads the
+snapshots only, so a training row never sees a minute that arrived after the decision.
 """
 from __future__ import annotations
 
@@ -65,6 +70,38 @@ def _num(v) -> Optional[float]:
     return x if x == x and x not in (float("inf"), float("-inf")) else None
 
 
+ASOF_SQL = """
+    INSERT INTO pump_flow_asof (symbol, decision_at, window_minutes, buy_quote, sell_quote, trade_count,
+                                usable_minutes, present_minutes, computed_at)
+    SELECT s.symbol, CAST(:d AS timestamptz), w.w,
+           sum(b.buy_quote) FILTER (WHERE NOT b.partial),
+           sum(b.sell_quote) FILTER (WHERE NOT b.partial),
+           sum(b.trade_count) FILTER (WHERE NOT b.partial),
+           count(b.bucket_start) FILTER (WHERE NOT b.partial),
+           count(b.bucket_start), now()
+      FROM unnest(CAST(:s AS text[])) AS s(symbol)
+     CROSS JOIN unnest(CAST(:w AS integer[])) AS w(w)
+      LEFT JOIN flow_buckets_1m b ON b.symbol = s.symbol
+            AND b.bucket_start >= CAST(:d AS timestamptz) - make_interval(mins => w.w)
+            AND b.bucket_start < CAST(:d AS timestamptz)
+     GROUP BY s.symbol, w.w
+    ON CONFLICT (symbol, decision_at, window_minutes) DO NOTHING
+"""
+
+
+def asof_decision(now_ms: int, last_minute_ms: Optional[int], step_seconds: int) -> Optional[int]:
+    """Decision time (epoch s) whose snapshot this cycle may write, or None.
+
+    Decision = close of the 5-minute candle that just closed (the open slot's start).
+    Written only once the cycle's own settled minutes reach it (``last_minute`` is the
+    last CLOSED minute after ``flow.settle_seconds``), so every minute of every window
+    has had its chance to be persisted; the first such cycle wins (immutable rows)."""
+    if last_minute_ms is None:
+        return None
+    d = (int(now_ms) // 1000 // step_seconds) * step_seconds
+    return d if int(last_minute_ms) + 60_000 >= d * 1000 else None
+
+
 def flow_window(now_ms: int, step_seconds: int) -> Dict[str, datetime]:
     """Last two CLOSED buckets: [slot − 2·step, slot)."""
     slot = (int(now_ms) // 1000 // step_seconds) * step_seconds
@@ -86,11 +123,18 @@ def perp_rows(derivatives: Optional[Dict[str, Optional[List[Dict[str, Any]]]]], 
 
 
 async def write(db, symbols: List[str], derivatives: Optional[Dict[str, Any]], now_ms: int,
-                cfg: Dict[str, Any], interval: str, rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, int]:
+                cfg: Dict[str, Any], interval: str, rows: Optional[List[Dict[str, Any]]] = None,
+                last_minute_ms: Optional[int] = None) -> Dict[str, int]:
     import json
     from sqlalchemy import text
     step = int(cfg["step_seconds"])
-    written = {"flow": 0, "perp": 0, "book": 0}
+    written = {"flow": 0, "perp": 0, "book": 0, "asof": 0}
+    windows = [int(w) for w in cfg.get("asof_windows_minutes") or []]
+    d = asof_decision(now_ms, last_minute_ms, step)
+    if symbols and windows and d is not None:
+        res = await db.execute(text(ASOF_SQL), {"s": sorted(symbols), "w": windows,
+                                                "d": datetime.fromtimestamp(d, timezone.utc)})
+        written["asof"] = res.rowcount or 0
     if symbols:
         res = await db.execute(text(FLOW_5M_SQL), {"s": sorted(symbols), "step": step, **flow_window(now_ms, step)})
         written["flow"] = res.rowcount or 0
@@ -151,6 +195,8 @@ COVERAGE_SQL = """
     SELECT 'perp', count(DISTINCT symbol), count(*), min(stat_time), max(stat_time) FROM pump_perp_stats_5m
     UNION ALL
     SELECT 'book', count(DISTINCT symbol), count(*), min(bucket_start), max(bucket_start) FROM pump_book_5m
+    UNION ALL
+    SELECT 'flow_asof', count(DISTINCT symbol), count(*), min(decision_at), max(decision_at) FROM pump_flow_asof
 """
 
 
