@@ -428,3 +428,34 @@ Regras:
 - Qualquer outro valor fica intacto.
 - Cada linha alterada ganha um registro em `config_audit_log`, com o JSON anterior.
 - Rodar de novo não altera nada.
+
+## v1.18 — Grupos de variáveis, ablação e histórico do livro (2026-10-08)
+
+**Grupos opcionais no modelo de velas** (`research.candle.feature_groups`, padrão `[]`, que mantém as 12 colunas originais na mesma ordem). Todos usam só velas fechadas até a decisão.
+
+| Grupo | Colunas | Precisa de OHLC/volume |
+|---|---|---|
+| `btc_beta` | `beta_btc_24h`, `lag_gap_btc_{1,3}` | não |
+| `candle_structure` | amplitude, corpo, pavios, posição do fechamento, distância à máxima e à mínima de 1 hora | sim |
+| `volume` | volume em USDT da vela e das 3 últimas velas, relativo à mediana de 24h do próprio ativo; aceleração de 3 velas | sim |
+| `pool_context` | dispersão dos retornos do pool (5 e 15 min), proporção de ativos subindo e posição do ativo no pool em 15 min | não |
+
+Detalhes:
+- O grupo `btc_beta` corrige um problema: o `lag_gap` original usa o beta contra a mediana do pool, mas multiplica pelo retorno do BTC. Com `btc_beta`, o `lag_gap` original sai e entram as versões calculadas com o beta contra o próprio BTC.
+- Treino e inferência ao vivo usam o mesmo `build_frame`. O `ohlcv` é lido com preferência pela Gate, e `quote_volume` cai para `volume` quando vem vazio.
+
+**Ablação (família `candle_ablation`)**:
+- Disparo manual em `POST /ml/train?family=candle_ablation`; resultado em `GET /ml/ablation`.
+- Usa as mesmas linhas e os mesmos dias de teste para a base e para cada variante: base + 1 grupo por vez, e no fim todos juntos.
+- Para cada variante: walk-forward e comparação dia a dia contra a base. São reportados a diferença mediana de AUC, o número de dias em que a variante foi melhor e o teste de sinal.
+- Não salva modelo e não aplica nada.
+- Configuração em `research.candle.ablation`: horizonte 15 min, 20 dias de teste, 100 mil linhas.
+- Benchmark local com dados sintéticos e 60 mil linhas por 15 dias: cerca de 16 s por variante.
+
+**Histórico do livro de ofertas** (migration `241_pump_book_5m`):
+- Guarda o último retrato de cada janela de 5 minutos: spread, profundidade ±1%, desequilíbrio e slippage estimado.
+- Cada retrato tem `observed_at`, a hora do ciclo, e `computed_at`, a hora do recebimento. Um retrato mais antigo nunca sobrescreve um mais novo.
+- A retenção segue `flow_history.retention_days`.
+- Uso pretendido: filtro de execução e variáveis de liquidez, depois de semanas de histórico.
+
+**Critério de adoção de um grupo:** só entra em `feature_groups` se melhorar a AUC diária contra a base de forma consistente entre os dias, com teste de sinal significativo, e sem piorar o spread econômico.

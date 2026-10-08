@@ -140,7 +140,16 @@ async def run_directional_horizons(conn, owner, c, diagnostics, staging, start, 
     return results
 
 
-FAMILIES = ("observation", "candle")
+FAMILIES = ("observation", "candle", "candle_ablation")
+
+
+class _noop:
+    """Async no-op context (ablation saves nothing: no transaction is opened)."""
+    async def __aenter__(self):
+        return None
+
+    async def __aexit__(self, *exc):
+        return False
 # Ledger rows without ``family`` predate 2026-10-07 and belong to the observation family.
 _FAMILY_SQL = "AND coalesce(payload->>'family','observation')=$3"
 
@@ -196,8 +205,14 @@ async def run_owner(conn, owner, *, horizons: List[int], force: bool = False,
         used = await conn.fetchval(STORAGE_SQL)
         if (used or 0) + 5_000_000 > c["budget"]["max_storage_bytes"]:
             raise ValueError("pump_storage_budget_exhausted")
+        ablation = None
         with tempfile.TemporaryDirectory(prefix="pump_ml_") as staging:
-            if family == "candle":
+            if family == "candle_ablation":
+                from .pump_ml_candles import run_candle_ablation
+                ablation = await run_candle_ablation(conn, owner, c, selection,
+                                                     start + timedelta(seconds=MAX_RUNTIME_SECONDS))
+                results = []
+            elif family == "candle":
                 from .pump_ml_candles import run_candle_horizons
                 if not c["research"]["candle"]["enabled"]:
                     raise ValueError("candle_family_disabled")
@@ -212,7 +227,7 @@ async def run_owner(conn, owner, *, horizons: List[int], force: bool = False,
             artifact_bytes = sum(len(content) for _, _, content in artifacts)
             if artifact_bytes > 5_000_000:
                 raise ValueError("artifact_budget_exceeded")
-            async with conn.transaction():
+            async with (conn.transaction() if results else _noop()):
                 for result in results:
                     manifest = result["manifest"]
                     experiment = uuid5(NAMESPACE_URL, f"pump_registry:{owner}:{manifest['experiment_id']}")
@@ -238,6 +253,8 @@ async def run_owner(conn, owner, *, horizons: List[int], force: bool = False,
                                     "cohort_rows": r["metrics"]["cohort_rows"]} for r in results],
                    "artifacts": len(artifacts), "artifact_bytes": artifact_bytes,
                    "applied_delta": 0, "auto_promotion": False}
+        if ablation is not None:   # research only: nothing saved, nothing applied
+            outcome = {"status": "ablation", "ablation": ablation, "applied_delta": 0, "auto_promotion": False}
     except ValueError as exc:
         outcome = {"status": "blocked", "reason": str(exc), "applied_delta": 0, "production_model_validated": False}
     except Exception as exc:

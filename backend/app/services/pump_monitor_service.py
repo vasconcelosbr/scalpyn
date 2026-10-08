@@ -570,7 +570,7 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
             from . import pump_flow_history
             interval = str((v1_spec.get("derivatives") or {}).get("interval") or "5m")
             await run_db_task(lambda db: pump_flow_history.write(db, symbols, derivatives, now_ms, history_cfg,
-                                                                 interval), celery=True)
+                                                                 interval, rows), celery=True)
         except Exception as exc:
             logger.warning("[PUMP-FLOW-HISTORY] write skipped user=%s reason=%s", user_id, type(exc).__name__)
     structures: Dict[str, Any] = {}
@@ -1030,7 +1030,8 @@ async def purge(db) -> Dict[str, int]:
         async with db.begin_nested():
             fl = await db.execute(text("DELETE FROM pump_flow_5m WHERE bucket_start < :t"), {"t": cutoff})
             pp = await db.execute(text("DELETE FROM pump_perp_stats_5m WHERE stat_time < :t"), {"t": cutoff})
-        history_purged = {"flow_5m": fl.rowcount, "perp_stats_5m": pp.rowcount}
+            bk = await db.execute(text("DELETE FROM pump_book_5m WHERE bucket_start < :t"), {"t": cutoff})
+        history_purged = {"flow_5m": fl.rowcount, "perp_stats_5m": pp.rowcount, "book_5m": bk.rowcount}
     except Exception as exc:
         logger.warning("[PUMP-FLOW-HISTORY] retention skipped reason=%s", type(exc).__name__)
     return {"buckets": b.rowcount, "snapshots": s.rowcount, "capital_flow": capital_purged,

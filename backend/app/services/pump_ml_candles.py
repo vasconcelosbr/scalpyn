@@ -27,11 +27,43 @@ CANDLE_OBJECTIVE = "pump_relative_candle_v1"
 REFERENCE = "BTC_USDT"
 
 
+# Optional feature groups (v1.18, 2026-10-08), switched on by ``research.candle.feature_groups``.
+# The base list (no groups) is unchanged, so every stored model keeps its column order.
+GROUPS = ("btc_beta", "candle_structure", "volume", "pool_context")
+GROUP_FEATURES = {
+    # beta estimated against BTC itself (the base lag_gap reuses the beta vs the POOL median)
+    "btc_beta": ["beta_btc_24h", "lag_gap_btc_1", "lag_gap_btc_3"],
+    # shape of the last closed candle + distance to the 1-hour extremes (needs OHLC)
+    "candle_structure": ["cs_range", "cs_body", "cs_upper_wick", "cs_lower_wick", "cs_close_pos",
+                         "cs_dist_high_12", "cs_dist_low_12"],
+    # quote volume vs the asset's own 24 h median (needs volume)
+    "volume": ["vol_rel_1", "vol_rel_3", "vol_accel_3"],
+    # cross-section of the pool at the decision time
+    "pool_context": ["pool_disp_1", "pool_disp_3", "pool_breadth_3", "pool_rank_3"],
+}
+NEEDS_BARS = {"candle_structure", "volume"}
+
+
 def feature_names(cfg: Dict[str, Any]) -> List[str]:
+    groups = set(cfg.get("feature_groups") or [])
     names = ["beta_24h"]
     names += [f"rel_resid_{k}" for k in cfg["prev_windows"]]
-    names += ["vol_ratio", "btc_ret_1", "btc_ret_3", "lag_gap_1", "lag_gap_3", "mkt_ret_1", "mkt_ret_3"]
+    names += ["vol_ratio", "btc_ret_1", "btc_ret_3"]
+    if "btc_beta" not in groups:          # replaced by the BTC-beta version, never both
+        names += ["lag_gap_1", "lag_gap_3"]
+    names += ["mkt_ret_1", "mkt_ret_3"]
+    for g in GROUPS:
+        if g in groups:
+            names += GROUP_FEATURES[g]
     return names
+
+
+def all_feature_names(cfg: Dict[str, Any]) -> List[str]:
+    """Union of every group's columns (ablation keeps them all in the rows)."""
+    out = feature_names({**cfg, "feature_groups": []})
+    for g in GROUPS:
+        out += [f for f in GROUP_FEATURES[g] if f not in out]
+    return out
 
 
 def _matrix(closes: Dict[str, Dict[int, float]], step: int):
@@ -108,13 +140,86 @@ def _rolling_std(R1, window, min_points):
     return np.sqrt(np.clip(var, 0, None))
 
 
+def _bar_matrices(bars: Optional[Dict[str, Dict[int, Sequence[float]]]], syms, grid):
+    """(O, H, L, V) aligned to the close grid; NaN where a bar is missing."""
+    import numpy as np
+    shape = (len(syms), len(grid))
+    O, H, L, V = (np.full(shape, np.nan) for _ in range(4))
+    if not bars:
+        return O, H, L, V
+    idx = {int(t): j for j, t in enumerate(grid)}
+    for i, s in enumerate(syms):
+        for t, bar in (bars.get(s) or {}).items():
+            j = idx.get(int(t))
+            if j is None:
+                continue
+            o, h, l, v = bar
+            O[i, j], H[i, j], L[i, j] = (np.nan if x is None else float(x) for x in (o, h, l))
+            V[i, j] = np.nan if v is None else float(v)
+    return O, H, L, V
+
+
+def _group_features(f: Dict[str, Any], groups, C, R1, beta, syms, grid, cfg, bars):
+    """Optional groups, all point-in-time (column t uses candles <= t only)."""
+    import numpy as np
+    import pandas as pd
+    window, min_points = int(cfg["beta_window"]), int(cfg["beta_min_points"])
+    ref = syms.index(REFERENCE) if REFERENCE in syms else None
+    if "btc_beta" in groups:
+        btc1 = R1[ref] if ref is not None else np.full(len(grid), np.nan)
+        bb = _rolling_beta(R1, btc1, window, min_points)
+        f["beta_btc_24h"] = bb
+        for k in (1, 3):
+            rk = _ret(C, k)
+            btc = rk[ref] if ref is not None else np.full(len(grid), np.nan)
+            f[f"lag_gap_btc_{k}"] = bb * btc[None, :] - rk
+    if groups & NEEDS_BARS:
+        O, H, L, V = _bar_matrices(bars, syms, grid)
+    if "candle_structure" in groups:
+        with np.errstate(all="ignore"):
+            rng = H - L
+            ok = rng > 0
+            f["cs_range"] = np.where(C > 0, rng / C * 100, np.nan)
+            f["cs_body"] = np.where(ok, (C - O) / rng, np.nan)
+            f["cs_upper_wick"] = np.where(ok, (H - np.maximum(O, C)) / rng, np.nan)
+            f["cs_lower_wick"] = np.where(ok, (np.minimum(O, C) - L) / rng, np.nan)
+            f["cs_close_pos"] = np.where(ok, (C - L) / rng, np.nan)
+            hi12 = pd.DataFrame(H.T).rolling(12, min_periods=12).max().to_numpy().T
+            lo12 = pd.DataFrame(L.T).rolling(12, min_periods=12).min().to_numpy().T
+            f["cs_dist_high_12"] = (C / hi12 - 1) * 100
+            f["cs_dist_low_12"] = (C / lo12 - 1) * 100
+    if "volume" in groups:
+        med = pd.DataFrame(V.T).rolling(window, min_periods=min_points).median().to_numpy().T
+        s3 = pd.DataFrame(V.T).rolling(3, min_periods=3).sum().to_numpy().T
+        prev3 = np.full_like(s3, np.nan); prev3[:, 3:] = s3[:, :-3]
+        with np.errstate(all="ignore"):
+            f["vol_rel_1"] = np.where(med > 0, V / med, np.nan)
+            f["vol_rel_3"] = np.where(med > 0, s3 / (3 * med), np.nan)
+            f["vol_accel_3"] = np.where(prev3 > 0, s3 / prev3, np.nan)
+    if "pool_context" in groups:
+        import warnings
+        R3 = _ret(C, 3)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            d1, d3 = np.nanstd(R1, axis=0), np.nanstd(R3, axis=0)
+            valid = np.sum(~np.isnan(R3), axis=0)
+            breadth = np.where(valid > 0, np.sum(R3 > 0, axis=0) / np.maximum(valid, 1), np.nan)
+        f["pool_disp_1"] = np.broadcast_to(d1, C.shape).copy()
+        f["pool_disp_3"] = np.broadcast_to(d3, C.shape).copy()
+        f["pool_breadth_3"] = np.broadcast_to(breadth, C.shape).copy()
+        f["pool_rank_3"] = pd.DataFrame(R3).rank(axis=0, pct=True).to_numpy()
+
+
 def build_frame(closes: Dict[str, Dict[int, float]], cfg: Dict[str, Any], *,
-                horizons_candles: Sequence[int] = ()) -> Dict[str, Any]:
+                horizons_candles: Sequence[int] = (), bars: Optional[Dict[str, Dict[int, Sequence[float]]]] = None,
+                all_groups: bool = False) -> Dict[str, Any]:
     """Features (and, for training, labels) on the regular candle grid.
 
     Returns ``{syms, grid(open epochs), features{name:[S,T]}, labels{(k,mode):[S,T]},
     excess{k:[S,T]}, assets{k:[T]}}``. Value at column t = decision at the CLOSE of
-    candle t (uses candles <= t)."""
+    candle t (uses candles <= t). ``bars`` = {symbol: {open_epoch: (open, high, low,
+    quote_volume)}} for the groups that need them; ``all_groups`` computes every group
+    (ablation), otherwise only ``cfg['feature_groups']``."""
     import numpy as np
     step = int(cfg["step_seconds"])
     syms, grid, C = _matrix(closes, step)
@@ -139,6 +244,9 @@ def build_frame(closes: Dict[str, Dict[int, float]], cfg: Dict[str, Any], *,
         f[f"btc_ret_{k}"] = np.broadcast_to(btc, C.shape).copy()
         f[f"lag_gap_{k}"] = beta * btc[None, :] - rk
         f[f"mkt_ret_{k}"] = np.broadcast_to(_nanmedian(rk, axis=0), C.shape).copy()
+    groups = set(GROUPS) if all_groups else set(cfg.get("feature_groups") or [])
+    if groups:
+        _group_features(f, groups, C, R1, beta, syms, grid, cfg, bars)
     for k in horizons_candles:
         resid_end, e_end = _residual(_fwd(C, int(k)), beta)
         out["excess"][k] = resid_end
@@ -174,11 +282,13 @@ def live_cells(frame: Dict[str, Any], cfg: Dict[str, Any], now_s: int) -> Dict[s
     return out
 
 
-def training_rows(frame: Dict[str, Any], cfg: Dict[str, Any], k: int, mode: str) -> List[Dict[str, Any]]:
+def training_rows(frame: Dict[str, Any], cfg: Dict[str, Any], k: int, mode: str,
+                  names: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     """Deterministic, outcome-blind subsample: at most ``max_rows_per_time`` assets per
-    decision time (hash order), then evenly spaced times down to ``max_rows``."""
+    decision time (hash order), then evenly spaced times down to ``max_rows``.
+    ``names`` overrides the stored columns (ablation keeps every group's columns)."""
     import numpy as np
-    names = feature_names(cfg)
+    names = names or feature_names(cfg)
     label = frame["labels"][(k, mode)]; excess = frame["excess"][k]; assets = frame["assets"][k]
     beta = frame["features"]["beta_24h"]
     step = int(cfg["step_seconds"]); cap = int(cfg["max_rows_per_time"]); min_assets = int(cfg["min_assets"])
@@ -293,6 +403,31 @@ async def load_closes(conn, symbols: List[str], timeframe: str, lo: datetime, hi
     return out
 
 
+BARS_SQL = """SELECT DISTINCT ON (symbol, time) symbol, time, open::float8 AS o, high::float8 AS h,
+       low::float8 AS l, close::float8 AS c, coalesce(quote_volume, volume)::float8 AS v FROM ohlcv
+ WHERE symbol=ANY($1::text[]) AND timeframe=$2 AND market_type='spot' AND is_closed IS TRUE
+  AND time>=$3 AND time<$4
+ ORDER BY symbol, time, CASE WHEN exchange ILIKE 'gate%' THEN 0 ELSE 1 END"""
+
+
+def needs_bars(cfg: Dict[str, Any], all_groups: bool = False) -> bool:
+    return all_groups or bool(set(cfg.get("feature_groups") or []) & NEEDS_BARS)
+
+
+async def load_bars(conn, symbols: List[str], timeframe: str, lo: datetime, hi: datetime, chunk: int = 10):
+    """(closes, bars) from the same rows, Gate preferred (asyncpg)."""
+    closes: Dict[str, Dict[int, float]] = {}
+    bars: Dict[str, Dict[int, tuple]] = {}
+    for i in range(0, len(symbols), chunk):
+        for rec in await conn.fetch(BARS_SQL, symbols[i:i + chunk], timeframe, lo, hi):
+            if rec["c"] is None:
+                continue
+            t = int(rec["time"].timestamp())
+            closes.setdefault(rec["symbol"], {})[t] = float(rec["c"])
+            bars.setdefault(rec["symbol"], {})[t] = (rec["o"], rec["h"], rec["l"], rec["v"])
+    return closes, bars
+
+
 UNIVERSE_SQL = """SELECT DISTINCT symbol FROM pump_opportunity_observations
  WHERE user_id=$1 AND slot_at >= now() - interval '1 day'"""
 
@@ -307,10 +442,14 @@ async def run_candle_horizons(conn, owner, c: Dict[str, Any], diagnostics: Dict[
     symbols = sorted({r["symbol"] for r in await conn.fetch(UNIVERSE_SQL, owner)} | {REFERENCE})
     hi = datetime.now(timezone.utc)
     lo = hi - timedelta(days=int(cfg["lookback_days"]))
-    closes = await load_closes(conn, symbols, cfg["timeframe"], lo, hi)
+    bars = None
+    if needs_bars(cfg):
+        closes, bars = await load_bars(conn, symbols, cfg["timeframe"], lo, hi)
+    else:
+        closes = await load_closes(conn, symbols, cfg["timeframe"], lo, hi)
     step = int(cfg["step_seconds"])
     ks = {int(h) // (step // 60): int(h) for h in cfg["horizons_minutes"]}
-    frame = await asyncio.to_thread(build_frame, closes, cfg, horizons_candles=list(ks))
+    frame = await asyncio.to_thread(build_frame, closes, cfg, horizons_candles=list(ks), bars=bars)
     diag.update(symbols=len(symbols), symbols_with_candles=len(closes),
                 candles=sum(len(v) for v in closes.values()),
                 first=datetime.fromtimestamp(int(frame["grid"][0]), timezone.utc).isoformat() if len(frame["grid"]) else None,
@@ -338,6 +477,89 @@ async def run_candle_horizons(conn, owner, c: Dict[str, Any], diagnostics: Dict[
     return results
 
 
+def paired_vs_base(base_wf: Dict[str, Any], wf: Dict[str, Any]) -> Dict[str, Any]:
+    """Day-paired comparison on the SAME test days: per-day AUC difference vs the base,
+    days better, one-sided sign test (variant > base)."""
+    import numpy as np
+    from .pump_directional_research import sign_test_p
+    a = {f["day"]: f["auc"] for f in (base_wf.get("folds") or []) if "auc" in f}
+    b = {f["day"]: f["auc"] for f in (wf.get("folds") or []) if "auc" in f}
+    days = sorted(set(a) & set(b))
+    if not days:
+        return {"days": 0}
+    d = np.array([b[x] - a[x] for x in days])
+    better = int((d > 0).sum())
+    return {"days": len(days), "median_auc_delta": float(np.median(d)), "mean_auc_delta": float(d.mean()),
+            "days_better": better, "sign_test_p": sign_test_p(better, len(days))}
+
+
+def _summary(wf: Dict[str, Any]) -> Dict[str, Any]:
+    p = wf.get("pooled") or {}
+    e = p.get("economic") or {}
+    return {"day_auc_median": p.get("day_auc_median"), "days_auc_above_half": p.get("days_auc_above_half"),
+            "scored_days": wf.get("scored_days"), "sign_test_p": p.get("sign_test_p"),
+            "brier_improvement_day_mean": p.get("brier_improvement_day_mean"),
+            "brier_ci95": p.get("paired_episode_brier_ci95"),
+            "top_minus_bottom": e.get("top_minus_bottom"), "top_minus_bottom_ci95": e.get("top_minus_bottom_ci95")}
+
+
+async def run_candle_ablation(conn, owner, c: Dict[str, Any], diagnostics: Dict[str, Any],
+                              deadline: datetime) -> Dict[str, Any]:
+    """Feature-group ablation (no model is saved or applied): the SAME rows and test days,
+    base columns vs base + one group at a time (+ all groups), walk-forward each, then a
+    day-paired comparison against the base. Variants left when the budget runs out are
+    reported as ``runtime_budget_exhausted``."""
+    import asyncio
+    from .pump_directional_research import walk_forward_evaluation
+    research = c["research"]; cand = research["candle"]; ab = cand["ablation"]
+    cfg = {**cand, "max_rows": int(ab["max_rows"]),
+           "walk_forward": {**research["walk_forward"], "max_folds": int(ab["max_folds"])}}
+    symbols = sorted({r["symbol"] for r in await conn.fetch(UNIVERSE_SQL, owner)} | {REFERENCE})
+    hi = datetime.now(timezone.utc)
+    lo = hi - timedelta(days=int(cfg["lookback_days"]))
+    closes, bars = await load_bars(conn, symbols, cfg["timeframe"], lo, hi)
+    step = int(cfg["step_seconds"]); h = int(ab["horizon_minutes"]); k = h // (step // 60)
+    frame = await asyncio.to_thread(build_frame, closes, cfg, horizons_candles=[k], bars=bars, all_groups=True)
+    rows = training_rows(frame, cfg, k, cfg["label_mode"], names=all_feature_names(cfg))
+    diagnostics["candle_ablation"] = {"symbols": len(symbols), "rows": len(rows), "horizon_minutes": h}
+    spec = {"params": research["params"], "max_threads": 1, "embargo_seconds": int(cfg["embargo_seconds"]),
+            "walk_forward": cfg["walk_forward"]}
+    options = {k2: research[k2] for k2 in ("calibration_C", "calibration_max_iter", "calibration_method",
+                                           "calibration_max_slope", "bootstrap_repetitions")}
+    variants = [("base", [])] + [(g, [g]) for g in ab["groups"]]
+    if ab.get("include_all") and len(ab["groups"]) > 1:
+        variants.append(("all", list(ab["groups"])))
+    out: Dict[str, Any] = {"horizon_minutes": h, "rows": len(rows), "max_folds": int(ab["max_folds"]),
+                           "variants": {}}
+    base_wf = None
+    for name, groups in variants:
+        if (deadline - datetime.now(timezone.utc)).total_seconds() < 60:
+            out["variants"][name] = {"blocked_reason": "runtime_budget_exhausted"}
+            continue
+        cols = feature_names({**cfg, "feature_groups": groups})
+        t0 = datetime.now(timezone.utc)
+        wf = await asyncio.wait_for(asyncio.to_thread(
+            walk_forward_evaluation, rows, columns=cols, spec=spec, options=options, relative=False),
+            timeout=max(1, (deadline - datetime.now(timezone.utc)).total_seconds()))
+        item = {"features": len(cols), "seconds": round((datetime.now(timezone.utc) - t0).total_seconds(), 1),
+                **_summary(wf)}
+        if name == "base":
+            base_wf = wf
+        elif base_wf is not None:
+            item["vs_base"] = paired_vs_base(base_wf, wf)
+        out["variants"][name] = item
+    return out
+
+
+_LIVE_BARS = """
+    SELECT DISTINCT ON (symbol, time) symbol, time, open, high, low, close, coalesce(quote_volume, volume) AS v
+      FROM ohlcv
+     WHERE symbol = ANY(CAST(:s AS text[])) AND timeframe = :tf AND market_type = 'spot'
+       AND is_closed IS TRUE AND time >= :lo AND time < :hi
+     ORDER BY symbol, time, CASE WHEN exchange ILIKE 'gate%' THEN 0 ELSE 1 END
+"""
+
+
 _LIVE_CANDLES = """
     SELECT DISTINCT ON (symbol, time) symbol, time, close FROM ohlcv
      WHERE symbol = ANY(CAST(:s AS text[])) AND timeframe = :tf AND market_type = 'spot'
@@ -355,11 +577,20 @@ async def candle_context(db, symbols: List[str], cfg: Dict[str, Any], now_s: int
     hi = datetime.fromtimestamp(now_s, timezone.utc)
     lo = hi - timedelta(seconds=step * need)
     syms = sorted(set(symbols) | {REFERENCE})
-    rows = (await db.execute(text(_LIVE_CANDLES), {"s": syms, "tf": cfg["timeframe"], "lo": lo, "hi": hi})).all()
     closes: Dict[str, Dict[int, float]] = {}
-    for sym, t, close in rows:
-        if close is not None:
-            closes.setdefault(sym, {})[int(t.timestamp())] = float(close)
-    frame = build_frame(closes, cfg)
+    bars: Optional[Dict[str, Dict[int, tuple]]] = None
+    if needs_bars(cfg):
+        bars = {}
+        rows = (await db.execute(text(_LIVE_BARS), {"s": syms, "tf": cfg["timeframe"], "lo": lo, "hi": hi})).all()
+        for sym, t, o, h, l, close, v in rows:
+            if close is not None:
+                closes.setdefault(sym, {})[int(t.timestamp())] = float(close)
+                bars.setdefault(sym, {})[int(t.timestamp())] = tuple(None if x is None else float(x) for x in (o, h, l, v))
+    else:
+        rows = (await db.execute(text(_LIVE_CANDLES), {"s": syms, "tf": cfg["timeframe"], "lo": lo, "hi": hi})).all()
+        for sym, t, close in rows:
+            if close is not None:
+                closes.setdefault(sym, {})[int(t.timestamp())] = float(close)
+    frame = build_frame(closes, cfg, bars=bars)
     cells = live_cells(frame, cfg, now_s)
     return {s: cells[s] for s in symbols if s in cells}
