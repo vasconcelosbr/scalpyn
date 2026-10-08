@@ -7,6 +7,30 @@ from ..models.pool import Pool, PoolAssetExclusion, PoolCoin
 from .pool_service import cascade_invalidate_removed_symbols, symbols_with_open_shadow_trades
 
 
+# 2026-10-08: a minute-signal stays in the feed for only 1-3 minutes, while the
+# POOL→L1→L2 snapshots are refreshed by a 300 s scan that runs 169 s+; since #220
+# removed the old 300 s absence grace, PUMP signals were dropped from every layer
+# before reaching L3. ``radar_min_hold_seconds`` (pool override, GUI-editable)
+# keeps a radar member eligible for that long after its last sighting — with or
+# without an open Shadow (a second Shadow is still refused by the consolidation
+# rule). Absent override → this default (the pre-#220 grace and the REALTIME
+# pool's ``pump_monitor_min_hold_seconds``). 0 restores the strict behaviour.
+RADAR_MIN_HOLD_SECONDS_DEFAULT = 300
+RADAR_MIN_HOLD_SECONDS_MAX = 3600
+
+
+def radar_min_hold_seconds(overrides: dict | None) -> int:
+    """Validated ``radar_min_hold_seconds``; invalid values fall back to the default."""
+    raw = (overrides or {}).get("radar_min_hold_seconds", RADAR_MIN_HOLD_SECONDS_DEFAULT)
+    if isinstance(raw, bool):
+        return RADAR_MIN_HOLD_SECONDS_DEFAULT
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return RADAR_MIN_HOLD_SECONDS_DEFAULT
+    return value if 0 <= value <= RADAR_MIN_HOLD_SECONDS_MAX else RADAR_MIN_HOLD_SECONDS_DEFAULT
+
+
 # Worker-owned health key → the operator toggle that owns it.
 _WORKER_OWNED_HEALTH = {
     "radar_feed_health": "radar_enabled",
@@ -73,7 +97,12 @@ async def reconcile_radar_pool(db, *, pool_id, user_id, radar_pairs: set[str] | 
     open_symbols = (await symbols_with_open_shadow_trades(db, user_id, set(grouped))
                     if hold_open_positions else set())
     present = (radar_pairs - excluded) if radar_pairs is not None else set()
-    stats = {"added": 0, "removed": 0, "held": 0, "duplicates": 0, "skipped": False}
+    # Minimum hold (radar feed only): a member absent from a USABLE feed stays a
+    # candidate until its last sighting is older than the window. An outage keeps
+    # the existing behaviour (membership preserved, health blocks eligibility).
+    hold_seconds = radar_min_hold_seconds(overrides) if origin == "radar" else 0
+    stats = {"added": 0, "removed": 0, "held": 0, "duplicates": 0, "lingering": 0,
+             "skipped": False}
     invalidated = set()
 
     for symbol, rows in grouped.items():
@@ -93,6 +122,17 @@ async def reconcile_radar_pool(db, *, pool_id, user_id, radar_pairs: set[str] | 
             coin.held_for_open_position = False
             if origin == "radar":
                 coin.radar_last_seen_at = now
+            continue
+
+        last_seen = coin.radar_last_seen_at
+        if (hold_seconds > 0 and radar_pairs is not None and coin.origin == origin
+                and symbol not in excluded and last_seen is not None
+                and 0 <= (now - last_seen).total_seconds() < hold_seconds):
+            # Still within its minimum hold: same treatment as present (an open
+            # Shadow does not hide it), but its sighting clock is not refreshed.
+            coin.is_active = True
+            coin.held_for_open_position = False
+            stats["lingering"] += 1
             continue
 
         invalidated.add(symbol)

@@ -91,6 +91,9 @@ export default function PoolConfigPage() {
 
   // Market Catalyst Radar settings (stored in pool.overrides)
   const [radarEnabled, setRadarEnabled] = useState(false);
+  // Minimum hold after the last radar sighting (backend default 300 s, 0 = strict).
+  const [radarMinHold, setRadarMinHold] = useState(300);
+  const radarMinHoldValid = Number.isInteger(radarMinHold) && radarMinHold >= 0 && radarMinHold <= 3600;
 
   // Pump Monitor sync (observation-only pool; stored in pool.overrides)
   const [pmSync, setPmSync] = useState(false);
@@ -169,6 +172,7 @@ export default function PoolConfigPage() {
       setNotifyChanges(Boolean(ov.notify_on_changes));
       setMaxAssets(Number(ov.max_assets) || 0);
       setRadarEnabled(Boolean(ov.radar_enabled));
+      setRadarMinHold(Number(ov.radar_min_hold_seconds ?? 300));
       setPmSync(Boolean(ov.pump_monitor_sync_enabled));
       setPmParams(p => ({
         min_score: Number(ov.pump_monitor_min_score ?? p.min_score),
@@ -186,6 +190,10 @@ export default function PoolConfigPage() {
   // ── Save pool metadata (includes auto-refresh overrides) ──────────────────
   const handleSave = async () => {
     if (!name.trim()) return;
+    if (radarEnabled && !radarMinHoldValid) {
+      setError("Radar: a permanência mínima deve ser um inteiro entre 0 e 3600 segundos.");
+      return;
+    }
     if (pmSync && !pmValid) {
       setError("Pump Monitor: o score mínimo deve estar entre 0 e 100.");
       return;
@@ -211,6 +219,7 @@ export default function PoolConfigPage() {
             notify_on_changes: notifyChanges,
             max_assets: maxAssets,
             radar_enabled: radarEnabled,
+            ...(radarEnabled ? { radar_min_hold_seconds: radarMinHold } : {}),
             pump_monitor_sync_enabled: pmSync,
             ...(pmSync ? {
               observation_only: true,
@@ -657,6 +666,17 @@ export default function PoolConfigPage() {
                     ? "Radar indisponível. Novas candidaturas estão suspensas; trades abertos continuam sendo acompanhados."
                     : "Aguardando confirmação do radar. Trades abertos continuam sendo acompanhados."}
               </div>
+            )}
+            {radarEnabled && (
+              <label data-testid="radar-min-hold" style={{ display: "flex", flexDirection: "column", fontSize: "12px", color: "var(--text-secondary)", maxWidth: "420px" }}>
+                Permanência mínima após o último sinal (s)
+                <input className="input" type="number" min={0} max={3600} step={1} value={radarMinHold}
+                  onChange={(e) => setRadarMinHold(Number(e.target.value))} style={{ width: "140px" }} />
+                <span style={{ color: "var(--text-tertiary)" }}>
+                  O ativo continua elegível do pool à L3 por este tempo depois de sair do radar, mesmo com Shadow aberto
+                  (um segundo Shadow do mesmo ativo continua bloqueado). 0 = só enquanto estiver no radar.
+                </span>
+              </label>
             )}
           </div>
         </div>

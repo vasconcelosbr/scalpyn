@@ -7,6 +7,7 @@ monitor quotas are unchanged.
 | Feed state | Open Shadow | Collection | Watchlists | New Shadow |
 | --- | --- | --- | --- | --- |
 | Present in usable feed | No | Active | Normal evaluation | Existing entry rules |
+| Absent, last sighting within `radar_min_hold_seconds` | Either | Active, not held | Normal evaluation (open Shadow does not hide it) | Existing duplicate guard (`ACTIVE_TRADE_ALREADY_EXISTS`) |
 | Absent from usable feed | Yes, any source | Active, held | Hidden at every level | Blocked |
 | Returns to usable feed | Yes | Active, no longer held | Normal evaluation, including rejection | Existing duplicate guard |
 | Absent from usable feed | No | Pool membership removed | Hidden | Blocked |
@@ -50,3 +51,16 @@ loopback database named `scalpyn_monitor_test`; they create disposable schemas.
 Production release requires canonical main-source parity, terminal provider
 status, runtime evidence and authenticated UI verification under the deployment
 source guard. No database migration or rollback is part of this repair.
+
+## Minimum hold (2026-10-08)
+
+Minute-signals stay in the feed for 1–3 minutes, while the POOL/L1/L2 snapshots
+are refreshed by a 300 s scan that runs for 169 s+. Without the pre-#220 grace,
+PUMP signals were removed from every layer before reaching L3 (the REALTIME
+chain was unaffected: `radar_enabled=false` and a 300 s Pump Monitor hold).
+`radar_min_hold_seconds` (pool override, edited in the pool page, default 300,
+range 0–3600, 0 = strict) keeps a radar member a candidate until its last
+sighting is older than the window, with or without an open Shadow. Absence never
+refreshes `radar_last_seen_at`; outages, exclusions and the Pump Monitor feed are
+unchanged. A second Shadow for a running symbol is still refused by the
+consolidation rule, and the L3 Consolidado re-presents the existing Shadow.
