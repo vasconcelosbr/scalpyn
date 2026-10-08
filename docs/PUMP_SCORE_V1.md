@@ -377,3 +377,34 @@ Métricas reportadas:
 O painel do ML mostra uma linha "Ao vivo" no modelo aplicado.
 
 **Limite conhecido:** se o coletor gravar a vela fechada com atraso, as variáveis daquela janela de 5 min ficam uma vela atrasadas, mas a decisão continua registrada no fechamento esperado. A avaliação mede exatamente o que o sistema fez, inclusive esse atraso.
+
+## v1.15 — Rótulo relativo no tooltip e coluna "ML acima do mercado" (2026-10-08)
+
+No detalhe do score, a linha do ML passa a se chamar `ml:acima_do_mercado` nos objetivos relativos. `ml:prob_alta` fica só para o objetivo absoluto. A probabilidade também vira coluna opcional, `ml_up_probability`, no grupo Scores, com cor por sinal em torno de 0,5.
+
+## v1.16 — Mais linhas no treino de velas e histórico longo de fluxo e perpétuo (2026-10-08)
+
+**Treino de velas** (`research.candle`):
+- **Linhas:** de 40 mil linhas, com até 5 ativos por instante, para 100 mil linhas, com até 12. Antes, só ~3% da amostra de 90 dias era usada.
+- **Comparação de rótulos:** removida (`compare_label_modes: ["path_mean"]`). `path_mean` venceu `endpoint` nos dois horizontes, e a comparação dobrava o tempo de treino.
+- **Ordem dos horizontes:** `[15, 10]`. O horizonte aplicado treina primeiro e nunca é o cortado pelo orçamento de 840 s.
+- **Benchmark local** (dados sintéticos, 90 dias, um horizonte): 40 mil linhas com comparação levaram 54 s; 120 mil linhas sem comparação, 116 s; 120 mil com comparação, 255 s.
+
+**Histórico de 5 minutos** (migration `239_pump_flow_history`, config `flow_history`: `{enabled: true, step_seconds: 300, retention_days: 180}`):
+
+O motivo é que `flow_buckets_1m` guarda só 2 dias e as estatísticas do perpétuo só existem no Redis. Assim, nenhum modelo conseguia aprender com fluxo ou derivativos. A partir desta versão, cada ciclo grava duas tabelas:
+
+| Tabela | Conteúdo | Chave |
+|---|---|---|
+| `pump_flow_5m` | Compra e venda a mercado em USDT, número de trades, minutos encontrados e minutos parciais por ativo e janela de 5 min. Agregado dos buckets de 1 min das 2 últimas janelas fechadas. | `(symbol, bucket_start)` |
+| `pump_perp_stats_5m` | Linhas de `contract_stats` do Gate exatamente como vieram, com `stat_time` = `time` do Gate. | `(symbol, stat_time, stat_interval)` |
+
+Regras:
+- As duas gravações são idempotentes. Minutos ausentes não são preenchidos.
+- As fontes ficam separadas de propósito. Quando virarem variáveis do modelo, cada fonte será alinhada explicitamente ao instante da decisão, usando só dados com tempo ≤ decisão − intervalo.
+- Falhas na gravação não afetam o ciclo.
+- A limpeza diária usa `retention_days`.
+
+**Cobertura:** `GET /api/pump-monitor/flow-history/coverage`.
+
+**Próximo passo:** com 3 a 4 semanas de histórico, adicionar variáveis de fluxo e perpétuo à família de velas e comparar no walk-forward com o modelo atual.

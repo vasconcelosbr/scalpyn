@@ -108,6 +108,23 @@ async def ml_live_evaluation(response: Response, days: int = Query(14, ge=1, le=
         raise HTTPException(status_code=503, detail=f"ml_live_evaluation_unavailable:{type(exc).__name__}")
 
 
+@router.get("/flow-history/coverage")
+async def flow_history_coverage(response: Response, db: AsyncSession = Depends(get_db),
+                                user_id: UUID = Depends(get_current_user_id)):
+    """Read-only: how much 5-minute flow / perpetual history has been kept so far (v1.16)."""
+    from sqlalchemy import text
+    from ..services.pump_flow_history import COVERAGE_SQL
+    response.headers["Cache-Control"] = "private, no-store"
+    try:
+        await db.execute(text("SET LOCAL statement_timeout = '20000ms'"))
+        rows = (await db.execute(text(COVERAGE_SQL))).mappings().all()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"flow_history_unavailable:{type(exc).__name__}")
+    return {"sources": [{"source": r["source"], "symbols": int(r["symbols"]), "rows": int(r["rows"]),
+                         "first": r["first"].isoformat() if r["first"] else None,
+                         "last": r["last"].isoformat() if r["last"] else None} for r in rows]}
+
+
 @router.get("/ml/candle-coverage")
 async def ml_candle_coverage(response: Response, db: AsyncSession = Depends(get_db),
                              user_id: UUID = Depends(get_current_user_id)):

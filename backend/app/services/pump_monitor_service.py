@@ -563,6 +563,16 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
         derivatives = await load_derivatives(symbols, v1_spec, now_ms, int(config["concurrency"]))
     except Exception as exc:  # perp context is optional: the cycle never depends on it
         logger.warning("[PUMP-PERP] unavailable user=%s reason=%s", user_id, type(exc).__name__)
+    history_cfg = config.get("flow_history") or {}
+    if history_cfg.get("enabled"):
+        # v1.16: 5-minute flow/perp history for future features; never breaks the cycle.
+        try:
+            from . import pump_flow_history
+            interval = str((v1_spec.get("derivatives") or {}).get("interval") or "5m")
+            await run_db_task(lambda db: pump_flow_history.write(db, symbols, derivatives, now_ms, history_cfg,
+                                                                 interval), celery=True)
+        except Exception as exc:
+            logger.warning("[PUMP-FLOW-HISTORY] write skipped user=%s reason=%s", user_id, type(exc).__name__)
     structures: Dict[str, Any] = {}
     try:
         structures = {sym: v1.structure_metrics(series.get(sym) or [], v1_spec, now_ms)
@@ -1011,7 +1021,20 @@ async def purge(db) -> Dict[str, int]:
     except Exception as exc:
         logger.warning("[PUMP-ML] live log retention skipped reason=%s", type(exc).__name__)
         live_purged = None
+    hist_days = max([int((c.get("flow_history") or {}).get("retention_days") or 0) for _, c in configs]
+                    or [int(eng.DEFAULT_CONFIG["flow_history"]["retention_days"])])
+    history_purged: Optional[Dict[str, int]] = None
+    try:
+        from .pump_flow_history import retention_cutoff
+        cutoff = retention_cutoff(now, hist_days)
+        async with db.begin_nested():
+            fl = await db.execute(text("DELETE FROM pump_flow_5m WHERE bucket_start < :t"), {"t": cutoff})
+            pp = await db.execute(text("DELETE FROM pump_perp_stats_5m WHERE stat_time < :t"), {"t": cutoff})
+        history_purged = {"flow_5m": fl.rowcount, "perp_stats_5m": pp.rowcount}
+    except Exception as exc:
+        logger.warning("[PUMP-FLOW-HISTORY] retention skipped reason=%s", type(exc).__name__)
     return {"buckets": b.rowcount, "snapshots": s.rowcount, "capital_flow": capital_purged,
+            "flow_history": history_purged,
             "ml_live_predictions": live_purged}
 
 
