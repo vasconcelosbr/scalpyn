@@ -99,6 +99,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "display": {"top_n": 10, "top_n_options": [10, 20, 50, 0], "stale_after_cycles": 2},
     # Redis always holds the full latest cycle; the table keeps a sample.
     "snapshots": {"retention_hours": 48, "every_n_cycles": 10},
+    # v1.16: long-lived 5-minute spot flow + perpetual stats for future model features
+    # (flow_buckets_1m keeps only flow.retention_days). Collection only.
+    "flow_history": {"enabled": True, "step_seconds": 300, "retention_days": 180},
     # Research dataset: one narrow row per asset per minute (pump_research_minute)
     # and offline labels written only after t + max horizon + settle.
     "research": {
@@ -273,6 +276,10 @@ def validate_config(body: Dict[str, Any]) -> None:
         errors.append("universe_filter.unknown_policy must be exclude")
     if int(body.get("cycle_seconds", 0)) < 10:
         errors.append("cycle_seconds must be >= 10")
+    fh = body.get("flow_history") or {}
+    if fh and (int(fh.get("step_seconds", 0)) <= 0 or int(fh["step_seconds"]) % 60
+               or not 1 <= int(fh.get("retention_days", 0)) <= 3650):
+        errors.append("flow_history: step_seconds multiple of 60 and retention_days within [1, 3650]")
     if int(body["flow"]["bucket_seconds"]) != 60:
         errors.append("flow.bucket_seconds is fixed at 60 (1-minute buckets)")
     if body["flow"]["volume_unit"] not in ("quote", "base"):

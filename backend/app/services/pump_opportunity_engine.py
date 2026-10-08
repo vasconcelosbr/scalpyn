@@ -39,10 +39,13 @@ DEFAULT_CONFIG = {
                  "walk_forward":{"enabled":True,"min_train_days":2,"calibration_fraction":0.2,"economic_quantile":0.1,
                                   "max_folds":30},
                  # Candle-history family: price-only relative model trained on closed ohlcv candles.
+                 # 2026-10-08: rows 40k/5 per time → 100k/12 (~3 % of the 90-day sample was used);
+                 # label comparison dropped (path_mean beat endpoint on both horizons) to stay in the
+                 # 840 s budget; the applied horizon (15) trains first so the budget never cuts it.
                  "candle":{"enabled":True,"timeframe":"5m","step_seconds":300,"lookback_days":90,
-                           "horizons_minutes":[10,15],"prev_windows":[1,3,6,12],"vol_short":12,
-                           "beta_window":288,"beta_min_points":200,"max_rows":40000,"max_rows_per_time":5,
-                           "min_assets":10,"label_mode":"path_mean","compare_label_modes":["endpoint","path_mean"],
+                           "horizons_minutes":[15,10],"prev_windows":[1,3,6,12],"vol_short":12,
+                           "beta_window":288,"beta_min_points":200,"max_rows":100000,"max_rows_per_time":12,
+                           "min_assets":10,"label_mode":"path_mean","compare_label_modes":["path_mean"],
                            "embargo_seconds":1800},
                  "lookback_days":30, "cohort_cuts":[0.5,0.65,0.8],
                  # 2026-10-07: label = asset endpoint return vs the median endpoint return of
