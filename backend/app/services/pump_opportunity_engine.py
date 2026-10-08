@@ -90,6 +90,32 @@ def merge(base, override):
     return out
 
 
+# Always stored verbatim: raw SQL selects owners by these flags (config_json->>'enabled',
+# 'training_job_enabled'), and the listing maps are authoritative evidence.
+PERSIST_ALWAYS = ("enabled","ui_enabled","labels_enabled","price_paths_enabled","ml_delta_enabled",
+                  "pool_connection_enabled","training_enabled","training_job_enabled","inference_enabled",
+                  "listing_ids","listing_records")
+
+
+def overrides(full, base=None, *, top=True):
+    """What to persist: only values that differ from the defaults (+ ``PERSIST_ALWAYS``).
+
+    2026-10-08: storing the whole merged config froze every default at write time (the
+    6-hourly listing refresh rewrites it), so later default changes never reached users."""
+    base = DEFAULT_CONFIG if base is None else base
+    out = {}
+    for key, value in full.items():
+        if top and key in PERSIST_ALWAYS:
+            out[key] = deepcopy(value)
+        elif isinstance(value, dict) and isinstance(base.get(key), dict):
+            sub = overrides(value, base[key], top=False)
+            if sub:
+                out[key] = sub
+        elif key not in base or value != base[key]:
+            out[key] = deepcopy(value)
+    return out
+
+
 def config(stored=None):
     result = merge(DEFAULT_CONFIG,stored)
     validate_config(result)
