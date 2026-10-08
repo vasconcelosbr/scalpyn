@@ -43,7 +43,8 @@ def test_default_config_is_relative():
     with pytest.raises(ValueError):
         eng.config({"research": {"relative_beta": {"enabled": True, "timeframe": "5m", "window_candles": 288,
                                                    "min_points": 500}}})
-    assert v1.DEFAULT_V1["ml"]["objective"] == "relative"
+    assert v1.DEFAULT_V1["ml"]["objective"] == "relative_candle"
+    assert v1.DEFAULT_V1["ml"]["score"]["max_adjust"] == 0.05
     with pytest.raises(ValueError):
         eng.config({"research": {"target_mode": "touch"}})
     errors = []
@@ -162,7 +163,11 @@ def test_inference_loads_only_the_configured_objective(monkeypatch):
     inf._CACHE.clear()
     out = asyncio.run(inf.load_model(None, "u", deepcopy(v1.DEFAULT_V1), now=1.0))
     assert out["active"] is False and out["reason"] == "no_recent_model"
-    assert asked == [RELATIVE_OBJECTIVE]
+    assert asked == [inf.CANDLE_OBJECTIVE]       # default objective since 2026-10-08
+    relative = deepcopy(v1.DEFAULT_V1); relative["ml"]["objective"] = "relative"
+    inf._CACHE.clear()
+    asyncio.run(inf.load_model(None, "u", relative, now=1.0))
+    assert asked[-1] == RELATIVE_OBJECTIVE
     absolute = deepcopy(v1.DEFAULT_V1); absolute["ml"]["objective"] = "absolute"
     asyncio.run(inf.load_model(None, "u", absolute, now=1.0))
     assert asked[-1] == inf.OBJECTIVE

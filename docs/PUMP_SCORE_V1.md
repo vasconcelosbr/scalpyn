@@ -319,3 +319,32 @@ Os dois modos são avaliados com o mesmo walk-forward, em `metrics.label_variant
 - a AUC mediana diária, com o p do teste de sinal;
 - o spread com IC95 por dias e o número de dias positivos;
 - na família de velas, a linha "Rótulos comparados", com `endpoint` vs `path_mean`. A métrica econômica dos dois usa o mesmo retorno residual no ponto final, por isso é comparável.
+
+## v1.13 — Modelo de velas aplicado ao v1, com ajuste máximo de ±5% (2026-10-08)
+
+**Evidência** (treino de 2026-10-08 03:22 UTC, walk-forward de 30 dias, `GET /api/pump-monitor/ml/models`): o modelo de velas de 15 min foi o primeiro a passar no portão.
+- AUC mediana diária: 0,558.
+- Dias com AUC > 0,5: 26 de 30, com p de sinal igual a 3,0e-5.
+- Ganho de Brier: +0,0022, com IC95 por dias de [0,0011; 0,0032].
+- Diferença entre o top 10% e o bottom 10%: +0,064 pp, com IC95 por dias de [0,038; 0,097].
+
+O modelo de 10 min continua reprovado (AUC 0,536). A família de observações também (AUC 0,526, com 0 de 4 dias acima de 0,5).
+
+**Mudança nos padrões:**
+- `score_v1.ml.objective` passa de `relative` para `relative_candle`.
+- `score_v1.ml.score.max_adjust` passa de 0,15 para 0,05. O score fica entre ×0,95 e ×1,05.
+
+**Por que ±5%:**
+- o efeito é pequeno: 6,4 bps de excesso em 15 min entre os decis extremos;
+- o teste de sinal supõe que os dias são independentes;
+- ainda não houve validação ao vivo.
+
+A seta de direção praticamente não muda, porque `direction.confirm_up` é 0,60 e `confirm_down` é 0,40. O teto de regime do ML continua desligado nos objetivos relativos.
+
+**Proteções que continuam valendo:**
+- Se um treino futuro reprovar o modelo, ou se ele passar de `max_model_age_days` (7), o v1 roda sem ML.
+- O treino de velas é diário, às 06:10 UTC.
+
+**Reversão:** voltar `objective` para `relative` e `max_adjust` para 0,15, por config ou por `git revert`.
+
+**Próximo passo:** comparar, durante 1 a 2 semanas, a AUC ao vivo das previsões aplicadas com o 0,558 do walk-forward.

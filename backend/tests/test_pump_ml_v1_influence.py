@@ -51,8 +51,11 @@ def test_quality_gate():
 def test_score_multiplier_is_bounded_and_neutral_at_half():
     s = spec()
     assert v1.ml_score_multiplier(0.5, s) == 1.0
+    k = s["ml"]["score"]["max_adjust"]          # 0.05 by default since 2026-10-08
+    assert v1.ml_score_multiplier(1.0, s) == pytest.approx(1 + k)
+    assert v1.ml_score_multiplier(0.0, s) == pytest.approx(1 - k)
+    s["ml"]["score"]["max_adjust"] = 0.15
     assert v1.ml_score_multiplier(1.0, s) == pytest.approx(1.15)
-    assert v1.ml_score_multiplier(0.0, s) == pytest.approx(0.85)
     assert v1.ml_score_multiplier(None, s) == 1.0
 
 
