@@ -51,8 +51,10 @@ DEFAULT_CONFIG = {
                            # [] = the original 12 price-only columns. Adopt a group only after ablation.
                            "feature_groups":[],
                            # Manual ablation (family candle_ablation): same rows/days, one group at a time.
+                           # Screening size (2026-10-08: 100k x 20 days took ~65 s/variant locally and the
+                           # run was killed); confirm a winner with groups=[it] and more folds.
                            "ablation":{"groups":["btc_beta","candle_structure","volume","pool_context"],
-                                       "horizon_minutes":15,"max_folds":20,"max_rows":100000,"include_all":True}},
+                                       "horizon_minutes":15,"max_folds":15,"max_rows":60000,"include_all":True}},
                  "lookback_days":30, "cohort_cuts":[0.5,0.65,0.8],
                  # 2026-10-07: label = asset endpoint return vs the median endpoint return of
                  # every labelled asset captured in the same minute (same horizon).

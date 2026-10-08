@@ -414,17 +414,24 @@ def needs_bars(cfg: Dict[str, Any], all_groups: bool = False) -> bool:
     return all_groups or bool(set(cfg.get("feature_groups") or []) & NEEDS_BARS)
 
 
+def _bars_from_records(records, closes, bars):
+    for rec in records:
+        if rec["c"] is None:
+            continue
+        t = int(rec["time"].timestamp())
+        closes.setdefault(rec["symbol"], {})[t] = float(rec["c"])
+        bars.setdefault(rec["symbol"], {})[t] = (rec["o"], rec["h"], rec["l"], rec["v"])
+
+
 async def load_bars(conn, symbols: List[str], timeframe: str, lo: datetime, hi: datetime, chunk: int = 10):
-    """(closes, bars) from the same rows, Gate preferred (asyncpg)."""
+    """(closes, bars) from the same rows, Gate preferred (asyncpg). Record conversion runs
+    off the event loop so runtime deadlines stay enforceable."""
+    import asyncio
     closes: Dict[str, Dict[int, float]] = {}
     bars: Dict[str, Dict[int, tuple]] = {}
     for i in range(0, len(symbols), chunk):
-        for rec in await conn.fetch(BARS_SQL, symbols[i:i + chunk], timeframe, lo, hi):
-            if rec["c"] is None:
-                continue
-            t = int(rec["time"].timestamp())
-            closes.setdefault(rec["symbol"], {})[t] = float(rec["c"])
-            bars.setdefault(rec["symbol"], {})[t] = (rec["o"], rec["h"], rec["l"], rec["v"])
+        records = await conn.fetch(BARS_SQL, symbols[i:i + chunk], timeframe, lo, hi)
+        await asyncio.to_thread(_bars_from_records, records, closes, bars)
     return closes, bars
 
 
@@ -504,13 +511,21 @@ def _summary(wf: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def run_candle_ablation(conn, owner, c: Dict[str, Any], diagnostics: Dict[str, Any],
-                              deadline: datetime) -> Dict[str, Any]:
+                              deadline: datetime, progress=None) -> Dict[str, Any]:
     """Feature-group ablation (no model is saved or applied): the SAME rows and test days,
     base columns vs base + one group at a time (+ all groups), walk-forward each, then a
-    day-paired comparison against the base. Variants left when the budget runs out are
-    reported as ``runtime_budget_exhausted``."""
+    day-paired comparison against the base.
+
+    2026-10-08: the first production run was hard-killed past the budget and lost every
+    finished variant. Now every phase is timed, heavy synchronous work runs off the event
+    loop, ``progress(out)`` persists the result after each variant, and a variant only
+    starts when the remaining budget exceeds 1.3x the slowest finished variant; the rest
+    are reported as ``runtime_budget_exhausted``."""
     import asyncio
+    import time
     from .pump_directional_research import walk_forward_evaluation
+    timings: Dict[str, float] = {}
+    tick = time.monotonic()
     research = c["research"]; cand = research["candle"]; ab = cand["ablation"]
     cfg = {**cand, "max_rows": int(ab["max_rows"]),
            "walk_forward": {**research["walk_forward"], "max_folds": int(ab["max_folds"])}}
@@ -518,10 +533,13 @@ async def run_candle_ablation(conn, owner, c: Dict[str, Any], diagnostics: Dict[
     hi = datetime.now(timezone.utc)
     lo = hi - timedelta(days=int(cfg["lookback_days"]))
     closes, bars = await load_bars(conn, symbols, cfg["timeframe"], lo, hi)
+    timings["load_seconds"] = round(time.monotonic() - tick, 1); tick = time.monotonic()
     step = int(cfg["step_seconds"]); h = int(ab["horizon_minutes"]); k = h // (step // 60)
     frame = await asyncio.to_thread(build_frame, closes, cfg, horizons_candles=[k], bars=bars, all_groups=True)
-    rows = training_rows(frame, cfg, k, cfg["label_mode"], names=all_feature_names(cfg))
-    diagnostics["candle_ablation"] = {"symbols": len(symbols), "rows": len(rows), "horizon_minutes": h}
+    timings["frame_seconds"] = round(time.monotonic() - tick, 1); tick = time.monotonic()
+    rows = await asyncio.to_thread(training_rows, frame, cfg, k, cfg["label_mode"], all_feature_names(cfg))
+    timings["rows_seconds"] = round(time.monotonic() - tick, 1)
+    diagnostics["candle_ablation"] = {"symbols": len(symbols), "rows": len(rows), "horizon_minutes": h, **timings}
     spec = {"params": research["params"], "max_threads": 1, "embargo_seconds": int(cfg["embargo_seconds"]),
             "walk_forward": cfg["walk_forward"]}
     options = {k2: research[k2] for k2 in ("calibration_C", "calibration_max_iter", "calibration_method",
@@ -530,10 +548,14 @@ async def run_candle_ablation(conn, owner, c: Dict[str, Any], diagnostics: Dict[
     if ab.get("include_all") and len(ab["groups"]) > 1:
         variants.append(("all", list(ab["groups"])))
     out: Dict[str, Any] = {"horizon_minutes": h, "rows": len(rows), "max_folds": int(ab["max_folds"]),
-                           "variants": {}}
+                           "timings": timings, "variants": {}}
+    if progress:
+        await progress(out)
     base_wf = None
+    slowest = 0.0
     for name, groups in variants:
-        if (deadline - datetime.now(timezone.utc)).total_seconds() < 60:
+        remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
+        if remaining < max(60.0, 1.3 * slowest):
             out["variants"][name] = {"blocked_reason": "runtime_budget_exhausted"}
             continue
         cols = feature_names({**cfg, "feature_groups": groups})
@@ -541,13 +563,16 @@ async def run_candle_ablation(conn, owner, c: Dict[str, Any], diagnostics: Dict[
         wf = await asyncio.wait_for(asyncio.to_thread(
             walk_forward_evaluation, rows, columns=cols, spec=spec, options=options, relative=False),
             timeout=max(1, (deadline - datetime.now(timezone.utc)).total_seconds()))
-        item = {"features": len(cols), "seconds": round((datetime.now(timezone.utc) - t0).total_seconds(), 1),
-                **_summary(wf)}
+        took = (datetime.now(timezone.utc) - t0).total_seconds()
+        slowest = max(slowest, took)
+        item = {"features": len(cols), "seconds": round(took, 1), **_summary(wf)}
         if name == "base":
             base_wf = wf
         elif base_wf is not None:
             item["vs_base"] = paired_vs_base(base_wf, wf)
         out["variants"][name] = item
+        if progress:
+            await progress(out)
     return out
 
 

@@ -108,8 +108,10 @@ def test_ablation_family_saves_no_model_and_reports_variants(monkeypatch):
         async def execute(self, sql, *args): calls.append((sql, args))
         def transaction(self): raise AssertionError("ablation must not open the model-saving transaction")
 
-    async def fake(conn, owner, c, diag, deadline):
-        return {"horizon_minutes": 15, "variants": {"base": {"day_auc_median": 0.55}}}
+    async def fake(conn, owner, c, diag, deadline, progress=None):
+        partial = {"horizon_minutes": 15, "variants": {"base": {"day_auc_median": 0.55}}}
+        await progress(partial)                                   # persisted while running
+        return partial
 
     monkeypatch.setattr(pc, "run_candle_ablation", fake)
     out = asyncio.run(daily.run_owner(Conn(), UUID(int=1), horizons=[15], force=True, family="candle_ablation"))
@@ -118,6 +120,8 @@ def test_ablation_family_saves_no_model_and_reports_variants(monkeypatch):
     lock = [a for q, a in calls if "pg_advisory_unlock" in q][0]
     assert lock[0] == f"pump_ml:candle_ablation:{UUID(int=1)}"
     assert not any("pump_ml_experiments" in q for q, _ in calls)
+    progress_sql = [a for q, a in calls if "payload = payload ||" in q]
+    assert progress_sql and progress_sql[0][1]["ablation"]["variants"]["base"]["day_auc_median"] == 0.55
 
 
 def test_feature_group_and_ablation_config_is_validated():
@@ -142,3 +146,53 @@ def test_book_rows_take_the_open_bucket_and_skip_empty_assets():
     assert r["sp"] == 0.05 and r["bd"] == 1e4 and r["sb"] is None
     json.dumps(out, allow_nan=False)
     assert "WHERE pump_book_5m.observed_at <= EXCLUDED.observed_at" in fh.BOOK_SQL   # never overwrite with older
+
+
+def _ablation_env(monkeypatch, wf_calls):
+    from datetime import datetime, timezone
+    from app.services import pump_directional_research as dr
+    closes = synthetic(n=900); bars = bars_for(closes)
+
+    async def fake_load(conn, symbols, tf, lo, hi):
+        return closes, bars
+
+    def fake_wf(rows, *, columns, spec, options, relative):
+        wf_calls.append(len(columns))
+        return {"scored_days": 2, "folds": [{"day": "d1", "auc": 0.55}, {"day": "d2", "auc": 0.56}],
+                "pooled": {"day_auc_median": 0.555, "days_auc_above_half": 2}}
+
+    class Conn:
+        async def fetch(self, sql, *args):
+            return [{"symbol": s} for s in closes]
+
+    monkeypatch.setattr(pc, "load_bars", fake_load)
+    monkeypatch.setattr(dr, "walk_forward_evaluation", fake_wf)
+    c = eng.config(None)
+    c["research"]["candle"]["ablation"] = {**c["research"]["candle"]["ablation"], "max_rows": 2000}
+    return Conn(), c
+
+
+def test_ablation_persists_progress_after_every_variant(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    wf_calls, saved = [], []
+    conn, c = _ablation_env(monkeypatch, wf_calls)
+
+    async def progress(partial):
+        saved.append(json.loads(json.dumps(partial, default=str)))
+
+    out = asyncio.run(pc.run_candle_ablation(conn, UUID(int=1), c, {}, datetime.now(timezone.utc) + timedelta(hours=1),
+                                             progress=progress))
+    names = ["base", *c["research"]["candle"]["ablation"]["groups"], "all"]
+    assert list(out["variants"]) == names and len(wf_calls) == len(names)
+    assert len(saved) == 1 + len(names)                          # once after setup, then after each variant
+    assert list(saved[2]["variants"]) == ["base", "btc_beta"]    # partial results survive a later kill
+    assert {"load_seconds", "frame_seconds", "rows_seconds"} <= set(out["timings"])
+    assert out["variants"]["btc_beta"]["vs_base"]["days"] == 2
+
+
+def test_ablation_marks_variants_that_do_not_fit_the_budget(monkeypatch):
+    from datetime import datetime, timezone
+    wf_calls = []
+    conn, c = _ablation_env(monkeypatch, wf_calls)
+    out = asyncio.run(pc.run_candle_ablation(conn, UUID(int=1), c, {}, datetime.now(timezone.utc)))
+    assert wf_calls == [] and all(v == {"blocked_reason": "runtime_budget_exhausted"} for v in out["variants"].values())
