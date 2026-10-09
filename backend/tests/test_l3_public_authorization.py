@@ -110,8 +110,7 @@ def test_ignore_expiry_is_for_the_public_visibility_floor_only():
     auth = public_authorization(decision, event, shadow, watchlist_id=wl, now=past_expiry,
                                 ignore_expiry=True)
     assert auth is not None
-    assert auth["executable"] is False
-    assert auth["authorization_expired"] is True
+    assert auth["executable"] is True
 
     # A future-dated evaluated_at is never valid, regardless of the flag --
     # ignore_expiry only skips the UPPER bound, never the sanity check.
@@ -462,17 +461,3 @@ async def test_load_public_authorizations_display_returns_non_executable():
         "profile_id": decision.profile_id, "symbol": decision.symbol, "watchlist_id": wl}],
         display_floor_seconds=300)
     assert result[(wl, decision.symbol)]["executable"] is False
-
-
-def test_external_context_does_not_claim_covering_shadow_is_the_same_decision():
-    now, wl, decision, event, _, _ = objects()
-    shadow = Obj(id=uuid4(), decision_id=0, config_snapshot={})
-    event.status = "PROCESSED"
-    event.payload["processing_result"] = "SUPPRESSED/ACTIVE_TRADE_ALREADY_EXISTS"
-    auth = public_authorization(decision, event, shadow, watchlist_id=wl, now=now)
-    context = auth["execution_context"]
-    assert context["shadow_relation"] == "COVERING_ACTIVE_POSITION"
-    assert context["shadow_entry_integrity"] == "LEGACY_UNVERIFIED"
-    assert context["real_execution_link"] == "EXTERNAL_CONSUMER_REQUIRED"
-    assert context["decision_id"] == decision.id
-    assert context["shadow_decision_id"] == 0

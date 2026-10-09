@@ -113,14 +113,9 @@ async def capture_entry_quote(*, symbol, amount_usdt, max_age_seconds):
                           max_age_seconds=max_age_seconds, now=datetime.now(timezone.utc))
 
 
-def require_current_quote(quote, *, now, max_age_seconds, authorization=None):
+def require_current_quote(quote, *, now, max_age_seconds):
     """Recheck after DB/lock work, immediately before persisting the entry."""
     source_at = _utc(quote.get("source_at"))
     age = (now - source_at).total_seconds()
     if age < 0 or age > float(max_age_seconds):
         raise EntryQuoteUnavailable("ENTRY_QUOTE_EXPIRED_BEFORE_INSERT")
-    if authorization is not None:
-        from .l3_public_authorization import authorization_expiry
-        expiry = authorization_expiry(authorization)
-        if expiry is None or expiry <= now:
-            raise EntryQuoteUnavailable("ENTRY_AUTHORIZATION_EXPIRED")

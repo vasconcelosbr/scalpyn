@@ -88,13 +88,3 @@ def test_slow_request_does_not_rejuvenate_old_book():
     payload["_requested_at"] = (NOW-timedelta(seconds=5)).isoformat()
     with pytest.raises(EntryQuoteUnavailable, match="STALE"):
         estimate(payload)
-
-
-def test_authorization_that_expires_after_capture_cannot_be_inserted():
-    result = estimate()
-    contract = {"evaluated_at": NOW.isoformat(), "feature_evaluations": [
-        {"max_age_seconds": 1, "resolved_feature": {"age_seconds": 0,
-         "source_timestamp": NOW.isoformat()}}]}
-    with pytest.raises(EntryQuoteUnavailable, match="AUTHORIZATION_EXPIRED"):
-        require_current_quote(result, now=NOW+timedelta(seconds=1), max_age_seconds=5,
-                              authorization=contract)

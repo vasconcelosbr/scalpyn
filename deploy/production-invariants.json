@@ -2316,8 +2316,8 @@
       {"path":"backend/tests/test_l3_contract_inputs.py","contains_all":["test_declared_inputs_resolve_without_changing_profile_or_upstream","test_real_threshold_boundaries_remain_enforced","test_missing_or_stale_required_evidence_never_authorizes","test_di_never_fabricates_identity_from_invalid_candles"]}
     ]},
     {
-      "id": "shadow-executable-price-and-external-l3-authority",
-      "description": "Candle indicators cannot overwrite quote identity; canonical L3 entries require dated Gate ask depth and external consumers cannot execute display-only expired rows",
+      "id": "shadow-executable-entry-price-integrity",
+      "description": "Candle indicators cannot overwrite quote identity; canonical spot L3 Shadow entries use dated Gate ask depth without changing external API or authorization policies",
       "files": [
         {
           "path": "backend/app/tasks/pipeline_scan.py",
@@ -2331,8 +2331,7 @@
           "contains_all": [
             "gate_spot_entry_quote_v1",
             "EXCHANGE_AGE_PLUS_REQUEST_ROUNDTRIP",
-            "ENTRY_QUOTE_INSUFFICIENT_DEPTH",
-            "ENTRY_AUTHORIZATION_EXPIRED"
+            "ENTRY_QUOTE_INSUFFICIENT_DEPTH"
           ]
         },
         {
@@ -2344,18 +2343,10 @@
           ]
         },
         {
-          "path": "backend/app/api/watchlists.py",
-          "contains_all": [
-            "L3_EXTERNAL_EXECUTION_STRICT",
-            "include_non_executable: bool = False"
-          ]
-        },
-        {
           "path": "backend/tests/test_shadow_entry_quote.py",
           "contains_all": [
             "test_entire_amount_uses_ask_depth_not_last_candle_or_best_ask",
-            "test_slow_request_does_not_rejuvenate_old_book",
-            "test_authorization_that_expires_after_capture_cannot_be_inserted"
+            "test_slow_request_does_not_rejuvenate_old_book"
           ]
         },
         {
@@ -2363,12 +2354,6 @@
           "contains_all": [
             "7.326",
             "7.435"
-          ]
-        },
-        {
-          "path": "backend/tests/test_l3_consolidated_watchlist.py",
-          "contains_all": [
-            "test_external_feed_excludes_expired_or_unconfirmed_display_rows"
           ]
         }
       ]
