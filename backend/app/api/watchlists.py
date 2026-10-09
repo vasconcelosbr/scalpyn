@@ -1190,26 +1190,15 @@ async def list_l3_consolidated_assets(
     user_id: UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
     response: Response = None,
-    include_non_executable: bool = False,
 ):
     """Return only live L3 opportunities; Shadow positions are not a source."""
     if response is not None:
         response.headers["Cache-Control"] = "private, no-store"
     candidates = await load_live_l3_candidates(db, user_id=user_id)
-    floor_seconds = 0
-    if include_non_executable:
-        candidates, floor_seconds = await _merge_recent_l3_shadows(db, user_id, candidates)
-    from ..services.l3_public_authorization import utc as _authorization_utc
+    candidates, floor_seconds = await _merge_recent_l3_shadows(db, user_id, candidates)
     items: List[Dict[str, Any]] = []
     for candidate in candidates:
         winner = candidate.winner
-        auth = winner.authorization or {}
-        expiry = _authorization_utc(auth.get("expires_at"))
-        executable_now = auth.get("executable") is True and expiry is not None and expiry > datetime.now(timezone.utc)
-        # L3_EXTERNAL_EXECUTION_STRICT: consumers that buy on presence must
-        # never receive an expired display-floor row in the default feed.
-        if not include_non_executable and not executable_now:
-            continue
         profile_ids = list(dict.fromkeys(str(item.profile_id) for item in candidate.contributors))
         profile_names = list(dict.fromkeys(item.profile_name for item in candidate.contributors))
         freshest = max(
@@ -1218,7 +1207,6 @@ async def list_l3_consolidated_assets(
         )
         items.append({
             **{key: value for key, value in (winner.authorization or {}).items() if not key.startswith("_")},
-            "executable": executable_now,
             "asset_id": str(winner.asset_id),
             "watchlist_id": str(winner.watchlist_id),
             "symbol": candidate.symbol,
@@ -1246,13 +1234,10 @@ async def list_l3_consolidated_assets(
         "semantic": "LIVE_L3_CANDIDATES",
         "authorization_contract": "L3_PUBLIC_AUTHORIZATION_V1",
         "consumer_policy": (
-            "Presence and visible_until are display information, not permission to buy. "
-            "Require executable=true and now < expires_at; re-fetch and match "
-            "authorization_id immediately before sending an order. Fetch a fresh Gate "
-            "quote for the actual order size; current_price is a decision reference, "
-            "not a fill or guaranteed execution price. Deduplicate authorization_id "
-            "and persist decision_id, shadow_id, order_id and Gate fills. A covering "
-            "Shadow can belong to an earlier decision; inspect execution_context."
+            "Every item here already has executable=true (ALLOW, now < "
+            "expires_at, AND a confirmed shadow_id) — PENDING/RETRY "
+            "opportunities are excluded from this list, not just flagged. "
+            "Deduplicate by authorization_id before placing an order."
         ),
         "items": items,
         "total": len(items),

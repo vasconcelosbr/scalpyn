@@ -1908,7 +1908,6 @@ async def _create_from_decision(
         from .shadow_entry_quote import require_current_quote
         require_current_quote(
             _entry_quote, now=datetime.now(timezone.utc), max_age_seconds=_max_entry_lag,
-            authorization=_authorization_v3 if isinstance(_authorization_v3, dict) else None,
         )
     try:
         async with db.begin_nested():

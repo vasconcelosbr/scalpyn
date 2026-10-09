@@ -522,9 +522,7 @@ async def load_recently_authorized_l3_shadows(
             watchlist_id=watchlist_id, profile_version=profile_version,
             now=now, ignore_expiry=True,
         )
-        if not auth or not (auth.get("executable") or (
-            auth.get("authorization_expired") is True and auth.get("shadow_status") == "STARTED"
-        )):
+        if not auth or not auth.get("executable"):
             continue
         seen_pairs.add(pair)
         contributions.append(LiveL3Contribution(
