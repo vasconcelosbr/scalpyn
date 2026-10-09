@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -35,6 +35,7 @@ async def test_l3_consolidated_assets_exposes_only_current_watchlist_candidates(
         alpha_score=87.5,
         current_price=123.45,
         refreshed_at=refreshed_at,
+        authorization={"executable": True, "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat()},
     )
     contributor = LiveL3Contribution(
         asset_id=uuid4(),
@@ -221,3 +222,25 @@ def test_live_candidate_universe_does_not_read_shadow_trades():
     assert "l1_asset.symbol == l2_asset.symbol" in full_source
     assert "pool_asset.symbol == l2_asset.symbol" in full_source
     assert "profile.is_active.is_(true)" in full_source
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flag,expiry_offset", [(False, 60), (True, -1), (True, None)])
+@pytest.mark.parametrize("from_display_floor", [False, True])
+async def test_external_feed_excludes_expired_or_unconfirmed_display_rows(monkeypatch, flag, expiry_offset, from_display_floor):
+    auth = {"executable": flag}
+    if expiry_offset is not None:
+        auth["expires_at"] = (datetime.now(timezone.utc)+timedelta(seconds=expiry_offset)).isoformat()
+    contribution = LiveL3Contribution(asset_id=uuid4(), watchlist_id=uuid4(), profile_id=uuid4(),
+        profile_name="Test", symbol="UNI_USDT", alpha_score=70, current_price=7.326,
+        refreshed_at=None, authorization=auth)
+    candidate = ConsolidatedL3Candidate(symbol="UNI_USDT", winner=contribution, contributors=(contribution,))
+    async def load(db, *, user_id): return [] if from_display_floor else [candidate]
+    async def merge(db, user_id, candidates): return [candidate], 300
+    monkeypatch.setattr(watchlists, "load_live_l3_candidates", load)
+    monkeypatch.setattr(watchlists, "_merge_recent_l3_shadows", merge)
+    response = await list_l3_consolidated_assets(user_id=uuid4(), db=object())
+    assert response["items"] == []
+    display = await list_l3_consolidated_assets(user_id=uuid4(), db=object(), include_non_executable=True)
+    assert len(display["items"]) == 1
+    assert display["items"][0]["executable"] is False

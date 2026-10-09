@@ -151,7 +151,11 @@ def public_authorization(decision, event, shadow, *, watchlist_id, profile_versi
     # nothing forced a caller to actually check that. A confirmed Shadow —
     # not just a valid, unexpired contract — is now required to call an
     # opportunity ``executable``; PENDING/RETRY stay tracking-only states.
-    executable = shadow_status == "STARTED" and shadow is not None and not (display and expired)
+    # Visibility never extends execution authority, including ignore_expiry
+    # callers used by the minimum display window.
+    executable = shadow_status == "STARTED" and shadow is not None and not expired
+    shadow_config = (getattr(shadow, "config_snapshot", None) or {}) if shadow else {}
+    shadow_decision_id = getattr(shadow, "decision_id", None) if shadow else None
     return {
         "decision_id": decision.id,
         "authorization_id": digest,
@@ -162,6 +166,29 @@ def public_authorization(decision, event, shadow, *, watchlist_id, profile_versi
         "shadow_status": shadow_status,
         "shadow_id": str(shadow.id) if shadow is not None else None,
         "executable": executable,
+        "execution_context": {
+            "contract_version": "l3_external_execution_context_v1",
+            "decision_id": decision.id,
+            "authorization_id": digest,
+            "shadow_id": str(shadow.id) if shadow is not None else None,
+            "shadow_decision_id": shadow_decision_id,
+            "shadow_relation": (
+                "SAME_DECISION" if shadow_decision_id == decision.id else
+                "COVERING_ACTIVE_POSITION" if active_trade_covered else "UNCONFIRMED"
+            ),
+            "decision_price_envelope": metrics.get("price_envelope"),
+            "reference_price_semantics": "DECISION_REFERENCE_NOT_EXECUTION_PRICE",
+            "shadow_entry_quote": shadow_config.get("entry_quote"),
+            "shadow_entry_integrity": (
+                "EXECUTABLE_QUOTE_ESTIMATE" if shadow_config.get("entry_quote") else
+                "LEGACY_UNVERIFIED"
+            ),
+            "real_execution_link": "EXTERNAL_CONSUMER_REQUIRED",
+            "shadow_result_semantics": "SIMULATED_NOT_GATE_REALIZED_PNL",
+            "real_exit_confirmation": "GATE_SELL_FILLS_REQUIRED",
+            "requires_gate_quote_before_order": True,
+            "requires_authorization_recheck": True,
+        },
         "shadow_reason": result or ("SHADOW_RETRY_PENDING" if status == "RETRY" else None),
         "alpha_score": metrics.get("final_score") if metrics.get("final_score") is not None else decision.score,
         "current_price": metrics.get("price"),
