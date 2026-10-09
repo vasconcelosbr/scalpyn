@@ -249,12 +249,24 @@ def _detail_actual(detail: Dict[str, Any]) -> Any:
     return jsonable_value(detail.get("actual"))
 
 
+def _declared_candle_asset(asset: dict, condition: dict) -> dict:
+    """Use request-bound inputs in the initial gate as well as final L3."""
+    indicator = condition.get("indicator") or condition.get("field")
+    candidates = [row for row in asset.get("_l3_contract_ohlcv_candidates") or []
+                  if row.get("indicator") == indicator
+                  and row.get("timeframe") == condition.get("timeframe")]
+    if condition.get("source") != "ohlcv" or len(candidates) != 1:
+        return asset
+    value = candidates[0]["actual"]
+    return {**asset, indicator: value, "indicators": {**(asset.get("indicators") or {}), indicator: value}}
+
+
 def _evaluate_filter(
     rule_engine: RuleEngine,
     asset: Dict[str, Any],
     condition: Dict[str, Any],
 ) -> Dict[str, Any]:
-    status, detail = rule_engine.evaluate_condition_status(condition, asset, field_key="field")
+    status, detail = rule_engine.evaluate_condition_status(condition, _declared_candle_asset(asset, condition), field_key="field")
     payload: Dict[str, Any] = {
         "type": "filter",
         "indicator": _condition_indicator(condition, field_key="field"),
@@ -273,7 +285,7 @@ def _evaluate_entry_trigger(
     asset: Dict[str, Any],
     condition: Dict[str, Any],
 ) -> Dict[str, Any]:
-    status, detail = rule_engine.evaluate_condition_status(condition, asset, field_key="indicator")
+    status, detail = rule_engine.evaluate_condition_status(condition, _declared_candle_asset(asset, condition), field_key="indicator")
     payload: Dict[str, Any] = {
         "type": "entry_trigger",
         "indicator": _condition_indicator(condition, field_key="indicator"),
@@ -293,7 +305,7 @@ def _evaluate_signal_condition(
     condition: Dict[str, Any],
 ) -> Dict[str, Any]:
     field_key = "indicator" if condition.get("indicator") else "field"
-    status, detail = rule_engine.evaluate_condition_status(condition, asset, field_key=field_key)
+    status, detail = rule_engine.evaluate_condition_status(condition, _declared_candle_asset(asset, condition), field_key=field_key)
     payload: Dict[str, Any] = {
         "type": "signal",
         "indicator": _condition_indicator(condition, field_key=field_key),

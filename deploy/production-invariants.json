@@ -2305,5 +2305,15 @@
       {"path":"backend/tests/test_pump_executive_insights.py","contains_all":["test_seven_hits_eight_unknown_never_become_operational_success_rate","test_indicator_ranges_do_not_select_by_outcome_or_fill_missing","test_shadow_invalid_lineage_not_repaired_and_profiles_sources_policies_separate"]},
       {"path":"frontend/lib/pump-intelligence.test.ts","contains_all":["winner concentration and group hit rate","seven hits and eight unknown","GMT minus three is fixed"]}
     ]}
+    ,{"id":"l3-declared-input-provenance","description":"Resolve declared closed M1 DI and observed book spread before L3 authorization without weakening required conditions",
+    "files":[
+      {"path":"backend/app/services/l3_contract_inputs.py","contains_all":["L3_DECLARED_INPUT_PROVENANCE","closed_di_candidates","capture_contract_version","fetch_raw_orderbook","_l3_live_order_book_snapshot"]},
+      {"path":"backend/app/tasks/pipeline_scan.py","contains_all":["assets = await prepare_l3_contract_inputs(db, assets, profile_config or {}, runtime_policy)","L3_DECLARED_INPUTS_BEFORE_REJECTIONS","contract_inputs_prepared=True"]},
+      {"path":"backend/app/services/pipeline_rejections.py","contains_all":["def _declared_candle_asset","_declared_candle_asset(asset, condition)"]},
+      {"path":"backend/app/services/l3_authorization_contract_v3.py","contains_all":["_l3_contract_ohlcv_candidates"]},
+      {"path":"backend/app/services/indicator_classifier.py","contains_all":["if name == \"di_trend\":"]},
+      {"path":"backend/app/services/profile_engine.py","contains_all":["Single-asset L3 evaluation must use the same exact candle inputs"]},
+      {"path":"backend/tests/test_l3_contract_inputs.py","contains_all":["test_declared_inputs_resolve_without_changing_profile_or_upstream","test_real_threshold_boundaries_remain_enforced","test_missing_or_stale_required_evidence_never_authorizes","test_di_never_fabricates_identity_from_invalid_candles"]}
+    ]}
   ]
 }
