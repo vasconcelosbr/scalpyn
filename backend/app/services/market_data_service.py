@@ -262,12 +262,14 @@ class MarketDataService:
 
         async def _primary() -> Optional[Dict[str, Any]]:
             async with httpx.AsyncClient(timeout=8) as client:
+                requested_at = datetime.now(timezone.utc)
                 resp = await client.get(
                     GATE_ORDERBOOK_URL,
                     params={"currency_pair": pair, "limit": depth, "with_id": "false"},
                 )
                 resp.raise_for_status()
                 payload = resp.json()
+                payload["_requested_at"] = requested_at.isoformat()
                 payload["_observed_at"] = datetime.now(timezone.utc).isoformat()
                 return payload
 

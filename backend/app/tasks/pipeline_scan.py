@@ -613,7 +613,10 @@ def _build_pipeline_asset(
         "_mtf_merged_indicators": mtf_merged_indicators,
         "_price_source_at": price_source_at,
         "_score_source_at": score_source_at,
-        **{k: v for k, v in indicators.items() if isinstance(v, (int, float, bool, str))},
+        # MARKET_PRICE_IDENTITY: a candle's `price` must never replace the
+        # metadata quote while retaining the metadata clock (UNI incident).
+        **{k: v for k, v in indicators.items()
+           if k != "price" and isinstance(v, (int, float, bool, str))},
     }
 
     if "atr_pct" in asset and "atr_percent" not in asset:
@@ -1537,6 +1540,9 @@ def _decision_metrics(asset: dict, processed: dict) -> dict:
             "value": asset.get("price"),
             "source": "market_metadata",
             "source_at": _jsonable(asset.get("_price_source_at")),
+            "semantics": "DECISION_REFERENCE_NOT_FILL",
+            "clock_semantics": "METADATA_REFRESH_NOT_MARKET_EVENT",
+            "verified_for_execution": False,
         },
         "change_24h": asset.get("change_24h"),
         "volume_24h": asset.get("volume_24h"),

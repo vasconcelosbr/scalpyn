@@ -1624,6 +1624,10 @@ async def _create_from_decision(
     # decision. Looking up OHLCV after ALLOW creates a second clock and is only
     # retained as an explicitly degraded compatibility fallback.
     _price_envelope = (decision.metrics or {}).get("price_envelope") or {}
+    _gate_spot_entry = (
+        normalized_source == SHADOW_SOURCE_L3
+        and (getattr(decision, "direction", None) or "SPOT").upper() == "SPOT"
+    )
     _entry_price_mode = "DECISION_ENVELOPE"
     try:
         entry_price = float(_price_envelope.get("value"))
@@ -1645,13 +1649,13 @@ async def _create_from_decision(
         )
     entry_ts = decision.created_at if entry_price is not None else None
     initial_status = "RUNNING"
-    if entry_price is None:
+    if entry_price is None and not _gate_spot_entry:
         _entry_price_mode = "DEGRADED_OHLCV_FALLBACK"
         entry_price, entry_price_source_at = await _get_current_price_multi_tf(
             db, decision.symbol, as_of=decision.created_at
         )
         entry_ts = decision.created_at if entry_price is not None else None
-    if entry_price is None:
+    if entry_price is None and not _gate_spot_entry:
         _entry_price_mode = "DEGRADED_NEXT_OPEN_FALLBACK"
         entry_price, entry_ts = await _next_1m_open(
             db, decision.symbol, decision.created_at
@@ -1672,10 +1676,30 @@ async def _create_from_decision(
         _entry_quality = "DEGRADED"
     elif _entry_lag_seconds is None:
         _entry_quality = "UNAVAILABLE"
-    elif _entry_lag_seconds > float(_max_entry_lag):
+    elif _entry_lag_seconds < 0 or _entry_lag_seconds > float(_max_entry_lag):
         _entry_quality = "DEGRADED"
     else:
         _entry_quality = "OK"
+
+    # SHADOW_EXECUTABLE_ENTRY: the decision price is a reference, never a
+    # pretend fill. New canonical spot Shadows start at the actual capture
+    # time with sufficient Gate ask depth for their configured amount.
+    # Existing positions and historical records are never rewritten.
+    _entry_quote = None
+    _decision_price_reference = entry_price
+    if _gate_spot_entry:
+        from .shadow_entry_quote import capture_entry_quote
+        _entry_quote = await capture_entry_quote(
+            symbol=decision.symbol, amount_usdt=amount_usdt,
+            max_age_seconds=_max_entry_lag,
+        )
+        entry_price = _entry_quote["value"]
+        entry_ts = datetime.fromisoformat(_entry_quote["entry_at"])
+        entry_price_source_at = datetime.fromisoformat(_entry_quote["source_at"])
+        _entry_lag_seconds = _entry_quote["age_seconds"]
+        _entry_price_mode = "GATE_ASK_DEPTH"
+        _entry_quality = "OK"
+        initial_status = "RUNNING"
 
     if entry_price is not None and entry_price > 0 and tp_pct > 0 and sl_pct > 0:
         tp_price = entry_price * (1 + tp_pct / 100.0)
@@ -1727,12 +1751,18 @@ async def _create_from_decision(
         if isinstance(entry_price_source_at, datetime)
         else None
     )
-    config_snap["entry_price_reference"] = entry_price
+    config_snap["entry_price_reference"] = _decision_price_reference
     config_snap["entry_price_observed"] = entry_price
     config_snap["entry_price_realized"] = None
     config_snap["entry_price_lag_seconds"] = _entry_lag_seconds
     config_snap["entry_quality"] = _entry_quality
     config_snap["entry_price_contract_version"] = "decision_price_v1"
+    if _entry_quote is not None:
+        config_snap["entry_price_contract_version"] = _entry_quote["contract_version"]
+        config_snap["entry_quote"] = _entry_quote
+        config_snap["decision_price_envelope"] = deepcopy(_price_envelope)
+        config_snap["entry_decision_id"] = getattr(decision, "id", None)
+        config_snap["entry_decision_at"] = decision.created_at.isoformat()
     config_snap["entry_price_mode"] = _entry_price_mode
     config_snap["feature_source_at"] = (
         native_capture.source_at.isoformat()
@@ -1874,6 +1904,12 @@ async def _create_from_decision(
             )
             return None
 
+    if _entry_quote is not None:
+        from .shadow_entry_quote import require_current_quote
+        require_current_quote(
+            _entry_quote, now=datetime.now(timezone.utc), max_age_seconds=_max_entry_lag,
+            authorization=_authorization_v3 if isinstance(_authorization_v3, dict) else None,
+        )
     try:
         async with db.begin_nested():
             res = await db.execute(

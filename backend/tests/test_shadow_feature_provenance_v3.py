@@ -10,6 +10,27 @@ from app.utils.indicator_merge import MergedIndicators
 NOW = datetime(2026, 8, 27, 12, 0, tzinfo=timezone.utc)
 
 
+def test_uni_candle_price_cannot_overwrite_market_quote_with_a_new_clock():
+    candle_indicators = {"price": 7.326, "close": 7.326, "rsi": 61.0}
+    asset = _build_pipeline_asset(
+        "UNI_USDT", name="UNI", score_row=None, indicators=candle_indicators, price=7.435,
+        price_source_at=NOW, has_market_metadata=True,
+    )
+    metrics = _decision_metrics(asset, {})
+    assert asset["price"] == 7.435
+    assert asset["indicators"]["price"] == 7.326
+    assert metrics["price_envelope"]["value"] == 7.435
+    assert metrics["price_envelope"]["source_at"] == "2026-08-27T12:00:00Z"
+    assert metrics["indicators_snapshot"]["price"]["value"] == 7.326
+
+
+def test_missing_market_quote_is_not_filled_with_an_indicator_price():
+    asset = _build_pipeline_asset("UNI_USDT", name="UNI", score_row=None,
+                                  has_market_metadata=False, indicators={"price": 7.326}, price=None)
+    assert asset["price"] is None
+    assert _decision_metrics(asset, {})["price_envelope"]["value"] is None
+
+
 def test_alpha_score_timestamp_is_inherited_by_all_decision_score_fields() -> None:
     merged = MergedIndicators()
     merged.values = {"adx": 20.0}
@@ -50,6 +71,9 @@ def test_alpha_score_timestamp_is_inherited_by_all_decision_score_fields() -> No
         "value": 100.0,
         "source": "market_metadata",
         "source_at": "2026-08-27T11:59:58Z",
+        "semantics": "DECISION_REFERENCE_NOT_FILL",
+        "clock_semantics": "METADATA_REFRESH_NOT_MARKET_EVENT",
+        "verified_for_execution": False,
     }
 
 
