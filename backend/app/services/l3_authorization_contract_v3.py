@@ -315,7 +315,10 @@ def _registry_candidate(raw: dict, *, market_scope: dict, evaluated_at: datetime
         "partial_window": bool(raw.get("partial_window", False)),
         "coverage_pct": raw.get("coverage_pct"),
         **{key: deepcopy(raw[key]) for key in ("reference_window", "dependencies") if key in raw},
-        **({"request_bound": True} if raw.get("request_bound") else {}),
+        **({"request_bound": True, **{key: _canonicalize(raw[key]) for key in (
+            "producer_version", "capture_contract_version", "source_ingested_at", "sample_count",
+            "config_profile_id", "config_user_id", "config_updated_at", "config_hash",
+        ) if key in raw}} if raw.get("request_bound") else {}),
     }
 
 
@@ -513,6 +516,7 @@ def build_feature_registry(asset: dict, *, evaluated_at: datetime) -> list[dict]
     })
     merged = asset.get("_merged_indicators")
     raw_candidates = list(getattr(merged, "candidates", []) if merged is not None else [])
+    raw_candidates.extend(asset.get("_l3_contract_ohlcv_candidates") or [])
     # Block inputs re-read the indicator store for the block timeframe; when
     # that equals the merged timeframe the very same row comes back. A re-read
     # is not a second producer, so it must not make the identity ambiguous.

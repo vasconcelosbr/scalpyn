@@ -2034,6 +2034,7 @@ async def _evaluate_l3_decisions(
     source_watchlist_id=None,
     read_only=False,
     order_flow_prepared=False,
+    contract_inputs_prepared=False,
 ) -> list[dict]:
     """Avaliar candidatos L3 (rules + entry triggers) e produzir decisions.
 
@@ -2052,6 +2053,9 @@ async def _evaluate_l3_decisions(
     from ..services.block_condition_timeframe import prepare_block_candle_inputs
     assets = await prepare_block_candle_inputs(db, assets, profile_config or {})
     runtime_policy = policy_from_profile(profile_config)
+    from ..services.l3_contract_inputs import prepare_l3_contract_inputs
+    if not contract_inputs_prepared:
+        assets = await prepare_l3_contract_inputs(db, assets, profile_config or {}, runtime_policy)
     engine = ProfileEngine(profile_config)
     engine.score_engine = _RobustScoreShim(
         thresholds=(score_config or {}).get("thresholds")
@@ -4505,6 +4509,13 @@ async def _run_pipeline_scan():
                     assets, profile_config, db=db, user_id=wl.user_id,
                     pool_id=wl.source_pool_id, watchlist_id=wl.id,
                 )
+                # L3_DECLARED_INPUTS_BEFORE_REJECTIONS: initial and final gates
+                # must read the same requested candle and observed book.
+                from ..services.l3_contract_inputs import prepare_l3_contract_inputs
+                assets = await prepare_l3_contract_inputs(
+                    db, assets, profile_config or {},
+                    (profile_config or {}).get("_l3_gate_runtime_policy") or {},
+                )
                 profile_passed, rejected_rows = evaluate_rejections(
                     assets,
                     profile_config=profile_config,
@@ -4594,6 +4605,7 @@ async def _run_pipeline_scan():
                     watchlist_level=wl.level,
                     source_watchlist_id=wl.source_watchlist_id,
                     order_flow_prepared=order_flow_prepared,
+                    contract_inputs_prepared=True,
                 )
                 # Technical filters/signals have now passed. Only at this
                 # point may Social Score change ranking or block a final

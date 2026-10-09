@@ -995,6 +995,12 @@ class ProfileEngine:
 
         # ── 2. Filters ────────────────────────────────────────────────────────
         filter_conditions = self.filters_config.get("conditions", [])
+        # Single-asset L3 evaluation must use the same exact candle inputs
+        # as the watchlist filter path and the final authorization contract.
+        for condition in filter_conditions:
+            self._apply_exact_timeframe_override(
+                symbol, condition, condition.get("field") or condition.get("indicator", ""), eval_data
+            )
         filter_result = self.rule_engine.evaluate(
             filter_conditions,
             eval_data,

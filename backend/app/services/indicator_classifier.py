@@ -408,6 +408,10 @@ def timeframe_semantics(name: str) -> TimeframeSemantics:
     other fields) and comparing them against "5m vs 30m" is a category
     error, not evidence of a bug.
     """
+    # DI trend inherits the candle identity of DI+ and DI-, even though it
+    # is derived as a boolean rather than scheduled as its own family.
+    if name == "di_trend":
+        return "CANDLE_TIMEFRAME"
     if name in _ROLLING_WINDOW_FIELDS:
         return "ROLLING_WINDOW"
     if name in _COMPOSITE_FIELDS:
