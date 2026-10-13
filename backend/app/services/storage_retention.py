@@ -24,13 +24,14 @@ TABLES = (
 
 def selection_sql(table):
     if table == TABLES[0]:
+        # rejected_from_closed_rows counts normal open/unsettled candles routed
+        # to ohlcv_live. It is not an ingestion error; status/error_code are.
         return """WITH fresh AS MATERIALIZED (
             SELECT symbol,timeframe,capture_contract_version
             FROM ohlcv_state_ingestion_observations WHERE observed_at >= $1
             ORDER BY observed_at DESC LIMIT $4
         ) SELECT t.ctid::text tid,to_jsonb(t)::text data FROM ohlcv_state_ingestion_observations t
         WHERE t.observed_at < $1 AND t.status='ok' AND t.error_code IS NULL
-          AND t.rejected_from_closed_rows=0
           AND EXISTS (SELECT 1 FROM fresh f WHERE f.symbol=t.symbol AND f.timeframe=t.timeframe
                       AND f.capture_contract_version=t.capture_contract_version)
           AND NOT EXISTS (SELECT 1 FROM storage_retention_holds h WHERE h.table_name=$5

@@ -91,7 +91,9 @@ async def exercise_database(url):
         assert (await run_retention(conn, owner, force=True))["status"] == "dry_run_required"
         dry = await run_retention(conn, owner, force=True, preview=True)
         assert dry["status"] == "completed" and dry["deleted"] == 0
-        assert [b["candidates"] for b in dry["batches"]] == [1,1,1]
+        # Healthy collection with open candles is eligible too. Errors, holds,
+        # missing fresh evidence, pending work and all training data stay intact.
+        assert [b["candidates"] for b in dry["batches"]] == [2,1,1]
         assert (await run_retention(conn, owner))["status"] == "not_due"
         # A second connection holding the model lock blocks cleanup.
         lock_conn = await asyncpg.connect(url)
@@ -104,7 +106,7 @@ async def exercise_database(url):
         assert await conn.fetchval(f"SELECT jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text)::text FROM {TABLES[0]} t") == before[TABLES[0]]
         await conn.execute("ALTER TABLE storage_retention_batches DROP CONSTRAINT fail_archive")
         result = await run_retention(conn, owner, force=True)
-        assert result["deleted"] == 3 and result["status"] == "completed"
+        assert result["deleted"] == 4 and result["status"] == "completed"
         for table in ("pump_opportunity_labels", "shadow_trades"):
             assert await conn.fetchval(f"SELECT jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text)::text FROM {table} t") == before[table]
         for batch in await conn.fetch("SELECT * FROM storage_retention_batches WHERE deleted_count>0"):
