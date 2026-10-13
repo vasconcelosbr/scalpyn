@@ -24,6 +24,8 @@ TABLES = (
 
 def selection_sql(table):
     if table == TABLES[0]:
+        # Keep EXISTS correlated (OFFSET 0) so LIMIT uses the ordered index
+        # instead of a global semijoin/sort over the historical telemetry.
         # rejected_from_closed_rows counts normal open/unsettled candles routed
         # to ohlcv_live. It is not an ingestion error; status/error_code are.
         return """WITH fresh AS MATERIALIZED (
@@ -33,22 +35,22 @@ def selection_sql(table):
         ) SELECT t.ctid::text tid,to_jsonb(t)::text data FROM ohlcv_state_ingestion_observations t
         WHERE t.observed_at < $1 AND t.status='ok' AND t.error_code IS NULL
           AND EXISTS (SELECT 1 FROM fresh f WHERE f.symbol=t.symbol AND f.timeframe=t.timeframe
-                      AND f.capture_contract_version=t.capture_contract_version)
+                      AND f.capture_contract_version=t.capture_contract_version OFFSET 0)
           AND NOT EXISTS (SELECT 1 FROM storage_retention_holds h WHERE h.table_name=$5
               AND (h.symbol IS NULL OR h.symbol=t.symbol)
-              AND t.observed_at BETWEEN h.starts_at AND h.ends_at)
+              AND t.observed_at BETWEEN h.starts_at AND h.ends_at OFFSET 0)
           AND $3::uuid IS NOT NULL
-        ORDER BY t.observed_at,t.symbol,t.timeframe,t.capture_contract_version
+        ORDER BY t.observed_at DESC,t.symbol DESC,t.timeframe DESC,t.capture_contract_version DESC
         LIMIT $2 FOR UPDATE OF t SKIP LOCKED"""
     if table == TABLES[1]:
         return """SELECT t.ctid::text tid,to_jsonb(t)::text data FROM ohlcv_settlement_latency_samples t
         WHERE t.observed_at < $1 AND t.found AND t.is_closed
           AND EXISTS (SELECT 1 FROM ohlcv_settlement_latency_samples f
               WHERE f.symbol=t.symbol AND f.timeframe=t.timeframe AND f.observed_at >= $1
-                AND f.candle_open_time >= $1 LIMIT 1)
+                AND f.candle_open_time >= $1 LIMIT 1 OFFSET 0)
           AND NOT EXISTS (SELECT 1 FROM storage_retention_holds h WHERE h.table_name=$5
               AND (h.symbol IS NULL OR h.symbol=t.symbol)
-              AND t.observed_at BETWEEN h.starts_at AND h.ends_at)
+              AND t.observed_at BETWEEN h.starts_at AND h.ends_at OFFSET 0)
           AND $3::uuid IS NOT NULL AND $4::integer > 0
         ORDER BY t.symbol,t.timeframe,t.candle_open_time,t.delay_target_seconds
         LIMIT $2 FOR UPDATE OF t SKIP LOCKED"""
@@ -57,9 +59,9 @@ def selection_sql(table):
         WHERE t.user_id=$3 AND t.completed_at < $1 AND t.resource_block IS NULL
           AND EXISTS (SELECT 1 FROM pump_opportunity_labels l
               WHERE l.observation_id=t.observation_id AND l.label_spec_hash=t.label_spec_hash
-                AND l.horizon_minutes=t.horizon_minutes)
+                AND l.horizon_minutes=t.horizon_minutes OFFSET 0)
           AND NOT EXISTS (SELECT 1 FROM storage_retention_holds h WHERE h.table_name=$5
-              AND t.completed_at BETWEEN h.starts_at AND h.ends_at)
+              AND t.completed_at BETWEEN h.starts_at AND h.ends_at OFFSET 0)
           AND $4::integer > 0
         ORDER BY t.completed_at,t.observation_id,t.label_spec_hash,t.horizon_minutes
         LIMIT $2 FOR UPDATE OF t SKIP LOCKED"""
@@ -86,6 +88,7 @@ async def process_batch(conn, owner, run_id, table, cutoff, cfg):
     async with conn.transaction():
         await conn.execute("SELECT set_config('statement_timeout',$1,true)", str(cfg.statement_timeout_ms))
         await conn.execute("SELECT set_config('lock_timeout',$1,true)", str(cfg.lock_timeout_ms))
+        await conn.execute("SELECT set_config('temp_file_limit',$1,true)", f"{cfg.max_temp_file_mb}MB")
         # No newly placed hold may race with a batch's selection/deletion.
         await conn.execute("LOCK TABLE storage_retention_holds IN SHARE MODE")
         before = await conn.fetchval("SELECT pg_total_relation_size($1::regclass)", table)

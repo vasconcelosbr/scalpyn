@@ -122,6 +122,20 @@ async def exercise_database(url):
         capped = await run_retention(conn, owner, force=True)
         assert len(capped["batches"]) == 3 and capped["deleted"] == 3
         assert capped["status"] == "batch_budget"
+        # A history-wide sort with row locks spills at this memory budget.
+        # The ordered index must find the limited batch without any temp files.
+        await conn.execute("""INSERT INTO ohlcv_state_ingestion_observations
+            SELECT now()-interval '20 days'+g*interval '1 second','perf','1m','v1',
+                'ok',NULL,1,1 FROM generate_series(1,30000) g;
+            INSERT INTO ohlcv_state_ingestion_observations VALUES(now(),'perf','1m','v1','ok',NULL,1,1);
+            ANALYZE ohlcv_state_ingestion_observations;
+        """)
+        async with conn.transaction():
+            await conn.execute("SET LOCAL work_mem='64kB'")
+            await conn.execute("SET LOCAL temp_file_limit='0'")
+            cutoff = await conn.fetchval("SELECT now()-interval '7 days'")
+            rows = await conn.fetch(selection_sql(TABLES[0]), cutoff, 100, owner, 10000, TABLES[0])
+            assert len(rows) == 100
     finally:
         await conn.execute(f"DROP SCHEMA {schema} CASCADE")
         await conn.close()

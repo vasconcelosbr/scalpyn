@@ -11,6 +11,7 @@ class StorageRetentionConfig(BaseModel):
     batch_rows: int = Field(1000, ge=1, le=10000)
     max_batches_per_run: int = Field(10, ge=3, le=100)
     statement_timeout_ms: int = Field(3000, ge=100, le=30000)
+    max_temp_file_mb: int = Field(16, ge=1, le=1024)
     lock_timeout_ms: int = Field(500, ge=1, le=3000)
     max_runtime_seconds: int = Field(60, ge=1, le=120)
     telemetry_retention_days: int = Field(7, ge=1)

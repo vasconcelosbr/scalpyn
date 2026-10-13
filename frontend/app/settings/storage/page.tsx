@@ -9,6 +9,7 @@ type State = { config: Config; schema: { properties: Record<string, { type?: str
 const labels: Record<string, string> = {
   cadence_seconds: "Intervalo entre execuções (segundos)", batch_rows: "Registros por lote",
   max_batches_per_run: "Máximo de lotes por execução", statement_timeout_ms: "Tempo máximo de consulta (ms)",
+  max_temp_file_mb: "Espa�o tempor�rio m�ximo por consulta (MB)",
   lock_timeout_ms: "Espera máxima por bloqueio (ms)", max_runtime_seconds: "Duração máxima da execução (segundos)",
   telemetry_retention_days: "Retenção da telemetria (dias)", completed_label_queue_retention_days: "Retenção da fila concluída (dias)",
   fresh_sample_rows: "Amostra de evidências recentes", max_wal_bytes_per_run: "Limite de WAL por execução (bytes)",
