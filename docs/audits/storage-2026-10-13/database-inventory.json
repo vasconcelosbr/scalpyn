@@ -1,0 +1,5150 @@
+{
+  "cutoff": {
+    "query": "SELECT now() cutoff,pg_database_size(current_database()) database_bytes",
+    "rows": [
+      {
+        "cutoff": "2026-10-13 15:06:53.626037+00:00",
+        "database_bytes": 88594499263
+      }
+    ]
+  },
+  "largest": {
+    "query": "SELECT n.nspname schema,c.relname table_name,pg_total_relation_size(c.oid) total_bytes,pg_table_size(c.oid) table_bytes,pg_indexes_size(c.oid) index_bytes,s.n_live_tup estimated_live_rows,s.n_dead_tup estimated_dead_rows,s.last_autovacuum,s.last_autoanalyze FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace LEFT JOIN pg_stat_user_tables s ON s.relid=c.oid WHERE c.relkind='r' AND n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%' ORDER BY total_bytes DESC LIMIT 30",
+    "rows": [
+      {
+        "schema": "public",
+        "table_name": "indicators",
+        "total_bytes": 38341017600,
+        "table_bytes": 36958216192,
+        "index_bytes": 1382801408,
+        "estimated_live_rows": 5198827,
+        "estimated_dead_rows": 291675,
+        "last_autovacuum": "2026-10-08 11:20:27.057562+00:00",
+        "last_autoanalyze": "2026-10-12 11:16:46.372363+00:00"
+      },
+      {
+        "schema": "public",
+        "table_name": "pump_radar_indicator_values",
+        "total_bytes": 5504327680,
+        "table_bytes": 4538114048,
+        "index_bytes": 966213632,
+        "estimated_live_rows": 8060947,
+        "estimated_dead_rows": 15898,
+        "last_autovacuum": "2026-09-29 17:35:02.605211+00:00",
+        "last_autoanalyze": "2026-09-29 17:39:07.632104+00:00"
+      },
+      {
+        "schema": "public",
+        "table_name": "pump_opportunity_labels",
+        "total_bytes": 5052342272,
+        "table_bytes": 4699389952,
+        "index_bytes": 352952320,
+        "estimated_live_rows": 2277803,
+        "estimated_dead_rows": 2939,
+        "last_autovacuum": "2026-10-08 15:44:51.929369+00:00",
+        "last_autoanalyze": "2026-10-08 08:35:53.176156+00:00"
+      },
+      {
+        "schema": "public",
+        "table_name": "decisions_log",
+        "total_bytes": 4515037184,
+        "table_bytes": 4203978752,
+        "index_bytes": 311058432,
+        "estimated_live_rows": 848610,
+        "estimated_dead_rows": 663,
+        "last_autovacuum": "2026-10-13 01:28:14.716917+00:00",
+        "last_autoanalyze": "2026-10-03 14:53:21.089720+00:00"
+      },
+      {
+        "schema": "public",
+        "table_name": "shadow_l3_flow_trades",
+        "total_bytes": 4295122944,
+        "table_bytes": 1565868032,
+        "index_bytes": 2729254912,
+        "estimated_live_rows": 15112229,
+        "estimated_dead_rows": 49904,
+        "last_autovacuum": "2026-10-12 03:34:14.881522+00:00",
+        "last_autoanalyze": "2026-10-12 05:45:10.931637+00:00"
+      },
+      {
+        "schema": "public",
+        "table_name": "ohlcv_state_ingestion_observations",
+        "total_bytes": 3946520576,
+        "table_bytes": 2275852288,
+        "index_bytes": 1670668288,
+        "estimated_live_rows": 13894053,
+        "estimated_dead_rows": 0,
+        "last_autovacuum": "2026-10-13 04:54:49.065733+00:00",
+        "last_autoanalyze": "2026-10-10 11:19:36.698248+00:00"
+      },
+      {
+        "schema": "public",
+        "table_name": "shadow_l3_exit_decisions",
+        "total_bytes": 3768279040,
+        "table_bytes": 3726843904,
+        "index_bytes": 41435136,
+        "estimated_live_rows": 606911,
+        "estimated_dead_rows": 4,
+        "last_autovacuum": "2026-10-12 10:48:33.413783+00:00",
+        "last_autoanalyze": "2026-10-12 17:08:39.374661+00:00"
+      },
+      {
+        "schema": "public",
+        "table_name": "shadow_trades",
+        "total_bytes": 3671138304,
+        "table_bytes": 3425214464,
+        "index_bytes": 245923840,
+        "estimated_live_rows": 343216,
+        "estimated_dead_rows": 47764,
+        "last_autovacuum": null,
+        "last_autoanalyze": "2026-10-09 07:47:36.613195+00:00"
+      },
+      {
+        "schema": "public",
+        "table_name": "ohlcv",
+        "total_bytes": 3267411968,
+        "table_bytes": 1220632576,
+        "index_bytes": 2046779392,
+        "estimated_live_rows": 8387150,
+        "estimated_dead_rows": 53215,
+        "last_autovacuum": "2026-10-06 00:21:09.568168+00:00",
+        "last_autoanalyze": "2026-10-13 04:51:50.991595+00:00"
+      },
+      {
+        "schema": "public",
+        "table_name": "pump_opportunity_observations",
+        "total_bytes": 2920669184,
+        "table_bytes": 2753282048,
+        "index_bytes": 167387136,
+        "estimated_live_rows": 410225,
+        "estimated_dead_rows": 2220,
+        "last_autovacuum": "2026-10-08 13:33:14.151090+00:00",
+        "last_autoanalyze": "2026-10-08 18:35:16.641089+00:00"
+      },
+      {
+        "schema": "public",
+        "table_name": "opportunity_snapshots",
+        "total_bytes": 1589641216,
+        "table_bytes": 1036550144,
+        "index_bytes": 553091072,
+        "estimated_live_rows": 253717,
+        "estimated_dead_rows": 6426,
+        "last_autovacuum": null,
+        "last_autoanalyze": "2026-10-03 10:21:04.567813+00:00"
+      },
+      {
+        "schema": "public",
+        "table_name": "pump_radar_ohlcv",
+        "total_bytes": 1402740736,
+        "table_bytes": 818929664,
+        "index_bytes": 583811072,
+        "estimated_live_rows": 2860688,
+        "estimated_dead_rows": 181752,
+        "last_autovacuum": "2026-09-29 16:54:35.803565+00:00",
+        "last_autoanalyze": "2026-09-29 17:01:08.647418+00:00"
+      },
+      {
+        "schema": "public",
+        "table_name": "indicator_snapshots",
+        "total_bytes": 1287168000,
+        "table_bytes": 881410048,
+        "index_bytes": 405757952,
+        "estimated_live_rows": 116390,
+        "estimated_dead_rows": 10671,
+        "last_autovacuum": "2026-10-13 11:02:01.908306+00:00",
+        "last_autoanalyze": "2026-10-13 13:54:53.051189+00:00"
+      },
+      {
+        "schema": "public",
+        "table_name": "pump_opportunity_price_paths",
+        "total_bytes": 1183531008,
+        "table_bytes": 916119552,
+        "index_bytes": 267411456,
+        "estimated_live_rows": 765956,
+        "estimated_dead_rows": 7927,
+        "last_autovacuum": "2026-10-08 06:28:58.438774+00:00",
+        "last_autoanalyze": "2026-10-08 13:48:21.200623+00:00"
+      },
+      {
+        "schema": "public",
+        "table_name": "trade_simulations",
+        "total_bytes": 919445504,
+        "table_bytes": 881025024,
+        "index_bytes": 38420480,
+        "estimated_live_rows": 1561,
+        "estimated_dead_rows": 0,
+        "last_autovacuum": null,
+        "last_autoanalyze": null
+      },
+      {
+        "schema": "public",
+        "table_name": "pump_opportunity_label_queue",
+        "total_bytes": 836943872,
+        "table_bytes": 381632512,
+        "index_bytes": 455311360,
+        "estimated_live_rows": 2430504,
+        "estimated_dead_rows": 20043,
+        "last_autovacuum": "2026-10-08 17:23:05.527417+00:00",
+        "last_autoanalyze": "2026-10-08 11:09:11.492737+00:00"
+      },
+      {
+        "schema": "public",
+        "table_name": "trade_decisions",
+        "total_bytes": 699031552,
+        "table_bytes": 426098688,
+        "index_bytes": 272932864,
+        "estimated_live_rows": 872662,
+        "estimated_dead_rows": 129,
+        "last_autovacuum": "2026-10-05 11:25:44.983804+00:00",
+        "last_autoanalyze": "2026-10-07 01:33:01.494569+00:00"
+      },
+      {
+        "schema": "public",
+        "table_name": "l3_gate_v2_evaluations",
+        "total_bytes": 505511936,
+        "table_bytes": 489816064,
+        "index_bytes": 15695872,
+        "estimated_live_rows": 49341,
+        "estimated_dead_rows": 1719,
+        "last_autovacuum": "2026-10-10 06:13:05.584221+00:00",
+        "last_autoanalyze": "2026-10-13 13:03:51.051199+00:00"
+      },
+      {
+        "schema": "public",
+        "table_name": "alpha_scores",
+        "total_bytes": 396787712,
+        "table_bytes": 394403840,
+        "index_bytes": 2383872,
+        "estimated_live_rows": 352097,
+        "estimated_dead_rows": 0,
+        "last_autovacuum": "2026-10-09 00:01:28.541369+00:00",
+        "last_autoanalyze": "2026-10-06 05:36:24.445882+00:00"
+      },
+      {
+        "schema": "public",
+        "table_name": "crypto_ev_snapshots",
+        "total_bytes": 358490112,
+        "table_bytes": 282050560,
+        "index_bytes": 76439552,
+        "estimated_live_rows": 21634,
+        "estimated_dead_rows": 0,
+        "last_autovacuum": null,
+        "last_autoanalyze": null
+      },
+      {
+        "schema": "public",
+        "table_name": "ohlcv_settlement_latency_samples",
+        "total_bytes": 327712768,
+        "table_bytes": 181993472,
+        "index_bytes": 145719296,
+        "estimated_live_rows": 1266914,
+        "estimated_dead_rows": 758,
+        "last_autovacuum": "2026-10-09 12:29:31.859488+00:00",
+        "last_autoanalyze": "2026-10-12 22:26:44.205488+00:00"
+      },
+      {
+        "schema": "public",
+        "table_name": "profile_indicator_performance",
+        "total_bytes": 256925696,
+        "table_bytes": 192978944,
+        "index_bytes": 63946752,
+        "estimated_live_rows": 0,
+        "estimated_dead_rows": 0,
+        "last_autovacuum": null,
+        "last_autoanalyze": null
+      },
+      {
+        "schema": "public",
+        "table_name": "ai_dataset_snapshot_items",
+        "total_bytes": 135921664,
+        "table_bytes": 135118848,
+        "index_bytes": 802816,
+        "estimated_live_rows": 0,
+        "estimated_dead_rows": 0,
+        "last_autovacuum": null,
+        "last_autoanalyze": null
+      },
+      {
+        "schema": "public",
+        "table_name": "shadow_trade_closure_audit",
+        "total_bytes": 108052480,
+        "table_bytes": 80347136,
+        "index_bytes": 27705344,
+        "estimated_live_rows": 935,
+        "estimated_dead_rows": 0,
+        "last_autovacuum": null,
+        "last_autoanalyze": null
+      },
+      {
+        "schema": "public",
+        "table_name": "pump_research_labels_20261001",
+        "total_bytes": 100343808,
+        "table_bytes": 88883200,
+        "index_bytes": 11460608,
+        "estimated_live_rows": 92807,
+        "estimated_dead_rows": 0,
+        "last_autovacuum": "2026-10-01 20:56:00.832902+00:00",
+        "last_autoanalyze": "2026-10-01 23:44:08.833030+00:00"
+      },
+      {
+        "schema": "public",
+        "table_name": "pump_monitor_snapshots",
+        "total_bytes": 97533952,
+        "table_bytes": 91774976,
+        "index_bytes": 5758976,
+        "estimated_live_rows": 28461,
+        "estimated_dead_rows": 588,
+        "last_autovacuum": "2026-10-13 14:15:04.256404+00:00",
+        "last_autoanalyze": "2026-10-13 13:15:52.789009+00:00"
+      },
+      {
+        "schema": "public",
+        "table_name": "pump_research_minute_20261001",
+        "total_bytes": 86466560,
+        "table_bytes": 79347712,
+        "index_bytes": 7118848,
+        "estimated_live_rows": 95015,
+        "estimated_dead_rows": 64,
+        "last_autovacuum": "2026-10-01 22:12:00.525044+00:00",
+        "last_autoanalyze": "2026-10-01 23:58:03.645012+00:00"
+      },
+      {
+        "schema": "public",
+        "table_name": "flow_buckets_1m",
+        "total_bytes": 83861504,
+        "table_bytes": 51904512,
+        "index_bytes": 31956992,
+        "estimated_live_rows": 145414,
+        "estimated_dead_rows": 26848,
+        "last_autovacuum": "2026-10-13 13:50:55.544712+00:00",
+        "last_autoanalyze": "2026-10-13 14:45:52.723811+00:00"
+      },
+      {
+        "schema": "public",
+        "table_name": "pump_research_minute_20261012",
+        "total_bytes": 83673088,
+        "table_bytes": 78135296,
+        "index_bytes": 5537792,
+        "estimated_live_rows": 72492,
+        "estimated_dead_rows": 0,
+        "last_autovacuum": "2026-10-12 19:55:39.859022+00:00",
+        "last_autoanalyze": "2026-10-12 22:55:42.880374+00:00"
+      },
+      {
+        "schema": "public",
+        "table_name": "pump_research_labels_20261002",
+        "total_bytes": 83591168,
+        "table_bytes": 74391552,
+        "index_bytes": 9199616,
+        "estimated_live_rows": 74420,
+        "estimated_dead_rows": 0,
+        "last_autovacuum": "2026-10-02 21:53:52.724395+00:00",
+        "last_autoanalyze": "2026-10-03 00:53:55.165297+00:00"
+      }
+    ]
+  },
+  "extensions": {
+    "query": "SELECT extname FROM pg_extension",
+    "rows": [
+      {
+        "extname": "plpgsql"
+      },
+      {
+        "extname": "pgcrypto"
+      },
+      {
+        "extname": "pg_stat_statements"
+      }
+    ]
+  },
+  "partition_parents": {
+    "query": "SELECT inhparent::regclass::text parent,count(*) partitions,sum(pg_total_relation_size(inhrelid)) total_bytes FROM pg_inherits GROUP BY inhparent ORDER BY total_bytes DESC",
+    "rows": [
+      {
+        "parent": "pump_research_labels",
+        "partitions": 17,
+        "total_bytes": "982876160"
+      },
+      {
+        "parent": "pump_research_minute",
+        "partitions": 17,
+        "total_bytes": "970571776"
+      },
+      {
+        "parent": "pump_research_labels_pkey",
+        "partitions": 17,
+        "total_bytes": "105406464"
+      },
+      {
+        "parent": "pump_research_minute_pkey",
+        "partitions": 17,
+        "total_bytes": "62349312"
+      },
+      {
+        "parent": "ix_pump_research_minute_ts",
+        "partitions": 17,
+        "total_bytes": "6881280"
+      },
+      {
+        "parent": "ix_pump_research_labels_ts",
+        "partitions": 17,
+        "total_bytes": "6815744"
+      }
+    ]
+  },
+  "timestamps": {
+    "query": "SELECT table_name,column_name,data_type FROM information_schema.columns WHERE table_schema='public' AND data_type LIKE 'timestamp%' ORDER BY table_name,ordinal_position",
+    "rows": [
+      {
+        "table_name": "ai_analysis_conversations",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_analysis_conversations",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_analysis_conversations",
+        "column_name": "last_message_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_analysis_conversations",
+        "column_name": "archived_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_analysis_message_evidence",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_analysis_messages",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_analysis_messages",
+        "column_name": "completed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_analysis_messages",
+        "column_name": "cancelled_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_analysis_profiles",
+        "column_name": "pricing_observed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_analysis_profiles",
+        "column_name": "pricing_valid_until",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_analysis_profiles",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_analysis_profiles",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_analysis_prompt_versions",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_analysis_prompts",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_analysis_prompts",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_analysis_prompts",
+        "column_name": "archived_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_analysis_shards",
+        "column_name": "started_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_analysis_shards",
+        "column_name": "completed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_analysis_shards",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_budget_policies",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_budget_reservations",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_budget_reservations",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_budget_reservations",
+        "column_name": "transport_started_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_budget_reservations",
+        "column_name": "reconciled_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_budget_reservations",
+        "column_name": "released_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_change_sets",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_configuration_bundles",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_dataset_snapshot_items",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_dataset_snapshots",
+        "column_name": "window_start",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_dataset_snapshots",
+        "column_name": "window_end",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_dataset_snapshots",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_graph_definitions",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_graph_definitions",
+        "column_name": "approved_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_graph_definitions",
+        "column_name": "deprecated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_graph_events",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_graph_interrupts",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_graph_interrupts",
+        "column_name": "resolved_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_graph_runs",
+        "column_name": "lease_expires_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_graph_runs",
+        "column_name": "heartbeat_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_graph_runs",
+        "column_name": "started_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_graph_runs",
+        "column_name": "completed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_graph_runs",
+        "column_name": "cancelled_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_graph_runs",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_graph_runs",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_graph_runtime_metadata",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_graph_runtime_metadata",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_jobs",
+        "column_name": "queued_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_jobs",
+        "column_name": "started_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_jobs",
+        "column_name": "heartbeat_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_jobs",
+        "column_name": "lease_expires_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_jobs",
+        "column_name": "retry_after",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_jobs",
+        "column_name": "completed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_model_aliases",
+        "column_name": "valid_from",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_model_aliases",
+        "column_name": "valid_to",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_model_approvals",
+        "column_name": "pricing_observed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_model_approvals",
+        "column_name": "approved_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_model_approvals",
+        "column_name": "expires_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_model_resolutions",
+        "column_name": "resolved_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_module_capabilities",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_module_capabilities",
+        "column_name": "approved_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_module_capabilities",
+        "column_name": "deprecated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_prompt_versions",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_prompt_versions",
+        "column_name": "approved_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_prompt_versions",
+        "column_name": "deprecated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_provider_keys",
+        "column_name": "last_used_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_provider_keys",
+        "column_name": "last_tested_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_provider_keys",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_provider_keys",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_requests",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_results",
+        "column_name": "completed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_skills",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_skills",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_tool_call_audits",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_tool_evidence",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ai_usage_records",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "algorithm_forward_validations",
+        "column_name": "human_approved_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "algorithm_forward_validations",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "algorithm_forward_validations",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "alpha_scores",
+        "column_name": "time",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "asset_traces",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "autopilot_audit_logs",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "autopilot_autonomy_policies",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "autopilot_autonomy_policies",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "autopilot_pending_actions",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "autopilot_pending_actions",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "autopilot_run_errors",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "backoffice_alerts",
+        "column_name": "acknowledged_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "backoffice_alerts",
+        "column_name": "resolved_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "backoffice_alerts",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "calibration_proposals",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "calibration_proposals",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "calibration_recommendations",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "calibration_recommendations",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "calibration_results",
+        "column_name": "window_from",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "calibration_results",
+        "column_name": "window_to",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "calibration_results",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "calibration_state_events",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "causal_evidence_refs",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "config_audit_log",
+        "column_name": "changed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "config_profiles",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "config_profiles",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "context_fingerprints",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "copilot_action_plans",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "copilot_action_plans",
+        "column_name": "approved_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "copilot_action_plans",
+        "column_name": "executed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "copilot_audit_logs",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "copilot_messages",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "copilot_query_runs",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "copilot_sessions",
+        "column_name": "started_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "copilot_sessions",
+        "column_name": "ended_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "copilot_skills",
+        "column_name": "approved_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "copilot_skills",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "copilot_skills",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "crypto_ev_current",
+        "column_name": "computed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "crypto_ev_l3_replay_flags",
+        "column_name": "computed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "crypto_ev_snapshots",
+        "column_name": "computed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "crypto_profile_ev_scores",
+        "column_name": "window_from",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "crypto_profile_ev_scores",
+        "column_name": "window_to",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "crypto_profile_ev_scores",
+        "column_name": "computed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "custom_watchlists",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "custom_watchlists",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "decision_hypotheses",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "decision_memory",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "decisions_log",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "decisions_log",
+        "column_name": "execution_entry_time",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "decisions_log",
+        "column_name": "profile_version",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "exchange_connections",
+        "column_name": "last_connected_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "exchange_connections",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "exchange_executions",
+        "column_name": "executed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "exchange_executions",
+        "column_name": "ingested_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "experiment_links",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "flow_buckets_1m",
+        "column_name": "bucket_start",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "flow_buckets_1m",
+        "column_name": "computed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "funding_rates",
+        "column_name": "time",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "indicator_registry",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "indicator_snapshots",
+        "column_name": "timestamp",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "indicators",
+        "column_name": "time",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "l3_authorization_outbox",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "l3_authorization_outbox",
+        "column_name": "available_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "l3_authorization_outbox",
+        "column_name": "processed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "l3_gate_v2_evaluations",
+        "column_name": "evaluated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "l3_gate_v2_evaluations",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "l3_gate_v2_evaluations",
+        "column_name": "last_seen_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "label_lab_runs",
+        "column_name": "evaluated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "market_metadata",
+        "column_name": "last_updated",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "market_metadata",
+        "column_name": "volume_24h_updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_data_certification_runs",
+        "column_name": "run_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_data_certification_runs",
+        "column_name": "window_from",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_data_certification_runs",
+        "column_name": "window_to",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_dataset_contracts",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_dataset_readiness_reports",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_evidence_registry",
+        "column_name": "window_from",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_evidence_registry",
+        "column_name": "window_to",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_evidence_registry",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_experiment_features",
+        "column_name": "signal_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_experiment_features",
+        "column_name": "run_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_experiment_labels",
+        "column_name": "signal_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_experiment_labels",
+        "column_name": "entry_candle_time",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_experiment_labels",
+        "column_name": "run_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_experiment_results",
+        "column_name": "run_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_feature_contracts",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_feature_drift_reports",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_feature_observations",
+        "column_name": "source_timestamp",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_feature_observations",
+        "column_name": "fetched_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_feature_observations",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_label_contracts",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_model_predictions",
+        "column_name": "scored_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_model_registry",
+        "column_name": "train_start",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_model_registry",
+        "column_name": "train_end",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_model_registry",
+        "column_name": "validation_start",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_model_registry",
+        "column_name": "validation_end",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_model_registry",
+        "column_name": "test_start",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_model_registry",
+        "column_name": "test_end",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_model_registry",
+        "column_name": "promoted_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_model_registry",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_model_registry",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_models",
+        "column_name": "train_from",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_models",
+        "column_name": "train_to",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_models",
+        "column_name": "activated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_models",
+        "column_name": "retired_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_models",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_models",
+        "column_name": "dataset_query_cutoff",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_models",
+        "column_name": "profile_version",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_opportunity_rankings",
+        "column_name": "ranked_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_predictions",
+        "column_name": "scored_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_predictions",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_promotion_gate_results",
+        "column_name": "evaluated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_readiness_gate_runs",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_threshold_curve",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_training_dataset",
+        "column_name": "cutoff_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_training_dataset",
+        "column_name": "train_from",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_training_dataset",
+        "column_name": "train_to",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ml_training_dataset",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "mtf_calibration_runs",
+        "column_name": "approved_policy_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "mtf_calibration_runs",
+        "column_name": "started_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "mtf_calibration_runs",
+        "column_name": "completed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "mtf_calibration_runs",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "mtf_l2_setup_states",
+        "column_name": "last_candle_open_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "mtf_l2_setup_states",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "mtf_profile_activation_audits",
+        "column_name": "rolled_back_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "mtf_profile_activation_audits",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "mutation_fingerprints",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "notification_settings",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ohlcv",
+        "column_name": "time",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ohlcv",
+        "column_name": "ingested_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ohlcv_capture_comparison_snapshots",
+        "column_name": "observed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ohlcv_capture_comparison_snapshots",
+        "column_name": "valid_from",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ohlcv_capture_contracts",
+        "column_name": "valid_from",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ohlcv_capture_contracts",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ohlcv_ingestion_observations",
+        "column_name": "observed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ohlcv_ingestion_observations",
+        "column_name": "latest_open_time",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ohlcv_ingestion_observations",
+        "column_name": "close_time",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ohlcv_live",
+        "column_name": "time",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ohlcv_live",
+        "column_name": "ingested_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ohlcv_readiness_snapshots",
+        "column_name": "observed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ohlcv_settlement_latency_samples",
+        "column_name": "candle_open_time",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ohlcv_settlement_latency_samples",
+        "column_name": "candle_close_time",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ohlcv_settlement_latency_samples",
+        "column_name": "observed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ohlcv_shadow",
+        "column_name": "time",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ohlcv_shadow",
+        "column_name": "ingested_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ohlcv_state_ingestion_observations",
+        "column_name": "observed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ohlcv_state_ingestion_observations",
+        "column_name": "latest_closed_open_time",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "ohlcv_state_ingestion_observations",
+        "column_name": "latest_closed_close_time",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "opportunity_snapshots",
+        "column_name": "future_evaluated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "opportunity_snapshots",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "orders",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "orders",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pg_stat_statements",
+        "column_name": "stats_since",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pg_stat_statements",
+        "column_name": "minmax_stats_since",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pg_stat_statements_info",
+        "column_name": "stats_reset",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pipeline_metrics",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pipeline_watchlist_assets",
+        "column_name": "entered_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pipeline_watchlist_assets",
+        "column_name": "refreshed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pipeline_watchlist_assets",
+        "column_name": "level_change_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pipeline_watchlist_rejections",
+        "column_name": "recorded_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pipeline_watchlists",
+        "column_name": "last_scanned_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pipeline_watchlists",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pipeline_watchlists",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pool_asset_exclusions",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pool_coins",
+        "column_name": "added_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pool_coins",
+        "column_name": "discovered_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pool_coins",
+        "column_name": "radar_last_seen_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pools",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pools",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "position_lifecycle",
+        "column_name": "opened_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "position_lifecycle",
+        "column_name": "closed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "position_lifecycle",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "position_lifecycle",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "production_champion_control",
+        "column_name": "activated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_adjustment_suggestions",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_adjustment_suggestions",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_adjustment_versions",
+        "column_name": "applied_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_adjustment_versions",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_adjustment_versions",
+        "column_name": "validated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_ai_reviews",
+        "column_name": "requested_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_ai_reviews",
+        "column_name": "completed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_ai_reviews",
+        "column_name": "next_review_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_ai_reviews",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_ai_reviews_reclassification_audit",
+        "column_name": "fix_deployed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_ai_reviews_reclassification_audit",
+        "column_name": "reclassified_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_audit_log",
+        "column_name": "previous_profile_version",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_audit_log",
+        "column_name": "new_profile_version",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_audit_log",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_bayesian_analysis_runs",
+        "column_name": "started_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_bayesian_analysis_runs",
+        "column_name": "finished_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_bayesian_analysis_runs",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_bayesian_analysis_runs",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_bayesian_audit_events",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_bayesian_candidate_links",
+        "column_name": "approved_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_bayesian_candidate_links",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_bayesian_candidate_links",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_bayesian_dataset_snapshots",
+        "column_name": "window_from",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_bayesian_dataset_snapshots",
+        "column_name": "window_to",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_bayesian_dataset_snapshots",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_bayesian_diagnostics",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_bayesian_indicator_effects",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_hard_negative_patterns",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_indicator_mutation_links",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_indicator_performance",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_indicator_stats",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_activity_log",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_ai_model_audit",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_audit_log",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_associations",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_audit",
+        "column_name": "profile_version",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_audit",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_candidates",
+        "column_name": "shadow_started_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_candidates",
+        "column_name": "review_after",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_candidates",
+        "column_name": "promoted_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_candidates",
+        "column_name": "rejected_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_candidates",
+        "column_name": "rollback_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_candidates",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_candidates",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_candidates",
+        "column_name": "approved_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_candidates",
+        "column_name": "live_activation_attempted_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_candidates",
+        "column_name": "live_activated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_compensations",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_compensations",
+        "column_name": "resolved_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_cycles",
+        "column_name": "window_start",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_cycles",
+        "column_name": "started_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_cycles",
+        "column_name": "completed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_cycles",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_reports",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_settings",
+        "column_name": "enabled_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_settings",
+        "column_name": "disabled_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_settings",
+        "column_name": "last_cycle_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_settings",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_settings",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_heartbeats",
+        "column_name": "heartbeat_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_heartbeats",
+        "column_name": "next_cycle_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_heartbeats",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_loss_families",
+        "column_name": "blocked_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_loss_families",
+        "column_name": "blocked_until",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_loss_families",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_manual_adjustment_events",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_manual_adjustments",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_manual_adjustments",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_manual_adjustments",
+        "column_name": "previewed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_manual_adjustments",
+        "column_name": "approved_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_manual_adjustments",
+        "column_name": "applied_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_manual_adjustments",
+        "column_name": "rolled_back_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_manual_adjustments",
+        "column_name": "runtime_confirmed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_runs",
+        "column_name": "run_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_runs",
+        "column_name": "discovery_start_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_runs",
+        "column_name": "discovery_end_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_runs",
+        "column_name": "validation_start_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_runs",
+        "column_name": "validation_end_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_runs",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_runs",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_intelligence_runs",
+        "column_name": "finished_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_metrics",
+        "column_name": "period_start",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_metrics",
+        "column_name": "period_end",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_metrics",
+        "column_name": "calculated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_optimization_studies",
+        "column_name": "started_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_optimization_studies",
+        "column_name": "finished_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_optimization_studies",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_optimization_studies",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_optimization_trial_metrics",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_optimization_trials",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_rule_combinations",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_score_optimization_challengers",
+        "column_name": "collection_started_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_score_optimization_challengers",
+        "column_name": "validated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_score_optimization_challengers",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_score_optimization_challengers",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_score_optimization_runs",
+        "column_name": "cutoff_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_score_optimization_runs",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_score_optimization_runs",
+        "column_name": "completed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_score_performance_daily",
+        "column_name": "computed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_score_replay_results",
+        "column_name": "window_from",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_score_replay_results",
+        "column_name": "window_to",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_score_replay_results",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_suggestions",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_suggestions",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_suggestions",
+        "column_name": "applied_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_suggestions",
+        "column_name": "reverted_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_version_ev_scores",
+        "column_name": "window_from",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_version_ev_scores",
+        "column_name": "window_to",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_version_ev_scores",
+        "column_name": "computed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_versions",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_versions",
+        "column_name": "activated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profile_versions",
+        "column_name": "deactivated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profiles",
+        "column_name": "preset_ia_last_run",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profiles",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profiles",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "profiles",
+        "column_name": "profile_version",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_book_5m",
+        "column_name": "bucket_start",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_book_5m",
+        "column_name": "observed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_book_5m",
+        "column_name": "computed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_capital_flow_1m",
+        "column_name": "minute",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_capital_flow_1m",
+        "column_name": "computed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_flow_5m",
+        "column_name": "bucket_start",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_flow_5m",
+        "column_name": "computed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_flow_asof",
+        "column_name": "decision_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_flow_asof",
+        "column_name": "computed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_ml_experiments",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_ml_job_runs",
+        "column_name": "started_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_ml_job_runs",
+        "column_name": "deadline_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_ml_job_runs",
+        "column_name": "finished_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_ml_live_predictions",
+        "column_name": "decision_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_ml_live_predictions",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_ml_predictions",
+        "column_name": "produced_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_monitor_alerts",
+        "column_name": "triggered_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_monitor_snapshots",
+        "column_name": "cycle_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_opportunity_job_runs",
+        "column_name": "finished_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_opportunity_label_queue",
+        "column_name": "ready_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_opportunity_label_queue",
+        "column_name": "completed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_opportunity_labels",
+        "column_name": "labeled_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_opportunity_observations",
+        "column_name": "slot_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_opportunity_observations",
+        "column_name": "decision_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_opportunity_observations",
+        "column_name": "published_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_opportunity_price_paths",
+        "column_name": "bucket_start",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_opportunity_price_paths",
+        "column_name": "captured_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_perp_stats_5m",
+        "column_name": "stat_time",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_perp_stats_5m",
+        "column_name": "computed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_radar_controls",
+        "column_name": "anchor_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_radar_event_links",
+        "column_name": "approval_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_radar_event_links",
+        "column_name": "simulation_created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_radar_event_links",
+        "column_name": "entry_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_radar_event_links",
+        "column_name": "exit_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_radar_events",
+        "column_name": "start_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_radar_events",
+        "column_name": "confirmed_market_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_radar_events",
+        "column_name": "detected_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_radar_events",
+        "column_name": "peak_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_radar_events",
+        "column_name": "end_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_radar_hypotheses",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_radar_indicator_snapshots",
+        "column_name": "snapshot_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_radar_ohlcv",
+        "column_name": "open_time",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_radar_ohlcv",
+        "column_name": "close_time",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_radar_ohlcv",
+        "column_name": "available_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_radar_ohlcv",
+        "column_name": "ingested_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_radar_range_results",
+        "column_name": "discovery_boundary",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_radar_report_items",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_radar_report_runs",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_radar_run_assets",
+        "column_name": "started_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_radar_run_assets",
+        "column_name": "finished_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_radar_runs",
+        "column_name": "date_from",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_radar_runs",
+        "column_name": "date_to",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_radar_runs",
+        "column_name": "requested_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_radar_runs",
+        "column_name": "started_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_radar_runs",
+        "column_name": "finished_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_radar_runs",
+        "column_name": "cancel_requested_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels",
+        "column_name": "labeled_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261001",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261001",
+        "column_name": "labeled_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261002",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261002",
+        "column_name": "labeled_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261003",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261003",
+        "column_name": "labeled_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261004",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261004",
+        "column_name": "labeled_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261005",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261005",
+        "column_name": "labeled_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261006",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261006",
+        "column_name": "labeled_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261007",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261007",
+        "column_name": "labeled_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261008",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261008",
+        "column_name": "labeled_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261009",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261009",
+        "column_name": "labeled_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261010",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261010",
+        "column_name": "labeled_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261011",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261011",
+        "column_name": "labeled_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261012",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261012",
+        "column_name": "labeled_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261013",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261013",
+        "column_name": "labeled_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261014",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261014",
+        "column_name": "labeled_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261015",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261015",
+        "column_name": "labeled_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261016",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_20261016",
+        "column_name": "labeled_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_default",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_labels_default",
+        "column_name": "labeled_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute",
+        "column_name": "cycle_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261001",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261001",
+        "column_name": "cycle_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261002",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261002",
+        "column_name": "cycle_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261003",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261003",
+        "column_name": "cycle_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261004",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261004",
+        "column_name": "cycle_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261005",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261005",
+        "column_name": "cycle_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261006",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261006",
+        "column_name": "cycle_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261007",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261007",
+        "column_name": "cycle_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261008",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261008",
+        "column_name": "cycle_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261009",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261009",
+        "column_name": "cycle_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261010",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261010",
+        "column_name": "cycle_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261011",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261011",
+        "column_name": "cycle_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261012",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261012",
+        "column_name": "cycle_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261013",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261013",
+        "column_name": "cycle_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261014",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261014",
+        "column_name": "cycle_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261015",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261015",
+        "column_name": "cycle_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261016",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_20261016",
+        "column_name": "cycle_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_default",
+        "column_name": "ts",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_minute_default",
+        "column_name": "cycle_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "pump_research_value_keys",
+        "column_name": "first_seen_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "radar_feed_items",
+        "column_name": "source_updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "radar_feed_receipts",
+        "column_name": "received_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "radar_feed_receipts",
+        "column_name": "expires_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "reconciled_gate_trades",
+        "column_name": "processed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "regeneration_runs",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "regime_history",
+        "column_name": "detected_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "rule_contribution",
+        "column_name": "calculated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "score_engine_versions",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_canonical_lineage_repair_audit",
+        "column_name": "repaired_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_capture_skips",
+        "column_name": "promotion_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_capture_skips",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_l3_exit_decisions",
+        "column_name": "candle_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_l3_exit_decisions",
+        "column_name": "available_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_l3_exit_states",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_l3_exit_states",
+        "column_name": "checked_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_l3_flow_trades",
+        "column_name": "occurred_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_l3_flow_trades",
+        "column_name": "available_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_l3_flow_trades",
+        "column_name": "persisted_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_l3_policy_validations",
+        "column_name": "approved_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trade_analysis_jobs",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trade_analysis_jobs",
+        "column_name": "started_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trade_analysis_jobs",
+        "column_name": "completed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trade_analysis_jobs",
+        "column_name": "heartbeat_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trade_analysis_jobs",
+        "column_name": "lease_expires_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trade_analysis_jobs",
+        "column_name": "retry_after",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trade_closure_audit",
+        "column_name": "price_timestamp",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trade_closure_audit",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trade_duplicate_audit",
+        "column_name": "detected_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trade_measurement_revisions",
+        "column_name": "entry_price_source_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trade_measurement_revisions",
+        "column_name": "legacy_mae_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trade_measurement_revisions",
+        "column_name": "legacy_mfe_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trade_measurement_revisions",
+        "column_name": "mae_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trade_measurement_revisions",
+        "column_name": "mfe_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trade_measurement_revisions",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trade_measurement_revisions",
+        "column_name": "mfe_mae_recomputed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trade_report_items",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trade_report_runs",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades",
+        "column_name": "entry_timestamp",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades",
+        "column_name": "exit_timestamp",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades",
+        "column_name": "last_processed_time",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades",
+        "column_name": "completed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades",
+        "column_name": "mae_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades",
+        "column_name": "mfe_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades",
+        "column_name": "barrier_touched_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades",
+        "column_name": "profile_version",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades",
+        "column_name": "lineage_resolved_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades",
+        "column_name": "features_captured_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades",
+        "column_name": "label_resolved_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades",
+        "column_name": "monitor_checked_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades",
+        "column_name": "feature_source_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades",
+        "column_name": "entry_risk_captured_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades",
+        "column_name": "entry_boundary_ambiguous_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades_cleanup_audit",
+        "column_name": "audit_created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades_cleanup_audit",
+        "column_name": "entry_timestamp",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades_cleanup_audit",
+        "column_name": "exit_timestamp",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades_cleanup_audit",
+        "column_name": "last_processed_time",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades_cleanup_audit",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades_cleanup_audit",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades_cleanup_audit",
+        "column_name": "completed_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades_cleanup_audit",
+        "column_name": "mae_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades_cleanup_audit",
+        "column_name": "mfe_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades_cleanup_audit",
+        "column_name": "barrier_touched_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades_cleanup_audit",
+        "column_name": "profile_version",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trades_cleanup_audit",
+        "column_name": "lineage_resolved_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trailing_replay_candles_1m",
+        "column_name": "time",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "shadow_trailing_replay_candles_1m",
+        "column_name": "fetched_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "social_asset_observations",
+        "column_name": "window_start",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "social_asset_observations",
+        "column_name": "window_end",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "social_asset_observations",
+        "column_name": "collected_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "social_asset_observations",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "social_intelligence_runs",
+        "column_name": "window_start",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "social_intelligence_runs",
+        "column_name": "window_end",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "social_intelligence_runs",
+        "column_name": "collected_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "social_intelligence_runs",
+        "column_name": "received_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "trade_decisions",
+        "column_name": "decided_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "trade_simulations",
+        "column_name": "timestamp_entry",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "trade_simulations",
+        "column_name": "exit_timestamp",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "trade_simulations",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "trade_simulations",
+        "column_name": "mae_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "trade_simulations",
+        "column_name": "mfe_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "trade_simulations",
+        "column_name": "barrier_touched_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "trade_tracking",
+        "column_name": "entry_time",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "trade_tracking",
+        "column_name": "exit_time",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "trade_tracking",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "trades",
+        "column_name": "entry_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "trades",
+        "column_name": "exit_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "users",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "users",
+        "column_name": "updated_at",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "watchlist_performance_priority_base_view",
+        "column_name": "first_trade",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "watchlist_performance_priority_base_view",
+        "column_name": "last_trade",
+        "data_type": "timestamp with time zone"
+      },
+      {
+        "table_name": "watchlist_profiles",
+        "column_name": "created_at",
+        "data_type": "timestamp with time zone"
+      }
+    ]
+  },
+  "foreign_keys": {
+    "query": "SELECT conrelid::regclass::text table_name,confrelid::regclass::text references_table,pg_get_constraintdef(oid) definition FROM pg_constraint WHERE contype='f' ORDER BY 1",
+    "rows": [
+      {
+        "table_name": "ai_analysis_conversations",
+        "references_table": "ai_graph_runs",
+        "definition": "FOREIGN KEY (parent_analysis_run_id) REFERENCES ai_graph_runs(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_analysis_conversations",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "ai_analysis_conversations",
+        "references_table": "ai_results",
+        "definition": "FOREIGN KEY (parent_result_id) REFERENCES ai_results(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_analysis_conversations",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_analysis_message_evidence",
+        "references_table": "ai_graph_runs",
+        "definition": "FOREIGN KEY (source_run_id) REFERENCES ai_graph_runs(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_analysis_message_evidence",
+        "references_table": "ai_tool_call_audits",
+        "definition": "FOREIGN KEY (tool_call_id) REFERENCES ai_tool_call_audits(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_analysis_message_evidence",
+        "references_table": "ai_analysis_messages",
+        "definition": "FOREIGN KEY (message_id) REFERENCES ai_analysis_messages(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_analysis_message_evidence",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_analysis_message_evidence",
+        "references_table": "ai_tool_evidence",
+        "definition": "FOREIGN KEY (evidence_id) REFERENCES ai_tool_evidence(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_analysis_messages",
+        "references_table": "ai_analysis_messages",
+        "definition": "FOREIGN KEY (parent_message_id) REFERENCES ai_analysis_messages(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_analysis_messages",
+        "references_table": "ai_analysis_conversations",
+        "definition": "FOREIGN KEY (conversation_id) REFERENCES ai_analysis_conversations(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_analysis_messages",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_analysis_messages",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "ai_analysis_messages",
+        "references_table": "ai_prompt_versions",
+        "definition": "FOREIGN KEY (prompt_version_id) REFERENCES ai_prompt_versions(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_analysis_messages",
+        "references_table": "ai_graph_runs",
+        "definition": "FOREIGN KEY (child_analysis_run_id) REFERENCES ai_graph_runs(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_analysis_messages",
+        "references_table": "ai_graph_runs",
+        "definition": "FOREIGN KEY (graph_run_id) REFERENCES ai_graph_runs(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_analysis_messages",
+        "references_table": "ai_results",
+        "definition": "FOREIGN KEY (ai_result_id) REFERENCES ai_results(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_analysis_messages",
+        "references_table": "ai_requests",
+        "definition": "FOREIGN KEY (ai_request_id) REFERENCES ai_requests(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_analysis_prompts",
+        "references_table": "ai_analysis_prompt_versions",
+        "definition": "FOREIGN KEY (current_version_id) REFERENCES ai_analysis_prompt_versions(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_analysis_prompts",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "ai_analysis_prompts",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (archived_by) REFERENCES users(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "ai_analysis_prompts",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "ai_analysis_prompt_versions",
+        "references_table": "ai_analysis_prompts",
+        "definition": "FOREIGN KEY (prompt_id) REFERENCES ai_analysis_prompts(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_analysis_prompt_versions",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "ai_analysis_shards",
+        "references_table": "ai_requests",
+        "definition": "FOREIGN KEY (ai_request_id) REFERENCES ai_requests(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_analysis_shards",
+        "references_table": "ai_dataset_snapshots",
+        "definition": "FOREIGN KEY (dataset_snapshot_id) REFERENCES ai_dataset_snapshots(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_analysis_shards",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_budget_policies",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_budget_reservations",
+        "references_table": "ai_budget_policies",
+        "definition": "FOREIGN KEY (budget_policy_id) REFERENCES ai_budget_policies(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "ai_budget_reservations",
+        "references_table": "ai_model_approvals",
+        "definition": "FOREIGN KEY (model_approval_id) REFERENCES ai_model_approvals(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "ai_budget_reservations",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_budget_reservations",
+        "references_table": "ai_requests",
+        "definition": "FOREIGN KEY (ai_request_id) REFERENCES ai_requests(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_change_sets",
+        "references_table": "ai_dataset_snapshots",
+        "definition": "FOREIGN KEY (dataset_snapshot_id) REFERENCES ai_dataset_snapshots(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_change_sets",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_change_sets",
+        "references_table": "ai_requests",
+        "definition": "FOREIGN KEY (ai_request_id) REFERENCES ai_requests(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "ai_change_sets",
+        "references_table": "ai_configuration_bundles",
+        "definition": "FOREIGN KEY (configuration_bundle_id) REFERENCES ai_configuration_bundles(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_configuration_bundles",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_configuration_bundles",
+        "references_table": "profile_versions",
+        "definition": "FOREIGN KEY (profile_version_id) REFERENCES profile_versions(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "ai_configuration_bundles",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "ai_configuration_bundles",
+        "references_table": "score_engine_versions",
+        "definition": "FOREIGN KEY (score_engine_version_id) REFERENCES score_engine_versions(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "ai_dataset_snapshot_items",
+        "references_table": "shadow_trades",
+        "definition": "FOREIGN KEY (shadow_trade_id) REFERENCES shadow_trades(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_dataset_snapshot_items",
+        "references_table": "ai_dataset_snapshots",
+        "definition": "FOREIGN KEY (dataset_snapshot_id) REFERENCES ai_dataset_snapshots(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_dataset_snapshot_items",
+        "references_table": "shadow_trade_report_runs",
+        "definition": "FOREIGN KEY (report_run_id) REFERENCES shadow_trade_report_runs(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_dataset_snapshot_items",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_dataset_snapshots",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_dataset_snapshots",
+        "references_table": "ai_configuration_bundles",
+        "definition": "FOREIGN KEY (configuration_bundle_id) REFERENCES ai_configuration_bundles(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_graph_events",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_graph_events",
+        "references_table": "ai_graph_runs",
+        "definition": "FOREIGN KEY (graph_run_id) REFERENCES ai_graph_runs(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_graph_interrupts",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "ai_graph_interrupts",
+        "references_table": "ai_graph_runs",
+        "definition": "FOREIGN KEY (graph_run_id) REFERENCES ai_graph_runs(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_graph_interrupts",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_graph_runs",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (requested_by_user_id) REFERENCES users(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "ai_graph_runs",
+        "references_table": "ai_graph_definitions",
+        "definition": "FOREIGN KEY (graph_definition_id) REFERENCES ai_graph_definitions(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_graph_runs",
+        "references_table": "ai_requests",
+        "definition": "FOREIGN KEY (ai_request_id) REFERENCES ai_requests(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_graph_runs",
+        "references_table": "ai_jobs",
+        "definition": "FOREIGN KEY (ai_job_id) REFERENCES ai_jobs(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "ai_graph_runs",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_jobs",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_jobs",
+        "references_table": "ai_requests",
+        "definition": "FOREIGN KEY (ai_request_id) REFERENCES ai_requests(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_model_approvals",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_model_approvals",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_model_approvals",
+        "references_table": "ai_analysis_profiles",
+        "definition": "FOREIGN KEY (analysis_profile_id) REFERENCES ai_analysis_profiles(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_model_resolutions",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_prompt_versions",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "ai_prompt_versions",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "ai_provider_keys",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_requests",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_requests",
+        "references_table": "ai_graph_runs",
+        "definition": "FOREIGN KEY (parent_analysis_run_id) REFERENCES ai_graph_runs(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_requests",
+        "references_table": "ai_analysis_conversations",
+        "definition": "FOREIGN KEY (conversation_id) REFERENCES ai_analysis_conversations(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_requests",
+        "references_table": "ai_dataset_snapshots",
+        "definition": "FOREIGN KEY (dataset_snapshot_id) REFERENCES ai_dataset_snapshots(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_requests",
+        "references_table": "ai_prompt_versions",
+        "definition": "FOREIGN KEY (prompt_version_id) REFERENCES ai_prompt_versions(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_requests",
+        "references_table": "ai_model_resolutions",
+        "definition": "FOREIGN KEY (model_resolution_id) REFERENCES ai_model_resolutions(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_requests",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (requested_by_user_id) REFERENCES users(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "ai_requests",
+        "references_table": "ai_analysis_messages",
+        "definition": "FOREIGN KEY (message_id) REFERENCES ai_analysis_messages(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_requests",
+        "references_table": "ai_analysis_prompt_versions",
+        "definition": "FOREIGN KEY (analysis_prompt_version_id) REFERENCES ai_analysis_prompt_versions(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_requests",
+        "references_table": "ai_configuration_bundles",
+        "definition": "FOREIGN KEY (configuration_bundle_id) REFERENCES ai_configuration_bundles(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "ai_results",
+        "references_table": "ai_requests",
+        "definition": "FOREIGN KEY (ai_request_id) REFERENCES ai_requests(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_results",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_skills",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_tool_call_audits",
+        "references_table": "ai_requests",
+        "definition": "FOREIGN KEY (ai_request_id) REFERENCES ai_requests(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_tool_call_audits",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_tool_evidence",
+        "references_table": "ai_requests",
+        "definition": "FOREIGN KEY (ai_request_id) REFERENCES ai_requests(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_tool_evidence",
+        "references_table": "ai_tool_call_audits",
+        "definition": "FOREIGN KEY (tool_call_audit_id) REFERENCES ai_tool_call_audits(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_tool_evidence",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_usage_records",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ai_usage_records",
+        "references_table": "ai_requests",
+        "definition": "FOREIGN KEY (ai_request_id) REFERENCES ai_requests(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "algorithm_forward_validations",
+        "references_table": "ml_model_registry",
+        "definition": "FOREIGN KEY (model_id) REFERENCES ml_model_registry(model_id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "algorithm_forward_validations",
+        "references_table": "profile_suggestions",
+        "definition": "FOREIGN KEY (suggestion_id) REFERENCES profile_suggestions(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "algorithm_forward_validations",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "autopilot_audit_logs",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "autopilot_audit_logs",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "autopilot_audit_logs",
+        "references_table": "profile_versions",
+        "definition": "FOREIGN KEY (version_id) REFERENCES profile_versions(id)"
+      },
+      {
+        "table_name": "autopilot_pending_actions",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "autopilot_pending_actions",
+        "references_table": "profile_adjustment_suggestions",
+        "definition": "FOREIGN KEY (suggestion_id) REFERENCES profile_adjustment_suggestions(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "backoffice_alerts",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (acknowledged_by) REFERENCES users(id)"
+      },
+      {
+        "table_name": "calibration_proposals",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (challenger_profile_id) REFERENCES profiles(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "calibration_proposals",
+        "references_table": "profile_versions",
+        "definition": "FOREIGN KEY (base_profile_version_id) REFERENCES profile_versions(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "calibration_proposals",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "calibration_proposals",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "calibration_proposals",
+        "references_table": "calibration_recommendations",
+        "definition": "FOREIGN KEY (recommendation_id) REFERENCES calibration_recommendations(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "calibration_proposals",
+        "references_table": "profile_intelligence_autopilot_candidates",
+        "definition": "FOREIGN KEY (autopilot_candidate_id) REFERENCES profile_intelligence_autopilot_candidates(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "calibration_proposals",
+        "references_table": "profile_versions",
+        "definition": "FOREIGN KEY (challenger_profile_version_id) REFERENCES profile_versions(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "calibration_recommendations",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "calibration_recommendations",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "calibration_recommendations",
+        "references_table": "profile_versions",
+        "definition": "FOREIGN KEY (base_profile_version_id) REFERENCES profile_versions(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "calibration_results",
+        "references_table": "calibration_proposals",
+        "definition": "FOREIGN KEY (proposal_id) REFERENCES calibration_proposals(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "calibration_results",
+        "references_table": "profile_versions",
+        "definition": "FOREIGN KEY (champion_version_id) REFERENCES profile_versions(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "calibration_results",
+        "references_table": "profile_versions",
+        "definition": "FOREIGN KEY (challenger_version_id) REFERENCES profile_versions(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "calibration_state_events",
+        "references_table": "calibration_recommendations",
+        "definition": "FOREIGN KEY (recommendation_id) REFERENCES calibration_recommendations(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "calibration_state_events",
+        "references_table": "calibration_proposals",
+        "definition": "FOREIGN KEY (proposal_id) REFERENCES calibration_proposals(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "calibration_state_events",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "calibration_state_events",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "causal_evidence_refs",
+        "references_table": "ai_dataset_snapshots",
+        "definition": "FOREIGN KEY (dataset_snapshot_id) REFERENCES ai_dataset_snapshots(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "causal_evidence_refs",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "causal_evidence_refs",
+        "references_table": "ai_requests",
+        "definition": "FOREIGN KEY (ai_request_id) REFERENCES ai_requests(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "causal_evidence_refs",
+        "references_table": "ai_configuration_bundles",
+        "definition": "FOREIGN KEY (configuration_bundle_id) REFERENCES ai_configuration_bundles(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "config_audit_log",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (changed_by) REFERENCES users(id)"
+      },
+      {
+        "table_name": "config_audit_log",
+        "references_table": "config_profiles",
+        "definition": "FOREIGN KEY (config_id) REFERENCES config_profiles(id)"
+      },
+      {
+        "table_name": "config_profiles",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "config_profiles",
+        "references_table": "pools",
+        "definition": "FOREIGN KEY (pool_id) REFERENCES pools(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "context_fingerprints",
+        "references_table": "ai_requests",
+        "definition": "FOREIGN KEY (ai_request_id) REFERENCES ai_requests(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "context_fingerprints",
+        "references_table": "ai_configuration_bundles",
+        "definition": "FOREIGN KEY (configuration_bundle_id) REFERENCES ai_configuration_bundles(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "context_fingerprints",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "context_fingerprints",
+        "references_table": "ai_dataset_snapshots",
+        "definition": "FOREIGN KEY (dataset_snapshot_id) REFERENCES ai_dataset_snapshots(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "copilot_action_plans",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "copilot_action_plans",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "copilot_action_plans",
+        "references_table": "copilot_sessions",
+        "definition": "FOREIGN KEY (session_id) REFERENCES copilot_sessions(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "copilot_audit_logs",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "copilot_audit_logs",
+        "references_table": "copilot_sessions",
+        "definition": "FOREIGN KEY (session_id) REFERENCES copilot_sessions(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "copilot_audit_logs",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "copilot_audit_logs",
+        "references_table": "copilot_action_plans",
+        "definition": "FOREIGN KEY (action_plan_id) REFERENCES copilot_action_plans(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "copilot_messages",
+        "references_table": "copilot_sessions",
+        "definition": "FOREIGN KEY (session_id) REFERENCES copilot_sessions(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "copilot_query_runs",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "copilot_query_runs",
+        "references_table": "copilot_sessions",
+        "definition": "FOREIGN KEY (session_id) REFERENCES copilot_sessions(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "copilot_sessions",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "copilot_skills",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "copilot_skills",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "crypto_ev_l3_replay_flags",
+        "references_table": "shadow_trades",
+        "definition": "FOREIGN KEY (shadow_trade_id) REFERENCES shadow_trades(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "crypto_profile_ev_scores",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "crypto_profile_ev_scores",
+        "references_table": "profile_versions",
+        "definition": "FOREIGN KEY (profile_version_id) REFERENCES profile_versions(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "custom_watchlists",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "decision_hypotheses",
+        "references_table": "ai_requests",
+        "definition": "FOREIGN KEY (ai_request_id) REFERENCES ai_requests(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "decision_hypotheses",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "decision_hypotheses",
+        "references_table": "ai_dataset_snapshots",
+        "definition": "FOREIGN KEY (dataset_snapshot_id) REFERENCES ai_dataset_snapshots(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "decision_hypotheses",
+        "references_table": "ai_configuration_bundles",
+        "definition": "FOREIGN KEY (configuration_bundle_id) REFERENCES ai_configuration_bundles(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "decision_memory",
+        "references_table": "ai_configuration_bundles",
+        "definition": "FOREIGN KEY (configuration_bundle_id) REFERENCES ai_configuration_bundles(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "decision_memory",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "decision_memory",
+        "references_table": "ai_dataset_snapshots",
+        "definition": "FOREIGN KEY (dataset_snapshot_id) REFERENCES ai_dataset_snapshots(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "decision_memory",
+        "references_table": "ai_requests",
+        "definition": "FOREIGN KEY (ai_request_id) REFERENCES ai_requests(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "decisions_log",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id)"
+      },
+      {
+        "table_name": "decisions_log",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "decisions_log",
+        "references_table": "ml_opportunity_rankings",
+        "definition": "FOREIGN KEY (ranking_id) REFERENCES ml_opportunity_rankings(id)"
+      },
+      {
+        "table_name": "exchange_connections",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "experiment_links",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "experiment_links",
+        "references_table": "ai_requests",
+        "definition": "FOREIGN KEY (ai_request_id) REFERENCES ai_requests(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "experiment_links",
+        "references_table": "ai_configuration_bundles",
+        "definition": "FOREIGN KEY (configuration_bundle_id) REFERENCES ai_configuration_bundles(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "experiment_links",
+        "references_table": "ai_dataset_snapshots",
+        "definition": "FOREIGN KEY (dataset_snapshot_id) REFERENCES ai_dataset_snapshots(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "indicator_registry",
+        "references_table": "indicator_registry",
+        "definition": "FOREIGN KEY (alias_of) REFERENCES indicator_registry(indicator_id)"
+      },
+      {
+        "table_name": "l3_authorization_outbox",
+        "references_table": "decisions_log",
+        "definition": "FOREIGN KEY (decision_id) REFERENCES decisions_log(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ml_model_registry",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "ml_models",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "mtf_calibration_runs",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "mtf_calibration_runs",
+        "references_table": "config_profiles",
+        "definition": "FOREIGN KEY (config_profile_id) REFERENCES config_profiles(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "mtf_l2_setup_states",
+        "references_table": "profile_versions",
+        "definition": "FOREIGN KEY (profile_version_id) REFERENCES profile_versions(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "mtf_l2_setup_states",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "mtf_profile_activation_audits",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (applied_by) REFERENCES users(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "mtf_profile_activation_audits",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "mtf_profile_activation_audits",
+        "references_table": "mtf_calibration_runs",
+        "definition": "FOREIGN KEY (calibration_run_id) REFERENCES mtf_calibration_runs(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "mtf_profile_activation_audits",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (rolled_back_by) REFERENCES users(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "mutation_fingerprints",
+        "references_table": "ai_requests",
+        "definition": "FOREIGN KEY (ai_request_id) REFERENCES ai_requests(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "mutation_fingerprints",
+        "references_table": "ai_configuration_bundles",
+        "definition": "FOREIGN KEY (configuration_bundle_id) REFERENCES ai_configuration_bundles(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "mutation_fingerprints",
+        "references_table": "ai_dataset_snapshots",
+        "definition": "FOREIGN KEY (dataset_snapshot_id) REFERENCES ai_dataset_snapshots(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "mutation_fingerprints",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "notification_settings",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "ohlcv_capture_comparison_snapshots",
+        "references_table": "ohlcv_capture_contracts",
+        "definition": "FOREIGN KEY (capture_contract_version) REFERENCES ohlcv_capture_contracts(capture_contract_version)"
+      },
+      {
+        "table_name": "ohlcv_live",
+        "references_table": "ohlcv_capture_contracts",
+        "definition": "FOREIGN KEY (capture_contract_version) REFERENCES ohlcv_capture_contracts(capture_contract_version)"
+      },
+      {
+        "table_name": "ohlcv_shadow",
+        "references_table": "ohlcv_capture_contracts",
+        "definition": "FOREIGN KEY (capture_contract_version) REFERENCES ohlcv_capture_contracts(capture_contract_version)"
+      },
+      {
+        "table_name": "ohlcv_state_ingestion_observations",
+        "references_table": "ohlcv_capture_contracts",
+        "definition": "FOREIGN KEY (capture_contract_version) REFERENCES ohlcv_capture_contracts(capture_contract_version)"
+      },
+      {
+        "table_name": "orders",
+        "references_table": "trades",
+        "definition": "FOREIGN KEY (trade_id) REFERENCES trades(id)"
+      },
+      {
+        "table_name": "orders",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id)"
+      },
+      {
+        "table_name": "pipeline_watchlist_assets",
+        "references_table": "pipeline_watchlists",
+        "definition": "FOREIGN KEY (watchlist_id) REFERENCES pipeline_watchlists(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "pipeline_watchlist_rejections",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "pipeline_watchlist_rejections",
+        "references_table": "pipeline_watchlists",
+        "definition": "FOREIGN KEY (watchlist_id) REFERENCES pipeline_watchlists(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "pipeline_watchlist_rejections",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "pipeline_watchlists",
+        "references_table": "pipeline_watchlists",
+        "definition": "FOREIGN KEY (source_watchlist_id) REFERENCES pipeline_watchlists(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "pipeline_watchlists",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "pipeline_watchlists",
+        "references_table": "pools",
+        "definition": "FOREIGN KEY (source_pool_id) REFERENCES pools(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "pipeline_watchlists",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "pool_asset_exclusions",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "pool_asset_exclusions",
+        "references_table": "pools",
+        "definition": "FOREIGN KEY (pool_id) REFERENCES pools(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "pool_coins",
+        "references_table": "pools",
+        "definition": "FOREIGN KEY (pool_id) REFERENCES pools(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "pools",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "pools",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "production_champion_control",
+        "references_table": "ml_model_registry",
+        "definition": "FOREIGN KEY (active_model_id) REFERENCES ml_model_registry(model_id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "production_champion_control",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_adjustment_suggestions",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "profile_adjustment_versions",
+        "references_table": "profile_adjustment_suggestions",
+        "definition": "FOREIGN KEY (suggestion_id) REFERENCES profile_adjustment_suggestions(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_adjustment_versions",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "profile_ai_reviews_reclassification_audit",
+        "references_table": "profile_ai_reviews",
+        "definition": "FOREIGN KEY (review_id) REFERENCES profile_ai_reviews(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "profile_audit_log",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_audit_log",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (changed_by) REFERENCES users(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_bayesian_analysis_runs",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "profile_bayesian_analysis_runs",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (requested_by) REFERENCES users(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "profile_bayesian_analysis_runs",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_bayesian_analysis_runs",
+        "references_table": "profile_bayesian_dataset_snapshots",
+        "definition": "FOREIGN KEY (dataset_snapshot_id) REFERENCES profile_bayesian_dataset_snapshots(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_bayesian_analysis_runs",
+        "references_table": "profile_versions",
+        "definition": "FOREIGN KEY (profile_version_id) REFERENCES profile_versions(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_bayesian_audit_events",
+        "references_table": "profile_bayesian_candidate_links",
+        "definition": "FOREIGN KEY (candidate_link_id) REFERENCES profile_bayesian_candidate_links(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_bayesian_audit_events",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_bayesian_audit_events",
+        "references_table": "profile_bayesian_analysis_runs",
+        "definition": "FOREIGN KEY (analysis_run_id) REFERENCES profile_bayesian_analysis_runs(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_bayesian_audit_events",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "profile_bayesian_audit_events",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_bayesian_audit_events",
+        "references_table": "profile_optimization_studies",
+        "definition": "FOREIGN KEY (study_id) REFERENCES profile_optimization_studies(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_bayesian_candidate_links",
+        "references_table": "profile_intelligence_autopilot_candidates",
+        "definition": "FOREIGN KEY (autopilot_candidate_id) REFERENCES profile_intelligence_autopilot_candidates(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_bayesian_candidate_links",
+        "references_table": "profile_optimization_studies",
+        "definition": "FOREIGN KEY (optimization_study_id) REFERENCES profile_optimization_studies(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_bayesian_candidate_links",
+        "references_table": "profile_bayesian_analysis_runs",
+        "definition": "FOREIGN KEY (analysis_run_id) REFERENCES profile_bayesian_analysis_runs(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "profile_bayesian_candidate_links",
+        "references_table": "profile_versions",
+        "definition": "FOREIGN KEY (base_profile_version_id) REFERENCES profile_versions(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_bayesian_candidate_links",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "profile_bayesian_candidate_links",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_bayesian_candidate_links",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_bayesian_dataset_snapshots",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "profile_bayesian_dataset_snapshots",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_bayesian_dataset_snapshots",
+        "references_table": "profile_versions",
+        "definition": "FOREIGN KEY (profile_version_id) REFERENCES profile_versions(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_bayesian_diagnostics",
+        "references_table": "profile_bayesian_analysis_runs",
+        "definition": "FOREIGN KEY (analysis_run_id) REFERENCES profile_bayesian_analysis_runs(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_bayesian_indicator_effects",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "profile_bayesian_indicator_effects",
+        "references_table": "profile_bayesian_analysis_runs",
+        "definition": "FOREIGN KEY (analysis_run_id) REFERENCES profile_bayesian_analysis_runs(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_hard_negative_patterns",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_indicator_performance",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_indicator_stats",
+        "references_table": "profile_intelligence_runs",
+        "definition": "FOREIGN KEY (run_id) REFERENCES profile_intelligence_runs(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_intelligence_ai_model_audit",
+        "references_table": "config_profiles",
+        "definition": "FOREIGN KEY (config_id) REFERENCES config_profiles(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_intelligence_ai_model_audit",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_associations",
+        "references_table": "pipeline_watchlists",
+        "definition": "FOREIGN KEY (watchlist_id) REFERENCES pipeline_watchlists(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_associations",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (new_profile_id) REFERENCES profiles(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_associations",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (previous_profile_id) REFERENCES profiles(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_associations",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_associations",
+        "references_table": "profile_intelligence_autopilot_candidates",
+        "definition": "FOREIGN KEY (candidate_id) REFERENCES profile_intelligence_autopilot_candidates(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_audit",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_audit",
+        "references_table": "profile_suggestions",
+        "definition": "FOREIGN KEY (suggestion_id) REFERENCES profile_suggestions(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_audit",
+        "references_table": "profile_rule_combinations",
+        "definition": "FOREIGN KEY (combination_id) REFERENCES profile_rule_combinations(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_audit",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_audit",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_audit",
+        "references_table": "profile_intelligence_autopilot_cycles",
+        "definition": "FOREIGN KEY (cycle_id) REFERENCES profile_intelligence_autopilot_cycles(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_audit",
+        "references_table": "profile_intelligence_autopilot_candidates",
+        "definition": "FOREIGN KEY (candidate_id) REFERENCES profile_intelligence_autopilot_candidates(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_audit",
+        "references_table": "pipeline_watchlists",
+        "definition": "FOREIGN KEY (watchlist_id) REFERENCES pipeline_watchlists(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_candidates",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_candidates",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_candidates",
+        "references_table": "profile_suggestions",
+        "definition": "FOREIGN KEY (source_suggestion_id) REFERENCES profile_suggestions(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_candidates",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_candidates",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (origin_profile_id) REFERENCES profiles(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_candidates",
+        "references_table": "profile_rule_combinations",
+        "definition": "FOREIGN KEY (source_combination_id) REFERENCES profile_rule_combinations(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_candidates",
+        "references_table": "pipeline_watchlists",
+        "definition": "FOREIGN KEY (target_watchlist_id) REFERENCES pipeline_watchlists(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_candidates",
+        "references_table": "pipeline_watchlists",
+        "definition": "FOREIGN KEY (shadow_watchlist_id) REFERENCES pipeline_watchlists(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_candidates",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (previous_profile_id) REFERENCES profiles(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_candidates",
+        "references_table": "profile_intelligence_autopilot_cycles",
+        "definition": "FOREIGN KEY (cycle_id) REFERENCES profile_intelligence_autopilot_cycles(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_compensations",
+        "references_table": "profile_intelligence_autopilot_cycles",
+        "definition": "FOREIGN KEY (cycle_id) REFERENCES profile_intelligence_autopilot_cycles(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_compensations",
+        "references_table": "profile_intelligence_autopilot_candidates",
+        "definition": "FOREIGN KEY (candidate_id) REFERENCES profile_intelligence_autopilot_candidates(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_compensations",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_cycles",
+        "references_table": "profile_intelligence_runs",
+        "definition": "FOREIGN KEY (analysis_run_id) REFERENCES profile_intelligence_runs(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_cycles",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_reports",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_reports",
+        "references_table": "profile_intelligence_autopilot_cycles",
+        "definition": "FOREIGN KEY (cycle_id) REFERENCES profile_intelligence_autopilot_cycles(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_intelligence_autopilot_settings",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_intelligence_loss_families",
+        "references_table": "profile_intelligence_autopilot_candidates",
+        "definition": "FOREIGN KEY (candidate_id) REFERENCES profile_intelligence_autopilot_candidates(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_intelligence_loss_families",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_intelligence_manual_adjustment_events",
+        "references_table": "profile_intelligence_manual_adjustments",
+        "definition": "FOREIGN KEY (adjustment_id) REFERENCES profile_intelligence_manual_adjustments(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "profile_intelligence_manual_adjustments",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "profile_intelligence_manual_adjustments",
+        "references_table": "profile_versions",
+        "definition": "FOREIGN KEY (runtime_target_profile_version_id) REFERENCES profile_versions(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "profile_intelligence_manual_adjustments",
+        "references_table": "score_engine_versions",
+        "definition": "FOREIGN KEY (runtime_target_score_engine_version_id) REFERENCES score_engine_versions(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "profile_intelligence_manual_adjustments",
+        "references_table": "profile_versions",
+        "definition": "FOREIGN KEY (applied_profile_version_id) REFERENCES profile_versions(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "profile_intelligence_manual_adjustments",
+        "references_table": "profile_versions",
+        "definition": "FOREIGN KEY (base_profile_version_id) REFERENCES profile_versions(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "profile_intelligence_manual_adjustments",
+        "references_table": "profile_versions",
+        "definition": "FOREIGN KEY (rollback_profile_version_id) REFERENCES profile_versions(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "profile_metrics",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_optimization_studies",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_optimization_studies",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "profile_optimization_studies",
+        "references_table": "profile_bayesian_analysis_runs",
+        "definition": "FOREIGN KEY (analysis_run_id) REFERENCES profile_bayesian_analysis_runs(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "profile_optimization_trial_metrics",
+        "references_table": "profile_optimization_trials",
+        "definition": "FOREIGN KEY (trial_id) REFERENCES profile_optimization_trials(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_optimization_trials",
+        "references_table": "profile_optimization_studies",
+        "definition": "FOREIGN KEY (study_id) REFERENCES profile_optimization_studies(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_rule_combinations",
+        "references_table": "profile_intelligence_runs",
+        "definition": "FOREIGN KEY (run_id) REFERENCES profile_intelligence_runs(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profiles",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_score_optimization_challengers",
+        "references_table": "profile_versions",
+        "definition": "FOREIGN KEY (champion_profile_version_id) REFERENCES profile_versions(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "profile_score_optimization_challengers",
+        "references_table": "profile_score_optimization_runs",
+        "definition": "FOREIGN KEY (run_id) REFERENCES profile_score_optimization_runs(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_score_optimization_challengers",
+        "references_table": "profile_score_replay_results",
+        "definition": "FOREIGN KEY (replay_result_id) REFERENCES profile_score_replay_results(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_score_optimization_challengers",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_score_optimization_challengers",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_score_optimization_challengers",
+        "references_table": "profile_versions",
+        "definition": "FOREIGN KEY (challenger_profile_version_id) REFERENCES profile_versions(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "profile_score_optimization_runs",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_score_optimization_runs",
+        "references_table": "ai_skills",
+        "definition": "FOREIGN KEY (skill_id) REFERENCES ai_skills(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_score_performance_daily",
+        "references_table": "score_engine_versions",
+        "definition": "FOREIGN KEY (score_engine_version_id) REFERENCES score_engine_versions(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "profile_score_performance_daily",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_score_performance_daily",
+        "references_table": "profile_score_optimization_challengers",
+        "definition": "FOREIGN KEY (challenger_id) REFERENCES profile_score_optimization_challengers(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_score_performance_daily",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_score_performance_daily",
+        "references_table": "profile_versions",
+        "definition": "FOREIGN KEY (profile_version_id) REFERENCES profile_versions(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "profile_score_replay_results",
+        "references_table": "score_engine_versions",
+        "definition": "FOREIGN KEY (champion_score_engine_version_id) REFERENCES score_engine_versions(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "profile_score_replay_results",
+        "references_table": "profile_versions",
+        "definition": "FOREIGN KEY (champion_profile_version_id) REFERENCES profile_versions(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "profile_score_replay_results",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_score_replay_results",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_score_replay_results",
+        "references_table": "profile_score_optimization_runs",
+        "definition": "FOREIGN KEY (run_id) REFERENCES profile_score_optimization_runs(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_suggestions",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_suggestions",
+        "references_table": "profile_intelligence_runs",
+        "definition": "FOREIGN KEY (run_id) REFERENCES profile_intelligence_runs(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_suggestions",
+        "references_table": "profile_rule_combinations",
+        "definition": "FOREIGN KEY (source_combination_id) REFERENCES profile_rule_combinations(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "profile_version_ev_scores",
+        "references_table": "profile_versions",
+        "definition": "FOREIGN KEY (profile_version_id) REFERENCES profile_versions(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_version_ev_scores",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "profile_versions",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "pump_ml_artifacts",
+        "references_table": "pump_ml_experiments",
+        "definition": "FOREIGN KEY (experiment_id) REFERENCES pump_ml_experiments(experiment_id)"
+      },
+      {
+        "table_name": "pump_ml_predictions",
+        "references_table": "pump_ml_experiments",
+        "definition": "FOREIGN KEY (experiment_id) REFERENCES pump_ml_experiments(experiment_id)"
+      },
+      {
+        "table_name": "pump_ml_predictions",
+        "references_table": "pump_opportunity_observations",
+        "definition": "FOREIGN KEY (observation_id) REFERENCES pump_opportunity_observations(observation_id)"
+      },
+      {
+        "table_name": "pump_opportunity_label_queue",
+        "references_table": "pump_opportunity_observations",
+        "definition": "FOREIGN KEY (observation_id) REFERENCES pump_opportunity_observations(observation_id)"
+      },
+      {
+        "table_name": "pump_opportunity_labels",
+        "references_table": "pump_opportunity_observations",
+        "definition": "FOREIGN KEY (observation_id) REFERENCES pump_opportunity_observations(observation_id)"
+      },
+      {
+        "table_name": "pump_radar_controls",
+        "references_table": "pump_radar_runs",
+        "definition": "FOREIGN KEY (run_id) REFERENCES pump_radar_runs(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "pump_radar_controls",
+        "references_table": "pump_radar_events",
+        "definition": "FOREIGN KEY (event_id) REFERENCES pump_radar_events(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "pump_radar_event_links",
+        "references_table": "shadow_trades",
+        "definition": "FOREIGN KEY (shadow_trade_id) REFERENCES shadow_trades(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "pump_radar_event_links",
+        "references_table": "decisions_log",
+        "definition": "FOREIGN KEY (decision_id) REFERENCES decisions_log(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "pump_radar_event_links",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "pump_radar_event_links",
+        "references_table": "pump_radar_events",
+        "definition": "FOREIGN KEY (event_id) REFERENCES pump_radar_events(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "pump_radar_events",
+        "references_table": "pump_radar_runs",
+        "definition": "FOREIGN KEY (run_id) REFERENCES pump_radar_runs(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "pump_radar_hypotheses",
+        "references_table": "pump_radar_runs",
+        "definition": "FOREIGN KEY (run_id) REFERENCES pump_radar_runs(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "pump_radar_hypotheses",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "pump_radar_indicator_snapshots",
+        "references_table": "pump_radar_events",
+        "definition": "FOREIGN KEY (event_id) REFERENCES pump_radar_events(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "pump_radar_indicator_snapshots",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "pump_radar_indicator_values",
+        "references_table": "pump_radar_indicator_snapshots",
+        "definition": "FOREIGN KEY (snapshot_id) REFERENCES pump_radar_indicator_snapshots(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "pump_radar_range_results",
+        "references_table": "pump_radar_runs",
+        "definition": "FOREIGN KEY (run_id) REFERENCES pump_radar_runs(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "pump_radar_report_items",
+        "references_table": "pump_radar_report_runs",
+        "definition": "FOREIGN KEY (report_run_id) REFERENCES pump_radar_report_runs(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "pump_radar_report_items",
+        "references_table": "pump_radar_events",
+        "definition": "FOREIGN KEY (event_id) REFERENCES pump_radar_events(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "pump_radar_report_runs",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "pump_radar_report_runs",
+        "references_table": "pump_radar_runs",
+        "definition": "FOREIGN KEY (run_id) REFERENCES pump_radar_runs(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "pump_radar_run_assets",
+        "references_table": "pump_radar_runs",
+        "definition": "FOREIGN KEY (run_id) REFERENCES pump_radar_runs(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "pump_radar_runs",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "radar_feed_items",
+        "references_table": "radar_feed_receipts",
+        "definition": "FOREIGN KEY (receipt_id) REFERENCES radar_feed_receipts(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "radar_feed_receipts",
+        "references_table": "pools",
+        "definition": "FOREIGN KEY (pool_id) REFERENCES pools(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "reconciled_gate_trades",
+        "references_table": "trade_tracking",
+        "definition": "FOREIGN KEY (trade_tracking_id) REFERENCES trade_tracking(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "regeneration_runs",
+        "references_table": "ai_requests",
+        "definition": "FOREIGN KEY (ai_request_id) REFERENCES ai_requests(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "regeneration_runs",
+        "references_table": "ai_configuration_bundles",
+        "definition": "FOREIGN KEY (configuration_bundle_id) REFERENCES ai_configuration_bundles(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "regeneration_runs",
+        "references_table": "ai_dataset_snapshots",
+        "definition": "FOREIGN KEY (dataset_snapshot_id) REFERENCES ai_dataset_snapshots(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "regeneration_runs",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (tenant_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "rule_contribution",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "shadow_canonical_lineage_repair_audit",
+        "references_table": "shadow_trades",
+        "definition": "FOREIGN KEY (shadow_trade_id) REFERENCES shadow_trades(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "shadow_l3_exit_decisions",
+        "references_table": "shadow_trades",
+        "definition": "FOREIGN KEY (shadow_id) REFERENCES shadow_trades(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "shadow_l3_exit_states",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "shadow_l3_exit_states",
+        "references_table": "shadow_trades",
+        "definition": "FOREIGN KEY (shadow_id) REFERENCES shadow_trades(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "shadow_l3_policy_validations",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "shadow_l3_policy_validations",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (approved_by) REFERENCES users(id)"
+      },
+      {
+        "table_name": "shadow_trade_analysis_jobs",
+        "references_table": "shadow_trades",
+        "definition": "FOREIGN KEY (shadow_trade_id) REFERENCES shadow_trades(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "shadow_trade_analysis_jobs",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "shadow_trade_analysis_jobs",
+        "references_table": "shadow_trade_report_runs",
+        "definition": "FOREIGN KEY (report_run_id) REFERENCES shadow_trade_report_runs(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "shadow_trade_measurement_revisions",
+        "references_table": "shadow_trades",
+        "definition": "FOREIGN KEY (shadow_trade_id) REFERENCES shadow_trades(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "shadow_trade_report_items",
+        "references_table": "shadow_trades",
+        "definition": "FOREIGN KEY (shadow_trade_id) REFERENCES shadow_trades(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "shadow_trade_report_items",
+        "references_table": "shadow_trade_report_runs",
+        "definition": "FOREIGN KEY (report_run_id) REFERENCES shadow_trade_report_runs(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "shadow_trade_report_runs",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "shadow_trades",
+        "references_table": "decisions_log",
+        "definition": "FOREIGN KEY (decision_id) REFERENCES decisions_log(id)"
+      },
+      {
+        "table_name": "shadow_trades",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id)"
+      },
+      {
+        "table_name": "shadow_trades",
+        "references_table": "ml_opportunity_rankings",
+        "definition": "FOREIGN KEY (ranking_id) REFERENCES ml_opportunity_rankings(id)"
+      },
+      {
+        "table_name": "shadow_trades",
+        "references_table": "shadow_trades",
+        "definition": "FOREIGN KEY (superseded_by_id) REFERENCES shadow_trades(id)"
+      },
+      {
+        "table_name": "shadow_trades",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "social_asset_observations",
+        "references_table": "social_intelligence_runs",
+        "definition": "FOREIGN KEY (run_id) REFERENCES social_intelligence_runs(id) ON DELETE RESTRICT"
+      },
+      {
+        "table_name": "trade_decisions",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id)"
+      },
+      {
+        "table_name": "trade_decisions",
+        "references_table": "trades",
+        "definition": "FOREIGN KEY (trade_id) REFERENCES trades(id)"
+      },
+      {
+        "table_name": "trade_decisions",
+        "references_table": "pools",
+        "definition": "FOREIGN KEY (pool_id) REFERENCES pools(id)"
+      },
+      {
+        "table_name": "trades",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id)"
+      },
+      {
+        "table_name": "trades",
+        "references_table": "pools",
+        "definition": "FOREIGN KEY (pool_id) REFERENCES pools(id)"
+      },
+      {
+        "table_name": "trade_simulations",
+        "references_table": "decisions_log",
+        "definition": "FOREIGN KEY (decision_id) REFERENCES decisions_log(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "trade_simulations",
+        "references_table": "decisions_log",
+        "definition": "FOREIGN KEY (decision_id) REFERENCES decisions_log(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "trade_tracking",
+        "references_table": "decisions_log",
+        "definition": "FOREIGN KEY (decision_id) REFERENCES decisions_log(id) ON DELETE SET NULL"
+      },
+      {
+        "table_name": "watchlist_profiles",
+        "references_table": "users",
+        "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+      },
+      {
+        "table_name": "watchlist_profiles",
+        "references_table": "profiles",
+        "definition": "FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE"
+      }
+    ]
+  }
+}

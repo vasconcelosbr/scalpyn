@@ -382,6 +382,8 @@ app.add_middleware(_SchemaReadinessGate)
 # Auth & Config
 app.include_router(auth.router)
 app.include_router(config_api.router)
+from .api import storage_retention as storage_retention_api
+app.include_router(storage_retention_api.router)
 app.include_router(strategy_settings.router)
 app.include_router(indicator_registry.router)
 app.include_router(decisions.router)

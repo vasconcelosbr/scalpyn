@@ -145,6 +145,7 @@ _ALL_TASK_MODULES = (
         "app.tasks.ml_data_certification",
         "app.tasks.prune_indicator_snapshots",
         "app.tasks.prune_indicators",
+        "app.tasks.storage_retention",
         "app.tasks.ai_orchestration",
         "app.tasks.governed_cache_reconciliation",
         "app.tasks.entry_risk_capture",
@@ -371,6 +372,7 @@ TASK_ROUTES = {
     # teve retenção, mesmo padrão de falha do indicator_snapshots acima.
     # Compute queue: isolada da captura; falha aqui nunca afeta scan.
     "app.tasks.prune_indicators.run": {"queue": QUEUE_STRUCTURAL_COMPUTE},
+    "app.tasks.storage_retention.run": {"queue": QUEUE_STRUCTURAL_COMPUTE},
     "app.tasks.ai_orchestration.start_graph_run": {"queue": QUEUE_AI_ORCHESTRATION},
     "app.tasks.ai_orchestration.dispatch_queued_graph_runs": {"queue": QUEUE_AI_ORCHESTRATION},
     "app.tasks.ai_orchestration.resume_graph_run": {"queue": QUEUE_AI_ORCHESTRATION},
@@ -477,6 +479,10 @@ _RESEARCH_OHLCV_GUARDS = {
 _NO_REQUEUE_ON_WORKER_LOSS = {"acks_late": False}
 
 TASK_ANNOTATIONS = {
+    "app.tasks.storage_retention.run": {
+        "time_limit": 180, "soft_time_limit": 150, "max_retries": 0,
+        **_NO_REQUEUE_ON_WORKER_LOSS,
+    },
     # Microstructure (Task #245: idempotent + beat-driven → opt-out of acks_late)
     "app.tasks.collect_market_data.collect_5m":  {**_MICRO_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.compute_indicators.compute_5m":   {**_MICRO_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},
@@ -779,6 +785,11 @@ celery_app.conf.update(
 
 # Periodic task schedule
 celery_app.conf.beat_schedule = {
+    "storage_retention": {
+        "task": "app.tasks.storage_retention.run",
+        "schedule": 60.0,
+        "options": {"queue": QUEUE_STRUCTURAL_COMPUTE, "expires": 55},
+    },
     # Collect market data every 60 seconds
     "collect_market_data_every_minute": {
         "task": "app.tasks.collect_market_data.collect_all",

@@ -96,6 +96,14 @@ class ConfigService:
         return {}
 
     async def update_config(self, db: AsyncSession, config_type: str, user_id: UUID, new_json: Dict[str, Any], changed_by: UUID, pool_id: Optional[UUID] = None, change_description: str = "") -> Dict[str, Any]:
+        if config_type == "storage_retention":
+            from sqlalchemy import text
+            from ..schemas.storage_retention import StorageRetentionConfig
+            if pool_id is not None:
+                raise ValueError("Storage retention is global")
+            if not (await db.execute(text("SELECT EXISTS(SELECT 1 FROM storage_retention_owners WHERE user_id=:uid)"), {"uid": user_id})).scalar():
+                raise ValueError("Storage retention operator authorization required")
+            new_json = StorageRetentionConfig.model_validate(new_json).model_dump()
         if config_type == "ml":
             from app.ml.l3_managed_exit import definition
             definition(new_json)  # Invalid costs or partial contracts never reach production config.

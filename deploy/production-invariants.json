@@ -2357,6 +2357,37 @@
           ]
         }
       ]
+    },
+    {
+      "id": "recoverable-operational-storage-retention",
+      "description": "Only completed operational data can be purged, with verified recovery archives and DB policy",
+      "files": [
+        {
+          "path": "backend/app/services/storage_retention.py",
+          "contains_all": [
+            "table_not_allowlisted",
+            "archive_restore_mismatch",
+            "dry_run_required",
+            "indexes_required",
+            "storage_retention_holds"
+          ]
+        },
+        {
+          "path": "backend/tests/test_storage_retention.py",
+          "contains_all": [
+            "test_postgres_retention_protection_restore_and_rollback",
+            "fail_archive",
+            "other_owner"
+          ]
+        },
+        {
+          "path": "frontend/app/settings/storage/page.tsx",
+          "contains_all": [
+            "Retenção de dados",
+            "/storage-retention/status"
+          ]
+        }
+      ]
     }
   ]
 }

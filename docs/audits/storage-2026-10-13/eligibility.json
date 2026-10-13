@@ -1,0 +1,141 @@
+{
+  "telemetry_age": {
+    "query": "SELECT min(observed_at) oldest,max(observed_at) newest,count(*) rows,count(*) FILTER(WHERE observed_at < now()-interval '7 days') older_than_proposed_7d FROM ohlcv_state_ingestion_observations",
+    "error": "QueryCanceled"
+  },
+  "indicators_age": {
+    "query": "SELECT min(time) oldest,max(time) newest,count(*) rows,count(*) FILTER(WHERE time<now()-interval '90 days') older_than_current_90d FROM indicators",
+    "error": "QueryCanceled"
+  },
+  "queue_completed": {
+    "query": "SELECT count(*) rows,count(*) FILTER(WHERE completed_at IS NOT NULL) completed,count(*) FILTER(WHERE completed_at IS NULL) pending,count(*) FILTER(WHERE resource_block IS NOT NULL) blocked FROM pump_opportunity_label_queue",
+    "rows": [
+      {
+        "rows": 2459184,
+        "completed": 2367833,
+        "pending": 91351,
+        "blocked": 0
+      }
+    ]
+  },
+  "queue_candidates": {
+    "query": "SELECT count(*) eligible_rows FROM pump_opportunity_label_queue q WHERE q.completed_at < now()-interval '7 days' AND q.resource_block IS NULL AND EXISTS (SELECT 1 FROM pump_opportunity_labels l WHERE l.observation_id=q.observation_id AND l.label_spec_hash=q.label_spec_hash AND l.horizon_minutes=q.horizon_minutes)",
+    "error": "QueryCanceled"
+  },
+  "snapshots_age": {
+    "query": "SELECT min(timestamp) oldest,max(timestamp) newest,count(*) rows,count(*) FILTER(WHERE timestamp<now()-interval '48 hours') older_than_current_48h FROM indicator_snapshots",
+    "rows": [
+      {
+        "oldest": "2026-10-11 15:02:01.213315+00:00",
+        "newest": "2026-10-13 15:09:17.702030+00:00",
+        "rows": 116540,
+        "older_than_current_48h": 425
+      }
+    ]
+  },
+  "pump_expired": {
+    "query": "SELECT min(slot_at) oldest,max(slot_at) newest,count(*) rows,count(*) FILTER(WHERE slot_at<now()-interval '30 days') older_than_configured_30d FROM pump_opportunity_observations",
+    "rows": [
+      {
+        "oldest": "2026-10-01 16:38:00+00:00",
+        "newest": "2026-10-08 20:58:00+00:00",
+        "rows": 410225,
+        "older_than_configured_30d": 0
+      }
+    ]
+  },
+  "config_extracts": {
+    "query": "SELECT config_type, CASE WHEN config_type='pump_opportunity' THEN jsonb_build_object('budget',config_json->'budget','research_lookback_days',config_json#>'{research,lookback_days}','candle_lookback_days',config_json#>'{research,candle,lookback_days}') WHEN config_type='shadow_l3_exit_policy' THEN jsonb_build_object('retention_days',config_json->'retention_days','capture_batch_size',config_json->'capture_batch_size') ELSE jsonb_build_object('flow',config_json->'flow','snapshots',config_json->'snapshots','flow_history',config_json->'flow_history','research',config_json->'research') END config FROM config_profiles WHERE pool_id IS NULL AND is_active IS NOT FALSE AND config_type IN ('pump_opportunity','pump_monitor','shadow_l3_exit_policy')",
+    "rows": [
+      {
+        "config_type": "pump_opportunity",
+        "config": {
+          "budget": {
+            "max_assets": 100,
+            "batch_labels": 512,
+            "retention_days": 30,
+            "max_storage_bytes": 10000000000,
+            "max_label_read_bytes": 20000000,
+            "label_timeout_seconds": 4,
+            "max_label_read_points": 100000,
+            "write_timeout_seconds": 4,
+            "max_price_points_per_cycle": 10000,
+            "max_price_points_per_minute": 3000
+          },
+          "candle_lookback_days": 90,
+          "research_lookback_days": 30
+        }
+      },
+      {
+        "config_type": "shadow_l3_exit_policy",
+        "config": {
+          "retention_days": 30,
+          "capture_batch_size": 10000
+        }
+      },
+      {
+        "config_type": "pump_monitor",
+        "config": {
+          "flow": {
+            "volume_unit": "quote",
+            "bucket_seconds": 60,
+            "retention_days": 2,
+            "settle_seconds": 3,
+            "min_coverage_pct": 80,
+            "persistence_buckets": 10,
+            "bucket_lookback_seconds": 300,
+            "progress_window_minutes": 15
+          },
+          "research": {
+            "labels": {
+              "version": "pump_research_labels_v1",
+              "barriers": {
+                "L1": {
+                  "sl_pct": 0.5,
+                  "tp_pct": 1.0,
+                  "h_minutes": 15
+                },
+                "L2": {
+                  "sl_pct": 1.0,
+                  "tp_pct": 2.0,
+                  "h_minutes": 30
+                },
+                "L3": {
+                  "sl_pct": 1.5,
+                  "tp_pct": 3.0,
+                  "h_minutes": 60
+                }
+              },
+              "batch_rows": 20000,
+              "max_gap_pct": 10.0,
+              "settle_seconds": 300,
+              "horizons_minutes": [
+                5,
+                15,
+                30,
+                60
+              ],
+              "fee_roundtrip_source": {
+                "key": "ml_fee_roundtrip_pct",
+                "config_type": "ml"
+              }
+            },
+            "enabled": true,
+            "retention_days": 30,
+            "every_n_minutes": 1,
+            "partition_days_ahead": 3
+          },
+          "snapshots": {
+            "every_n_cycles": 10,
+            "retention_hours": 48
+          },
+          "flow_history": {
+            "enabled": true,
+            "step_seconds": 300,
+            "retention_days": 180
+          }
+        }
+      }
+    ]
+  }
+}
