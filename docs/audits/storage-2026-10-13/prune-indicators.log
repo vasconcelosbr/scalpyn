@@ -1,0 +1,2 @@
+{"message":"[2026-10-13 10:16:59.851-03:00: INFO/ForkPoolWorker-191] [prune-indicators] deleted=2924 batches=1 retention_days=90 hit_cap=False","level":"error","timestamp":"2026-10-13T13:17:01.561391997Z"}
+{"level":"error","message":"[2026-10-13 11:17:38.493-03:00: INFO/ForkPoolWorker-193] [prune-indicators] deleted=3042 batches=1 retention_days=90 hit_cap=False","timestamp":"2026-10-13T14:17:46.403118965Z"}

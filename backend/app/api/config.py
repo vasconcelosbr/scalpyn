@@ -147,6 +147,16 @@ async def update_config(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=str(exc),
             ) from exc
+    if config_type == "storage_retention":
+        from .storage_retention import require_operator
+        from ..schemas.storage_retention import StorageRetentionConfig
+        await require_operator(db, user_id)
+        if pool_id is not None:
+            raise HTTPException(status_code=422, detail="Storage retention is global")
+        try:
+            payload = StorageRetentionConfig.model_validate(payload).model_dump()
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     if config_type == "social_score":
         validated = SocialScoreConfig.model_validate(payload)
         if validated.enabled:
