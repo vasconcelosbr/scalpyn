@@ -13,19 +13,120 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 from app.schemas.storage_retention import StorageRetentionConfig
-from app.services.storage_retention import TABLES, pack_archive, run_retention, selection_sql
+from app.services.storage_retention import TABLES, active_tables, pack_archive, run_retention, selection_sql
 
 
 def test_allowlist_and_fail_closed_config():
     for table in ("shadow_trades", "ohlcv", "indicators", "pump_opportunity_labels", "x;DROP TABLE users"):
         with pytest.raises(ValueError): selection_sql(table)
-    for payload in ({"archive_before_delete": False}, {"tables": ["shadow_trades"]}, {"batch_rows": 10001}, {"enabled": "true"}):
+    for payload in ({"archive_before_delete": "false"}, {"tables": ["shadow_trades"]}, {"batch_rows": 10001},
+                    {"enabled": "true"}, {"pump_collection_retention_days": 0}):
         with pytest.raises(ValidationError): StorageRetentionConfig.model_validate(payload)
     raw = '{"price":0.123456789012345678901234567890}'
     archive, digest, size = pack_archive([{"data": raw}])
     assert gzip.decompress(archive) == ("[" + raw + "]").encode()
     assert hashlib.sha256(gzip.decompress(archive)).hexdigest() == digest
     assert size == len(gzip.decompress(archive))
+
+
+def test_pump_collection_runs_only_without_archive():
+    archived = StorageRetentionConfig()
+    assert archived.archive_before_delete and active_tables(archived) == TABLES[:3]
+    unarchived = StorageRetentionConfig(archive_before_delete=False)
+    assert active_tables(unarchived) == TABLES and unarchived.pump_collection_retention_days == 7
+
+
+def test_postgres_pump_collection_retention_without_archive():
+    url = os.getenv("RETENTION_TEST_DATABASE_URL")
+    if not url: pytest.skip("RETENTION_TEST_DATABASE_URL not configured")
+    assert urlparse(url).hostname in {"127.0.0.1", "localhost", "::1"}, "Only isolated local PostgreSQL allowed"
+    asyncio.run(exercise_pump_collection(url))
+
+
+async def exercise_pump_collection(url):
+    import asyncpg
+    conn = await asyncpg.connect(url)
+    schema = "retention_pump_test_" + uuid4().hex
+    owner, other = uuid4(), uuid4()
+    try:
+        await conn.execute(f"CREATE SCHEMA {schema}")
+        await conn.execute(f"SET search_path TO {schema}")
+        spec = importlib.util.spec_from_file_location("retention_migration", Path(__file__).parents[1] / "alembic/versions/244_storage_retention.py")
+        migration = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(migration)
+        statements = []
+        migration.op = SimpleNamespace(execute=lambda sql: statements.append(str(sql)))
+        migration.upgrade()
+        for sql in statements: await conn.execute(sql)
+        await conn.execute("""
+            CREATE TABLE config_profiles(user_id uuid,pool_id uuid,config_type text,config_json jsonb,is_active boolean,updated_at timestamptz DEFAULT now());
+            CREATE TABLE ohlcv_state_ingestion_observations(observed_at timestamptz, symbol text,timeframe text,capture_contract_version text,
+              status text,error_code text,rejected_from_closed_rows int,PRIMARY KEY(observed_at,symbol,timeframe,capture_contract_version));
+            CREATE TABLE ohlcv_settlement_latency_samples(symbol text,timeframe text,candle_open_time timestamptz,delay_target_seconds int,
+              observed_at timestamptz,found bool,is_closed bool,PRIMARY KEY(symbol,timeframe,candle_open_time,delay_target_seconds));
+            CREATE TABLE pump_opportunity_observations(observation_id uuid PRIMARY KEY,user_id uuid,instrument_id uuid,
+              slot_at timestamptz,payload jsonb);
+            CREATE INDEX ix_pump_opportunity_owner_slot ON pump_opportunity_observations(user_id,slot_at DESC,observation_id);
+            CREATE TABLE pump_opportunity_label_queue(observation_id uuid REFERENCES pump_opportunity_observations,user_id uuid,
+              label_spec_hash text,horizon_minutes int,ready_at timestamptz,completed_at timestamptz,resource_block jsonb,
+              PRIMARY KEY(observation_id,label_spec_hash,horizon_minutes));
+            CREATE TABLE pump_opportunity_labels(observation_id uuid REFERENCES pump_opportunity_observations,label_spec_hash text,
+              horizon_minutes int,payload jsonb,PRIMARY KEY(observation_id,label_spec_hash,horizon_minutes));
+            CREATE TABLE pump_ml_predictions(prediction_id uuid PRIMARY KEY,observation_id uuid REFERENCES pump_opportunity_observations);
+            CREATE TABLE pump_opportunity_price_paths(user_id uuid,instrument_id uuid,bucket_start timestamptz,content_hash text,
+              payload jsonb,PRIMARY KEY(user_id,instrument_id,bucket_start,content_hash));
+            CREATE INDEX ix_retention_ingestion_ok ON ohlcv_state_ingestion_observations(observed_at) WHERE status='ok';
+            CREATE INDEX ix_retention_completed_labels ON pump_opportunity_label_queue(user_id,completed_at) WHERE completed_at IS NOT NULL;
+        """)
+        ids = {}
+        # old: deleted with its labels and its (still open) queue rows; recent, predicted,
+        # held and other-owner observations stay.
+        for case, age in (("old", "10 days"), ("recent", "1 day"), ("predicted", "10 days"), ("held", "10 days"), ("other", "10 days")):
+            oid = ids[case] = uuid4()
+            await conn.execute(f"INSERT INTO pump_opportunity_observations VALUES($1,$2,$3,now()-interval '{age}','{{}}')",
+                               oid, other if case == "other" else owner, uuid4())
+            await conn.execute("INSERT INTO pump_opportunity_labels VALUES($1,'v1',10,'{}'),($1,'v1',15,'{}')", oid)
+            await conn.execute("INSERT INTO pump_opportunity_label_queue VALUES($1,$2,'v1',30,now(),NULL,NULL)", oid, owner)
+        await conn.execute("INSERT INTO pump_ml_predictions VALUES($1,$2)", uuid4(), ids["predicted"])
+        await conn.execute("INSERT INTO storage_retention_holds VALUES($1,$2,NULL,now()-interval '11 days',now()-interval '9 days','incident',now())",
+                           uuid4(), TABLES[3])
+        for age in ("10 days", "1 day"):
+            await conn.execute(f"INSERT INTO pump_opportunity_price_paths VALUES($1,$2,now()-interval '{age}','h','{{}}')", owner, uuid4())
+        cfg = StorageRetentionConfig(enabled=True, mode="execute", batch_rows=100, archive_before_delete=False)
+        await conn.execute("INSERT INTO storage_retention_owners(user_id,authorization_reason) VALUES($1,'test')", owner)
+        await conn.execute("INSERT INTO config_profiles VALUES($1,NULL,'storage_retention',$2::jsonb,true,now())", owner, cfg.model_dump_json())
+        await run_retention(conn, owner, force=True, preview=True)
+        result = await run_retention(conn, owner, force=True)
+        assert result["status"] == "completed", result
+        pump = {b["table"]: b for b in result["batches"] if b["table"] in TABLES[3:]}
+        # The hold covers every 10-day-old observation, so only after lifting it is "old" eligible.
+        assert pump[TABLES[3]]["deleted"] == 0 and pump[TABLES[4]]["deleted"] == 1
+        await conn.execute("DELETE FROM storage_retention_holds")
+        # A pump batch that times out rolls back alone and does not fail the run.
+        await conn.execute("""CREATE FUNCTION slow() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN PERFORM pg_sleep(0.5); RETURN NULL; END$$;
+            CREATE TRIGGER slow BEFORE DELETE ON pump_opportunity_labels FOR EACH STATEMENT EXECUTE FUNCTION slow();""")
+        slow_cfg = cfg.model_copy(update={"statement_timeout_ms": 100})
+        await conn.execute("UPDATE config_profiles SET config_json=$1::jsonb", slow_cfg.model_dump_json())
+        await run_retention(conn, owner, force=True, preview=True)
+        timed_out = await run_retention(conn, owner, force=True)
+        assert timed_out["status"] == "completed"
+        assert [b.get("error") for b in timed_out["batches"] if b["table"] == TABLES[3]] == ["statement_timeout"]
+        assert await conn.fetchval("SELECT count(*) FROM pump_opportunity_labels") == 10
+        await conn.execute("DROP TRIGGER slow ON pump_opportunity_labels")
+        await conn.execute("UPDATE config_profiles SET config_json=$1::jsonb", cfg.model_dump_json())
+        result = await run_retention(conn, owner, force=True)
+        obs = [b for b in result["batches"] if b["table"] == TABLES[3]][0]
+        assert obs["deleted"] == 2 and obs["archived"] is False
+        assert obs["children_deleted"] == {"pump_opportunity_labels": 4, "pump_opportunity_label_queue": 2}
+        left = {r["observation_id"] for r in await conn.fetch("SELECT observation_id FROM pump_opportunity_observations")}
+        assert left == {ids["recent"], ids["predicted"], ids["other"]}
+        assert await conn.fetchval("SELECT count(*) FROM pump_opportunity_labels") == 6
+        assert await conn.fetchval("SELECT count(*) FROM pump_opportunity_price_paths") == 1
+        assert await conn.fetchval("SELECT count(*) FROM storage_retention_batches WHERE archive_gzip IS NOT NULL") == 0
+        assert await conn.fetchval("SELECT count(*) FROM storage_retention_batches WHERE deleted_count>0 AND archive_sha256<>''") >= 2
+    finally:
+        await conn.execute(f"DROP SCHEMA {schema} CASCADE")
+        await conn.close()
 
 
 def test_postgres_retention_protection_restore_and_rollback():
@@ -87,7 +188,7 @@ async def exercise_database(url):
         cfg = StorageRetentionConfig(enabled=True, mode="execute", batch_rows=100)
         await conn.execute("INSERT INTO storage_retention_owners(user_id,authorization_reason) VALUES($1,'test')", owner)
         await conn.execute("INSERT INTO config_profiles VALUES($1,NULL,'storage_retention',$2::jsonb,true,now())", owner, cfg.model_dump_json())
-        before = {t: await conn.fetchval(f"SELECT jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text)::text FROM {t} t") for t in (*TABLES, "pump_opportunity_labels", "shadow_trades")}
+        before = {t: await conn.fetchval(f"SELECT jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text)::text FROM {t} t") for t in (*TABLES[:3], "pump_opportunity_labels", "shadow_trades")}
         assert (await run_retention(conn, owner, force=True))["status"] == "dry_run_required"
         dry = await run_retention(conn, owner, force=True, preview=True)
         assert dry["status"] == "completed" and dry["deleted"] == 0
