@@ -45,6 +45,8 @@ def test_oracle_probabilities_score_high_and_noise_scores_half():
     assert m["horizon_candles"] == 3 and m["label_mode"] == CFG["label_mode"]
     assert m["pooled_auc"] > 0.95 and m["days_auc_above_half"] == m["days_scored"] >= 1
     assert m["economic"]["top_minus_bottom"] > 0
+    # Per-day rows must not overwrite the endpoint's window ``days`` (UI showed "[object Object] d").
+    assert "days" not in m and len(m["per_day"]) == m["days_scored"]
     rng = np.random.default_rng(3)
     noise, _ = _preds(closes, lambda f, i, t: float(rng.uniform(0.4, 0.6)))
     n = live.evaluate(noise, closes, CFG, horizon_minutes=15, quantile=0.1)

@@ -8,10 +8,9 @@ from app.services.pump_opportunity_engine import canonical_hash,config,utc
 
 FEATURES=["rsi","adx","delta_norm","buy_persistence","cvd_slope","rvol_strict","price_progress_atr","spread_pct","estimated_slippage_buy_pct"]
 MAX_ROWS=10000
+# Training gate: own ledger only (see app.services.pump_ml_daily.STORAGE_SQL).
 STORAGE_SQL="""SELECT sum(pg_total_relation_size(name::regclass)) FROM unnest(ARRAY[
-    'pump_opportunity_observations','pump_opportunity_labels','pump_opportunity_price_paths',
-    'pump_opportunity_label_queue','pump_opportunity_job_runs','pump_ml_experiments','pump_ml_predictions',
-    'pump_ml_job_runs','pump_ml_artifacts']) name"""
+    'pump_ml_experiments','pump_ml_predictions','pump_ml_job_runs','pump_ml_artifacts']) name"""
 
 def prepare(rows,selection=None):
     """Mechanical challenger floors, never a model-validation/promotion gate."""

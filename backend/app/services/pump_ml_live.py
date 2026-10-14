@@ -113,7 +113,7 @@ def evaluate(preds: List[Dict[str, Any]], closes: Dict[str, Dict[int, float]], c
             "sign_test_p": sign_test_p(above, int(aucs.size)) if aucs.size else None,
             "mean_probability": float(P.mean()), "realised_up_frequency": float(Y.mean()),
             "brier": float(np.mean((Y - P) ** 2)), "baseline_brier": float(np.mean((Y - Y.mean()) ** 2)),
-            "economic": eco, "days": per_day}
+            "economic": eco, "per_day": per_day}
 
 
 async def live_evaluation(db, user_id, spec: Dict[str, Any], *, days: int) -> Dict[str, Any]:
