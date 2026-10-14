@@ -330,8 +330,10 @@ async def audit_multilayer_runtime(
             ) snapshot ON TRUE
         )
         SELECT timeframe, scheduler_group,
-               array_remove(array_agg(DISTINCT entry.value->>'producer_version'), NULL)
-                 AS producer_versions
+               array_remove(array_agg(DISTINCT COALESCE(
+                 entry.value->>'producer_version',
+                 latest.indicators_json->'_envelope'->'common'->>'producer_version'
+               )), NULL) AS producer_versions
           FROM latest
           LEFT JOIN LATERAL jsonb_each(latest.indicators_json) entry ON TRUE
          GROUP BY timeframe, scheduler_group

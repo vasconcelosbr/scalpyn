@@ -13,6 +13,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from ..services.profile_runtime_config import canonical_hash
+from ..utils.indicator_payload import maybe_compact_indicator_payload
 from ..tasks.celery_app import celery_app
 from ..utils.indicator_merge import envelop_results
 
@@ -274,7 +275,7 @@ async def _compute_symbol(
         "time": now,
         "symbol": symbol,
         "timeframe": timeframe,
-        "payload": json.dumps(payload, default=str),
+        "payload": json.dumps(maybe_compact_indicator_payload(payload), default=str),
     })
     return True
 

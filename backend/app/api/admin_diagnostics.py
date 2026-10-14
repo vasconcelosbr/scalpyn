@@ -243,7 +243,8 @@ async def _probe_indicators_history(symbol: str) -> Dict[str, Any]:
                        timeframe,
                        time,
                        (SELECT array_agg(k ORDER BY k)
-                          FROM jsonb_object_keys(indicators_json) k) AS keys
+                          FROM jsonb_object_keys(indicators_json) k
+                         WHERE k <> '_envelope') AS keys
                 FROM indicators
                 WHERE symbol = :s
                 ORDER BY scheduler_group, timeframe, time DESC
@@ -254,7 +255,8 @@ async def _probe_indicators_history(symbol: str) -> Dict[str, Any]:
                        timeframe,
                        scheduler_group,
                        (SELECT array_agg(k ORDER BY k)
-                          FROM jsonb_object_keys(indicators_json) k) AS keys
+                          FROM jsonb_object_keys(indicators_json) k
+                         WHERE k <> '_envelope') AS keys
                 FROM indicators
                 WHERE symbol = :s
                 ORDER BY time DESC

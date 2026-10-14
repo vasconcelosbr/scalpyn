@@ -23,6 +23,7 @@ from .mtf_walk_forward import (
     select_candidate,
 )
 from .profile_runtime_config import canonical_hash
+from ..utils.indicator_payload import expand_indicator_payload
 
 
 _TF_SECONDS = {"1h": 3600, "15m": 900}
@@ -101,6 +102,7 @@ def _validated_features(
         raise ValueError("SOURCE_IDENTITY_CONFIG_REQUIRED")
     if validity_margin is None:
         raise ValueError("VALIDITY_MARGIN_CONFIG_REQUIRED")
+    payload = expand_indicator_payload(payload)
     for feature in sorted(required_features):
         envelope = payload.get(feature)
         if not isinstance(envelope, Mapping):
@@ -189,9 +191,9 @@ async def audit_policy_availability(db, *, user_id: UUID) -> dict[str, Any]:
                percentile_cont(0.5) WITHIN GROUP (
                  ORDER BY EXTRACT(EPOCH FROM (
                    time - CASE
-                     WHEN indicators_json->'price'->>'source_timestamp'
+                     WHEN (COALESCE(indicators_json->'_envelope'->'common', '{}'::jsonb) || (indicators_json->'price'))->>'source_timestamp'
                           ~ '^\\d{4}-\\d{2}-\\d{2}T'
-                     THEN (indicators_json->'price'->>'source_timestamp')::timestamptz
+                     THEN ((COALESCE(indicators_json->'_envelope'->'common', '{}'::jsonb) || (indicators_json->'price'))->>'source_timestamp')::timestamptz
                      ELSE NULL
                    END
                  ))
@@ -350,19 +352,19 @@ async def build_point_in_time_dataset(
                    ) AS history
               FROM (
                 SELECT DISTINCT ON (
-                         i.indicators_json->'price'->>'source_timestamp'
+                         (COALESCE(i.indicators_json->'_envelope'->'common', '{}'::jsonb) || (i.indicators_json->'price'))->>'source_timestamp'
                        )
                        i.time, i.indicators_json,
-                       (i.indicators_json->'price'->>'source_timestamp')::timestamptz
+                       ((COALESCE(i.indicators_json->'_envelope'->'common', '{}'::jsonb) || (i.indicators_json->'price'))->>'source_timestamp')::timestamptz
                          AS source_timestamp
                   FROM indicators i
                  WHERE i.symbol = p.symbol AND i.market_type = 'spot'
                    AND i.timeframe = '15m' AND i.scheduler_group = 'structural'
                    AND i.time <= p.decision_at
-                   AND i.indicators_json->'price'->>'source_timestamp'
+                   AND (COALESCE(i.indicators_json->'_envelope'->'common', '{}'::jsonb) || (i.indicators_json->'price'))->>'source_timestamp'
                        ~ '^\\d{4}-\\d{2}-\\d{2}T'
                  ORDER BY
-                   i.indicators_json->'price'->>'source_timestamp' DESC,
+                   (COALESCE(i.indicators_json->'_envelope'->'common', '{}'::jsonb) || (i.indicators_json->'price'))->>'source_timestamp' DESC,
                    i.time DESC
                  LIMIT :l2_history_candles
               ) recent

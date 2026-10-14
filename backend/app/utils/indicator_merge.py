@@ -289,6 +289,14 @@ def merge_indicator_rows(
         now = _ensure_utc(now)
     assert now is not None
 
+    # Compact rows (``_envelope`` header) are rebuilt into the legacy
+    # per-key envelope shape before any merge logic sees them.
+    from .indicator_payload import expand_indicator_payload
+
+    rows = [
+        (*row[:-1], expand_indicator_payload(row[-1])) for row in rows
+    ]
+
     # ── Step 1: Absolute staleness filter ────────────────────────────────────
     # Stale rows are excluded from scoring values but tracked in `stale_rows`
     # so their metadata can be added to result.meta with stale=True.

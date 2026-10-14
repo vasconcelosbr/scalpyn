@@ -13,6 +13,7 @@ from sqlalchemy import text
 from ..services import persistence as _pq
 from ..tasks.celery_app import celery_app
 from ..utils.indicator_merge import envelop_results, _ORDER_FLOW_KEYS, _ORDER_FLOW_AUDIT_KEYS
+from ..utils.indicator_payload import maybe_compact_indicator_payload
 
 logger = logging.getLogger(__name__)
 _STOCHASTIC_WARMUP_OVERLAP = 2
@@ -879,7 +880,7 @@ async def _process_one_symbol_5m(symbol, indicators_config, indicator_config_ide
 
             now = datetime.now(timezone.utc)
 
-            payload_json = json.dumps(envelop_results(
+            payload_json = json.dumps(maybe_compact_indicator_payload(envelop_results(
                 results,
                 default_source="candle_computed",
                 default_confidence=0.80,
@@ -901,7 +902,7 @@ async def _process_one_symbol_5m(symbol, indicators_config, indicator_config_ide
                     "source_ingested_at": rows[0].ingested_at.isoformat(),
                     **indicator_config_identity,
                 },
-            ))
+            )))
 
             # SAVEPOINT: isolates this symbol's writes so that a
             # failure here does not roll back other symbols' data.
@@ -1093,7 +1094,7 @@ async def _compute_structural_5m_async():
                         continue
 
                     now = datetime.now(timezone.utc)
-                    payload_json = json.dumps(envelop_results(
+                    payload_json = json.dumps(maybe_compact_indicator_payload(envelop_results(
                         results,
                         default_source="candle_computed",
                         default_confidence=0.80,
@@ -1115,7 +1116,7 @@ async def _compute_structural_5m_async():
                             "source_ingested_at": rows[0].ingested_at.isoformat(),
                             **indicator_config_identity,
                         },
-                    ))
+                    )))
 
                     if _pq.is_enabled():
                         # ``mode="insert_only"`` (ON CONFLICT DO NOTHING) — a UNIQUE
