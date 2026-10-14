@@ -16,9 +16,13 @@ class StorageRetentionConfig(BaseModel):
     max_runtime_seconds: int = Field(60, ge=1, le=120)
     telemetry_retention_days: int = Field(7, ge=1)
     completed_label_queue_retention_days: int = Field(7, ge=1)
+    # Pump collection (observations with their labels/queue, price paths). Runs
+    # only with archive_before_delete=false: the owner chose deletion without
+    # archive for this collection (2026-10-14).
+    pump_collection_retention_days: int = Field(7, ge=1)
     # A fresh sample certifies that the most recent evidence for that key is retained.
     fresh_sample_rows: int = Field(10000, ge=1, le=50000)
     max_wal_bytes_per_run: int = Field(100000000, ge=1000000)
     preserve_model_and_shadow_evidence: Literal[True] = True
-    archive_required_for_research_datasets: Literal[True] = True
-    archive_before_delete: Literal[True] = True
+    archive_required_for_research_datasets: bool = True
+    archive_before_delete: bool = True

@@ -1,7 +1,8 @@
 """Small, recoverable batches on an immutable allowlist of operational tables.
 
-Neither a config nor a request can name a different table. Source deletion and
-the gzip archive commit together. Errors roll both back. Archives are retained.
+Neither a config nor a request can name a different table. With
+archive_before_delete, source deletion and the gzip archive commit together and
+errors roll both back; without it, only the content hash of each batch is kept.
 """
 from __future__ import annotations
 
@@ -19,7 +20,18 @@ TABLES = (
     "ohlcv_state_ingestion_observations",
     "ohlcv_settlement_latency_samples",
     "pump_opportunity_label_queue",
+    "pump_opportunity_observations",
+    "pump_opportunity_price_paths",
 )
+# Pump collection had no retention and filled its storage budget (2026-10-14).
+# Labels and queue rows go with their observation, unarchived, so these tables
+# only run when archive_before_delete is off.
+PUMP_COLLECTION_TABLES = TABLES[3:]
+OBSERVATION_CHILDREN = ("pump_opportunity_labels", "pump_opportunity_label_queue")
+
+
+def active_tables(cfg):
+    return TABLES if not cfg.archive_before_delete else TABLES[:3]
 
 
 def selection_sql(table):
@@ -65,6 +77,31 @@ def selection_sql(table):
           AND $4::integer > 0
         ORDER BY t.completed_at,t.observation_id,t.label_spec_hash,t.horizon_minutes
         LIMIT $2 FOR UPDATE OF t SKIP LOCKED"""
+    # Pump tables are never archived, so they select only their identity: reading
+    # the whole row would detoast payloads the slow volume cannot afford.
+    if table == TABLES[3]:
+        # Observations scored by a model are model evidence and stay.
+        return """SELECT t.ctid::text tid,
+            json_build_object('observation_id',t.observation_id,'slot_at',t.slot_at)::text data
+        FROM pump_opportunity_observations t
+        WHERE t.user_id=$3 AND t.slot_at < $1
+          AND NOT EXISTS (SELECT 1 FROM pump_ml_predictions p WHERE p.observation_id=t.observation_id OFFSET 0)
+          AND NOT EXISTS (SELECT 1 FROM storage_retention_holds h WHERE h.table_name=$5
+              AND t.slot_at BETWEEN h.starts_at AND h.ends_at OFFSET 0)
+          AND $4::integer > 0
+        ORDER BY t.user_id,t.slot_at DESC,t.observation_id
+        LIMIT $2 FOR UPDATE OF t SKIP LOCKED"""
+    if table == TABLES[4]:
+        return """SELECT t.ctid::text tid,
+            json_build_object('instrument_id',t.instrument_id,'bucket_start',t.bucket_start,
+                              'content_hash',t.content_hash)::text data
+        FROM pump_opportunity_price_paths t
+        WHERE t.user_id=$3 AND t.bucket_start < $1
+          AND NOT EXISTS (SELECT 1 FROM storage_retention_holds h WHERE h.table_name=$5
+              AND t.bucket_start BETWEEN h.starts_at AND h.ends_at OFFSET 0)
+          AND $4::integer > 0
+        ORDER BY t.user_id,t.instrument_id,t.bucket_start
+        LIMIT $2 FOR UPDATE OF t SKIP LOCKED"""
     raise ValueError("table_not_allowlisted")
 
 
@@ -93,26 +130,40 @@ async def process_batch(conn, owner, run_id, table, cutoff, cfg):
         await conn.execute("LOCK TABLE storage_retention_holds IN SHARE MODE")
         before = await conn.fetchval("SELECT pg_total_relation_size($1::regclass)", table)
         rows = await conn.fetch(sql, cutoff, cfg.batch_rows, owner, cfg.fresh_sample_rows, table)
-        archive, digest, raw_bytes = pack_archive(rows)
+        if cfg.archive_before_delete:
+            archive, digest, raw_bytes = pack_archive(rows)
+        else:
+            # No archive by owner decision; the content hash still records what was deleted.
+            raw = ("[" + ",".join(r["data"] for r in rows) + "]").encode()
+            archive, digest, raw_bytes = None, hashlib.sha256(raw).hexdigest(), len(raw)
         deleted = 0
+        children = {}
         if cfg.mode == "execute" and rows:
-            restored = await conn.fetch(
-                f"SELECT to_jsonb(r)::text data FROM jsonb_populate_recordset(NULL::{table},$1::jsonb) r",
-                gzip.decompress(archive).decode())
-            if Counter(r["data"] for r in restored) != Counter(r["data"] for r in rows):
-                raise RuntimeError("archive_restore_mismatch")
+            if archive is not None:
+                restored = await conn.fetch(
+                    f"SELECT to_jsonb(r)::text data FROM jsonb_populate_recordset(NULL::{table},$1::jsonb) r",
+                    gzip.decompress(archive).decode())
+                if Counter(r["data"] for r in restored) != Counter(r["data"] for r in rows):
+                    raise RuntimeError("archive_restore_mismatch")
+            if table == TABLES[3]:
+                ids = [json.loads(r["data"])["observation_id"] for r in rows]
+                for child in OBSERVATION_CHILDREN:
+                    result = await conn.execute(f"DELETE FROM {child} WHERE observation_id = ANY($1::uuid[])", ids)
+                    children[child] = int(result.split()[-1])
             result = await conn.execute(
                 f"DELETE FROM {table} WHERE ctid IN (SELECT unnest($1::text[])::tid)", [r["tid"] for r in rows])
             deleted = int(result.split()[-1])
             if deleted != len(rows):
                 raise RuntimeError("deleted_count_mismatch")
         after = await conn.fetchval("SELECT pg_total_relation_size($1::regclass)", table)
-        daily_counts = Counter(json.loads(r["data"]).get("observed_at", json.loads(r["data"]).get("completed_at", ""))[:10] for r in rows)
+        daily_counts = Counter(next((str(d[k]) for k in ("observed_at", "completed_at", "slot_at", "bucket_start")
+                                     if d.get(k)), "")[:10] for d in (json.loads(r["data"]) for r in rows))
         summary = {"mode": cfg.mode, "source_bytes_before": before, "source_bytes_after": after,
-                   "daily_counts": dict(daily_counts), "restore_verified": bool(deleted),
-                   "raw_archive_bytes": raw_bytes, "compressed_archive_bytes": len(archive),
+                   "daily_counts": dict(daily_counts), "restore_verified": bool(deleted) and archive is not None,
+                   "raw_archive_bytes": raw_bytes, "compressed_archive_bytes": len(archive) if archive else 0,
                    "query_sha256": hashlib.sha256(sql.encode()).hexdigest(),
-                   "archive_verified": True}
+                   "archived": archive is not None, "archive_verified": archive is not None,
+                   "children_deleted": children}
         await conn.execute("""INSERT INTO storage_retention_batches
             (batch_id,run_id,table_name,cutoff,candidate_count,deleted_count,archive_sha256,archive_gzip,summary)
             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)""", uuid4(), run_id, table, cutoff,
@@ -122,6 +173,7 @@ async def process_batch(conn, owner, run_id, table, cutoff, cfg):
 
 async def run_retention(conn, owner, *, force=False, preview=False):
     """Only provisioned operators with one active global policy can run retention."""
+    import asyncpg
     locked = []
     run_id = None
     started = time.monotonic()
@@ -166,8 +218,9 @@ async def run_retention(conn, owner, *, force=False, preview=False):
         status = "completed"
         # Round-robin prevents telemetry from starving queue cleanup.
         exhausted = set()
+        tables = active_tables(cfg)
         for _ in range(cfg.max_batches_per_run):
-            for table in TABLES:
+            for table in tables:
                 if table in exhausted:
                     continue
                 if len(batches) >= cfg.max_batches_per_run:
@@ -177,14 +230,25 @@ async def run_retention(conn, owner, *, force=False, preview=False):
                 wal_bytes = await conn.fetchval("SELECT pg_wal_lsn_diff(pg_current_wal_lsn(),$1::text::pg_lsn)", wal_start)
                 if wal_bytes >= cfg.max_wal_bytes_per_run:
                     status = "wal_budget"; break
-                days = cfg.completed_label_queue_retention_days if table == TABLES[2] else cfg.telemetry_retention_days
-                result = await process_batch(conn, owner, run_id, table, now-timedelta(days=days), cfg)
+                days = (cfg.completed_label_queue_retention_days if table == TABLES[2]
+                        else cfg.pump_collection_retention_days if table in PUMP_COLLECTION_TABLES
+                        else cfg.telemetry_retention_days)
+                try:
+                    result = await process_batch(conn, owner, run_id, table, now-timedelta(days=days), cfg)
+                except asyncpg.QueryCanceledError:
+                    # A slow pump batch (its transaction already rolled back) must
+                    # not abort telemetry cleanup; it is retried next run.
+                    if table not in PUMP_COLLECTION_TABLES:
+                        raise
+                    batches.append({"table": table, "candidates": 0, "deleted": 0, "error": "statement_timeout"})
+                    exhausted.add(table)
+                    continue
                 batches.append(result)
                 if result["candidates"] < cfg.batch_rows or cfg.mode == "dry_run":
                     exhausted.add(table)
-            if status != "completed" or len(exhausted) == len(TABLES):
+            if status != "completed" or len(exhausted) == len(tables):
                 break
-        if status == "completed" and len(exhausted) < len(TABLES):
+        if status == "completed" and len(exhausted) < len(tables):
             status = "batch_budget"
         result = {"status": status, "run_id": str(run_id), "mode": cfg.mode,
                   "policy_hash": eligibility_hash,
