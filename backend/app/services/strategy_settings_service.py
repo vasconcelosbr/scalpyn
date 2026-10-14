@@ -41,6 +41,7 @@ from .multilayer_contract import (
     validate_waived_statistical_gate,
 )
 from .profile_runtime_config import canonical_hash, canonical_profile_config_hash
+from ..utils.indicator_payload import expand_indicator_envelope, expand_indicator_payload
 
 
 CONFIG_TYPES = ("strategy", "spot_engine", "ml")
@@ -428,7 +429,7 @@ class StrategySettingsService:
         """), {"symbols": symbols})).mappings().all()
         by_identity = {
             (str(row["symbol"]), str(row["timeframe"]), str(row["scheduler_group"])):
-            dict(row["indicators_json"] or {})
+            dict(expand_indicator_payload(row["indicators_json"]) or {})
             for row in rows
             if row["indicators_json"] is not None
         }
@@ -1376,7 +1377,8 @@ class StrategySettingsService:
                 )
             representative = required[0]
             rows = (await db.execute(text("""
-                SELECT i.symbol, i.indicators_json -> :indicator AS envelope
+                SELECT i.symbol, i.indicators_json -> :indicator AS envelope,
+                       i.indicators_json -> '_envelope' AS compact_header
                   FROM indicators i
                  WHERE i.symbol = ANY(CAST(:symbols AS TEXT[]))
                    AND i.market_type = 'spot'
@@ -1405,7 +1407,9 @@ class StrategySettingsService:
             for row in rows:
                 if not isinstance(row["envelope"], dict):
                     continue
-                original = dict(row["envelope"])
+                original = dict(expand_indicator_envelope(
+                    row["envelope"], row["compact_header"],
+                ))
                 expected_hash = original.pop("envelope_hash", None)
                 if (
                     not expected_hash

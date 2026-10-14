@@ -143,31 +143,31 @@ async def main() -> None:
                    min(time) AS first_computed_at,
                    max(time) AS last_computed_at,
                    count(*) FILTER (
-                     WHERE indicators_json->'price'->>'capture_contract_version'
+                     WHERE (COALESCE(indicators_json->'_envelope'->'common', '{}'::jsonb) || (indicators_json->'price'))->>'capture_contract_version'
                            = 'spot_mtf_closed_ohlcv_v2'
-                       AND indicators_json->'price'->>'candle_policy' = 'CLOSED_ONLY'
-                       AND indicators_json->'price'->>'candle_closed' = 'true'
+                       AND (COALESCE(indicators_json->'_envelope'->'common', '{}'::jsonb) || (indicators_json->'price'))->>'candle_policy' = 'CLOSED_ONLY'
+                       AND (COALESCE(indicators_json->'_envelope'->'common', '{}'::jsonb) || (indicators_json->'price'))->>'candle_closed' = 'true'
                    ) AS governed_snapshots,
                    percentile_cont(0.5) WITHIN GROUP (
                      ORDER BY EXTRACT(EPOCH FROM (
-                       (indicators_json->'price'->>'available_at')::timestamptz
-                       - (indicators_json->'price'->>'source_timestamp')::timestamptz
+                       ((COALESCE(indicators_json->'_envelope'->'common', '{}'::jsonb) || (indicators_json->'price'))->>'available_at')::timestamptz
+                       - ((COALESCE(indicators_json->'_envelope'->'common', '{}'::jsonb) || (indicators_json->'price'))->>'source_timestamp')::timestamptz
                      ))
                    ) FILTER (
-                     WHERE indicators_json->'price'->>'available_at'
+                     WHERE (COALESCE(indicators_json->'_envelope'->'common', '{}'::jsonb) || (indicators_json->'price'))->>'available_at'
                            ~ '^\\d{4}-\\d{2}-\\d{2}T'
-                       AND indicators_json->'price'->>'source_timestamp'
+                       AND (COALESCE(indicators_json->'_envelope'->'common', '{}'::jsonb) || (indicators_json->'price'))->>'source_timestamp'
                            ~ '^\\d{4}-\\d{2}-\\d{2}T'
                    ) AS median_open_to_available_seconds,
                    percentile_cont(0.95) WITHIN GROUP (
                      ORDER BY EXTRACT(EPOCH FROM (
-                       (indicators_json->'price'->>'available_at')::timestamptz
-                       - (indicators_json->'price'->>'source_timestamp')::timestamptz
+                       ((COALESCE(indicators_json->'_envelope'->'common', '{}'::jsonb) || (indicators_json->'price'))->>'available_at')::timestamptz
+                       - ((COALESCE(indicators_json->'_envelope'->'common', '{}'::jsonb) || (indicators_json->'price'))->>'source_timestamp')::timestamptz
                      ))
                    ) FILTER (
-                     WHERE indicators_json->'price'->>'available_at'
+                     WHERE (COALESCE(indicators_json->'_envelope'->'common', '{}'::jsonb) || (indicators_json->'price'))->>'available_at'
                            ~ '^\\d{4}-\\d{2}-\\d{2}T'
-                       AND indicators_json->'price'->>'source_timestamp'
+                       AND (COALESCE(indicators_json->'_envelope'->'common', '{}'::jsonb) || (indicators_json->'price'))->>'source_timestamp'
                            ~ '^\\d{4}-\\d{2}-\\d{2}T'
                    ) AS p95_open_to_available_seconds
               FROM indicators

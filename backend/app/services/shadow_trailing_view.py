@@ -4,6 +4,7 @@ from math import floor, isfinite
 from sqlalchemy import text
 from ..schemas.shadow_trailing_view import ShadowTrailingView, TrailingLevel, TrailingRegime
 from .shadow_l3_exit_service import canonical_exchange
+from ..utils.indicator_payload import expand_indicator_payload
 from .market_regime_engine import MarketRegimeEngine
 from ..schemas.entry_risk_observation import DEFAULT_ENTRY_RISK_OBSERVATION
 
@@ -204,6 +205,6 @@ async def attach_trailing_views(db, rows, user_id):
         d = indexed.get(row.id) or {}
         quote = {'close':d['close'],'at':d['quote_at']+timedelta(minutes=1)} if d.get('quote_at') else None
         v = project(row,quote=quote,activation={'candle_at':d['activation_at']} if d.get('activation_at') else None,now=now)
-        v.asset_regime = asset_regime(d.get('indicators_json'),row,now)
+        v.asset_regime = asset_regime(expand_indicator_payload(d.get('indicators_json')),row,now)
         v.market_regime = market
         row.trailing_view = v

@@ -34,6 +34,7 @@ from app.services.profile_execution_contract import (  # noqa: E402
     load_profile_execution_snapshots,
 )
 from app.services.profile_runtime_config import canonical_hash  # noqa: E402
+from app.utils.indicator_payload import expand_indicator_payload  # noqa: E402
 
 
 _DERIVED_L2 = {
@@ -327,7 +328,7 @@ async def _run(args: argparse.Namespace) -> None:
             for feature in required_by_group[group] + optional_by_group.get(group, []):
                 try:
                     validated_by_key[(symbol, group, feature)] = _validated_l3_envelope(
-                        (row["indicators_json"] or {}).get(feature),
+                        (expand_indicator_payload(row["indicators_json"]) or {}).get(feature),
                         feature=feature,
                         scheduler_group=group,
                     )
@@ -337,8 +338,8 @@ async def _run(args: argparse.Namespace) -> None:
                             f"MTF_L3_REQUIRED_INDICATOR_INVALID:{symbol}:{group}:{feature}:"
                             + json.dumps(
                                 {
-                                    "envelope": (row["indicators_json"] or {}).get(feature),
-                                    "available_keys": sorted((row["indicators_json"] or {}).keys()),
+                                    "envelope": (expand_indicator_payload(row["indicators_json"]) or {}).get(feature),
+                                    "available_keys": sorted((expand_indicator_payload(row["indicators_json"]) or {}).keys()),
                                 },
                                 ensure_ascii=False,
                                 default=str,
@@ -450,7 +451,7 @@ async def _run(args: argparse.Namespace) -> None:
             try:
                 for feature in {item[0] for item in _DERIVED_L2.values()}:
                     values[feature], hashes[feature] = _validated_value(
-                        (row["indicators_json"] or {}).get(feature),
+                        (expand_indicator_payload(row["indicators_json"]) or {}).get(feature),
                         feature=feature,
                         source_identity=l2_source_identity,
                     )

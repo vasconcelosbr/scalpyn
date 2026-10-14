@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.services.mtf_walk_forward import require_calibration_config
 from app.services.profile_runtime_config import canonical_hash
+from app.utils.indicator_payload import expand_indicator_payload
 
 
 _REQUIRED_BY_TIMEFRAME = {
@@ -183,12 +184,15 @@ async def main() -> None:
             inventory = await connection.fetch(
                 """
                 SELECT timeframe,
-                       indicators_json->'adx'->>'capture_contract_version'
+                       (COALESCE(indicators_json->'_envelope'->'common', '{}'::jsonb)
+                          || (indicators_json->'adx'))->>'capture_contract_version'
                            AS capture_contract_version,
-                       indicators_json->'adx'->>'producer_version' AS producer_version,
+                       (COALESCE(indicators_json->'_envelope'->'common', '{}'::jsonb)
+                          || (indicators_json->'adx'))->>'producer_version' AS producer_version,
                        count(*) AS snapshots,
                        count(*) FILTER (
                          WHERE indicators_json->'adx' ? 'envelope_hash'
+                            OR (indicators_json ? '_envelope' AND indicators_json ? 'adx')
                        ) AS snapshots_with_adx_hash,
                        min(time) AS first_computed_at,
                        max(time) AS last_computed_at
@@ -291,7 +295,7 @@ async def main() -> None:
                     if isinstance(raw_indicators, str):
                         raw_indicators = json.loads(raw_indicators)
                     state, identity = _envelope_state(
-                        raw_indicators,
+                        expand_indicator_payload(raw_indicators),
                         _REQUIRED_BY_TIMEFRAME[timeframe],
                     )
                     state_counts[timeframe][state] += 1

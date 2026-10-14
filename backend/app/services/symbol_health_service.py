@@ -315,7 +315,7 @@ async def _probe_latest_indicator(db, symbol: str) -> Dict[str, Any]:
     try:
         row = (await db.execute(text("""
             SELECT time,
-                   (SELECT array_agg(k) FROM jsonb_object_keys(indicators_json) k) AS keys
+                   (SELECT array_agg(k) FROM jsonb_object_keys(indicators_json) k WHERE k <> '_envelope') AS keys
             FROM indicators
             WHERE symbol = :s
               AND scheduler_group = 'microstructure'
@@ -367,7 +367,7 @@ async def _load_latest_indicators(db, symbols: List[str]) -> Dict[str, Dict[str,
         rows = (await db.execute(text("""
             SELECT DISTINCT ON (symbol)
                    symbol, time,
-                   (SELECT array_agg(k) FROM jsonb_object_keys(indicators_json) k) AS keys
+                   (SELECT array_agg(k) FROM jsonb_object_keys(indicators_json) k WHERE k <> '_envelope') AS keys
             FROM indicators
             WHERE symbol = ANY(:syms)
               AND scheduler_group = 'microstructure'
