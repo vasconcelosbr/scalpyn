@@ -36,10 +36,12 @@ logger = logging.getLogger(__name__)
 
 MAX_RUNTIME_SECONDS = 840
 MAX_ROWS = 10000
+# Training only writes its own ledger (experiments/artifacts, capped at 5 MB per
+# run by ``artifact_budget_exceeded``), so it is gated on that ledger alone.  The
+# collection tables are governed by the collection gate; counting them here let a
+# full collection budget block every scheduled run (2026-10-09 → 10-14).
 STORAGE_SQL = """SELECT sum(pg_total_relation_size(name::regclass)) FROM unnest(ARRAY[
-    'pump_opportunity_observations','pump_opportunity_labels','pump_opportunity_price_paths',
-    'pump_opportunity_label_queue','pump_opportunity_job_runs','pump_ml_experiments','pump_ml_predictions',
-    'pump_ml_job_runs','pump_ml_artifacts']) name"""
+    'pump_ml_experiments','pump_ml_predictions','pump_ml_job_runs','pump_ml_artifacts']) name"""
 
 
 def prepare(rows, selection=None, *, features, cuts=(.5, .7, .85)):
