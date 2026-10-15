@@ -35,6 +35,7 @@ class CoverageTests(AtlasTests):
         self.assertEqual(q['pool_total'],2);self.assertEqual(q['matched'],['pool-one'])
         self.assertEqual(q['pool_only'],['pool-two']);self.assertEqual(q['assets'][0]['alpha_score'],17.2)
         self.assertIsNone(q['assets'][1]['alpha_score'])
+        self.assertEqual(q['assets'][1]['coverage_status'],'PARTIAL')
         self.assertEqual(q['assets'][0]['freshness_by_reading'][0]['age_seconds'],7200)
         self.assertEqual(q['assets'][0]['freshness_by_reading'][0]['status'],'STALE')
         self.assertEqual(q['assets'][0]['indicator_readings'][0]['values'],{'rsi':42})
