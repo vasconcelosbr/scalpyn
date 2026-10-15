@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     # Dedicated machine-to-machine token for the Claude Social Intelligence
     # agent. When unset, the ingestion route intentionally returns 404.
     SOCIAL_INTELLIGENCE_INGEST_TOKEN: str = ""
+    # Isolated persisted-only Radar export. Empty hash disables the endpoint.
+    RADAR_READONLY_KEY_SHA256: str = ""
+    RADAR_READONLY_USER_ID: str = ""
+    RADAR_READONLY_WATCHLIST_IDS: str = ""
 
     # Maximum seconds a trade may remain open before the Trade Monitor closes
     # it with outcome = "timeout".  Override via the TRADE_MONITOR_TIMEOUT_SECONDS
