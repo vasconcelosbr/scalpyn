@@ -185,7 +185,8 @@ def main():
             export(os.environ.get("SNAPSHOT_DIR", "/data"), os.environ["SCALPYN_WATCHLIST_ID"], args.export_day, args.output)
             result = {"event": "export_verified"}
         else:
-            result = collect(os.environ)
+            from delivery import run
+            result = run(os.environ, collect)
         print(json.dumps(result), flush=True)
         return 0
     except Exception:
