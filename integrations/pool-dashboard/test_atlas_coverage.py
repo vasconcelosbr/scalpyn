@@ -58,3 +58,23 @@ class CoverageTests(AtlasTests):
         with patch.object(specialized,'request',side_effect=ValueError('offline')):
             e,h,i=specialized.collect([],NOW)
         self.assertFalse(e);self.assertTrue(all(x['status']=='UNAVAILABLE' for x in h))
+    def test_authorized_recovery_keeps_uncertain_cost_reserved_and_parent_immutable(self):
+        first=self.run_cycle()
+        interrupted=pipeline.cycle(NOW,FakeProvider(),lambda t:([],[]),lambda t:copy.deepcopy(self.snap),revision=1)
+        with store.db(True) as c:
+            c.execute("DELETE FROM reports WHERE run_id=?",(interrupted,))
+            c.execute("UPDATE cycles SET status='INTERRUPTED' WHERE id=?",(interrupted,))
+            c.execute("UPDATE agents SET status='INTERRUPTED',usage=NULL,output=NULL,started_at=NULL,session_id=NULL WHERE run_id=? AND code!='QUANT'",(interrupted,))
+            c.execute("UPDATE agents SET started_at='2026-10-15T22:00:00Z',session_id='messages:fixture',reserved_cents=70 WHERE run_id=? AND code='MACRO'",(interrupted,))
+            before=[tuple(r) for r in c.execute('SELECT * FROM agents WHERE run_id=?',(interrupted,))]
+        p=FakeProvider();allocations=[];normal=p.run
+        def run(code,context,cents,save):
+            allocations.append(cents);return normal(code,context,cents,save)
+        p.run=run
+        recovered=pipeline.cycle(NOW,p,revision=2)
+        self.assertEqual(allocations,[60]*7)
+        with store.db() as c:
+            self.assertEqual(before,[tuple(r) for r in c.execute('SELECT * FROM agents WHERE run_id=?',(interrupted,))])
+            hashes=[r[0] for r in c.execute('SELECT input_hash FROM cycles WHERE id IN (?,?)',(interrupted,recovered))]
+            self.assertEqual(hashes[0],hashes[1])
+        pipeline.cycle(NOW,p,revision=2);self.assertEqual(len(p.calls),7)

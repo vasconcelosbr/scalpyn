@@ -94,3 +94,9 @@ Official implementation references verified during development:
 * https://platform.claude.com/docs/en/managed-agents/sessions
 * https://platform.claude.com/docs/en/managed-agents/session-observability
 * https://platform.claude.com/docs/en/managed-agents/multiagent-orchestration
+
+## Authorized interrupted-request recovery
+
+The operator explicitly authorized recovery of the first interrupted bounded MACRO request on 2026-10-15, still within the same daily USD 5 budget. `--recover-authorized` creates revision 2 only when revision 1 is INTERRUPTED and its sole started model stage is bounded MACRO. It reuses the exact frozen inputs and hash, preserves the interrupted rows, and charges the full prior `reserved_cents` against new admission capacity. This is an upper bound, not invented actual usage. Unknown Managed/session costs still block all inference. The CLI is idempotent and unavailable over HTTP. Subsequent failures do not imply permission for further retries.
+
+The complete Pool payload increased memory demand. QUANT no longer duplicates indicator readings inside its Pool identity object; the original complete export remains frozen. Dashboard service memory ceiling is 1 GB; actual usage is metered separately from the model budget. Retain unknown/stale distinctions and check runtime memory during collection, inference and authenticated UI reads.
