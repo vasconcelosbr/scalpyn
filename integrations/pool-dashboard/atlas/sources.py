@@ -145,7 +145,7 @@ def quant(snap,cutoff):
             try:
                 age=(cutoff-datetime.fromisoformat(t.replace('Z','+00:00'))).total_seconds()
                 stale=stale or age<0 or age>max_age
-            except (ValueError,TypeError,AttributeError): stale=True
+            except (ValueError,TypeError,AttributeError): pass  # Unknown age is partial, not proof of staleness.
         freshness=[]
         for r in readings:
             try:
@@ -153,7 +153,6 @@ def quant(snap,cutoff):
                 status='FRESH' if 0<=age<=max_age else 'STALE'
             except (ValueError,TypeError,KeyError,AttributeError): age=None;status='UNKNOWN'
             freshness.append({'scheduler_group':r.get('scheduler_group'),'timeframe':r.get('timeframe'),'timestamp':r.get('timestamp'),'age_seconds':age,'status':status,'formula':'cutoff - persisted timestamp'})
-        if not readings: stale=True
         rows.append({'market_type':a.get('market_type',market),'watchlist_asset_id':a.get('watchlist_asset_id',a['id'] if not context else None),'pool_coin':a.get('pool_coin'),'freshness_by_reading':freshness,'asset_id':a['id'],'symbol':a['symbol'],'identity_status':'UNRESOLVED_PROJECT',
           'coverage_status':'STALE' if stale else 'PARTIAL','risk_level':'UNKNOWN',
           'current_price':a.get('current_price'),'price_change_24h':a.get('price_change_24h'),
