@@ -1,6 +1,8 @@
 'use strict';
 const $=s=>document.querySelector(s), content=$('#content');
 const state={health:null,reports:[],runs:[],report:null,run:null};
+// API pagination uses IDs; editorial recency follows day and numeric revision.
+function compareEditions(a,b){return a.day.localeCompare(b.day)||(a.revision||0)-(b.revision||0)||a.id.localeCompare(b.id);}
 const labels={SUCCEEDED:'Concluído',BLOCKED:'Bloqueado',PENDING:'Pendente',FAILED:'Falhou',INVALID:'Rejeitado na validação',INTERRUPTED:'Interrompido',RUNNING:'Em execução',REVIEW_REQUIRED:'Revisão necessária',PUBLISHED_PARTIAL:'Publicado · cobertura parcial',UNKNOWN:'Não determinado',STALE:'Desatualizado',PARTIAL:'Parcial',PROPOSED:'Proposta',EXPIRED:'Expirada'};
 const problems={ANTHROPIC_KEY_MISSING:'Chave Anthropic ainda não configurada.',ANTHROPIC_AUTH_REJECTED:'A Anthropic recusou a credencial configurada.',DAILY_BUDGET_REQUIRED:'Orçamento diário não configurado.',MODEL_UNAVAILABLE:'Modelo indisponível para esta conta.',MANAGED_AGENTS_ACCESS_REQUIRED:'A conta precisa de acesso a Managed Agents.',PREVIOUS_SESSION_UNCERTAIN:'A execução anterior precisa ser conferida antes de novas chamadas.',SCHEMA_OR_POLICY_REJECTED:'O parecer não passou pela validação de evidências e contrato.'};
 function el(tag,text,cls){const n=document.createElement(tag);if(text!==undefined&&text!==null)n.textContent=String(text);if(cls)n.className=cls;return n;}
@@ -106,10 +108,10 @@ function render(){content.replaceChildren();const path=location.pathname.split('
  if(state.report&&new Date(state.report.expires_at)<=new Date())content.append(notice('Relatório vencido: disponível como histórico, sem elegibilidade para novas diretivas.',true));
  if(section==='agentes')agent(path[2]);else if(section==='ativos')assets(path[2]);else if(section==='noticias'||section==='evidencias')news(path[2]);else if(section==='decisoes')decisions();else if(section==='historico')historyPage();else if(section==='operacao')operation();else overview();
 }
-async function load(){try{$('#error').hidden=true;state.health=await api('/health');[state.runs,state.reports]=await Promise.all([pages('/runs'),pages('/reports')]);const p=params();const reportId=p.get('report');let runId=p.get('run');state.report=null;state.run=null;
+async function load(){try{$('#error').hidden=true;state.health=await api('/health');[state.runs,state.reports]=await Promise.all([pages('/runs'),pages('/reports')]);state.runs.sort(compareEditions);const p=params();const reportId=p.get('report');let runId=p.get('run');state.report=null;state.run=null;
  if(reportId){state.report=await api('/reports/'+encodeURIComponent(reportId));runId=state.report.run_id;}else if(!runId){runId=state.runs.at(-1)?.id;const r=state.reports.find(x=>x.run_id===runId);if(r)state.report=await api('/reports/'+r.id);}
  if(runId){state.run=await api('/runs/'+encodeURIComponent(runId));if(!state.report){const published=state.reports.find(r=>r.run_id===runId);if(published)state.report=await api('/reports/'+published.id);}}
- const select=$('#edition-select');select.replaceChildren();if(!state.runs.length){select.append(el('option','Aguardando primeiro ciclo'));}for(const r of [...state.runs].reverse()){const option=el('option',r.day+(r.revision?' · revalidação':'')+' · '+(labels[r.status]||r.status));option.value=r.id;select.append(option);}if(runId)select.value=runId;
+ const select=$('#edition-select');select.replaceChildren();if(!state.runs.length){select.append(el('option','Aguardando primeiro ciclo'));}for(const r of [...state.runs].reverse()){const option=el('option',r.day+(r.revision?' · revisão '+r.revision:' · original')+' · '+(labels[r.status]||r.status));option.value=r.id;select.append(option);}if(runId)select.value=runId;
  $('#loading').hidden=true;$('#login').hidden=true;$('#workspace').hidden=false;render();
  }catch(e){err(e);}}
 $('#edition-select').addEventListener('change',()=>{const p=params();p.delete('report');p.set('run',$('#edition-select').value);location.search=p.toString();});
