@@ -305,6 +305,8 @@ def health():
     setting("INGEST_KEY_SHA256")
     with db(write=True) as conn:
         conn.execute("SELECT 1")
+    from atlas import store
+    store.init()
     return {"status": "ok"}
 
 
@@ -314,3 +316,22 @@ def index():
 
 
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
+
+# ATLAS owns its database, schedule and read API; archive/source contracts stay intact.
+from atlas.routes import configure as configure_atlas
+from atlas.pipeline import scheduler as atlas_scheduler
+from atlas import store as atlas_store
+configure_atlas(app, authenticated, ROOT)
+atlas_stop = threading.Event()
+
+def start_atlas():
+    atlas_store.init()
+    # A restart never silently repeats an uncertain inference.
+    with atlas_store.db(True) as conn:
+        conn.execute("UPDATE cycles SET status='INTERRUPTED',error_code='PROCESS_RESTART' WHERE status IN ('RUNNING','COLLECTING')")
+        conn.execute("UPDATE agents SET status='INTERRUPTED',error_code='PROCESS_RESTART' WHERE status IN ('PENDING','RUNNING')")
+    atlas_stop.clear()
+    threading.Thread(target=atlas_scheduler,args=(atlas_stop,),daemon=True,name='atlas-daily').start()
+
+app.add_event_handler('startup', start_atlas)
+app.add_event_handler('shutdown', atlas_stop.set)
