@@ -91,3 +91,18 @@ async def radar_assets(watchlist_id: UUID, owner: UUID = Depends(radar_owner)):
             return result
     except SQLAlchemyError:
         raise HTTPException(503, "Radar export unavailable") from None
+
+
+# Separate additive contract: existing /assets response and JWT routes are unchanged.
+from ..schemas.radar_readonly import RadarPoolContext
+from ..services.radar_pool_readonly import read_pool_context
+
+@router.get('/watchlists/{watchlist_id}/pool-context', response_model=RadarPoolContext)
+async def radar_pool_context(watchlist_id: UUID, owner: UUID = Depends(radar_owner)):
+    try:
+        async with readonly_session() as db:
+            result = await read_pool_context(db, watchlist_id, owner)
+            if result is None: raise HTTPException(404, 'Not found')
+            return result
+    except SQLAlchemyError:
+        raise HTTPException(503, 'Radar export unavailable') from None

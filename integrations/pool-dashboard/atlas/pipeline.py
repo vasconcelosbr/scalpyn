@@ -5,8 +5,8 @@ import os
 import sqlite3
 import threading
 from zoneinfo import ZoneInfo
-from . import store,sources
-from .provider import Managed,ProviderError,budget_cents
+from . import store,sources,specialized
+from .provider import BoundedMessages,ProviderError,budget_cents
 from .schema import AGENTS,Opinion,Report,prompt
 
 ZONE=ZoneInfo('America/Sao_Paulo')
@@ -23,12 +23,21 @@ def validate_opinion(code,raw,inputs):
     if inputs['snapshot']:
         evidence['snapshot_'+inputs['snapshot']['sha256']]={'source_tier':'PERSISTED_SNAPSHOT'}
     cutoff=parse_time(inputs['cutoff'])
+    v2=bool(inputs.get('risk_policy'))
+    if v2 and code=='MAPPER' and set(opinion['evidence_dispositions'])!=set(evidence)-({'snapshot_'+inputs['snapshot']['sha256']} if inputs['snapshot'] else set()):
+        raise ValueError('EVIDENCE_COVERAGE_MISMATCH')
     for finding in opinion['findings']:
         if not set(finding['asset_ids'])<=assets.keys() or not set(finding['evidence_ids'])<=evidence.keys(): raise ValueError('INVALID_REFERENCE')
         if finding['risk_level'] in ('HIGH','CRITICAL') and not finding['evidence_ids']: raise ValueError('EVIDENCE_REQUIRED')
         if finding['association']=='DIRECT' and finding['asset_ids']:
-            # Source contract has no immutable token/project identity. Do not accept ticker-only proof.
-            raise ValueError('DIRECT_IDENTITY_UNPROVEN')
+            verified=set().union(*(set(evidence[e].get('verified_asset_ids',[])) for e in finding['evidence_ids']))
+            if not set(finding['asset_ids'])<=verified: raise ValueError('DIRECT_IDENTITY_UNPROVEN')
+        if v2:
+            if finding['risk_level']!='UNKNOWN': raise ValueError('SEVERITY_POLICY_UNCONFIGURED')
+            if not finding['evidence_quotes']: raise ValueError('LITERAL_SUPPORT_REQUIRED')
+            for eid,quote in finding['evidence_quotes'].items():
+                if eid not in finding['evidence_ids'] or not quote.strip() or not any(quote in evidence.get(eid,{}).get(k,'') for k in ('title','excerpt')):
+                    raise ValueError('LITERAL_SUPPORT_MISMATCH')
         if finding['scheduled_at']: parse_time(finding['scheduled_at'])
         if finding['occurrence']=='CONFIRMED' and not any(evidence[e]['source_tier']=='VERIFIED_PRIMARY' for e in finding['evidence_ids']):
             raise ValueError('PRIMARY_SOURCE_REQUIRED')
@@ -37,12 +46,14 @@ def validate_opinion(code,raw,inputs):
         ids=[a['asset_id'] for a in opinion['asset_risks']]
         if len(ids)!=len(set(ids)) or set(ids)!=assets.keys(): raise ValueError('ASSET_COVERAGE_MISMATCH')
         for a in opinion['asset_risks']:
+            if v2 and a['risk_level']!='UNKNOWN': raise ValueError('SEVERITY_POLICY_UNCONFIGURED')
             if not set(a['evidence_ids'])<=evidence.keys(): raise ValueError('INVALID_REFERENCE')
             if assets[a['asset_id']]['coverage_status']!='COMPLETE':
                 a['coverage_status']=assets[a['asset_id']]['coverage_status']
                 if a['alert_status']=='NO_ALERT': raise ValueError('NO_ALERT_WITH_INCOMPLETE_DATA')
             if a['risk_level']!='UNKNOWN' and not a['evidence_ids']: raise ValueError('EVIDENCE_REQUIRED')
         for d in opinion['directives']:
+            if v2 and d['risk_level']!='UNKNOWN': raise ValueError('SEVERITY_POLICY_UNCONFIGURED')
             if not set(d['asset_ids'])<=assets.keys() or not set(d['evidence_ids'])<=evidence.keys(): raise ValueError('INVALID_REFERENCE')
             if d['scope']=='ASSET' and not d['asset_ids']: raise ValueError('EMPTY_ASSET_SCOPE')
             if d['scope']=='GLOBAL' and d['asset_ids']: raise ValueError('INVALID_GLOBAL_SCOPE')
@@ -60,7 +71,7 @@ def validate_opinion(code,raw,inputs):
                 if not maximum or d['priority_delta'] is None or d['priority_delta']>float(maximum): raise ValueError('PRIORITY_POLICY_UNCONFIGURED')
             elif d['priority_delta'] is not None: raise ValueError('UNEXPECTED_PRIORITY_DELTA')
             if d['action']=='SET_RISK_MODE' and d['risk_mode'] is None: raise ValueError('RISK_MODE_REQUIRED')
-    # This read-only integration does not prove full Pool membership.
+    # Membership completeness is separate from coverage of all risk domains.
     opinion['coverage_status']='PARTIAL'
     return opinion
 
@@ -80,14 +91,17 @@ def agent_rows(run_id):
         result.append(r)
     return result
 
-def cycle(cutoff=None,provider=None,feed_loader=None,snapshot_loader=None,resume_blocked=False):
+def cycle(cutoff=None,provider=None,feed_loader=None,snapshot_loader=None,resume_blocked=False,revision=0):
     store.init()
     cutoff=cutoff or datetime.now(timezone.utc)
     day=cutoff.astimezone(ZONE).date().isoformat()
-    run_id=day+':America_Sao_Paulo:ATLAS_V1'
+    if revision not in (0,1): raise ValueError('INVALID_REVISION')
+    run_id=day+':America_Sao_Paulo:ATLAS_V1'+(':REVALIDATION_V2' if revision else '')
     frozen=None
     with store.db(True) as c:
-        try: c.execute('INSERT INTO cycles VALUES (?,?,?,?,?,?,?,?)',(run_id,day,store.now(),None,'COLLECTING','{}',store.digest({}),None))
+        try:
+            if c.execute("SELECT 1 FROM cycles WHERE status IN ('COLLECTING','RUNNING') AND id!=?",(run_id,)).fetchone(): raise ValueError('ANOTHER_CYCLE_RUNNING')
+            c.execute('INSERT INTO cycles(id,day,started_at,finished_at,status,inputs,input_hash,error_code,revision) VALUES (?,?,?,?,?,?,?,?,?)',(run_id,day,store.now(),None,'COLLECTING','{}',store.digest({}),None,revision))
         except sqlite3.IntegrityError:
             row=c.execute('SELECT status,inputs FROM cycles WHERE id=?',(run_id,)).fetchone()
             called=c.execute('SELECT count(*) FROM agents WHERE run_id=? AND code!=? AND (started_at IS NOT NULL OR session_id IS NOT NULL)',(run_id,'QUANT')).fetchone()[0]
@@ -98,22 +112,37 @@ def cycle(cutoff=None,provider=None,feed_loader=None,snapshot_loader=None,resume
             store.audit(c,'configuration_unblocked_no_prior_inference',run_id,{'inputs_unchanged':True})
         else:
             for code in AGENTS: c.execute('INSERT INTO agents(run_id,code,status) VALUES (?,?,?)',(run_id,code,'PENDING'))
-            store.audit(c,'cycle_claimed',run_id,{'day':day})
+            store.audit(c,'cycle_claimed',run_id,{'day':day,'revision':revision,'authorization':'operator_explicit_revalidation' if revision else 'daily'})
     try:
         if frozen:
             inputs=frozen;cutoff=parse_time(inputs['cutoff'])
             snap,evidence,health,quant=(inputs[k] for k in ('snapshot','evidence','source_health','quant'))
         else:
             snap=(snapshot_loader or sources.snapshot)(cutoff)
+            if snap and snap.get('pool_context') and not snapshot_loader:
+                cutoff=datetime.now(timezone.utc)
             evidence,health=(feed_loader or sources.collect_feeds)(cutoff)
             quant=sources.quant(snap,cutoff)
+            if not feed_loader:
+                extra,extra_health,identities=specialized.collect(quant['assets'],cutoff)
+                evidence.extend(extra);health.extend(extra_health)
+                cutoff=datetime.now(timezone.utc)
+                quant=sources.quant(snap,cutoff)
+                for asset in quant['assets']:
+                    identity=identities.get(asset['asset_id'])
+                    if identity:
+                        asset.update(identity=identity,identity_status=identity['status'])
+                        asset['limitations']=['Identidade verificada apenas na exchange; vesting e projeto não verificados independentemente.','Snapshot de decisão separado dos indicadores recentes.']
+                with store.db(True) as c:
+                    for e in extra: c.execute('INSERT OR IGNORE INTO evidence VALUES (?,?,?,?,?)',(e['evidence_id'],e['url'],e['hash'],store.encode(e),e['retrieved_at']))
             inputs={'cutoff':cutoff.isoformat(),'snapshot':snap,'evidence':evidence,'source_health':health,'quant':quant,
-               'limitations':['Universo completo do Pool indisponível; membros observados são da watchlist.',
-               'Fontes especializadas SECURITY/TOKEN e calendários completos ainda sem contratos validados.']}
+               'limitations':quant['limitations']+['Cobertura de unlocks/vesting e incidentes por projeto não é universal. Ausência de evento não prova ausência de risco.'],
+               'facts':deterministic_facts(quant,evidence,cutoff),
+               'risk_policy':'UNKNOWN; no calibrated severity policy is configured.'}
         with store.db(True) as c:
             c.execute('UPDATE cycles SET inputs=?,input_hash=?,status=? WHERE id=?',(store.encode(inputs),store.digest(inputs),'RUNNING',run_id))
         if not frozen: finish_agent(run_id,'QUANT','SUCCEEDED',quant,{'input_tokens':0,'output_tokens':0,'list_cost':{'amount':'0','currency':'USD'}})
-        p=provider or Managed()
+        p=provider or BoundedMessages()
         try:
             budget=budget_cents(); p.preflight()
         except ProviderError as exc:
@@ -123,18 +152,30 @@ def cycle(cutoff=None,provider=None,feed_loader=None,snapshot_loader=None,resume
             store.state('preflight',{'status':str(exc),'checked_at':store.now()})
             return run_id
         # Fixed allocation is reserved before calls. Unknown cost never frees a reservation.
-        allocation=budget//7
+        with store.db() as c:
+            prior=[dict(r) for r in c.execute('SELECT a.usage,a.status,a.reserved_cents,a.started_at FROM agents a JOIN cycles c ON c.id=a.run_id WHERE c.day=? AND c.id!=?',(day,run_id))]
         used=0
-        compact={'cutoff':inputs['cutoff'],'source_health':health,'evidence':evidence,
+        for previous in prior:
+            cost=(json.loads(previous['usage']) or {}).get('list_cost') if previous['usage'] else None
+            if cost and cost.get('currency')=='USD': used+=int(cost['amount'])
+            elif previous['started_at']: used=budget;break
+        allocation=max(0,(budget-used)//7)
+        if allocation<1: used=budget
+        compact={'cutoff':inputs['cutoff'],'source_health':health,'evidence':[{k:v for k,v in e.items() if k not in ('source_record','structured')} for e in evidence],
           'snapshot_sha256':snap['sha256'] if snap else None,'limitations':inputs['limitations'],
-          'quant':dict(quant,assets=[{k:v for k,v in a.items() if k not in ('decision_snapshot','indicator_readings')} for a in quant['assets']])}
+          'facts':inputs.get('facts',{}),'risk_policy':inputs.get('risk_policy'),
+          'quant':dict(quant,assets=[compact_asset(a) for a in quant['assets']],pool_inactive=None)}
         for code in AGENTS:
             if code=='QUANT': continue
-            if used+allocation>budget:
+            if isinstance(p,BoundedMessages):
+                weights={'MACRO':1,'GEO':1,'SECURITY':1,'TOKEN':1,'MAPPER':1,'AUDITOR':2,'ATLAS':4}
+                remaining=list(AGENTS)[list(AGENTS).index(code):]
+                allocation=max(0,(budget-used)*weights[code]//sum(weights.get(c,0) for c in remaining))
+            if allocation<1 or used+allocation>budget:
                 finish_agent(run_id,code,'BLOCKED',error='DAILY_BUDGET_EXHAUSTED'); continue
             predecessors=agent_rows(run_id)
             context=dict(compact,previous_opinions=[{'code':a['code'],'status':a['status'],'output':a['output'],'error_code':a['error_code']} for a in predecessors if a['status']!='PENDING' and a['code']!='QUANT'])
-            if len(store.encode(context).encode())>int(os.environ.get('ATLAS_MAX_CONTEXT_BYTES','250000')):
+            if len(store.encode(context).encode())>int(os.environ.get('ATLAS_MAX_CONTEXT_BYTES','750000')):
                 finish_agent(run_id,code,'BLOCKED',error='CONTEXT_LIMIT_NO_SILENT_TRUNCATION'); continue
             with store.db(True) as c:
                 changed=c.execute("UPDATE agents SET status='RUNNING',started_at=?,model=?,prompt_hash=?,reserved_cents=? WHERE run_id=? AND code=? AND status='PENDING'",
@@ -149,7 +190,7 @@ def cycle(cutoff=None,provider=None,feed_loader=None,snapshot_loader=None,resume
                 if not cost or cost.get('currency')!='USD':
                     used=budget  # Unknown metering prevents starting another billable session.
                 else:
-                    used+=max(0,int(cost['amount'])-allocation)
+                    used+=int(cost['amount'])-allocation if isinstance(p,BoundedMessages) else max(0,int(cost['amount'])-allocation)
                 # Persist rejected output too: the portal labels it INVALID, never a validated decision.
                 try:
                     raw=json.loads(result['text']); opinion=validate_opinion(code,raw,inputs)
@@ -169,12 +210,12 @@ def cycle(cutoff=None,provider=None,feed_loader=None,snapshot_loader=None,resume
         publish=all(a['status']=='SUCCEEDED' for a in rows) and auditor['output']['publication_allowed'] and atlas['output']['publication_allowed']
         with store.db(True) as c:
             if publish:
-                report_id='atlas_'+day
+                report_id='atlas_'+day+('_r'+str(revision) if revision else '')
                 report={'contract_version':'atlas_v1','report_id':report_id,'run_id':run_id,'authorization_mode':'SHADOW_ONLY',
                   'generated_at':store.now(),'data_cutoff_at':cutoff.isoformat(),'expires_at':(cutoff+timedelta(days=1)).isoformat(),
-                  'report_status':'PARTIAL','coverage':{'status':'PARTIAL','pool_total':None,'evaluated':len(quant['assets'])},
+                  'report_status':'PARTIAL','coverage':{'status':'PARTIAL','membership_status':quant['pool_membership_status'],'pool_total':quant['pool_total'],'evaluated':len(quant['assets'])},
                   'editorial':atlas['output'],'agents':rows,'quant':quant,'source_health':health,'evidence':evidence,
-                  'snapshot':{k:v for k,v in (snap or {}).items() if k!='data'},'limitations':inputs['limitations']}
+                  'snapshot':{k:v for k,v in (snap or {}).items() if k not in ('data','pool_context')},'limitations':inputs['limitations']}
                 for i,d in enumerate(report['editorial']['directives']):
                     d.update(directive_id=report_id+':'+str(i),status='PROPOSED',authorization_mode='SHADOW_ONLY',report_id=report_id,
                       policy_eligibility='NOT_EVALUATED',execution_enabled=False)
@@ -201,3 +242,28 @@ def scheduler(stop):
         except Exception:
             store.state('scheduler',{'status':'ERROR','checked_at':store.now()})
         stop.wait(30)
+
+
+def deterministic_facts(quant,evidence,cutoff):
+    changes=[a['price_change_24h'] for a in quant['assets'] if a['price_change_24h'] is not None]
+    return {'cutoff':cutoff.isoformat(),'observed_asset_count':len(quant['assets']),
+      'pool_total':quant['pool_total'],'watchlist_total':quant['observed_watchlist_total'],
+      'evidence_count':len(evidence),'evidence_ids':[e['evidence_id'] for e in evidence],
+      'change_24h':{'positive':sum(x>0 for x in changes),'negative':sum(x<0 for x in changes),
+                   'zero':sum(x==0 for x in changes),'missing':len(quant['assets'])-len(changes),
+                   'method':'Count persisted price_change_24h; not an intraday return or causal test.'},
+      'freshness_method':'Per-reading statuses are server-calculated. Do not infer freshness from timeframe names.'}
+
+
+def compact_asset(asset):
+    """Explicit editorial projection; full persisted readings remain in QUANT/portal."""
+    fields=('asset_id','symbol','market_type','watchlist_asset_id','identity_status','coverage_status',
+        'risk_level','current_price','price_change_24h','volume_24h','market_cap','alpha_score','refreshed_at')
+    result={k:asset.get(k) for k in fields}
+    identity=asset.get('identity')
+    if identity: result['identity']={k:identity.get(k) for k in ('status','project_name','base','quote','evidence_id','scope')}
+    result['readings']=[{'group':r.get('scheduler_group'),'timeframe':r.get('timeframe'),
+        'timestamp':r.get('timestamp'),'age_seconds':r.get('age_seconds'),'freshness':r.get('status')}
+        for r in asset.get('freshness_by_reading',[])]
+    result['projection']='Persisted scalar metrics and all reading timestamps; full indicator values and frozen decision remain in QUANT, not inferred here.'
+    return result

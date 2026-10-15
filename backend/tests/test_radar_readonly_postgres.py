@@ -33,6 +33,8 @@ def test_postgres_readonly_snapshot_and_source_parity(monkeypatch):
                     "CREATE TABLE pipeline_watchlists (id uuid, user_id uuid, name text, level text, market_mode text, source_pool_id uuid, source_watchlist_id uuid, last_scanned_at timestamptz)",
                     "CREATE TABLE pipeline_watchlist_assets (id uuid, watchlist_id uuid, symbol text, current_price numeric, price_change_24h numeric, volume_24h numeric, market_cap numeric, alpha_score numeric, entered_at timestamptz, refreshed_at timestamptz, analysis_snapshot jsonb, level_direction text)",
                     "CREATE TABLE indicators (symbol text, market_type text, scheduler_group text, timeframe text, time timestamptz, indicators_json jsonb)",
+                    "CREATE TABLE pools (id uuid,user_id uuid,name text,market_type text,is_active boolean,updated_at timestamptz)",
+                    "CREATE TABLE pool_coins (id uuid,pool_id uuid,symbol text,market_type text,is_active boolean,is_approved boolean,is_tradable boolean,held_for_open_position boolean,added_at timestamptz,origin text,discovered_at timestamptz,radar_last_seen_at timestamptz)",
                 ]:
                     await conn.execute(text(sql))
                 await conn.execute(text("INSERT INTO pipeline_watchlists VALUES (:w, :u, 'POOL', 'POOL', 'spot', NULL, NULL, '2020-01-01')"), {"w": wid, "u": owner})
@@ -44,6 +46,10 @@ def test_postgres_readonly_snapshot_and_source_parity(monkeypatch):
                     ('AKE_USDT','spot','microstructure','5m','2020-01-02','{"taker_ratio": 0.6}'),
                     ('AKE_USDT','spot','structural','1h','2020-01-02','{"rsi": 51}'),
                     ('AKE_USDT','futures','structural','5m','2020-01-03','{"rsi": 99}')"""))
+                await conn.execute(text("INSERT INTO pools VALUES (:p,:u,'POOL','spot',true,NULL)"),{'p':wid,'u':owner})
+                await conn.execute(text("UPDATE pipeline_watchlists SET source_pool_id=:p"),{'p':wid})
+                for symbol,market,active in [('AKE_USDT','spot',True),('AKE_USDT','futures',True),('EMPTY_USDT','spot',True),('OLD_USDT','spot',False)]:
+                    await conn.execute(text("INSERT INTO pool_coins(id,pool_id,symbol,market_type,is_active,held_for_open_position) VALUES (:id,:p,:s,:m,:a,false)"),{'id':uuid4(),'p':wid,'s':symbol,'m':market,'a':active})
             monkeypatch.setattr(service, "AsyncSessionLocal", async_sessionmaker(engine, expire_on_commit=False))
             async with service.readonly_session() as db:
                 assert (await db.execute(text("SHOW transaction_read_only"))).scalar() == "on"
@@ -56,6 +62,14 @@ def test_postgres_readonly_snapshot_and_source_parity(monkeypatch):
                 assert {r.timeframe for r in result.assets[0].indicator_readings} == {"1h", "5m"}
                 assert {r.values.get("rsi") for r in result.assets[0].indicator_readings} == {None, 42, 51}
                 assert await service.read_watchlist(db, wid, uuid4()) is None
+                from app.services.radar_pool_readonly import read_pool_context
+                from app.schemas.radar_readonly import RadarPoolContext
+                pool=RadarPoolContext.model_validate(await read_pool_context(db,wid,owner))
+                assert pool.row_count==4 and pool.active_count==3
+                futures=next(c for c in pool.coins if c.market_type=='futures')
+                assert futures.indicator_readings[0].values=={'rsi':99}
+                assert next(c for c in pool.coins if c.symbol=='EMPTY_USDT').indicator_readings==[]
+                assert await read_pool_context(db,wid,uuid4()) is None
                 async with engine.begin() as concurrent:
                     await concurrent.execute(text("UPDATE pipeline_watchlist_assets SET alpha_score=80"))
                 same_snapshot = await service.read_watchlist(db, wid, owner)

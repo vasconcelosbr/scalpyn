@@ -1,5 +1,5 @@
 """Independent SQLite ledger; additive migration, immutable inputs and publications."""
-from contextlib import contextmanager
+from contextlib import contextmanager, closing
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -55,6 +55,37 @@ def init():
           'CREATE TABLE IF NOT EXISTS operational(key TEXT PRIMARY KEY,value TEXT NOT NULL)',
         ): c.execute(sql)
         c.execute('INSERT OR IGNORE INTO migrations VALUES (1,?)',(now(),))
+    migrate_revisions()
+
+
+def migrate_revisions():
+    """Preserve all historical rows while allowing an explicitly authorized revision.
+
+    SQLite requires a table rebuild to replace UNIQUE(day). A backup precedes it;
+    the existing foreign-key target name remains cycles. Never rewrite reports.
+    """
+    with closing(sqlite3.connect(path())) as c:
+        if any(r[1]=='revision' for r in c.execute('PRAGMA table_info(cycles)')): return
+        backup=path().with_suffix('.pre-revisions.sqlite3')
+        if not backup.exists():
+            with closing(sqlite3.connect(backup)) as dest: c.backup(dest)
+        c.execute('PRAGMA foreign_keys=OFF')
+        try:
+            c.execute('BEGIN IMMEDIATE')
+            if any(r[1]=='revision' for r in c.execute('PRAGMA table_info(cycles)')):
+                c.rollback()
+                return
+            c.execute('CREATE TABLE cycles_v2(id TEXT PRIMARY KEY,day TEXT NOT NULL,started_at TEXT NOT NULL,finished_at TEXT,status TEXT NOT NULL,inputs TEXT NOT NULL,input_hash TEXT NOT NULL,error_code TEXT,revision INTEGER NOT NULL DEFAULT 0,UNIQUE(day,revision))')
+            c.execute('INSERT INTO cycles_v2(id,day,started_at,finished_at,status,inputs,input_hash,error_code) SELECT id,day,started_at,finished_at,status,inputs,input_hash,error_code FROM cycles')
+            c.execute('DROP TABLE cycles')
+            c.execute('ALTER TABLE cycles_v2 RENAME TO cycles')
+            if c.execute('PRAGMA foreign_key_check').fetchone(): raise RuntimeError('MIGRATION_FOREIGN_KEY')
+            c.execute('INSERT INTO migrations VALUES (2,?)',(now(),))
+            c.commit()
+        except BaseException:
+            c.rollback(); raise
+        finally:
+            c.execute('PRAGMA foreign_keys=ON')
 
 def audit(c, operation, entity, data):
     row=c.execute('SELECT hash FROM audit ORDER BY id DESC LIMIT 1').fetchone()

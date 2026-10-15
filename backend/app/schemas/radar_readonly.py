@@ -51,3 +51,38 @@ class RadarWatchlistResponse(ExportModel):
     last_scanned_at: datetime | None
     asset_count: int
     assets: list[RadarAsset]
+
+
+class RadarPoolCoin(ExportModel):
+    id: UUID
+    symbol: str
+    market_type: str
+    is_active: bool
+    is_approved: bool | None
+    is_tradable: bool | None
+    held_for_open_position: bool
+    added_at: datetime | None
+    origin: str | None
+    discovered_at: datetime | None
+    radar_last_seen_at: datetime | None
+    indicator_readings: list[IndicatorReading]
+
+class RadarPoolIdentity(ExportModel):
+    id: UUID
+    name: str
+    market_type: str
+    is_active: bool
+    updated_at: datetime | None
+
+class RadarPoolContext(ExportModel):
+    contract_version: Literal['radar_pool_context_v1'] = 'radar_pool_context_v1'
+    served_by: Literal['service_readonly'] = 'service_readonly'
+    read_mode: Literal['persisted-only'] = 'persisted-only'
+    queried_at: datetime
+    pool: RadarPoolIdentity
+    membership_basis: Literal['all_persisted_pool_rows']
+    membership_complete: Literal[True]
+    row_count: int
+    active_count: int
+    coins: list[RadarPoolCoin]
+    watchlist: RadarWatchlistResponse
