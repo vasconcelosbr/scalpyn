@@ -53,20 +53,25 @@ def configure(app,authenticated,root):
     @router.get('/health',dependencies=[Depends(access('reports:read'))])
     def health():
         with store.db() as c:
-            last=c.execute('SELECT id,day,started_at,finished_at,status,error_code FROM cycles ORDER BY day DESC LIMIT 1').fetchone()
+            last=c.execute('SELECT id,day,revision,started_at,finished_at,status,error_code FROM cycles ORDER BY day DESC,revision DESC LIMIT 1').fetchone()
             count=c.execute('SELECT count(*) FROM reports').fetchone()[0]
             successful=c.execute('SELECT id,generated_at,expires_at FROM reports ORDER BY generated_at DESC LIMIT 1').fetchone()
+            inputs=c.execute('SELECT inputs FROM cycles WHERE id=?',(last['id'],)).fetchone() if last else None
+            frozen=json.loads(inputs[0]) if inputs else {}
+            q=frozen.get('quant',{})
         return {'authorization_mode':'SHADOW_ONLY','execution_enabled':False,'enabled':os.environ.get('ATLAS_ENABLED')=='true',
           'schedule':'19:00 America/Sao_Paulo','last_cycle':dict(last) if last else None,'published_reports':count,
           'last_successful_report':dict(successful) if successful else None,
           'preflight':store.get_state('preflight',{'status':'NOT_CHECKED'}),'daily_budget_usd':os.environ.get('ATLAS_DAILY_BUDGET_USD'),
-          'gaps':['POOL_UNIVERSE_NOT_PROVEN','TOKEN_IDENTITY_NOT_PROVEN','SPECIALIST_FEEDS_PARTIAL'],
+          'gaps':(['POOL_UNIVERSE_NOT_PROVEN'] if q.get('pool_membership_status')!='COMPLETE' else [])+['PROJECT_VESTING_NOT_UNIVERSALLY_VERIFIED','SPECIALIST_FEEDS_PARTIAL'],
+          'pool_membership_status':q.get('pool_membership_status','UNKNOWN'),
+          'inference_mode':'single_bounded_messages_request',
           'agents':list(AGENTS)}
 
     @router.get('/runs',dependencies=[Depends(access('reports:read'))])
     def runs(limit:int=Query(50,ge=1,le=100),cursor:str=''):
-        with store.db() as c: rows=c.execute('SELECT id,day,started_at,finished_at,status,error_code FROM cycles WHERE day>? ORDER BY day LIMIT ?', (cursor,limit+1)).fetchall()
-        return {'items':[dict(r) for r in rows[:limit]],'next_cursor':rows[limit-1]['day'] if len(rows)>limit else None}
+        with store.db() as c: rows=c.execute('SELECT id,day,revision,started_at,finished_at,status,error_code FROM cycles WHERE id>? ORDER BY id LIMIT ?', (cursor,limit+1)).fetchall()
+        return {'items':[dict(r) for r in rows[:limit]],'next_cursor':rows[limit-1]['id'] if len(rows)>limit else None}
 
     @router.get('/runs/{run_id}',dependencies=[Depends(access('reports:read'))])
     def run(run_id:str):

@@ -17,7 +17,10 @@ from . import store
 # No article URL is fetched. New sources require a reviewed configuration change.
 FEEDS = (
  ('FED','https://www.federalreserve.gov/feeds/press_all.xml','VERIFIED_PRIMARY','MACRO'),
- ('THE_BLOCK','https://www.theblock.co/rss.xml','CORROBORATED_REPORT','GENERAL'),
+ ('THE_BLOCK','https://www.theblock.co/rss.xml','SINGLE_SOURCE_REPORT','GENERAL'),
+ ('SEC','https://www.sec.gov/news/pressreleases.rss','VERIFIED_PRIMARY','GEO'),
+ ('ECB','https://www.ecb.europa.eu/rss/press.html','VERIFIED_PRIMARY','MACRO'),
+ ('BLS','https://www.bls.gov/feed/bls_latest.rss','VERIFIED_PRIMARY','MACRO'),
 )
 
 class Plain(HTMLParser):
@@ -59,7 +62,7 @@ def parse_feed(raw, source, url, tier, domain, cutoff):
         title=plain(value('title'))
         excerpt=plain(value('description') or value('summary'))
         canonical={'url':link,'title':title,'excerpt':excerpt,'published_at':published}
-        hash_=store.digest(canonical)
+        hash_=store.digest(dict(canonical,source_tier=tier,extractor_version=2))
         result.append(dict(canonical,evidence_id='ev_'+hash_,hash=hash_,source_id=source,
            source_feed=url,source_tier=tier,domain=domain,retrieved_at=store.now(),
            publication_verification='SOURCE_REPORTED' if published else 'UNKNOWN',
@@ -105,25 +108,36 @@ def collect_feeds(cutoff):
                     if finding.get('occurrence')=='UPCOMING' and stamp and datetime.fromisoformat(stamp.replace('Z','+00:00'))>=cutoff:
                         upcoming_ids.update(finding['evidence_ids'])
     lookback=cutoff-timedelta(days=int(os.environ.get('ATLAS_EVIDENCE_LOOKBACK_DAYS','7')))
-    selected=[]
+    selected={}
     for r in rows:
         e=json.loads(r[0]); e['first_seen_at']=r[1]
-        if e['evidence_id'] in upcoming_ids or e['published_at'] is None or datetime.fromisoformat(e['published_at'])>=lookback: selected.append(e)
-    return selected,health
+        if e.get('source_id') not in {f[0] for f in FEEDS}: continue
+        if e.get('source_tier')=='CORROBORATED_REPORT': continue
+        if e['evidence_id'] in upcoming_ids or e['published_at'] is None or datetime.fromisoformat(e['published_at'])>=lookback:
+            selected[(e['source_id'],e['url'])]=e
+    return list(selected.values()),health
 
 def snapshot(cutoff):
-    p=Path(os.environ['SNAPSHOT_DIR'])/'dashboard.sqlite3'
-    c=sqlite3.connect(p.resolve().as_uri()+'?mode=ro',uri=True)
-    try: row=c.execute('SELECT day,captured_at,sha256,payload_gzip FROM snapshots WHERE captured_at<=? ORDER BY day DESC LIMIT 1',(cutoff.isoformat(),)).fetchone()
-    finally: c.close()
-    if not row: return None
-    raw=unpack((row[2],row[3]))
-    return {'day':row[0],'captured_at':row[1],'sha256':row[2],'data':json.loads(raw)}
+    from .pool_source import fetch_context
+    return fetch_context(cutoff)
+
 
 def quant(snap,cutoff):
     rows=[]
+    context=(snap or {}).get('pool_context')
+    original=(snap or {}).get('data',{}).get('assets',[])
+    market=(snap or {}).get('data',{}).get('market_mode')
+    members={(market,a['symbol']):a for a in original}
+    active=[c for c in context['coins'] if c['is_active']] if context else []
+    source_rows=[]
+    for coin in active:
+        matched=members.get((coin['market_type'],coin['symbol']))
+        a=dict(matched or {});a.update(id=coin['id'],symbol=coin['symbol'],market_type=coin['market_type'],
+          watchlist_asset_id=(matched or {}).get('id'),pool_coin=coin,indicator_readings=coin['indicator_readings'])
+        source_rows.append(a)
+    if not context: source_rows=original
     max_age=int(os.environ.get('ATLAS_QUANT_MAX_AGE_SECONDS','3600'))
-    for a in (snap or {}).get('data',{}).get('assets',[]):
+    for a in source_rows:
         readings=a.get('indicator_readings') or []
         stamps=[r.get('timestamp') for r in readings]
         stale=False
@@ -132,7 +146,15 @@ def quant(snap,cutoff):
                 age=(cutoff-datetime.fromisoformat(t.replace('Z','+00:00'))).total_seconds()
                 stale=stale or age<0 or age>max_age
             except (ValueError,TypeError,AttributeError): stale=True
-        rows.append({'asset_id':a['id'],'symbol':a['symbol'],'identity_status':'UNRESOLVED_PROJECT',
+        freshness=[]
+        for r in readings:
+            try:
+                age=(cutoff-datetime.fromisoformat(r['timestamp'].replace('Z','+00:00'))).total_seconds()
+                status='FRESH' if 0<=age<=max_age else 'STALE'
+            except (ValueError,TypeError,KeyError,AttributeError): age=None;status='UNKNOWN'
+            freshness.append({'scheduler_group':r.get('scheduler_group'),'timeframe':r.get('timeframe'),'timestamp':r.get('timestamp'),'age_seconds':age,'status':status,'formula':'cutoff - persisted timestamp'})
+        if not readings: stale=True
+        rows.append({'market_type':a.get('market_type',market),'watchlist_asset_id':a.get('watchlist_asset_id',a['id'] if not context else None),'pool_coin':a.get('pool_coin'),'freshness_by_reading':freshness,'asset_id':a['id'],'symbol':a['symbol'],'identity_status':'UNRESOLVED_PROJECT',
           'coverage_status':'STALE' if stale else 'PARTIAL','risk_level':'UNKNOWN',
           'current_price':a.get('current_price'),'price_change_24h':a.get('price_change_24h'),
           'volume_24h':a.get('volume_24h'),'market_cap':a.get('market_cap'),'alpha_score':a.get('alpha_score'),
@@ -150,6 +172,11 @@ def quant(snap,cutoff):
     return {'title':'Leitura quantitativa persistida','summary':'Valores originais, sem recálculo de score ou avaliação de trading.',
        'analysis':'A análise quantitativa conserva valores e timeframes. Não há séries anteriores suficientes para inferir aceleração ou causalidade. UNKNOWN não equivale a ausência de risco.',
        'coverage_status':'PARTIAL','assets':rows,'freshness_policy':{'max_age_seconds':max_age},
-       'pool_total':None,'observed_watchlist_total':len(rows),'pool_membership_status':'BLOCKED_BY_SOURCE_CONTRACT',
-       'pool_only':None,'watchlist_only':None,'matched':None,
-       'limitations':['A fonte disponível é a watchlist; o denominador completo do Pool não foi recebido.']}
+       'pool_total':len(active) if context else None,'observed_watchlist_total':len(original),
+       'pool_membership_status':'COMPLETE' if context else 'BLOCKED_BY_SOURCE_CONTRACT',
+       'pool_row_count':context['row_count'] if context else None,
+       'pool_inactive':[c for c in context['coins'] if not c['is_active']] if context else None,
+       'pool_only':[c['id'] for c in active if (c['market_type'],c['symbol']) not in members] if context else None,
+       'watchlist_only':[a['id'] for a in original if (market,a['symbol']) not in {(c['market_type'],c['symbol']) for c in active}] if context else None,
+       'matched':[c['id'] for c in active if (c['market_type'],c['symbol']) in members] if context else None,
+       'limitations':(['Cobertura de membros completa não comprova atualidade, identidade ou ausência de risco.'] if context else ['A fonte disponível é a watchlist; o denominador completo do Pool não foi recebido.'])}
