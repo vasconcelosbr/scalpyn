@@ -95,10 +95,18 @@ def cycle(cutoff=None,provider=None,feed_loader=None,snapshot_loader=None,resume
     store.init()
     cutoff=cutoff or datetime.now(timezone.utc)
     day=cutoff.astimezone(ZONE).date().isoformat()
-    if revision not in (0,1): raise ValueError('INVALID_REVISION')
-    run_id=day+':America_Sao_Paulo:ATLAS_V1'+(':REVALIDATION_V2' if revision else '')
+    if revision not in (0,1,2): raise ValueError('INVALID_REVISION')
+    run_id=day+':America_Sao_Paulo:ATLAS_V1'+({0:'',1:':REVALIDATION_V2',2:':RECOVERY_V3'}[revision])
     frozen=None
     with store.db(True) as c:
+        if revision==2:
+            parent=c.execute('SELECT id,status,inputs,input_hash FROM cycles WHERE day=? AND revision=1',(day,)).fetchone()
+            if not parent or parent['status']!='INTERRUPTED': raise ValueError('RECOVERY_REQUIRES_INTERRUPTED_REVISION')
+            prior_calls=c.execute("SELECT code,session_id FROM agents WHERE run_id=? AND code!='QUANT' AND started_at IS NOT NULL",(parent['id'],)).fetchall()
+            if len(prior_calls)!=1 or prior_calls[0]['code']!='MACRO' or not (prior_calls[0]['session_id'] or '').startswith('messages:'):
+                raise ValueError('RECOVERY_AUTHORIZATION_SCOPE')
+            frozen=json.loads(parent['inputs'])
+            if store.digest(frozen)!=parent['input_hash']: raise ValueError('INPUT_INTEGRITY')
         try:
             if c.execute("SELECT 1 FROM cycles WHERE status IN ('COLLECTING','RUNNING') AND id!=?",(run_id,)).fetchone(): raise ValueError('ANOTHER_CYCLE_RUNNING')
             c.execute('INSERT INTO cycles(id,day,started_at,finished_at,status,inputs,input_hash,error_code,revision) VALUES (?,?,?,?,?,?,?,?,?)',(run_id,day,store.now(),None,'COLLECTING','{}',store.digest({}),None,revision))
@@ -141,7 +149,7 @@ def cycle(cutoff=None,provider=None,feed_loader=None,snapshot_loader=None,resume
                'risk_policy':'UNKNOWN; no calibrated severity policy is configured.'}
         with store.db(True) as c:
             c.execute('UPDATE cycles SET inputs=?,input_hash=?,status=? WHERE id=?',(store.encode(inputs),store.digest(inputs),'RUNNING',run_id))
-        if not frozen: finish_agent(run_id,'QUANT','SUCCEEDED',quant,{'input_tokens':0,'output_tokens':0,'list_cost':{'amount':'0','currency':'USD'}})
+        if not frozen or revision==2: finish_agent(run_id,'QUANT','SUCCEEDED',quant,{'input_tokens':0,'output_tokens':0,'list_cost':{'amount':'0','currency':'USD'}})
         p=provider or BoundedMessages()
         try:
             budget=budget_cents(); p.preflight()
@@ -153,12 +161,16 @@ def cycle(cutoff=None,provider=None,feed_loader=None,snapshot_loader=None,resume
             return run_id
         # Fixed allocation is reserved before calls. Unknown cost never frees a reservation.
         with store.db() as c:
-            prior=[dict(r) for r in c.execute('SELECT a.usage,a.status,a.reserved_cents,a.started_at FROM agents a JOIN cycles c ON c.id=a.run_id WHERE c.day=? AND c.id!=?',(day,run_id))]
+            prior=[dict(r) for r in c.execute('SELECT a.usage,a.status,a.session_id,a.reserved_cents,a.started_at FROM agents a JOIN cycles c ON c.id=a.run_id WHERE c.day=? AND c.id!=?',(day,run_id))]
         used=0
         for previous in prior:
             cost=(json.loads(previous['usage']) or {}).get('list_cost') if previous['usage'] else None
             if cost and cost.get('currency')=='USD': used+=int(cost['amount'])
-            elif previous['started_at']: used=budget;break
+            elif previous['started_at']:
+                if (previous['session_id'] or '').startswith('messages:') and previous['reserved_cents']>0:
+                    used+=previous['reserved_cents']  # Retain the full hard request ceiling; never release unknown cost.
+                else:
+                    used=budget;break
         allocation=max(0,(budget-used)//7)
         if allocation<1: used=budget
         compact={'cutoff':inputs['cutoff'],'source_health':health,'evidence':[{k:v for k,v in e.items() if k not in ('source_record','structured')} for e in evidence],

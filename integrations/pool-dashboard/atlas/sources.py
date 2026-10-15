@@ -133,7 +133,7 @@ def quant(snap,cutoff):
     for coin in active:
         matched=members.get((coin['market_type'],coin['symbol']))
         a=dict(matched or {});a.update(id=coin['id'],symbol=coin['symbol'],market_type=coin['market_type'],
-          watchlist_asset_id=(matched or {}).get('id'),pool_coin=coin,indicator_readings=coin['indicator_readings'])
+          watchlist_asset_id=(matched or {}).get('id'),pool_coin={k:v for k,v in coin.items() if k!='indicator_readings'},indicator_readings=coin['indicator_readings'])
         source_rows.append(a)
     if not context: source_rows=original
     max_age=int(os.environ.get('ATLAS_QUANT_MAX_AGE_SECONDS','3600'))
