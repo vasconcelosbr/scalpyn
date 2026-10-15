@@ -126,6 +126,8 @@ def cycle(cutoff=None,provider=None,feed_loader=None,snapshot_loader=None,resume
             if not feed_loader:
                 extra,extra_health,identities=specialized.collect(quant['assets'],cutoff)
                 evidence.extend(extra);health.extend(extra_health)
+                cutoff=datetime.now(timezone.utc)
+                quant=sources.quant(snap,cutoff)
                 for asset in quant['assets']:
                     identity=identities.get(asset['asset_id'])
                     if identity:
