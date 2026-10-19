@@ -35,6 +35,8 @@ Queue topology (Task #216, operator spec parts 4-6):
                           Isolated so a slow indicator pass
                           cannot delay lighter structural ops (pipeline_scan,
                           reconciliation, alerts) and vice-versa.
+    canonical_ohlcv     — Dedicated state/canonical candle collectors. Never
+                          combined with research queues in the same worker.
     research_ohlcv      — Exchange-native 15m/1h collection, historical
                           backfill, retention, and readiness snapshots only.
                           No indicator/score/signal/trading task is routed here.
@@ -86,6 +88,7 @@ QUEUE_STRUCTURAL_COMPUTE = "structural_compute"
 QUEUE_EXECUTION = "execution"
 QUEUE_AI_ORCHESTRATION = "ai_orchestration"
 QUEUE_RESEARCH_OHLCV = "research_ohlcv"
+QUEUE_CANONICAL_OHLCV = "canonical_ohlcv"
 QUEUE_PUMP_RADAR = "pump_radar"
 # 2026-09-21 — structural queue split (P0: collect_all + pipeline_scan.scan
 # starving ~20 other structural tasks behind a single concurrency=1 worker;
@@ -103,7 +106,7 @@ ALL_QUEUES = (
     QUEUE_MICROSTRUCTURE, QUEUE_STRUCTURAL, QUEUE_STRUCTURAL_COMPUTE,
     QUEUE_EXECUTION, QUEUE_AI_ORCHESTRATION, QUEUE_RESEARCH_OHLCV,
     QUEUE_PUMP_RADAR, QUEUE_STRUCTURAL_COLLECT, QUEUE_STRUCTURAL_SCAN,
-    QUEUE_PUMP_MONITOR, QUEUE_PUMP_ML,
+    QUEUE_PUMP_MONITOR, QUEUE_PUMP_ML, QUEUE_CANONICAL_OHLCV,
 )
 
 _ALL_TASK_MODULES = (
@@ -161,6 +164,10 @@ def _configured_task_modules() -> tuple[str, ...]:
     queues = tuple(
         item.strip() for item in os.getenv("WORKER_QUEUES", "").split(",") if item.strip()
     )
+    if QUEUE_CANONICAL_OHLCV in queues:
+        if queues != (QUEUE_CANONICAL_OHLCV,):
+            raise ValueError("canonical_ohlcv requires a dedicated worker")
+        return ("app.tasks.collect_research_ohlcv",)
     if queues == (QUEUE_AI_ORCHESTRATION,):
         return (
             "app.tasks.ai_orchestration",
@@ -258,9 +265,9 @@ TASK_ROUTES = {
     "app.tasks.robust_alerts.evaluate":                  {"queue": QUEUE_STRUCTURAL},
     "app.tasks.daily_summary.send":                      {"queue": QUEUE_STRUCTURAL},
     # Research/state OHLCV is physically isolated from decision workers.
-    "app.tasks.collect_research_ohlcv.collect_1m_shadow": {"queue": QUEUE_RESEARCH_OHLCV},
-    "app.tasks.collect_research_ohlcv.collect_5m_shadow": {"queue": QUEUE_RESEARCH_OHLCV},
-    "app.tasks.collect_research_ohlcv.collect_30m_shadow": {"queue": QUEUE_RESEARCH_OHLCV},
+    "app.tasks.collect_research_ohlcv.collect_1m_shadow": {"queue": QUEUE_CANONICAL_OHLCV},
+    "app.tasks.collect_research_ohlcv.collect_5m_shadow": {"queue": QUEUE_CANONICAL_OHLCV},
+    "app.tasks.collect_research_ohlcv.collect_30m_shadow": {"queue": QUEUE_CANONICAL_OHLCV},
     "app.tasks.collect_research_ohlcv.collect_15m":      {"queue": QUEUE_RESEARCH_OHLCV},
     "app.tasks.collect_research_ohlcv.collect_1h":       {"queue": QUEUE_RESEARCH_OHLCV},
     "app.tasks.collect_research_ohlcv.capture_state_comparison": {"queue": QUEUE_RESEARCH_OHLCV},
@@ -940,22 +947,22 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.collect_structural_30m.run",
         "schedule": crontab(minute="0,30"),
     },
-    # State-separated dual run. These tasks only write ohlcv_shadow/ohlcv_live;
-    # no compute, score, signal, barrier, or simulation consumes them in v1.
+    # State/canonical collectors follow the active capture contract. Keep their
+    # beat routes consistent with TASK_ROUTES and the dedicated consumer.
     "collect_state_1m_every_30s": {
         "task": "app.tasks.collect_research_ohlcv.collect_1m_shadow",
         "schedule": 30.0,
-        "options": {"queue": QUEUE_RESEARCH_OHLCV},
+        "options": {"queue": QUEUE_CANONICAL_OHLCV},
     },
     "collect_state_5m_every_60s": {
         "task": "app.tasks.collect_research_ohlcv.collect_5m_shadow",
         "schedule": 60.0,
-        "options": {"queue": QUEUE_RESEARCH_OHLCV},
+        "options": {"queue": QUEUE_CANONICAL_OHLCV},
     },
     "collect_state_30m_every_120s": {
         "task": "app.tasks.collect_research_ohlcv.collect_30m_shadow",
         "schedule": 120.0,
-        "options": {"queue": QUEUE_RESEARCH_OHLCV},
+        "options": {"queue": QUEUE_CANONICAL_OHLCV},
     },
     "capture_state_ohlcv_comparison_every_5min": {
         "task": "app.tasks.collect_research_ohlcv.capture_state_comparison",
@@ -1186,3 +1193,5 @@ for _sched_name, _sched_entry in celery_app.conf.beat_schedule.items():
 from . import task_dispatch as _task_dispatch  # noqa: E402
 
 _task_dispatch.install_signal_handlers()
+
+from . import ohlcv_task_telemetry as _ohlcv_task_telemetry  # noqa: E402,F401

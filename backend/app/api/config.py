@@ -96,6 +96,12 @@ async def get_config(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id)
 ):
+    if config_type == "ohlcv_comparison":
+        from ..schemas.ohlcv_comparison import require_comparison_owner
+        try:
+            await require_comparison_owner(db, user_id)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
     if config_type == "pump_radar":
         config_type = "pump_radar_v1"
     config = await config_service.get_config(db, config_type, user_id, pool_id)
@@ -135,6 +141,17 @@ async def update_config(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id)
 ):
+    if config_type == "ohlcv_comparison":
+        from ..schemas.ohlcv_comparison import OHLCVComparisonConfig, require_comparison_owner
+        try:
+            await require_comparison_owner(db, user_id)
+            if pool_id is not None:
+                raise ValueError("OHLCV comparison is global")
+            payload = OHLCVComparisonConfig.model_validate(payload).model_dump()
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     if config_type in {"score", "signal", "block"}:
         from ..services.entry_risk_features import (
             assert_no_observational_execution_fields,

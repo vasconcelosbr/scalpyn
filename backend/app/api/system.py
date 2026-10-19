@@ -515,6 +515,14 @@ async def get_celery_status():
                     result["registered_task_count"] = sum(
                         len(v) for v in registered.values()
                     )
+                consumers = inspect.active_queues()
+                result["queue_consumers"] = (
+                    {queue: [worker for worker, queues in consumers.items()
+                             if any(item.get("name") == queue for item in queues)]
+                     for queue in ALL_QUEUES} if consumers is not None else None
+                )
+            else:
+                result["queue_consumers"] = {queue: [] for queue in ALL_QUEUES}
         except Exception as exc:
             result["error"] = str(exc)
             logger.warning("[celery-status] inspect failed: %s", exc)
@@ -552,6 +560,9 @@ async def get_celery_status():
                     "depth": depth,
                     "oldest_age_s": oldest_age,
                     "alert_state": alert_state,
+                    "consumers": (result.get("queue_consumers") or {}).get(queue_name),
+                    "consumer_missing": (not result["queue_consumers"][queue_name]
+                                         if result.get("queue_consumers") is not None else None),
                 }
                 result["queue_depth_by_queue"][queue_name] = depth
                 result["oldest_task_age_seconds_by_queue"][queue_name] = oldest_age

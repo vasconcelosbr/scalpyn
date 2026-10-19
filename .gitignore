@@ -240,3 +240,6 @@ backend/force_*.py
 backend/hourly_monitor.py
 backend/trigger_celery.py
 backend/update_cycle_hours.py
+
+# Isolated local PR validation infrastructure
+.codex-test/

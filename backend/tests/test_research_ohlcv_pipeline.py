@@ -31,6 +31,7 @@ from app.tasks import collect_structural_30m
 from app.tasks import sample_ohlcv_settlement_latency
 from app.tasks.celery_app import (
     QUEUE_RESEARCH_OHLCV,
+    QUEUE_CANONICAL_OHLCV,
     TASK_ROUTES,
     celery_app,
 )
@@ -177,7 +178,7 @@ def test_research_tasks_are_isolated_and_have_no_decision_dispatch() -> None:
         "app.tasks.sample_ohlcv_settlement_latency.sample_settlement_latency",
     }
     assert all(
-        TASK_ROUTES[name]["queue"] == QUEUE_RESEARCH_OHLCV
+        TASK_ROUTES[name]["queue"] == (QUEUE_CANONICAL_OHLCV if name.endswith(("collect_1m_shadow", "collect_5m_shadow", "collect_30m_shadow")) else QUEUE_RESEARCH_OHLCV)
         for name in names
     )
     source = inspect.getsource(collect_research_ohlcv)
@@ -244,7 +245,7 @@ def test_research_beat_entries_explicitly_target_isolated_queue() -> None:
         "enforce_research_ohlcv_retention",
         "sample_ohlcv_settlement_latency_every_10s",
     ):
-        assert schedule[name]["options"]["queue"] == QUEUE_RESEARCH_OHLCV
+        assert schedule[name]["options"]["queue"] == (QUEUE_CANONICAL_OHLCV if name.startswith("collect_state_") else QUEUE_RESEARCH_OHLCV)
 
     assert schedule["collect_state_1m_every_30s"]["schedule"] == 30.0
     assert schedule["collect_state_5m_every_60s"]["schedule"] == 60.0
@@ -388,11 +389,12 @@ def test_dual_run_migration_enforces_state_and_valid_from_contracts() -> None:
 
 
 def test_comparison_contract_compares_all_ohlcv_fields() -> None:
-    sql = str(collect_research_ohlcv._STATE_COMPARISON_SQL)
+    from app.services.ohlcv_comparison import WINDOW_SQL, run_incremental
+    sql = str(WINDOW_SQL)
     for field in ("open", "high", "low", "close", "volume", "quote_volume"):
         assert f"o.{field} IS NOT DISTINCT FROM s.{field}" in sql
     assert "missing_canonical_rows" in sql
-    assert "canonical_read_enabled IS FALSE" in sql
+    assert "canonical_read_enabled IS FALSE" in inspect.getsource(run_incremental)
 
 
 @pytest.mark.asyncio
