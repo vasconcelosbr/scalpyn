@@ -250,6 +250,14 @@ async def _collect_state_shadow_async(timeframe: str) -> dict[str, Any]:
                         capture_contract_version=contract["capture_contract_version"],
                         closed_table=contract["closed_table"],
                     )
+                persisted_at = datetime.now(timezone.utc)
+                logger.info("[OHLCV-COLLECTION] %s", json.dumps({
+                    "symbol": symbol, "timeframe": timeframe,
+                    "observed_at": batch.observed_at, "persisted_at": persisted_at,
+                    "response_to_persist_seconds": (persisted_at - batch.observed_at).total_seconds(),
+                    "inserted_closed_rows": inserted_now,
+                    "capture_contract_version": contract["capture_contract_version"],
+                }, default=str))
             except Exception as exc:
                 logger.exception(
                     "[OHLCV-STATE-SHADOW][PERSIST-FAILED] symbol=%s timeframe=%s",
@@ -575,116 +583,11 @@ def capture_readiness() -> str:
     return json.dumps(_run_async(_capture_readiness_async()), default=str)
 
 
-_STATE_COMPARISON_SQL = text(
-    """
-    WITH contract AS (
-        SELECT valid_from
-          FROM ohlcv_capture_contracts
-         WHERE capture_contract_version = :capture_contract_version
-           AND mode = 'SHADOW'
-           AND canonical_read_enabled IS FALSE
-    ), shadow_rows AS (
-        SELECT s.*
-          FROM ohlcv_shadow s
-          CROSS JOIN contract c
-         WHERE s.timeframe = :timeframe
-           AND s.capture_contract_version = :capture_contract_version
-           AND s.time >= c.valid_from
-    ), compared AS (
-        SELECT s.time,
-               o.time IS NOT NULL AS canonical_present,
-               o.open IS NOT DISTINCT FROM s.open
-               AND o.high IS NOT DISTINCT FROM s.high
-               AND o.low IS NOT DISTINCT FROM s.low
-               AND o.close IS NOT DISTINCT FROM s.close
-               AND o.volume IS NOT DISTINCT FROM s.volume
-               AND o.quote_volume IS NOT DISTINCT FROM s.quote_volume AS exact
-          FROM shadow_rows s
-          LEFT JOIN ohlcv o
-            ON o.time = s.time
-           AND o.symbol = s.symbol
-           AND o.exchange = s.exchange
-           AND o.timeframe = s.timeframe
-           AND o.market_type = s.market_type
-    )
-    SELECT clock_timestamp() AS observed_at,
-           :timeframe AS timeframe,
-           :capture_contract_version AS capture_contract_version,
-           c.valid_from,
-           (SELECT count(*) FROM shadow_rows)::bigint AS shadow_rows,
-           (SELECT count(*) FROM ohlcv o
-             WHERE o.timeframe = :timeframe
-               AND o.market_type = 'spot'
-               AND o.time >= c.valid_from)::bigint AS canonical_rows,
-           count(*) FILTER (WHERE canonical_present)::bigint AS compared_rows,
-           count(*) FILTER (WHERE canonical_present AND exact)::bigint AS exact_rows,
-           count(*) FILTER (WHERE canonical_present AND NOT exact)::bigint
-               AS divergent_rows,
-           count(*) FILTER (WHERE NOT canonical_present)::bigint
-               AS missing_canonical_rows,
-           percentile_cont(0.5) WITHIN GROUP (
-               ORDER BY extract(epoch FROM (
-                   clock_timestamp() - (time + make_interval(secs => :interval_seconds))
-               ))
-           ) AS median_close_lag_seconds,
-           percentile_cont(0.95) WITHIN GROUP (
-               ORDER BY extract(epoch FROM (
-                   clock_timestamp() - (time + make_interval(secs => :interval_seconds))
-               ))
-           ) AS p95_close_lag_seconds
-      FROM compared
-      CROSS JOIN contract c
-     GROUP BY c.valid_from
-    """
-)
-
-
 async def _capture_state_comparison_async() -> list[dict[str, Any]]:
     from ..database import CeleryAsyncSessionLocal
-
-    snapshots: list[dict[str, Any]] = []
-    async with CeleryAsyncSessionLocal() as db:
-        for timeframe in SHADOW_STATE_TIMEFRAMES:
-            result = await db.execute(
-                _STATE_COMPARISON_SQL,
-                {
-                    "timeframe": timeframe,
-                    "capture_contract_version": STATE_CAPTURE_CONTRACT_VERSION,
-                    "interval_seconds": SUPPORTED_TIMEFRAMES[timeframe],
-                },
-            )
-            row = result.mappings().one_or_none()
-            if row is None:
-                continue
-            payload = dict(row)
-            await db.execute(
-                text(
-                    """
-                    INSERT INTO ohlcv_capture_comparison_snapshots
-                        (observed_at, timeframe, capture_contract_version,
-                         valid_from, shadow_rows, canonical_rows, compared_rows,
-                         exact_rows, divergent_rows, missing_canonical_rows,
-                         median_close_lag_seconds, p95_close_lag_seconds)
-                    VALUES
-                        (:observed_at, :timeframe, :capture_contract_version,
-                         :valid_from, :shadow_rows, :canonical_rows,
-                         :compared_rows, :exact_rows, :divergent_rows,
-                         :missing_canonical_rows, :median_close_lag_seconds,
-                         :p95_close_lag_seconds)
-                    ON CONFLICT
-                        (observed_at, timeframe, capture_contract_version)
-                    DO NOTHING
-                    """
-                ),
-                payload,
-            )
-            snapshots.append(payload)
-        await db.commit()
-
-    logger.info(
-        "[OHLCV-STATE-SHADOW][COMPARISON] %s",
-        json.dumps(snapshots, default=str, sort_keys=True),
-    )
+    from ..services.ohlcv_comparison import run_incremental
+    snapshots = await run_incremental(CeleryAsyncSessionLocal)
+    logger.info("[OHLCV-COMPARISON] %s", json.dumps(snapshots, default=str))
     return snapshots
 
 

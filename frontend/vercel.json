@@ -1,5 +1,10 @@
 {
   "framework": "nextjs",
+  "git": {
+    "deploymentEnabled": {
+      "codex/l3-canonical-queue": false
+    }
+  },
   "buildCommand": "npm run build",
   "outputDirectory": ".next",
   "installCommand": "npm ci",

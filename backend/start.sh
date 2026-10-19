@@ -312,6 +312,20 @@ if [ "$WORKER_QUEUES" = "__none__" ]; then
     echo "==> [queue] WORKER_QUEUES=__none__ - API-only mode"
     WORKER_QUEUES=""
 fi
+
+# The canonical collector must never share processes with research/backfill.
+case ",${WORKER_QUEUES}," in
+    *,canonical_ohlcv,*)
+        if [ "$WORKER_QUEUES" != "canonical_ohlcv" ]; then
+            echo "ERROR: canonical_ohlcv requires a dedicated worker" >&2
+            exit 1
+        fi
+        if [ -z "${CELERY_CONCURRENCY:-}" ]; then
+            echo "ERROR: set CELERY_CONCURRENCY explicitly for canonical_ohlcv" >&2
+            exit 1
+        fi
+        ;;
+esac
 RUN_BEAT="${RUN_BEAT:-1}"
 
 # ── Safe concurrency defaults per Cloud Run service (Task #216 follow-up) ────
