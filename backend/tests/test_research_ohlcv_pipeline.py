@@ -636,7 +636,7 @@ async def test_state_shadow_slow_symbol_does_not_delay_faster_symbols_persist(mo
     artifact. Each symbol must now persist as soon as its OWN fetch resolves.
     """
     import app.database as database_module
-    import app.services.pool_service as pool_service_module
+    import app.services.ohlcv_collection_universe as universe_module
 
     order: list[str] = []
 
@@ -653,8 +653,8 @@ async def test_state_shadow_slow_symbol_does_not_delay_faster_symbols_persist(mo
         async def rollback(self):
             pass
 
-    async def fake_get_active_pool_symbols(db, market):
-        return ["SLOW", "FAST"]
+    async def fake_collection_universe(db):
+        return {s: ["active_pool"] for s in ["SLOW", "FAST"]}
 
     async def fake_active_capture_contract(db, *, timeframe):
         return {
@@ -677,7 +677,7 @@ async def test_state_shadow_slow_symbol_does_not_delay_faster_symbols_persist(mo
     async def fake_paced_delay():
         return None
 
-    monkeypatch.setattr(pool_service_module, "get_active_pool_symbols", fake_get_active_pool_symbols)
+    monkeypatch.setattr(universe_module, "collection_universe", fake_collection_universe)
     monkeypatch.setattr(database_module, "CeleryAsyncSessionLocal", FakeSession)
     monkeypatch.setattr(collect_research_ohlcv, "active_capture_contract", fake_active_capture_contract)
     monkeypatch.setattr(collect_research_ohlcv, "fetch_gate_closed_candles", fake_fetch)
@@ -700,7 +700,7 @@ async def test_state_shadow_one_symbol_failure_does_not_block_others(monkeypatch
     """A fetch or persist failure for one symbol must not prevent the other
     symbols in the same run from being collected and persisted."""
     import app.database as database_module
-    import app.services.pool_service as pool_service_module
+    import app.services.ohlcv_collection_universe as universe_module
 
     persisted: list[str] = []
     errors_recorded: list[str] = []
@@ -718,8 +718,8 @@ async def test_state_shadow_one_symbol_failure_does_not_block_others(monkeypatch
         async def rollback(self):
             pass
 
-    async def fake_get_active_pool_symbols(db, market):
-        return ["FETCH_FAILS", "PERSIST_FAILS", "OK"]
+    async def fake_collection_universe(db):
+        return {s: ["active_pool"] for s in ["FETCH_FAILS", "PERSIST_FAILS", "OK"]}
 
     async def fake_active_capture_contract(db, *, timeframe):
         return {
@@ -747,7 +747,7 @@ async def test_state_shadow_one_symbol_failure_does_not_block_others(monkeypatch
     async def fake_paced_delay():
         return None
 
-    monkeypatch.setattr(pool_service_module, "get_active_pool_symbols", fake_get_active_pool_symbols)
+    monkeypatch.setattr(universe_module, "collection_universe", fake_collection_universe)
     monkeypatch.setattr(database_module, "CeleryAsyncSessionLocal", FakeSession)
     monkeypatch.setattr(collect_research_ohlcv, "active_capture_contract", fake_active_capture_contract)
     monkeypatch.setattr(collect_research_ohlcv, "fetch_gate_closed_candles", fake_fetch)

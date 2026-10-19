@@ -128,6 +128,7 @@ _ALL_TASK_MODULES = (
         "app.tasks.fetch_market_caps",
         "app.tasks.pipeline_scan",
         "app.tasks.ohlcv_backfill",
+        "app.tasks.ohlcv_recovery",
         "app.tasks.simulation",
         "app.tasks.robust_alerts",
         "app.tasks.symbol_health_audit",
@@ -179,6 +180,7 @@ def _configured_task_modules() -> tuple[str, ...]:
             "app.tasks.collect_mtf_ohlcv",
             "app.tasks.sample_ohlcv_settlement_latency",
             "app.tasks.ohlcv_backfill",
+            "app.tasks.ohlcv_recovery",
             "app.tasks.pump_research",
         )
     if queues == (QUEUE_PUMP_RADAR,):
@@ -281,6 +283,7 @@ TASK_ROUTES = {
     "app.tasks.ohlcv_backfill.backfill":                 {"queue": QUEUE_RESEARCH_OHLCV},
     "app.tasks.ohlcv_backfill.backfill_research":        {"queue": QUEUE_RESEARCH_OHLCV},
     "app.tasks.ohlcv_backfill.get_status":               {"queue": QUEUE_STRUCTURAL},
+    "app.tasks.ohlcv_recovery.recover": {"queue": QUEUE_RESEARCH_OHLCV},
     # Pump Radar has an isolated, non-trading queue and writes only its own
     # additive research tables.
     "app.tasks.pump_radar.inventory":                    {"queue": QUEUE_PUMP_RADAR},
@@ -531,6 +534,9 @@ TASK_ANNOTATIONS = {
     "app.tasks.ohlcv_backfill.backfill":                 {"time_limit": 1800, "soft_time_limit": 1700, "rate_limit": "2/h", "max_retries": 3},
     "app.tasks.ohlcv_backfill.backfill_research":        {"time_limit": 3600, "soft_time_limit": 3500, "rate_limit": "1/h", "max_retries": 0},
     "app.tasks.ohlcv_backfill.get_status":               {"time_limit": 60, "soft_time_limit": 50, "rate_limit": "6/m", "max_retries": 3},
+    # Durable manifest is resumed explicitly after a crash; never redelivery loops.
+    # Inherit infrastructure time limits, but pace through the persisted DB budget.
+    "app.tasks.ohlcv_recovery.recover": {**_RESEARCH_OHLCV_GUARDS, "rate_limit": None, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.collect_research_ohlcv.collect_1m_shadow": {**_RESEARCH_OHLCV_GUARDS, "rate_limit": "180/h", **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.shadow_l3_continuation.run": {"time_limit": 120, "soft_time_limit": 100, "max_retries": 0, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.collect_research_ohlcv.collect_5m_shadow": {**_RESEARCH_OHLCV_GUARDS, "rate_limit": "90/h", **_NO_REQUEUE_ON_WORKER_LOSS},

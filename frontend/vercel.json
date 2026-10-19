@@ -3,6 +3,7 @@
   "git": {
     "deploymentEnabled": {
       "codex/l3-canonical-queue": false,
+      "codex/l3-gap-recovery": false,
       "codex/l3-queue-ci-process-isolation": false
     }
   },

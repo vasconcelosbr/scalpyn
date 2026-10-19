@@ -3,9 +3,11 @@
 ``pool_coins`` is the single source of truth for the symbol universe.
 Gate.io (or any other exchange) is a data source only — never a universe source.
 
-Every pipeline stage (collect, ohlcv, indicators, scores, decisions) MUST
+Entry pipeline stages (indicators, scores, decisions) MUST
 obtain its symbol list exclusively via :func:`get_pool_symbols` (raw pool)
 or :func:`get_active_pool_symbols` (post-Task #232 ingestion gate).
+Canonical OHLCV and WS also retain open Shadow dependencies through
+``ohlcv_collection_universe``. This does not grant entry eligibility.
 
 Task #232 — semantic split
 ---------------------------

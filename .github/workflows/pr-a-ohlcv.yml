@@ -42,4 +42,4 @@ jobs:
       - working-directory: backend
         run: |
           python -m alembic heads
-          python -m pytest -q tests/test_ohlcv_queue_isolation.py tests/test_ohlcv_comparison_postgres.py tests/test_ohlcv_broker_isolation.py tests/test_research_ohlcv_pipeline.py tests/test_celery_routing_invariants.py tests/test_celery_queue_status_and_dedup.py tests/test_celery_diagnostics_endpoint.py
+          python -m pytest -q tests/test_ohlcv_recovery_postgres.py tests/test_ohlcv_queue_isolation.py tests/test_ohlcv_comparison_postgres.py tests/test_ohlcv_broker_isolation.py tests/test_research_ohlcv_pipeline.py tests/test_celery_routing_invariants.py tests/test_celery_queue_status_and_dedup.py tests/test_celery_diagnostics_endpoint.py

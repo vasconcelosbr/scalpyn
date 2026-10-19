@@ -199,11 +199,12 @@ async def _collect_state_shadow_async(timeframe: str) -> dict[str, Any]:
 
     from ..database import CeleryAsyncSessionLocal
     from ..services import ohlcv_metrics
-    from ..services.pool_service import get_active_pool_symbols
+    from ..services.ohlcv_collection_universe import collection_universe
 
     started_at = datetime.now(timezone.utc)
     async with CeleryAsyncSessionLocal() as db:
-        symbols = sorted(await get_active_pool_symbols(db, "spot"))
+        universe = await collection_universe(db)
+        symbols = sorted(universe)
         contract = await active_capture_contract(db, timeframe=timeframe)
         finalization_delay_seconds = int(contract["finalization_delay_seconds"])
         if db.in_transaction():
@@ -253,6 +254,7 @@ async def _collect_state_shadow_async(timeframe: str) -> dict[str, Any]:
                 persisted_at = datetime.now(timezone.utc)
                 logger.info("[OHLCV-COLLECTION] %s", json.dumps({
                     "symbol": symbol, "timeframe": timeframe,
+                    "inclusion_reasons": universe[symbol],
                     "observed_at": batch.observed_at, "persisted_at": persisted_at,
                     "response_to_persist_seconds": (persisted_at - batch.observed_at).total_seconds(),
                     "inserted_closed_rows": inserted_now,
@@ -323,6 +325,7 @@ async def _collect_state_shadow_async(timeframe: str) -> dict[str, Any]:
             )
 
     summary = {
+        "collection_universe": universe,
         "mode": contract["mode"],
         "capture_contract_version": contract["capture_contract_version"],
         "closed_table": contract["closed_table"],
