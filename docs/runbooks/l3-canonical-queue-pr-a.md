@@ -123,6 +123,12 @@ O teste Redis exige `PR_A_TEST_REDIS_URL` em loopback e database `/15`, com fila
 exclusivas. Executa workers Celery reais com corpos de tarefa sintéticos, sem
 chamar exchange, dados de produção ou execução de ordens. Comprova consumo
 independente enquanto a pesquisa permanece bloqueada e descarte de mensagem expirada.
+Os workers usam processos separados iniciados por `spawn`, com prontidão explícita
+e verificação dos PIDs que executaram cada tarefa. Workers embutidos em threads
+compartilhavam o event loop global do Kombu no Linux, causando interferência no
+próprio teste; o Windows não usava esse event loop. O teste libera a pesquisa
+antes de encerrar os processos, inclusive quando uma asserção falha, e exige
+encerramento normal para passar.
 
 No diretório `backend`:
 
@@ -151,7 +157,7 @@ Essa regra não desabilita deploys de outras branches nem altera configuração 
 Suite focada executada com PostgreSQL e Redis locais reais, sem skips:
 
 ```text
-92 passed in 15.25s
+92 passed in 26.75s
 ```
 
 `tsc --noEmit`, lint dos arquivos frontend alterados e verificação de sintaxe do
@@ -161,4 +167,4 @@ Nenhum teste de carga ou aceite operacional foi executado em produção.
 
 | Número reportado | Origem | Valor literal |
 | --- | --- | --- |
-| Testes da suite focada e duração | [command] pytest, comando acima | `92 passed in 15.25s` |
+| Testes da suite focada e duração | [command] pytest, comando acima | `92 passed in 26.75s` |

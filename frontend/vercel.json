@@ -2,7 +2,8 @@
   "framework": "nextjs",
   "git": {
     "deploymentEnabled": {
-      "codex/l3-canonical-queue": false
+      "codex/l3-canonical-queue": false,
+      "codex/l3-queue-ci-process-isolation": false
     }
   },
   "buildCommand": "npm run build",
