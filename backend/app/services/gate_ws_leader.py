@@ -222,7 +222,7 @@ async def _load_gate_credentials() -> tuple[str, str]:
 
 
 async def _resolve_spot_symbols() -> list[str]:
-    """Resolve the SPOT universe from approved pool coins.
+    """Resolve pool subscriptions plus dependencies of open spot Shadows.
 
     Queries ``pool_coins`` joined with ``pools`` where ``market_type = 'spot'``
     and the coin is active.  Falls back to the legacy union query
@@ -231,7 +231,10 @@ async def _resolve_spot_symbols() -> list[str]:
     working.
     """
     try:
+        from .ohlcv_collection_universe import open_shadow_symbols
+        from .pool_service import normalize_pool_symbol
         async with AsyncSessionLocal() as db:
+            open_symbols = await open_shadow_symbols(db)
             # Task #232: WS leader subscribes to every active spot
             # symbol so indicators / order-flow stay populated even for
             # symbols not yet authorised to trade. Execution gate is
@@ -248,7 +251,7 @@ async def _resolve_spot_symbols() -> list[str]:
             """))).fetchall()
         symbols = [r.symbol for r in rows if r.symbol]
         if symbols:
-            return symbols
+            return sorted({normalize_pool_symbol(s) for s in symbols} | open_symbols)
         # Legacy fallback: no pool_coins with market_type='spot' — fall back
         # to the pipeline_watchlist_assets ∪ market_metadata universe so
         # systems without explicit pool configuration keep working.
@@ -263,7 +266,7 @@ async def _resolve_spot_symbols() -> list[str]:
                 WHERE symbol IS NOT NULL AND symbol <> ''
                 LIMIT 500
             """))).fetchall()
-        return [r.symbol for r in rows if r.symbol]
+        return sorted({normalize_pool_symbol(r.symbol) for r in rows if r.symbol} | open_symbols)
     except Exception as exc:
         logger.warning("[gate-ws-leader] failed to resolve spot symbols: %s", exc)
         return []

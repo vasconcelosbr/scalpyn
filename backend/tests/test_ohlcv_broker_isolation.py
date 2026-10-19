@@ -31,7 +31,7 @@ def _test_app(url, suffix):
     return app
 
 
-def _worker_main(url, suffix, queue, hostname, entered, release, ready):
+def _worker_main(url, suffix, queue, hostname, entered, release, ready, research_task):
     """Spawn without inheriting Celery registries or Kombu's global event loop.
 
     Embedded workers in threads share Kombu's process-global hub on Linux.
@@ -40,10 +40,10 @@ def _worker_main(url, suffix, queue, hostname, entered, release, ready):
     """
     app = _test_app(url, suffix)
     app.finalize()
-    app.tasks.pop(RESEARCH_TASK, None)
+    app.tasks.pop(research_task, None)
     app.tasks.pop(CANONICAL_TASK, None)
 
-    @app.task(name=RESEARCH_TASK,shared=False,lazy=False)
+    @app.task(name=research_task,shared=False,lazy=False)
     def heavy():
         entered.set()
         if not release.wait(30):
@@ -67,7 +67,8 @@ def _worker_main(url, suffix, queue, hostname, entered, release, ready):
         app.close()
 
 
-def test_busy_research_worker_does_not_starve_canonical_collector():
+@pytest.mark.parametrize('research_task', [RESEARCH_TASK, 'app.tasks.ohlcv_recovery.recover'])
+def test_busy_research_worker_does_not_starve_canonical_collector(research_task):
     url = os.getenv('PR_A_TEST_REDIS_URL')
     if not url:
         pytest.skip('PR_A_TEST_REDIS_URL required for real broker test')
@@ -82,14 +83,14 @@ def test_busy_research_worker_does_not_starve_canonical_collector():
             hostname = queue+'_'+suffix+'@localhost'
             ready = context.Event()
             process = context.Process(target=_worker_main,
-                args=(url, suffix, queue+'_'+suffix, hostname, entered, release, ready))
+                args=(url, suffix, queue+'_'+suffix, hostname, entered, release, ready, research_task))
             process.start()
             workers.append(process)
             hostnames.append(hostname)
             readiness.append(ready)
         for process, ready in zip(workers, readiness):
             assert ready.wait(30), f'worker {process.pid} did not become ready (exit={process.exitcode})'
-        job = app.send_task(RESEARCH_TASK)
+        job = app.send_task(research_task)
         results.append(job)
         assert entered.wait(10), 'research worker did not start'
         collected = app.send_task(CANONICAL_TASK)
@@ -98,7 +99,7 @@ def test_busy_research_worker_does_not_starve_canonical_collector():
         assert len({workers[0].pid, workers[1].pid, os.getpid()}) == 3
         assert not job.ready(), 'research was not saturated during canonical execution'
         # A stale message is discarded, never executed after recovery.
-        expired = app.send_task(RESEARCH_TASK, expires=datetime.now(timezone.utc)-timedelta(seconds=1))
+        expired = app.send_task(research_task, expires=datetime.now(timezone.utc)-timedelta(seconds=1))
         results.append(expired)
         release.set()
         assert job.get(timeout=10) == {'status': 'research_finished', 'pid': workers[0].pid}

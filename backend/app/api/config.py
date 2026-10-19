@@ -96,6 +96,12 @@ async def get_config(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id)
 ):
+    if config_type == "ohlcv_recovery":
+        from ..schemas.ohlcv_recovery import require_recovery_owner
+        try:
+            await require_recovery_owner(db, user_id)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
     if config_type == "ohlcv_comparison":
         from ..schemas.ohlcv_comparison import require_comparison_owner
         try:
@@ -141,6 +147,17 @@ async def update_config(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id)
 ):
+    if config_type == "ohlcv_recovery":
+        from ..schemas.ohlcv_recovery import OHLCVRecoveryConfig, require_recovery_owner
+        try:
+            await require_recovery_owner(db, user_id)
+            if pool_id is not None:
+                raise ValueError("OHLCV recovery is global")
+            payload = OHLCVRecoveryConfig.model_validate(payload).model_dump()
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     if config_type == "ohlcv_comparison":
         from ..schemas.ohlcv_comparison import OHLCVComparisonConfig, require_comparison_owner
         try:
