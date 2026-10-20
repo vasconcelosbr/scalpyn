@@ -439,6 +439,8 @@ async def test_override_loader_replaces_only_v1_proof_clauses(policy):
         dataset_query_cutoff=T+timedelta(days=2), maturity_embargo_margin_minutes=60,
         managed_contract=spec, managed_label_overrides=overrides)
     sql = str(db.execute.call_args.args[0])
+    assert "id = ANY(CAST(:override_ids AS uuid[]))" in sql
+    assert db.execute.call_args.args[1]['override_ids'] == ['a']  # only valid proofs reach SQL
     for kept in ("label_contract_version=:managed_version", "capture_valid'='true'", "smr.status = 'READY'",
                  "lineage_status = 'EXACT'", "closure_path='l3_continuation'", "'TIMEOUT'", "'TRAILING_STOP'"):
         assert kept in sql

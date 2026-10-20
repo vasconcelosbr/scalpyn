@@ -209,6 +209,16 @@ def _fit(service, records, *, ml_config, feature_columns, seed):
     return report
 
 
+def _read_census_cache(path):
+    if not path:
+        return None
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+    except FileNotFoundError:
+        return None
+
+
 async def run(args):
     from app.database import CeleryAsyncSessionLocal
     from app.ml.feature_extractor import FEATURE_COLUMNS
@@ -216,10 +226,20 @@ async def run(args):
     from app.services.ml_challenger_service import LOOKBACK_DAYS, MLChallengerService
     rules_v2 = certification_rules({"version": CERTIFICATION_V2, "flow_evidence": args.flow_evidence,
                                     "timeout_horizon": args.timeout_horizon})
-    cutoff = datetime.fromisoformat(args.cutoff) if args.cutoff else datetime.now(timezone.utc)
+    cache = _read_census_cache(args.census_cache)
+    if cache and not args.cutoff:
+        cutoff = datetime.fromisoformat(cache["cutoff"])  # reuse needs the identical cutoff
+    else:
+        cutoff = datetime.fromisoformat(args.cutoff) if args.cutoff else datetime.now(timezone.utc)
     if cutoff.tzinfo is None:
         raise ValueError("--cutoff needs an explicit timezone")
     service = MLChallengerService()
+
+    def write(report):
+        """Checkpoint after every stage so a later failure never loses earlier work."""
+        if args.output:
+            with open(args.output, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps(report, default=str, indent=2, ensure_ascii=False))
     async with CeleryAsyncSessionLocal() as db:
         # Session-level so the periodic commits below (which release the MVCC
         # snapshot on a long census) can never open a writable transaction.
@@ -237,9 +257,22 @@ async def run(args):
         valid_from = parse_required_ml_dataset_valid_from(
             {"ml_dataset_valid_from": ml_config.get("ml_l3_dataset_valid_from") or ml_config["ml_dataset_valid_from"]})
         fee = float(spec["fee_roundtrip_pct"]) + float(spec["slippage_roundtrip_pct"])
-        census, proofs_v1, proofs_v2 = await _census(db, user_id=user_id, spec=spec, valid_from=valid_from, cutoff=cutoff,
-                                                      rules_v2=rules_v2, fee=fee, limit=args.limit,
-                                                      batch_size=args.batch_size)
+        identity = {"cutoff": cutoff.isoformat(), "user_id": str(user_id), "contract_hash": spec["hash"],
+                    "rules_v2": rules_v2, "limit": args.limit}
+        if cache and all(cache.get(k) == v for k, v in identity.items()):
+            census, proofs_v2 = cache["census"], cache["proofs_v2"]
+            print(f"[census] reused {args.census_cache} ({census['population']} shadows)", flush=True)
+        else:
+            if cache:
+                print("[census] cache ignored: cutoff/contract/rules differ", flush=True)
+            census, _, proofs_v2 = await _census(db, user_id=user_id, spec=spec, valid_from=valid_from, cutoff=cutoff,
+                                                 rules_v2=rules_v2, fee=fee, limit=args.limit,
+                                                 batch_size=args.batch_size)
+            if args.census_cache:
+                with open(args.census_cache, "w", encoding="utf-8") as handle:
+                    handle.write(json.dumps({**identity, "census": census, "proofs_v2": proofs_v2}, default=str))
+                print(f"[census] cached to {args.census_cache}", flush=True)
+        write({"read_only": True, **identity, "stage": "census", "census": census})
         lookback = args.lookback_days or LOOKBACK_DAYS
         official, official_meta = await service._prepare_catboost_gate_records(
             db, user_id, lookback_days=lookback, cb_sources=["L3"], dataset_query_cutoff=cutoff, ml_config=ml_config)
@@ -256,18 +289,20 @@ async def run(args):
     if not args.skip_training:
         seeds = [int(s) for s in args.seeds.split(",")] if args.seeds else [int(ml_config["ml_training_seed"])]
         report["training"] = {}
+        write({**report, "stage": "populations"})
         for name, records in (("v1_official", official), ("v2_replay", v2_records)):
+            print(f"[train] {name}: {len(records)} rows", flush=True)
             report["training"][name] = [await asyncio.to_thread(
                 _fit, service, records, ml_config=ml_config, feature_columns=list(FEATURE_COLUMNS), seed=seed)
                 for seed in seeds]
+            write({**report, "stage": f"trained_{name}"})
             print(f"[train] {name} done", flush=True)
-    payload = json.dumps(report, default=str, indent=2, ensure_ascii=False)
+    report["stage"] = "complete"
     if args.output:
-        with open(args.output, "w", encoding="utf-8") as handle:
-            handle.write(payload)
+        write(report)
         print(f"[done] report written to {args.output}", flush=True)
     else:
-        print(payload)
+        print(json.dumps(report, default=str, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":
@@ -282,4 +317,5 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=50, help="shadows per evidence round trip (1 = per-shadow loader)")
     parser.add_argument("--skip-training", action="store_true")
     parser.add_argument("--output")
+    parser.add_argument("--census-cache", help="JSON file: reused when cutoff/contract/rules match, else (re)written")
     asyncio.run(run(parser.parse_args()))

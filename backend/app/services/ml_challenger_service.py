@@ -1074,7 +1074,9 @@ class MLChallengerService:
             from app.ml.l3_managed_exit import VERSION
             if sources != ["L3"]:
                 raise ValueError("managed_exit_requires_exact_l3_lane")
-            params.update(managed_version=VERSION, managed_hash=managed_contract["hash"])
+            params.update(managed_version=VERSION, managed_hash=managed_contract["hash"],
+                          override_ids=sorted(str(k) for k, p in managed_label_overrides.items()
+                                              if (p or {}).get("valid") is True))
             outcome_clause = "outcome IN ('TP_HIT','SL_HIT','TIMEOUT','TRAILING_STOP','FLOW_STRUCTURE_EXIT')"
             # eligible_for_training / net_return_pct / holding horizon and the
             # persisted proof are all products of the v1 certifier; the
@@ -1088,7 +1090,11 @@ class MLChallengerService:
                 AND config_snapshot->'l3_managed_ml'->>'capture_valid'='true'
                 AND closure_path='l3_continuation'
                 AND completed_at <= :dataset_query_cutoff
+                AND id = ANY(CAST(:override_ids AS uuid[]))
             """
+            # Rows without a valid supplied proof are dropped below anyway;
+            # filtering them in SQL spares the per-row measurement subquery
+            # and the snapshot transfer for rows that can never be kept.
         elif managed_contract is not None:
             from app.ml.l3_managed_exit import VERSION
             if sources != ["L3"]:
