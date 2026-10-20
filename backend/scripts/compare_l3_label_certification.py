@@ -51,7 +51,36 @@ def _bucket(hours):
     return f">={HOLDING_BUCKETS_H[-1]}h"
 
 
-async def _census(db, *, user_id, spec, valid_from, cutoff, rules_v2, fee, limit):
+async def _load_evidence_batch(db, chunk):
+    """Same predicates as l3_managed_exit.load_certification_evidence (compact),
+    fetched for many shadows per round trip (the census may run over a public
+    proxy). The per-shadow loader is kept as --batch-size 1 for parity checks."""
+    ids = [str(r["id"]) for r in chunk]
+    decisions = defaultdict(list)
+    result = await db.execute(text("""SELECT shadow_id::text AS shadow_id, candle_at, available_at, policy_hash,
+            evidence - 'flow_buckets' AS evidence, state
+        FROM shadow_l3_exit_decisions WHERE shadow_id = ANY(CAST(:ids AS uuid[]))
+        ORDER BY shadow_id, candle_at"""), {"ids": ids})
+    for row in result.mappings():
+        decisions[row["shadow_id"]].append({k: row[k] for k in ("candle_at", "available_at", "policy_hash", "evidence", "state")})
+    boundaries = {}
+    by_exchange = defaultdict(list)
+    for r in chunk:
+        exchange = "gate.io" if r["exchange"] in ("gate", "gateio", "gate.io") else r["exchange"]
+        by_exchange[exchange].append(r)
+    for exchange, rows in by_exchange.items():
+        result = await db.execute(text("""SELECT q.id, o.time, o.high, o.low
+            FROM unnest(CAST(:ids AS text[]), CAST(:symbols AS text[]), CAST(:entries AS timestamptz[])) AS q(id, symbol, entry)
+            JOIN ohlcv o ON o.symbol = q.symbol AND o.exchange = :exchange AND o.market_type = 'spot'
+             AND o.timeframe = '1m' AND o.is_closed IS TRUE AND o.time = date_trunc('minute', q.entry)"""),
+            {"ids": [str(r["id"]) for r in rows], "symbols": [r["symbol"] for r in rows],
+             "entries": [r["entry_timestamp"] for r in rows], "exchange": exchange})
+        for row in result.mappings():
+            boundaries.setdefault(row["id"], {"time": row["time"], "high": row["high"], "low": row["low"]})
+    return {sid: (decisions.get(sid, []), boundaries.get(sid)) for sid in ids}
+
+
+async def _census(db, *, user_id, spec, valid_from, cutoff, rules_v2, fee, limit, batch_size):
     from app.ml.l3_managed_exit import VERSION, certify, load_certification_evidence
     rows = (await db.execute(text(f"""
         SELECT st.id, st.symbol, st.exchange, st.config_snapshot, st.label_contract_version, st.lineage_status,
@@ -70,20 +99,24 @@ async def _census(db, *, user_id, spec, valid_from, cutoff, rules_v2, fee, limit
            "cutoff": cutoff})).mappings().all()
     proofs_v1, proofs_v2, out = {}, {}, []
     parity = Counter()
-    for index, row in enumerate(rows, 1):
-        shadow = SimpleNamespace(**row)
-        decisions, boundary = await load_certification_evidence(db, shadow, compact=True)
-        p1 = certify(shadow, decisions, boundary, checked_at=cutoff)
-        p2 = certify(shadow, decisions, boundary, checked_at=cutoff, certification=rules_v2)
-        sid = str(row["id"])
-        proofs_v1[sid], proofs_v2[sid] = p1, p2
-        persisted = row["persisted_label"] or {}
-        parity["match" if bool(persisted.get("valid")) == p1["valid"] else
-               ("persisted_missing" if not persisted else "mismatch")] += 1
-        out.append({**dict(row), "v1": p1, "v2": p2})
-        if index % 250 == 0:
-            await db.commit()  # read-only session: only ends the snapshot
-            print(f"[census] {index}/{len(rows)} certified", flush=True)
+    print(f"[census] {len(rows)} completed managed shadows", flush=True)
+    for start in range(0, len(rows), batch_size):
+        chunk = rows[start:start + batch_size]
+        evidence = await _load_evidence_batch(db, chunk) if batch_size > 1 else {
+            str(r["id"]): await load_certification_evidence(db, SimpleNamespace(**r), compact=True) for r in chunk}
+        for row in chunk:
+            shadow = SimpleNamespace(**row)
+            decisions, boundary = evidence[str(row["id"])]
+            p1 = certify(shadow, decisions, boundary, checked_at=cutoff)
+            p2 = certify(shadow, decisions, boundary, checked_at=cutoff, certification=rules_v2)
+            sid = str(row["id"])
+            proofs_v1[sid], proofs_v2[sid] = p1, p2
+            persisted = row["persisted_label"] or {}
+            parity["match" if bool(persisted.get("valid")) == p1["valid"] else
+                   ("persisted_missing" if not persisted else "mismatch")] += 1
+            out.append({**dict(row), "v1": p1, "v2": p2})
+        await db.commit()  # read-only session: only ends the MVCC snapshot
+        print(f"[census] {min(start + batch_size, len(rows))}/{len(rows)} certified", flush=True)
 
     def by(key_fn):
         groups = defaultdict(list)
@@ -205,7 +238,8 @@ async def run(args):
             {"ml_dataset_valid_from": ml_config.get("ml_l3_dataset_valid_from") or ml_config["ml_dataset_valid_from"]})
         fee = float(spec["fee_roundtrip_pct"]) + float(spec["slippage_roundtrip_pct"])
         census, proofs_v1, proofs_v2 = await _census(db, user_id=user_id, spec=spec, valid_from=valid_from, cutoff=cutoff,
-                                                      rules_v2=rules_v2, fee=fee, limit=args.limit)
+                                                      rules_v2=rules_v2, fee=fee, limit=args.limit,
+                                                      batch_size=args.batch_size)
         lookback = args.lookback_days or LOOKBACK_DAYS
         official, official_meta = await service._prepare_catboost_gate_records(
             db, user_id, lookback_days=lookback, cb_sources=["L3"], dataset_query_cutoff=cutoff, ml_config=ml_config)
@@ -243,6 +277,7 @@ if __name__ == "__main__":
     parser.add_argument("--lookback-days", type=int)
     parser.add_argument("--seeds", help="comma-separated seeds (default: ml_training_seed)")
     parser.add_argument("--limit", type=int, help="census only the first N shadows (smoke test)")
+    parser.add_argument("--batch-size", type=int, default=50, help="shadows per evidence round trip (1 = per-shadow loader)")
     parser.add_argument("--skip-training", action="store_true")
     parser.add_argument("--output")
     asyncio.run(run(parser.parse_args()))
