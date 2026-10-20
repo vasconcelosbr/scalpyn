@@ -86,22 +86,30 @@ async def test_end_to_end_replay_reconstructs_live_and_detects_stale_slots(tmp_p
     train_b = {s: {t: b for t, b in v.items() if t < cut} for s, v in bars.items()}
     frame = pc.build_frame(train_c, cfg, horizons_candles=[3], bars=train_b)
     rows = pc.training_rows(frame, cfg, 3, cfg["label_mode"])
-    result = pc.train_candle_model(rows, cfg=cfg, horizon_minutes=15, options={
-        k: research[k] for k in ("calibration_C", "calibration_max_iter", "calibration_method",
-                                 "calibration_max_slope", "bootstrap_repetitions")},
-        params=research["params"], output_root=tmp_path)
-    man = result["manifest"]; exp = str(uuid4())
-    folder = Path(tmp_path) / man["artifact_namespace"]
-    files = {n: (folder / n).read_bytes() for n in ("xgboost.json", "calibrator.json")}
-    model = inf.DirectionalModel(exp, man, result["metrics"], files["xgboost.json"],
-                                 json.loads(files["calibrator.json"]), "x")
+    opts = {k: research[k] for k in ("calibration_C", "calibration_max_iter", "calibration_method",
+                                     "calibration_max_slope", "bootstrap_repetitions")}
+    models = []                                   # two candle-param variants, as after a config change
+    for vcfg in (cfg, {**cfg, "prev_windows": [1, 3, 6]}):
+        vrows = pc.training_rows(pc.build_frame(train_c, vcfg, horizons_candles=[3], bars=train_b), vcfg, 3,
+                                 vcfg["label_mode"])
+        result = pc.train_candle_model(vrows, cfg=vcfg, horizon_minutes=15, options=opts,
+                                       params=research["params"], output_root=tmp_path)
+        man = result["manifest"]; exp = str(uuid4())
+        folder = Path(tmp_path) / man["artifact_namespace"]
+        files = {n: (folder / n).read_bytes() for n in ("xgboost.json", "calibrator.json")}
+        model = inf.DirectionalModel(exp, man, result["metrics"], files["xgboost.json"],
+                                     json.loads(files["calibrator.json"]), "x")
+        full = pc.build_frame(closes, man["spec"]["candle"], bars=bars)
+        models.append((exp, man, result, files, model, full))
 
-    # live: every slot of the last day; odd slots logged before the decision candle arrived
-    full = pc.build_frame(closes, man["spec"]["candle"], bars=bars)
-    col = {int(t): j for j, t in enumerate(full["grid"])}
+    # live: every slot of the last day; odd slots logged before the decision candle arrived;
+    # the first half of the day is scored by variant 0, the second half by variant 1
     uid = uuid4(); preds, candles = [], []
     stale_slots = set()
-    for n, d in enumerate(range(cut + step, start + T * step - 6 * step, step)):
+    decisions = list(range(cut + step, start + T * step - 6 * step, step))
+    for n, d in enumerate(decisions):
+        exp, man, result, files, model, full = models[0 if n < len(decisions) // 2 else 1]
+        col = {int(t): j for j, t in enumerate(full["grid"])}
         stale = n % 2 == 1
         created = d + 5
         if stale:
@@ -145,10 +153,12 @@ async def test_end_to_end_replay_reconstructs_live_and_detects_stale_slots(tmp_p
                        " CAST(:ca AS timestamptz[])) AS x(e, d, s, p, ca)"),
                   {"u": uid, "o": inf.CANDLE_OBJECTIVE, "e": [p[0] for p in preds], "d": [p[1] for p in preds],
                    "s": [p[2] for p in preds], "p": [p[3] for p in preds], "ca": [p[4] for p in preds]})
-        c.execute(text("INSERT INTO pump_ml_experiments VALUES (:e, now(), CAST(:m AS jsonb), CAST(:x AS jsonb))"),
-                  {"e": exp, "m": json.dumps(man), "x": json.dumps(result["metrics"], default=str)})
-        for n, b in files.items():
-            c.execute(text("INSERT INTO pump_ml_artifacts VALUES (:e, :p, :b)"), {"e": exp, "p": f"x/{n}", "b": b})
+        for vi, (exp, man, result, files, _, _) in enumerate(models):
+            c.execute(text("INSERT INTO pump_ml_experiments VALUES (:e, now() + make_interval(secs => :v),"
+                           " CAST(:m AS jsonb), CAST(:x AS jsonb))"),
+                      {"e": exp, "v": vi, "m": json.dumps(man), "x": json.dumps(result["metrics"], default=str)})
+            for n, b in files.items():
+                c.execute(text("INSERT INTO pump_ml_artifacts VALUES (:e, :p, :b)"), {"e": exp, "p": f"x/{n}", "b": b})
         c.execute(text("INSERT INTO config_profiles VALUES (:u, 'ml', true, NULL, CAST(:j AS jsonb), now())"),
                   {"u": uid, "j": json.dumps({"ml_fee_roundtrip_pct": 0.2})})
 
@@ -170,6 +180,9 @@ async def test_end_to_end_replay_reconstructs_live_and_detects_stale_slots(tmp_p
         sync.dispose()
 
     assert rep["status"] == "ok"
+    v = rep["candle_param_variants"]
+    assert v["count"] == 2 and v["differing_keys"] == ["prev_windows"]
+    assert [x["experiments"] for x in v["variants"]] == [[models[0][0]], [models[1][0]]]
     a = rep["A_freshness"]
     assert set(a["slot_classes"]) == {"FRESH", "STALE_1"}
     assert abs(a["slot_classes"]["FRESH"] - a["slot_classes"]["STALE_1"]) <= 1

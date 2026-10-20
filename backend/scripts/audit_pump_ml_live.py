@@ -163,6 +163,15 @@ def effect_profile(P, ml):
             "config": {"max_adjust": k, "confirm_up": up, "confirm_down": down}}
 
 
+def variant_diff(cfgs, experiments, created):
+    """Candle-param variants: which keys differ, and which experiments used each."""
+    keys = sorted({k for c in cfgs for k in c})
+    differ = [k for k in keys if len({json.dumps(c.get(k), sort_keys=True) for c in cfgs}) > 1]
+    return {"count": len(cfgs), "differing_keys": differ,
+            "variants": [{"experiments": es, "first_created": created[es[0]], "last_created": created[es[-1]],
+                          "values": {k: c.get(k) for k in differ}} for c, es in zip(cfgs, experiments)]}
+
+
 def corr(a, b):
     import numpy as np
     a, b = np.asarray(a, float), np.asarray(b, float)
@@ -255,23 +264,29 @@ async def execute(db, args):
     if not preds:
         return {**report, "status": "no_predictions"}
     exps = await _experiments(db, sorted({p[0] for p in preds}))
-    cfgs = {json.dumps((e["manifest"].get("spec") or {}).get("candle"), sort_keys=True) for e in exps.values()}
+    variants = defaultdict(list)          # candle params -> experiments; each row uses ITS model's params
+    for e, v in exps.items():
+        variants[json.dumps((v["manifest"].get("spec") or {}).get("candle"), sort_keys=True)].append(e)
     report["experiments"] = {k: {"created_at": v["created_at"].isoformat(), "artifacts": v["model"] is not None,
                                  "rows": sum(1 for p in preds if p[0] == k)} for k, v in exps.items()}
     report["experiments_missing"] = sorted({p[0] for p in preds} - set(exps))
-    if len(cfgs) != 1:
-        return {**report, "status": "mixed_candle_params", "candle_params_variants": len(cfgs)}
-    cfg = json.loads(cfgs.pop())
-    if needs_flow(cfg):
+    keys = list(variants)
+    vcfgs = [json.loads(key) for key in keys]
+    report["candle_param_variants"] = variant_diff(vcfgs, [sorted(variants[key], key=lambda e: exps[e]["created_at"])
+                                                           for key in keys],
+                                                   {e: v["created_at"].isoformat() for e, v in exps.items()})
+    if any(needs_flow(c) for c in vcfgs):
         return {**report, "status": "flow_features_not_replayable_here"}
-    step = int(cfg["step_seconds"])
+    if len({(c["timeframe"], int(c["step_seconds"])) for c in vcfgs}) != 1:
+        return {**report, "status": "mixed_timeframes"}
+    tf, step = vcfgs[0]["timeframe"], int(vcfgs[0]["step_seconds"])
     k = max(1, int(round(horizon * 60 / step)))
-    mode = cfg.get("label_mode", "path_mean")
     syms = sorted({p[2] for p in preds} | {REFERENCE})
     first_d = preds[0][1]; last_d = preds[-1][1]
-    lo = first_d - timedelta(seconds=step * (int(cfg["beta_window"]) + max(int(x) for x in cfg["prev_windows"]) + 8))
+    back = max(int(c["beta_window"]) + max(int(x) for x in c["prev_windows"]) for c in vcfgs) + 8
+    lo = first_d - timedelta(seconds=step * back)
     hi = last_d + timedelta(minutes=horizon, seconds=2 * step)
-    closes, bars, ingested = await _candles(db, syms, cfg["timeframe"], lo, hi, args.symbol_chunk)
+    closes, bars, ingested = await _candles(db, syms, tf, lo, hi, args.symbol_chunk)
 
     # A. freshness ------------------------------------------------------------------
     first_ing = {}
@@ -308,54 +323,76 @@ async def execute(db, args):
         "candles_with_ingested_at": len(lag)}
     print(f"[audit] freshness {report['A_freshness']['slot_classes']}", flush=True)
 
-    # B/C. replay + alignment -------------------------------------------------------
-    frame = build_frame(closes, cfg, horizons_candles=[k], bars=bars if needs_bars(cfg) else None)
-    col = {int(t): j for j, t in enumerate(frame["grid"])}
-    row_of = {s: i for i, s in enumerate(frame["syms"])}
-    label, excess, assets = frame["labels"][(k, mode)], frame["excess"][k], frame["assets"][k]
-    min_assets = int(cfg["min_assets"])
-    feats = frame["features"]
-    recs = []
+    # B/C. replay + alignment, one frame per candle-param variant ---------------------
+    n_rows = len(preds)
+    LAB = {s: np.full(n_rows, np.nan) for s in (-1, 0, 1)}
+    EX = np.full(n_rows, np.nan); p_int = np.full(n_rows, np.nan); p_seen = np.full(n_rows, np.nan)
+    mature = np.zeros(n_rows, bool)
+    gains = {}
+    for e in exps.values():
+        for f, g in ((e["metrics"] or {}).get("feature_importance_gain") or {}).items():
+            gains[f] = gains.get(f, 0.0) + float(g or 0)
+    top = sorted(gains, key=gains.get, reverse=True)[:args.top_features]
+    FV = {f: np.full(n_rows, np.nan) for f in top}
+    variant_of = {e: key for key, es in variants.items() for e in es}
+    rows_by_variant = defaultdict(list)
     for j, p in enumerate(preds):
-        t = col.get(int(p[1].timestamp()) - step); i = row_of.get(p[2])
-        if t is None or i is None or assets[t] < min_assets or not np.isfinite(label[i, t]) or abs(label[i, t]) <= 1e-9:
-            continue
-        recs.append((j, i, t))
-    print(f"[audit] mature rows={len(recs)}; replaying", flush=True)
-    by_exp = defaultdict(list)
-    for r in recs:
-        by_exp[preds[r[0]][0]].append(r)
-    p_int = np.full(len(preds), np.nan); p_seen = np.full(len(preds), np.nan)
+        if p[0] in variant_of:
+            rows_by_variant[variant_of[p[0]]].append(j)
     abstain = Counter()
-    for e, rs in by_exp.items():
-        model = (exps.get(e) or {}).get("model")
-        if model is None:
-            abstain["artifact_missing"] += len(rs)
-            continue
-        for target, shift_of in ((p_int, lambda j: 0), (p_seen, lambda j: row_stale[j])):
-            vecs, js = [], []
-            for j, i, t in rs:
-                s = shift_of(j)
-                if s is None or t - s < 0:
-                    abstain["seen_column_unknown"] += target is p_seen
-                    continue
-                cells = {f: {"value": float(feats[f][i, t - s]) if f in feats and np.isfinite(feats[f][i, t - s])
-                             else None, "reason": None} for f in model.features}
-                for c in cells.values():
-                    if c["value"] is None:
-                        c["reason"] = "nan"
-                v = model.vector(cells, float("inf"))
-                if v is None:
-                    abstain["replay_abstained_" + ("intended" if target is p_int else "seen")] += 1
-                    continue
-                vecs.append(v); js.append(j)
-            for j, pv in zip(js, model.predict(vecs)):
-                target[j] = pv
-    J = np.array([r[0] for r in recs]); I = np.array([r[1] for r in recs]); T = np.array([r[2] for r in recs])
+    for vi, (key, js) in enumerate(rows_by_variant.items()):
+        cfg = json.loads(key); mode = cfg.get("label_mode", "path_mean")
+        frame = build_frame(closes, cfg, horizons_candles=[k], bars=bars if needs_bars(cfg) else None)
+        col = {int(t): c for c, t in enumerate(frame["grid"])}
+        row_of = {s: i for i, s in enumerate(frame["syms"])}
+        label, excess, assets = frame["labels"][(k, mode)], frame["excess"][k], frame["assets"][k]
+        feats = frame["features"]; width = label.shape[1]
+        by_exp = defaultdict(list)
+        for j in js:
+            p = preds[j]
+            t = col.get(int(p[1].timestamp()) - step); i = row_of.get(p[2])
+            if t is None or i is None or assets[t] < int(cfg["min_assets"]) or not np.isfinite(label[i, t]) \
+                    or abs(label[i, t]) <= 1e-9:
+                continue
+            mature[j] = True; LAB[0][j] = label[i, t]; EX[j] = excess[i, t]
+            for s in (-1, 1):
+                if 0 <= t + s < width:
+                    LAB[s][j] = label[i, t + s]
+            for f in top:
+                if f in feats:
+                    FV[f][j] = feats[f][i, t]
+            by_exp[p[0]].append((j, i, t))
+        for e, rs in by_exp.items():
+            model = (exps.get(e) or {}).get("model")
+            if model is None:
+                abstain["artifact_missing"] += len(rs)
+                continue
+            for target, name in ((p_int, "intended"), (p_seen, "seen")):
+                vecs, idx = [], []
+                for j, i, t in rs:
+                    s = 0 if name == "intended" else row_stale[j]
+                    if s is None or t - s < 0:
+                        abstain["seen_column_unknown"] += 1
+                        continue
+                    cells = {}
+                    for f in model.features:
+                        v = feats[f][i, t - s] if f in feats else np.nan
+                        cells[f] = {"value": float(v), "reason": None} if np.isfinite(v) else {"value": None, "reason": "nan"}
+                    vec = model.vector(cells, float("inf"))
+                    if vec is None:
+                        abstain["replay_abstained_" + name] += 1
+                        continue
+                    vecs.append(vec); idx.append(j)
+                for j, pv in zip(idx, model.predict(vecs)):
+                    target[j] = pv
+        del frame, feats, label, excess
+        print(f"[audit] variant {vi + 1}/{len(rows_by_variant)} replayed ({len(js)} rows)", flush=True)
+    J = np.where(mature)[0]
+    print(f"[audit] mature rows={len(J)}", flush=True)
     P = np.array([preds[j][3] for j in J], float)
-    Y = (label[I, T] > 0).astype(int)
+    Y = (LAB[0][J] > 0).astype(int)
     D = np.array([preds[j][1].date().isoformat() for j in J], object)
-    E = excess[I, T]
+    E = EX[J]
     S = np.array([-1 if row_stale[j] is None else row_stale[j] for j in J])
     groups = {"all": np.ones(len(J), bool), "fresh_slots": S == 0, "stale_slots": S != 0}
     B = {}
@@ -365,13 +402,11 @@ async def execute(db, args):
                 "corr_live_vs_replay_seen": corr(P[m], p_seen[J][m]),
                 "corr_live_vs_replay_intended": corr(P[m], p_int[J][m])}
     report["B_replay"] = {"mature_rows": int(len(J)), "abstentions": dict(abstain), "groups": B,
-                          "note": "replay uses complete candles; live medians over a partially ingested universe "
-                                  "are not reproduced (residual mismatch shows in corr_live_vs_replay_seen)"}
+                          "note": "replay uses complete candles and each row's own model params; live medians over a "
+                                  "partially ingested universe are not reproduced (shows in corr_live_vs_replay_seen)"}
     C = {}
     for shift in (-1, 0, 1):
-        ok = (T + shift >= 0) & (T + shift < label.shape[1])
-        lab = np.full(len(J), np.nan)
-        lab[ok] = label[I[ok], T[ok] + shift]
+        lab = LAB[shift][J]
         fin = np.isfinite(lab) & (np.abs(np.nan_to_num(lab)) > 1e-9)
         C[str(shift)] = {g: day_auc(P[m & fin], (lab[m & fin] > 0).astype(int), D[m & fin]) for g, m in groups.items()}
     report["C_label_alignment"] = {"meaning": "-1 = label of the previous decision (what a one-candle-stale feature "
@@ -387,21 +422,15 @@ async def execute(db, args):
     report["E_effect"] = effect_profile(P, ml)
     # F. what the model rewards: Spearman of the top features vs live p and vs the label
     from scipy.stats import spearmanr
-    gains = {}
-    for e in exps.values():
-        for f, g in ((e["metrics"] or {}).get("feature_importance_gain") or {}).items():
-            gains[f] = gains.get(f, 0.0) + float(g or 0)
     F = {}
-    for f in sorted(gains, key=gains.get, reverse=True)[:args.top_features]:
-        if f not in feats:
-            continue
-        x = feats[f][I, T]
+    for f in top:
+        x = FV[f][J]
         ok = np.isfinite(x)
-        if ok.sum() < 30:
+        if ok.sum() < 30 or np.ptp(x[ok]) == 0:      # constant column: correlation undefined
             continue
         F[f] = {"gain_sum": round(gains[f], 4), "rows": int(ok.sum()),
                 "spearman_vs_p_live": round(float(spearmanr(x[ok], P[ok]).statistic), 4),
-                "spearman_vs_label": round(float(spearmanr(x[ok], label[I, T][ok]).statistic), 4)}
+                "spearman_vs_label": round(float(spearmanr(x[ok], LAB[0][J][ok]).statistic), 4)}
     report["F_feature_direction"] = F
     return {**report, "status": "ok"}
 
