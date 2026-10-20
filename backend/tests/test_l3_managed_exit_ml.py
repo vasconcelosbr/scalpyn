@@ -461,3 +461,72 @@ def test_v2_keeps_the_loser_that_v1_drops_for_degraded_flow(policy):
     assert certify(shadow, rows, None, checked_at=T+timedelta(days=2))['reason'] == 'INCOMPLETE_FLOW_EVIDENCE'
     proof = certify(shadow, rows, None, checked_at=T+timedelta(days=2), certification=V2)
     assert proof['valid'] and proof['label'] == 0 and proof['degraded_flow_decisions'] == 2
+
+
+# --- activation of l3_managed_cert_v2 through config ---
+from app.ml.l3_managed_exit import CERTIFICATION_KEY, apply_proof, configured_certification
+
+
+def test_configured_certification_is_optional_and_strict(policy):
+    _, _, cfg = scenario(policy)
+    assert configured_certification(cfg) is None and configured_certification(None) is None
+    assert configured_certification({**cfg, CERTIFICATION_KEY: V2}) == V2
+    with pytest.raises(ValueError):
+        configured_certification({**cfg, CERTIFICATION_KEY: {**V2, 'flow_evidence': 'ANY'}})
+
+
+def test_apply_proof_clears_label_fields_when_a_recertified_proof_is_invalid():
+    shadow = SimpleNamespace(eligible_for_training=True, net_return_pct=0.4, label_resolved_at=T)
+    apply_proof(shadow, {'valid': False, 'reason': 'PRICE_HISTORY_GAP'})
+    assert (shadow.eligible_for_training, shadow.net_return_pct, shadow.label_resolved_at) == (False, None, None)
+    apply_proof(shadow, {'valid': True, 'net_return_pct': -1.2, 'label_available_at': T.isoformat()})
+    assert (shadow.eligible_for_training, shadow.net_return_pct, shadow.label_resolved_at) == (True, -1.2, T)
+
+
+@pytest.mark.asyncio
+async def test_persisted_loader_segregates_by_certification_version_and_admits_policy_timeouts(policy):
+    from app.services.ml_challenger_service import MLChallengerService
+    from unittest.mock import AsyncMock, MagicMock
+    _, _, cfg = scenario(policy)
+    result = MagicMock(); result.fetchall.return_value = []
+    db = SimpleNamespace(execute=AsyncMock(return_value=result))
+    kwargs = dict(dataset_valid_from=T, dataset_query_cutoff=T+timedelta(days=2), maturity_embargo_margin_minutes=60,
+                  managed_contract=definition(cfg))
+    await MLChallengerService()._load_shadow_data(db, 'user', 30, ['L3'], **kwargs)
+    v1_sql = str(db.execute.call_args.args[0])
+    assert "certification_version" not in v1_sql and "holding_seconds <= :managed_horizon\n" in v1_sql + "\n"
+    await MLChallengerService()._load_shadow_data(db, 'user', 30, ['L3'], managed_certification=V2, **kwargs)
+    sql, params = str(db.execute.call_args.args[0]), db.execute.call_args.args[1]
+    assert "sx.state->'ml_label'->>'certification_version'=:certification_version" in sql
+    assert params['certification_version'] == CERTIFICATION_V2
+    assert "(holding_seconds <= :managed_horizon OR outcome = 'TIMEOUT')" in sql
+    strict = dict(V2, timeout_horizon='EXIT_AT')
+    await MLChallengerService()._load_shadow_data(db, 'user', 30, ['L3'], managed_certification=strict, **kwargs)
+    assert "OR outcome = 'TIMEOUT'" not in str(db.execute.call_args.args[0])
+
+
+def test_label_contract_identity_changes_only_when_rules_are_configured(policy):
+    from app.ml.l3_integrity import contract_definitions
+    from app.ml.feature_extractor import FEATURE_COLUMNS
+    _, _, cfg = scenario(policy)
+    base = {**cfg, 'ml_label_version': VERSION, 'ml_label_objective': 'positive_net_return',
+            'ml_active_barrier_contract_version': 'shadow_atr_dynamic_v3', 'ml_fee_roundtrip_pct': .2,
+            'ml_win_fast_threshold_seconds': 14400}
+    plain = contract_definitions(base, FEATURE_COLUMNS)
+    assert 'certification' not in plain['label']
+    v2 = contract_definitions({**base, CERTIFICATION_KEY: V2}, FEATURE_COLUMNS)
+    assert v2['label']['certification'] == V2 and v2['label_id'] != plain['label_id']
+    assert contract_definitions(base, FEATURE_COLUMNS)['label_id'] == plain['label_id']  # stable without rules
+
+
+@pytest.mark.asyncio
+async def test_config_service_rejects_bad_certification_and_frontier_before_any_write(policy):
+    from app.services.config_service import ConfigService
+    _, _, cfg = scenario(policy)
+    service = ConfigService(); service.redis = None
+    for bad in ({**cfg, CERTIFICATION_KEY: {**V2, 'version': 'x'}}, {CERTIFICATION_KEY: V2},
+                {**cfg, 'ml_l3_dataset_valid_from': 'not-a-date'}):
+        with pytest.raises(ValueError):
+            await service.update_config(None, 'ml', 'user', bad, 'user')
+    with pytest.raises(ValueError):
+        await service.update_config(None, 'shadow_l3_exit_runtime', 'user', {'version': 'shadow_l3_exit_runtime_v1'}, 'user')

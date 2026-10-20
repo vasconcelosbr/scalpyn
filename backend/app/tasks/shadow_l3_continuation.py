@@ -23,6 +23,7 @@ async def _sweep():
             WHERE config_type='shadow_l3_exit_policy' AND pool_id IS NULL AND is_active
         """))).scalars().all()
         policies = [validate_policy(c) for c in configs] or [ShadowL3ExitPolicy()]
+        gap_stats = {}
         batch_size = max(p.trade_batch_size for p in policies)
         # Recover only the recent rollout overlap. Future enrollment is atomic
         # with shadow creation, so discovery never scans historical JSONB.
@@ -76,7 +77,7 @@ async def _sweep():
                     if checked and (datetime.now(timezone.utc)-checked).total_seconds() < snapshot["evaluation_seconds"]:
                         continue
                     was_completed = shadow.status == "COMPLETED"
-                    await advance_shadow(db, shadow)
+                    await advance_shadow(db, shadow, stats=gap_stats)
                     processed += 1
                     just_closed = not was_completed and shadow.status == "COMPLETED"
                 await db.commit()
@@ -116,7 +117,9 @@ async def _sweep():
             )
         """), {"cutoff":cutoff,"batch":max(p.capture_batch_size for p in policies)})
         await db.commit()
-        return {"processed":processed,"errors":errors}
+        if gap_stats.get("gaps_skipped"):
+            logger.warning("[shadow-l3-continuation] gap summary %s", gap_stats)
+        return {"processed":processed,"errors":errors,**gap_stats}
 
 
 async def _sweep_with_redis_cleanup():

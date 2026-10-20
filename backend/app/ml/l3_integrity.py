@@ -157,6 +157,14 @@ def contract_definitions(config, feature_names):
              "outcomes": ["TP_HIT", "SL_HIT", "TIMEOUT"], "net_return_required": True}
     if managed:
         label.update(managed_exit=managed, outcomes=list(OUTCOMES), formula="gross_return_pct - fee_roundtrip_pct - slippage_roundtrip_pct > 0", maturity="max(entry+horizon,label_available_at)+embargo", censored="exclude; do not force exit", evidence="contiguous closed candles; replay; warmup price-only then VALID flow")
+        from .l3_managed_exit import configured_certification
+        rules = configured_certification(config)
+        if rules:
+            # Part of the label identity: v1 and v2 proofs are different targets.
+            label.update(certification=rules, evidence=(
+                "contiguous closed candles; replay; warmup price-only then "
+                + ("degraded flow replayed as no-continuation" if rules["flow_evidence"] == "REPLAY_FALLBACK" else "VALID flow")
+                + ("; policy TIMEOUT accepted within horizon" if rules["timeout_horizon"] == "POLICY_TIMEOUT" else "")))
     features = {"version": VERSION, "schema": FEATURE_SCHEMA_VERSION, "capture": CAPTURE_CONTRACT_VERSION,
                 "ordered_features": list(feature_names), "row_contract": (config.get("ml_feature_contract") or {}).get("L3_PROFILE"),
                 "ranges": config.get("ml_feature_ranges"), "exclusions": config.get("ml_l3_feature_exclusions"),

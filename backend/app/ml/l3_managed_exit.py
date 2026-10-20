@@ -237,15 +237,36 @@ async def load_certification_evidence(db, shadow, *, compact=False):
     return decisions, boundary
 
 
+def configured_certification(config):
+    """Active certification rules from config (None keeps the v1 rules)."""
+    return certification_rules((config or {}).get(CERTIFICATION_KEY))
+
+
+async def active_certification(db, user_id):
+    """The tenant's configured rules, read at certification time (fail-closed)."""
+    from sqlalchemy import text
+    raw = (await db.execute(text("""SELECT config_json FROM config_profiles
+        WHERE user_id=:uid AND config_type='ml' AND pool_id IS NULL AND is_active
+        ORDER BY updated_at DESC NULLS LAST LIMIT 1"""), {"uid": user_id})).scalar_one_or_none()
+    if isinstance(raw, str):
+        raw = json.loads(raw)
+    return configured_certification(raw)
+
+
+def apply_proof(shadow, proof):
+    """The only shadow fields a managed proof owns."""
+    shadow.eligible_for_training = proof["valid"]
+    shadow.net_return_pct = proof["net_return_pct"] if proof["valid"] else None
+    shadow.label_resolved_at = at(proof["label_available_at"]) if proof["valid"] else None
+
+
 async def finalize(db, shadow, state):
     if not (shadow.config_snapshot or {}).get("l3_managed_ml"):
         return state  # Legacy rows remain excluded, never re-labelled.
     decisions, boundary = await load_certification_evidence(db, shadow)
-    proof = certify(shadow, decisions, boundary, checked_at=datetime.now(timezone.utc))
-    shadow.eligible_for_training = proof["valid"]
-    if proof["valid"]:
-        shadow.net_return_pct = proof["net_return_pct"]
-        shadow.label_resolved_at = at(proof["label_available_at"])
+    rules = await active_certification(db, shadow.user_id)
+    proof = certify(shadow, decisions, boundary, checked_at=datetime.now(timezone.utc), certification=rules)
+    apply_proof(shadow, proof)
     return {**state, "ml_label": proof}
 
 
