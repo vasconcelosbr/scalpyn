@@ -265,7 +265,9 @@ async def run(args):
     if args.output:
         with open(args.output, "w", encoding="utf-8") as handle:
             handle.write(payload)
-    print(payload)
+        print(f"[done] report written to {args.output}", flush=True)
+    else:
+        print(payload)
 
 
 if __name__ == "__main__":
