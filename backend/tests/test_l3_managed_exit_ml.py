@@ -8,9 +8,9 @@ from app.services.shadow_l3_exit_evaluator import advance
 from app.schemas.shadow_l3_exit_policy import frozen_policy
 
 
-def scenario(policy, kind='TRAILING_STOP'):
+def scenario(policy, kind='TRAILING_STOP', max_holding=86400, invalid=(), timeout_candles=2):
     policy = policy.model_copy(update={'mode':'APPLY'})
-    config = {KEY:dict(version=VERSION,policy_hash=policy.digest(),trailing_hash=digest({}),fee_roundtrip_pct=.2,slippage_roundtrip_pct=.1,max_holding_seconds=86400,barrier_contract_version='shadow_atr_dynamic_v3')}
+    config = {KEY:dict(version=VERSION,policy_hash=policy.digest(),trailing_hash=digest({}),fee_roundtrip_pct=.2,slippage_roundtrip_pct=.1,max_holding_seconds=max_holding,barrier_contract_version='shadow_atr_dynamic_v3')}
     snapshot = dict(shadow_l3_exit_policy=frozen_policy(policy.model_dump()),trailing={},barrier_contract_version='shadow_atr_dynamic_v3',ml_fee_roundtrip_pct=.2)
     snapshot['l3_managed_ml'] = freeze(snapshot,config,source='L3',capture_valid=True)
     # Two known flow signals authorize continuation, then a prior floor is hit.
@@ -18,19 +18,20 @@ def scenario(policy, kind='TRAILING_STOP'):
     if kind=='TP_HIT': prices=[(100,101,100,101),(101,103,101,102)]
     if kind=='SL_HIT': prices=[(100,101,100,101),(94,96,93,95)]
     if kind=='TIMEOUT': prices=[(100,101,100,101),(101,101,100,101),(101,101,100,101)]
+    if kind=='SL_LATE': prices=[(100,101,100,101),(101,101,100,101),(100,101,99,100),(94,96,93,95)]
     if kind=='FLOW_STRUCTURE_EXIT': prices=[(100,101,100,101),(101,101,101,101),(101,104,101,104),(106,106,106,106),(106,106,106,106),(106,107,106,107)]
     rows=[];state={}
     for i,(op,hi,lo,close) in enumerate(prices):
         stamp=T+timedelta(minutes=i)
         candle=dict(time=stamp,open=op,high=hi,low=lo,close=close,ingested_at=stamp+timedelta(minutes=1))
-        evidence=ev(stamp,weak=kind=='FLOW_STRUCTURE_EXIT' and i in (3,4),lost=True)
+        evidence=ev(stamp,weak=kind=='FLOW_STRUCTURE_EXIT' and i in (3,4),lost=True,valid=i not in invalid)
         evidence['candle']=candle
-        state=advance(state,candle,evidence,policy,entry=100,tp=102,sl=95,trailing={},entry_at=T,timeout_candles=2)
+        state=advance(state,candle,evidence,policy,entry=100,tp=102,sl=95,trailing={},entry_at=T,timeout_candles=timeout_candles)
         rows.append(dict(candle_at=stamp,available_at=stamp+timedelta(minutes=1),policy_hash=policy.digest(),evidence=evidence,state=deepcopy(state)))
-    assert state['outcome']==kind
+    assert state['outcome']==('SL_HIT' if kind=='SL_LATE' else kind)
     shadow=SimpleNamespace(config_snapshot=snapshot,label_contract_version=VERSION,lineage_status='EXACT',source='L3',
         entry_timestamp=T,exit_timestamp=state['exit_at'],outcome=state['outcome'],closure_path='l3_continuation',
-        entry_price=100,tp_price=102,sl_price=95,timeout_candles=2,exit_price=state['exit_price'],
+        entry_price=100,tp_price=102,sl_price=95,timeout_candles=timeout_candles,exit_price=state['exit_price'],
         exit_price_semantics=state['semantics'],pnl_pct=state['exit_price']-100)
     return shadow,rows,config
 
@@ -331,3 +332,130 @@ async def test_flow_evidence_detail_names_flow_window_dimension_under_v2():
     detail = await _flow_evidence_detail(db, row)
     assert 'idade do fluxo na janela' in detail['reason']
     assert '142.97 s' in detail['reason']
+
+
+# --- l3_managed_cert_v2: certification rules versioned apart from the contract ---
+from app.ml.l3_managed_exit import certification_rules, CERTIFICATION_V1, CERTIFICATION_V2
+
+V2 = dict(version=CERTIFICATION_V2, flow_evidence='REPLAY_FALLBACK', timeout_horizon='POLICY_TIMEOUT')
+
+
+def test_v1_output_is_unchanged_when_no_rules_are_passed(policy):
+    shadow, rows, _ = scenario(policy)
+    proof = certify(shadow, rows, None, checked_at=T+timedelta(days=2))
+    assert proof['valid']
+    assert not {'certification_version', 'degraded_flow_decisions', 'policy_timeout_accepted'} & set(proof)
+    explicit_v1 = dict(version=CERTIFICATION_V1, flow_evidence='REQUIRE_VALID', timeout_horizon='EXIT_AT')
+    again = certify(shadow, rows, None, checked_at=T+timedelta(days=2), certification=explicit_v1)
+    assert {k: v for k, v in again.items() if k not in ('certification_version', 'degraded_flow_decisions',
+            'policy_timeout_accepted')} == proof
+
+
+def test_policy_timeout_stamped_after_close_is_censored_by_v1_and_certified_by_v2(policy):
+    # timeout_candles=2 -> the policy decides TIMEOUT on the candle at +120 s,
+    # but DECISION_CLOSE stamps exit_at when that candle's decision is
+    # available (+180 s): exactly the production artefact (86 525-86 679 s).
+    shadow, rows, _ = scenario(policy, 'TIMEOUT', max_holding=120)
+    assert (shadow.exit_timestamp if isinstance(shadow.exit_timestamp, str) else shadow.exit_timestamp.isoformat()) == (T+timedelta(minutes=3)).isoformat()
+    assert certify(shadow, rows, None, checked_at=T+timedelta(days=2))['reason'] == 'CENSORED_OR_INVALID_HORIZON'
+    proof = certify(shadow, rows, None, checked_at=T+timedelta(days=2), certification=V2)
+    assert proof['valid'], proof
+    assert proof['policy_timeout_accepted'] is True
+    assert proof['net_return_pct'] == pytest.approx(shadow.pnl_pct-.3)
+
+
+def test_v2_still_censors_timeouts_beyond_the_contract_horizon(policy):
+    shadow, rows, _ = scenario(policy, 'TIMEOUT', max_holding=120)
+    shadow.timeout_candles = 3  # frozen policy timeout (180 s) exceeds the 120 s contract
+    assert certify(shadow, rows, None, checked_at=T+timedelta(days=2), certification=V2)['reason'] == 'CENSORED_OR_INVALID_HORIZON'
+    shadow, rows, _ = scenario(policy, 'TRAILING_STOP', max_holding=120)
+    # non-timeout outcomes keep the strict exit-stamp horizon under v2
+    assert certify(shadow, rows, None, checked_at=T+timedelta(days=2), certification=V2)['reason'] == 'CENSORED_OR_INVALID_HORIZON'
+
+
+def test_v2_replays_degraded_flow_instead_of_discarding_the_label(policy):
+    # Evidence that was not VALID when the shadow ran: the policy could not
+    # extend, so the persisted states already reflect the fallback path.
+    # The floor touch on the post-warmup candle (+180 s) is decided before
+    # flow quality is read, so the degraded minute leaves the exit intact.
+    shadow, rows, _ = scenario(policy, 'TRAILING_STOP', invalid=(3,))
+    assert rows[3]['evidence']['quality'] != 'VALID'
+    v1 = certify(shadow, rows, None, checked_at=T+timedelta(days=2))
+    assert v1['reason'] == 'INCOMPLETE_FLOW_EVIDENCE'
+    v2 = certify(shadow, rows, None, checked_at=T+timedelta(days=2), certification=V2)
+    assert v2['valid'], v2
+    assert v2['degraded_flow_decisions'] == 1
+    assert v2['label'] == int(shadow.pnl_pct-.3 > 0) and v2['net_return_pct'] == pytest.approx(shadow.pnl_pct-.3)
+
+
+@pytest.mark.parametrize('mutation,reason', [
+    ('gap', 'PRICE_HISTORY_GAP'), ('tamper', 'REPLAY_STATE_MISMATCH'), ('future', 'INVALID_DECISION_AVAILABILITY'),
+    ('legacy', 'LABEL_CONTRACT_MISMATCH'), ('capture', 'INVALID_CAPTURE'), ('return', 'RETURN_MISMATCH'),
+    ('closure', 'UNSUPPORTED_CLOSURE')])
+def test_v2_keeps_every_other_proof_fail_closed(policy, mutation, reason):
+    shadow, rows, _ = scenario(policy)
+    if mutation == 'gap': rows.pop(1)
+    if mutation == 'tamper': rows[1]['state']['high_water_mark'] = 200
+    if mutation == 'future': rows[0]['available_at'] = T+timedelta(days=3)
+    if mutation == 'legacy': shadow.label_contract_version = 'legacy'
+    if mutation == 'capture': shadow.config_snapshot['l3_managed_ml']['capture_valid'] = False
+    if mutation == 'return': shadow.pnl_pct = 100
+    if mutation == 'closure': shadow.closure_path = 'legacy'
+    proof = certify(shadow, rows, None, checked_at=T+timedelta(days=2), certification=V2)
+    assert not proof['valid'] and proof['reason'] == reason, proof
+
+
+def test_v2_degraded_evidence_cannot_be_rewritten_into_a_different_exit(policy):
+    # Flipping persisted evidence to invalid after the fact changes the replay
+    # (no continuation) and must be caught as a state mismatch, not accepted.
+    shadow, rows, _ = scenario(policy, 'TRAILING_STOP')
+    rows[2]['evidence']['quality'] = 'INCOMPLETE_OR_STALE'
+    proof = certify(shadow, rows, None, checked_at=T+timedelta(days=2), certification=V2)
+    assert not proof['valid']
+
+
+@pytest.mark.parametrize('raw', [
+    {}, dict(V2, extra=1), dict(V2, version='x'), dict(V2, flow_evidence='ANY'), dict(V2, timeout_horizon='ANY'),
+    dict(version=CERTIFICATION_V1, flow_evidence='REPLAY_FALLBACK', timeout_horizon='EXIT_AT')])
+def test_certification_rules_fail_closed(raw):
+    with pytest.raises(ValueError):
+        certification_rules(raw)
+
+
+@pytest.mark.asyncio
+async def test_override_loader_replaces_only_v1_proof_clauses(policy):
+    from app.services.ml_challenger_service import MLChallengerService
+    from unittest.mock import AsyncMock, MagicMock
+    _, _, cfg = scenario(policy)
+    spec = definition(cfg)
+    rows = [SimpleNamespace(_mapping=dict(shadow_id=i, entry_timestamp=T+timedelta(hours=1), completed_at=T+timedelta(hours=2),
+            net_return_pct=None, label_resolved_at=None)) for i in ('a', 'b', 'c')]
+    result = MagicMock(); result.fetchall.return_value = rows
+    db = SimpleNamespace(execute=AsyncMock(return_value=result))
+    service = MLChallengerService()
+    overrides = {'a': dict(valid=True, contract_hash=spec['hash'], net_return_pct=-1.5, certification_version=CERTIFICATION_V2),
+                 'b': dict(valid=False, reason='PRICE_HISTORY_GAP')}
+    records = await service._load_shadow_data(db, 'user', 30, ['L3'], dataset_valid_from=T,
+        dataset_query_cutoff=T+timedelta(days=2), maturity_embargo_margin_minutes=60,
+        managed_contract=spec, managed_label_overrides=overrides)
+    sql = str(db.execute.call_args.args[0])
+    for kept in ("label_contract_version=:managed_version", "capture_valid'='true'", "smr.status = 'READY'",
+                 "lineage_status = 'EXACT'", "closure_path='l3_continuation'", "'TIMEOUT'", "'TRAILING_STOP'"):
+        assert kept in sql
+    for dropped in ("eligible_for_training IS TRUE", "shadow_l3_exit_states", "holding_seconds <= :managed_horizon",
+                    "net_return_pct IS NOT NULL"):
+        assert dropped not in sql
+    assert [r['shadow_id'] for r in records] == ['a']
+    assert records[0]['net_return_pct'] == -1.5 and records[0]['label_resolved_at'] == T+timedelta(hours=2)
+    with pytest.raises(ValueError):
+        await service._load_shadow_data(db, 'user', 30, ['L3'], dataset_valid_from=T,
+            dataset_query_cutoff=T+timedelta(days=2), maturity_embargo_margin_minutes=60,
+            managed_contract=spec, managed_label_overrides={'a': dict(overrides['a'], contract_hash='0'*64)})
+
+
+def test_v2_keeps_the_loser_that_v1_drops_for_degraded_flow(policy):
+    # The production bias: a long-lived loser whose flow degraded post-warmup.
+    shadow, rows, _ = scenario(policy, 'SL_LATE', invalid=(2, 3), timeout_candles=10)
+    assert certify(shadow, rows, None, checked_at=T+timedelta(days=2))['reason'] == 'INCOMPLETE_FLOW_EVIDENCE'
+    proof = certify(shadow, rows, None, checked_at=T+timedelta(days=2), certification=V2)
+    assert proof['valid'] and proof['label'] == 0 and proof['degraded_flow_decisions'] == 2
