@@ -1008,7 +1008,16 @@ class MLChallengerService:
         maturity_embargo_margin_minutes: Optional[int] = None,
         collect_diagnostics: bool = False,
         managed_contract: Optional[dict] = None,
+        managed_label_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> List[Dict[str, Any]]:
+        """Load the trainable shadow population.
+
+        ``managed_label_overrides`` (read-only analysis only) maps shadow_id ->
+        an in-memory managed-label proof produced by ``l3_managed_exit.certify``
+        under explicit certification rules. When given, the persisted-proof
+        clauses are replaced by those proofs: only ids with ``valid`` proofs
+        are kept and their net return comes from the proof. Nothing is written.
+        """
         if dataset_query_cutoff is None:
             raise ValueError("missing_dataset_query_cutoff")
         if dataset_query_cutoff.tzinfo is None:
@@ -1056,9 +1065,31 @@ class MLChallengerService:
             **cutoff_params,
         }
         managed_clause = ""
+        eligibility_clause = "AND eligible_for_training IS TRUE"
         outcome_clause = "outcome IN ('TP_HIT', 'SL_HIT', 'TIMEOUT')"
         maturity_expression = "created_at + make_interval(mins => COALESCE(ttt_timeout_minutes, 0) + :maturity_embargo_margin_minutes)"
-        if managed_contract is not None:
+        if managed_label_overrides is not None and managed_contract is None:
+            raise ValueError("managed_label_overrides_require_managed_contract")
+        if managed_label_overrides is not None:
+            from app.ml.l3_managed_exit import VERSION
+            if sources != ["L3"]:
+                raise ValueError("managed_exit_requires_exact_l3_lane")
+            params.update(managed_version=VERSION, managed_hash=managed_contract["hash"])
+            outcome_clause = "outcome IN ('TP_HIT','SL_HIT','TIMEOUT','TRAILING_STOP','FLOW_STRUCTURE_EXIT')"
+            # eligible_for_training / net_return_pct / holding horizon and the
+            # persisted proof are all products of the v1 certifier; the
+            # supplied proofs replace them. Capture/lineage/measurement/feature
+            # clauses below stay identical to the official population.
+            eligibility_clause = ""
+            maturity_expression = "completed_at + make_interval(mins => :maturity_embargo_margin_minutes)"
+            managed_clause = """
+                AND label_contract_version=:managed_version
+                AND config_snapshot->'l3_managed_ml'->'contract'->>'hash'=:managed_hash
+                AND config_snapshot->'l3_managed_ml'->>'capture_valid'='true'
+                AND closure_path='l3_continuation'
+                AND completed_at <= :dataset_query_cutoff
+            """
+        elif managed_contract is not None:
             from app.ml.l3_managed_exit import VERSION
             if sources != ["L3"]:
                 raise ValueError("managed_exit_requires_exact_l3_lane")
@@ -1110,7 +1141,7 @@ class MLChallengerService:
               AND feature_schema_version IS NOT NULL
               AND feature_hash IS NOT NULL
               AND lineage_status = 'EXACT'
-              AND eligible_for_training IS TRUE
+              {eligibility_clause}
               AND COALESCE((
                     SELECT smr.status = 'READY' AND smr.entry_quality = 'OK'
                       FROM shadow_trade_measurement_revisions smr
@@ -1187,6 +1218,28 @@ class MLChallengerService:
             sources, len(rows), require_profile_id, user_id,
         )
         records = [dict(r._mapping) for r in rows]
+        if managed_label_overrides is not None:
+            overridden = []
+            for record in records:
+                proof = managed_label_overrides.get(str(record["shadow_id"]))
+                if not proof or proof.get("valid") is not True:
+                    continue
+                if proof.get("contract_hash") != managed_contract["hash"]:
+                    raise ValueError("managed_label_override_contract_mismatch")
+                overridden.append({
+                    **record,
+                    "net_return_pct": float(proof["net_return_pct"]),
+                    # Label knowable at exit; the in-memory proof's checked_at
+                    # is analysis wall-clock and must not drive purging.
+                    "label_resolved_at": record.get("completed_at"),
+                    "managed_label_proof": {k: proof.get(k) for k in (
+                        "certification_version", "degraded_flow_decisions", "policy_timeout_accepted")},
+                })
+            self._last_managed_override_stats = {
+                "loaded_rows": len(records), "kept_rows": len(overridden),
+                "dropped_without_valid_proof": len(records) - len(overridden),
+            }
+            records = overridden
         # Fase 1 B.2 — guard de montagem: linha pré-fronteira presente no
         # dataset é exceção dura; o treino aborta em vez de treinar contaminado.
         _vf = dataset_valid_from
@@ -2695,8 +2748,13 @@ class MLChallengerService:
         advisory_intelligence: bool = False,
         strategy_tp_pct: Optional[float] = None,
         collect_diagnostics: bool = False,
+        managed_label_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
-        """Prepare the exact CatBoost gate population for train and dry-run."""
+        """Prepare the exact CatBoost gate population for train and dry-run.
+
+        ``managed_label_overrides`` is the read-only certification comparison
+        hook (see _load_shadow_data); production callers never pass it.
+        """
         cb_lane = self._catboost_lane_for_sources(
             cb_sources, advisory_intelligence=advisory_intelligence
         )
@@ -2732,6 +2790,8 @@ class MLChallengerService:
             ),
             collect_diagnostics=collect_diagnostics,
             **({"managed_contract": managed_contract} if managed_contract else {}),
+            **({"managed_label_overrides": managed_label_overrides}
+               if managed_label_overrides is not None else {}),
         )
         native_maturity_diagnostics = dict(self._last_shadow_load_diagnostics)
         historical_records: List[Dict[str, Any]] = []
