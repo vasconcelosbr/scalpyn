@@ -117,8 +117,21 @@ class ConfigService:
                 raise ValueError("Storage retention operator authorization required")
             new_json = StorageRetentionConfig.model_validate(new_json).model_dump()
         if config_type == "ml":
-            from app.ml.l3_managed_exit import definition
+            from app.ml.l3_managed_exit import definition, configured_certification
             definition(new_json)  # Invalid costs or partial contracts never reach production config.
+            if configured_certification(new_json) and definition(new_json) is None:
+                raise ValueError("l3_label_certification_requires_managed_exit_contract")
+            if new_json.get("ml_l3_dataset_valid_from") not in (None, ""):
+                from app.ml.dataset_config import MLDatasetConfigError, parse_required_ml_dataset_valid_from
+                try:
+                    parse_required_ml_dataset_valid_from({"ml_dataset_valid_from": new_json["ml_l3_dataset_valid_from"]})
+                except MLDatasetConfigError as exc:
+                    raise ValueError(f"invalid ml_l3_dataset_valid_from: {exc}") from exc
+        if config_type == "shadow_l3_exit_runtime":
+            from ..schemas.shadow_l3_exit_runtime import ShadowL3ExitRuntimeConfig
+            if pool_id is not None:
+                raise ValueError("shadow_l3_exit_runtime is global per user")
+            new_json = ShadowL3ExitRuntimeConfig.model_validate(new_json).model_dump()
         if config_type == "shadow_l3_exit_policy":
             await self.validate_shadow_l3_policy(db, new_json, user_id, pool_id)
             from ..schemas.shadow_l3_exit_policy import validate_policy

@@ -221,6 +221,15 @@ async def update_config(
             await config_service.validate_shadow_l3_policy(db, payload, user_id, pool_id)
         except (ValueError, ValidationError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+    elif config_type == "shadow_l3_exit_runtime":
+        from ..schemas.shadow_l3_exit_runtime import ShadowL3ExitRuntimeConfig
+        from pydantic import ValidationError
+        if pool_id is not None:
+            raise HTTPException(status_code=422, detail="shadow_l3_exit_runtime is global per user")
+        try:
+            payload = ShadowL3ExitRuntimeConfig.model_validate(payload).model_dump()
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     elif config_type == "ai_provider_runtime":
         payload = AIProviderRuntimeConfig.model_validate(payload).model_dump(mode="json")
     elif config_type == "ai_analysis_chat_runtime":

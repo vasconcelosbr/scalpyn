@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import text
 
 from ..schemas.shadow_l3_exit_policy import frozen_policy, validate_policy
 from .shadow_l3_exit_evaluator import advance
+
+logger = logging.getLogger(__name__)
 
 
 def canonical_exchange(value):
@@ -186,7 +189,31 @@ async def candle_evidence(db, shadow, candle, history, policy):
     return evidence
 
 
-async def advance_shadow(db, shadow):
+_RUNTIME_UNSET = object()
+
+
+async def load_exit_runtime(db, user_id):
+    """The tenant's ShadowL3ExitRuntimeConfig, or None when not configured."""
+    from ..schemas.shadow_l3_exit_runtime import CONFIG_TYPE, ShadowL3ExitRuntimeConfig
+    raw = (await db.execute(text("""SELECT config_json FROM config_profiles
+        WHERE user_id=:uid AND config_type=:type AND pool_id IS NULL AND is_active
+        ORDER BY updated_at DESC NULLS LAST LIMIT 1"""), {"uid": user_id, "type": CONFIG_TYPE})).scalar_one_or_none()
+    return ShadowL3ExitRuntimeConfig.model_validate(raw) if raw else None
+
+
+async def advance_shadow(db, shadow, runtime=_RUNTIME_UNSET, stats=None):
+    """Evaluate the closed 1m candles available now for one managed shadow.
+
+    ``runtime`` (ShadowL3ExitRuntimeConfig or None; resolved from config for
+    the shadow's tenant when omitted, so every caller -- the continuation
+    sweep and the price monitor -- applies the same guard). Without it the legacy
+    behaviour is kept: whatever candles exist are evaluated and a minute that
+    has not arrived yet is skipped for good once a later one is processed.
+    With it, the cursor never jumps a due-but-missing minute until it has
+    been due for ``missing_candle_wait_seconds``; after that the minute is
+    skipped explicitly, recorded under ``state.price_gaps`` (bookkeeping
+    only, never part of the replayed decision state) and logged.
+    """
     snapshot = (shadow.config_snapshot or {}).get("shadow_l3_exit_policy")
     if shadow.source != "L3" or not snapshot or not shadow.entry_timestamp or not shadow.tp_price or not shadow.sl_price:
         return None
@@ -195,9 +222,15 @@ async def advance_shadow(db, shadow):
         raise ValueError("Frozen shadow L3 policy hash mismatch")
     if policy.mode == "LEGACY":
         return None
+    if runtime is _RUNTIME_UNSET:
+        runtime = await load_exit_runtime(db, shadow.user_id)
     await register_shadow(db, shadow.id, shadow.user_id, snapshot)
     row = (await db.execute(text("SELECT state FROM shadow_l3_exit_states WHERE shadow_id=:id FOR UPDATE"), {"id":shadow.id})).scalar_one()
-    state = row or {}
+    state = dict(row or {})
+    # Gap bookkeeping must not enter the evaluator state persisted with each
+    # decision: certify() replays decisions and compares those states.
+    price_gaps = list(state.pop("price_gaps", None) or [])
+    stats = stats if stats is not None else {}
     if state.get("observation_complete") or (state.get("outcome") and policy.mode != "OBSERVE"):
         return state
     start = shadow.entry_timestamp.replace(second=0,microsecond=0)
@@ -215,6 +248,8 @@ async def advance_shadow(db, shadow):
     candles = [{k:float(v) if k in ("open","high","low","close") else v for k,v in r.items()} for r in data]
     evaluated = 0
     horizon = shadow.entry_timestamp + timedelta(seconds=policy.observation_horizon_seconds)
+    expected = None  # next minute the evaluator must see (runtime guard only)
+    clock = datetime.now(timezone.utc)
     for index, candle in enumerate(candles):
         cursor = state.get("observation_cursor") if policy.mode == "OBSERVE" else state.get("last_candle_at")
         if candle["time"] < start or cursor and candle["time"] <= datetime.fromisoformat(cursor):
@@ -222,12 +257,30 @@ async def advance_shadow(db, shadow):
         if policy.mode == "OBSERVE" and candle["time"] >= horizon:
             state["observation_complete"] = True
             break
+        if runtime is not None:
+            if expected is None:
+                expected = datetime.fromisoformat(cursor) + timedelta(minutes=1) if cursor else start
+            if candle["time"] > expected:
+                due = expected + timedelta(minutes=1)  # the missing candle closes here
+                waited = (clock - due).total_seconds()
+                missing = int((candle["time"] - expected).total_seconds() // 60)
+                if waited < runtime.missing_candle_wait_seconds:
+                    stats["gap_waits"] = stats.get("gap_waits", 0) + 1
+                    break  # keep the cursor; the late candle is evaluated when it lands
+                price_gaps.append({"from": expected.isoformat(), "until": candle["time"].isoformat(),
+                                   "minutes": missing, "waited_seconds": waited, "skipped_at": clock.isoformat()})
+                stats["gaps_skipped"] = stats.get("gaps_skipped", 0) + 1
+                stats["gap_minutes_skipped"] = stats.get("gap_minutes_skipped", 0) + missing
+                logger.warning("[shadow-l3-continuation] PRICE_GAP_SKIPPED %s", json.dumps({
+                    "shadow_id": str(shadow.id), "symbol": shadow.symbol, "from": expected.isoformat(),
+                    "until": candle["time"].isoformat(), "minutes": missing, "waited_seconds": waited}))
         decision_at = max(candle["ingested_at"],candle["time"]+timedelta(minutes=1))
         history = [c for c in candles[:index+1] if c["ingested_at"] <= decision_at]
         evidence = await candle_evidence(db,shadow,candle,history,policy)
         state = advance(state,candle,evidence,policy,entry=float(shadow.entry_price),tp=float(shadow.tp_price),
                         sl=float(shadow.sl_price),trailing=(shadow.config_snapshot or {}).get("trailing") or {},
                         entry_at=shadow.entry_timestamp,timeout_candles=shadow.timeout_candles)
+        expected = candle["time"] + timedelta(minutes=1)
         if policy.mode == "OBSERVE":
             state["observation_cursor"] = candle["time"].isoformat()
         elif state.get("last_candle_at") != candle["time"].isoformat():
@@ -240,8 +293,10 @@ async def advance_shadow(db, shadow):
                 "evidence":json.dumps(evidence,default=str),"state":json.dumps(state,default=str)})
         if (state.get("outcome") and policy.mode != "OBSERVE") or evaluated >= policy.max_candles_per_run:
             break
+    def stored(value):
+        return json.dumps({**value, "price_gaps": price_gaps} if price_gaps else value, default=str)
     await db.execute(text("UPDATE shadow_l3_exit_states SET state=CAST(:state AS JSONB),checked_at=clock_timestamp() WHERE shadow_id=:id"),
-                     {"id":shadow.id,"state":json.dumps(state,default=str)})
+                     {"id":shadow.id,"state":stored(state)})
     if policy.mode == "APPLY" and state.get("outcome") and shadow.status != "COMPLETED":
         from ..tasks.shadow_trade_monitor import _finalize_outcome
         price = state["exit_price"]
@@ -252,5 +307,5 @@ async def advance_shadow(db, shadow):
         from app.ml.l3_managed_exit import finalize as finalize_managed_label
         state = await finalize_managed_label(db, shadow, state)
         await db.execute(text("UPDATE shadow_l3_exit_states SET state=CAST(:state AS JSONB),checked_at=clock_timestamp() WHERE shadow_id=:id"),
-                         {"id":shadow.id,"state":json.dumps(state,default=str)})
+                         {"id":shadow.id,"state":stored(state)})
     return state

@@ -1009,8 +1009,13 @@ class MLChallengerService:
         collect_diagnostics: bool = False,
         managed_contract: Optional[dict] = None,
         managed_label_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
+        managed_certification: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """Load the trainable shadow population.
+
+        ``managed_certification`` (validated ``ml_l3_label_certification``):
+        when set, only persisted proofs stamped with that certification
+        version are trainable, so v1 and v2 proofs never share a population.
 
         ``managed_label_overrides`` (read-only analysis only) maps shadow_id ->
         an in-memory managed-label proof produced by ``l3_managed_exit.certify``
@@ -1101,6 +1106,16 @@ class MLChallengerService:
                 raise ValueError("managed_exit_requires_exact_l3_lane")
             params.update(managed_version=VERSION, managed_hash=managed_contract["hash"],
                           managed_horizon=managed_contract["max_holding_seconds"])
+            certification_clause = ""
+            horizon_clause = "AND holding_seconds > 0 AND holding_seconds <= :managed_horizon"
+            if managed_certification is not None:
+                params["certification_version"] = managed_certification["version"]
+                certification_clause = "AND sx.state->'ml_label'->>'certification_version'=:certification_version"
+                if managed_certification["timeout_horizon"] == "POLICY_TIMEOUT":
+                    # The proof already checked timeout_candles*60 <= horizon;
+                    # the TIMEOUT exit stamp lands just after it by design.
+                    horizon_clause = ("AND holding_seconds > 0 AND (holding_seconds <= :managed_horizon "
+                                      "OR outcome = 'TIMEOUT')")
             outcome_clause = "outcome IN ('TP_HIT','SL_HIT','TIMEOUT','TRAILING_STOP','FLOW_STRUCTURE_EXIT')"
             # A position that closes early (TP/trailing-stop) has its outcome
             # certified the moment it closes -- label_resolved_at already
@@ -1110,17 +1125,18 @@ class MLChallengerService:
             # make every early closer wait out the full horizon anyway, for no
             # reason tied to the label itself.
             maturity_expression = "label_resolved_at + make_interval(mins => :maturity_embargo_margin_minutes)"
-            managed_clause = """
+            managed_clause = f"""
                 AND label_contract_version=:managed_version
                 AND config_snapshot->'l3_managed_ml'->'contract'->>'hash'=:managed_hash
                 AND config_snapshot->'l3_managed_ml'->>'capture_valid'='true'
                 AND closure_path='l3_continuation'
-                AND holding_seconds > 0 AND holding_seconds <= :managed_horizon
+                {horizon_clause}
                 AND completed_at <= :dataset_query_cutoff
                 AND net_return_pct IS NOT NULL
                 AND EXISTS (SELECT 1 FROM shadow_l3_exit_states sx
                     WHERE sx.shadow_id=shadow_trades.id AND sx.user_id=shadow_trades.user_id
                       AND sx.state->'ml_label'->>'valid'='true'
+                      {certification_clause}
                       AND sx.state->'ml_label'->>'contract_hash'=:managed_hash
                       AND CAST(sx.state->'ml_label'->>'label_available_at' AS timestamptz)<=:dataset_query_cutoff
                       AND abs(CAST(sx.state->'ml_label'->>'net_return_pct' AS numeric)-net_return_pct)<1e-8)
@@ -2784,6 +2800,8 @@ class MLChallengerService:
 
         from app.ml.l3_managed_exit import definition as managed_definition
         managed_contract = managed_definition(ml_config) if cb_lane == "L3_PROFILE" and cb_sources == ["L3"] else None
+        from app.ml.l3_managed_exit import configured_certification
+        managed_certification = configured_certification(ml_config) if managed_contract else None
         native_records = await self._load_shadow_data(
             db,
             user_id,
@@ -2798,6 +2816,8 @@ class MLChallengerService:
             **({"managed_contract": managed_contract} if managed_contract else {}),
             **({"managed_label_overrides": managed_label_overrides}
                if managed_label_overrides is not None else {}),
+            **({"managed_certification": managed_certification}
+               if managed_contract and managed_label_overrides is None and managed_certification else {}),
         )
         native_maturity_diagnostics = dict(self._last_shadow_load_diagnostics)
         historical_records: List[Dict[str, Any]] = []
