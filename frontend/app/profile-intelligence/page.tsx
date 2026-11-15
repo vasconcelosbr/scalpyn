@@ -527,7 +527,9 @@ function ChampionScoreBar({ score }: { score: number | null | undefined }) {
   );
 }
 
-const TABS = ["Overview", "Live Engine", "Calibration Evolution", "Auto-Pilot", "Profiles", "Indicators", "Combinations", "Suggestions", "Audit", "Settings"] as const;
+import BayesianIntelligencePanel from "@/components/profile-intelligence/BayesianIntelligencePanel";
+
+const TABS = ["Overview", "Live Engine", "Calibration Evolution", "Bayesian Intelligence", "Auto-Pilot", "Profiles", "Indicators", "Combinations", "Suggestions", "Audit", "Settings"] as const;
 type Tab = typeof TABS[number];
 
 const DEFAULT_RUN_PAYLOAD = {
@@ -2158,6 +2160,8 @@ export default function ProfileIntelligencePage() {
           </div>
         </div>
       )}
+
+      {activeTab === "Bayesian Intelligence" && <BayesianIntelligencePanel />}
 
       {/* ── TAB: Profiles ──────────────────────────────────────────────────────── */}
       {selectedAutopilotCandidate && (
