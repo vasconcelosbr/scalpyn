@@ -297,7 +297,10 @@ async def add_pool_coin(pool_id: UUID, payload: Dict[str, Any], db: AsyncSession
         PoolAssetExclusion.pool_id == pool_id,
         PoolAssetExclusion.symbol == symbol,
     ))
-    coin = PoolCoin(pool_id=pool_id, symbol=symbol, market_type=market_type, is_active=True)
+    coin = PoolCoin(
+        pool_id=pool_id, symbol=symbol, market_type=market_type, is_active=True,
+        is_approved=False, is_tradable=False,
+    )
     db.add(coin)
     await db.commit()
     await db.refresh(coin)
@@ -364,6 +367,8 @@ async def bulk_add_pool_coins(
             symbol=symbol,
             market_type=market_type,
             is_active=True,
+            is_approved=False,
+            is_tradable=False,
             origin="manual",
         ))
         existing_symbols.add(symbol)

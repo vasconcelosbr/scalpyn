@@ -341,6 +341,7 @@ app.add_middleware(
 # (Cloud Run rolls back to the previous revision). This middleware does not
 # need to handle that — it only protects the *in-flight* window.
 import os as _os
+import re as _re
 from starlette.middleware.base import BaseHTTPMiddleware as _BaseHTTPMiddleware
 from starlette.responses import JSONResponse as _JSONResponse
 
@@ -383,10 +384,21 @@ app.add_middleware(_SchemaReadinessGate)
 from .api import profile_bayesian_intelligence as profile_bayesian_api
 
 
+_RECOVERY_RESOURCE_ID = r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}"
+_RECOVERY_EDIT_ROUTES = {
+    "PUT": _re.compile(rf"/api/profiles/{_RECOVERY_RESOURCE_ID}"),
+    "PATCH": _re.compile(rf"/api/pools/{_RECOVERY_RESOURCE_ID}"),
+    "POST": _re.compile(rf"/api/pools/{_RECOVERY_RESOURCE_ID}/coins(?:/bulk)?"),
+}
+
+
 class _RecoveryObservationGate(_BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         method = request.method
         path = request.url.path
+        edit_route = _RECOVERY_EDIT_ROUTES.get(method)
+        if edit_route is not None and edit_route.fullmatch(path):
+            return await call_next(request)
         if method in {"GET", "HEAD", "OPTIONS"} or (
             method == "POST"
             and (
