@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..services.config_service import config_service
 from .audit import record_event
 from .config import BayesianPolicy, feature_flags
-from .dataset_builder import BayesianDatasetBuilder
+from .dataset_builder import BayesianDatasetBuilder, NoCompletedObservations
 from .diagnostics import DiagnosticResult, analyze_diagnostics
 from .evidence_grading import grade_evidence
 from .hierarchical_model import HierarchicalModel, prepare_matrix
@@ -449,26 +449,9 @@ async def execute_analysis(db: AsyncSession, run_id: UUID) -> dict[str, Any]:
         ):
             preflight_warnings.append("effective_day_count_below_policy")
         if preflight_warnings:
-            warnings = sorted(preflight_warnings)
-            await _persist_preflight_diagnostic(
-                db,
-                run_id,
-                DiagnosticStatus.INSUFFICIENT_EVIDENCE,
-                warnings,
+            return await _complete_insufficient_evidence(
+                db, run_id, sorted(preflight_warnings)
             )
-            await _set_run_status(
-                db,
-                run_id,
-                "COMPLETED_WITH_WARNINGS",
-                diagnostic_status=DiagnosticStatus.INSUFFICIENT_EVIDENCE,
-                warnings=warnings,
-                finished=True,
-            )
-            return {
-                "run_id": str(run_id),
-                "status": "COMPLETED_WITH_WARNINGS",
-                "diagnostic_status": "INSUFFICIENT_EVIDENCE",
-            }
 
         await _set_run_status(db, run_id, "SAMPLING")
         matrix = prepare_matrix(
@@ -781,6 +764,10 @@ async def execute_analysis(db: AsyncSession, run_id: UUID) -> dict[str, Any]:
             "diagnostic_status": combined_status.value,
             "effect_count": len(posterior_effects),
         }
+    except NoCompletedObservations:
+        return await _complete_insufficient_evidence(
+            db, run_id, ["no_completed_point_in_time_observations"]
+        )
     except Exception as exc:
         logger.exception(
             "profile_bayesian_analysis_failed analysis_run_id=%s profile_id=%s",
@@ -800,6 +787,23 @@ async def execute_analysis(db: AsyncSession, run_id: UUID) -> dict[str, Any]:
         if ANALYSIS_DURATION is not None:
             ANALYSIS_DURATION.observe(time.perf_counter() - started)
         return {"run_id": str(run_id), "status": "FAILED", "error": str(exc)}
+
+
+async def _complete_insufficient_evidence(
+    db: AsyncSession, run_id: UUID, warnings: list[str]
+) -> dict[str, Any]:
+    status = "COMPLETED_WITH_WARNINGS"
+    diagnostic = DiagnosticStatus.INSUFFICIENT_EVIDENCE
+    await _persist_preflight_diagnostic(db, run_id, diagnostic, warnings)
+    await _set_run_status(
+        db, run_id, status, diagnostic_status=diagnostic,
+        warnings=warnings, finished=True,
+    )
+    return {
+        "run_id": str(run_id),
+        "status": status,
+        "diagnostic_status": diagnostic.value,
+    }
 
 
 async def _persist_preflight_diagnostic(
