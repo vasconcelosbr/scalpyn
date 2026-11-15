@@ -380,13 +380,29 @@ class _SchemaReadinessGate(_BaseHTTPMiddleware):
 
 app.add_middleware(_SchemaReadinessGate)
 
+from .api import profile_bayesian_intelligence as profile_bayesian_api
+
+
 class _RecoveryObservationGate(_BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         method = request.method
         path = request.url.path
         if method in {"GET", "HEAD", "OPTIONS"} or (
             method == "POST"
-            and path in {"/api/auth/register", "/api/auth/login", "/api/auth/refresh"}
+            and (
+                path in {
+                    "/api/auth/register",
+                    "/api/auth/login",
+                    "/api/auth/refresh",
+                    "/api/profile-intelligence/bayesian/policy/activate-analysis-only",
+                    "/api/profile-intelligence/bayesian/batches",
+                }
+                or (
+                    len(path.split("/")) == 6
+                    and path.startswith("/api/profile-intelligence/")
+                    and path.endswith("/bayesian/analyze")
+                )
+            )
         ):
             return await call_next(request)
         return _JSONResponse(status_code=403, content={"detail": "Recovery observation mode"})
@@ -398,6 +414,7 @@ if _os.environ.get("RECOVERY_OBSERVATION_ONLY") == "1":
 
 # Auth & Config
 app.include_router(auth.router)
+app.include_router(profile_bayesian_api.router)
 app.include_router(config_api.router)
 from .api import storage_retention as storage_retention_api
 app.include_router(storage_retention_api.router)
