@@ -76,8 +76,8 @@ type PolicyResponse = {
   error?: string;
 };
 
-type ProfileRankingResponse = {
-  profiles?: BayesianProfileOption[];
+type ProfileListResponse = {
+  profiles: { id: string; name: string }[];
 };
 
 type BatchRequestState = {
@@ -422,9 +422,7 @@ export default function BayesianIntelligencePanel() {
       const [statusResult, profilesResult, batchResult] =
         await Promise.allSettled([
           apiGet<ModuleStatus>("/profile-intelligence/bayesian/status"),
-          apiGet<ProfileRankingResponse>(
-            "/profile-intelligence/profiles/ranking?lookback_days=60&limit=100",
-          ),
+          apiGet<ProfileListResponse>("/profiles/"),
           apiGet<{ item: BatchAnalysis | null }>(
             "/profile-intelligence/bayesian/batches/latest",
           ),
@@ -437,7 +435,10 @@ export default function BayesianIntelligencePanel() {
       setModuleStatus(statusResult.value);
       const rawItems =
         profilesResult.status === "fulfilled"
-          ? profilesResult.value?.profiles ?? []
+          ? profilesResult.value.profiles.map(({ id, name }) => ({
+              profile_id: id,
+              profile_name: name,
+            }))
           : [];
       const items = deduplicateProfileOptions(rawItems);
       setProfiles(items);
@@ -446,11 +447,11 @@ export default function BayesianIntelligencePanel() {
       setBatchAnalysis(latestBatch);
 
       if (profilesResult.status === "rejected") {
-        const rankingMessage =
+        const profilesMessage =
           profilesResult.reason instanceof Error
             ? profilesResult.reason.message
             : "erro inesperado";
-        setError(`Ranking de profiles indisponível: ${rankingMessage}`);
+        setError(`Lista de profiles indisponível: ${profilesMessage}`);
       }
 
       const selected = profileId || items[0]?.profile_id || "";
