@@ -214,13 +214,26 @@ async def _enqueue_analysis_run(
     *,
     max_runtime_seconds: int,
 ) -> str:
-    task_id = enqueue(
-        "app.tasks.profile_bayesian_intelligence.analyze",
-        dedup_key=f"profile-bayesian-analysis:{run_id}",
-        ttl_seconds=max_runtime_seconds,
-        queue="profile_bayesian",
-        args=(str(run_id),),
-    )
+    try:
+        task_id = enqueue(
+            "app.tasks.profile_bayesian_intelligence.analyze",
+            dedup_key=f"profile-bayesian-analysis:{run_id}",
+            ttl_seconds=max_runtime_seconds,
+            queue="profile_bayesian",
+            args=(str(run_id),),
+        )
+    except Exception:
+        await db.execute(
+            text("""
+                UPDATE profile_bayesian_analysis_runs
+                SET status = 'FAILED', error_message = 'TASK_DISPATCH_FAILED',
+                    finished_at = now(), updated_at = now()
+                WHERE id = :id AND status = 'PENDING' AND task_id IS NULL
+            """),
+            {"id": str(run_id)},
+        )
+        await db.commit()
+        raise
     await db.execute(
         text(
             """
