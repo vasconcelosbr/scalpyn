@@ -394,6 +394,8 @@ class _RecoveryObservationGate(_BaseHTTPMiddleware):
                     "/api/auth/register",
                     "/api/auth/login",
                     "/api/auth/refresh",
+                    "/api/profiles/",
+                    "/api/pools/",
                     "/api/profile-intelligence/bayesian/policy/activate-analysis-only",
                     "/api/profile-intelligence/bayesian/batches",
                 }
