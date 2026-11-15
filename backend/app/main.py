@@ -380,6 +380,22 @@ class _SchemaReadinessGate(_BaseHTTPMiddleware):
 
 app.add_middleware(_SchemaReadinessGate)
 
+class _RecoveryObservationGate(_BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        method = request.method
+        path = request.url.path
+        if method in {"GET", "HEAD", "OPTIONS"} or (
+            method == "POST"
+            and path in {"/api/auth/register", "/api/auth/login", "/api/auth/refresh"}
+        ):
+            return await call_next(request)
+        return _JSONResponse(status_code=403, content={"detail": "Recovery observation mode"})
+
+
+if _os.environ.get("RECOVERY_OBSERVATION_ONLY") == "1":
+    app.add_middleware(_RecoveryObservationGate)
+
+
 # Auth & Config
 app.include_router(auth.router)
 app.include_router(config_api.router)
