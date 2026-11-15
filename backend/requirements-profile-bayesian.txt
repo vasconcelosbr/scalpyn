@@ -4,7 +4,7 @@
 # scientific image isolated prevents an unrelated dependency download from
 # exhausting Railway's build window.
 fastapi>=0.111.0,<0.136.0
-sqlalchemy>=2.0.31
+sqlalchemy[asyncio]>=2.0.31
 asyncpg>=0.29.0
 celery[redis]>=5.4.0,<5.7
 kombu>=5.4.0,<5.7
