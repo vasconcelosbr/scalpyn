@@ -1,6 +1,7 @@
 FROM python:3.11-slim
 
 RUN pip install --no-cache-dir \
+    sqlalchemy==2.0.44 \
     mlflow==2.13.0 \
     psycopg2-binary==2.9.9 \
     google-cloud-storage==2.17.0 \
