@@ -28,6 +28,9 @@ from .data_contract import (
 class DatasetContractError(ValueError):
     pass
 
+class NoCompletedObservations(DatasetContractError):
+    """The requested profile and window have no eligible observations."""
+
 
 @dataclass(frozen=True)
 class BuiltDataset:
@@ -171,7 +174,7 @@ class BayesianDatasetBuilder:
             )
         ).mappings().all()
         if not policy_groups:
-            raise DatasetContractError("no completed point-in-time observations")
+            raise NoCompletedObservations("no completed point-in-time observations")
 
         selected_group: Mapping[str, Any] | None = None
         if requested_policy_key:
