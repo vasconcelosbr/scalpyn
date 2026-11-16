@@ -121,29 +121,8 @@ COMPUTE_30M_BATCH_SIZE: int = int(os.environ.get("COMPUTE_30M_BATCH_SIZE", "10")
 
 
 async def _load_active_indicator_config(db) -> tuple[dict, dict]:
-    """Load the single governed indicator config; cardinality is fail-closed."""
-    from ..services.profile_runtime_config import canonical_hash
-
-    rows = (await db.execute(text("""
-        SELECT id, user_id, config_json, updated_at
-          FROM config_profiles
-         WHERE config_type = 'indicators' AND is_active IS TRUE
-         ORDER BY updated_at DESC, id
-    """))).mappings().all()
-    if len(rows) != 1:
-        raise RuntimeError(
-            f"INDICATOR_CONFIG_CARDINALITY_INVALID: expected=1 actual={len(rows)}"
-        )
-    row = rows[0]
-    config = dict(row["config_json"] or {})
-    if not config:
-        raise RuntimeError("INDICATOR_CONFIG_EMPTY")
-    return config, {
-        "config_profile_id": str(row["id"]),
-        "config_user_id": str(row["user_id"]),
-        "config_updated_at": row["updated_at"].isoformat(),
-        "config_hash": canonical_hash(config),
-    }
+    from ..services.canonical_indicator_config import load_canonical_indicator_config
+    return await load_canonical_indicator_config(db)
 
 
 def _merge_order_flow_into_results(results: dict, of_data: dict) -> None:

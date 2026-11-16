@@ -93,28 +93,9 @@ def required_warmup_candles(config: dict[str, Any], timeframe: str) -> int:
     return max(required)
 
 
-async def _load_governed_indicator_config(db) -> tuple[dict[str, Any], dict[str, Any]]:
-    rows = (await db.execute(text("""
-        SELECT id, user_id, config_json, updated_at
-          FROM config_profiles
-         WHERE config_type = 'indicators' AND is_active IS TRUE
-         ORDER BY updated_at DESC, id
-    """))).mappings().all()
-    if len(rows) != 1:
-        raise RuntimeError(
-            f"INDICATOR_CONFIG_CARDINALITY_INVALID: expected=1 actual={len(rows)}"
-        )
-    row = rows[0]
-    config = dict(row["config_json"] or {})
-    if not config:
-        raise RuntimeError("INDICATOR_CONFIG_EMPTY")
-    identity = {
-        "config_profile_id": str(row["id"]),
-        "config_user_id": str(row["user_id"]),
-        "config_updated_at": row["updated_at"].isoformat(),
-        "config_hash": canonical_hash(config),
-    }
-    return config, identity
+async def _load_governed_indicator_config(db) -> tuple[dict, dict]:
+    from ..services.canonical_indicator_config import load_canonical_indicator_config
+    return await load_canonical_indicator_config(db)
 
 
 def _period_for_indicator(key: str, config: dict[str, Any]) -> Any:

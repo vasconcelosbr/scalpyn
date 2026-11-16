@@ -8,6 +8,7 @@ ALLOWED = (
 )
 
 M5_SHADOW_ALLOWED = (
+    'collect_state_1m_every_30s', 'collect_state_5m_every_60s',
     'collect_5m_data_every_5min', 'pipeline_scan', 'shadow_trade_monitor',
 )
 
