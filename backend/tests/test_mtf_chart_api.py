@@ -7,6 +7,24 @@ from app.api import mtf_chart
 from app.schemas.mtf_chart import MTFChartConfig, experimental_preset
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize('stored_time', ['2026-11-16T20:25:00Z', None])
+async def test_l3_members_accept_authorization_json_timestamp(monkeypatch, stored_time):
+    from types import SimpleNamespace
+    from app.api import watchlists
+    from app.services import mtf_chart_service
+    from app.services.pipeline_live_candidates import LiveL3Contribution, ConsolidatedL3Candidate
+    wid, uid, profile_id = uuid4(), uuid4(), uuid4()
+    contribution = LiveL3Contribution(uuid4(), wid, profile_id, 'M5', 'AAVE_USDT', 70, 108, stored_time)
+    candidate = ConsolidatedL3Candidate('AAVE_USDT', contribution, (contribution,))
+    monkeypatch.setattr(watchlists, 'load_live_l3_candidates', AsyncMock(return_value=[candidate]))
+    db = SimpleNamespace(scalar=AsyncMock(return_value=SimpleNamespace(level='L3')))
+    rows = await mtf_chart_service.members(db, uid, str(wid))
+    assert rows[0]['symbol'] == 'AAVE_USDT'
+    assert rows[0]['price_snapshot_at'] == stored_time
+    assert rows[0]['profile_id'] == str(profile_id)
+
+
 @pytest.fixture
 def client(monkeypatch):
     app = FastAPI()

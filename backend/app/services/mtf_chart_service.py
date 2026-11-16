@@ -43,7 +43,7 @@ async def watchlist_options(db, user_id):
 async def members(db, user_id, watchlist_id: str) -> list[dict]:
     # These canonical L3 handlers only read persisted authorization. Other
     # watchlists read snapshots directly: never invoke their auto-refresh GET.
-    from ..api.watchlists import list_l3_consolidated_assets, load_live_l3_candidates
+    from ..api.watchlists import list_l3_consolidated_assets, load_live_l3_candidates, _iso_utc
     if watchlist_id == "l3-consolidated":
         return (await list_l3_consolidated_assets(user_id=user_id, db=db))["items"]
     try:
@@ -59,7 +59,7 @@ async def members(db, user_id, watchlist_id: str) -> list[dict]:
         candidates = await load_live_l3_candidates(db, user_id=user_id)
         return [{"symbol": c.symbol, "profile_id": str(p.profile_id), "alpha_score": p.alpha_score,
                  "current_price": p.current_price,
-                 "price_snapshot_at": p.refreshed_at.isoformat() if p.refreshed_at else None}
+                 "price_snapshot_at": _iso_utc(p.refreshed_at)}
                 for c in candidates for p in c.contributors if p.watchlist_id == wid]
     rows = (await db.execute(select(PipelineWatchlistAsset).where(
         PipelineWatchlistAsset.watchlist_id == wid,
