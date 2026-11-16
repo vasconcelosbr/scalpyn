@@ -410,7 +410,9 @@ def timeframe_semantics(name: str) -> TimeframeSemantics:
     """
     # DI trend inherits the candle identity of DI+ and DI-, even though it
     # is derived as a boolean rather than scheduled as its own family.
-    if name in {"di_trend", "vwap", "bb_upper", "bb_middle", "bb_lower", "bb_width"}:
+    if name == "di_trend":
+        return "CANDLE_TIMEFRAME"
+    if name in {"vwap", "bb_upper", "bb_middle", "bb_lower", "bb_width"}:
         return "CANDLE_TIMEFRAME"
     if name in _ROLLING_WINDOW_FIELDS:
         return "ROLLING_WINDOW"
