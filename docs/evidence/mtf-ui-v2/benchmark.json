@@ -1,0 +1,19 @@
+{
+  "environment": "local backend calculation; live public Gate reads; no database or production writes",
+  "results": {
+    "AAVE_USDT": {
+      "cold_seconds": 24.851328099997772,
+      "warm_seconds": 6.808724300000904,
+      "full_bytes": 1001400,
+      "delta_bytes": 6753,
+      "delta_transport": "delta"
+    },
+    "ASTER_USDT": {
+      "cold_seconds": 30.024201399999583,
+      "warm_seconds": 6.210694999997941,
+      "full_bytes": 997523,
+      "delta_bytes": 6658,
+      "delta_transport": "delta"
+    }
+  }
+}

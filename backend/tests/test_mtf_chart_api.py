@@ -17,7 +17,8 @@ def client(monkeypatch):
     monkeypatch.setattr(mtf_chart.service, 'load_config', AsyncMock(return_value=MTFChartConfig.model_validate(experimental_preset())))
     monkeypatch.setattr(mtf_chart.service, 'members', AsyncMock(return_value=[{'symbol':'BTC_USDT','profile_id':None}]))
     monkeypatch.setattr(mtf_chart.service, 'latest_evaluations', AsyncMock(return_value={}))
-    monkeypatch.setattr(mtf_chart.service, 'chart_data', AsyncMock(return_value={'mode':'SHADOW','operational_effect':False}))
+    monkeypatch.setattr(mtf_chart.service, 'chart_data', AsyncMock(return_value={'mode':'SHADOW','operational_effect':False,
+        'analysis':{'config_hash':'cfg','engine_version':'mtf_chart_v1'},'frames':{},'as_of':'now'}))
     write = AsyncMock(side_effect=AssertionError('GET attempted a config mutation'))
     monkeypatch.setattr(mtf_chart.config_service, 'update_config', write)
     return TestClient(app), uid, write
@@ -37,6 +38,23 @@ def test_removed_or_foreign_asset_is_not_fetched(client):
     result = http.get('/api/mtf/chart', params={'watchlist_id':'l3-consolidated','symbol':'OTHER_USDT'})
     assert result.status_code == 404
     mtf_chart.service.chart_data.assert_not_awaited()
+
+
+def test_cursor_never_bypasses_removed_membership(client):
+    http, _, _ = client
+    params = {'watchlist_id':'l3-consolidated','symbol':'BTC_USDT'}
+    first = http.get('/api/mtf/chart', params=params).json()
+    mtf_chart.service.members.return_value = []
+    mtf_chart.service.chart_data.reset_mock()
+    response = http.get('/api/mtf/chart', params={**params,'since':first['cursor']})
+    assert response.status_code == 404
+    mtf_chart.service.chart_data.assert_not_awaited()
+
+
+def test_membership_expiring_during_cold_calculation_is_rejected(client):
+    http, _, _ = client
+    mtf_chart.service.members.side_effect = [[{'symbol':'BTC_USDT','profile_id':None}], []]
+    assert http.get('/api/mtf/chart', params={'watchlist_id':'l3-consolidated','symbol':'BTC_USDT'}).status_code == 404
 
 
 def test_missing_config_is_fail_closed(client, monkeypatch):

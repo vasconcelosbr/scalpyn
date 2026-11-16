@@ -1,0 +1,15 @@
+{
+  "serialization": "compact JSON UTF-8, uncompressed; same frozen snapshot, final transport implementation; revised/new candles may be larger",
+  "results": {
+    "AAVE_USDT": {
+      "full_bytes": 1001065,
+      "unchanged_delta_bytes": 6144,
+      "transport": "delta"
+    },
+    "ASTER_USDT": {
+      "full_bytes": 996368,
+      "unchanged_delta_bytes": 6048,
+      "transport": "delta"
+    }
+  }
+}

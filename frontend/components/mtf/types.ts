@@ -5,30 +5,103 @@ export interface Point { time: number; value: number }
 export interface Pattern { time: number; pattern: string; metrics: Record<string, number> }
 export interface Pivot { time: number; price: number; label: string; kind: string; confirmed_at: number }
 export interface Zone { type: string; low: number; high: number; touches: number; available_at: number; distance_atr?: number; in_zone?: boolean; rejection?: boolean }
-export interface Frame { candles: Candle[]; indicators: Record<string, Point[]>; patterns: Pattern[]; pivots: Pivot[]; error?: string | null; stale: boolean; source: string }
+export interface Frame { candles: Candle[]; indicators: Record<string, Point[]>; patterns: Pattern[]; pivots: Pivot[]; patterns_removed?: [number,string][]; pivots_removed?: [number,string][]; zones?: Zone[]; warmup?: {reason: string | null}; window_start?: number; error?: string | null; stale: boolean; source: string }
 export interface Plan { side: string; entry_type: string; entry: number; stop: number; tp1: number; tp2: number; rr_net: number; rr_gross: number; quantity: number; notional_usdt: number; expires_at: string; expires_after_candles: number }
 export interface Analysis {
   evaluation_id?: string; symbol: string; status: MTFStatus; observed_at_utc: string; evaluated_at_utc: string;
   candle_closed_5m: string | null; candle_close_at_utc?: string; config_hash: string; mode: 'SHADOW'; operational_effect: false;
   context_4h: { trend: string; last_pivots: string[]; strength: string; last_candle_pattern: string | null };
   zone_1h: Zone | null; zones: Zone[]; trigger_5m: (Pattern & { volume_ratio: number | null; type: string }) | null;
-  plan: Plan | null; score: { total: number; maximum: number; components: Record<string, number>; calibrated: false };
+  plan: Plan | null; score: { total: number; raw?: number | null; maximum: number; components: Record<string, number>; calibrated: false };
   vetoes: string[]; explanation: string[]; unavailable_profile_indicators: string[]; spread_pct: number | null; btc_trend: string | null;
 }
-export interface ChartData { symbol: string; frames: Record<Timeframe, Frame>; analysis: Analysis; as_of: string; profile: Profile | null; indicator_config: Record<string, unknown> }
+export interface ChartData { symbol: string; frames: Record<Timeframe, Frame>; analysis: Analysis; as_of: string; profile: Profile | null; indicator_config: Record<string, unknown>; cursor?: string; transport?: 'full'|'delta'; price_format?: {precision: number; min_move: number; source: string} | null }
 export interface Profile { id: string; name: string; default_timeframe?: string }
 export interface Watchlist { id: string; name: string; profile_id?: string }
-export interface Asset { symbol: string; current_price?: number | null; alpha_score?: number | null; profile_id?: string; mtf?: Analysis | null }
+export interface Asset { symbol: string; current_price?: number | null; price_snapshot_at?: string | null; alpha_score?: number | null; profile_id?: string; mtf?: Analysis | null }
 export interface MTFConfig {
   schema_version: string; enabled: boolean; calibrated: false; default_watchlist: string; monitored_watchlists: string[];
   poll_seconds: number; history_page_size: number; candle_limits: Record<Timeframe, number>; stale_tf_multiplier: number;
+  presentation?: Presentation;
   [key: string]: unknown;
 }
-export interface Preferences { theme: 'dark' | 'light'; timezone: 'America/Sao_Paulo' | 'UTC'; sound: boolean; aligned_only: boolean }
-export interface Bootstrap { config: MTFConfig | null; preset: MTFConfig; watchlists: Watchlist[]; profiles: Profile[]; preferences: Partial<Preferences> }
+export interface Presentation {
+  visible_candles: Record<Timeframe,number>; panel_heights: Record<string,number>;
+  default_indicators: string[]; markers_max: number; markers_recent_signals: number;
+  pivots_per_type: number; marker_min_range_atr: number; zones_per_side: number;
+  removal_confirmations: number; retry_initial_seconds: number; retry_max_seconds: number;
+  watchlist_poll_seconds: number; autoscale_clip_pct: number; pair_metadata_ttl_seconds: number;
+  reason_labels: Record<string,string>;
+}
+export interface Preferences { theme: 'dark' | 'light'; timezone: 'America/Sao_Paulo' | 'UTC'; sound: boolean; aligned_only: boolean;
+  last_symbol?: string | null; last_watchlist?: string | null; last_timeframe?: Timeframe | null;
+  enabled_indicators?: string[] | null; show_patterns?: boolean; show_pivots?: boolean; show_zones?: boolean;
+  collapsed_panels?: string[]; clipped_scale?: boolean;
+}
+export interface Bootstrap { config: MTFConfig | null; preset: MTFConfig; presentation_preset: Presentation; watchlists: Watchlist[]; profiles: Profile[]; preferences: Partial<Preferences> }
 export interface HistoryItem { evaluation: Analysis; observed_at: string; shadow: { status: string; pnl_pct?: number | null; pnl_usdt?: number | null; fill?: number; ambiguous?: boolean; reason?: string } | null }
 export interface MTFReport { groups: { pattern: string; config_hash: string; n: number; mean_pct: number; ambiguous: number; sample_sufficient: boolean; confidence_interval: [number,number] | null; fee_per_side_pct: number; slippage_pct: number }[]; confidence_level: number; formula: string; origin: string; method: string }
 export const statusLabels: Record<MTFStatus, string> = { NO_TRADE: 'SEM TRADE', WAIT: 'AGUARDAR', ARMED: 'ARMADO', TRIGGERED: 'GATILHO' };
 export const patternLabels: Record<string, string> = { ENGULF_BULL: 'Engolfo de alta', ENGULF_BEAR: 'Engolfo de baixa', PIN_BULL: 'Martelo / Pin de alta', PIN_BEAR: 'Pin de baixa', SHOOTING_STAR: 'Estrela cadente', DOJI: 'Doji', HARAMI: 'Harami', INSIDE_BAR: 'Inside Bar', MARUBOZU_BULL: 'Marubozu de alta', MARUBOZU_BEAR: 'Marubozu de baixa' };
 export const patternShort: Record<string, string> = { ENGULF_BULL: 'ENG', ENGULF_BEAR: 'ENG', PIN_BULL: 'MART', PIN_BEAR: 'PIN', SHOOTING_STAR: 'EC', DOJI: 'DOJI', HARAMI: 'HAR', INSIDE_BAR: 'IB', MARUBOZU_BULL: 'MARU', MARUBOZU_BEAR: 'MARU' };
+export const shadowLabels: Record<string,string> = {PENDING:'Entrada pendente',OPEN:'Em acompanhamento',TP:'Alvo',SL:'Stop',EXPIRED:'Expirado',UNRESOLVED:'Sem resolução'};
+export function readingLabel(line:string) {
+  const labels={...patternLabels,UP:'alta',DOWN:'baixa',RANGE:'lateral'};
+  return Object.entries(labels).reduce((text,[code,label])=>text.replace(new RegExp(`\\b${code}\\b`,'g'),label),line);
+}
 export const number = (value: number | undefined | null, digits = 5) => value == null || !Number.isFinite(value) ? '—' : value.toLocaleString('pt-BR', { maximumFractionDigits: digits });
+
+export function mergeChart(previous: ChartData | null, incoming: ChartData): ChartData {
+  if (incoming.transport !== 'delta') return incoming;
+  if (!previous || previous.symbol !== incoming.symbol || previous.analysis.config_hash !== incoming.analysis.config_hash || previous.profile?.id !== incoming.profile?.id) throw new Error('Contexto incremental inválido');
+  const merge = <T extends { time: number }>(old: T[], updates: T[], start?: number) =>
+    [...new Map([...old, ...updates].map(p => [p.time, p])).values()].filter(p => start == null || p.time >= start).sort((a,b)=>a.time-b.time);
+  const frames = { ...incoming.frames };
+  for (const tf of Object.keys(frames) as Timeframe[]) {
+    const f = frames[tf], old = previous.frames[tf];
+    const overlays = <T extends {time:number}>(before:T[], updates:T[], removed:[number,string][], discriminator:(p:T)=>string) => {
+      const key=(p:T)=>`${p.time}:${discriminator(p)}`;
+      const map=new Map(before.map(p=>[key(p),p]));removed.forEach(([t,k])=>map.delete(`${t}:${k}`));updates.forEach(p=>map.set(key(p),p));
+      return [...map.values()].sort((a,b)=>a.time-b.time);
+    };
+    frames[tf] = { ...f, zones:f.zones??old.zones, candles: merge(old.candles, f.candles, f.window_start),
+      patterns:overlays(old.patterns,f.patterns,f.patterns_removed??[],p=>p.pattern),
+      pivots:overlays(old.pivots,f.pivots,f.pivots_removed??[],p=>p.kind),
+      indicators: Object.fromEntries(Object.entries(f.indicators).map(([k,v]) => [k, merge(old.indicators[k] ?? [], v, f.window_start)])) };
+  }
+  return { ...incoming, frames };
+}
+
+export function visibleMarks(frame: Frame, config: Presentation, preferences: Preferences, trigger?: Pattern | null) {
+  const selected: { time: number; label: string; above: boolean; pattern: boolean }[] = [];
+  const used = new Set<number>();
+  const add = (p: Pattern) => {
+    if (used.has(p.time) || selected.length >= config.markers_max) return;
+    used.add(p.time); selected.push({time:p.time,label:patternShort[p.pattern] ?? p.pattern,
+      above:p.pattern.includes('BEAR') || p.pattern==='SHOOTING_STAR',pattern:true});
+  };
+  if (preferences.show_patterns !== false) {
+    if (trigger && frame.candles.some(c=>c.time===trigger.time)) add(trigger);
+    const major = new Set(['ENGULF_BULL','ENGULF_BEAR','PIN_BULL','SHOOTING_STAR','MARUBOZU_BULL','MARUBOZU_BEAR']);
+    for (const p of [...frame.patterns].reverse()) {
+      if (used.size >= config.markers_recent_signals + (trigger ? 1 : 0)) break;
+      if (major.has(p.pattern) && p.metrics.atr > 0 && p.metrics.range >= config.marker_min_range_atr*p.metrics.atr) add(p);
+    }
+  }
+  if (preferences.show_pivots !== false) {
+    const counts: Record<string,number> = {};
+    for (const p of [...frame.pivots].reverse()) {
+      if (selected.length >= config.markers_max) break;
+      if ((counts[p.label] ?? 0) >= config.pivots_per_type) continue;
+      counts[p.label] = (counts[p.label] ?? 0) + 1;
+      selected.push({time:p.time,label:p.label,above:p.kind==='H',pattern:false});
+    }
+  }
+  return selected.sort((a,b)=>a.time-b.time);
+}
+
+export function reasonLabel(code: string, config?: Presentation) {
+  const [key, suffix] = code.split(':');
+  const label = config?.reason_labels[key] ?? 'Condição de análise indisponível';
+  return suffix ? `${label} (${suffix.toUpperCase()})` : label;
+}

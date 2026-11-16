@@ -42,6 +42,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
 
     const data = await res.json();
+    if (data.refresh_token) localStorage.setItem('refresh_token', data.refresh_token);
+    else localStorage.removeItem('refresh_token');
     get().setUser(data.user, data.access_token);
   },
 

@@ -1,4 +1,33 @@
 const API_URL = '/api';
+let refreshInFlight: {key:string; promise:Promise<string|null>} | null = null;
+
+async function renewedToken(failedToken: string | null): Promise<string | null> {
+  if (typeof window === 'undefined') return null;
+  if (getToken() !== failedToken) return getToken();
+  const refresh = localStorage.getItem('refresh_token');
+  if (!refresh) return null;
+  if (!refreshInFlight || refreshInFlight.key !== refresh) {
+    const promise = (async () => {
+      const response = await fetch(`${API_URL}/auth/refresh`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refresh }),
+      });
+      // A logout/account switch during refresh must never resurrect the session.
+      if (localStorage.getItem('refresh_token') !== refresh) throw new Error('Sessão alterada durante a renovação');
+      if (getToken() !== failedToken) return getToken();
+      if (response.status === 401 || response.status === 403) return null;
+      if (!response.ok) throw new Error('Renovação de sessão temporariamente indisponível');
+      const data = await response.json();
+      if (typeof data.access_token !== 'string' || !data.access_token) throw new Error('Resposta de renovação inválida');
+      if (localStorage.getItem('refresh_token') !== refresh || getToken() !== failedToken)
+        throw new Error('Sessão alterada durante a renovação');
+      localStorage.setItem('token', data.access_token);
+      return data.access_token;
+    })().finally(() => { if(refreshInFlight?.promise===promise) refreshInFlight = null; });
+    refreshInFlight={key:refresh,promise};
+  }
+  return refreshInFlight.promise;
+}
 
 function getToken(): string | null {
   if (typeof window === 'undefined') return null;
@@ -53,6 +82,8 @@ export async function apiFetch<T = any>(
   options: RequestInit = {}
 ): Promise<T> {
   const token = getToken();
+  let requestToken = token;
+  const sessionRefresh = typeof window==='undefined'?null:localStorage.getItem('refresh_token');
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string>),
@@ -63,12 +94,30 @@ export async function apiFetch<T = any>(
 
   const method = (options.method ?? 'GET').toUpperCase();
   const path = resolvePath(endpoint);
-  const res = await fetch(path, { ...options, headers });
+  let res = await fetch(path, { ...options, headers });
+
+  if (res.status === 401 && !path.startsWith('/api/auth/')) {
+    if (typeof window!=='undefined' && localStorage.getItem('refresh_token')!==sessionRefresh)
+      throw new ApiError({status:409,endpoint,path,method,detail:'Sessão alterada; recarregue a página',rawBody:null});
+    let renewed: string | null;
+    try { renewed = await renewedToken(token); }
+    catch {
+      throw new ApiError({ status: 503, endpoint, path, method,
+        detail: 'Sessão não renovada: tente novamente', rawBody: null });
+    }
+    if (renewed) {
+      requestToken = renewed;
+      res = await fetch(path, { ...options, headers: { ...headers, Authorization: `Bearer ${renewed}` } });
+    }
+  }
 
   if (res.status === 401) {
     if (typeof window !== 'undefined') {
+      if (getToken() !== requestToken || localStorage.getItem('refresh_token') !== sessionRefresh)
+        throw new ApiError({status:409,endpoint,path,method,detail:'Sessão alterada; recarregue a página',rawBody:null});
       localStorage.removeItem('token');
       localStorage.removeItem('user');
+      localStorage.removeItem('refresh_token');
       window.location.href = '/login';
     }
     throw new ApiError({

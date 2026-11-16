@@ -1,0 +1,59 @@
+{
+  "environment": "same captured candle and fixed producer window, canonical FeatureEngine function; not a query of persisted pipeline indicators",
+  "results": [
+    {
+      "symbol": "AAVE_USDT",
+      "timeframe": "4h",
+      "time": 1794830400,
+      "producer_window": 200,
+      "chart_ema200": 131.64390973,
+      "canonical_function_ema200": 131.64390973,
+      "equal": true
+    },
+    {
+      "symbol": "AAVE_USDT",
+      "timeframe": "1h",
+      "time": 1794852000,
+      "producer_window": 201,
+      "chart_ema200": 114.88711639,
+      "canonical_function_ema200": 114.88711639,
+      "equal": true
+    },
+    {
+      "symbol": "AAVE_USDT",
+      "timeframe": "5m",
+      "time": 1794857700,
+      "producer_window": 288,
+      "chart_ema200": 108.40552226,
+      "canonical_function_ema200": 108.40552226,
+      "equal": true
+    },
+    {
+      "symbol": "ASTER_USDT",
+      "timeframe": "4h",
+      "time": 1794830400,
+      "producer_window": 200,
+      "chart_ema200": 0.66706152,
+      "canonical_function_ema200": 0.66706152,
+      "equal": true
+    },
+    {
+      "symbol": "ASTER_USDT",
+      "timeframe": "1h",
+      "time": 1794852000,
+      "producer_window": 201,
+      "chart_ema200": 0.61029497,
+      "canonical_function_ema200": 0.61029497,
+      "equal": true
+    },
+    {
+      "symbol": "ASTER_USDT",
+      "timeframe": "5m",
+      "time": 1794857700,
+      "producer_window": 288,
+      "chart_ema200": 0.55369468,
+      "canonical_function_ema200": 0.55369468,
+      "equal": true
+    }
+  ]
+}

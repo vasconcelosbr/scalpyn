@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CandlestickSeries,
   ColorType,
@@ -9,7 +9,7 @@ import {
   HistogramSeries,
   LineSeries,
   CrosshairMode,
-  type IChartApi,
+  type IChartApi, type ISeriesApi, type IPriceLine, type ISeriesMarkersPluginApi, type AutoscaleInfo,
   type Time,
   type SeriesMarker,
   type UTCTimestamp,
@@ -18,7 +18,7 @@ import {
 import type { ShadowTradeChartResponse } from "./types";
 import { chartTickMarkFormatter, chartTimeFormatter, formatTime } from "@/lib/datetime";
 import { ZonePrimitive } from '@/components/mtf/ZonePrimitive';
-import { number, patternShort, patternLabels, type ChartData, type Timeframe, type Preferences } from '@/components/mtf/types';
+import { number, patternLabels, type ChartData, type Timeframe, type Preferences, type Presentation, visibleMarks } from '@/components/mtf/types';
 
 const COLORS = {
   bg: "#090c12",
@@ -211,103 +211,151 @@ export function TradeCandlestickChart({ data }: { data: ShadowTradeChartResponse
   return <div ref={hostRef} style={{ width: "100%", minHeight: 480 }} />;
 }
 
-/** MTF extension of the existing Shadow candlestick renderer. */
-export function MTFCandlestickChart({ data, timeframe, preferences }: { data: ChartData; timeframe: Timeframe; preferences: Preferences }) {
+const family = (name: string) => name.startsWith('di_') || name.startsWith('adx') ? 'adx' : name.split('_')[0];
+const overlay = (name: string) => name.startsWith('ema') || name.startsWith('bb_') || name==='vwap' || name==='psar';
+
+/** MTF extension: one chart instance, independent data/layout/theme updates. */
+export function MTFCandlestickChart({ data, timeframe, preferences, config, onPreference }: {
+  data: ChartData; timeframe: Timeframe; preferences: Preferences; config: Presentation;
+  onPreference: (change: Partial<Preferences>) => void;
+}) {
   const host = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
-  const [legend, setLegend] = useState<string>('');
-  const [hoverDetail, setHoverDetail] = useState<string>('');
-  const [disabled, setDisabled] = useState<string[]>([]);
-  const frame = data.frames[timeframe];
-  const light = preferences.theme === 'light';
-  const timeLabel = (seconds: number) => new Intl.DateTimeFormat('pt-BR', { timeZone: preferences.timezone, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(seconds * 1000));
-  const visibleRange = useRef<{ from: Time; to: Time } | null>(null);
+  const priceRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const lines = useRef(new Map<string, ISeriesApi<'Line'>>());
+  const volumeRef = useRef<ISeriesApi<'Histogram'> | null>(null);
+  const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  const zoneRef = useRef<ZonePrimitive | null>(null);
+  const priceLines = useRef<IPriceLine[]>([]);
+  const layoutKey = useRef('');
   const context = useRef('');
+  const paneHeights = useRef<number[]>([]);
+  const [hover, setHover] = useState<number | null>(null);
+  const [visibleRange, setVisibleRange] = useState<{from:number;to:number}|null>(null);
+  const [height, setHeight] = useState(config.panel_heights.price);
+  const frame = data.frames[timeframe];
+  const enabled = useMemo(()=>preferences.enabled_indicators ?? config.default_indicators,[preferences.enabled_indicators,config.default_indicators]);
+  const collapsed = useMemo(()=>preferences.collapsed_panels ?? [],[preferences.collapsed_panels]);
+  const light = preferences.theme === 'light';
+  const date = useCallback((t: number) => new Intl.DateTimeFormat('pt-BR', {timeZone:preferences.timezone,day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}).format(new Date(t*1000)),[preferences.timezone]);
+  const formatPrice = useCallback((v: number) => data.price_format ? number(v,data.price_format.precision) : v.toLocaleString('pt-BR',{maximumSignificantDigits:16}),[data.price_format]);
+  const clipping=useMemo(()=>{
+    if(!preferences.clipped_scale) return null;
+    const candles=frame.candles.filter(c=>!visibleRange || (c.time>=visibleRange.from && c.time<=visibleRange.to));
+    if(!candles.length) return null;
+    const lows=candles.map(c=>c.low).sort((a,b)=>a-b),highs=candles.map(c=>c.high).sort((a,b)=>a-b);
+    const fraction=config.autoscale_clip_pct/100;
+    const low=lows[Math.floor((lows.length-1)*fraction)],high=highs[Math.ceil((highs.length-1)*(1-fraction))];
+    return {low,high,outside:candles.filter(c=>c.low<low || c.high>high)};
+  },[preferences.clipped_scale,frame.candles,visibleRange,config.autoscale_clip_pct]);
+
   useEffect(() => {
-    if (!host.current || !frame.candles.length) return;
-    const key = `${data.symbol}:${timeframe}`;
-    if (context.current !== key) visibleRange.current = null;
-    context.current = key;
-    const chart = createChart(host.current, {
-      autoSize: true, height: 710,
-      layout: { background: { type: ColorType.Solid, color: light ? '#ffffff' : COLORS.bg }, textColor: light ? '#526078' : '#8c9ab0', attributionLogo: true, fontFamily: '"JetBrains Mono", monospace', fontSize: 11 },
-      grid: { vertLines: { color: light ? '#eef1f6' : COLORS.grid }, horzLines: { color: light ? '#eef1f6' : COLORS.grid } },
-      crosshair: { mode: CrosshairMode.Normal, vertLine: { labelBackgroundColor: COLORS.blue }, horzLine: { labelBackgroundColor: COLORS.blue } },
-      timeScale: { timeVisible: true, secondsVisible: false, rightOffset: 5, borderColor: COLORS.border, tickMarkFormatter: (t: Time) => timeLabel(Number(t)) },
-      localization: { timeFormatter: (t: Time) => timeLabel(Number(t)) },
-      rightPriceScale: { borderColor: COLORS.border },
-    });
+    if (!host.current) return;
+    const chart = createChart(host.current, {autoSize:true,layout:{attributionLogo:true,fontFamily:'"JetBrains Mono", monospace'},
+      crosshair:{mode:CrosshairMode.Normal},timeScale:{timeVisible:true,secondsVisible:false}});
     chartRef.current = chart;
-    const price = chart.addSeries(CandlestickSeries, { upColor: COLORS.green, downColor: COLORS.red, wickUpColor: COLORS.green, wickDownColor: COLORS.red, borderVisible: false, priceFormat: { type: 'price', precision: 8, minMove: 0.00000001 } });
-    price.setData(frame.candles.map(c => ({ ...c, time: c.time as Time, ...(c.closed ? {} : { color: '#6b7280', wickColor: '#6b7280' }) })));
-    const volume = chart.addSeries(HistogramSeries, { priceFormat: { type: 'volume' }, lastValueVisible: false, priceLineVisible: false }, 1);
-    volume.setData(frame.candles.map(c => ({ time: c.time as Time, value: c.volume, color: c.close >= c.open ? '#18c98b60' : '#ff526360' })));
-    const seriesNames = Object.keys(frame.indicators).filter(name => name !== 'atr' && name !== 'volume_ma' && !disabled.includes(name));
-    let pane = 2;
-    const paneMap = new Map<string, number>();
-    const colors = ['#f5aa42', '#5a86ff', '#bb91ff', '#2dd4bf', '#ec8ba8', '#92c964'];
-    seriesNames.forEach((name, i) => {
-      const overlay = name.startsWith('ema') || name.startsWith('bb_') || name === 'vwap' || name === 'psar';
-      const family = name.startsWith('di_') || name.startsWith('adx') ? 'adx' : name.split('_')[0];
-      if (!overlay && !paneMap.has(family)) paneMap.set(family, pane++);
-      const line = chart.addSeries(LineSeries, { color: colors[i % colors.length], lineWidth: 1, title: name.toUpperCase(), priceLineVisible: false, lastValueVisible: false }, overlay ? 0 : paneMap.get(family)!);
-      line.setData(frame.indicators[name].map(p => ({ ...p, time: p.time as Time })));
+    const price = chart.addSeries(CandlestickSeries,{upColor:COLORS.green,downColor:COLORS.red,wickUpColor:COLORS.green,wickDownColor:COLORS.red,borderVisible:false});
+    priceRef.current = price;
+    markersRef.current = createSeriesMarkers(price,[]);
+    const currentLines=lines.current;
+    chart.subscribeCrosshairMove(e => setHover(e.time ? Number(e.time) : null));
+    chart.timeScale().subscribeVisibleTimeRangeChange(range=>{
+      const next=range?{from:Number(range.from),to:Number(range.to)}:null;
+      setVisibleRange(old=>old?.from===next?.from && old?.to===next?.to?old:next);
     });
-    const volumeMa = chart.addSeries(LineSeries, { color: COLORS.blue, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, title: 'Volume MM' }, 1);
-    if (frame.indicators.volume_ma) volumeMa.setData(frame.indicators.volume_ma.map(p => ({ ...p, time: p.time as Time })));
-    const plan = data.analysis.plan;
-    const areas = [...data.analysis.zones];
-    if (plan) {
-      const available_at = Date.parse(data.analysis.candle_close_at_utc ?? data.analysis.evaluated_at_utc)/1000;
-      areas.push({ type: 'RISK', low: plan.stop, high: plan.entry, touches: 5, available_at },
-        { type: 'REWARD', low: plan.entry, high: plan.tp2, touches: 5, available_at });
-    }
-    price.attachPrimitive(new ZonePrimitive(areas));
-    const markers: SeriesMarker<Time>[] = frame.patterns.map(p => ({ time: p.time as Time, position: p.pattern.includes('BEAR') || p.pattern === 'SHOOTING_STAR' ? 'aboveBar' : 'belowBar', color: p.pattern.includes('BEAR') || p.pattern === 'SHOOTING_STAR' ? COLORS.red : COLORS.green, shape: 'circle', text: patternShort[p.pattern] ?? p.pattern }));
-    markers.push(...frame.pivots.map(p => ({ time: p.time as Time, position: p.kind === 'H' ? 'aboveBar' as const : 'belowBar' as const, color: '#95a3b8', shape: 'circle' as const, text: p.label })));
-    createSeriesMarkers(price, markers.sort((a,b) => Number(a.time)-Number(b.time)));
-    for (const kind of ['H', 'L']) {
-      const pivot = frame.pivots.filter(p => p.kind === kind).at(-1);
-      if (pivot) price.createPriceLine({ price: pivot.price, color: '#8796ac66', lineWidth: 1, lineStyle: 3, axisLabelVisible: false, title: `Último ${pivot.label}` });
-    }
-    if (plan) for (const [title, value, color] of [['ENTRADA TEÓRICA', plan.entry, COLORS.blue], ['STOP SIMULADO', plan.stop, COLORS.red], ['TP1', plan.tp1, COLORS.green], ['TP2', plan.tp2, COLORS.green]] as const) {
-      price.createPriceLine({ price: value, color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title });
-    }
-    chart.panes()[0]?.setHeight(360);
-    chart.panes()[1]?.setHeight(100);
-    chart.panes().slice(2).forEach(p => p.setHeight(105));
-    if (visibleRange.current) chart.timeScale().setVisibleRange(visibleRange.current);
-    else chart.timeScale().fitContent();
-    const describe = (t: number) => {
-      const c = frame.candles.find(c => c.time === t);
-      if (!c) return;
-      const values = Object.entries(frame.indicators).flatMap(([name, points]) => {
-        const point = points.find(p => p.time === t);
-        return point ? [`${name.toUpperCase()} ${number(point.value, 4)}`] : [];
+    return () => { chart.remove(); chartRef.current=null; priceRef.current=null; currentLines.clear(); volumeRef.current=null; layoutKey.current=''; context.current=''; };
+  }, []);
+
+  useEffect(() => {
+    const chart=chartRef.current;
+    if (!chart) return;
+    chart.applyOptions({layout:{background:{type:ColorType.Solid,color:light?'#ffffff':COLORS.bg},textColor:light?'#526078':'#8c9ab0'},
+      grid:{vertLines:{color:light?'#eef1f6':COLORS.grid},horzLines:{color:light?'#eef1f6':COLORS.grid}},
+      localization:{timeFormatter:(t:Time)=>date(Number(t))},timeScale:{tickMarkFormatter:(t:Time)=>date(Number(t))}});
+  }, [light, date]);
+
+  useEffect(() => {
+    const chart=chartRef.current, price=priceRef.current;
+    if (!chart || !price) return;
+    const names=Object.keys(frame.indicators).filter(n=>n!=='atr' && n!=='volume_ma' && enabled.includes(n) && (overlay(n)||!collapsed.includes(family(n))));
+    const key=JSON.stringify([names,collapsed,enabled.includes('volume_ma'),config.panel_heights]);
+    const sameContext=context.current===`${data.symbol}:${timeframe}`;
+    const range=sameContext?chart.timeScale().getVisibleLogicalRange():null;
+    if (key!==layoutKey.current) {
+      lines.current.forEach(s=>chart.removeSeries(s)); lines.current.clear();
+      if (volumeRef.current) {chart.removeSeries(volumeRef.current);volumeRef.current=null;}
+      const groups=new Map<string,number>();
+      let pane=1;
+      if (!collapsed.includes('volume')) {
+        groups.set('volume',pane++);
+        volumeRef.current=chart.addSeries(HistogramSeries,{priceFormat:{type:'volume'},lastValueVisible:false,priceLineVisible:false},groups.get('volume'));
+        if (enabled.includes('volume_ma')) lines.current.set('volume_ma',chart.addSeries(LineSeries,{color:COLORS.blue,lineWidth:1,priceLineVisible:false,lastValueVisible:false,title:'Volume · média'},groups.get('volume')));
+      }
+      const colors=['#f5aa42','#5a86ff','#bb91ff','#2dd4bf','#ec8ba8','#92c964'];
+      names.forEach((name,i)=>{
+        if (!overlay(name) && !groups.has(family(name))) groups.set(family(name),pane++);
+        lines.current.set(name,chart.addSeries(LineSeries,{color:colors[i%colors.length],lineWidth:1,title:name.toUpperCase(),priceLineVisible:false,lastValueVisible:false},overlay(name)?0:groups.get(family(name))));
       });
-      setLegend(`${timeLabel(t)} · ${c.closed ? 'fechado' : 'em formação'}   O ${number(c.open)}  H ${number(c.high)}  L ${number(c.low)}  C ${number(c.close)}  Vol ${number(c.volume, 1)}   ${number((c.close/c.open-1)*100, 2)}%`);
-      const patterns = frame.patterns.filter(p => p.time === t).map(p => `${patternLabels[p.pattern]} · ${Object.entries(p.metrics).map(([k,v]) => `${k} ${number(v)}`).join(' · ')}`);
-      setHoverDetail([...values, ...patterns].join(' | '));
-    };
-    chart.subscribeCrosshairMove(event => { if (event.time) describe(Number(event.time)); });
-    describe(frame.candles[frame.candles.length-1].time);
-    return () => {
-      visibleRange.current = chart.timeScale().getVisibleRange();
-      chart.remove();
-      chartRef.current = null;
-    };
-  // Recreate on snapshots while preserving the user's visible time range.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, timeframe, light, preferences.timezone, disabled]);
+      paneHeights.current=[config.panel_heights.price];
+      let total=config.panel_heights.price;
+      groups.forEach((index,name)=>{const h=config.panel_heights[name]??config.panel_heights.other;paneHeights.current[index]=h;total+=h;});
+      // setHeight redistributes the remaining panes on every call. Stretch
+      // factors preserve the configured proportions when autoSize runs.
+      chart.panes().forEach((pane,index)=>pane.setStretchFactor(paneHeights.current[index]));
+      // Reserve separator and pixel-rounding space so no pane falls below its
+      // configured minimum after the library rounds canvas dimensions.
+      setHeight(total+chart.timeScale().height()+chart.panes().length*2);layoutKey.current=key;
+    }
+    price.applyOptions({priceFormat:data.price_format?{type:'price',precision:data.price_format.precision,minMove:data.price_format.min_move}:{type:'custom',formatter:formatPrice,minMove:Number.EPSILON},
+      autoscaleInfoProvider:(base:()=>AutoscaleInfo|null)=>{
+        return clipping?{priceRange:{minValue:clipping.low,maxValue:clipping.high}}:base();
+      }});
+    price.setData(frame.candles.map(c=>({...c,time:c.time as Time,...(c.closed?{}:{color:'#6b7280',wickColor:'#6b7280'})})));
+    volumeRef.current?.setData(frame.candles.map(c=>({time:c.time as Time,value:c.volume,color:c.close>=c.open?'#18c98b60':'#ff526360'})));
+    lines.current.forEach((series,name)=>series.setData((frame.indicators[name]??[]).map(p=>({...p,time:p.time as Time}))));
+    markersRef.current?.setMarkers(visibleMarks(frame,config,preferences,timeframe==='5m'?data.analysis.trigger_5m:null).map(m=>({time:m.time as Time,text:m.label,position:m.above?'aboveBar':'belowBar',shape:'circle',color:m.pattern?(m.above?COLORS.red:COLORS.green):'#95a3b8'})));
+    if (zoneRef.current) price.detachPrimitive(zoneRef.current);
+    const reference=data.frames['5m'].candles.filter(c=>c.closed).at(-1)?.close;
+    const zones=reference==null?[]:(frame.zones??[]);
+    const below=zones.filter(z=>z.high<reference!).sort((a,b)=>b.high-a.high).slice(0,config.zones_per_side);
+    const above=zones.filter(z=>z.low>reference!).sort((a,b)=>a.low-b.low).slice(0,config.zones_per_side);
+    const inside=zones.filter(z=>z.low<=reference! && z.high>=reference!).slice(0,config.zones_per_side);
+    zoneRef.current=new ZonePrimitive(preferences.show_zones===false?[]:[...below,...inside,...above]);price.attachPrimitive(zoneRef.current);
+    priceLines.current.forEach(line=>price.removePriceLine(line));priceLines.current=[];
+    const plan=data.analysis.plan;
+    if (plan) for(const [title,value,color] of [['ENTRADA TEÓRICA',plan.entry,COLORS.blue],['STOP SIMULADO',plan.stop,COLORS.red],['TP1',plan.tp1,COLORS.green],['TP2',plan.tp2,COLORS.green]] as const)
+      priceLines.current.push(price.createPriceLine({price:value,color,lineWidth:1,lineStyle:2,axisLabelVisible:true,title}));
+    if (!sameContext) {const end=frame.candles.length-1;chart.timeScale().setVisibleLogicalRange({from:Math.max(0,end-config.visible_candles[timeframe]+1),to:end});setHover(null);}
+    else if(range) chart.timeScale().setVisibleLogicalRange(range);
+    context.current=`${data.symbol}:${timeframe}`;
+  }, [data,timeframe,preferences,config,frame,enabled,collapsed,formatPrice,clipping]);
+
+  useEffect(()=>{
+    const animation=requestAnimationFrame(()=>{
+      const chart=chartRef.current;
+      if(chart) setHeight(paneHeights.current.reduce((sum,h)=>sum+h,0)+chart.timeScale().height()+chart.panes().length*2);
+    });
+    return ()=>cancelAnimationFrame(animation);
+  },[height]);
+
+  const candle=frame.candles.find(c=>c.time===hover)??frame.candles.at(-1);
+  const groups=[...new Set(['volume',...Object.keys(frame.indicators).filter(n=>n!=='atr'&&n!=='volume_ma'&&!overlay(n)).map(family)])];
   return <div className="mtf-chart-wrap">
-    <div className="mtf-chart-heading"><strong>{data.symbol.replace('_', '/')} <span>{timeframe.toUpperCase()}</span></strong><button onClick={() => chartRef.current?.timeScale().scrollToRealTime()}>Último candle ↗</button></div>
-    <div className="mtf-ohlc">{legend || 'Aguardando candles…'}</div>
-    <div className="mtf-indicator-toggles">{Object.keys(frame.indicators).filter(n => n !== 'atr').map(name => <button key={name} className={disabled.includes(name) ? 'off' : ''} onClick={() => setDisabled(v => v.includes(name) ? v.filter(n => n !== name) : [...v, name])}>{name.toUpperCase()}</button>)}</div>
-    {frame.error && <div className="mtf-warning">{frame.error}</div>}
-    {frame.stale && <div className="mtf-warning">Dados atrasados — análise bloqueada quando os critérios de frescor falham.</div>}
-    {!frame.candles.length && <div className="mtf-empty">Sem candles Gate disponíveis neste período.</div>}
-    <div ref={host} style={{ width: '100%', height: frame.candles.length ? 710 : 0 }} />
-    <div className="mtf-hover-detail" aria-live="polite">{hoverDetail}</div>
-    <div className="mtf-chart-note">ENG Engolfo · MART Martelo · EC Estrela cadente · MARU Marubozu · HH/HL/LH/LL pivôs confirmados<br/>Faixas: suporte/resistência do 1H · Candle cinza: em formação, sem sinal · {preferences.timezone === 'UTC' ? 'UTC' : 'Brasília'}</div>
+    <div className="mtf-chart-heading"><strong>{data.symbol.replace('_','/')} <span>{timeframe.toUpperCase()}</span></strong><button onClick={()=>chartRef.current?.timeScale().scrollToRealTime()}>Último candle ↗</button></div>
+    <div className="mtf-ohlc">{candle?`${date(candle.time)} · ${candle.closed?'fechado':'em formação'} · O ${formatPrice(candle.open)} H ${formatPrice(candle.high)} L ${formatPrice(candle.low)} C ${formatPrice(candle.close)} · Vol ${number(candle.volume,1)}`:'Aguardando candles'}</div>
+    <div className="mtf-indicator-toggles">
+      {(['patterns','pivots','zones'] as const).map(key=>{const prop=`show_${key}` as 'show_patterns'|'show_pivots'|'show_zones';return <button key={key} aria-pressed={preferences[prop]!==false} className={preferences[prop]===false?'off':''} onClick={()=>onPreference({[prop]:preferences[prop]===false})}>{key==='patterns'?'Padrões':key==='pivots'?'Pivôs':'Zonas'}</button>;})}
+      {Object.keys(frame.indicators).filter(n=>n!=='atr').map(name=><button key={name} aria-pressed={enabled.includes(name)} className={enabled.includes(name)?'':'off'} onClick={()=>onPreference({enabled_indicators:enabled.includes(name)?enabled.filter(n=>n!==name):[...enabled,name]})}>{name.toUpperCase()}</button>)}
+    </div>
+    <div className="mtf-panel-controls">{groups.map(group=><button key={group} aria-expanded={!collapsed.includes(group)} onClick={()=>onPreference({collapsed_panels:collapsed.includes(group)?collapsed.filter(g=>g!==group):[...collapsed,group]})}>{collapsed.includes(group)?'▸':'▾'} {group.toUpperCase()}</button>)}<button aria-pressed={!!preferences.clipped_scale} onClick={()=>onPreference({clipped_scale:!preferences.clipped_scale})}>{preferences.clipped_scale?'Restaurar escala completa':'Recortar extremos (visual)'}</button></div>
+    {preferences.clipped_scale&&<div className="mtf-warning">Escala recortada apenas no desenho. Valores OHLC completos na legenda.
+      {clipping?.outside.map(c=><div key={c.time}>{date(c.time)} · fora da escala: {c.low<clipping.low?`mínima ${formatPrice(c.low)}`:''} {c.high>clipping.high?`máxima ${formatPrice(c.high)}`:''}</div>)}
+    </div>}
+    {!data.price_format&&<div className="mtf-warning">Precisão do par indisponível; preços exibidos sem arredondamento por tick.</div>}
+    {(frame.error||frame.warmup?.reason)&&<div className="mtf-warning">Histórico insuficiente ou descontínuo: indicadores sem cobertura permanecem indisponíveis.</div>}
+    {frame.stale&&<div className="mtf-warning">Dados de mercado atrasados — sem confirmação de sinal atual.</div>}
+    <div className="mtf-chart-scroll"><div ref={host} style={{width:'100%',height}} /></div>
+    <div className="mtf-hover-detail">{candle&&Object.entries(frame.indicators).flatMap(([name,points])=>{const point=points.find(p=>p.time===candle.time);return point?[`${name.toUpperCase()} ${number(point.value,4)}`]:[];}).join(' · ')}<br/>{frame.patterns.filter(p=>p.time===candle?.time).map(p=>patternLabels[p.pattern]??'Padrão').join(' · ')}</div>
+    <div className="mtf-chart-note">Zonas do {timeframe.toUpperCase()} · Contexto do plano: H1 · Candle cinza em formação não gera sinal · {preferences.timezone==='UTC'?'UTC':'Brasília'}</div>
   </div>;
 }
