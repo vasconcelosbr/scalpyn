@@ -15,6 +15,7 @@
         {"path":"backend/app/services/mtf_chart_engine.py","contains_all":["\"operational_effect\": False","CANDLE_GAP","ZONE_INVALIDATED"]},
         {"path":"backend/app/services/mtf_chart_service.py","contains_all":["mtf_chart_evaluations","gate_only=True","ON CONFLICT (identity) DO NOTHING"]},
         {"path":"backend/tests/test_mtf_chart_engine.py","contains_all":["test_missing_data_no_authority","test_no_retroactive_fill_and_stop_first"]},
+        {"path":"backend/tests/test_mtf_recovery_gate.py","contains_all":["test_recovery_allows_only_observational_mtf_settings","/api/orders/"]},
         {"path":"backend/scripts/run_observation_beat.py","contains_all":["mtf_chart_after_close","ALLOWED"]}
       ]
     },
