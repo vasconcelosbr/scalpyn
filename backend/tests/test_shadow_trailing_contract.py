@@ -269,3 +269,4 @@ async def test_point_in_time_atr_uses_configured_timeframe_and_cutoff():
     assert db.params["timeframe"] == "5m"
     assert db.params["as_of"] == ENTRY_AT
     assert "time <= :as_of" in db.statement
+    assert "scheduler_group = 'structural'" in db.statement

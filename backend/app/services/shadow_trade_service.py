@@ -320,7 +320,12 @@ async def _load_point_in_time_atr_pct(
     timeframe: str,
     as_of: datetime,
 ) -> tuple[Optional[float], Optional[datetime]]:
-    """Read ATR% from the configured timeframe at or before the decision."""
+    """SHADOW_STRUCTURAL_ATR: read its owning group at/before the decision.
+
+    A newer microstructure row is intentionally partial and cannot erase ATR.
+    Keep the latest structural row even when invalid: never fall back past an
+    invalid structural measurement or to a value computed after the decision.
+    """
     result = await db.execute(
         text(
             """
@@ -333,6 +338,7 @@ async def _load_point_in_time_atr_pct(
              WHERE symbol = :symbol
                AND market_type = 'spot'
                AND timeframe = :timeframe
+               AND scheduler_group = 'structural'
                AND time <= :as_of
              ORDER BY time DESC
              LIMIT 1
@@ -374,6 +380,7 @@ async def _load_point_in_time_atr_map(
              WHERE symbol = ANY(CAST(:symbols AS varchar[]))
                AND market_type = 'spot'
                AND timeframe = :timeframe
+               AND scheduler_group = 'structural'
                AND time <= :as_of
              ORDER BY symbol, time DESC
             """
