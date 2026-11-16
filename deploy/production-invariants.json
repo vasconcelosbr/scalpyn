@@ -7,6 +7,15 @@
   },
   "required_features": [
     {
+      "id": "l3-shadow-suppression-reason",
+      "description": "Required Shadow dispatch never claims NO_SHADOW_REQUIRED; hourly uniqueness stays enforced and observable",
+      "files": [
+        {"path":"backend/app/services/l3_authorization_outbox_service.py","contains_all":["L3_SHADOW_SUPPRESSION_REASON","SUPPRESSED/PROFILE_SYMBOL_HOURLY_LIMIT"]},
+        {"path":"backend/tests/test_l3_authorization_outbox_v3.py","contains_all":["test_required_shadow_never_reports_not_required","test_hourly_limit_matches_database_key_even_after_trade_closes"]},
+        {"path":"backend/tests/test_l3_public_authorization.py","contains_all":["test_suppressed_required_shadow_is_visible_but_never_confirmed"]}
+      ]
+    },
+    {
       "id": "l3-stable-allow-shadow-route",
       "description": "Stable valid L3 evaluations retain their idempotent Shadow route independently of audit edge dedup",
       "files": [

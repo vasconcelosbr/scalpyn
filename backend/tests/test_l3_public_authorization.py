@@ -89,6 +89,20 @@ def test_comparison_operands_use_shortest_remaining_lifetime():
     assert authorization_expiry(body) is None
 
 
+@pytest.mark.parametrize("reason", ["PROFILE_SYMBOL_HOURLY_LIMIT", "SHADOW_NOT_CREATED"])
+def test_suppressed_required_shadow_is_visible_but_never_confirmed(reason):
+    now, wl, decision, event, _, _ = objects()
+    event.status = "PROCESSED"
+    event.payload["processing_result"] = f"SUPPRESSED/{reason}"
+    assert public_authorization(decision, event, None, watchlist_id=wl, now=now) is None
+    display = public_authorization(decision, event, None, watchlist_id=wl, now=now,
+                                   display_floor_seconds=300)
+    assert display["shadow_reason"] == f"SUPPRESSED/{reason}"
+    assert display["shadow_status"] == "SUPPRESSED"
+    assert display["shadow_id"] is None
+    assert display["executable"] is False
+
+
 def test_ignore_expiry_is_for_the_public_visibility_floor_only():
     """2026-09-18 (part 3): ignore_expiry must default to False (every
     existing caller -- shadow creation, consolidation, outbox, execute_buy's
