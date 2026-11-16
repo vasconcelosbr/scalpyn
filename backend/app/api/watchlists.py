@@ -3273,7 +3273,8 @@ async def _profile_display_payload(wl, user_id, db, profile_config):
             snapshot=snapshot, alpha_score=row['alpha_score']),
             'data_reasons': row['data_reasons'], 'decision_id': row['decision_id'],
             'executable': False, 'execution_authority': False}
-        item['current_values']['price'] = row['current_price']
+        item['current_values']['_meta:price'] = row['current_price']
+        item['details']['current_values'] = dict(item['current_values'])
         groups[row['status']].append(item)
     return {'watchlist_id': str(wl.id), 'profile_id': str(wl.profile_id),
         'approved_items': groups['approved'], 'items': groups['rejected'],

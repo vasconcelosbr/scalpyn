@@ -132,5 +132,5 @@ async def load_profile_display_rows(db, *, user_id, watchlist_id):
             'decision_id': decision['id'] if decision else None,
             'evaluated_at': decision['evaluated_at'] if decision else None,
             'alpha_score': decision['score'] if decision else row['alpha_score'],
-            'current_price': decision['price'] if decision else row['current_price']})
+            'current_price': decision['price'] if decision and decision['price'] is not None else row['current_price']})
     return items
