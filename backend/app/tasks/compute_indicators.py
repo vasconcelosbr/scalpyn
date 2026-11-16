@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 from sqlalchemy import text
@@ -17,6 +17,20 @@ from ..utils.indicator_payload import maybe_compact_indicator_payload
 
 logger = logging.getLogger(__name__)
 _STOCHASTIC_WARMUP_OVERLAP = 2
+
+
+def closed_5m_source_clock(opened_at):
+    """M5_CLOSED_SOURCE_CLOCK: TTL starts at candle close, never at compute time.
+
+    Gate timestamps identify interval openings. Keep that identity separately;
+    the indicator describes the complete interval ending five minutes later.
+    This matches the existing closed-H4 provider's freshness semantics.
+    """
+    return {
+        "source_open_timestamp": opened_at.isoformat(),
+        "source_timestamp": (opened_at + timedelta(minutes=5)).isoformat(),
+        "source_timestamp_semantics": "CANDLE_CLOSE_TIME",
+    }
 
 
 def _compute_score_fields(results: dict) -> dict:
@@ -873,10 +887,10 @@ async def _process_one_symbol_5m(symbol, indicators_config, indicator_config_ide
                     "provider_policy_id": "spot_gate_closed_ohlcv_v1",
                     "candle_policy": "CLOSED_ONLY",
                     "candle_closed": True,
-                    "source_timestamp": rows[0].time.isoformat(),
+                    **closed_5m_source_clock(rows[0].time),
                     "computed_at": now.isoformat(),
                     "available_at": now.isoformat(),
-                    "producer_version": "compute_5m_v2",
+                    "producer_version": "compute_5m_v3",
                     "capture_contract_version": rows[0].capture_contract_version,
                     "source_ingested_at": rows[0].ingested_at.isoformat(),
                     **indicator_config_identity,
@@ -1092,10 +1106,10 @@ async def _compute_structural_5m_async():
                             "provider_policy_id": "spot_gate_closed_ohlcv_v1",
                             "candle_policy": "CLOSED_ONLY",
                             "candle_closed": True,
-                            "source_timestamp": rows[0].time.isoformat(),
+                            **closed_5m_source_clock(rows[0].time),
                             "computed_at": now.isoformat(),
                             "available_at": now.isoformat(),
-                            "producer_version": "compute_structural_5m_v2",
+                            "producer_version": "compute_structural_5m_v3",
                             "capture_contract_version": rows[0].capture_contract_version,
                             "source_ingested_at": rows[0].ingested_at.isoformat(),
                             **indicator_config_identity,
