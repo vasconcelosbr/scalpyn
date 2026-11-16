@@ -113,6 +113,8 @@ async def test_api_returns_three_disjoint_states_without_executable_authority(mo
     payload = await _profile_display_payload(SimpleNamespace(id='watchlist',profile_id='profile'), 'user', None, {})
     assert payload['metrics'] == {'total':3,'approved_count':1,'rejected_count':1,'awaiting_data_count':1}
     assert payload['items'][0]['symbol'] == 'ETH_USDT'
+    assert payload['approved_items'][0]['current_values']['_meta:price'] == 1
+    assert payload['approved_items'][0]['details']['current_values']['_meta:price'] == 1
     assert payload['awaiting_data_items'][0]['status'] == 'awaiting_data'
     assert all(not item['executable'] for key in ['items','approved_items','awaiting_data_items'] for item in payload[key])
 
