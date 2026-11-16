@@ -5241,13 +5241,8 @@ async def _run_pipeline_scan():
                         score_delta_threshold=dl_score_delta,
                         direction_change_logs=dl_direction_logs,
                     )
-                    # Edge-triggered L3_VISIBLE: log only on FIRST appearance
-                    # in the L3 ALLOW set (NEW transition handled by
-                    # _should_log_decision). Subsequent cycles with the same
-                    # symbol stable in ALLOW are intentionally silent — the
-                    # frontend reads pipeline_watchlist_assets for "currently
-                    # visible" state; decisions_log is an audit trail of
-                    # transitions, not a per-cycle snapshot.
+                    # L3_VISIBLE is edge-triggered. The contract audit below
+                    # can still persist a fresh evaluation for a stable ALLOW.
                     if d.get("decision") == "ALLOW":
                         current_l3_visibility.add(sym)
                         if not should_log and sym not in prior_visibility:
@@ -5273,14 +5268,17 @@ async def _run_pipeline_scan():
                         _contract_v3,
                         legacy_decision=d.get("decision"),
                     )
+                    # L3_STABLE_ALLOW_SHADOW_ROUTE: audit dedup is not capture
+                    # authority. Every persisted eligible evaluation needs an
+                    # outbox route, including stable ALLOW audits forced below.
+                    # The consumer reconciles an existing active Shadow; the
+                    # persistence boundary still rejects invalid/expired L3.
                     d["_shadow_creation_required"] = bool(
-                        should_log
-                        and _contract_shadow_eligible
+                        _contract_shadow_eligible
                         and not _wl_consolidation_enabled
                     )
                     d["_consolidation_required"] = bool(
-                        should_log
-                        and _contract_shadow_eligible
+                        _contract_shadow_eligible
                         and _wl_consolidation_enabled
                     )
                     d["_scan_run_id"] = execution_id

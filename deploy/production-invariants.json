@@ -7,6 +7,14 @@
   },
   "required_features": [
     {
+      "id": "l3-stable-allow-shadow-route",
+      "description": "Stable valid L3 evaluations retain their idempotent Shadow route independently of audit edge dedup",
+      "files": [
+        {"path":"backend/app/tasks/pipeline_scan.py","contains_all":["L3_STABLE_ALLOW_SHADOW_ROUTE"]},
+        {"path":"backend/tests/test_l3_stable_allow_shadow.py","contains_all":["test_stable_allow_keeps_shadow_route_and_public_visibility","test_stable_scan_never_routes_failed_public_authorization"]}
+      ]
+    },
+    {
       "id": "recovery-m5-shadow-order-isolation",
       "description": "Opt-in M5 collection and Shadow recovery require observation mode; Gate writes are blocked before network access",
       "files": [
