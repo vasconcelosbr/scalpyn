@@ -115,7 +115,7 @@ interface L3ConsolidatedResponse {
   as_of: string;
 }
 
-type WatchlistDetailTab = 'approved' | 'rejected';
+type WatchlistDetailTab = 'approved' | 'rejected' | 'awaiting_data';
 
 interface Pool {
   id: string;
@@ -1095,10 +1095,13 @@ function FuturesAssetTable({
 function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, onRefreshed, refreshTick, liveDirections = {} }: WatchlistRowProps) {
   const displayLevel = resolveWatchlistLevel(wl, profiles);
   const isFutures = wl.market_mode === 'futures';
+  const profileDisplay = displayLevel === 'L3' && !isFutures;
   const [expanded, setExpanded] = useState(false);
   const [detailTab, setDetailTab] = useState<WatchlistDetailTab>('approved');
   const [approvedItems, setApprovedItems] = useState<RejectedAssetItem[]>([]);
   const [rejectedItems, setRejectedItems] = useState<RejectedAssetItem[]>([]);
+  const [awaitingDataItems, setAwaitingDataItems] = useState<RejectedAssetItem[]>([]);
+  const [profileStatusLoaded, setProfileStatusLoaded] = useState(false);
   const [approvedCols, setApprovedCols] = useState<IndicatorColumnSpec[]>([]);
   const [rejectedCols, setRejectedCols] = useState<IndicatorColumnSpec[]>([]);
   const [expandedApprovedRow, setExpandedApprovedRow] = useState<string | null>(null);
@@ -1116,6 +1119,8 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
   const rejectedRequestInFlight = useRef(false);
   const rejectedLoaded = useRef(false);
 
+  const visibleApprovedCount = profileDisplay && profileStatusLoaded ? approvedItems.length : wl.asset_count;
+
   const sourceName = wl.source_pool_id
     ? pools.find((p) => p.id === wl.source_pool_id)?.name ?? 'Pool'
     : wl.source_watchlist_id
@@ -1126,7 +1131,7 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
     ? (profiles.find((p) => p.id === wl.profile_id)?.name ?? wl.profile_name ?? 'Profile')
     : null;
 
-  // loadApproved: fetches /assets only. Called on expand and periodic refresh.
+  // Profile display reads all three states atomically; execution feeds stay separate.
   const loadApproved = useCallback(async (
     { triggerParentRefresh = false, silent = false, hn = hideNeutral }: {
       triggerParentRefresh?: boolean;
@@ -1140,11 +1145,13 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
     assetsRequestInFlight.current = true;
     if (!silent) { setLoadingAssets(true); setAssetsError(null); }
     try {
-      const assetsUrl = isFutures && hn
+      const assetsUrl = profileDisplay ? `/watchlists/${wl.id}/profile-status` : isFutures && hn
         ? `/watchlists/${wl.id}/assets?hide_neutral=true`
         : `/watchlists/${wl.id}/assets`;
       const data = await apiFetch<{
         approved_items: RejectedAssetItem[];
+        items?: RejectedAssetItem[];
+        awaiting_data_items?: RejectedAssetItem[];
         assets: FuturesAsset[];
         total: number;
         market_mode?: string;
@@ -1152,13 +1159,21 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
         profile_indicators?: IndicatorColumnSpec[];
       }>(assetsUrl);
       setApprovedItems(data.approved_items ?? []);
+      if (profileDisplay) {
+        setRejectedItems(data.items ?? []);
+        setAwaitingDataItems(data.awaiting_data_items ?? []);
+        setProfileStatusLoaded(true);
+        setRejectedCols(data.profile_indicators ?? []);
+        setRejectedError(null);
+        rejectedLoaded.current = true;
+      }
       setFuturesAssets(data.assets ?? []);
       setApprovedCols(data.profile_indicators ?? []);
       // A manual refresh can fail briefly while the API deployment is being
       // replaced.  Any later successful read proves recovery and must clear
       // the stale banner even when the read was triggered silently by polling.
       setRefreshError(null);
-      if (!silent) setAssetsError(null);
+      setAssetsError(null);
       if (triggerParentRefresh && ((data.approved_items?.length ?? 0) > 0 || (data.assets?.length ?? 0) > 0)) {
         onRefreshed();
       }
@@ -1168,10 +1183,11 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
       assetsRequestInFlight.current = false;
       if (!silent) setLoadingAssets(false);
     }
-  }, [wl.id, isFutures, hideNeutral, onRefreshed]);
+  }, [wl.id, isFutures, profileDisplay, hideNeutral, onRefreshed]);
 
   // loadRejected: fetches /pipeline/rejected lazily — only when Rejected tab is opened.
   const loadRejected = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
+    if (profileDisplay) { await loadApproved({ silent }); return; }
     if (rejectedRequestInFlight.current) return;
     rejectedRequestInFlight.current = true;
     if (!silent) { setLoadingRejected(true); setRejectedError(null); }
@@ -1190,7 +1206,7 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
       rejectedRequestInFlight.current = false;
       if (!silent) setLoadingRejected(false);
     }
-  }, [wl.id, approvedCols]);
+  }, [wl.id, approvedCols, profileDisplay, loadApproved]);
 
   useEffect(() => {
     if (expanded) {
@@ -1202,11 +1218,11 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
     if (expanded && wl.auto_refresh && refreshTick > 0) {
       void loadApproved({ silent: true });
       // Only refresh rejected if it was already loaded (user visited that tab).
-      if (rejectedLoaded.current) {
+      if (rejectedLoaded.current && !profileDisplay) {
         void loadRejected({ silent: true });
       }
     }
-  }, [expanded, wl.auto_refresh, refreshTick, loadApproved, loadRejected]);
+  }, [expanded, wl.auto_refresh, refreshTick, loadApproved, loadRejected, profileDisplay]);
 
   // Re-fetch when hide_neutral toggle changes (server-side filter)
   useEffect(() => {
@@ -1222,7 +1238,7 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
       await apiFetch(`/watchlists/${wl.id}/refresh`, { method: 'POST' });
       rejectedLoaded.current = false;
       await loadApproved({ silent: true });
-      if (detailTab === 'rejected') {
+      if (detailTab !== 'approved' && !profileDisplay) {
         await loadRejected({ silent: true });
       }
       onRefreshed();
@@ -1274,15 +1290,15 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
         {profileName && (
           <span
             className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold tabular-nums ${
-              wl.asset_count > 0
+              visibleApprovedCount > 0
                 ? 'border-[#2A3448] bg-[#1E2433] text-[#CBD5E1]'
                 : 'border-[#1E2433] bg-[#0F1117] text-[#4B5563]'
             }`}
-            title={`${wl.asset_count} ativo${wl.asset_count !== 1 ? 's' : ''} aprovado${wl.asset_count !== 1 ? 's' : ''} neste profile`}
+            title={`${visibleApprovedCount} ativo${visibleApprovedCount !== 1 ? 's' : ''} aprovado${visibleApprovedCount !== 1 ? 's' : ''} neste profile`}
             data-testid={`profile-approved-count-${wl.id}`}
           >
             <Layers size={9} />
-            {wl.asset_count} ativo{wl.asset_count !== 1 ? 's' : ''}
+            {visibleApprovedCount} ativo{visibleApprovedCount !== 1 ? 's' : ''}
           </span>
         )}
         {isFutures && (
@@ -1363,6 +1379,7 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
           <div className="flex items-center gap-2 border-b border-[#1E2433] px-4 py-3">
             <button
               type="button"
+              aria-pressed={detailTab === 'approved'}
               onClick={() => setDetailTab('approved')}
               className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
                 detailTab === 'approved'
@@ -1377,6 +1394,7 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
             </button>
             <button
               type="button"
+              aria-pressed={detailTab === 'rejected'}
               onClick={() => {
                 setDetailTab('rejected');
                 if (!rejectedLoaded.current) void loadRejected();
@@ -1390,13 +1408,19 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
                 Rejected
               <span className="ml-1 text-[#4B5563]">{rejectedItems.length}</span>
             </button>
+            {profileDisplay && <button type="button"
+              aria-pressed={detailTab === 'awaiting_data'}
+              onClick={() => setDetailTab('awaiting_data')}
+              className={`rounded-lg px-3 py-1.5 text-xs font-medium ${detailTab === 'awaiting_data' ? 'bg-amber-500/15 text-amber-200' : 'text-[#64748B] hover:text-amber-200'}`}>
+              Aguardando dados <span className="ml-1">{awaitingDataItems.length}</span>
+            </button>}
           </div>
           {refreshError && (
             <div className="px-4 py-2 text-xs text-red-400 bg-red-400/10">
               Refresh error: {refreshError}
             </div>
           )}
-          {detailTab === 'approved' && assetsError ? (
+          {(detailTab === 'approved' || profileDisplay) && assetsError ? (
             <div className="px-4 py-5 flex items-center gap-3">
               <span className="text-xs text-red-400 flex-1">{assetsError}</span>
               <button
@@ -1442,9 +1466,9 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
             </div>
           ) : (
             <WatchlistDecisionTable
-              items={rejectedItems}
-              loading={loadingRejected}
-              emptyMessage="Nenhum ativo rejeitado para os filtros atuais."
+              items={detailTab === 'awaiting_data' ? awaitingDataItems : rejectedItems}
+              loading={profileDisplay ? loadingAssets : loadingRejected}
+              emptyMessage={detailTab === 'awaiting_data' ? 'Nenhum ativo aguardando atualização dos dados.' : 'Nenhum ativo rejeitado pelas regras configuradas.'}
               indicatorCols={rejectedCols}
               showScore={displayLevel !== 'L1'}
               expandedRow={expandedRejectedRow}

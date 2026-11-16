@@ -41,7 +41,8 @@ export interface DecisionDetails {
 
 export interface WatchlistDecisionItem {
   symbol: string;
-  status: "approved" | "rejected";
+  status: "approved" | "rejected" | "awaiting_data";
+  data_reasons?: string[];
   stage?: string | null;
   profile_id?: string | null;
   timestamp?: string | null;
@@ -192,7 +193,11 @@ function CryptoEVBadge({ value }: { value?: CryptoEVSummary | null }) {
   );
 }
 
-function itemPalette(status: "approved" | "rejected") {
+function itemPalette(status: WatchlistDecisionItem["status"]) {
+  if (status === "awaiting_data") return {
+    badge: "bg-amber-500/10 text-amber-200 border border-amber-500/25",
+    row: "border-l-2 border-l-amber-500/60", accent: "text-amber-200",
+  };
   return status === "approved"
     ? {
         badge: "bg-[#34D399]/10 text-[#86EFAC] border border-[#34D399]/25",
@@ -293,20 +298,22 @@ export function WatchlistDecisionTable({
 }) {
   const [search, setSearch] = useState("");
   const [stage, setStage] = useState("all");
-  const [status, setStatus] = useState<"all" | "approved" | "rejected">("all");
+  const [status, setStatus] = useState<"all" | WatchlistDecisionItem["status"]>("all");
   const [indicator, setIndicator] = useState("all");
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
   const metrics = useMemo(() => {
     const approved = items.filter((item) => item.status === "approved").length;
-    const rejected = items.length - approved;
+    const rejected = items.filter((item) => item.status === "rejected").length;
+    const awaitingData = items.filter((item) => item.status === "awaiting_data").length;
     const stages = [...new Set(items.map((item) => item.stage).filter(Boolean))] as string[];
     const availableIndicators = [...new Set(items.flatMap((item) => item.details.indicators))].sort();
     return {
       total: items.length,
       approved,
       rejected,
+      awaitingData,
       topIndicator: metricTopIndicator(items),
       stages,
       availableIndicators,
@@ -370,7 +377,7 @@ export function WatchlistDecisionTable({
         <MetricCard label="Total" value={metrics.total} valueClass="text-[#E2E8F0]" />
         <MetricCard label="Approved" value={metrics.approved} valueClass="text-[#86EFAC]" />
         <MetricCard label="Rejected" value={metrics.rejected} valueClass="text-[#FCA5A5]" />
-        <MetricCard label="Top Indicator" value={metrics.topIndicator} valueClass="text-[#E2E8F0]" compact />
+        <MetricCard label="Aguardando dados" value={metrics.awaitingData} valueClass="text-amber-200" />
       </div>
 
       <div className="flex flex-wrap gap-2">
@@ -392,12 +399,13 @@ export function WatchlistDecisionTable({
         </select>
         <select
           value={status}
-          onChange={(event) => setStatus(event.target.value as "all" | "approved" | "rejected")}
+          onChange={(event) => setStatus(event.target.value as "all" | WatchlistDecisionItem["status"])}
           className="rounded-lg border border-[#1E2433] bg-[#0A0B10] px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none"
         >
           <option value="all">All statuses</option>
           <option value="approved">approved</option>
           <option value="rejected">rejected</option>
+          <option value="awaiting_data">Aguardando dados</option>
         </select>
         <select
           value={indicator}
@@ -571,7 +579,7 @@ export function WatchlistDecisionTable({
                       <td className="px-3 py-2.5 text-[#94A3B8]">{item.stage ?? "—"}</td>
                       <td className="px-3 py-2.5">
                         <span className={`inline-flex rounded px-2 py-0.5 text-[10px] font-semibold ${palette.badge}`}>
-                          {item.status}
+                          {item.status === "awaiting_data" ? "Aguardando dados" : item.status}
                         </span>
                       </td>
                       <td className="px-3 py-2.5 text-[#64748B]">{item.timestamp ? formatDateTime(item.timestamp) : "—"}</td>
@@ -579,7 +587,14 @@ export function WatchlistDecisionTable({
                     {isExpanded && (
                       <tr className="border-b border-[#1A2035] bg-[#06080E]">
                         <td colSpan={totalCols} className="p-4">
-                          {item.stage === "L3" && item.status === "rejected" && (
+                          {item.status === "awaiting_data" && (
+                            <div className="mb-4 rounded-xl border border-amber-500/30 bg-amber-950/20 p-4 text-xs text-amber-200" role="status">
+                              <p className="font-semibold">Dados desatualizados ou indisponíveis</p>
+                              <p className="mt-1">Aguardando uma avaliação atual das regras do perfil. Este ativo não foi rejeitado pela estratégia.</p>
+                              <p className="mt-2">Motivo: {(item.data_reasons ?? []).map((reason) => reason === "FEATURE_TTL_EXPIRED" ? "Leitura do indicador desatualizada" : reason === "EVALUATION_PENDING" ? "Primeira avaliação pendente" : reason === "PROFILE_EVALUATION_OUTDATED" ? "Aguardando avaliação da configuração atual" : "Dados insuficientes para avaliar a regra").filter((reason, index, values) => values.indexOf(reason) === index).join("; ")}</p>
+                            </div>
+                          )}
+                          {item.stage === "L3" && item.status === "rejected" && item.flow_check && (
                             <div className="mb-4 rounded-xl border border-amber-500/30 bg-amber-950/20 p-4 text-xs text-amber-200" role="status">
                               <p className="font-semibold">{item.flow_check?.status === "STALE"
                                 ? "Aguardando dados de fluxo atualizados"

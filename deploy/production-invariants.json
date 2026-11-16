@@ -7,6 +7,41 @@
   },
   "required_features": [
     {
+      "id": "profile-display-data-separation",
+      "description": "Only authored profile predicates reject; stale or missing inputs have a separate non-executable UI state",
+      "files": [
+        {
+          "path": "backend/app/services/profile_display_status.py",
+          "contains_all": [
+            "PROFILE_DISPLAY_DATA_SEPARATION",
+            "awaiting_data",
+            "execution_authority"
+          ]
+        },
+        {
+          "path": "backend/tests/test_profile_display_status.py",
+          "contains_all": [
+            "test_only_configured_rsi_boundary_rejects",
+            "test_expired_data_is_separate_even_when_last_value_tripped_rule",
+            "test_global_rules_score_and_shadow_contract_are_not_profile_vetoes",
+            "test_configured_required_predicate_replay_blocks_below_and_passes_at_boundary"
+          ]
+        },
+        {
+          "path": "frontend/lib/profileDisplayStatus.test.ts",
+          "contains_all": ["stale data renders its own state", "profile rejection does not invent a global flow restriction"]
+        },
+        {
+          "path": "frontend/app/watchlist/page.tsx",
+          "contains_all": [
+            "/profile-status",
+            "Aguardando dados",
+            "awaitingDataItems"
+          ]
+        }
+      ]
+    },
+    {
       "id": "l3-shadow-suppression-reason",
       "description": "Required Shadow dispatch never claims NO_SHADOW_REQUIRED; hourly uniqueness stays enforced and observable",
       "files": [

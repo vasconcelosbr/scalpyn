@@ -3252,6 +3252,54 @@ async def get_watchlist_assets(
     }
 
 
+async def _profile_display_payload(wl, user_id, db, profile_config):
+    """Profile-only UI projection; strict assets/public execution feeds stay intact."""
+    from ..services.profile_display_status import load_profile_display_rows
+    rows = await load_profile_display_rows(db, user_id=user_id, watchlist_id=wl.id)
+    groups = {"approved": [], "rejected": [], "awaiting_data": []}
+    for row in rows:
+        trace = [_contract_trace_item(c) for c in row['trace']]
+        # A stale predicate is not a current pass/fail, even if it had a value.
+        if row['status'] == 'awaiting_data':
+            for item in trace:
+                item.update(status='SKIPPED', reason=','.join(row['data_reasons']))
+                if item.get('type') == 'block_rule':
+                    item.update(outcome='SKIPPED', condition_matched=None)
+        snapshot = build_analysis_snapshot(symbol=row['symbol'], stage='L3',
+            profile_id=str(wl.profile_id), status=row['status'], trace=trace,
+            timestamp=row['evaluated_at'])
+        item = {**_normalize_decision_snapshot(symbol=row['symbol'], status=row['status'],
+            stage='L3', profile_id=str(wl.profile_id), timestamp=row['evaluated_at'],
+            snapshot=snapshot, alpha_score=row['alpha_score']),
+            'data_reasons': row['data_reasons'], 'decision_id': row['decision_id'],
+            'executable': False, 'execution_authority': False}
+        item['current_values']['price'] = row['current_price']
+        groups[row['status']].append(item)
+    return {'watchlist_id': str(wl.id), 'profile_id': str(wl.profile_id),
+        'approved_items': groups['approved'], 'items': groups['rejected'],
+        'awaiting_data_items': groups['awaiting_data'],
+        'metrics': {'total': len(rows), 'approved_count': len(groups['approved']),
+                    'rejected_count': len(groups['rejected']),
+                    'awaiting_data_count': len(groups['awaiting_data'])},
+        'profile_indicators': _extract_profile_indicator_fields(profile_config),
+        'display_classification': 'PROFILE_DISPLAY_DATA_SEPARATION',
+        'execution_authority': False}
+
+
+@router.get('/{watchlist_id}/profile-status')
+async def get_profile_display_status(watchlist_id: UUID, response: Response,
+    user_id: UUID = Depends(get_current_user_id), db: AsyncSession = Depends(get_db)):
+    wl = (await db.execute(select(PipelineWatchlist).where(
+        PipelineWatchlist.id == watchlist_id, PipelineWatchlist.user_id == user_id))).scalars().first()
+    if wl is None:
+        raise HTTPException(status_code=404, detail='Watchlist not found')
+    config = await _load_watchlist_profile_config(wl, db)
+    if wl.level != 'L3' or getattr(wl, 'market_mode', 'spot') != 'spot':
+        raise HTTPException(status_code=400, detail='Profile status is available for spot L3')
+    response.headers['Cache-Control'] = 'private, no-store'
+    return await _profile_display_payload(wl, user_id, db, config or {})
+
+
 async def _get_watchlist_rejections_payload(
     wl: PipelineWatchlist,
     user_id: UUID,
@@ -3263,6 +3311,8 @@ async def _get_watchlist_rejections_payload(
         source_pool_id=wl.source_pool_id,
         profile_config=profile_config,
     )
+    if effective_level == 'L3' and getattr(wl, 'market_mode', 'spot') == 'spot':
+        return await _profile_display_payload(wl, user_id, db, profile_config or {})
     assets = await _load_active_watchlist_assets(wl.id, db)
 
     if wl.auto_refresh and not (effective_level == "L3" and getattr(wl, "market_mode", "spot") == "spot"):
