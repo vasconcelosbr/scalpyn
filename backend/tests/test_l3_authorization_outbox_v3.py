@@ -138,3 +138,56 @@ def test_consolidation_result_distinguishes_winner_active_and_lower_priority():
     assert _consolidation_processing_result(
         other_winner, candidate
     ) == "SUPPRESSED/SAME_SYMBOL_LOWER_PRIORITY"
+
+
+def test_required_shadow_never_reports_not_required():
+    _, _, contract = _objects()
+    assert _direct_processing_result(contract, required=False) == "NO_SHADOW_REQUIRED"
+    assert _direct_processing_result(contract, required=True) == "SUPPRESSED/SHADOW_NOT_CREATED"
+    assert _direct_processing_result(
+        contract, required=True, hourly_limit_exists=True
+    ) == "SUPPRESSED/PROFILE_SYMBOL_HOURLY_LIMIT"
+    assert _direct_processing_result(
+        contract, required=True, hourly_limit_exists=True, active_exists=True
+    ) == "SUPPRESSED/ACTIVE_TRADE_ALREADY_EXISTS"
+
+
+@pytest.mark.asyncio
+async def test_hourly_limit_matches_database_key_even_after_trade_closes():
+    import os
+    from uuid import uuid4
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from app.services.l3_authorization_outbox_service import _hourly_profile_shadow_exists
+
+    url = os.environ.get("TEST_DATABASE_URL")
+    if not url:
+        pytest.skip("TEST_DATABASE_URL required; never use application DATABASE_URL")
+    engine = create_async_engine(url.replace("postgresql://", "postgresql+asyncpg://"))
+    profile = uuid4()
+    schema = f"shadow_hourly_{uuid4().hex}"
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(text("CREATE TEMP TABLE shadow_trades "
+                "(id uuid, profile_id uuid, symbol text, source text, status text, created_at timestamptz) ON COMMIT DROP"))
+            await connection.execute(text(f"CREATE SCHEMA {schema}"))
+            await connection.execute(text(f"SET LOCAL search_path = {schema}, public"))
+            await connection.execute(text(f"CREATE FUNCTION {schema}.shadow_lab_hour_bucket(ts timestamptz) "
+                "RETURNS timestamp LANGUAGE sql IMMUTABLE AS $$ SELECT date_trunc('hour', ts AT TIME ZONE 'UTC') $$"))
+            await connection.execute(text("INSERT INTO shadow_trades VALUES "
+                "(:id, :profile, 'SOL_USDT', 'L3', 'COMPLETED', now())"),
+                {"id": uuid4(), "profile": profile})
+            async with AsyncSession(bind=connection) as db:
+                async def exists(pid=profile, symbol="SOL_USDT"):
+                    return await _hourly_profile_shadow_exists(db, profile_id=pid, symbol=symbol)
+                assert await exists()
+                assert not await exists(uuid4())
+                assert not await exists(symbol="BTC_USDT")
+                assert not await exists(None)
+                await db.execute(text("UPDATE shadow_trades SET source='L3_REJECTED'"))
+                assert not await exists()
+                await db.execute(text("UPDATE shadow_trades SET source='L3', created_at=now()-interval '1 hour'"))
+                assert not await exists()
+            await connection.execute(text(f"DROP SCHEMA {schema} CASCADE"))
+    finally:
+        await engine.dispose()

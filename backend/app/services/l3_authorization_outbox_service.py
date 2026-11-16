@@ -101,7 +101,30 @@ async def _profile_is_active(db, *, user_id: Any, profile_id: Any) -> bool:
 def _not_created_result(contract: dict, *, required: bool) -> str:
     if contract.get("valid") is not True or contract.get("authorization_status") == "CONTRACT_REJECT":
         return "CONTRACT_REJECT"
-    return "NO_SHADOW_REQUIRED"
+    # L3_SHADOW_SUPPRESSION_REASON: required dispatch is never 'not required'.
+    return "SUPPRESSED/SHADOW_NOT_CREATED" if required else "NO_SHADOW_REQUIRED"
+
+
+async def _hourly_profile_shadow_exists(db, *, profile_id: Any, symbol: str) -> bool:
+    """Diagnose the existing unique index, including already completed trades.
+
+    Use the database bucket and transaction clock used by created_at's default.
+    Do not filter by status/direction: neither belongs to that unique key.
+    This is diagnostic only; the database still arbitrates concurrent inserts.
+    """
+    from ..models.shadow_trade import ShadowTrade
+
+    if not profile_id:
+        return False
+    return (await db.scalar(
+        select(ShadowTrade.id).where(
+            ShadowTrade.profile_id == profile_id,
+            ShadowTrade.symbol == symbol,
+            ShadowTrade.source == "L3",
+            func.shadow_lab_hour_bucket(ShadowTrade.created_at)
+            == func.shadow_lab_hour_bucket(func.now()),
+        ).limit(1)
+    )) is not None
 
 
 def _direct_processing_result(
@@ -110,11 +133,14 @@ def _direct_processing_result(
     required: bool,
     trade_id: Any = None,
     active_exists: bool = False,
+    hourly_limit_exists: bool = False,
 ) -> str:
     if trade_id is not None:
         return "CREATED_OR_RECONCILED"
     if active_exists:
         return "SUPPRESSED/ACTIVE_TRADE_ALREADY_EXISTS"
+    if required and hourly_limit_exists:
+        return "SUPPRESSED/PROFILE_SYMBOL_HOURLY_LIMIT"
     return _not_created_result(contract, required=required)
 
 
@@ -310,6 +336,12 @@ async def _process_direct(event_id: Any) -> str:
                             contract,
                             required=required,
                             active_exists=active is not None,
+                            hourly_limit_exists=(
+                                await _hourly_profile_shadow_exists(
+                                    db, profile_id=lineage.profile_id,
+                                    symbol=decision.symbol,
+                                ) if active is None else False
+                            ),
                         )
             payload = dict(event.payload or {})
             payload["processing_result"] = processing_result
