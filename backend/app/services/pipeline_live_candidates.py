@@ -168,6 +168,7 @@ def _l3_symbol_universe_statement(
             PipelineWatchlist.profile_id.label("profile_id"),
             Profile.name.label("profile_name"),
             Profile.profile_version.label("profile_version"),
+            Profile.config.label("profile_config"),
             PipelineWatchlist.filters_json.label("watchlist_filters"),
             l2_asset.symbol.label("symbol"),
             l2_asset.alpha_score.label("alpha_score"),
