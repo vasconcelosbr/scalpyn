@@ -39,6 +39,13 @@ capture settlement delay. Recomputing an old candle never renews its source time
 Existing profile TTLs and veto thresholds remain unchanged; old envelopes are
 not rewritten. New producer versions identify this timestamp correction.
 
+Shadow ATR barriers read the latest structural observation at or before the
+decision, in the configured timeframe. A newer partial microstructure row cannot
+mask ATR. A missing or invalid latest structural ATR still blocks creation.
+The quote-age budget must also be explicitly persisted through ConfigService;
+recovery uses the already configured order-book cache budget, without claiming
+that this is a calibrated trading parameter. Quote validity remains mandatory.
+
 Missing Shadow configuration must be persisted through ConfigService, using the
 existing typed simulation defaults and preserving any already configured values.
 Do not change profile rules, score thresholds, or model gates to obtain an ALLOW.

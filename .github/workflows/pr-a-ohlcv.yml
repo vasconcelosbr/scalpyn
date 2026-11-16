@@ -28,6 +28,7 @@ jobs:
         options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       PR_A_TEST_DATABASE_URL: postgresql+asyncpg://codex:local-test-only@127.0.0.1:5432/scalpyn_pr_a_test
+      TEST_DATABASE_URL: postgresql+asyncpg://codex:local-test-only@127.0.0.1:5432/scalpyn_pr_a_test
       PR_A_TEST_REDIS_URL: redis://127.0.0.1:6379/15
       DATABASE_URL: postgresql+asyncpg://codex:local-test-only@127.0.0.1:5432/scalpyn_pr_a_test
       REDIS_URL: redis://127.0.0.1:6379/15
@@ -42,4 +43,5 @@ jobs:
       - working-directory: backend
         run: |
           python -m alembic heads
+          python -m pytest -q tests/test_shadow_structural_atr_postgres.py tests/test_m5_closed_source_clock.py tests/test_recovery_m5_shadow.py
           python -m pytest -q tests/test_ohlcv_recovery_postgres.py tests/test_ohlcv_queue_isolation.py tests/test_ohlcv_comparison_postgres.py tests/test_ohlcv_broker_isolation.py tests/test_research_ohlcv_pipeline.py tests/test_celery_routing_invariants.py tests/test_celery_queue_status_and_dedup.py tests/test_celery_diagnostics_endpoint.py
