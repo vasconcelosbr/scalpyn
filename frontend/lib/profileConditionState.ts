@@ -201,6 +201,41 @@ export function setProfileBlockTimeframe<T extends Record<string, any>>(
   return { ...block, timeframe, conditions };
 }
 
+/** An explicit default selection applies to every candle feature already in the profile.
+ * Live metadata, order books and rolling trade windows keep their own identity.
+ */
+export function setProfileDefaultTimeframe<T extends Record<string, any>>(config: T, timeframe: string): T {
+  const next: Record<string, any> = structuredClone(config);
+  next.default_timeframe = timeframe;
+  function visit(value: any): void {
+    if (!value || typeof value !== "object") return;
+    const indicator = value.indicator || value.field;
+    if (indicator && !DECISION_CONTEXT_INDICATORS.has(indicator)
+      && indicator !== "funding_rate"
+      && !/^(recent_(high|low)_|price_change_)/.test(indicator)
+      && indicator !== "breakout_distance_pct"
+      && (value.source || inferredFeatureSource(indicator)) === "ohlcv") {
+      value.timeframe = timeframe;
+    }
+    if (isProfileComparisonCondition(value)) {
+      // A comparison's candle operands follow the selection independently;
+      // an explicitly live price operand must remain a live price.
+      for (const side of ["left", "right"]) {
+        const operand = value.resolved_operands?.[side];
+        const source = operand?.source || inferredFeatureSource(value[side], true);
+        if (source === "ohlcv") {
+          value.timeframe = timeframe;
+          if (operand) operand.timeframe = timeframe;
+        }
+      }
+    }
+    Object.values(value).forEach(visit);
+  }
+  for (const section of ["filters", "signals", "scoring", "entry_triggers", "block_rules"]) visit(next[section]);
+  for (const block of next.block_rules?.blocks || []) block.timeframe = timeframe;
+  return next as T;
+}
+
 export function blockConditionHasTimeframe(condition: Record<string, any>): boolean {
   return profileTemporalIdentity(condition).showTimeframe
     || profileConditionPrimaryIndicator(condition) === "bb_upper_distance_pct";
@@ -333,7 +368,7 @@ function conditionIdentity(
         ?? reference.parameters ?? calculation?.parameters ?? catalog?.defaultParameters;
       if (configuredParameters !== undefined) reference.parameters = configuredParameters;
     }
-    reference.timeframe = condition.timeframe || reference.timeframe || policy.timeframe || defaultTimeframe;
+    reference.timeframe = condition.timeframe || reference.timeframe || defaultTimeframe || policy.timeframe;
     reference.candle_policy = reference.candle_policy || policy.candle_policy;
     delete reference.window_seconds;
     delete reference.snapshot;

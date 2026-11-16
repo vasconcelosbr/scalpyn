@@ -1473,7 +1473,7 @@ async def test_profile(
     # Run profile engine test
     hydrated_profile_config = await _hydrate_profile_config_with_global_score(db, user_id, profile.config)
     from ..services.block_condition_timeframe import prepare_block_candle_inputs
-    assets = await prepare_block_candle_inputs(db, assets, hydrated_profile_config)
+    assets = await prepare_block_candle_inputs(db, assets, hydrated_profile_config, user_id=user_id)
     engine = ProfileEngine(hydrated_profile_config)
     test_result = engine.test_profile(assets)
     
@@ -1519,7 +1519,7 @@ async def test_profile_config(
     # Run profile engine test
     hydrated_profile_config = await _hydrate_profile_config_with_global_score(db, user_id, validated_config)
     from ..services.block_condition_timeframe import prepare_block_candle_inputs
-    assets = await prepare_block_candle_inputs(db, assets, hydrated_profile_config)
+    assets = await prepare_block_candle_inputs(db, assets, hydrated_profile_config, user_id=user_id)
     engine = ProfileEngine(hydrated_profile_config)
     test_result = engine.test_profile(assets)
     

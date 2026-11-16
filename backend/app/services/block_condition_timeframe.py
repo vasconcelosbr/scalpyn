@@ -73,7 +73,7 @@ def block_condition_data(condition: dict, asset: dict, *, scheduler_group: Optio
     return data
 
 
-async def prepare_block_candle_inputs(db, assets: list[dict], profile: dict) -> list[dict]:
+async def prepare_block_candle_inputs(db, assets: list[dict], profile: dict, *, user_id=None) -> list[dict]:
     """Fetch declared block candle series before both rejection and final gates.
 
     PROFILE_BLOCK_EXACT_TIMEFRAME: independent of legacy flat-map feature flags.
@@ -82,7 +82,13 @@ async def prepare_block_candle_inputs(db, assets: list[dict], profile: dict) -> 
     from .indicators_provider import get_timeframe_indicators, get_closed_block_rsi6
 
     requested_by_timeframe: dict[str, set[str]] = {}
-    for block in (profile.get("block_rules") or {}).get("blocks") or []:
+    if profile.get("default_timeframe") == "4h":
+        requested_by_timeframe["4h"] = set()
+    # PROFILE_ALL_CANDLE_TIMEFRAMES: declared candle identities in every
+    # section share the same exact-series loading as block conditions.
+    sections = [profile.get(name) or {} for name in ("filters", "signals", "entry_triggers")]
+    sections.extend((profile.get("block_rules") or {}).get("blocks") or [])
+    for block in sections:
         if block.get("enabled", True) is False:
             continue
         for condition in block.get("conditions") or []:
@@ -116,9 +122,14 @@ async def prepare_block_candle_inputs(db, assets: list[dict], profile: dict) -> 
                 c.get("indicator") == "rsi_6" for c in getattr(exact.get(a["symbol"]), "candidates", [])
             )] if timeframe == "1m" and market_type == "spot" else []
             rsi_candidates = await get_closed_block_rsi6(db, missing_rsi) if missing_rsi else {}
+            h4_candidates = {}
+            if timeframe == "4h" and market_type == "spot":
+                from .profile_candles_4h import get_closed_profile_4h
+                h4_candidates = await get_closed_profile_4h(db, [a["symbol"] for a in pending], user_id=user_id)
             for asset in pending:
                 merged = exact.get(asset["symbol"])
                 asset["_block_candle_timeframes_loaded"].append(timeframe)
+                asset["_indicators_by_tf"].setdefault(timeframe, {})
                 if merged is not None:
                     asset["_indicators_by_tf"][timeframe] = merged.as_flat_dict()
                     asset["_block_ohlcv_candidates"].extend(merged.candidates)
@@ -126,4 +137,20 @@ async def prepare_block_candle_inputs(db, assets: list[dict], profile: dict) -> 
                     candidate = rsi_candidates[asset["symbol"]]
                     asset["_block_ohlcv_candidates"].append(candidate)
                     asset["_indicators_by_tf"].setdefault(timeframe, {})["rsi_6"] = candidate["actual"]
+                if timeframe == "4h" and market_type == "spot":
+                    candidates = h4_candidates.get(asset["symbol"], [])
+                    asset["_block_ohlcv_candidates"].extend(candidates)
+                    asset["_indicators_by_tf"][timeframe] = {c["indicator"]: c["actual"] for c in candidates}
+                # Scoring and rejection consumers use this profile's default
+                # candle series too, preserving current price and live data.
+                from .indicator_classifier import timeframe_semantics
+                if profile.get("default_timeframe") == timeframe:
+                    indicators = dict(asset.get("indicators") or {})
+                    for key in set(indicators) | set(asset["_indicators_by_tf"][timeframe]):
+                        if (key != "price" and not key.startswith(("recent_high_", "recent_low_", "price_change_"))
+                                and key != "breakout_distance_pct" and timeframe_semantics(key) == "CANDLE_TIMEFRAME"):
+                            value = asset["_indicators_by_tf"][timeframe].get(key)
+                            indicators[key] = value
+                            asset[key] = value
+                    asset["indicators"] = indicators
     return prepared

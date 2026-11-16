@@ -7,6 +7,18 @@
   },
   "required_features": [
     {
+      "id": "profile-default-timeframe-h4",
+      "description": "Explicit profile timeframe changes propagate to every candle condition, preserving live metadata and supporting closed Gate H4 inputs",
+      "files": [
+        {"path": "frontend/lib/profileConditionState.ts", "contains_all": ["setProfileDefaultTimeframe", "defaultTimeframe || policy.timeframe"]},
+        {"path": "frontend/components/profiles/ProfileBuilder.tsx", "contains_all": ["setProfileDefaultTimeframe(c, e.target.value)", "4h (4 horas)"]},
+        {"path": "frontend/lib/profileDefaultTimeframe.test.ts", "contains_all": ["default selection updates all candle sections", "metadata, live windows and fixed reference windows remain unchanged"]},
+        {"path": "backend/app/services/block_condition_timeframe.py", "contains_all": ["PROFILE_ALL_CANDLE_TIMEFRAMES", "get_closed_profile_4h"]},
+        {"path": "backend/app/services/profile_candles_4h.py", "contains_all": ["profile_closed_gate_4h_v1", "CLOSED_ONLY"]},
+        {"path": "backend/tests/test_profile_default_timeframe.py", "contains_all": ["test_h4_profile_roundtrip_uses_exact_rsi_and_live_metadata", "test_all_sections_load_h4_before_scoring_and_preserve_live_data"]}
+      ]
+    },
+    {
       "id": "profile-status-ui-safe-deactivation",
       "description": "Profile activation is a dedicated audited status operation; inactive profiles cannot feed live watchlists, new Shadows or orders, while existing positions keep their immutable monitoring path",
       "files": [

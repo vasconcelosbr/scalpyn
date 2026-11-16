@@ -756,7 +756,7 @@ export function JsonImportBuilder({ onClose }: Props) {
       "description": "texto livre",          // opcional
       "funnel_role": "acquisition_queue",    // universe_filter | primary_filter | score_engine | acquisition_queue
       "pipeline_label": "L3_TREND_V1",      // opcional
-      "default_timeframe": "5m",             // 1m | 3m | 5m | 15m | 1h  (default: 5m)
+      "default_timeframe": "5m",             // 1m | 3m | 5m | 15m | 1h | 4h  (default: 5m)
 
       // ── filters / signals ─────────────────────────────────────────
       // usar "field" + "operator" + "value"  (+ "period" se suportado)
