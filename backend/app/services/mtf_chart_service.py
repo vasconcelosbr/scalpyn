@@ -18,11 +18,13 @@ from ..models.pipeline_watchlist import PipelineWatchlist, PipelineWatchlistAsse
 from ..schemas.mtf_chart import MTFChartConfig
 from .config_service import config_service
 from .profile_runtime_config import canonical_hash
-from .mtf_chart_engine import TF_SECONDS, ENGINE_VERSION, timestamp, prepare_frame, evaluate, trend, simulate_step, closed_candles
+from .mtf_chart_engine import TF_SECONDS, ENGINE_VERSION, timestamp, prepare_frame, evaluate, trend, simulate_step, closed_candles, frame_zones
 
 log = logging.getLogger(__name__)
 _market_cache: OrderedDict = OrderedDict()
 _frame_cache: OrderedDict = OrderedDict()
+_chart_snapshots: OrderedDict = OrderedDict()
+_pair_cache: tuple = (0, {})
 
 
 async def load_config(db, user_id) -> MTFChartConfig:
@@ -56,17 +58,20 @@ async def members(db, user_id, watchlist_id: str) -> list[dict]:
     if wl.level == "L3":
         candidates = await load_live_l3_candidates(db, user_id=user_id)
         return [{"symbol": c.symbol, "profile_id": str(p.profile_id), "alpha_score": p.alpha_score,
-                 "current_price": p.current_price} for c in candidates for p in c.contributors if p.watchlist_id == wid]
+                 "current_price": p.current_price,
+                 "price_snapshot_at": p.refreshed_at.isoformat() if p.refreshed_at else None}
+                for c in candidates for p in c.contributors if p.watchlist_id == wid]
     rows = (await db.execute(select(PipelineWatchlistAsset).where(
         PipelineWatchlistAsset.watchlist_id == wid,
         (PipelineWatchlistAsset.level_direction.is_(None)) | (PipelineWatchlistAsset.level_direction == "up")
     ).order_by(PipelineWatchlistAsset.symbol))).scalars().all()
     return [{"symbol": r.symbol, "profile_id": str(wl.profile_id) if wl.profile_id else None,
              "current_price": float(r.current_price) if r.current_price is not None else None,
+             "price_snapshot_at": r.refreshed_at.isoformat() if r.refreshed_at else None,
              "alpha_score": float(r.alpha_score) if r.alpha_score is not None else None} for r in rows]
 
 
-async def profile_context(db, user_id, profile_id):
+async def profile_context(db, user_id, profile_id, include_display=True):
     profile = None
     if profile_id:
         profile = await db.scalar(select(Profile).where(Profile.id == UUID(str(profile_id)),
@@ -94,21 +99,23 @@ async def profile_context(db, user_id, profile_id):
             families.add("stochastic")
         else:
             families.add(name.split("_", 1)[0])
-    if not names:
-        families = {name for name in ("ema", "rsi", "adx") if (indicator_config.get(name) or {}).get("enabled")}
+    if include_display:
+        families |= {name for name in ("ema", "rsi", "adx") if (indicator_config.get(name) or {}).get("enabled")}
     from .feature_engine import FeatureEngine
     supported = {name for name in families if hasattr(FeatureEngine, f"_calc_{name}")}
     return profile, indicator_config, identity, supported, sorted(names)
 
 
-async def market_candles(symbol, tf, cfg):
+async def market_candles(symbol, tf, cfg, limit=None):
     from .market_data_service import market_data_service
-    key = (symbol, tf, cfg.candle_limits[tf])
+    limit = limit or cfg.candle_limits[tf]
+    key = (symbol, tf, limit)
     cached = _market_cache.get(key)
     if cached and time.monotonic()-cached[0] < cfg.poll_seconds:
         _market_cache.move_to_end(key)
         return cached[1]
-    df = await market_data_service.fetch_ohlcv(symbol, tf, limit=cfg.candle_limits[tf], gate_only=True)
+    incremental = cached and time.monotonic()-cached[0] < TF_SECONDS[tf]
+    df = await market_data_service.fetch_ohlcv(symbol, tf, limit=2 if incremental else limit, gate_only=True)
     if df is None or df.empty or df.attrs.get("exchange") != "gate.io":
         return []
     rows = []
@@ -117,6 +124,10 @@ async def market_candles(symbol, tf, cfg):
         if not all(math.isfinite(v) for v in values.values()):
             raise ValueError("INVALID_OHLCV")
         rows.append({"time": timestamp(c["time"]), "is_closed": bool(c.get("is_closed", False)), **values})
+    if incremental:
+        by_time = {c['time']: c for c in cached[1]}
+        by_time.update({c['time']: c for c in rows})
+        rows = sorted(by_time.values(), key=lambda c:c['time'])[-limit:]
     _market_cache[key] = (time.monotonic(), rows)
     # Bounded by the configured universe and three supported timeframes.
     while len(_market_cache) > cfg.max_assets_per_watchlist*len(TF_SECONDS):
@@ -136,14 +147,14 @@ def calculation_window(config, tf):
     return max(_derive_min_candles(config, tf), max(config.get("ema", {}).get("periods") or [0]))
 
 
-async def prepared(raw, tf, cutoff, indicators, families, cfg):
+async def prepared(raw, tf, cutoff, indicators, families, cfg, history=None):
     window = calculation_window(indicators, tf)
     closed = closed_candles(raw, tf, cutoff)
     key = canonical_hash({"candles": closed, "tf": tf, "indicators": indicators,
-                          "families": sorted(families), "config": cfg.model_dump(), "window": window})
+                          "families": sorted(families), "config": cfg.engine_dump(), "window": window})
     if key not in _frame_cache:
-        _frame_cache[key] = await asyncio.to_thread(prepare_frame, closed, tf, cutoff, indicators, families, cfg, window)
-        while len(_frame_cache) > cfg.max_assets_per_watchlist*len(TF_SECONDS):
+        _frame_cache[key] = await asyncio.to_thread(prepare_frame, closed, tf, cutoff, indicators, families, cfg, window, history)
+        while len(_frame_cache) > cfg.max_assets_per_watchlist*len(TF_SECONDS)*2:
             _frame_cache.popitem(last=False)
     _frame_cache.move_to_end(key)
     result = deepcopy(_frame_cache[key])
@@ -151,22 +162,33 @@ async def prepared(raw, tf, cutoff, indicators, families, cfg):
     return result
 
 
-async def chart_data(db, user_id, symbol, profile_id, cfg):
+async def chart_data(db, user_id, symbol, profile_id, cfg, include_display=True):
     from .market_data_service import market_data_service
-    profile, indicators, identity, families, names = await profile_context(db, user_id, profile_id)
+    profile, indicators, identity, families, names = await profile_context(db, user_id, profile_id, include_display)
     # Close snapshots first, then collect live context; observed_at is never
     # presented as a candle-close timestamp or used for historical fills.
     now = int(time.time())
     cutoff = now-now % TF_SECONDS["5m"]
-    raw = dict(zip(TF_SECONDS, await asyncio.gather(*(market_candles(symbol, tf, cfg) for tf in TF_SECONDS))))
+    # MTF_DISPLAY_WARMUP: the added prefix is display-only. The evaluation
+    # keeps its original candle domain and producer initialization window.
+    full_raw = dict(zip(TF_SECONDS, await asyncio.gather(*(market_candles(symbol, tf, cfg,
+        limit=min(1000, cfg.candle_limits[tf] + (calculation_window(indicators, tf) if include_display else 0))) for tf in TF_SECONDS))))
+    raw = {tf: candles[-cfg.candle_limits[tf]:] for tf,candles in full_raw.items()}
     closes = [c["time"]+TF_SECONDS["5m"] for c in raw["5m"] if c.get("is_closed") and c["time"]+TF_SECONDS["5m"] <= cutoff]
     if closes:
         cutoff = max(closes)
     frames = {}
+    display_frames = {}
+    display_errors = {}
     errors = {}
     for tf in TF_SECONDS:
         try:
-            frames[tf] = await prepared(raw[tf], tf, cutoff, indicators, families, cfg)
+            display_frames[tf] = await prepared(full_raw[tf], tf, cutoff, indicators, families, cfg)
+        except ValueError as exc:
+            display_errors[tf] = str(exc)
+        try:
+            frames[tf] = await prepared(raw[tf], tf, cutoff, indicators, families, cfg,
+                                        history=display_frames.get(tf, {}).get('indicators'))
         except ValueError as exc:
             errors[tf] = str(exc)
             frames[tf] = {"candles": [], "indicators": {}, "patterns": [], "pivots": [], "atr": None}
@@ -189,7 +211,7 @@ async def chart_data(db, user_id, symbol, profile_id, cfg):
         analysis["status"] = "NO_TRADE"
         analysis["score"]["total"] = 0
     analysis["observed_at_utc"] = datetime.now(timezone.utc).isoformat()
-    analysis["config_hash"] = canonical_hash(cfg.model_dump())
+    analysis["config_hash"] = canonical_hash(cfg.engine_dump())
     analysis["indicator_identity"] = identity
     analysis["profile_id"] = str(profile.id) if profile else None
     analysis["profile_hash"] = canonical_hash(profile.config) if profile else None
@@ -199,15 +221,100 @@ async def chart_data(db, user_id, symbol, profile_id, cfg):
     analysis["data_errors"] = errors
     unavailable = [name for name in names if not any(name in f["indicators"] for f in frames.values())]
     analysis["unavailable_profile_indicators"] = unavailable
+    if not include_display:
+        # The scheduled observer persists analysis, never the drawing history.
+        # Keep its original work/domain instead of adding UI-only computation.
+        return {'symbol': symbol, 'frames': frames, 'analysis': analysis,
+                'as_of': analysis['observed_at_utc']}
     for tf, frame in frames.items():
+        display_zones = frame_zones(frame, tf, cfg, frames['5m']['candles'][-1]['close']) if frames['5m']['candles'] and frame.get('atr') else []
+        try:
+            display = display_frames.get(tf)
+            if display is None:
+                raise ValueError(display_errors.get(tf, 'INSUFFICIENT_HISTORY'))
+            first = raw[tf][0]['time'] if raw[tf] else now
+            frame['indicators'] = {k: [p for p in v if p['time'] >= first] for k,v in display['indicators'].items()}
+            frame['patterns'] = [p for p in display['patterns'] if p['time'] >= first]
+            frame['warmup'] = {'required': calculation_window(indicators, tf),
+                'available_prefix': sum(c['time'] < first for c in full_raw[tf]),
+                'reason': None if sum(c['time'] < first for c in full_raw[tf]) >= calculation_window(indicators,tf)-1 else 'INSUFFICIENT_HISTORY'}
+        except ValueError as exc:
+            frame['warmup'] = {'reason': str(exc)}
+        frame['zones'] = display_zones
         # Display the open candle without including it in any analysis.
         frame["candles"] = [{**c, "closed": c.get("is_closed") is True and c["time"]+TF_SECONDS[tf] <= now} for c in raw[tf]]
         frame["error"] = errors.get(tf)
         frame["source"] = "gate.io"
         frame["stale"] = not raw[tf] or now-(raw[tf][-1]["time"]+TF_SECONDS[tf]) > cfg.stale_tf_multiplier*TF_SECONDS[tf]
-    return {"symbol": symbol, "frames": frames, "analysis": analysis,
+    price_format = await pair_price_format(symbol, cfg)
+    return {"symbol": symbol, "frames": frames, "analysis": analysis, 'price_format': price_format,
             "profile": {"id": str(profile.id), "name": profile.name, "default_timeframe": (profile.config or {}).get("default_timeframe")} if profile else None,
             "indicator_config": indicators, "as_of": analysis["observed_at_utc"]}
+
+
+async def pair_price_format(symbol, cfg):
+    global _pair_cache
+    if not cfg.presentation:
+        return None
+    try:
+        if time.monotonic()-_pair_cache[0] >= cfg.presentation.pair_metadata_ttl_seconds:
+            from ..exchange_adapters.gate_adapter import GateAdapter
+            pairs = await GateAdapter('', '').list_spot_pairs()
+            _pair_cache = (time.monotonic(), {p['id']: p for p in pairs})
+        pair = _pair_cache[1].get(symbol)
+        if pair is None or pair.get('precision') is None:
+            return None
+        precision = int(pair['precision'])
+        if precision < 0 or precision > 18:
+            return None
+        return {'precision': precision, 'min_move': 10 ** -precision, 'source': 'gate.io'}
+    except Exception:
+        log.warning('MTF pair precision unavailable symbol=%s', symbol)
+        return None
+
+
+def chart_transport(data, *, context, since, max_entries):
+    """Opaque cursor, owner/version scoped; replace overlay lists, upsert series.
+
+    A cached old snapshot is only a delta base, never an authorization cache.
+    Missing/evicted bases reset explicitly instead of silently losing candles.
+    """
+    identity = canonical_hash({'context': context, 'profile': data['analysis'].get('profile_hash'),
+        'indicator': data['analysis'].get('indicator_identity'), 'config': data['analysis']['config_hash'],
+        'engine': data['analysis']['engine_version']})
+    old = _chart_snapshots.get(since)
+    cursor = canonical_hash({'identity': identity, 'frames': data['frames'], 'as_of': data['as_of']})
+    result = deepcopy(data)
+    result.update(cursor=cursor, transport='full')
+    overlapping = old and all(
+        not frame.get('error') and bool({c['time'] for c in frame['candles']} &
+             {c['time'] for c in old[1]['frames'].get(tf, {}).get('candles', [])})
+        for tf, frame in data['frames'].items())
+    if old and old[0] == identity and overlapping:
+        result['transport'] = 'delta'
+        for tf, frame in result['frames'].items():
+            before = old[1]['frames'][tf]
+            # Zones change only with closed-frame context; absent means retain,
+            # while an explicit empty list removes the previous zones.
+            if 'zones' in frame and frame['zones'] == before.get('zones'):
+                del frame['zones']
+            frame['window_start'] = frame['candles'][0]['time'] if frame['candles'] else None
+            for field in ('candles',):
+                previous = {p['time']: p for p in before[field]}
+                frame[field] = [p for p in frame[field] if previous.get(p['time']) != p]
+            for name, points in frame['indicators'].items():
+                previous = {p['time']: p for p in before['indicators'].get(name, [])}
+                frame['indicators'][name] = [p for p in points if previous.get(p['time']) != p]
+            for field, discriminator in (('patterns','pattern'),('pivots','kind')):
+                previous = {(p['time'],p[discriminator]):p for p in before[field]}
+                current = {(p['time'],p[discriminator]):p for p in frame[field]}
+                frame[field] = [p for key,p in current.items() if previous.get(key) != p]
+                frame[field+'_removed'] = [list(key) for key in previous.keys()-current.keys()]
+    _chart_snapshots[cursor] = (identity, deepcopy(data))
+    _chart_snapshots.move_to_end(cursor)
+    while len(_chart_snapshots) > max_entries:
+        _chart_snapshots.popitem(last=False)
+    return result
 
 
 async def latest_evaluations(db, user_id, watchlist_id):
@@ -305,7 +412,7 @@ async def run_cycle():
                                     locked = await db.scalar(text("SELECT pg_try_advisory_xact_lock(hashtext(:key))"), {"key": f"mtf-chart:{user_id}"})
                                     if not locked:
                                         continue
-                                    data = await chart_data(db, user_id, item["symbol"], item.get("profile_id"), cfg)
+                                    data = await chart_data(db, user_id, item["symbol"], item.get("profile_id"), cfg, include_display=False)
                                     count += await persist_evaluation(db, user_id, wid, data, cfg)
                                 await db.commit()
                             except Exception:

@@ -1,0 +1,99 @@
+{
+  "environment": "local production build; isolated browser; captured Gate data; all API calls intercepted; synthetic failures; no production writes",
+  "checks": [
+    "all default panes meet configured minimum heights",
+    "restore saved symbol/timeframe",
+    "theme preserves canvas and does not fetch market data",
+    "timeframe changes locally",
+    "symbol switch preserves timeframe",
+    "indicator and collapsed panel persist after reload",
+    "compact chart scrolls with configured panel heights",
+    "clipping is explicit and reversible",
+    "transient chart failure retains canvas and removes current status",
+    "bounded retry recovers",
+    "list failure does not count as removal",
+    "confirmed removal withdraws current status",
+    "aborted slow response cannot replace newer symbol"
+  ],
+  "errors": [],
+  "chartCalls": 10,
+  "listCalls": 12,
+  "paneDimensions": [
+    {
+      "width": 872,
+      "height": 423
+    },
+    {
+      "width": 872,
+      "height": 423
+    },
+    {
+      "width": 80,
+      "height": 423
+    },
+    {
+      "width": 80,
+      "height": 423
+    },
+    {
+      "width": 872,
+      "height": 91
+    },
+    {
+      "width": 872,
+      "height": 91
+    },
+    {
+      "width": 80,
+      "height": 91
+    },
+    {
+      "width": 80,
+      "height": 91
+    },
+    {
+      "width": 872,
+      "height": 111
+    },
+    {
+      "width": 872,
+      "height": 111
+    },
+    {
+      "width": 80,
+      "height": 111
+    },
+    {
+      "width": 80,
+      "height": 111
+    },
+    {
+      "width": 872,
+      "height": 110
+    },
+    {
+      "width": 872,
+      "height": 110
+    },
+    {
+      "width": 80,
+      "height": 110
+    },
+    {
+      "width": 80,
+      "height": 110
+    },
+    {
+      "width": 872,
+      "height": 28
+    },
+    {
+      "width": 872,
+      "height": 28
+    },
+    {
+      "width": 80,
+      "height": 28
+    }
+  ]
+}

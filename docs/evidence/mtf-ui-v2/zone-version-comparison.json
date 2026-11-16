@@ -1,0 +1,539 @@
+{
+  "environment": "local replay of public Gate candles; same candle/config context per asset; no persistence; not a calibration sample",
+  "zone_lookback_candles": {
+    "1h": 300,
+    "4h": 300,
+    "5m": 500
+  },
+  "comparison": [
+    {
+      "symbol": "AAVE_USDT",
+      "before": {
+        "zone_1h": {
+          "type": "SUPPORT",
+          "low": 96.41250000000001,
+          "high": 97.1775,
+          "touches": 2,
+          "available_at": 1794718800,
+          "distance_atr": 6.616013071895426,
+          "in_zone": false,
+          "rejection": false
+        },
+        "plan": null,
+        "status": "NO_TRADE",
+        "vetoes": [
+          "SPOT_NOT_BUYING",
+          "BTC_DOWNTREND"
+        ]
+      },
+      "after": {
+        "zone_1h": {
+          "type": "SUPPORT",
+          "low": 96.41250000000001,
+          "high": 97.1775,
+          "touches": 2,
+          "available_at": 1794718800,
+          "origins": [
+            "SUPPORT"
+          ],
+          "pivot_times": [
+            1794690000,
+            1794704400
+          ],
+          "reference_price": 107.3,
+          "distance_atr": 6.616013071895426,
+          "in_zone": false,
+          "rejection": false
+        },
+        "plan": null,
+        "status": "NO_TRADE",
+        "vetoes": [
+          "SPOT_NOT_BUYING",
+          "BTC_DOWNTREND"
+        ]
+      },
+      "operational_effect": false
+    },
+    {
+      "symbol": "ASTER_USDT",
+      "before": {
+        "zone_1h": {
+          "type": "SUPPORT",
+          "low": 0.47714642749999997,
+          "high": 0.4828535725,
+          "touches": 3,
+          "available_at": 1794790800,
+          "distance_atr": 7.249371401988209,
+          "in_zone": false,
+          "rejection": false
+        },
+        "plan": null,
+        "status": "NO_TRADE",
+        "vetoes": [
+          "BTC_DOWNTREND"
+        ]
+      },
+      "after": {
+        "zone_1h": {
+          "type": "SUPPORT",
+          "low": 0.5293464275,
+          "high": 0.5381535725,
+          "touches": 2,
+          "available_at": 1794844800,
+          "origins": [
+            "RESISTANCE",
+            "SUPPORT"
+          ],
+          "pivot_times": [
+            1794711600,
+            1794830400
+          ],
+          "reference_price": 0.5656,
+          "distance_atr": 2.4045672135542406,
+          "in_zone": false,
+          "rejection": false
+        },
+        "plan": null,
+        "status": "NO_TRADE",
+        "vetoes": [
+          "BTC_DOWNTREND"
+        ]
+      },
+      "operational_effect": false
+    },
+    {
+      "symbol": "AVAX_USDT",
+      "before": {
+        "zone_1h": {
+          "type": "SUPPORT",
+          "low": 7.1072142849999995,
+          "high": 7.156785715,
+          "touches": 2,
+          "available_at": 1794805200,
+          "distance_atr": 0.0,
+          "in_zone": true,
+          "rejection": false
+        },
+        "plan": null,
+        "status": "NO_TRADE",
+        "vetoes": [
+          "SPOT_NOT_BUYING",
+          "BTC_DOWNTREND"
+        ]
+      },
+      "after": {
+        "zone_1h": {
+          "type": "TEST",
+          "low": 7.030880951666667,
+          "high": 7.156785715,
+          "touches": 5,
+          "available_at": 1794855600,
+          "origins": [
+            "SUPPORT"
+          ],
+          "pivot_times": [
+            1794729600,
+            1794751200,
+            1794790800,
+            1794808800,
+            1794841200
+          ],
+          "reference_price": 7.142,
+          "distance_atr": 0.0,
+          "in_zone": true,
+          "rejection": false
+        },
+        "plan": null,
+        "status": "NO_TRADE",
+        "vetoes": [
+          "SPOT_NOT_BUYING",
+          "BTC_DOWNTREND"
+        ]
+      },
+      "operational_effect": false
+    },
+    {
+      "symbol": "BTC_USDT",
+      "before": {
+        "zone_1h": {
+          "type": "SUPPORT",
+          "low": 64259.060714285006,
+          "high": 64567.039285715,
+          "touches": 2,
+          "available_at": 1794805200,
+          "distance_atr": 0.41847183245277986,
+          "in_zone": true,
+          "rejection": false
+        },
+        "plan": {
+          "side": "LONG",
+          "entry_type": "MARKET_ON_CLOSE",
+          "entry": 64824.8,
+          "stop": 64749.482857142,
+          "tp1": 65490.710714285,
+          "tp2": 73930.67738095167,
+          "rr_net": 1.744438649532012,
+          "rr_gross": 8.841422935286538,
+          "quantity": 0.15403082587635222,
+          "notional_usdt": 9985.017481269359,
+          "expires_after_candles": 3,
+          "expires_at": "2026-11-16T20:00:00+00:00"
+        },
+        "status": "NO_TRADE",
+        "vetoes": [
+          "SPOT_NOT_BUYING",
+          "RR_BELOW_MIN"
+        ]
+      },
+      "after": {
+        "zone_1h": {
+          "type": "TEST",
+          "low": 63687.910714285,
+          "high": 65153.989285715,
+          "touches": 5,
+          "available_at": 1794844800,
+          "origins": [
+            "SUPPORT"
+          ],
+          "pivot_times": [
+            1794672000,
+            1794726000,
+            1794758400,
+            1794790800,
+            1794830400
+          ],
+          "reference_price": 64824.8,
+          "distance_atr": 0.0,
+          "in_zone": true,
+          "rejection": true
+        },
+        "plan": {
+          "side": "LONG",
+          "entry_type": "MARKET_ON_CLOSE",
+          "entry": 64824.8,
+          "stop": 64749.482857142,
+          "tp1": 65490.710714285,
+          "tp2": 67371.310714285,
+          "rr_net": 1.744438649532012,
+          "rr_gross": 8.841422935286538,
+          "quantity": 0.15403082587635222,
+          "notional_usdt": 9985.017481269359,
+          "expires_after_candles": 3,
+          "expires_at": "2026-11-16T20:00:00+00:00"
+        },
+        "status": "NO_TRADE",
+        "vetoes": [
+          "SPOT_NOT_BUYING",
+          "RR_BELOW_MIN"
+        ]
+      },
+      "operational_effect": false
+    },
+    {
+      "symbol": "CRO_USDT",
+      "before": {
+        "zone_1h": {
+          "type": "SUPPORT",
+          "low": 0.042928572500000005,
+          "high": 0.043171427500000005,
+          "touches": 2,
+          "available_at": 1794744000,
+          "distance_atr": 0.0,
+          "in_zone": true,
+          "rejection": false
+        },
+        "plan": null,
+        "status": "NO_TRADE",
+        "vetoes": [
+          "TREND_RANGE",
+          "BTC_DOWNTREND"
+        ]
+      },
+      "after": {
+        "zone_1h": {
+          "type": "TEST",
+          "low": 0.042928572500000005,
+          "high": 0.043171427500000005,
+          "touches": 2,
+          "available_at": 1794744000,
+          "origins": [
+            "SUPPORT"
+          ],
+          "pivot_times": [
+            1794672000,
+            1794729600
+          ],
+          "reference_price": 0.04293,
+          "distance_atr": 0.0,
+          "in_zone": true,
+          "rejection": false
+        },
+        "plan": null,
+        "status": "NO_TRADE",
+        "vetoes": [
+          "TREND_RANGE",
+          "BTC_DOWNTREND"
+        ]
+      },
+      "operational_effect": false
+    },
+    {
+      "symbol": "ENA_USDT",
+      "before": {
+        "zone_1h": {
+          "type": "SUPPORT",
+          "low": 0.1097660725,
+          "high": 0.1107339275,
+          "touches": 2,
+          "available_at": 1794718800,
+          "distance_atr": 2.637829271946729,
+          "in_zone": false,
+          "rejection": false
+        },
+        "plan": null,
+        "status": "NO_TRADE",
+        "vetoes": [
+          "SPOT_NOT_BUYING",
+          "BTC_DOWNTREND"
+        ]
+      },
+      "after": {
+        "zone_1h": {
+          "type": "SUPPORT",
+          "low": 0.1097660725,
+          "high": 0.1107339275,
+          "touches": 2,
+          "available_at": 1794718800,
+          "origins": [
+            "SUPPORT"
+          ],
+          "pivot_times": [
+            1794690000,
+            1794704400
+          ],
+          "reference_price": 0.11584,
+          "distance_atr": 2.637829271946729,
+          "in_zone": false,
+          "rejection": false
+        },
+        "plan": null,
+        "status": "NO_TRADE",
+        "vetoes": [
+          "SPOT_NOT_BUYING",
+          "BTC_DOWNTREND"
+        ]
+      },
+      "operational_effect": false
+    },
+    {
+      "symbol": "ETH_USDT",
+      "before": {
+        "zone_1h": {
+          "type": "SUPPORT",
+          "low": 1802.4466071425,
+          "high": 1813.2133928575,
+          "touches": 2,
+          "available_at": 1794805200,
+          "distance_atr": 0.10665240320054421,
+          "in_zone": true,
+          "rejection": false
+        },
+        "plan": null,
+        "status": "NO_TRADE",
+        "vetoes": [
+          "SPOT_NOT_BUYING",
+          "BTC_DOWNTREND"
+        ]
+      },
+      "after": {
+        "zone_1h": {
+          "type": "SUPPORT",
+          "low": 1767.9866071425,
+          "high": 1813.2133928575,
+          "touches": 5,
+          "available_at": 1794844800,
+          "origins": [
+            "SUPPORT"
+          ],
+          "pivot_times": [
+            1794672000,
+            1794726000,
+            1794751200,
+            1794790800,
+            1794830400
+          ],
+          "reference_price": 1815.51,
+          "distance_atr": 0.10665240320054421,
+          "in_zone": true,
+          "rejection": false
+        },
+        "plan": null,
+        "status": "NO_TRADE",
+        "vetoes": [
+          "SPOT_NOT_BUYING",
+          "BTC_DOWNTREND"
+        ]
+      },
+      "operational_effect": false
+    },
+    {
+      "symbol": "GRAM_USDT",
+      "before": {
+        "zone_1h": {
+          "type": "SUPPORT",
+          "low": 1.0302464275,
+          "high": 1.0364535725,
+          "touches": 2,
+          "available_at": 1794758400,
+          "distance_atr": 0.2292863707872114,
+          "in_zone": true,
+          "rejection": false
+        },
+        "plan": null,
+        "status": "NO_TRADE",
+        "vetoes": [
+          "SPOT_NOT_BUYING",
+          "BTC_DOWNTREND"
+        ]
+      },
+      "after": {
+        "zone_1h": {
+          "type": "SUPPORT",
+          "low": 1.0117964275,
+          "high": 1.0364535725,
+          "touches": 5,
+          "available_at": 1794848400,
+          "origins": [
+            "SUPPORT"
+          ],
+          "pivot_times": [
+            1794261600,
+            1794704400,
+            1794729600,
+            1794744000,
+            1794834000
+          ],
+          "reference_price": 1.0393,
+          "distance_atr": 0.2292863707872114,
+          "in_zone": true,
+          "rejection": false
+        },
+        "plan": null,
+        "status": "NO_TRADE",
+        "vetoes": [
+          "SPOT_NOT_BUYING",
+          "BTC_DOWNTREND"
+        ]
+      },
+      "operational_effect": false
+    },
+    {
+      "symbol": "HBAR_USDT",
+      "before": {
+        "zone_1h": {
+          "type": "SUPPORT",
+          "low": 0.05711553500000001,
+          "high": 0.057434465000000004,
+          "touches": 2,
+          "available_at": 1794855600,
+          "distance_atr": 0.0,
+          "in_zone": true,
+          "rejection": true
+        },
+        "plan": null,
+        "status": "NO_TRADE",
+        "vetoes": [
+          "SPOT_NOT_BUYING",
+          "BTC_DOWNTREND"
+        ]
+      },
+      "after": {
+        "zone_1h": {
+          "type": "TEST",
+          "low": 0.05711553500000001,
+          "high": 0.059584465,
+          "touches": 10,
+          "available_at": 1794855600,
+          "origins": [
+            "RESISTANCE",
+            "SUPPORT"
+          ],
+          "pivot_times": [
+            1794621600,
+            1794639600,
+            1794672000,
+            1794711600,
+            1794747600,
+            1794758400,
+            1794783600,
+            1794790800,
+            1794837600,
+            1794841200
+          ],
+          "reference_price": 0.05743,
+          "distance_atr": 0.0,
+          "in_zone": true,
+          "rejection": true
+        },
+        "plan": null,
+        "status": "NO_TRADE",
+        "vetoes": [
+          "SPOT_NOT_BUYING",
+          "BTC_DOWNTREND"
+        ]
+      },
+      "operational_effect": false
+    },
+    {
+      "symbol": "HYPE_USDT",
+      "before": {
+        "zone_1h": {
+          "type": "SUPPORT",
+          "low": 65.6816071425,
+          "high": 66.24839285750001,
+          "touches": 2,
+          "available_at": 1794823200,
+          "distance_atr": 1.1129489585848131,
+          "in_zone": false,
+          "rejection": true
+        },
+        "plan": null,
+        "status": "NO_TRADE",
+        "vetoes": [
+          "SPOT_NOT_BUYING",
+          "BTC_DOWNTREND"
+        ]
+      },
+      "after": {
+        "zone_1h": {
+          "type": "SUPPORT",
+          "low": 65.6816071425,
+          "high": 67.3433928575,
+          "touches": 4,
+          "available_at": 1794823200,
+          "origins": [
+            "RESISTANCE",
+            "SUPPORT"
+          ],
+          "pivot_times": [
+            1794625200,
+            1794711600,
+            1794762000,
+            1794808800
+          ],
+          "reference_price": 67.51,
+          "distance_atr": 0.1469754248305274,
+          "in_zone": true,
+          "rejection": true
+        },
+        "plan": null,
+        "status": "NO_TRADE",
+        "vetoes": [
+          "SPOT_NOT_BUYING",
+          "BTC_DOWNTREND"
+        ]
+      },
+      "operational_effect": false
+    }
+  ]
+}

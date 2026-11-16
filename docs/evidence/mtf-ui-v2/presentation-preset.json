@@ -1,0 +1,47 @@
+{
+  "visible_candles": {
+    "4h": 90,
+    "1h": 120,
+    "5m": 150
+  },
+  "panel_heights": {
+    "price": 420,
+    "volume": 90,
+    "rsi": 110,
+    "adx": 110,
+    "other": 110
+  },
+  "default_indicators": [
+    "ema9",
+    "ema21",
+    "volume_ma",
+    "rsi",
+    "adx"
+  ],
+  "markers_max": 15,
+  "markers_recent_signals": 3,
+  "pivots_per_type": 4,
+  "marker_min_range_atr": 0.25,
+  "zones_per_side": 2,
+  "removal_confirmations": 2,
+  "retry_initial_seconds": 3,
+  "retry_max_seconds": 60,
+  "watchlist_poll_seconds": 30,
+  "autoscale_clip_pct": 1.0,
+  "pair_metadata_ttl_seconds": 3600,
+  "reason_labels": {
+    "BTC_DOWNTREND": "Bitcoin em tendência de baixa",
+    "BTC_CONTEXT_UNAVAILABLE": "Contexto do Bitcoin indisponível",
+    "SPOT_NOT_BUYING": "Viés de baixa: não comprar em Spot",
+    "TREND_RANGE": "Tendência lateral",
+    "SPREAD_UNAVAILABLE": "Spread indisponível",
+    "SPREAD_TOO_WIDE": "Spread acima do limite",
+    "STOP_TOO_WIDE": "Stop acima do limite",
+    "STRUCTURAL_TARGETS_UNAVAILABLE": "Alvos estruturais indisponíveis",
+    "RR_BELOW_MIN": "Retorno/risco abaixo do mínimo",
+    "DATA_MISSING": "Candles ou indicadores insuficientes",
+    "DATA_STALE": "Dados de mercado vencidos",
+    "EVALUATION_STALE": "Avaliação vencida",
+    "CONFIG_CHANGED": "Configuração alterada; aguardando avaliação"
+  }
+}

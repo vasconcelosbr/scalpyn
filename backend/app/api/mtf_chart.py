@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from .config import get_current_user_id
 from ..models.profile import Profile
-from ..schemas.mtf_chart import MTFChartConfig, MTFPreferences, experimental_preset
+from ..schemas.mtf_chart import MTFChartConfig, MTFPreferences, experimental_preset, presentation_preset
 from ..services.config_service import config_service
 from ..services import mtf_chart_service as service
 
@@ -28,7 +28,7 @@ async def bootstrap(response: Response, db: AsyncSession = Depends(get_db), uid:
     profiles = (await db.execute(select(Profile).where(Profile.user_id == uid, Profile.is_active.is_(True)))).scalars().all()
     return {"config": config or None, "preset": experimental_preset(), "watchlists": await service.watchlist_options(db, uid),
             "profiles": [{"id": str(p.id), "name": p.name, "default_timeframe": (p.config or {}).get("default_timeframe")} for p in profiles],
-            "preferences": await config_service.get_config(db, "mtf_preferences", uid),
+            "preferences": await config_service.get_config(db, "mtf_preferences", uid), 'presentation_preset': presentation_preset(),
             "mode": "SHADOW", "operational_effect": False}
 
 
@@ -58,7 +58,7 @@ async def watchlist(response: Response, watchlist_id: str, db: AsyncSession = De
     latest = await service.latest_evaluations(db, uid, watchlist_id)
     from datetime import datetime, timezone
     from ..services.profile_runtime_config import canonical_hash
-    expected_hash = canonical_hash(cfg.model_dump())
+    expected_hash = canonical_hash(cfg.engine_dump())
     now = datetime.now(timezone.utc).timestamp()
     for analysis in latest.values():
         closed_at = analysis.get('candle_close_at_utc')
@@ -69,11 +69,14 @@ async def watchlist(response: Response, watchlist_id: str, db: AsyncSession = De
             analysis['vetoes'] = list(analysis['vetoes']) + ['EVALUATION_STALE' if stale else 'CONFIG_CHANGED']
     return {"items": [{**item, "mtf": latest.get(item["symbol"])} for item in items[:cfg.max_assets_per_watchlist]],
             "total": len(items), "limited": len(items) > cfg.max_assets_per_watchlist,
-            "monitored": watchlist_id in cfg.monitored_watchlists}
+            "monitored": watchlist_id in cfg.monitored_watchlists,
+            'as_of': datetime.now(timezone.utc).isoformat(),
+            'snapshot_id': canonical_hash({'members': items, 'config': expected_hash})}
 
 
 @router.get("/chart")
 async def chart(response: Response, symbol: str, watchlist_id: str, profile_id: UUID | None = None,
+                since: str | None = Query(default=None, max_length=64),
                 db: AsyncSession = Depends(get_db), uid: UUID = Depends(get_current_user_id)):
     response.headers["Cache-Control"] = "private, no-store"
     cfg = await config_or_error(db, uid)
@@ -82,7 +85,13 @@ async def chart(response: Response, symbol: str, watchlist_id: str, profile_id: 
         member = next((m for m in items if m["symbol"] == symbol), None)
         if member is None:
             raise HTTPException(404, "ASSET_NO_LONGER_IN_WATCHLIST")
-        return await service.chart_data(db, uid, symbol, profile_id or member.get("profile_id"), cfg)
+        data = await service.chart_data(db, uid, symbol, profile_id or member.get("profile_id"), cfg)
+        # A cold chart can outlive an L3 authorization while computing history.
+        if not any(m['symbol'] == symbol for m in await service.members(db, uid, watchlist_id)):
+            raise HTTPException(404, 'ASSET_NO_LONGER_IN_WATCHLIST')
+        return service.chart_transport(data, context={'user_id': str(uid), 'watchlist_id': watchlist_id,
+            'symbol': symbol, 'profile_id': str(profile_id or member.get('profile_id'))},
+            since=since, max_entries=cfg.max_assets_per_watchlist * len(service.TF_SECONDS))
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(422, str(exc)) from exc
 

@@ -100,7 +100,7 @@ def trend(points: list[dict]) -> str:
     return "RANGE"
 
 
-def zones(points: list[dict], atr: float, cfg: MTFChartConfig) -> list[dict]:
+def zones(points: list[dict], atr: float, cfg: MTFChartConfig, reference: float | None = None) -> list[dict]:
     result = []
     for kind, zone_type in (("H", "RESISTANCE"), ("L", "SUPPORT")):
         clusters: list[list[dict]] = []
@@ -110,12 +110,40 @@ def zones(points: list[dict], atr: float, cfg: MTFChartConfig) -> list[dict]:
             else:
                 clusters[-1].append(point)
         for group in clusters:
-            if len(group) >= cfg.zone_min_touches:
+            if cfg.schema_version == 'mtf_chart_v2' or len(group) >= cfg.zone_min_touches:
                 center = sum(p["price"] for p in group) / len(group)
                 result.append({"type": zone_type, "low": center-cfg.zone_atr_mult*atr/2,
                                "high": center+cfg.zone_atr_mult*atr/2, "touches": len(group),
-                               "available_at": max(p["confirmed_at"] for p in group)})
+                               "available_at": max(p["confirmed_at"] for p in group),
+                               **({"origins": [zone_type], "pivot_times": sorted({p['time'] for p in group})}
+                                  if cfg.schema_version == 'mtf_chart_v2' else {})})
+    if cfg.schema_version == 'mtf_chart_v2' and reference is not None:
+        merged = []
+        for zone in sorted(result, key=lambda z: z['low']):
+            if merged and zone['low'] - merged[-1]['high'] <= cfg.zone_atr_mult * atr:
+                prior = merged[-1]
+                prior['high'] = max(prior['high'], zone['high'])
+                prior['available_at'] = max(prior['available_at'], zone['available_at'])
+                prior['origins'] = sorted(set(prior['origins'] + zone['origins']))
+                prior['pivot_times'] = sorted(set(prior['pivot_times'] + zone['pivot_times']))
+                prior['touches'] = len(prior['pivot_times'])
+            else:
+                merged.append(dict(zone))
+        for zone in merged:
+            zone['touches'] = len(zone['pivot_times'])
+            zone['type'] = 'SUPPORT' if zone['high'] < reference else 'RESISTANCE' if zone['low'] > reference else 'TEST'
+            zone['reference_price'] = reference
+        return [zone for zone in merged if zone['touches'] >= cfg.zone_min_touches]
     return result
+
+
+def frame_zones(frame, tf, cfg, reference):
+    points = frame['pivots']
+    if cfg.schema_version == 'mtf_chart_v2':
+        candles = frame['candles'][-cfg.zone_lookback_candles[tf]:]
+        points = [p for p in points if candles and p['time'] >= candles[0]['time']
+                  and p['confirmed_at'] <= candles[-1]['time'] + TF_SECONDS[tf]]
+    return zones(points, frame['atr'], cfg, reference) if frame.get('atr') else []
 
 
 def indicator_history(candles: list[dict], config: dict, families: set[str], window: int | None = None) -> dict[str, list[dict]]:
@@ -154,9 +182,18 @@ def indicator_history(candles: list[dict], config: dict, families: set[str], win
     return series
 
 
-def prepare_frame(candles, tf, as_of, indicator_config, families, cfg, window=None):
+def prepare_frame(candles, tf, as_of, indicator_config, families, cfg, window=None, history=None):
     closed = closed_candles(candles, tf, as_of)
-    series = indicator_history(closed, indicator_config, families, window=window)
+    if history is None:
+        series = indicator_history(closed, indicator_config, families, window=window)
+    else:
+        # Supplied samples use the same fixed producer window. Restrict their
+        # availability to this frame's original warmup/domain before evaluation.
+        ready = closed[window-1]['time'] if window and len(closed) >= window else None
+        end = closed[-1]['time'] if closed else None
+        series = {name: [dict(p) for p in points if ready is not None and ready <= p['time'] <= end]
+                  for name, points in history.items() if name != 'volume_ma'}
+        series = {name: points for name, points in series.items() if points}
     series["volume_ma"] = [{"time": closed[i]["time"], "value": sum(c["volume"] for c in closed[i-cfg.vol_lookback+1:i+1])/cfg.vol_lookback}
                            for i in range(cfg.vol_lookback-1, len(closed))]
     atr_map = {p["time"]: p["value"] for p in series.get("atr", [])}
@@ -172,10 +209,10 @@ def prepare_frame(candles, tf, as_of, indicator_config, families, cfg, window=No
 
 def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_pct: float | None, btc_trend: str | None) -> dict[str, Any]:
     result: dict[str, Any] = {"symbol": symbol, "market": "spot", "mode": "SHADOW", "operational_effect": False,
-        "engine_version": ENGINE_VERSION, "evaluated_at_utc": iso(as_of), "candle_closed_5m": None,
+        "engine_version": cfg.schema_version, "evaluated_at_utc": iso(as_of), "candle_closed_5m": None,
         "context_4h": {"trend": "RANGE", "last_pivots": [], "strength": "NEUTRAL", "last_candle_pattern": None},
         "zone_1h": None, "zones": [], "trigger_5m": None, "plan": None,
-        "score": {"total": 0, "maximum": sum(cfg.score_weights.values()), "components": {}, "calibrated": False},
+        "score": {"total": 0, "raw": None, "maximum": sum(cfg.score_weights.values()), "components": {}, "calibrated": False},
         "vetoes": [], "status": "NO_TRADE", "explanation": []}
     vetoes = result["vetoes"]
     closed_5m = frames.get("5m", {}).get("candles", [])
@@ -201,10 +238,11 @@ def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_
     force = any(p in ("ENGULF_BULL", "MARUBOZU_BULL") for p in last4)
     result["context_4h"] = {"trend": direction, "last_pivots": [p["label"] for p in f4["pivots"][-4:]],
                             "last_candle_pattern": last4[0] if last4 else None, "strength": "FORCE" if force else "NEUTRAL"}
-    zs = zones(f1["pivots"], f1["atr"], cfg)
+    zs = frame_zones(f1, '1h', cfg, c['close'])
     result["zones"] = zs
     supports = [z for z in zs if z["low"] <= c["close"]]
-    supports = [z for z in supports if z["type"] == "SUPPORT"]
+    supports = [z for z in supports if z["type"] == "SUPPORT" or
+                (z['type'] == 'TEST' and 'SUPPORT' in z.get('origins', []))]
     zone = min(supports, key=lambda z: max(z["low"]-c["close"], c["close"]-z["high"], 0)) if supports else None
     rejection = False
     near = False
@@ -262,10 +300,10 @@ def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_
              "rr": rr is not None and rr >= cfg.rr_bonus_threshold}
     components = {k: cfg.score_weights[k] if v else 0 for k, v in flags.items()}
     score = 0 if vetoes else sum(components.values())
-    result["score"].update(total=score, components=components)
+    result["score"].update(total=score, raw=sum(components.values()), components=components)
     result["status"] = "NO_TRADE" if vetoes else "TRIGGERED" if near and trigger and result["plan"] and score >= cfg.min_score else "ARMED" if near else "WAIT"
     result["explanation"] = [
-        f"Estrutura do 4H: {direction}; pivôs confirmados: {', '.join(result['context_4h']['last_pivots']) or 'indisponíveis'}.",
+        f"Estrutura do 4H: {dict(UP='alta', DOWN='baixa', RANGE='lateral')[direction]}; pivôs confirmados: {', '.join(result['context_4h']['last_pivots']) or 'indisponíveis'}.",
         "Preço próximo do suporte do 1H." if near else "Aguardando aproximação de uma zona confirmada do 1H.",
         f"Gatilho fechado: {trigger['pattern']} em {iso(c['time'])}." if trigger else "Sem gatilho de compra no último candle fechado.",
         "Plano experimental; stops e perdas pertencem somente à simulação.",

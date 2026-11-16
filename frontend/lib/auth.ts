@@ -12,6 +12,7 @@ export function clearToken(): void {
   if (typeof window === 'undefined') return;
   localStorage.removeItem('token');
   localStorage.removeItem('user');
+  localStorage.removeItem('refresh_token');
 }
 
 export function isAuthenticated(): boolean {
