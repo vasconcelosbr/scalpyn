@@ -2318,7 +2318,7 @@ async def _resolve_and_persist(
     # as the scanner, including futures market scope.
     assets_out = await prepare_block_candle_inputs(
         db, [{**asset, "is_futures": getattr(wl, "market_mode", "spot") == "futures"}
-             for asset in candidate_assets], profile_config_full or {},
+             for asset in candidate_assets], profile_config_full or {}, user_id=user_id,
     )
     rejected_rows: List[Dict[str, Any]] = []
 
@@ -3065,7 +3065,7 @@ async def get_watchlist_assets(
 
     block_inputs = {asset["symbol"]: asset for asset in await prepare_block_candle_inputs(
         db, [{"symbol": symbol, "is_futures": is_futures} for symbol in symbols],
-        profile_config or {},
+        profile_config or {}, user_id=user_id,
     )}
     enriched = []
     for a in assets:
@@ -3473,7 +3473,7 @@ async def _get_watchlist_rejections_payload(
 
     block_inputs = {asset["symbol"]: asset for asset in await prepare_block_candle_inputs(
         db, [{"symbol": symbol, "is_futures": getattr(wl, "market_mode", "spot") == "futures"}
-             for symbol in rejection_symbols], profile_config or {},
+             for symbol in rejection_symbols], profile_config or {}, user_id=user_id,
     )}
 
     def _recompute_trace(row: PipelineWatchlistRejection) -> List[Dict[str, Any]]:

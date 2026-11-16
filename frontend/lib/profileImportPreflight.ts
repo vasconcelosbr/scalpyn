@@ -16,7 +16,7 @@ export interface ImportPreflightResult {
   issues: ImportPreflightIssue[];
 }
 
-const VALID_TIMEFRAMES = new Set(["1m", "3m", "5m", "15m", "1h"]);
+const VALID_TIMEFRAMES = new Set(["1m", "3m", "5m", "15m", "1h", "4h"]);
 const VALID_FUNNEL_ROLES = new Set(["universe_filter", "primary_filter", "score_engine", "acquisition_queue"]);
 const NUMERIC_OPERATORS = new Set([">", ">=", "<", "<=", "=", "==", "!=", "between"]);
 const BOOLEAN_OPERATORS = new Set(["is_true", "is_false", "=", "==", "!="]);

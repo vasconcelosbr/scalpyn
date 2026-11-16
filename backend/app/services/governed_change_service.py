@@ -157,7 +157,7 @@ _SPOT_PRESERVED_COMPAT_ROOTS = frozenset({
     "capital",
     "limits",
 })
-_PROFILE_TIMEFRAMES = frozenset({"1m", "3m", "5m", "15m", "1h"})
+_PROFILE_TIMEFRAMES = frozenset({"1m", "3m", "5m", "15m", "1h", "4h"})
 _PROFILE_LOGICS = frozenset({"AND", "OR"})
 _PROFILE_OPERATORS = frozenset({
     ">",

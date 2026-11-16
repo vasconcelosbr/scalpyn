@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, List
 
 ALL_SECTIONS = frozenset({"filters", "signals", "block_rules", "entry_triggers"})
 BREAKOUT_REFERENCE_WINDOWS = frozenset({"5m", "15m", "30m", "1h"})
-VALID_TIMEFRAMES = frozenset({"1m", "3m", "5m", "15m", "1h"})
+VALID_TIMEFRAMES = frozenset({"1m", "3m", "5m", "15m", "1h", "4h"})
 NUMERIC_OPERATORS = frozenset({">", ">=", "<", "<=", "=", "==", "!=", "between"})
 BOOLEAN_OPERATORS = frozenset({"is_true", "is_false", "=", "==", "!="})
 STRING_OPERATORS = frozenset({"=", "==", "!="})

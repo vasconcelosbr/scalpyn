@@ -24,6 +24,7 @@ import {
   profileSourcePoliciesForEditor,
   setProfileFlowWindow,
   setProfileBlockTimeframe,
+  setProfileDefaultTimeframe,
   blockConditionHasTimeframe,
   profileBooleanSelection,
   updateProfileConditionIndicator,
@@ -139,6 +140,7 @@ const TIMEFRAME_OPTIONS = [
   { value: "5m",  label: "5m" },
   { value: "15m", label: "15m" },
   { value: "1h",  label: "1h" },
+  { value: "4h",  label: "4h (4 horas)" },
 ];
 
 /** Period defaults for indicators that support configurable periods */
@@ -1234,7 +1236,7 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
               <select
                 className="input"
                 value={config.default_timeframe || "5m"}
-                onChange={(e) => setConfig((c: any) => ({ ...c, default_timeframe: e.target.value }))}
+                onChange={(e) => setConfig((c: any) => setProfileDefaultTimeframe(c, e.target.value))}
                 data-testid="default-timeframe-select"
               >
                 {TIMEFRAME_OPTIONS.map((tf) => (
@@ -1242,7 +1244,8 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
                 ))}
               </select>
               <p className="text-[11px] text-[var(--text-tertiary)]">
-                Indicadores de candles herdam este timeframe, salvo configuração específica.
+                Ao selecionar, aplica a todos os indicadores de candles do profile, inclusive os já inseridos.
+                Capitalização, preço atual, livro de ofertas e janelas de fluxo não são alterados.
               </p>
             </div>
           </div>

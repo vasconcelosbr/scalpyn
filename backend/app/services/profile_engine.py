@@ -17,6 +17,7 @@ from typing import Dict, Any, List, Optional
 
 from .block_engine import BlockEngine
 from .indicator_classifier import timeframe_semantics
+from .profile_indicator_contract import VALID_TIMEFRAMES
 from .rule_engine import RuleEngine
 from .score_engine import ScoreEngine
 from .signal_engine import SignalEngine
@@ -31,10 +32,6 @@ DEFAULT_WEIGHTS = {
     "momentum": 25,
     "signal": 25
 }
-
-# Valid timeframe choices (used for grouping)
-VALID_TIMEFRAMES = frozenset({"1m", "3m", "5m", "15m", "1h"})
-
 
 # ── Indicator Cache ───────────────────────────────────────────────────────────
 
@@ -436,7 +433,7 @@ class ProfileEngine:
         cached = self._indicator_cache.get(symbol, tf)
         if cached is not None:
             return cached
-        if self.strict_timeframe_mode:
+        if self.strict_timeframe_mode or condition.get("source") == "ohlcv":
             return {}
         # Fallback: default timeframe data
         return self._indicator_cache.get(symbol, self.default_timeframe) or {}
@@ -463,8 +460,10 @@ class ProfileEngine:
         """
         if not field or timeframe_semantics(field) != "CANDLE_TIMEFRAME":
             return
+        if field == "price" and cond.get("source") != "ohlcv":
+            return
         resolved = self._get_indicators_for_condition(symbol, cond).get(field)
-        if resolved is not None:
+        if resolved is not None or cond.get("source") == "ohlcv":
             eval_data[field] = resolved
 
     # ── Pipeline ──────────────────────────────────────────────────────────────
