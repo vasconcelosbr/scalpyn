@@ -1,0 +1,329 @@
+"""Pure price-action analysis. No database, exchange credentials or order APIs."""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from math import isfinite
+from typing import Any
+import pandas as pd
+
+from ..schemas.mtf_chart import MTFChartConfig
+from .feature_engine import FeatureEngine
+
+TF_SECONDS = {"4h": 14400, "1h": 3600, "5m": 300}
+ENGINE_VERSION = "mtf_chart_v1"
+
+
+def timestamp(value) -> int:
+    return int(pd.Timestamp(value).timestamp())
+
+
+def iso(seconds: int | float) -> str:
+    return datetime.fromtimestamp(seconds, timezone.utc).isoformat()
+
+
+def closed_candles(candles: list[dict], timeframe: str, as_of: int) -> list[dict]:
+    result = []
+    for c in sorted(candles, key=lambda c: c["time"]):
+        if c["time"] + TF_SECONDS[timeframe] > as_of or c.get("is_closed") is False:
+            continue
+        values = [c.get(key) for key in ("open", "high", "low", "close", "volume")]
+        if any(v is None or not isfinite(v) for v in values):
+            raise ValueError("INVALID_OHLCV")
+        if min(values[:4]) <= 0 or c["volume"] < 0 or c["high"] < max(c["open"], c["close"]) or c["low"] > min(c["open"], c["close"]) or c["low"] > c["high"]:
+            raise ValueError("INVALID_OHLCV")
+        if result and c["time"] - result[-1]["time"] != TF_SECONDS[timeframe]:
+            raise ValueError("CANDLE_GAP_OR_DUPLICATE")
+        result.append(c)
+    return result
+
+
+def patterns(c: dict, previous: dict | None, atr: float | None, cfg: MTFChartConfig) -> list[dict]:
+    amplitude = c["high"] - c["low"]
+    if not atr or amplitude <= 0 or amplitude < cfg.min_range_atr * atr:
+        return []
+    body = abs(c["close"] - c["open"])
+    upper = c["high"] - max(c["open"], c["close"])
+    lower = min(c["open"], c["close"]) - c["low"]
+    bull = c["close"] > c["open"]
+    found = []
+    def add(name):
+        found.append({"time": c["time"], "pattern": name,
+                      "metrics": {"body": body, "range": amplitude, "upper_wick": upper,
+                                  "lower_wick": lower, "atr": atr}})
+    if body <= amplitude * cfg.doji_body_pct:
+        add("DOJI")
+    if lower >= cfg.pin_wick_ratio * body and lower >= cfg.pin_wick_pct * amplitude and c["close"] >= c["high"] - amplitude * cfg.pin_close_fraction:
+        add("PIN_BULL")
+    if upper >= cfg.pin_wick_ratio * body and upper >= cfg.pin_wick_pct * amplitude and c["close"] <= c["low"] + amplitude * cfg.pin_close_fraction:
+        add("PIN_BEAR")
+    if upper + lower <= cfg.marubozu_wick_pct * amplitude:
+        add("MARUBOZU_BULL" if bull else "MARUBOZU_BEAR")
+    if previous:
+        prev_bull = previous["close"] > previous["open"]
+        low, high = (c["low"], c["high"]) if cfg.engulf_include_wicks else sorted([c["open"], c["close"]])
+        plow, phigh = (previous["low"], previous["high"]) if cfg.engulf_include_wicks else sorted([previous["open"], previous["close"]])
+        if bull != prev_bull and body > 0 and previous["close"] != previous["open"] and low <= plow and high >= phigh:
+            add("ENGULF_BULL" if bull else "ENGULF_BEAR")
+        if c["low"] > previous["low"] and c["high"] < previous["high"]:
+            add("INSIDE_BAR")
+        if min(c["open"], c["close"]) > min(previous["open"], previous["close"]) and max(c["open"], c["close"]) < max(previous["open"], previous["close"]):
+            add("HARAMI")
+    return found
+
+
+def pivots(candles: list[dict], timeframe: str, cfg: MTFChartConfig) -> list[dict]:
+    result = []
+    prior = {}
+    for i in range(cfg.pivot_left, len(candles) - cfg.pivot_right):
+        c = candles[i]
+        neighbours = candles[i-cfg.pivot_left:i] + candles[i+1:i+cfg.pivot_right+1]
+        for key, kind in (("high", "H"), ("low", "L")):
+            confirmed = all(c[key] > n[key] for n in neighbours) if kind == "H" else all(c[key] < n[key] for n in neighbours)
+            if not confirmed:
+                continue
+            label = kind if kind not in prior else ("H" if c[key] > prior[kind] else "L") + kind
+            result.append({"time": c["time"], "price": c[key], "kind": kind, "label": label,
+                           "confirmed_at": candles[i+cfg.pivot_right]["time"] + TF_SECONDS[timeframe]})
+            prior[kind] = c[key]
+    return result
+
+
+def trend(points: list[dict]) -> str:
+    highs = [p for p in points if p["kind"] == "H"]
+    lows = [p for p in points if p["kind"] == "L"]
+    if len(highs) < 2 or len(lows) < 2:
+        return "RANGE"
+    if highs[-1]["price"] > highs[-2]["price"] and lows[-1]["price"] > lows[-2]["price"]:
+        return "UP"
+    if highs[-1]["price"] < highs[-2]["price"] and lows[-1]["price"] < lows[-2]["price"]:
+        return "DOWN"
+    return "RANGE"
+
+
+def zones(points: list[dict], atr: float, cfg: MTFChartConfig) -> list[dict]:
+    result = []
+    for kind, zone_type in (("H", "RESISTANCE"), ("L", "SUPPORT")):
+        clusters: list[list[dict]] = []
+        for point in sorted((p for p in points if p["kind"] == kind), key=lambda p: p["price"]):
+            if not clusters or point["price"] - clusters[-1][0]["price"] > cfg.zone_atr_mult * atr:
+                clusters.append([point])
+            else:
+                clusters[-1].append(point)
+        for group in clusters:
+            if len(group) >= cfg.zone_min_touches:
+                center = sum(p["price"] for p in group) / len(group)
+                result.append({"type": zone_type, "low": center-cfg.zone_atr_mult*atr/2,
+                               "high": center+cfg.zone_atr_mult*atr/2, "touches": len(group),
+                               "available_at": max(p["confirmed_at"] for p in group)})
+    return result
+
+
+def indicator_history(candles: list[dict], config: dict, families: set[str], window: int | None = None) -> dict[str, list[dict]]:
+    """Exact prefix evaluation of existing functions; no parallel TA formulas."""
+    engine = FeatureEngine(config)
+    df = pd.DataFrame(candles)
+    series: dict[str, list[dict]] = {}
+    if df.empty:
+        return series
+    for family in sorted(families | {"atr"}):
+        setting = config.get(family)
+        calculate = getattr(engine, f"_calc_{family}", None)
+        if not setting or not setting.get("enabled") or not calculate:
+            continue
+        # A config must explicitly declare parameters; do not inherit the
+        # legacy FeatureEngine's fallback periods in this fail-closed consumer.
+        required = {"ema": ("periods",), "rsi": ("period",), "adx": ("period",),
+                    "atr": ("period",), "macd": ("fast", "slow", "signal"),
+                    "bollinger": ("period", "deviation"), "stochastic": ("k", "d", "smooth")}.get(family, ())
+        if any(k not in setting for k in required):
+            raise ValueError(f"INDICATOR_CONFIG_REQUIRED:{family}")
+        for i in range(1, len(candles)):
+            if window is not None and i+1 < window:
+                continue
+            # Warmup is represented as a missing sample, never zero.
+            if family == "adx" and i+1 < int(setting["period"])*2:
+                continue
+            try:
+                prefix = df.iloc[max(0, i+1-window):i+1] if window else df.iloc[:i+1]
+                values = calculate(prefix)
+            except (IndexError, ValueError, KeyError):
+                continue
+            for key, value in values.items():
+                if isinstance(value, (int, float)) and not isinstance(value, bool) and isfinite(value):
+                    series.setdefault(key, []).append({"time": candles[i]["time"], "value": value})
+    return series
+
+
+def prepare_frame(candles, tf, as_of, indicator_config, families, cfg, window=None):
+    closed = closed_candles(candles, tf, as_of)
+    series = indicator_history(closed, indicator_config, families, window=window)
+    series["volume_ma"] = [{"time": closed[i]["time"], "value": sum(c["volume"] for c in closed[i-cfg.vol_lookback+1:i+1])/cfg.vol_lookback}
+                           for i in range(cfg.vol_lookback-1, len(closed))]
+    atr_map = {p["time"]: p["value"] for p in series.get("atr", [])}
+    marks = [p for i, c in enumerate(closed) for p in patterns(c, closed[i-1] if i else None, atr_map.get(c["time"]), cfg)]
+    points = pivots(closed, tf, cfg)
+    # Shooting star requires context; a bearish pin by itself is not one.
+    for mark in list(marks):
+        if mark["pattern"] == "PIN_BEAR" and trend([p for p in points if p["confirmed_at"] <= mark["time"]]) == "UP":
+            marks.append({**mark, "pattern": "SHOOTING_STAR"})
+    return {"candles": closed, "indicators": series, "patterns": marks, "pivots": points,
+            "atr": atr_map.get(closed[-1]["time"]) if closed else None}
+
+
+def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_pct: float | None, btc_trend: str | None) -> dict[str, Any]:
+    result: dict[str, Any] = {"symbol": symbol, "market": "spot", "mode": "SHADOW", "operational_effect": False,
+        "engine_version": ENGINE_VERSION, "evaluated_at_utc": iso(as_of), "candle_closed_5m": None,
+        "context_4h": {"trend": "RANGE", "last_pivots": [], "strength": "NEUTRAL", "last_candle_pattern": None},
+        "zone_1h": None, "zones": [], "trigger_5m": None, "plan": None,
+        "score": {"total": 0, "maximum": sum(cfg.score_weights.values()), "components": {}, "calibrated": False},
+        "vetoes": [], "status": "NO_TRADE", "explanation": []}
+    vetoes = result["vetoes"]
+    closed_5m = frames.get("5m", {}).get("candles", [])
+    if closed_5m:
+        result["candle_closed_5m"] = iso(closed_5m[-1]["time"])
+        result["candle_close_at_utc"] = iso(closed_5m[-1]["time"] + TF_SECONDS["5m"])
+    for tf in TF_SECONDS:
+        frame = frames.get(tf, {})
+        candles = frame.get("candles", [])
+        if not candles or not frame.get("atr"):
+            vetoes.append(f"DATA_MISSING:{tf}")
+        elif as_of - (candles[-1]["time"] + TF_SECONDS[tf]) > cfg.stale_tf_multiplier * TF_SECONDS[tf]:
+            vetoes.append(f"DATA_STALE:{tf}")
+    if vetoes:
+        result["explanation"] = ["SEM TRADE: candles fechados ou ATR indisponíveis/desatualizados."]
+        return result
+    f4, f1, f5 = (frames[tf] for tf in ("4h", "1h", "5m"))
+    c = f5["candles"][-1]
+    result["candle_closed_5m"] = iso(c["time"])
+    result["candle_close_at_utc"] = iso(c["time"] + TF_SECONDS["5m"])
+    direction = trend(f4["pivots"])
+    last4 = [p["pattern"] for p in f4["patterns"] if p["time"] == f4["candles"][-1]["time"]]
+    force = any(p in ("ENGULF_BULL", "MARUBOZU_BULL") for p in last4)
+    result["context_4h"] = {"trend": direction, "last_pivots": [p["label"] for p in f4["pivots"][-4:]],
+                            "last_candle_pattern": last4[0] if last4 else None, "strength": "FORCE" if force else "NEUTRAL"}
+    zs = zones(f1["pivots"], f1["atr"], cfg)
+    result["zones"] = zs
+    supports = [z for z in zs if z["low"] <= c["close"]]
+    supports = [z for z in supports if z["type"] == "SUPPORT"]
+    zone = min(supports, key=lambda z: max(z["low"]-c["close"], c["close"]-z["high"], 0)) if supports else None
+    rejection = False
+    near = False
+    if zone:
+        distance = max(zone["low"]-c["close"], c["close"]-zone["high"], 0) / f1["atr"]
+        near = distance <= cfg.zone_proximity_atr
+        recent = f1["candles"][-cfg.rejection_lookback:]
+        rejection_times = {x["time"] for x in recent if x["low"] <= zone["high"] and x["high"] >= zone["low"]}
+        rejection = any(p["time"] in rejection_times and p["pattern"] in ("PIN_BULL", "ENGULF_BULL") for p in f1["patterns"])
+        result["zone_1h"] = {**zone, "distance_atr": distance, "in_zone": near, "rejection": rejection}
+    trigger = next((p for name in cfg.trigger_patterns for p in f5["patterns"] if p["time"] == c["time"] and p["pattern"] == name), None)
+    preceding = f5["candles"][-cfg.vol_lookback-1:-1]
+    average = sum(x["volume"] for x in preceding) / len(preceding) if len(preceding) == cfg.vol_lookback else None
+    ratio = c["volume"] / average if average else None
+    if trigger:
+        result["trigger_5m"] = {**trigger, "type": "CONTINUATION" if trigger["pattern"] == "MARUBOZU_BULL" else "REVERSAL", "volume_ratio": ratio}
+    if direction != "UP":
+        vetoes.append("SPOT_NOT_BUYING" if direction == "DOWN" else "TREND_RANGE")
+    if spread_pct is None:
+        vetoes.append("SPREAD_UNAVAILABLE")
+    elif spread_pct > cfg.max_spread_pct:
+        vetoes.append("SPREAD_TOO_WIDE")
+    if symbol != "BTC_USDT" and btc_trend is None:
+        vetoes.append("BTC_CONTEXT_UNAVAILABLE")
+    if symbol != "BTC_USDT" and btc_trend == "DOWN":
+        vetoes.append("BTC_DOWNTREND")
+    rr = None
+    if trigger and near:
+        entry = c["close"]
+        stop = c["low"] - max(cfg.stop_buffer_atr * f5["atr"], entry*(spread_pct or 0)/100)
+        targets = sorted({z["low"] for z in zs if z["type"] == "RESISTANCE" and z["low"] > entry})
+        targets = targets or sorted({p["price"] for p in f1["pivots"] if p["kind"] == "H" and p["price"] > entry})
+        if stop <= 0 or entry-stop > cfg.max_stop_atr*f5["atr"]:
+            vetoes.append("STOP_TOO_WIDE")
+        if len(targets) < 2:
+            vetoes.append("STRUCTURAL_TARGETS_UNAVAILABLE")
+        else:
+            fee = cfg.fee_per_side_pct / 100
+            slip = cfg.slippage_pct / 100
+            cost_entry = entry*(1+slip)*(1+fee)
+            loss = cost_entry-stop*(1-slip)*(1-fee)
+            reward = targets[0]*(1-slip)*(1-fee)-cost_entry
+            rr = reward/loss if loss > 0 else None
+            if rr is None or rr < cfg.min_rr_net:
+                vetoes.append("RR_BELOW_MIN")
+            qty = min(cfg.capital_usdt/cost_entry, cfg.capital_usdt*cfg.risk_per_trade_pct/100/loss) if loss > 0 else None
+            result["plan"] = {"side": "LONG", "entry_type": "MARKET_ON_CLOSE", "entry": entry,
+                "stop": stop, "tp1": targets[0], "tp2": targets[1], "rr_net": rr,
+                "rr_gross": (targets[0]-entry)/(entry-stop) if entry > stop else None,
+                "quantity": qty, "notional_usdt": qty*entry if qty else None,
+                "expires_after_candles": cfg.expires_after_candles,
+                "expires_at": iso(as_of+cfg.expires_after_candles*TF_SECONDS["5m"])}
+    flags = {"trend": direction == "UP", "force": force and direction == "UP", "zone": near,
+             "rejection": rejection and near, "trigger": bool(trigger), "volume": ratio is not None and ratio >= cfg.vol_mult,
+             "rr": rr is not None and rr >= cfg.rr_bonus_threshold}
+    components = {k: cfg.score_weights[k] if v else 0 for k, v in flags.items()}
+    score = 0 if vetoes else sum(components.values())
+    result["score"].update(total=score, components=components)
+    result["status"] = "NO_TRADE" if vetoes else "TRIGGERED" if near and trigger and result["plan"] and score >= cfg.min_score else "ARMED" if near else "WAIT"
+    result["explanation"] = [
+        f"Estrutura do 4H: {direction}; pivôs confirmados: {', '.join(result['context_4h']['last_pivots']) or 'indisponíveis'}.",
+        "Preço próximo do suporte do 1H." if near else "Aguardando aproximação de uma zona confirmada do 1H.",
+        f"Gatilho fechado: {trigger['pattern']} em {iso(c['time'])}." if trigger else "Sem gatilho de compra no último candle fechado.",
+        "Plano experimental; stops e perdas pertencem somente à simulação.",
+    ]
+    return result
+
+
+def simulate_step(state: dict, candle: dict, cfg: MTFChartConfig, hourly_close: float | None = None) -> dict | None:
+    """Append-only event reducer. Never fills inside/before the decision candle."""
+    s = dict(state)
+    if s["status"] in ("TP", "SL", "EXPIRED", "UNRESOLVED") or candle["time"] <= s.get("last_candle", -1):
+        return None
+    if candle["time"] <= s["observed_at"]:
+        return None
+    expected = s["last_candle"]+TF_SECONDS["5m"] if s["status"] == "OPEN" else (s["observed_at"]//TF_SECONDS["5m"]+1)*TF_SECONDS["5m"]
+    if candle["time"] > expected and (s["status"] == "OPEN" or candle["time"] < s["expires_at"]):
+        return {**s, "last_candle": candle["time"], "status": "UNRESOLVED", "reason": "CANDLE_GAP", "pnl_usdt": None, "pnl_pct": None}
+    fee, slip = cfg.fee_per_side_pct/100, cfg.slippage_pct/100
+    s["last_candle"] = candle["time"]
+    if s["status"] == "PENDING":
+        if candle["time"] >= s["expires_at"]:
+            return {**s, "status": "EXPIRED", "reason": "ENTRY_EXPIRED", "pnl_usdt": 0, "pnl_pct": None}
+        fill = candle["open"]*(1+slip)
+        if fill <= s["stop"] or fill >= s["tp1"]:
+            return {**s, "status": "EXPIRED", "reason": "GAP_INVALIDATED", "pnl_usdt": 0, "pnl_pct": None}
+        risk = fill*(1+fee)-s["stop"]*(1-slip)*(1-fee)
+        reward = s["tp1"]*(1-slip)*(1-fee)-fill*(1+fee)
+        if risk <= 0 or reward/risk < cfg.min_rr_net:
+            return {**s, "status": "EXPIRED", "reason": "FILL_RR_BELOW_MIN", "pnl_usdt": 0, "pnl_pct": None}
+        qty = min(cfg.capital_usdt/(fill*(1+fee)), cfg.capital_usdt*cfg.risk_per_trade_pct/100/risk)
+        s.update(status="OPEN", fill=fill, filled_at=candle["time"], quantity=qty, remaining=qty,
+                 invested=qty*fill*(1+fee), proceeds=0, partial=False, ambiguous=False)
+    stop = s["stop"]
+    hit_stop = candle["low"] <= stop
+    target = s["tp2"] if s["partial"] else s["tp1"]
+    hit_target = candle["high"] >= target
+    s["ambiguous"] = s["ambiguous"] or (hit_stop and hit_target)
+    if hit_stop:
+        s["proceeds"] += s["remaining"]*min(stop, candle["open"])*(1-slip)*(1-fee)
+        s.update(status="SL", remaining=0)
+    elif hit_target:
+        if not s["partial"]:
+            sold = s["quantity"]*cfg.partial_tp1_pct/100
+            s["proceeds"] += sold*s["tp1"]*(1-slip)*(1-fee)
+            s["remaining"] -= sold
+            s["partial"] = True
+            # Fee/slippage adjusted breakeven applies from the NEXT candle.
+            s["stop"] = s["fill"]*(1+fee)/((1-slip)*(1-fee))
+        if candle["high"] >= s["tp2"]:
+            s["proceeds"] += s["remaining"]*s["tp2"]*(1-slip)*(1-fee)
+            s.update(status="TP", remaining=0)
+    if s["status"] == "OPEN" and candle["time"]+TF_SECONDS["5m"] >= s["filled_at"]+cfg.holding_candles*TF_SECONDS["5m"]:
+        s["proceeds"] += s["remaining"]*candle["close"]*(1-slip)*(1-fee)
+        s.update(status="EXPIRED", remaining=0, reason="HOLDING_EXPIRED")
+    if s["status"] == "OPEN" and hourly_close is not None and s.get("invalidation_zone_low") is not None and hourly_close < s["invalidation_zone_low"]:
+        s["proceeds"] += s["remaining"]*candle["close"]*(1-slip)*(1-fee)
+        s.update(status="EXPIRED", remaining=0, reason="ZONE_INVALIDATED")
+    if s["status"] != "OPEN":
+        s["pnl_usdt"] = s["proceeds"]-s["invested"]
+        s["pnl_pct"] = 100*s["pnl_usdt"]/s["invested"]
+    return s

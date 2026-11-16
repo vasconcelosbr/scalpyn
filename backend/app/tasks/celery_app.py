@@ -113,6 +113,7 @@ ALL_QUEUES = (
 )
 
 _ALL_TASK_MODULES = (
+        "app.tasks.mtf_chart",
         "app.tasks.collect_market_data",
         "app.tasks.collect_structural_30m",
         "app.tasks.collect_research_ohlcv",
@@ -239,6 +240,7 @@ TASK_ROUTES = {
     "app.tasks.compute_indicators.compute":              {"queue": QUEUE_STRUCTURAL_COMPUTE},
     "app.tasks.compute_mtf_indicators.compute_15m":      {"queue": QUEUE_STRUCTURAL_COMPUTE},
     "app.tasks.compute_mtf_indicators.compute_1h":       {"queue": QUEUE_STRUCTURAL_COMPUTE},
+    "app.tasks.mtf_chart.observe":                       {"queue": QUEUE_STRUCTURAL_COMPUTE},
     "app.tasks.compute_scores.score":                    {"queue": QUEUE_STRUCTURAL_COMPUTE},
     "app.tasks.crypto_ev_score.compute":                 {"queue": QUEUE_STRUCTURAL},
     # pipeline_scan.scan: structural per operator spec (cadence-locked
@@ -519,6 +521,7 @@ TASK_ANNOTATIONS = {
     "app.tasks.collect_mtf_ohlcv.collect_1h":            {**_STRUCTURAL_GUARDS, "rate_limit": "2/h", **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.compute_mtf_indicators.compute_15m":      {**_STRUCTURAL_GUARDS, "rate_limit": "4/h", **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.compute_mtf_indicators.compute_1h":       {**_STRUCTURAL_GUARDS, "rate_limit": "2/h", **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.mtf_chart.observe":                      {**_STRUCTURAL_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.compute_scores.score":                    {**_STRUCTURAL_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},
     # pipeline_scan.scan: structural cadence (5-min safety-net scan,
     # but heavier than the 5m TA chain — uses structural cost guards).
@@ -801,6 +804,11 @@ celery_app.conf.update(
 
 # Periodic task schedule
 celery_app.conf.beat_schedule = {
+    "mtf_chart_after_close": {
+        "task": "app.tasks.mtf_chart.observe",
+        "schedule": crontab(minute="*/5"),
+        "options": {"queue": QUEUE_STRUCTURAL_COMPUTE, "expires": 240},
+    },
     "storage_retention": {
         "task": "app.tasks.storage_retention.run",
         "schedule": 60.0,

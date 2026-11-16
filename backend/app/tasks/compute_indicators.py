@@ -1009,6 +1009,11 @@ def compute_5m():
 # — escrever de novo aqui geraria contention de UPSERT em hot rows; ver
 # gotchas Tasks #245/#251/#273) e não puxa order-flow nem ``_compute_score_fields``
 # (esses são consumidos pelo robust score, alimentado pelo merged provider).
+def structural_5m_query_limit(indicators_config: dict) -> int:
+    """Shared sample window for the producer and read-only MTF chart."""
+    return max(288, _derive_min_candles(indicators_config, "5m"))
+
+
 async def _compute_structural_5m_async():
     """Compute STRUCTURAL indicators (rsi/adx/macd/bollinger) sobre candles 5m.
 
@@ -1036,7 +1041,7 @@ async def _compute_structural_5m_async():
             )
             engine = FeatureEngine(indicators_config)
             min_candles_5m = _derive_min_candles(indicators_config, "5m")
-            query_limit_5m = max(288, min_candles_5m)
+            query_limit_5m = structural_5m_query_limit(indicators_config)
             # Task #232: ingestion gate é ``is_active`` only.
             symbols_result = await db.execute(text("""
                 SELECT DISTINCT o.symbol, p.market_type

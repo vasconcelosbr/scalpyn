@@ -15,6 +15,7 @@ from .logging_config import install_brazil_time_logging
 install_brazil_time_logging()
 
 from .api import (
+    mtf_chart,
     auth,
     config as config_api,
     strategy_settings,
@@ -445,6 +446,7 @@ app.include_router(decisions.router)
 app.include_router(market.router)
 app.include_router(watchlist.router)
 app.include_router(watchlists.router)
+app.include_router(mtf_chart.router)
 app.include_router(radar_readonly.router)
 app.include_router(watchlists.pipeline_router)
 app.include_router(custom_watchlists.router)

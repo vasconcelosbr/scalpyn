@@ -422,7 +422,7 @@ class MarketDataService:
     MIN_OHLCV_CANDLES = 50
 
     async def fetch_ohlcv(
-        self, symbol: str, timeframe: str = "1h", limit: int = 200,
+        self, symbol: str, timeframe: str = "1h", limit: int = 200, *, gate_only: bool = False,
     ) -> Optional[pd.DataFrame]:
         """Fetch OHLCV candles — Gate.io primary, Binance fallback, merge on shortage.
 
@@ -498,6 +498,11 @@ class MarketDataService:
                 symbol, timeframe, e,
                 exc_info=True,
             )
+
+        if gate_only:
+            if gate_df is not None:
+                gate_df.attrs["exchange"] = "gate.io"
+            return gate_df
 
         # ── Fallback / Merge source: Binance ──────────────────────────────────
         try:
