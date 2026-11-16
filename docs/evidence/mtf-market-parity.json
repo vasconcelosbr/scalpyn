@@ -1,0 +1,2370 @@
+{
+  "observed_at": "2026-11-16T16:17:32.192290+00:00",
+  "scope": "Same closed Gate inputs and configured producer windows; not a comparison to differently timed stored pipeline snapshots.",
+  "indicator_config": {
+    "adx": {
+      "period": 14,
+      "enabled": true
+    },
+    "atr": {
+      "period": 14,
+      "enabled": true
+    },
+    "ema": {
+      "enabled": true,
+      "periods": [
+        5,
+        9,
+        10,
+        21,
+        30,
+        50,
+        200
+      ]
+    },
+    "obv": {
+      "enabled": true
+    },
+    "rsi": {
+      "period": 14,
+      "enabled": true,
+      "periods": [
+        6,
+        12,
+        24
+      ]
+    },
+    "macd": {
+      "fast": 12,
+      "slow": 26,
+      "signal": 9,
+      "enabled": true
+    },
+    "vwap": {
+      "enabled": true,
+      "reset_period": "daily"
+    },
+    "zscore": {
+      "enabled": false,
+      "lookback": 20
+    },
+    "bollinger": {
+      "period": 20,
+      "enabled": true,
+      "deviation": 2.0
+    },
+    "stochastic": {
+      "d": 3,
+      "k": 14,
+      "smooth": 3,
+      "enabled": true
+    },
+    "taker_ratio": {
+      "enabled": true,
+      "lookback": 20
+    },
+    "funding_rate": {
+      "enabled": true
+    },
+    "volume_delta": {
+      "enabled": true
+    },
+    "volume_spike": {
+      "enabled": true,
+      "lookback": 20
+    },
+    "btc_dominance": {
+      "enabled": false
+    },
+    "parabolic_sar": {
+      "step": 0.02,
+      "af_max": 0.2,
+      "enabled": true,
+      "rsi_max": 75.0,
+      "af_start": 0.02,
+      "max_step": 0.2,
+      "af_increment": 0.02,
+      "max_distance_pct": 3.0,
+      "adx_min_threshold": 20.0,
+      "adx_filter_enabled": false
+    },
+    "volume_metrics": {
+      "enabled": true,
+      "min_coverage_hours": 23.5
+    },
+    "entry_exhaustion": {
+      "enabled": true
+    },
+    "orderbook_imbalance": {
+      "enabled": false,
+      "depth_levels": 10
+    },
+    "market_data_fallback": {
+      "confidence_scores": {
+        "gate": 0.7,
+        "mixed": 0.85,
+        "binance": 0.9
+      },
+      "max_cache_entries": 1000,
+      "binance_trade_limit": 500,
+      "orderbook_depth_levels": 10,
+      "ticker_cache_ttl_seconds": 5,
+      "trades_cache_ttl_seconds": 1,
+      "orderbook_cache_ttl_seconds": 5
+    }
+  },
+  "rows": [
+    {
+      "symbol": "BTC_USDT",
+      "timeframe": "4h",
+      "source": "gate.io",
+      "closed_count": 299,
+      "window": 200,
+      "candle_time": 1794830400,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 61.75,
+          "canonical": 61.75
+        },
+        "di_plus": {
+          "chart": 10.15,
+          "canonical": 10.15
+        },
+        "di_minus": {
+          "chart": 27.24,
+          "canonical": 27.24
+        },
+        "adx_acceleration": {
+          "chart": -1.23,
+          "canonical": -1.23
+        },
+        "atr": {
+          "chart": 1516.78571429,
+          "canonical": 1516.78571429
+        },
+        "ema5": {
+          "chart": 64729.18669,
+          "canonical": 64729.18669
+        },
+        "ema9": {
+          "chart": 65001.81617121,
+          "canonical": 65001.81617121
+        },
+        "ema10": {
+          "chart": 65095.37714842,
+          "canonical": 65095.37714842
+        },
+        "ema21": {
+          "chart": 66473.38489233,
+          "canonical": 66473.38489233
+        },
+        "ema30": {
+          "chart": 67620.91658183,
+          "canonical": 67620.91658183
+        },
+        "ema50": {
+          "chart": 69669.54382174,
+          "canonical": 69669.54382174
+        },
+        "ema200": {
+          "chart": 76145.61886834,
+          "canonical": 76145.61886834
+        },
+        "rsi": {
+          "chart": 30.2,
+          "canonical": 30.2
+        },
+        "rsi_6": {
+          "chart": 33.19,
+          "canonical": 33.19
+        },
+        "rsi_12": {
+          "chart": 30.65,
+          "canonical": 30.65
+        },
+        "rsi_24": {
+          "chart": 30.03,
+          "canonical": 30.03
+        }
+      }
+    },
+    {
+      "symbol": "BTC_USDT",
+      "timeframe": "1h",
+      "source": "gate.io",
+      "closed_count": 299,
+      "window": 201,
+      "candle_time": 1794841200,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 13.36,
+          "canonical": 13.36
+        },
+        "di_plus": {
+          "chart": 23.97,
+          "canonical": 23.97
+        },
+        "di_minus": {
+          "chart": 16.93,
+          "canonical": 16.93
+        },
+        "adx_acceleration": {
+          "chart": 0.3,
+          "canonical": 0.3
+        },
+        "atr": {
+          "chart": 618.27142857,
+          "canonical": 618.27142857
+        },
+        "ema5": {
+          "chart": 64565.17531469,
+          "canonical": 64565.17531469
+        },
+        "ema9": {
+          "chart": 64578.90800721,
+          "canonical": 64578.90800721
+        },
+        "ema10": {
+          "chart": 64588.24092935,
+          "canonical": 64588.24092935
+        },
+        "ema21": {
+          "chart": 64707.8527501,
+          "canonical": 64707.8527501
+        },
+        "ema30": {
+          "chart": 64846.86991597,
+          "canonical": 64846.86991597
+        },
+        "ema50": {
+          "chart": 65359.16489349,
+          "canonical": 65359.16489349
+        },
+        "ema200": {
+          "chart": 69528.73962444,
+          "canonical": 69528.73962444
+        },
+        "rsi": {
+          "chart": 46.35,
+          "canonical": 46.35
+        },
+        "rsi_6": {
+          "chart": 46.72,
+          "canonical": 46.72
+        },
+        "rsi_12": {
+          "chart": 46.52,
+          "canonical": 46.52
+        },
+        "rsi_24": {
+          "chart": 44.89,
+          "canonical": 44.89
+        }
+      }
+    },
+    {
+      "symbol": "BTC_USDT",
+      "timeframe": "5m",
+      "source": "gate.io",
+      "closed_count": 499,
+      "window": 288,
+      "candle_time": 1794845400,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 16.48,
+          "canonical": 16.48
+        },
+        "di_plus": {
+          "chart": 22.25,
+          "canonical": 22.25
+        },
+        "di_minus": {
+          "chart": 25.24,
+          "canonical": 25.24
+        },
+        "adx_acceleration": {
+          "chart": -0.78,
+          "canonical": -0.78
+        },
+        "atr": {
+          "chart": 238.92857143,
+          "canonical": 238.92857143
+        },
+        "ema5": {
+          "chart": 64419.38640692,
+          "canonical": 64419.38640692
+        },
+        "ema9": {
+          "chart": 64441.947627,
+          "canonical": 64441.947627
+        },
+        "ema10": {
+          "chart": 64448.35523685,
+          "canonical": 64448.35523685
+        },
+        "ema21": {
+          "chart": 64490.52369638,
+          "canonical": 64490.52369638
+        },
+        "ema30": {
+          "chart": 64492.57967907,
+          "canonical": 64492.57967907
+        },
+        "ema50": {
+          "chart": 64484.76599629,
+          "canonical": 64484.76599629
+        },
+        "ema200": {
+          "chart": 64593.8831656,
+          "canonical": 64593.8831656
+        },
+        "rsi": {
+          "chart": 45.07,
+          "canonical": 45.07
+        },
+        "rsi_6": {
+          "chart": 37.8,
+          "canonical": 37.8
+        },
+        "rsi_12": {
+          "chart": 44.06,
+          "canonical": 44.06
+        },
+        "rsi_24": {
+          "chart": 47.39,
+          "canonical": 47.39
+        }
+      }
+    },
+    {
+      "symbol": "SOL_USDT",
+      "timeframe": "4h",
+      "source": "gate.io",
+      "closed_count": 299,
+      "window": 200,
+      "candle_time": 1794830400,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 54.29,
+          "canonical": 54.29
+        },
+        "di_plus": {
+          "chart": 11.88,
+          "canonical": 11.88
+        },
+        "di_minus": {
+          "chart": 25.74,
+          "canonical": 25.74
+        },
+        "adx_acceleration": {
+          "chart": -1.34,
+          "canonical": -1.34
+        },
+        "atr": {
+          "chart": 2.34214286,
+          "canonical": 2.34214286
+        },
+        "ema5": {
+          "chart": 71.39760989,
+          "canonical": 71.39760989
+        },
+        "ema9": {
+          "chart": 71.85204278,
+          "canonical": 71.85204278
+        },
+        "ema10": {
+          "chart": 72.00575006,
+          "canonical": 72.00575006
+        },
+        "ema21": {
+          "chart": 74.14981516,
+          "canonical": 74.14981516
+        },
+        "ema30": {
+          "chart": 75.90713829,
+          "canonical": 75.90713829
+        },
+        "ema50": {
+          "chart": 79.20808757,
+          "canonical": 79.20808757
+        },
+        "ema200": {
+          "chart": 91.65539006,
+          "canonical": 91.65539006
+        },
+        "rsi": {
+          "chart": 32.39,
+          "canonical": 32.39
+        },
+        "rsi_6": {
+          "chart": 33.84,
+          "canonical": 33.84
+        },
+        "rsi_12": {
+          "chart": 32.69,
+          "canonical": 32.69
+        },
+        "rsi_24": {
+          "chart": 32.18,
+          "canonical": 32.18
+        }
+      }
+    },
+    {
+      "symbol": "SOL_USDT",
+      "timeframe": "1h",
+      "source": "gate.io",
+      "closed_count": 299,
+      "window": 201,
+      "candle_time": 1794841200,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 12.96,
+          "canonical": 12.96
+        },
+        "di_plus": {
+          "chart": 23.28,
+          "canonical": 23.28
+        },
+        "di_minus": {
+          "chart": 22.19,
+          "canonical": 22.19
+        },
+        "adx_acceleration": {
+          "chart": -0.81,
+          "canonical": -0.81
+        },
+        "atr": {
+          "chart": 0.99642857,
+          "canonical": 0.99642857
+        },
+        "ema5": {
+          "chart": 71.12901594,
+          "canonical": 71.12901594
+        },
+        "ema9": {
+          "chart": 71.20519169,
+          "canonical": 71.20519169
+        },
+        "ema10": {
+          "chart": 71.22507575,
+          "canonical": 71.22507575
+        },
+        "ema21": {
+          "chart": 71.41116129,
+          "canonical": 71.41116129
+        },
+        "ema30": {
+          "chart": 71.62165624,
+          "canonical": 71.62165624
+        },
+        "ema50": {
+          "chart": 72.42431662,
+          "canonical": 72.42431662
+        },
+        "ema200": {
+          "chart": 78.77336708,
+          "canonical": 78.77336708
+        },
+        "rsi": {
+          "chart": 44.43,
+          "canonical": 44.43
+        },
+        "rsi_6": {
+          "chart": 42.26,
+          "canonical": 42.26
+        },
+        "rsi_12": {
+          "chart": 44.24,
+          "canonical": 44.24
+        },
+        "rsi_24": {
+          "chart": 43.8,
+          "canonical": 43.8
+        }
+      }
+    },
+    {
+      "symbol": "SOL_USDT",
+      "timeframe": "5m",
+      "source": "gate.io",
+      "closed_count": 499,
+      "window": 288,
+      "candle_time": 1794845400,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 18.71,
+          "canonical": 18.71
+        },
+        "di_plus": {
+          "chart": 20.85,
+          "canonical": 20.85
+        },
+        "di_minus": {
+          "chart": 29.74,
+          "canonical": 29.74
+        },
+        "adx_acceleration": {
+          "chart": -0.09,
+          "canonical": -0.09
+        },
+        "atr": {
+          "chart": 0.38428571,
+          "canonical": 0.38428571
+        },
+        "ema5": {
+          "chart": 70.6017885,
+          "canonical": 70.6017885
+        },
+        "ema9": {
+          "chart": 70.63387966,
+          "canonical": 70.63387966
+        },
+        "ema10": {
+          "chart": 70.64615183,
+          "canonical": 70.64615183
+        },
+        "ema21": {
+          "chart": 70.79375605,
+          "canonical": 70.79375605
+        },
+        "ema30": {
+          "chart": 70.87202282,
+          "canonical": 70.87202282
+        },
+        "ema50": {
+          "chart": 70.96629078,
+          "canonical": 70.96629078
+        },
+        "ema200": {
+          "chart": 71.24645478,
+          "canonical": 71.24645478
+        },
+        "rsi": {
+          "chart": 41.75,
+          "canonical": 41.75
+        },
+        "rsi_6": {
+          "chart": 36.73,
+          "canonical": 36.73
+        },
+        "rsi_12": {
+          "chart": 40.99,
+          "canonical": 40.99
+        },
+        "rsi_24": {
+          "chart": 44.0,
+          "canonical": 44.0
+        }
+      }
+    },
+    {
+      "symbol": "TRX_USDT",
+      "timeframe": "4h",
+      "source": "gate.io",
+      "closed_count": 299,
+      "window": 200,
+      "candle_time": 1794830400,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 45.65,
+          "canonical": 45.65
+        },
+        "di_plus": {
+          "chart": 13.68,
+          "canonical": 13.68
+        },
+        "di_minus": {
+          "chart": 25.95,
+          "canonical": 25.95
+        },
+        "adx_acceleration": {
+          "chart": -1.13,
+          "canonical": -1.13
+        },
+        "atr": {
+          "chart": 0.00298571,
+          "canonical": 0.00298571
+        },
+        "ema5": {
+          "chart": 0.30495463,
+          "canonical": 0.30495463
+        },
+        "ema9": {
+          "chart": 0.3056415,
+          "canonical": 0.3056415
+        },
+        "ema10": {
+          "chart": 0.30585726,
+          "canonical": 0.30585726
+        },
+        "ema21": {
+          "chart": 0.30823037,
+          "canonical": 0.30823037
+        },
+        "ema30": {
+          "chart": 0.30979591,
+          "canonical": 0.30979591
+        },
+        "ema50": {
+          "chart": 0.31231951,
+          "canonical": 0.31231951
+        },
+        "ema200": {
+          "chart": 0.32146603,
+          "canonical": 0.32146603
+        },
+        "rsi": {
+          "chart": 36.99,
+          "canonical": 36.99
+        },
+        "rsi_6": {
+          "chart": 42.9,
+          "canonical": 42.9
+        },
+        "rsi_12": {
+          "chart": 37.53,
+          "canonical": 37.53
+        },
+        "rsi_24": {
+          "chart": 36.93,
+          "canonical": 36.93
+        }
+      }
+    },
+    {
+      "symbol": "TRX_USDT",
+      "timeframe": "1h",
+      "source": "gate.io",
+      "closed_count": 299,
+      "window": 201,
+      "candle_time": 1794841200,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 33.26,
+          "canonical": 33.26
+        },
+        "di_plus": {
+          "chart": 22.63,
+          "canonical": 22.63
+        },
+        "di_minus": {
+          "chart": 17.14,
+          "canonical": 17.14
+        },
+        "adx_acceleration": {
+          "chart": -1.5,
+          "canonical": -1.5
+        },
+        "atr": {
+          "chart": 0.00129286,
+          "canonical": 0.00129286
+        },
+        "ema5": {
+          "chart": 0.30480383,
+          "canonical": 0.30480383
+        },
+        "ema9": {
+          "chart": 0.30442291,
+          "canonical": 0.30442291
+        },
+        "ema10": {
+          "chart": 0.30437669,
+          "canonical": 0.30437669
+        },
+        "ema21": {
+          "chart": 0.30449591,
+          "canonical": 0.30449591
+        },
+        "ema30": {
+          "chart": 0.30494898,
+          "canonical": 0.30494898
+        },
+        "ema50": {
+          "chart": 0.30618296,
+          "canonical": 0.30618296
+        },
+        "ema200": {
+          "chart": 0.31235762,
+          "canonical": 0.31235762
+        },
+        "rsi": {
+          "chart": 51.84,
+          "canonical": 51.84
+        },
+        "rsi_6": {
+          "chart": 58.25,
+          "canonical": 58.25
+        },
+        "rsi_12": {
+          "chart": 53.13,
+          "canonical": 53.13
+        },
+        "rsi_24": {
+          "chart": 47.81,
+          "canonical": 47.81
+        }
+      }
+    },
+    {
+      "symbol": "TRX_USDT",
+      "timeframe": "5m",
+      "source": "gate.io",
+      "closed_count": 499,
+      "window": 288,
+      "candle_time": 1794845400,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 19.69,
+          "canonical": 19.69
+        },
+        "di_plus": {
+          "chart": 25.25,
+          "canonical": 25.25
+        },
+        "di_minus": {
+          "chart": 18.3,
+          "canonical": 18.3
+        },
+        "adx_acceleration": {
+          "chart": -0.29,
+          "canonical": -0.29
+        },
+        "atr": {
+          "chart": 0.00038571,
+          "canonical": 0.00038571
+        },
+        "ema5": {
+          "chart": 0.30540187,
+          "canonical": 0.30540187
+        },
+        "ema9": {
+          "chart": 0.30529669,
+          "canonical": 0.30529669
+        },
+        "ema10": {
+          "chart": 0.30528478,
+          "canonical": 0.30528478
+        },
+        "ema21": {
+          "chart": 0.30519397,
+          "canonical": 0.30519397
+        },
+        "ema30": {
+          "chart": 0.30508616,
+          "canonical": 0.30508616
+        },
+        "ema50": {
+          "chart": 0.30481679,
+          "canonical": 0.30481679
+        },
+        "ema200": {
+          "chart": 0.30411444,
+          "canonical": 0.30411444
+        },
+        "rsi": {
+          "chart": 56.89,
+          "canonical": 56.89
+        },
+        "rsi_6": {
+          "chart": 61.31,
+          "canonical": 61.31
+        },
+        "rsi_12": {
+          "chart": 57.17,
+          "canonical": 57.17
+        },
+        "rsi_24": {
+          "chart": 56.68,
+          "canonical": 56.68
+        }
+      }
+    },
+    {
+      "symbol": "XRP_USDT",
+      "timeframe": "4h",
+      "source": "gate.io",
+      "closed_count": 299,
+      "window": 200,
+      "candle_time": 1794830400,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 51.07,
+          "canonical": 51.07
+        },
+        "di_plus": {
+          "chart": 13.97,
+          "canonical": 13.97
+        },
+        "di_minus": {
+          "chart": 23.88,
+          "canonical": 23.88
+        },
+        "adx_acceleration": {
+          "chart": -1.92,
+          "canonical": -1.92
+        },
+        "atr": {
+          "chart": 0.03006429,
+          "canonical": 0.03006429
+        },
+        "ema5": {
+          "chart": 0.95785675,
+          "canonical": 0.95785675
+        },
+        "ema9": {
+          "chart": 0.96102904,
+          "canonical": 0.96102904
+        },
+        "ema10": {
+          "chart": 0.96211137,
+          "canonical": 0.96211137
+        },
+        "ema21": {
+          "chart": 0.97943812,
+          "canonical": 0.97943812
+        },
+        "ema30": {
+          "chart": 0.99663769,
+          "canonical": 0.99663769
+        },
+        "ema50": {
+          "chart": 1.0346901,
+          "canonical": 1.0346901
+        },
+        "ema200": {
+          "chart": 1.1880377,
+          "canonical": 1.1880377
+        },
+        "rsi": {
+          "chart": 38.48,
+          "canonical": 38.48
+        },
+        "rsi_6": {
+          "chart": 39.58,
+          "canonical": 39.58
+        },
+        "rsi_12": {
+          "chart": 38.97,
+          "canonical": 38.97
+        },
+        "rsi_24": {
+          "chart": 36.92,
+          "canonical": 36.92
+        }
+      }
+    },
+    {
+      "symbol": "XRP_USDT",
+      "timeframe": "1h",
+      "source": "gate.io",
+      "closed_count": 299,
+      "window": 201,
+      "candle_time": 1794841200,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 10.41,
+          "canonical": 10.41
+        },
+        "di_plus": {
+          "chart": 26.26,
+          "canonical": 26.26
+        },
+        "di_minus": {
+          "chart": 20.88,
+          "canonical": 20.88
+        },
+        "adx_acceleration": {
+          "chart": 0.08,
+          "canonical": 0.08
+        },
+        "atr": {
+          "chart": 0.01195714,
+          "canonical": 0.01195714
+        },
+        "ema5": {
+          "chart": 0.95488711,
+          "canonical": 0.95488711
+        },
+        "ema9": {
+          "chart": 0.95503761,
+          "canonical": 0.95503761
+        },
+        "ema10": {
+          "chart": 0.95516985,
+          "canonical": 0.95516985
+        },
+        "ema21": {
+          "chart": 0.95659735,
+          "canonical": 0.95659735
+        },
+        "ema30": {
+          "chart": 0.95805916,
+          "canonical": 0.95805916
+        },
+        "ema50": {
+          "chart": 0.96404062,
+          "canonical": 0.96404062
+        },
+        "ema200": {
+          "chart": 1.02607265,
+          "canonical": 1.02607265
+        },
+        "rsi": {
+          "chart": 47.21,
+          "canonical": 47.21
+        },
+        "rsi_6": {
+          "chart": 46.27,
+          "canonical": 46.27
+        },
+        "rsi_12": {
+          "chart": 47.12,
+          "canonical": 47.12
+        },
+        "rsi_24": {
+          "chart": 46.69,
+          "canonical": 46.69
+        }
+      }
+    },
+    {
+      "symbol": "XRP_USDT",
+      "timeframe": "5m",
+      "source": "gate.io",
+      "closed_count": 499,
+      "window": 288,
+      "candle_time": 1794845400,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 17.99,
+          "canonical": 17.99
+        },
+        "di_plus": {
+          "chart": 20.27,
+          "canonical": 20.27
+        },
+        "di_minus": {
+          "chart": 27.2,
+          "canonical": 27.2
+        },
+        "adx_acceleration": {
+          "chart": -0.26,
+          "canonical": -0.26
+        },
+        "atr": {
+          "chart": 0.00451429,
+          "canonical": 0.00451429
+        },
+        "ema5": {
+          "chart": 0.95033432,
+          "canonical": 0.95033432
+        },
+        "ema9": {
+          "chart": 0.95079515,
+          "canonical": 0.95079515
+        },
+        "ema10": {
+          "chart": 0.95093556,
+          "canonical": 0.95093556
+        },
+        "ema21": {
+          "chart": 0.95228454,
+          "canonical": 0.95228454
+        },
+        "ema30": {
+          "chart": 0.9527519,
+          "canonical": 0.9527519
+        },
+        "ema50": {
+          "chart": 0.95302597,
+          "canonical": 0.95302597
+        },
+        "ema200": {
+          "chart": 0.95492585,
+          "canonical": 0.95492585
+        },
+        "rsi": {
+          "chart": 42.48,
+          "canonical": 42.48
+        },
+        "rsi_6": {
+          "chart": 34.4,
+          "canonical": 34.4
+        },
+        "rsi_12": {
+          "chart": 41.38,
+          "canonical": 41.38
+        },
+        "rsi_24": {
+          "chart": 45.37,
+          "canonical": 45.37
+        }
+      }
+    },
+    {
+      "symbol": "ETH_USDT",
+      "timeframe": "4h",
+      "source": "gate.io",
+      "closed_count": 299,
+      "window": 200,
+      "candle_time": 1794830400,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 58.15,
+          "canonical": 58.15
+        },
+        "di_plus": {
+          "chart": 12.93,
+          "canonical": 12.93
+        },
+        "di_minus": {
+          "chart": 25.27,
+          "canonical": 25.27
+        },
+        "adx_acceleration": {
+          "chart": -1.99,
+          "canonical": -1.99
+        },
+        "atr": {
+          "chart": 56.03571429,
+          "canonical": 56.03571429
+        },
+        "ema5": {
+          "chart": 1818.60433361,
+          "canonical": 1818.60433361
+        },
+        "ema9": {
+          "chart": 1824.29612393,
+          "canonical": 1824.29612393
+        },
+        "ema10": {
+          "chart": 1826.71882071,
+          "canonical": 1826.71882071
+        },
+        "ema21": {
+          "chart": 1866.19041102,
+          "canonical": 1866.19041102
+        },
+        "ema30": {
+          "chart": 1902.15950379,
+          "canonical": 1902.15950379
+        },
+        "ema50": {
+          "chart": 1971.76154834,
+          "canonical": 1971.76154834
+        },
+        "ema200": {
+          "chart": 2209.36977314,
+          "canonical": 2209.36977314
+        },
+        "rsi": {
+          "chart": 37.7,
+          "canonical": 37.7
+        },
+        "rsi_6": {
+          "chart": 44.94,
+          "canonical": 44.94
+        },
+        "rsi_12": {
+          "chart": 38.68,
+          "canonical": 38.68
+        },
+        "rsi_24": {
+          "chart": 35.73,
+          "canonical": 35.73
+        }
+      }
+    },
+    {
+      "symbol": "ETH_USDT",
+      "timeframe": "1h",
+      "source": "gate.io",
+      "closed_count": 299,
+      "window": 201,
+      "candle_time": 1794841200,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 13.1,
+          "canonical": 13.1
+        },
+        "di_plus": {
+          "chart": 29.04,
+          "canonical": 29.04
+        },
+        "di_minus": {
+          "chart": 16.13,
+          "canonical": 16.13
+        },
+        "adx_acceleration": {
+          "chart": 1.19,
+          "canonical": 1.19
+        },
+        "atr": {
+          "chart": 21.55071429,
+          "canonical": 21.55071429
+        },
+        "ema5": {
+          "chart": 1819.16375521,
+          "canonical": 1819.16375521
+        },
+        "ema9": {
+          "chart": 1816.40499303,
+          "canonical": 1816.40499303
+        },
+        "ema10": {
+          "chart": 1816.15403731,
+          "canonical": 1816.15403731
+        },
+        "ema21": {
+          "chart": 1816.16790706,
+          "canonical": 1816.16790706
+        },
+        "ema30": {
+          "chart": 1818.78730014,
+          "canonical": 1818.78730014
+        },
+        "ema50": {
+          "chart": 1832.36344468,
+          "canonical": 1832.36344468
+        },
+        "ema200": {
+          "chart": 1967.67805068,
+          "canonical": 1967.67805068
+        },
+        "rsi": {
+          "chart": 50.76,
+          "canonical": 50.76
+        },
+        "rsi_6": {
+          "chart": 52.69,
+          "canonical": 52.69
+        },
+        "rsi_12": {
+          "chart": 51.28,
+          "canonical": 51.28
+        },
+        "rsi_24": {
+          "chart": 48.23,
+          "canonical": 48.23
+        }
+      }
+    },
+    {
+      "symbol": "ETH_USDT",
+      "timeframe": "5m",
+      "source": "gate.io",
+      "closed_count": 499,
+      "window": 288,
+      "candle_time": 1794845400,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 17.98,
+          "canonical": 17.98
+        },
+        "di_plus": {
+          "chart": 22.69,
+          "canonical": 22.69
+        },
+        "di_minus": {
+          "chart": 23.76,
+          "canonical": 23.76
+        },
+        "adx_acceleration": {
+          "chart": -1.21,
+          "canonical": -1.21
+        },
+        "atr": {
+          "chart": 8.61285714,
+          "canonical": 8.61285714
+        },
+        "ema5": {
+          "chart": 1817.72758358,
+          "canonical": 1817.72758358
+        },
+        "ema9": {
+          "chart": 1817.91959316,
+          "canonical": 1817.91959316
+        },
+        "ema10": {
+          "chart": 1818.04504795,
+          "canonical": 1818.04504795
+        },
+        "ema21": {
+          "chart": 1818.69275124,
+          "canonical": 1818.69275124
+        },
+        "ema30": {
+          "chart": 1817.90096115,
+          "canonical": 1817.90096115
+        },
+        "ema50": {
+          "chart": 1815.60303393,
+          "canonical": 1815.60303393
+        },
+        "ema200": {
+          "chart": 1813.05505289,
+          "canonical": 1813.05505289
+        },
+        "rsi": {
+          "chart": 47.51,
+          "canonical": 47.51
+        },
+        "rsi_6": {
+          "chart": 41.96,
+          "canonical": 41.96
+        },
+        "rsi_12": {
+          "chart": 46.64,
+          "canonical": 46.64
+        },
+        "rsi_24": {
+          "chart": 49.71,
+          "canonical": 49.71
+        }
+      }
+    },
+    {
+      "symbol": "LINK_USDT",
+      "timeframe": "4h",
+      "source": "gate.io",
+      "closed_count": 299,
+      "window": 200,
+      "candle_time": 1794830400,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 44.54,
+          "canonical": 44.54
+        },
+        "di_plus": {
+          "chart": 14.39,
+          "canonical": 14.39
+        },
+        "di_minus": {
+          "chart": 24.94,
+          "canonical": 24.94
+        },
+        "adx_acceleration": {
+          "chart": -1.36,
+          "canonical": -1.36
+        },
+        "atr": {
+          "chart": 0.27671429,
+          "canonical": 0.27671429
+        },
+        "ema5": {
+          "chart": 9.17022886,
+          "canonical": 9.17022886
+        },
+        "ema9": {
+          "chart": 9.2055576,
+          "canonical": 9.2055576
+        },
+        "ema10": {
+          "chart": 9.2182564,
+          "canonical": 9.2182564
+        },
+        "ema21": {
+          "chart": 9.40735318,
+          "canonical": 9.40735318
+        },
+        "ema30": {
+          "chart": 9.56742766,
+          "canonical": 9.56742766
+        },
+        "ema50": {
+          "chart": 9.86798915,
+          "canonical": 9.86798915
+        },
+        "ema200": {
+          "chart": 11.04012459,
+          "canonical": 11.04012459
+        },
+        "rsi": {
+          "chart": 35.9,
+          "canonical": 35.9
+        },
+        "rsi_6": {
+          "chart": 36.23,
+          "canonical": 36.23
+        },
+        "rsi_12": {
+          "chart": 35.94,
+          "canonical": 35.94
+        },
+        "rsi_24": {
+          "chart": 36.64,
+          "canonical": 36.64
+        }
+      }
+    },
+    {
+      "symbol": "LINK_USDT",
+      "timeframe": "1h",
+      "source": "gate.io",
+      "closed_count": 299,
+      "window": 201,
+      "candle_time": 1794841200,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 12.0,
+          "canonical": 12.0
+        },
+        "di_plus": {
+          "chart": 24.01,
+          "canonical": 24.01
+        },
+        "di_minus": {
+          "chart": 22.08,
+          "canonical": 22.08
+        },
+        "adx_acceleration": {
+          "chart": -0.6,
+          "canonical": -0.6
+        },
+        "atr": {
+          "chart": 0.11821429,
+          "canonical": 0.11821429
+        },
+        "ema5": {
+          "chart": 9.15507431,
+          "canonical": 9.15507431
+        },
+        "ema9": {
+          "chart": 9.15432108,
+          "canonical": 9.15432108
+        },
+        "ema10": {
+          "chart": 9.1551198,
+          "canonical": 9.1551198
+        },
+        "ema21": {
+          "chart": 9.16718638,
+          "canonical": 9.16718638
+        },
+        "ema30": {
+          "chart": 9.18315667,
+          "canonical": 9.18315667
+        },
+        "ema50": {
+          "chart": 9.25090453,
+          "canonical": 9.25090453
+        },
+        "ema200": {
+          "chart": 9.82279606,
+          "canonical": 9.82279606
+        },
+        "rsi": {
+          "chart": 46.91,
+          "canonical": 46.91
+        },
+        "rsi_6": {
+          "chart": 46.01,
+          "canonical": 46.01
+        },
+        "rsi_12": {
+          "chart": 46.89,
+          "canonical": 46.89
+        },
+        "rsi_24": {
+          "chart": 46.09,
+          "canonical": 46.09
+        }
+      }
+    },
+    {
+      "symbol": "LINK_USDT",
+      "timeframe": "5m",
+      "source": "gate.io",
+      "closed_count": 499,
+      "window": 288,
+      "candle_time": 1794845400,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 19.21,
+          "canonical": 19.21
+        },
+        "di_plus": {
+          "chart": 21.41,
+          "canonical": 21.41
+        },
+        "di_minus": {
+          "chart": 23.16,
+          "canonical": 23.16
+        },
+        "adx_acceleration": {
+          "chart": -1.18,
+          "canonical": -1.18
+        },
+        "atr": {
+          "chart": 0.04978571,
+          "canonical": 0.04978571
+        },
+        "ema5": {
+          "chart": 9.11613939,
+          "canonical": 9.11613939
+        },
+        "ema9": {
+          "chart": 9.11504821,
+          "canonical": 9.11504821
+        },
+        "ema10": {
+          "chart": 9.11568852,
+          "canonical": 9.11568852
+        },
+        "ema21": {
+          "chart": 9.12612408,
+          "canonical": 9.12612408
+        },
+        "ema30": {
+          "chart": 9.13038179,
+          "canonical": 9.13038179
+        },
+        "ema50": {
+          "chart": 9.13307629,
+          "canonical": 9.13307629
+        },
+        "ema200": {
+          "chart": 9.15166003,
+          "canonical": 9.15166003
+        },
+        "rsi": {
+          "chart": 46.64,
+          "canonical": 46.64
+        },
+        "rsi_6": {
+          "chart": 45.79,
+          "canonical": 45.79
+        },
+        "rsi_12": {
+          "chart": 46.33,
+          "canonical": 46.33
+        },
+        "rsi_24": {
+          "chart": 47.76,
+          "canonical": 47.76
+        }
+      }
+    },
+    {
+      "symbol": "DOGE_USDT",
+      "timeframe": "4h",
+      "source": "gate.io",
+      "closed_count": 299,
+      "window": 200,
+      "candle_time": 1794830400,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 55.38,
+          "canonical": 55.38
+        },
+        "di_plus": {
+          "chart": 11.54,
+          "canonical": 11.54
+        },
+        "di_minus": {
+          "chart": 25.39,
+          "canonical": 25.39
+        },
+        "adx_acceleration": {
+          "chart": -1.37,
+          "canonical": -1.37
+        },
+        "atr": {
+          "chart": 0.001925,
+          "canonical": 0.001925
+        },
+        "ema5": {
+          "chart": 0.05892315,
+          "canonical": 0.05892315
+        },
+        "ema9": {
+          "chart": 0.05921458,
+          "canonical": 0.05921458
+        },
+        "ema10": {
+          "chart": 0.05932565,
+          "canonical": 0.05932565
+        },
+        "ema21": {
+          "chart": 0.06089962,
+          "canonical": 0.06089962
+        },
+        "ema30": {
+          "chart": 0.062173,
+          "canonical": 0.062173
+        },
+        "ema50": {
+          "chart": 0.06451367,
+          "canonical": 0.06451367
+        },
+        "ema200": {
+          "chart": 0.07290918,
+          "canonical": 0.07290918
+        },
+        "rsi": {
+          "chart": 35.21,
+          "canonical": 35.21
+        },
+        "rsi_6": {
+          "chart": 38.44,
+          "canonical": 38.44
+        },
+        "rsi_12": {
+          "chart": 35.6,
+          "canonical": 35.6
+        },
+        "rsi_24": {
+          "chart": 34.91,
+          "canonical": 34.91
+        }
+      }
+    },
+    {
+      "symbol": "DOGE_USDT",
+      "timeframe": "1h",
+      "source": "gate.io",
+      "closed_count": 299,
+      "window": 201,
+      "candle_time": 1794841200,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 14.93,
+          "canonical": 14.93
+        },
+        "di_plus": {
+          "chart": 23.26,
+          "canonical": 23.26
+        },
+        "di_minus": {
+          "chart": 19.32,
+          "canonical": 19.32
+        },
+        "adx_acceleration": {
+          "chart": -0.44,
+          "canonical": -0.44
+        },
+        "atr": {
+          "chart": 0.00075071,
+          "canonical": 0.00075071
+        },
+        "ema5": {
+          "chart": 0.05882513,
+          "canonical": 0.05882513
+        },
+        "ema9": {
+          "chart": 0.05880021,
+          "canonical": 0.05880021
+        },
+        "ema10": {
+          "chart": 0.05880103,
+          "canonical": 0.05880103
+        },
+        "ema21": {
+          "chart": 0.05884854,
+          "canonical": 0.05884854
+        },
+        "ema30": {
+          "chart": 0.0589806,
+          "canonical": 0.0589806
+        },
+        "ema50": {
+          "chart": 0.05957389,
+          "canonical": 0.05957389
+        },
+        "ema200": {
+          "chart": 0.06415708,
+          "canonical": 0.06415708
+        },
+        "rsi": {
+          "chart": 48.21,
+          "canonical": 48.21
+        },
+        "rsi_6": {
+          "chart": 48.46,
+          "canonical": 48.46
+        },
+        "rsi_12": {
+          "chart": 48.5,
+          "canonical": 48.5
+        },
+        "rsi_24": {
+          "chart": 46.21,
+          "canonical": 46.21
+        }
+      }
+    },
+    {
+      "symbol": "DOGE_USDT",
+      "timeframe": "5m",
+      "source": "gate.io",
+      "closed_count": 499,
+      "window": 288,
+      "candle_time": 1794845400,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 17.76,
+          "canonical": 17.76
+        },
+        "di_plus": {
+          "chart": 23.24,
+          "canonical": 23.24
+        },
+        "di_minus": {
+          "chart": 21.86,
+          "canonical": 21.86
+        },
+        "adx_acceleration": {
+          "chart": -1.13,
+          "canonical": -1.13
+        },
+        "atr": {
+          "chart": 0.00030643,
+          "canonical": 0.00030643
+        },
+        "ema5": {
+          "chart": 0.05872105,
+          "canonical": 0.05872105
+        },
+        "ema9": {
+          "chart": 0.05870934,
+          "canonical": 0.05870934
+        },
+        "ema10": {
+          "chart": 0.05871033,
+          "canonical": 0.05871033
+        },
+        "ema21": {
+          "chart": 0.05873029,
+          "canonical": 0.05873029
+        },
+        "ema30": {
+          "chart": 0.05872637,
+          "canonical": 0.05872637
+        },
+        "ema50": {
+          "chart": 0.05870429,
+          "canonical": 0.05870429
+        },
+        "ema200": {
+          "chart": 0.05872601,
+          "canonical": 0.05872601
+        },
+        "rsi": {
+          "chart": 47.68,
+          "canonical": 47.68
+        },
+        "rsi_6": {
+          "chart": 44.56,
+          "canonical": 44.56
+        },
+        "rsi_12": {
+          "chart": 47.18,
+          "canonical": 47.18
+        },
+        "rsi_24": {
+          "chart": 48.98,
+          "canonical": 48.98
+        }
+      }
+    },
+    {
+      "symbol": "AVAX_USDT",
+      "timeframe": "4h",
+      "source": "gate.io",
+      "closed_count": 299,
+      "window": 200,
+      "candle_time": 1794830400,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 40.46,
+          "canonical": 40.46
+        },
+        "di_plus": {
+          "chart": 12.61,
+          "canonical": 12.61
+        },
+        "di_minus": {
+          "chart": 30.01,
+          "canonical": 30.01
+        },
+        "adx_acceleration": {
+          "chart": 0.03,
+          "canonical": 0.03
+        },
+        "atr": {
+          "chart": 0.24435714,
+          "canonical": 0.24435714
+        },
+        "ema5": {
+          "chart": 7.16919793,
+          "canonical": 7.16919793
+        },
+        "ema9": {
+          "chart": 7.24304791,
+          "canonical": 7.24304791
+        },
+        "ema10": {
+          "chart": 7.26632938,
+          "canonical": 7.26632938
+        },
+        "ema21": {
+          "chart": 7.52614432,
+          "canonical": 7.52614432
+        },
+        "ema30": {
+          "chart": 7.68376164,
+          "canonical": 7.68376164
+        },
+        "ema50": {
+          "chart": 7.90697301,
+          "canonical": 7.90697301
+        },
+        "ema200": {
+          "chart": 8.68864262,
+          "canonical": 8.68864262
+        },
+        "rsi": {
+          "chart": 28.75,
+          "canonical": 28.75
+        },
+        "rsi_6": {
+          "chart": 24.03,
+          "canonical": 24.03
+        },
+        "rsi_12": {
+          "chart": 27.39,
+          "canonical": 27.39
+        },
+        "rsi_24": {
+          "chart": 33.94,
+          "canonical": 33.94
+        }
+      }
+    },
+    {
+      "symbol": "AVAX_USDT",
+      "timeframe": "1h",
+      "source": "gate.io",
+      "closed_count": 299,
+      "window": 201,
+      "candle_time": 1794841200,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 20.26,
+          "canonical": 20.26
+        },
+        "di_plus": {
+          "chart": 21.08,
+          "canonical": 21.08
+        },
+        "di_minus": {
+          "chart": 20.21,
+          "canonical": 20.21
+        },
+        "adx_acceleration": {
+          "chart": -1.4,
+          "canonical": -1.4
+        },
+        "atr": {
+          "chart": 0.10214286,
+          "canonical": 0.10214286
+        },
+        "ema5": {
+          "chart": 7.13794032,
+          "canonical": 7.13794032
+        },
+        "ema9": {
+          "chart": 7.14379736,
+          "canonical": 7.14379736
+        },
+        "ema10": {
+          "chart": 7.14591173,
+          "canonical": 7.14591173
+        },
+        "ema21": {
+          "chart": 7.17415948,
+          "canonical": 7.17415948
+        },
+        "ema30": {
+          "chart": 7.21148844,
+          "canonical": 7.21148844
+        },
+        "ema50": {
+          "chart": 7.33060784,
+          "canonical": 7.33060784
+        },
+        "ema200": {
+          "chart": 7.87501024,
+          "canonical": 7.87501024
+        },
+        "rsi": {
+          "chart": 43.36,
+          "canonical": 43.36
+        },
+        "rsi_6": {
+          "chart": 43.22,
+          "canonical": 43.22
+        },
+        "rsi_12": {
+          "chart": 43.59,
+          "canonical": 43.59
+        },
+        "rsi_24": {
+          "chart": 41.76,
+          "canonical": 41.76
+        }
+      }
+    },
+    {
+      "symbol": "AVAX_USDT",
+      "timeframe": "5m",
+      "source": "gate.io",
+      "closed_count": 499,
+      "window": 288,
+      "candle_time": 1794845400,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 18.69,
+          "canonical": 18.69
+        },
+        "di_plus": {
+          "chart": 21.24,
+          "canonical": 21.24
+        },
+        "di_minus": {
+          "chart": 27.8,
+          "canonical": 27.8
+        },
+        "adx_acceleration": {
+          "chart": -0.41,
+          "canonical": -0.41
+        },
+        "atr": {
+          "chart": 0.03964286,
+          "canonical": 0.03964286
+        },
+        "ema5": {
+          "chart": 7.08620667,
+          "canonical": 7.08620667
+        },
+        "ema9": {
+          "chart": 7.0914192,
+          "canonical": 7.0914192
+        },
+        "ema10": {
+          "chart": 7.09293678,
+          "canonical": 7.09293678
+        },
+        "ema21": {
+          "chart": 7.10677285,
+          "canonical": 7.10677285
+        },
+        "ema30": {
+          "chart": 7.11193626,
+          "canonical": 7.11193626
+        },
+        "ema50": {
+          "chart": 7.11689401,
+          "canonical": 7.11689401
+        },
+        "ema200": {
+          "chart": 7.14595909,
+          "canonical": 7.14595909
+        },
+        "rsi": {
+          "chart": 42.47,
+          "canonical": 42.47
+        },
+        "rsi_6": {
+          "chart": 35.9,
+          "canonical": 35.9
+        },
+        "rsi_12": {
+          "chart": 41.49,
+          "canonical": 41.49
+        },
+        "rsi_24": {
+          "chart": 45.09,
+          "canonical": 45.09
+        }
+      }
+    },
+    {
+      "symbol": "ADA_USDT",
+      "timeframe": "4h",
+      "source": "gate.io",
+      "closed_count": 299,
+      "window": 200,
+      "candle_time": 1794830400,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 44.31,
+          "canonical": 44.31
+        },
+        "di_plus": {
+          "chart": 12.93,
+          "canonical": 12.93
+        },
+        "di_minus": {
+          "chart": 26.79,
+          "canonical": 26.79
+        },
+        "adx_acceleration": {
+          "chart": -0.72,
+          "canonical": -0.72
+        },
+        "atr": {
+          "chart": 0.00503571,
+          "canonical": 0.00503571
+        },
+        "ema5": {
+          "chart": 0.15313377,
+          "canonical": 0.15313377
+        },
+        "ema9": {
+          "chart": 0.15397689,
+          "canonical": 0.15397689
+        },
+        "ema10": {
+          "chart": 0.15427296,
+          "canonical": 0.15427296
+        },
+        "ema21": {
+          "chart": 0.15827888,
+          "canonical": 0.15827888
+        },
+        "ema30": {
+          "chart": 0.16136432,
+          "canonical": 0.16136432
+        },
+        "ema50": {
+          "chart": 0.16696605,
+          "canonical": 0.16696605
+        },
+        "ema200": {
+          "chart": 0.19177961,
+          "canonical": 0.19177961
+        },
+        "rsi": {
+          "chart": 34.05,
+          "canonical": 34.05
+        },
+        "rsi_6": {
+          "chart": 34.62,
+          "canonical": 34.62
+        },
+        "rsi_12": {
+          "chart": 34.02,
+          "canonical": 34.02
+        },
+        "rsi_24": {
+          "chart": 35.04,
+          "canonical": 35.04
+        }
+      }
+    },
+    {
+      "symbol": "ADA_USDT",
+      "timeframe": "1h",
+      "source": "gate.io",
+      "closed_count": 299,
+      "window": 201,
+      "candle_time": 1794841200,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 13.48,
+          "canonical": 13.48
+        },
+        "di_plus": {
+          "chart": 23.12,
+          "canonical": 23.12
+        },
+        "di_minus": {
+          "chart": 20.53,
+          "canonical": 20.53
+        },
+        "adx_acceleration": {
+          "chart": -0.58,
+          "canonical": -0.58
+        },
+        "atr": {
+          "chart": 0.00214214,
+          "canonical": 0.00214214
+        },
+        "ema5": {
+          "chart": 0.15252698,
+          "canonical": 0.15252698
+        },
+        "ema9": {
+          "chart": 0.15257938,
+          "canonical": 0.15257938
+        },
+        "ema10": {
+          "chart": 0.15260773,
+          "canonical": 0.15260773
+        },
+        "ema21": {
+          "chart": 0.15290618,
+          "canonical": 0.15290618
+        },
+        "ema30": {
+          "chart": 0.1532922,
+          "canonical": 0.1532922
+        },
+        "ema50": {
+          "chart": 0.1548558,
+          "canonical": 0.1548558
+        },
+        "ema200": {
+          "chart": 0.16569382,
+          "canonical": 0.16569382
+        },
+        "rsi": {
+          "chart": 47.0,
+          "canonical": 47.0
+        },
+        "rsi_6": {
+          "chart": 46.82,
+          "canonical": 46.82
+        },
+        "rsi_12": {
+          "chart": 47.11,
+          "canonical": 47.11
+        },
+        "rsi_24": {
+          "chart": 45.63,
+          "canonical": 45.63
+        }
+      }
+    },
+    {
+      "symbol": "ADA_USDT",
+      "timeframe": "5m",
+      "source": "gate.io",
+      "closed_count": 499,
+      "window": 288,
+      "candle_time": 1794845400,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 17.76,
+          "canonical": 17.76
+        },
+        "di_plus": {
+          "chart": 19.57,
+          "canonical": 19.57
+        },
+        "di_minus": {
+          "chart": 25.23,
+          "canonical": 25.23
+        },
+        "adx_acceleration": {
+          "chart": -0.39,
+          "canonical": -0.39
+        },
+        "atr": {
+          "chart": 0.00082071,
+          "canonical": 0.00082071
+        },
+        "ema5": {
+          "chart": 0.151813,
+          "canonical": 0.151813
+        },
+        "ema9": {
+          "chart": 0.15191852,
+          "canonical": 0.15191852
+        },
+        "ema10": {
+          "chart": 0.15194298,
+          "canonical": 0.15194298
+        },
+        "ema21": {
+          "chart": 0.15212823,
+          "canonical": 0.15212823
+        },
+        "ema30": {
+          "chart": 0.15216798,
+          "canonical": 0.15216798
+        },
+        "ema50": {
+          "chart": 0.15218219,
+          "canonical": 0.15218219
+        },
+        "ema200": {
+          "chart": 0.15259814,
+          "canonical": 0.15259814
+        },
+        "rsi": {
+          "chart": 42.63,
+          "canonical": 42.63
+        },
+        "rsi_6": {
+          "chart": 33.43,
+          "canonical": 33.43
+        },
+        "rsi_12": {
+          "chart": 41.42,
+          "canonical": 41.42
+        },
+        "rsi_24": {
+          "chart": 45.61,
+          "canonical": 45.61
+        }
+      }
+    },
+    {
+      "symbol": "SUI_USDT",
+      "timeframe": "4h",
+      "source": "gate.io",
+      "closed_count": 299,
+      "window": 200,
+      "candle_time": 1794830400,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 45.13,
+          "canonical": 45.13
+        },
+        "di_plus": {
+          "chart": 11.92,
+          "canonical": 11.92
+        },
+        "di_minus": {
+          "chart": 24.58,
+          "canonical": 24.58
+        },
+        "adx_acceleration": {
+          "chart": -0.8,
+          "canonical": -0.8
+        },
+        "atr": {
+          "chart": 0.02502143,
+          "canonical": 0.02502143
+        },
+        "ema5": {
+          "chart": 0.7226786,
+          "canonical": 0.7226786
+        },
+        "ema9": {
+          "chart": 0.72690335,
+          "canonical": 0.72690335
+        },
+        "ema10": {
+          "chart": 0.72830096,
+          "canonical": 0.72830096
+        },
+        "ema21": {
+          "chart": 0.74669467,
+          "canonical": 0.74669467
+        },
+        "ema30": {
+          "chart": 0.76078857,
+          "canonical": 0.76078857
+        },
+        "ema50": {
+          "chart": 0.78592523,
+          "canonical": 0.78592523
+        },
+        "ema200": {
+          "chart": 0.88691439,
+          "canonical": 0.88691439
+        },
+        "rsi": {
+          "chart": 35.41,
+          "canonical": 35.41
+        },
+        "rsi_6": {
+          "chart": 34.84,
+          "canonical": 34.84
+        },
+        "rsi_12": {
+          "chart": 35.24,
+          "canonical": 35.24
+        },
+        "rsi_24": {
+          "chart": 36.66,
+          "canonical": 36.66
+        }
+      }
+    },
+    {
+      "symbol": "SUI_USDT",
+      "timeframe": "1h",
+      "source": "gate.io",
+      "closed_count": 299,
+      "window": 201,
+      "candle_time": 1794841200,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 12.35,
+          "canonical": 12.35
+        },
+        "di_plus": {
+          "chart": 24.94,
+          "canonical": 24.94
+        },
+        "di_minus": {
+          "chart": 21.17,
+          "canonical": 21.17
+        },
+        "adx_acceleration": {
+          "chart": -0.32,
+          "canonical": -0.32
+        },
+        "atr": {
+          "chart": 0.01055714,
+          "canonical": 0.01055714
+        },
+        "ema5": {
+          "chart": 0.71948554,
+          "canonical": 0.71948554
+        },
+        "ema9": {
+          "chart": 0.7201557,
+          "canonical": 0.7201557
+        },
+        "ema10": {
+          "chart": 0.72036178,
+          "canonical": 0.72036178
+        },
+        "ema21": {
+          "chart": 0.72219593,
+          "canonical": 0.72219593
+        },
+        "ema30": {
+          "chart": 0.72413751,
+          "canonical": 0.72413751
+        },
+        "ema50": {
+          "chart": 0.73134722,
+          "canonical": 0.73134722
+        },
+        "ema200": {
+          "chart": 0.78163341,
+          "canonical": 0.78163341
+        },
+        "rsi": {
+          "chart": 45.9,
+          "canonical": 45.9
+        },
+        "rsi_6": {
+          "chart": 45.01,
+          "canonical": 45.01
+        },
+        "rsi_12": {
+          "chart": 45.85,
+          "canonical": 45.85
+        },
+        "rsi_24": {
+          "chart": 45.15,
+          "canonical": 45.15
+        }
+      }
+    },
+    {
+      "symbol": "SUI_USDT",
+      "timeframe": "5m",
+      "source": "gate.io",
+      "closed_count": 499,
+      "window": 288,
+      "candle_time": 1794845400,
+      "pass": true,
+      "comparisons": {
+        "adx": {
+          "chart": 17.04,
+          "canonical": 17.04
+        },
+        "di_plus": {
+          "chart": 22.05,
+          "canonical": 22.05
+        },
+        "di_minus": {
+          "chart": 26.1,
+          "canonical": 26.1
+        },
+        "adx_acceleration": {
+          "chart": -0.66,
+          "canonical": -0.66
+        },
+        "atr": {
+          "chart": 0.00403571,
+          "canonical": 0.00403571
+        },
+        "ema5": {
+          "chart": 0.71514899,
+          "canonical": 0.71514899
+        },
+        "ema9": {
+          "chart": 0.71547167,
+          "canonical": 0.71547167
+        },
+        "ema10": {
+          "chart": 0.71558119,
+          "canonical": 0.71558119
+        },
+        "ema21": {
+          "chart": 0.71662771,
+          "canonical": 0.71662771
+        },
+        "ema30": {
+          "chart": 0.71702764,
+          "canonical": 0.71702764
+        },
+        "ema50": {
+          "chart": 0.71752863,
+          "canonical": 0.71752863
+        },
+        "ema200": {
+          "chart": 0.72049759,
+          "canonical": 0.72049759
+        },
+        "rsi": {
+          "chart": 43.92,
+          "canonical": 43.92
+        },
+        "rsi_6": {
+          "chart": 38.1,
+          "canonical": 38.1
+        },
+        "rsi_12": {
+          "chart": 43.1,
+          "canonical": 43.1
+        },
+        "rsi_24": {
+          "chart": 45.96,
+          "canonical": 45.96
+        }
+      }
+    }
+  ],
+  "all_pass": true,
+  "mode": "READ_ONLY"
+}

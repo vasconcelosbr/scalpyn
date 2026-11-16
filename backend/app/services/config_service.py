@@ -96,6 +96,12 @@ class ConfigService:
         return {}
 
     async def update_config(self, db: AsyncSession, config_type: str, user_id: UUID, new_json: Dict[str, Any], changed_by: UUID, pool_id: Optional[UUID] = None, change_description: str = "") -> Dict[str, Any]:
+        if config_type in ("mtf_analysis", "mtf_preferences"):
+            from ..schemas.mtf_chart import MTFChartConfig, MTFPreferences
+            if pool_id is not None:
+                raise ValueError("MTF chart configuration is user-scoped")
+            schema = MTFChartConfig if config_type == "mtf_analysis" else MTFPreferences
+            new_json = schema.model_validate(new_json).model_dump()
         if config_type == "ohlcv_recovery":
             from ..schemas.ohlcv_recovery import OHLCVRecoveryConfig, require_recovery_owner
             await require_recovery_owner(db, user_id)

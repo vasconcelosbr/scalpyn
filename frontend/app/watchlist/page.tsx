@@ -1,5 +1,7 @@
 'use client';
 
+import Link from 'next/link';
+
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
 import { WatchlistTable } from '@/components/watchlist/WatchlistTable';
 import {
@@ -1569,6 +1571,9 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
           {loading && !data ? 'carregando' : `${items.length} favorável${items.length !== 1 ? 'is' : ''}`}
         </span>
         <div onClick={(event) => event.stopPropagation()}>
+          <Link href="/grafico-mtf" className="mr-3 inline-flex rounded-lg border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-xs font-semibold text-blue-300 hover:bg-blue-500/20" onKeyDown={(event) => event.stopPropagation()}>
+            Abrir Gráfico MTF ↗
+          </Link>
           <button
             type="button"
             onClick={() => void load()}
