@@ -7,6 +7,16 @@
   },
   "required_features": [
     {
+      "id": "recovery-m5-shadow-order-isolation",
+      "description": "Opt-in M5 collection and Shadow recovery require observation mode; Gate writes are blocked before network access",
+      "files": [
+        {"path":"backend/scripts/run_observation_beat.py","contains_all":["RECOVERY_M5_SHADOW_SCHEDULE","RECOVERY_OBSERVATION_ONLY","M5_SHADOW_ALLOWED","collect_state_5m_every_60s"]},
+        {"path":"backend/app/services/canonical_indicator_config.py","contains_all":["CANONICAL_INDICATOR_CONFIG_SELECTOR","INDICATOR_CONFIG_CARDINALITY_INVALID"]},
+        {"path":"backend/app/exchange_adapters/gate_adapter.py","contains_all":["RECOVERY_GATE_WRITE_BLOCK","Gate exchange writes are blocked"]},
+        {"path":"backend/tests/test_recovery_m5_shadow.py","contains_all":["test_recovery_blocks_exchange_writes_before_signing_or_network","test_recovery_schedule_requires_explicit_shadow_opt_in_and_order_block","test_canonical_indicator_selector_never_falls_back_to_another_user"]}
+      ]
+    },
+    {
       "id": "mtf-chart-observation-only",
       "description": "Gate MTF chart and append-only simulator remain separate from operational execution and training",
       "files": [
