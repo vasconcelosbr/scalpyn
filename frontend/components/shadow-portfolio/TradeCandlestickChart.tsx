@@ -281,6 +281,17 @@ export function MTFCandlestickChart({ data, timeframe, preferences, config, onPr
     const key=JSON.stringify([names,collapsed,enabled.includes('volume_ma'),config.panel_heights]);
     const sameContext=context.current===`${data.symbol}:${timeframe}`;
     const range=sameContext?chart.timeScale().getVisibleLogicalRange():null;
+    if (!sameContext && context.current) {
+      // The library shares a time index across series. Empty the old timeline
+      // before replacing its timeframe so markers/crosshair cannot resolve an
+      // old candle index against the new candle set during synchronous updates.
+      chart.clearCrosshairPosition();
+      markersRef.current?.setMarkers([]);
+      if (zoneRef.current) {price.detachPrimitive(zoneRef.current);zoneRef.current=null;}
+      lines.current.forEach(series=>series.setData([]));
+      volumeRef.current?.setData([]);
+      price.setData([]);
+    }
     if (key!==layoutKey.current) {
       lines.current.forEach(s=>chart.removeSeries(s)); lines.current.clear();
       if (volumeRef.current) {chart.removeSeries(volumeRef.current);volumeRef.current=null;}
