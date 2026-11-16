@@ -32,6 +32,13 @@ inactive or malformed selections fail closed; there is no latest-user fallback.
 Without a selector the original exact-singleton validation remains in effect.
 Consumers retain the selected configuration identity and hash in provenance.
 
+M5 producers record both the Gate interval opening and the candle close. Feature
+freshness uses the close time, as the closed-H4 provider already does. Using the
+opening incorrectly exhausted the profile TTL during the candle itself and the
+capture settlement delay. Recomputing an old candle never renews its source time.
+Existing profile TTLs and veto thresholds remain unchanged; old envelopes are
+not rewritten. New producer versions identify this timestamp correction.
+
 Missing Shadow configuration must be persisted through ConfigService, using the
 existing typed simulation defaults and preserving any already configured values.
 Do not change profile rules, score thresholds, or model gates to obtain an ALLOW.
