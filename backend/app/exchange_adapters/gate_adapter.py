@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import time
 from typing import Any, Dict, List, Optional
 
@@ -168,6 +169,13 @@ class GateAdapter(BaseExchangeAdapter):
         Args:
             write: if True, use write-rate-limiter; else read-rate-limiter.
         """
+        # RECOVERY_GATE_WRITE_BLOCK: collection and Shadow may run while every
+        # signed exchange mutation remains forbidden, including worker calls.
+        # Check the HTTP method too: a forgotten write=True must not bypass it.
+        if os.environ.get("RECOVERY_OBSERVATION_ONLY") == "1" and (
+            write or method.upper() not in {"GET", "HEAD", "OPTIONS"}
+        ):
+            raise PermissionError("RECOVERY_OBSERVATION_ONLY: Gate exchange writes are blocked")
         if write:
             await self._write_limiter.acquire()
         else:
