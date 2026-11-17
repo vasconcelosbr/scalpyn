@@ -99,7 +99,9 @@ def test_capture_idempotence_history_removal_isolation_and_exports(database):
                 def json(self):return [{'last':'100'}]
             return Reply()
     async def run():
-        with patch.object(h.chart,'chart_data',AsyncMock(return_value=sample())),patch.object(h.chart,'load_config',AsyncMock(return_value=cfg)),\
+        data=sample()
+        data['market_context']={'large_evidence':'x'*150000}
+        with patch.object(h.chart,'chart_data',AsyncMock(return_value=data)),patch.object(h.chart,'load_config',AsyncMock(return_value=cfg)),\
              patch.object(h.config_service,'get_config',AsyncMock(return_value=HistoryConfig().model_dump())),patch('httpx.AsyncClient',return_value=Client()):
             assert await h.capture(adapter,uid,'l3-consolidated',{'symbol':'ETH_USDT'},'2026-01-01T12:00:00+00:00')
             assert not await h.capture(adapter,uid,'l3-consolidated',{'symbol':'ETH_USDT'},'2026-01-01T12:00:00+00:00')
@@ -126,6 +128,10 @@ def test_capture_idempotence_history_removal_isolation_and_exports(database):
         assert book['observations']['A2'].value==str(oid)
         assert book['indicators']['B2'].value=='rsi'
         assert len(list(book['outcomes'].rows))==5
+        reference=book['observations']['W2'].value
+        assert reference.startswith('metadata:')
+        chunks=[row[2] for row in book['metadata_chunks'].iter_rows(min_row=2,values_only=True) if row[0]==reference]
+        assert json.loads(''.join(chunks))['market_context']['large_evidence']=='x'*150000
         book.close()
         eid=uuid4()
         db.execute(sa.text("INSERT INTO mtf_history_exports(id,user_id,request,status,content) VALUES(:id,:uid,'{\"format\":\"xlsx\"}','READY',:content)"),{'id':eid,'uid':uid,'content':raw})
@@ -188,6 +194,26 @@ def test_bad_filters_return_validation_error():
     from fastapi import HTTPException
     with pytest.raises(HTTPException) as e:history_filters(start=datetime(2026,1,1))
     assert e.value.status_code==422
+
+
+def test_dispatch_releases_claim_before_consumer_can_receive():
+    from app.tasks.mtf_history import dispatch_pending
+    from unittest.mock import MagicMock
+    result=MagicMock()
+    result.scalars.return_value.all.return_value=['first','second']
+    db=AsyncMock()
+    db.execute.return_value=result
+    events=[]
+    async def committed():events.append('commit')
+    db.commit.side_effect=committed
+    def published(*args,**kwargs):
+        assert events and events[0]=='commit', 'consumer must not see locked capture rows'
+        events.append(kwargs['args'][0])
+    async def run():
+        with patch('app.tasks.task_dispatch.enqueue',side_effect=published):
+            await dispatch_pending(db)
+    asyncio.run(run())
+    assert events==['commit','first','second']
 
 
 def test_mature_outcome_follows_removed_asset_without_current_membership(database):

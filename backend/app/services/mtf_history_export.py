@@ -80,6 +80,9 @@ async def build(db,uid,request,cutoff):
         else:
             from openpyxl import Workbook
             from openpyxl.cell import WriteOnlyCell
+            # Full snapshots exceed the CSV parser's default field limit.
+            # Use the portable C long maximum; Excel cells are chunked below.
+            csv.field_size_limit(2147483647)
             workbook = Workbook(write_only=True)
             def append(sheet, values):
                 cells=[]
