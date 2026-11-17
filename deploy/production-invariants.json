@@ -11,6 +11,10 @@
       "description": "Consolidated display is the union of current profile approvals, with pending data separate and no Shadow or execution veto; strict external execution feed remains independent",
       "files": [
         {
+          "path": "backend/app/api/watchlists.py",
+          "contains_all": ["L3_PROFILE_SUMMARY_COUNTS", "load_l3_profile_summary_counts"]
+        },
+        {
           "path": "backend/app/services/l3_profile_consolidation.py",
           "contains_all": [
             "L3_PROFILE_CONSOLIDATED_DISPLAY",
@@ -23,7 +27,8 @@
           "contains_all": [
             "test_shadow_suppression_and_low_score_never_hide_profile_approvals",
             "test_union_deduplicates_profiles_and_keeps_data_pending_separate",
-            "test_display_route_precedes_dynamic_route_and_never_uses_execution_loader"
+            "test_display_route_precedes_dynamic_route_and_never_uses_execution_loader",
+            "test_summary_counts_use_profile_approvals_not_shadow_and_exclude_pending"
           ]
         },
         {

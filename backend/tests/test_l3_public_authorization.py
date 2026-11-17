@@ -328,8 +328,9 @@ async def test_load_public_authorizations_keeps_symbol_still_in_its_pool():
 
 
 @pytest.mark.asyncio
-async def test_l3_card_count_excludes_raw_membership_without_authorization(monkeypatch):
+async def test_l3_card_count_uses_profile_status_instead_of_raw_membership_or_authorization(monkeypatch):
     from app.api import watchlists
+    from app.services import l3_profile_consolidation
     l3 = Obj(id=uuid4(), level="L3", market_mode="spot", profile_id=None, source_watchlist_id=None)
     l1 = Obj(id=uuid4(), level="L1", market_mode="spot", profile_id=None, source_watchlist_id=None)
     db = Obj(execute=AsyncMock(side_effect=[
@@ -338,10 +339,13 @@ async def test_l3_card_count_excludes_raw_membership_without_authorization(monke
         _no_pool_ancestry(),
     ]))
     monkeypatch.setattr(watchlists, "load_live_l3_candidates", AsyncMock(return_value=[]))
+    monkeypatch.setattr(l3_profile_consolidation, 'load_profile_display_rows',
+        AsyncMock(return_value=[{'status': 'approved'}, {'status': 'awaiting_data'}]))
     monkeypatch.setattr(watchlists, "_wl_to_dict", lambda w, **kwargs: {"id": str(w.id), "level": w.level})
     result = await watchlists.list_watchlists(order_by="created_at", user_id=uuid4(), db=db)
-    assert result["watchlists"][0]["asset_count"] == 0
+    assert result["watchlists"][0]["asset_count"] == 1
     assert result["watchlists"][1]["asset_count"] == 2
+    watchlists.load_live_l3_candidates.assert_not_awaited()
 
 
 @pytest.mark.asyncio

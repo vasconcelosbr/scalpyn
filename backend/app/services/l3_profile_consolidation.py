@@ -59,3 +59,15 @@ async def load_l3_profile_consolidation(db, *, user_id):
         rows.extend(await load_profile_display_rows(
             db, user_id=user_id, watchlist_id=watchlist_id, now=now))
     return consolidate_profile_display_rows(rows, now=now)
+
+
+async def load_l3_profile_summary_counts(db, *, user_id, watchlists):
+    now = datetime.now(timezone.utc)
+    counts = {}
+    for watchlist in watchlists:
+        if watchlist.level != 'L3' or watchlist.market_mode != 'spot':
+            continue
+        rows = await load_profile_display_rows(
+            db, user_id=user_id, watchlist_id=watchlist.id, now=now)
+        counts[watchlist.id] = sum(row['status'] == 'approved' for row in rows)
+    return counts
