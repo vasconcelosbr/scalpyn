@@ -50,6 +50,8 @@ class ShadowTradeRead(BaseModel):
     """Item da listagem paginada — payload enxuto para tabelas."""
 
     id: UUID
+    source: Optional[str] = None
+    mtf_observation_id: Optional[UUID] = None
     symbol: str
     direction: Optional[str] = None
     entry_price: Optional[float] = None

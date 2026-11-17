@@ -278,6 +278,8 @@ export function ShadowTradeDetailScreen({ shadowId }: { shadowId: string }) {
         <header className={styles.hero}>
           <div>
             <div className={styles.eyebrow}>Trade replay · leitura histórica</div>
+            <p>Origem: {data.source === "L3_CONSOLIDATED" ? "L3 Consolidado → Aprovados" : data.source ?? "Não registrada"}</p>
+            {data.mtf_observation_id && <p className={styles.cardMeta}>Observação MTF: {data.mtf_observation_id}</p>}
             <div className={styles.titleRow}>
               <h1 className={styles.title}>{data.symbol}</h1>
               <span className={styles.badge}>{data.status}</span>

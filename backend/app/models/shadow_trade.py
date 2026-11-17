@@ -97,6 +97,7 @@ class ShadowTrade(Base):
     # Default 'L3' garante back-compat com linhas pré-migration 060.
     # Histórico: 'ARROW' existia para watchlist custom (Task #321, removida).
     source = Column(String(20), nullable=False, default="L3", index=True)
+    mtf_observation_id = Column(UUID(as_uuid=True), nullable=True)
 
     # R6 observational attribution.  Historical rows intentionally remain
     # NULL; NONE is used only after a future runtime emits all layer verdicts.

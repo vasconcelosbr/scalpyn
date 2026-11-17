@@ -28,7 +28,7 @@ import {
   type ShadowReportOutcome,
 } from "@/lib/shadowReportOutcomeFilters";
 
-type Source = "L3" | "L3_REJECTED" | "L1_SPECTRUM";
+type Source = "L3_CONSOLIDATED" | "L3" | "L3_REJECTED" | "L1_SPECTRUM";
 const OUTCOME_LABEL: Record<ShadowReportOutcome, string> = {
   TP_HIT: "TP",
   SL_HIT: "SL",
@@ -158,6 +158,7 @@ interface OptimizationPlan {
 }
 
 const SOURCE_LABEL: Record<Source, string> = {
+  L3_CONSOLIDATED: "L3 Consolidado → Aprovados",
   L3: "Aprovados (L3)",
   L3_REJECTED: "Rejeitados (L3)",
   L1_SPECTRUM: "Dataset ML (L1)",
@@ -260,7 +261,7 @@ function FacetPicker({
 export default function DetailedReportWorkspace() {
   const router = useRouter();
   const initial = useMemo(() => initialDateTimes(), []);
-  const [sources, setSources] = useState<Source[]>(["L3"]);
+  const [sources, setSources] = useState<Source[]>(["L3", "L3_CONSOLIDATED"]);
   const [outcomes, setOutcomes] = useState<ShadowReportOutcome[]>([...SHADOW_REPORT_OUTCOMES]);
   const [dateFrom, setDateFrom] = useState(initial.from);
   const [dateTo, setDateTo] = useState(initial.to);
@@ -634,7 +635,7 @@ export default function DetailedReportWorkspace() {
                   <tr key={trade.id} className="text-xs text-[#b9c1d1] hover:bg-white/[0.025]">
                     <td className="whitespace-nowrap px-4 py-3 font-mono text-[11px] text-[#8993a8]">{trade.event_at ? formatDateTime(trade.event_at) : "—"}</td>
                     <td className="px-4 py-3 font-semibold text-[#edf0f7]">{trade.symbol}</td>
-                    <td className="max-w-[230px] px-4 py-3"><div className="truncate text-[#d2d8e5]">{trade.profile_name ?? "Sem profile"}</div><div className="truncate text-[10px] text-[#687287]">{trade.watchlist_name ?? SOURCE_LABEL[trade.source]}</div></td>
+                    <td className="max-w-[230px] px-4 py-3"><div className="truncate text-[#d2d8e5]">{trade.profile_name ?? "Sem profile"}</div><div className="truncate text-[10px] text-[#687287]">{SOURCE_LABEL[trade.source]} · {trade.watchlist_name ?? "Sem watchlist"}</div></td>
                     <td className="px-4 py-3"><span className={`rounded-md border px-2 py-1 font-semibold ${trade.outcome === "TP_HIT" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" : trade.outcome === "SL_HIT" ? "border-rose-500/30 bg-rose-500/10 text-rose-300" : "border-sky-500/30 bg-sky-500/10 text-sky-300"}`}>{OUTCOME_LABEL[trade.outcome]}</span></td>
                     <td className="px-4 py-3 font-mono">{money(trade.entry_price)}</td>
                     <td className="px-4 py-3 font-mono">{money(trade.exit_price)}</td>

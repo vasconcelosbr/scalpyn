@@ -46,6 +46,7 @@ const COPY: Record<string, { label: string; help?: string }> = {
   "spot_engine.scanner.l3_global_block_range_compiler.profile_allowlist": { label: "Profiles autorizados para regras de faixa", help: "IDs exatos do canário. Lista vazia mantém o compilador sem efeito operacional." },
   "spot_engine.scanner.l3_global_block_range_compiler.policy_version": { label: "Versão do compilador de faixa" },
   "spot_engine.selling.never_sell_at_loss": { label: "Nunca vender com prejuízo", help: "Proteção do Spot real. O Kill Switch pode sobrepor esta regra em emergência." },
+  "spot_engine.shadow.approved_source": { label: "Fonte dos Shadows aprovados", help: "L3 mantém a captura antiga. L3_CONSOLIDATED usa somente Armados atuais em L3 Consolidado → Aprovados. Afeta apenas novas simulações." },
   "spot_engine.shadow.amount_usdt": { label: "Valor por trade Shadow", help: "Valor nominal congelado no snapshot de cada novo trade." },
   "spot_engine.shadow.timeout_candles": { label: "Prazo do outcome operacional (candles)", help: "Quantidade máxima de candles antes do encerramento operacional por TIMEOUT." },
   "spot_engine.shadow.trailing_contract_version": { label: "Contrato técnico do trailing" },

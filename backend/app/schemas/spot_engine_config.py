@@ -246,6 +246,7 @@ class ShadowTTTConfig(BaseModel):
 class ShadowRuntimeConfig(BaseModel):
     """Operator-owned Shadow runtime values persisted in ``spot_engine``."""
 
+    approved_source: Literal["L3", "L3_CONSOLIDATED"] = "L3"
     amount_usdt: float = Field(1000.0, gt=0)
     timeout_candles: int = Field(1440, ge=1, le=10080)
     trailing_contract_version: Literal["shadow_hwm_trailing_v1"] = (

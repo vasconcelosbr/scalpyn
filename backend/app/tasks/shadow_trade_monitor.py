@@ -1416,7 +1416,7 @@ async def _advance_shadow(
         return "pending"
 
     l3_policy = (shadow.config_snapshot or {}).get("shadow_l3_exit_policy") or {}
-    if shadow.source == "L3" and (l3_policy.get("config") or {}).get("mode") == "APPLY":
+    if shadow.source in ("L3", "L3_CONSOLIDATED") and (l3_policy.get("config") or {}).get("mode") == "APPLY":
         from ..services.shadow_l3_exit_service import advance_shadow
         await advance_shadow(db, shadow)
         return "completed" if shadow.status == "COMPLETED" else "running"
@@ -2370,7 +2370,7 @@ async def _monitor_async() -> Dict[str, Any]:
                     select(ShadowTrade)
                     .where(
                         ShadowTrade.status.in_(("PENDING", "RUNNING")),
-                        ShadowTrade.source == "L3",
+                        ShadowTrade.source.in_(("L3", "L3_CONSOLIDATED")),
                     )
                     .where(_continuous_only)
                     .order_by(ShadowTrade.created_at.asc(), ShadowTrade.id.asc())
@@ -2403,7 +2403,7 @@ async def _monitor_async() -> Dict[str, Any]:
                     select(ShadowTrade.source)
                     .where(
                         ShadowTrade.status.in_(("PENDING", "RUNNING")),
-                        ShadowTrade.source != "L3",
+                        ShadowTrade.source.notin_(("L3", "L3_CONSOLIDATED")),
                     )
                     .where(_continuous_only)
                     .distinct()
@@ -2604,6 +2604,7 @@ async def _backfill_shadows_for_all_users() -> int:
                 select(ConfigProfile).where(
                     ConfigProfile.config_type == "spot_engine",
                     ConfigProfile.is_active.is_(True),
+                    ConfigProfile.pool_id.is_(None),
                 )
             )
             cfg_rows = cfg_res.scalars().all()
@@ -2614,7 +2615,13 @@ async def _backfill_shadows_for_all_users() -> int:
                 user_config = _shadow_user_config_from_persisted(
                     cfg_row.config_json
                 )
-                total += await safe_backfill_watchlist_shadows(cfg_row.user_id, user_config)
+                from ..services.shadow_approved_source import capture_approved_shadows, CONSOLIDATED
+                if user_config["approved_source"] == CONSOLIDATED:
+                    from ..services.shadow_trade_service import load_shadow_creation_config
+                    user_config = await load_shadow_creation_config(cfg_row.user_id)
+                    total += await capture_approved_shadows(cfg_row.user_id, user_config)
+                else:
+                    total += await safe_backfill_watchlist_shadows(cfg_row.user_id, user_config)
             except Exception:
                 logger.exception(
                     "[shadow-monitor] backfill failed for user=%s", cfg_row.user_id

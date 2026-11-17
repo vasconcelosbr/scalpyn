@@ -1,7 +1,7 @@
 """Unified read-only ranking endpoints for Shadow Portfolio and L3 consumers."""
 
 from datetime import date, datetime, timezone
-from typing import List
+from typing import Annotated, List
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -25,6 +25,7 @@ from ..services.watchlist_performance_ranking_service import (
     get_performance_rankings,
 )
 from .config import get_current_user_id
+from .shadow_trades import _source_values
 
 
 router = APIRouter(tags=["Watchlist Performance Ranking"])
@@ -58,6 +59,7 @@ async def shadow_portfolio_profile_performance(
     as_of: date | None = Query(None),
     range_days: int = Query(7),
     profile_id: UUID | None = Query(None),
+    sources: Annotated[str | None, Query()] = None,
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ) -> ProfilePerformanceResponse:
@@ -69,6 +71,7 @@ async def shadow_portfolio_profile_performance(
             db,
             user_id,
             as_of=selected_day,
+            sources=_source_values(sources=sources) or None,
             range_days=range_days,
             profile_id=profile_id,
         )
@@ -85,6 +88,7 @@ async def shadow_portfolio_profile_performance(
 async def shadow_portfolio_profile_daily_performance(
     as_of: date | None = Query(None),
     range: ProfileDailyRange = Query("7d"),
+    sources: Annotated[str | None, Query()] = None,
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ) -> ProfileDailyPerformanceResponse:
@@ -96,6 +100,7 @@ async def shadow_portfolio_profile_daily_performance(
             db,
             user_id,
             as_of=selected_day,
+            sources=_source_values(sources=sources) or None,
             range_key=range,
         )
     except RankingConfigError as exc:
@@ -110,6 +115,7 @@ async def shadow_portfolio_profile_daily_performance(
 )
 async def shadow_portfolio_profile_hourly_performance(
     as_of: date | None = Query(None),
+    sources: Annotated[str | None, Query()] = None,
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ) -> ProfileHourlyPerformanceResponse:
@@ -121,6 +127,7 @@ async def shadow_portfolio_profile_hourly_performance(
             db,
             user_id,
             as_of=selected_day,
+            sources=_source_values(sources=sources) or None,
         )
     except RankingConfigError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

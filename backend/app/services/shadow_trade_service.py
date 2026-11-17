@@ -100,6 +100,7 @@ def _trailing_policy_from_spot_config(spot_config: Any) -> Dict[str, Any]:
 def _shadow_user_config_from_spot_config(spot_config: Any) -> Dict[str, Any]:
     """Build the complete point-in-time Spot exit policy used by shadows."""
     return {
+        "approved_source": spot_config.shadow.approved_source,
         "tp_pct": float(spot_config.selling.take_profit_pct),
         "sl_pct": float(spot_config.sell_flow.kill_switch.max_drawdown_from_hwm_pct),
         "amount_usdt": float(spot_config.shadow.amount_usdt),
@@ -628,6 +629,8 @@ async def _load_ml_shadow_config(user_id, user_config: dict) -> dict:
     return _merge_ml_shadow_config(merged, ml_config)
 
 SHADOW_SOURCE_L3 = "L3"
+SHADOW_SOURCE_L3_CONSOLIDATED = "L3_CONSOLIDATED"
+APPROVED_SHADOW_SOURCES = (SHADOW_SOURCE_L3, SHADOW_SOURCE_L3_CONSOLIDATED)
 # Shadows de ativos rejeitados na L3 — usados exclusivamente para dados ML.
 # Segregados por source para nunca contaminar métricas de aprovados.
 SHADOW_SOURCE_L3_REJECTED = "L3_REJECTED"
@@ -648,6 +651,7 @@ SHADOW_SOURCE_L3_SIMULATED = "L3_SIMULATED"
 # Multiple profiles can shadow the same symbol simultaneously.
 SHADOW_SOURCE_L3_LAB = "L3_LAB"
 _VALID_SHADOW_SOURCES = (
+    SHADOW_SOURCE_L3_CONSOLIDATED,
     SHADOW_SOURCE_L3,
     SHADOW_SOURCE_L3_REJECTED,
     SHADOW_SOURCE_WATCHLIST_SPOT,
@@ -1258,7 +1262,7 @@ _INSERT_SHADOW_SQL = text("""
         amount_usdt, entry_price, entry_timestamp,
         tp_price, sl_price, tp_pct, sl_pct, timeout_candles,
         status, skip_reason, source, config_snapshot, features_snapshot,
-        l3_consolidation_enforced,
+        l3_consolidation_enforced, mtf_observation_id,
         last_processed_time,
         ttt_enabled, ttt_tp_pct, ttt_timeout_minutes,
         barrier_mode, tp_pct_applied, sl_pct_applied, atr_pct_at_entry,
@@ -1286,7 +1290,7 @@ _INSERT_SHADOW_SQL = text("""
         :status, :skip_reason, :source,
         CAST(:config_snapshot AS JSONB),
         CAST(:features_snapshot AS JSONB),
-        :l3_consolidation_enforced,
+        :l3_consolidation_enforced, :mtf_observation_id,
         :last_processed_time,
         :ttt_enabled, :ttt_tp_pct, :ttt_timeout_minutes,
         :barrier_mode, :tp_pct_applied, :sl_pct_applied, :atr_pct_at_entry,
@@ -1325,6 +1329,7 @@ async def _create_from_decision(
     extra_config: Optional[Dict[str, Any]] = None,
     lineage: Optional[Any] = None,
     consolidation_enforced: Optional[bool] = None,
+    mtf_observation_id: Optional[UUID] = None,
 ) -> Optional[UUID]:
     """Insere uma row em ``shadow_trades`` para a ``decision`` informada.
 
@@ -1340,6 +1345,13 @@ async def _create_from_decision(
         capture_native_snapshot,
         coverage as feature_coverage,
     )
+
+    from .shadow_approved_source import admission
+    if not await admission(db, user_id=decision.user_id, symbol=decision.symbol,
+        direction=(getattr(decision, "direction", None) or "SPOT").upper(), source=source):
+        return None
+    if source == SHADOW_SOURCE_L3_CONSOLIDATED and mtf_observation_id is None:
+        raise ValueError("SHADOW_MTF_OBSERVATION_REQUIRED")
 
     tp_pct = _resolve_shadow_tp_pct(user_config)
     sl_pct = float(user_config.get("sl_pct") or 0.0)
@@ -1467,7 +1479,7 @@ async def _create_from_decision(
     # never satisfy the governed Shadow report contract.  Fail closed before
     # any market lookup or INSERT; safe callers contain the failure and never
     # affect live execution.
-    if normalized_source == SHADOW_SOURCE_L3:
+    if normalized_source in APPROVED_SHADOW_SOURCES:
         _require_canonical_l3_lineage(decision, lineage)
 
     # New L3-family shadows are authorized only while their immutable entry
@@ -1475,6 +1487,7 @@ async def _create_from_decision(
     # final insert boundary with the dedicated profile status endpoint.  Open
     # shadows never call this creation function and continue to be monitored.
     if normalized_source in {
+        SHADOW_SOURCE_L3_CONSOLIDATED,
         SHADOW_SOURCE_L3,
         SHADOW_SOURCE_L3_REJECTED,
         SHADOW_SOURCE_L3_SIMULATED,
@@ -1632,7 +1645,7 @@ async def _create_from_decision(
     # retained as an explicitly degraded compatibility fallback.
     _price_envelope = (decision.metrics or {}).get("price_envelope") or {}
     _gate_spot_entry = (
-        normalized_source == SHADOW_SOURCE_L3
+        normalized_source in APPROVED_SHADOW_SOURCES
         and (getattr(decision, "direction", None) or "SPOT").upper() == "SPOT"
     )
     _entry_price_mode = "DECISION_ENVELOPE"
@@ -1778,7 +1791,7 @@ async def _create_from_decision(
     )
     config_snap["feature_source_times"] = native_capture.source_times
     config_snap["feature_contract_errors"] = feature_errors
-    if normalized_source == SHADOW_SOURCE_L3:
+    if normalized_source in APPROVED_SHADOW_SOURCES:
         from .shadow_l3_exit_service import load_frozen_policy
         config_snap["shadow_l3_exit_policy"] = await load_frozen_policy(db, decision.user_id)
     # Social Score is immutable decision-time context, not an ML feature in
@@ -1911,6 +1924,10 @@ async def _create_from_decision(
             )
             return None
 
+    if normalized_source == SHADOW_SOURCE_L3_CONSOLIDATED:
+        from .shadow_approved_source import current_observation
+        await current_observation(db, user_id=decision.user_id, symbol=decision.symbol,
+            observation_id=mtf_observation_id)
     if _entry_quote is not None:
         from .shadow_entry_quote import require_current_quote
         require_current_quote(
@@ -1976,6 +1993,7 @@ async def _create_from_decision(
                     "config_snapshot": json.dumps(config_snap, default=str),
                     "features_snapshot": json.dumps(features_snap, default=str),
                     "l3_consolidation_enforced": _consolidation_enforced,
+                    "mtf_observation_id": mtf_observation_id,
                     # Bookmark do monitor: começa em entry_ts para que a
                     # primeira janela de candles avaliada seja "tudo após a
                     # entrada" (e não tudo desde sempre).
@@ -2029,7 +2047,8 @@ async def _create_from_decision(
                     "score_engine_config_hash": _lin_score_engine_config_hash,
                     "lineage_status": lineage_status,
                     "eligible_for_training": (
-                        lineage_complete
+                        normalized_source != SHADOW_SOURCE_L3_CONSOLIDATED
+                        and lineage_complete
                         and (config_snap.get("shadow_l3_exit_policy", {}).get("config") or {}).get("mode") != "APPLY"
                         and not feature_errors
                         and authorization_contract_valid
@@ -2071,7 +2090,7 @@ async def _create_from_decision(
 
     row = res.fetchone()
     shadow_trade_id = row[0] if row is not None else None
-    if shadow_trade_id is not None and normalized_source == SHADOW_SOURCE_L3:
+    if shadow_trade_id is not None and normalized_source in APPROVED_SHADOW_SOURCES:
         from .shadow_l3_exit_service import register_shadow
         await register_shadow(db, shadow_trade_id, decision.user_id, config_snap["shadow_l3_exit_policy"])
     if shadow_trade_id is not None and isinstance(_l3_gate_v2, dict):
@@ -2107,6 +2126,7 @@ async def load_shadow_creation_config(user_id) -> Dict[str, Any]:
                     ConfigProfile.user_id == user_id,
                     ConfigProfile.config_type == "spot_engine",
                     ConfigProfile.is_active.is_(True),
+                    ConfigProfile.pool_id.is_(None),
                 ).limit(1)
             )
             row = result.scalar_one_or_none()
@@ -3892,6 +3912,8 @@ async def record_as_simulation(
       * decision_type 'ALLOW' para shadows aprovados; 'BLOCK' para L3_REJECTED
       * source = 'SHADOW'
     """
+    if shadow.source == SHADOW_SOURCE_L3_CONSOLIDATED:
+        return None  # New observational population is not an authorized training source.
     if ((shadow.config_snapshot or {}).get("shadow_l3_exit_policy", {}).get("config") or {}).get("mode") == "APPLY":
         return None  # Managed policies never enter the fixed-barrier training population.
     outcome = (shadow.outcome or "").upper()
