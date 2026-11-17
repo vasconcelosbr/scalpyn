@@ -34,6 +34,7 @@ def client(monkeypatch):
     app.dependency_overrides[mtf_chart.get_db] = lambda: object()
     monkeypatch.setattr(mtf_chart.service, 'load_config', AsyncMock(return_value=MTFChartConfig.model_validate(experimental_preset())))
     monkeypatch.setattr(mtf_chart.service, 'members', AsyncMock(return_value=[{'symbol':'BTC_USDT','profile_id':None}]))
+    monkeypatch.setattr(mtf_chart.service, 'display_members', AsyncMock(return_value=[{'symbol':'BTC_USDT','profile_id':None}]))
     monkeypatch.setattr(mtf_chart.service, 'latest_evaluations', AsyncMock(return_value={}))
     monkeypatch.setattr(mtf_chart.service, 'chart_data', AsyncMock(return_value={'mode':'SHADOW','operational_effect':False,
         'analysis':{'config_hash':'cfg','engine_version':'mtf_chart_v1'},'frames':{},'as_of':'now'}))
@@ -44,10 +45,10 @@ def client(monkeypatch):
 
 def test_get_snapshot_and_chart_read_only(client):
     http, uid, write = client
-    assert http.get('/api/mtf/watchlist', params={'watchlist_id':'l3-consolidated'}).status_code == 200
+    assert http.get('/api/mtf/watchlist', params={'watchlist_id':str(uuid4())}).status_code == 200
     response = http.get('/api/mtf/chart', params={'watchlist_id':'l3-consolidated','symbol':'BTC_USDT'})
     assert response.json()['operational_effect'] is False
-    assert mtf_chart.service.members.await_args.args[1] == uid
+    assert mtf_chart.service.display_members.await_args.args[1] == uid
     write.assert_not_awaited()
 
 
@@ -62,7 +63,7 @@ def test_cursor_never_bypasses_removed_membership(client):
     http, _, _ = client
     params = {'watchlist_id':'l3-consolidated','symbol':'BTC_USDT'}
     first = http.get('/api/mtf/chart', params=params).json()
-    mtf_chart.service.members.return_value = []
+    mtf_chart.service.display_members.return_value = []
     mtf_chart.service.chart_data.reset_mock()
     response = http.get('/api/mtf/chart', params={**params,'since':first['cursor']})
     assert response.status_code == 404
@@ -71,7 +72,7 @@ def test_cursor_never_bypasses_removed_membership(client):
 
 def test_membership_expiring_during_cold_calculation_is_rejected(client):
     http, _, _ = client
-    mtf_chart.service.members.side_effect = [[{'symbol':'BTC_USDT','profile_id':None}], []]
+    mtf_chart.service.display_members.side_effect = [[{'symbol':'BTC_USDT','profile_id':None}], []]
     assert http.get('/api/mtf/chart', params={'watchlist_id':'l3-consolidated','symbol':'BTC_USDT'}).status_code == 404
 
 
@@ -96,3 +97,45 @@ def test_auth_required_without_overrides():
     app = FastAPI()
     app.include_router(mtf_chart.router)
     assert TestClient(app).get('/api/mtf/bootstrap').status_code in (401,403)
+
+
+def test_consolidated_chart_shares_armed_observation_without_shadow_cap(client, monkeypatch):
+    from app.services import l3_armed_observation
+    http, uid, write = client
+    cfg = mtf_chart.service.load_config.return_value
+    items = [{'symbol':f'ASSET_{i}', 'profile_id':'reference',
+              'refreshed_at':'2026-11-17T17:55:00+00:00',
+              'mtf':{'status':None, 'data_state':'pending'}} for i in range(cfg.max_assets_per_watchlist + 1)]
+    items[-1].update(symbol='ETH_USDT', mtf={'status':'ARMED','data_state':'current','observation_id':'same-as-api'})
+    analysis = {'status':'ARMED','profile_id':'reference','score':{'total':4},'vetoes':[]}
+    pending = [{'symbol':'DATA_PENDING','status':'awaiting_data'}]
+    loader = AsyncMock(return_value={'items':items, 'analyses':{'ETH_USDT':analysis},
+        'awaiting_data_items':pending,'awaiting_data_count':1,'as_of':'now'})
+    monkeypatch.setattr(l3_armed_observation, 'load_l3_armed_display', loader)
+    result = http.get('/api/mtf/watchlist',params={'watchlist_id':'l3-consolidated'})
+    body = result.json()
+    assert result.status_code == 200 and result.headers['cache-control'] == 'private, no-store'
+    assert body['total'] == len(items) and len(body['items']) == len(items) and body['limited'] is False
+    assert body['items'][-1]['mtf'] == analysis
+    assert body['items'][-1]['mtf_observation']['observation_id'] == 'same-as-api'
+    assert body['items'][0]['mtf'] is None  # Pending cannot borrow an old Shadow evaluation.
+    assert body['awaiting_data_items'] == pending
+    assert body['executable'] is body['execution_authority'] is False
+    assert loader.await_args.kwargs == {'user_id':uid,'include_analysis':True}
+    mtf_chart.service.members.assert_not_awaited()
+    mtf_chart.service.latest_evaluations.assert_not_awaited()
+    write.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_display_members_include_approved_assets_outside_shadow(monkeypatch):
+    from app.services import l3_profile_consolidation
+    uid = uuid4()
+    items = [{'symbol':'ETH_USDT','profile_id':'reference'}]
+    loader = AsyncMock(return_value={'items':items, 'awaiting_data_items':[{'symbol':'PENDING'}]})
+    monkeypatch.setattr(l3_profile_consolidation,'load_l3_profile_consolidation',loader)
+    internal = AsyncMock(side_effect=AssertionError('Shadow membership must not hide chart assets'))
+    monkeypatch.setattr(mtf_chart.service,'members',internal)
+    assert await mtf_chart.service.display_members(object(),uid,'l3-consolidated') == items
+    assert loader.await_args.kwargs['user_id'] == uid
+    internal.assert_not_awaited()

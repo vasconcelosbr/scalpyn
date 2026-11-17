@@ -51,6 +51,21 @@ async def preferences(payload: MTFPreferences, db: AsyncSession = Depends(get_db
 async def watchlist(response: Response, watchlist_id: str, db: AsyncSession = Depends(get_db), uid: UUID = Depends(get_current_user_id)):
     response.headers["Cache-Control"] = "private, no-store"
     cfg = await config_or_error(db, uid)
+    if watchlist_id == 'l3-consolidated':
+        # L3_CHART_PROFILE_DISPLAY_PARITY: neither Shadow admission nor its
+        # simulation capacity can hide a profile-approved asset from the chart.
+        from ..services.l3_armed_observation import load_l3_armed_display
+        from ..services.profile_runtime_config import canonical_hash
+        display = await load_l3_armed_display(db, user_id=uid, include_analysis=True)
+        items = [{**item, 'price_snapshot_at': item.get('refreshed_at'),
+                  'mtf_observation': item['mtf'], 'mtf': display['analyses'].get(item['symbol'])}
+                 for item in display['items']]
+        return {'items': items, 'total': len(items), 'limited': False,
+                'awaiting_data_items': display['awaiting_data_items'],
+                'awaiting_data_count': display['awaiting_data_count'],
+                'monitored': watchlist_id in cfg.monitored_watchlists,
+                'as_of': display['as_of'], 'snapshot_id': canonical_hash(items),
+                'executable': False, 'execution_authority': False}
     try:
         items = await service.members(db, uid, watchlist_id)
     except ValueError as exc:
@@ -81,13 +96,13 @@ async def chart(response: Response, symbol: str, watchlist_id: str, profile_id: 
     response.headers["Cache-Control"] = "private, no-store"
     cfg = await config_or_error(db, uid)
     try:
-        items = await service.members(db, uid, watchlist_id)
+        items = await service.display_members(db, uid, watchlist_id)
         member = next((m for m in items if m["symbol"] == symbol), None)
         if member is None:
             raise HTTPException(404, "ASSET_NO_LONGER_IN_WATCHLIST")
         data = await service.chart_data(db, uid, symbol, profile_id or member.get("profile_id"), cfg)
         # A cold chart can outlive an L3 authorization while computing history.
-        if not any(m['symbol'] == symbol for m in await service.members(db, uid, watchlist_id)):
+        if not any(m['symbol'] == symbol for m in await service.display_members(db, uid, watchlist_id)):
             raise HTTPException(404, 'ASSET_NO_LONGER_IN_WATCHLIST')
         return service.chart_transport(data, context={'user_id': str(uid), 'watchlist_id': watchlist_id,
             'symbol': symbol, 'profile_id': str(profile_id or member.get('profile_id'))},

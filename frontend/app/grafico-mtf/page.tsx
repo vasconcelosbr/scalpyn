@@ -189,7 +189,9 @@ export default function MTFPage() {
   const historical=stale || membership==='removed';
   const analysis = historical ? undefined : data?.analysis;
   const plan = analysis?.plan;
-  const shown = assets.map(a => a.symbol === data?.symbol ? { ...a, mtf: analysis } : listError ? {...a,mtf:undefined} : a)
+  // Consolidated membership/status comes from the same observation as Aprovados;
+  // selecting a symbol or an exploratory profile must not rewrite that snapshot.
+  const shown = assets.map(a => listError ? {...a,mtf:undefined} : watchlist !== 'l3-consolidated' && a.symbol === data?.symbol ? { ...a, mtf: analysis } : a)
     .filter(a => !prefs.aligned_only || a.mtf?.status === 'ARMED' || a.mtf?.status === 'TRIGGERED')
     .sort((a,b) => (scoreOrder ? 0 : (statusOrder[a.mtf?.status ?? 'NO_TRADE'] - statusOrder[b.mtf?.status ?? 'NO_TRADE'])) || (scoreOrder ? (b.mtf?.score.raw ?? -1)-(a.mtf?.score.raw ?? -1) || (a.mtf?.zone_1h?.distance_atr ?? Infinity)-(b.mtf?.zone_1h?.distance_atr ?? Infinity) : (b.mtf?.score.total ?? -1)-(a.mtf?.score.total ?? -1)) || a.symbol.localeCompare(b.symbol));
   const date = (value?: string | null) => value && Number.isFinite(Date.parse(value)) ? new Intl.DateTimeFormat('pt-BR', { timeZone: prefs.timezone, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(value)) : '—';

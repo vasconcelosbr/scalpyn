@@ -67,13 +67,13 @@ def reading(item, row, *, now, cfg, profile_hashes, indicator_identity):
     return result
 
 
-async def load_l3_armed_display(db, *, user_id):
+async def load_l3_armed_display(db, *, user_id, include_analysis=False):
     # Enrich outside the base loader: history capture itself calls that loader.
     result = await load_l3_profile_consolidation(db, user_id=user_id)
     now = timestamp(result['as_of'])
     items = result['items']
     if not items:
-        return {**result, 'armed_items': [], 'armed_count': 0}
+        return {**result, 'armed_items': [], 'armed_count': 0, **({'analyses': {}} if include_analysis else {})}
     try:
         cfg = await load_config(db, user_id)
     except ValueError:
@@ -101,7 +101,12 @@ async def load_l3_armed_display(db, *, user_id):
     enriched = [{**item, 'mtf':reading(item, latest.get(item['symbol']), now=now, cfg=cfg,
                  profile_hashes=profile_hashes, indicator_identity=identity)} for item in items]
     armed = [i for i in enriched if i['mtf']['status'] == 'ARMED']
-    return {**result, 'items':enriched, 'armed_items':armed, 'armed_count':len(armed)}
+    # The chart consumes the same validated observation as Aprovados. Invalid
+    # readings remain data-pending and must never revive an older ARMED payload.
+    analyses = {i['symbol']: latest[i['symbol']]['analysis'] for i in enriched
+                if i['mtf']['data_state'] == 'current'} if include_analysis else {}
+    return {**result, 'items':enriched, 'armed_items':armed, 'armed_count':len(armed),
+            **({'analyses': analyses} if include_analysis else {})}
 
 
 async def load_l3_armed_assets(db, *, user_id):
