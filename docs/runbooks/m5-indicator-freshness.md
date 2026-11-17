@@ -14,3 +14,6 @@ Evidence ledger:
 | --- | --- | --- |
 | Queue wait | [query] compute worker runtime log | `queue_wait_s=133.18` |
 | Compute duration | [query] same task runtime log | `succeeded in 6.218487087637186s` |
+
+
+The production cycle also exposed an independent audit-refresh issue: stale operational order flow returned before evaluating otherwise healthy candle rules. Continue the configured-profile audit in that case, persist the flow diagnostic under `operational_data`, and force the operational decision to `BLOCK` both before and after gate promotion. The canonical authorization envelope retains that blocked final decision, so neither public execution nor Shadow capture is granted. The profile display can still classify its own current RSI predicate. Capture, TTL and profile configuration are unchanged.
