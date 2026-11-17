@@ -79,3 +79,16 @@ async def test_display_route_precedes_dynamic_route_and_never_uses_execution_loa
     assert await watchlists.get_l3_consolidated_profile_status(response, uuid4(), object()) == payload
     assert response.headers['Cache-Control'] == 'private, no-store'
     execution.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_summary_counts_use_profile_approvals_not_shadow_and_exclude_pending(monkeypatch):
+    loader = AsyncMock(return_value=[row(processing_result='SUPPRESSED/PROFILE_SYMBOL_HOURLY_LIMIT'),
+        row(symbol='ETH_USDT', status='awaiting_data'), row(symbol='SOL_USDT', status='rejected')])
+    monkeypatch.setattr(service, 'load_profile_display_rows', loader)
+    watchlists = [SimpleNamespace(id='M5', level='L3', market_mode='spot'),
+                 SimpleNamespace(id='FUTURES', level='L3', market_mode='futures'),
+                 SimpleNamespace(id='H1', level='L2', market_mode='spot')]
+    assert await service.load_l3_profile_summary_counts(None, user_id='user', watchlists=watchlists) == {'M5': 1}
+    loader.assert_awaited_once()
+    assert loader.call_args.kwargs['user_id'] == 'user'
