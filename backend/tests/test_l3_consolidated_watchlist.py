@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 
 from app.api import watchlists
-from app.api.watchlists import list_l3_consolidated_assets, router
+from app.api.watchlists import load_l3_internal_candidates, router
 from app.services.pipeline_live_candidates import (
     ConsolidatedL3Candidate,
     LiveL3Contribution,
@@ -24,7 +24,7 @@ def test_l3_consolidated_static_route_precedes_dynamic_assets_route():
 
 
 @pytest.mark.asyncio
-async def test_l3_consolidated_assets_exposes_only_current_watchlist_candidates(monkeypatch):
+async def test_l3_internal_observer_preserves_current_watchlist_candidates(monkeypatch):
     refreshed_at = datetime(2026, 9, 6, 16, 0, tzinfo=timezone.utc)
     winner = LiveL3Contribution(
         asset_id=uuid4(),
@@ -57,7 +57,7 @@ async def test_l3_consolidated_assets_exposes_only_current_watchlist_candidates(
         ]
 
     monkeypatch.setattr(watchlists, "load_live_l3_candidates", _load)
-    response = await list_l3_consolidated_assets(user_id=uuid4(), db=object())
+    response = await load_l3_internal_candidates(user_id=uuid4(), db=object())
 
     assert response["semantic"] == "LIVE_L3_CANDIDATES"
     assert response["total"] == 1
