@@ -985,7 +985,8 @@ celery_app.conf.beat_schedule = {
         # UTC minute boundary, independent of beat startup time. The DB capture
         # contract still decides when a CLOSED candle is eligible for ingestion.
         "schedule": crontab(minute="*"),
-        "options": {"queue": QUEUE_CANONICAL_OHLCV},
+        # Preserve the former interval schedule's backlog expiry (3 polls).
+        "options": {"queue": QUEUE_CANONICAL_OHLCV, "expires": 180.0},
     },
     "collect_state_30m_every_120s": {
         "task": "app.tasks.collect_research_ohlcv.collect_30m_shadow",
