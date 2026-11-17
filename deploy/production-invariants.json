@@ -24,14 +24,14 @@
       ]
     },
     {
-      "id": "l3-armed-observation-feed",
-      "description": "Existing consolidated URL exposes only fresh reference-profile ARMED observations; Watchlist remains complete and orders stay unauthorized.",
+      "id": "l3-triggered-observation-feed",
+      "description": "Existing consolidated URL exposes only fresh reference-profile TRIGGERED observations; internal ARMED membership remains unchanged and orders stay unauthorized.",
       "files": [
-        { "path": "backend/app/services/l3_armed_observation.py", "contains_all": ["L3_ARMED_OBSERVATION_V1", "load_l3_armed_display", "REFERENCE_PROFILE_CHANGED", "execution_authority=False"] },
-        { "path": "backend/app/api/watchlists.py", "contains_all": ["/l3-consolidated/assets", "load_l3_armed_assets", "load_l3_internal_candidates"] },
+        { "path": "backend/app/services/l3_armed_observation.py", "contains_all": ["L3_TRIGGERED_OBSERVATION_V1", "load_l3_armed_display", "REFERENCE_PROFILE_CHANGED", "execution_authority=False"] },
+        { "path": "backend/app/api/watchlists.py", "contains_all": ["/l3-consolidated/assets", "load_l3_triggered_assets", "load_l3_internal_candidates"] },
         { "path": "backend/app/services/mtf_chart_service.py", "contains_all": ["await load_l3_internal_candidates(user_id=user_id, db=db)"] },
         { "path": "frontend/app/watchlist/page.tsx", "contains_all": ["['watchlist', 'approved', 'awaiting_data']", "data?.armed_items", "Estado MTF"] },
-        { "path": "backend/tests/test_l3_armed_observation.py", "contains_all": ["test_real_database_latest_reference_and_full_universe", "test_internal_observer_never_calls_filtered_external_feed", "test_existing_external_url_is_authenticated_read_only"] }
+        { "path": "backend/tests/test_l3_armed_observation.py", "contains_all": ["test_real_database_latest_reference_and_full_universe", "test_external_feed_selects_only_current_triggers", "test_internal_observer_never_calls_filtered_external_feed", "test_existing_external_url_is_authenticated_read_only"] }
       ]
     },
     {
