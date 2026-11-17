@@ -277,7 +277,7 @@
     },
     {
       "id": "watchlist-live-candidate-chain",
-      "description": "Spot watchlists expose only current candidates from the complete POOL to L3 chain, while open Shadow trades remain independent historical position follow-up",
+      "description": "Internal L3 observer candidates retain the complete POOL to L3 chain; the public ARMED feed has its separate observation invariant, while open Shadow trades remain independent historical follow-up",
       "files": [
         {
           "path": "backend/app/services/pipeline_live_candidates.py",
@@ -299,7 +299,7 @@
         {
           "path": "backend/tests/test_l3_consolidated_watchlist.py",
           "contains_all": [
-            "test_l3_consolidated_assets_exposes_only_current_watchlist_candidates",
+            "test_l3_internal_observer_preserves_current_watchlist_candidates",
             "test_child_snapshot_is_intersected_with_current_parent",
             "test_live_candidate_universe_does_not_read_shadow_trades"
           ]
