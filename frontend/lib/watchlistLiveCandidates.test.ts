@@ -8,16 +8,15 @@ const consolidatedCard = page.slice(
   page.indexOf('function PipelineTab'),
 );
 
-test('L3 consolidated renders live opportunities instead of open Shadow trades', () => {
-  assert.match(page, /semantic: 'LIVE_L3_CANDIDATES'/);
-  assert.match(consolidatedCard, /Aprovado para execução/);
-  assert.match(consolidatedCard, /Date.parse\(asset.expires_at\) > authorizationClock/);
-  assert.match(consolidatedCard, /Shadow pendente/);
+test('L3 consolidated renders profile approvals separately from data and execution', () => {
+  assert.match(page, /semantic: 'PROFILE_DISPLAY_DATA_SEPARATION'/);
+  assert.match(consolidatedCard, /watchlists\/l3-consolidated\/profile-status/);
+  assert.match(consolidatedCard, /Aprovado no perfil/);
+  assert.match(consolidatedCard, /Aguardando dados/);
+  assert.match(consolidatedCard, /data\?\.awaiting_data_items/);
   assert.match(consolidatedCard, /setData\(null\)/);
-  assert.match(consolidatedCard, /Shadow Portfolio/);
-  assert.doesNotMatch(consolidatedCard, /shadow_id/);
-  assert.doesNotMatch(consolidatedCard, /dashboard\/shadow-portfolio\//);
-  assert.doesNotMatch(consolidatedCard, /Abrir trade/);
+  assert.doesNotMatch(consolidatedCard, /authorization_status|shadow_status|expires_at|visible_until/);
+  assert.doesNotMatch(consolidatedCard, /Aprovado para execução|Abrir trade/);
 });
 
 test('a successful watchlist read clears a transient refresh error', () => {
