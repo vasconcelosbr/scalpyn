@@ -99,7 +99,9 @@ def test_capture_idempotence_history_removal_isolation_and_exports(database):
                 def json(self):return [{'last':'100'}]
             return Reply()
     async def run():
-        with patch.object(h.chart,'chart_data',AsyncMock(return_value=sample())),patch.object(h.chart,'load_config',AsyncMock(return_value=cfg)),\
+        data=sample()
+        data['market_context']={'large_evidence':'x'*150000}
+        with patch.object(h.chart,'chart_data',AsyncMock(return_value=data)),patch.object(h.chart,'load_config',AsyncMock(return_value=cfg)),\
              patch.object(h.config_service,'get_config',AsyncMock(return_value=HistoryConfig().model_dump())),patch('httpx.AsyncClient',return_value=Client()):
             assert await h.capture(adapter,uid,'l3-consolidated',{'symbol':'ETH_USDT'},'2026-01-01T12:00:00+00:00')
             assert not await h.capture(adapter,uid,'l3-consolidated',{'symbol':'ETH_USDT'},'2026-01-01T12:00:00+00:00')
@@ -126,6 +128,10 @@ def test_capture_idempotence_history_removal_isolation_and_exports(database):
         assert book['observations']['A2'].value==str(oid)
         assert book['indicators']['B2'].value=='rsi'
         assert len(list(book['outcomes'].rows))==5
+        reference=book['observations']['W2'].value
+        assert reference.startswith('metadata:')
+        chunks=[row[2] for row in book['metadata_chunks'].iter_rows(min_row=2,values_only=True) if row[0]==reference]
+        assert json.loads(''.join(chunks))['market_context']['large_evidence']=='x'*150000
         book.close()
         eid=uuid4()
         db.execute(sa.text("INSERT INTO mtf_history_exports(id,user_id,request,status,content) VALUES(:id,:uid,'{\"format\":\"xlsx\"}','READY',:content)"),{'id':eid,'uid':uid,'content':raw})
