@@ -1,9 +1,14 @@
 # L3 Consolidado: authorization and Shadow contract
 
-`GET /api/watchlists/l3-consolidated/assets` retains its existing fields and
-`LIVE_L3_CANDIDATES` semantic, but membership alone is no longer sufficient for
-publication. All candidates must pass the same persisted authorization projection
-used by the individual Spot L3 approved list.
+This document now describes the **internal** execution/Shadow projection only.
+The existing external URL `GET /api/watchlists/l3-consolidated/assets` has been
+changed, by explicit product request, to the observational contract documented
+in [L3_ARMED_OBSERVATION_V1.md](L3_ARMED_OBSERVATION_V1.md). Its items are not
+executable and must not be used as order authorizations.
+
+The internal `load_l3_internal_candidates` projection retains the
+`LIVE_L3_CANDIDATES` semantic and the persisted authorization requirements used
+by the individual Spot L3 execution feed. It is not an external HTTP endpoint.
 
 Publication requires the latest decision for the user, profile and symbol to be
 ALLOW, a valid ALLOW v3 contract with matching content hash/profile version/

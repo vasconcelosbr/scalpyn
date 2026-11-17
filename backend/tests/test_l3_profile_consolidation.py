@@ -72,7 +72,8 @@ async def test_display_route_precedes_dynamic_route_and_never_uses_execution_loa
     assert paths.index('/api/watchlists/l3-consolidated/profile-status') < paths.index(
         '/api/watchlists/{watchlist_id}/profile-status')
     payload = service.consolidate_profile_display_rows([row()], now=NOW)
-    monkeypatch.setattr(service, 'load_l3_profile_consolidation', AsyncMock(return_value=payload))
+    from app.services import l3_armed_observation
+    monkeypatch.setattr(l3_armed_observation, 'load_l3_armed_display', AsyncMock(return_value=payload))
     execution = AsyncMock(side_effect=AssertionError('Display must not consume execution authorization'))
     monkeypatch.setattr(watchlists, 'load_live_l3_candidates', execution)
     response = Response()

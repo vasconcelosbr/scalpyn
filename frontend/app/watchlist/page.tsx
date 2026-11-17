@@ -94,10 +94,19 @@ interface L3ConsolidatedAsset {
   data_reasons: string[];
   executable: false;
   execution_authority: false;
+  mtf?: {
+    status: 'WAIT' | 'ARMED' | 'TRIGGERED' | 'NO_TRADE' | null;
+    data_state: 'current' | 'pending' | 'stale';
+    observed_at: string | null;
+    valid_until: string | null;
+    reason_codes: string[];
+  };
 }
 
 interface L3ConsolidatedResponse {
   items: L3ConsolidatedAsset[];
+  armed_items: L3ConsolidatedAsset[];
+  armed_count: number;
   awaiting_data_items: L3ConsolidatedAsset[];
   total: number;
   awaiting_data_count: number;
@@ -1482,7 +1491,7 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const requestInFlight = useRef(false);
-  const [tab, setTab] = useState<'approved' | 'awaiting_data'>('approved');
+  const [tab, setTab] = useState<'watchlist' | 'approved' | 'awaiting_data'>('watchlist');
 
   const load = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
     if (requestInFlight.current) return;
@@ -1521,9 +1530,11 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
   }, [load]);
 
   // L3_PROFILE_CONSOLIDATED_DISPLAY: use the same classification as Edit Profile.
-  const approved = data?.items ?? [];
+  const watchlist = data?.items ?? [];
+  const approved = data?.armed_items ?? [];
   const pending = data?.awaiting_data_items ?? [];
-  const items = tab === 'approved' ? approved : pending;
+  const items = tab === 'watchlist' ? watchlist : tab === 'approved' ? approved : pending;
+  const mtfLabels = { WAIT: 'Aguardar', ARMED: 'Armado', TRIGGERED: 'Gatilho', NO_TRADE: 'Sem trade' };
 
   return (
     <div
@@ -1566,19 +1577,19 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
             </span>
           </div>
           <p className="mt-0.5 truncate text-[11px] text-[#64748B]">
-            Aprovados pelas regras do Edit Profile. Pendências de dados separadas.
+            Watchlist aprovada no Edit Profile. Aprovados mostra os Armados do perfil de referência.
           </p>
         </div>
         <span
           className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold tabular-nums ${
-            approved.length > 0
+            watchlist.length > 0
               ? 'border-[#D6A84B]/30 bg-[#D6A84B]/10 text-[#F2C66D]'
               : 'border-[#1E2433] bg-[#0F1117] text-[#4B5563]'
           }`}
           data-testid="l3-consolidated-count"
         >
           <GitMerge size={10} />
-          {loading && !data ? 'carregando' : `${approved.length} aprovado${approved.length !== 1 ? 's' : ''} · ${pending.length} aguardando dados`}
+          {loading && !data ? 'carregando' : `${watchlist.length} na Watchlist · ${approved.length} armado${approved.length !== 1 ? 's' : ''} · ${pending.length} aguardando dados`}
         </span>
         <div onClick={(event) => event.stopPropagation()}>
           <Link href="/grafico-mtf" className="mr-3 inline-flex rounded-lg border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-xs font-semibold text-blue-300 hover:bg-blue-500/20" onKeyDown={(event) => event.stopPropagation()}>
@@ -1602,16 +1613,16 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
           <div className="flex flex-col gap-2 border-b border-[#1E2433] bg-[#0D0E13] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-2 text-[11px] text-[#7D8494]">
               <GitMerge size={12} className="text-[#D6A84B]" />
-              Cada ativo aparece uma vez quando aprovado em algum perfil. A exibição não autoriza ordens.
+              Watchlist mantém os aprovados no perfil; Aprovados reúne somente Armados no MTF. Ordens bloqueadas.
             </div>
           </div>
 
           <div className="flex gap-2 border-b border-[#1E2433] px-4 py-3" role="tablist" aria-label="Classificação do Consolidado">
-            {(['approved', 'awaiting_data'] as const).map(value => (
+            {(['watchlist', 'approved', 'awaiting_data'] as const).map(value => (
               <button key={value} role="tab" aria-selected={tab === value}
                 onClick={() => setTab(value)}
                 className={`rounded-lg px-3 py-1.5 text-xs ${tab === value ? 'bg-[#1E2433] text-white' : 'text-[#94A3B8]'}`}>
-                {value === 'approved' ? `Aprovados (${approved.length})` : `Aguardando dados (${pending.length})`}
+                {value === 'watchlist' ? `Watchlist (${watchlist.length})` : value === 'approved' ? `Aprovados (${approved.length})` : `Aguardando dados (${pending.length})`}
               </button>
             ))}
           </div>
@@ -1636,9 +1647,9 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
           ) : items.length === 0 ? (
             <div className="px-4 py-9 text-center">
               <Crown size={24} className="mx-auto mb-3 text-[#3A3324]" />
-              <p className="text-sm text-[#94A3B8]">{tab === 'approved' ? 'Nenhum ativo aprovado agora.' : 'Nenhuma pendência de dados agora.'}</p>
+              <p className="text-sm text-[#94A3B8]">{tab === 'watchlist' ? 'Nenhum ativo aprovado no perfil agora.' : tab === 'approved' ? 'Nenhum ativo Armado com avaliação atual agora.' : 'Nenhuma pendência de dados agora.'}</p>
               <p className="mt-1 text-xs text-[#4B5563]">
-                Dados desatualizados ou indisponíveis ficam em Aguardando dados.
+                {tab === 'awaiting_data' ? 'Dados desatualizados ou indisponíveis ficam em Aguardando dados.' : 'A ausência de uma avaliação MTF atual não remove ativos da Watchlist.'}
               </p>
             </div>
           ) : (
@@ -1652,6 +1663,7 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
                     <th className="px-3 py-2.5 font-semibold">Contribuição</th>
                     <th className="px-3 py-2.5 font-semibold">Score</th>
                     <th className="px-3 py-2.5 font-semibold">Condição</th>
+                    {tab !== 'awaiting_data' && <th className="px-3 py-2.5 font-semibold">Estado MTF</th>}
                     <th className="px-4 py-2.5 text-right font-semibold">Atualizado</th>
                   </tr>
                 </thead>
@@ -1672,7 +1684,7 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
                             <div>
                               <div className="font-mono text-sm font-semibold text-[#E2E8F0]">{asset.symbol}</div>
                               <div className="text-[9px] uppercase tracking-[0.1em] text-[#4B5563]">
-                                {tab === 'approved' ? 'aprovado no perfil' : 'avaliação pendente'}
+                                {tab !== 'awaiting_data' ? 'aprovado no perfil' : 'avaliação pendente'}
                               </div>
                             </div>
                           </div>
@@ -1705,8 +1717,8 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
                           {typeof asset.alpha_score === 'number' ? asset.alpha_score.toFixed(2) : '—'}
                         </td>
                         <td className="px-3 py-3">
-                          <span className={`rounded-full border px-2 py-1 text-[9px] font-bold uppercase tracking-[0.1em] ${tab === 'approved' ? 'border-[#22B97A]/25 text-[#34D399]' : 'border-amber-500/25 text-amber-300'}`}>
-                            {tab === 'approved' ? 'Aprovado no perfil' : 'Aguardando dados'}
+                          <span className={`rounded-full border px-2 py-1 text-[9px] font-bold uppercase tracking-[0.1em] ${tab !== 'awaiting_data' ? 'border-[#22B97A]/25 text-[#34D399]' : 'border-amber-500/25 text-amber-300'}`}>
+                            {tab !== 'awaiting_data' ? 'Aprovado no perfil' : 'Aguardando dados'}
                           </span>
                           {asset.data_reasons.length > 0 && (
                             <div className="mt-2 max-w-[280px] text-[10px] text-[#94A3B8]">
@@ -1714,6 +1726,14 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
                             </div>
                           )}
                         </td>
+                        {tab !== 'awaiting_data' && <td className="px-3 py-3">
+                          <span className={asset.mtf?.status === 'ARMED' ? 'font-semibold text-blue-300' : 'text-[#94A3B8]'}>
+                            {asset.mtf?.status ? mtfLabels[asset.mtf.status] : asset.mtf?.data_state === 'stale' ? 'Avaliação desatualizada' : asset.mtf?.reason_codes.some(r => r.endsWith('_CHANGED')) ? 'Aguardando nova avaliação' : 'Sem avaliação válida'}
+                          </span>
+                          {asset.mtf?.observed_at && <div className="mt-1 text-[10px] text-[#64748B]" title={asset.mtf.valid_until ? `Validade MTF: ${formatDateTime(asset.mtf.valid_until)}` : undefined}>
+                            {formatDateTime(asset.mtf.observed_at)}
+                          </div>}
+                        </td>}
                         <td className="px-4 py-3 text-right text-[#64748B]" title={refreshedAt ? formatDateTime(refreshedAt) : undefined}>
                           {asset.refreshed_at ? timeAgo(asset.refreshed_at) : '—'}
                         </td>

@@ -43,9 +43,9 @@ async def watchlist_options(db, user_id):
 async def members(db, user_id, watchlist_id: str) -> list[dict]:
     # These canonical L3 handlers only read persisted authorization. Other
     # watchlists read snapshots directly: never invoke their auto-refresh GET.
-    from ..api.watchlists import list_l3_consolidated_assets, load_live_l3_candidates, _iso_utc
+    from ..api.watchlists import load_l3_internal_candidates, load_live_l3_candidates, _iso_utc
     if watchlist_id == "l3-consolidated":
-        return (await list_l3_consolidated_assets(user_id=user_id, db=db))["items"]
+        return (await load_l3_internal_candidates(user_id=user_id, db=db))["items"]
     try:
         wid = UUID(watchlist_id)
     except ValueError as exc:
