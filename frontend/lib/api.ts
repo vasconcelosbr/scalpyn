@@ -79,7 +79,8 @@ export class ApiError extends Error {
 
 export async function apiFetch<T = any>(
   endpoint: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  responseType: 'json' | 'blob' = 'json'
 ): Promise<T> {
   const token = getToken();
   let requestToken = token;
@@ -158,6 +159,7 @@ export async function apiFetch<T = any>(
   }
 
   if (res.status === 204) return undefined as unknown as T;
+  if (responseType === 'blob') return await res.blob() as T;
   const text = await res.text();
   if (!text) return undefined as unknown as T;
   try {

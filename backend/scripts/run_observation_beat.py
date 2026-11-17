@@ -5,6 +5,7 @@ ALLOWED = (
     'fetch_market_caps', 'collect_research_15m_after_close',
     'collect_research_1h_after_close', 'pump_monitor_cycle',
     'mtf_chart_after_close',
+    'mtf_history_after_close', 'mtf_history_maintenance',
 )
 
 M5_SHADOW_ALLOWED = (
