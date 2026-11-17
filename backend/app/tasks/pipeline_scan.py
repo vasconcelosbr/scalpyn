@@ -2141,9 +2141,10 @@ async def _evaluate_l3_decisions(
             )
     decisions: list[dict] = []
     for asset in assets:
+        operational_flow_pending = None
         # ── L3 LIVE ORDER FLOW INJECTION ─────────────────────────────────
         # Sobrescreve indicators de fluxo com snapshot live do Redis
-        # antes da regra avaliar. Stale → continue (skip do ciclo).
+        # antes da regra avaliar. Stale blocks operation, not profile-data audit.
         if inject_live and not order_flow_prepared:
             symbol = asset.get("symbol")
             current_indicators = asset.get("indicators") or {}
@@ -2162,11 +2163,16 @@ async def _evaluate_l3_decisions(
                     observation=updated_indicators.get("_l3_flow_check"),
                 )
             if not order_flow_ok:
+                # PROFILE_REFRESH_WITH_FLOW_PENDING: keep evaluating authored
+                # candle rules so a healthy RSI does not retain an expired audit.
+                # The operational decision remains BLOCK, with no Shadow route.
+                operational_flow_pending = updated_indicators.get("_l3_flow_check") or {
+                    "status": "UNAVAILABLE",
+                }
                 logger.info(
-                    "[L3][%s] skipped this cycle (order flow unavailable, incomplete or stale) — will retry next tick",
+                    "[L3][%s] refreshing profile audit with operational flow blocked",
                     symbol,
                 )
-                continue
             # Re-flatten escalares no top-level do asset (mesmo padrão
             # de ``_build_pipeline_asset``) para que ``ProfileEngine``
             # leia as overrides via ``asset[key]`` quando aplicável.
@@ -2215,6 +2221,9 @@ async def _evaluate_l3_decisions(
             else:
                 l3_pass = True
                 decision = "ALLOW"
+
+        if operational_flow_pending is not None:
+            decision, l3_pass = "BLOCK", False
 
         if v2_error is None:
             v2_score = float(v2_asset.get("_score") or 0.0)
@@ -2320,6 +2329,8 @@ async def _evaluate_l3_decisions(
             legacy_l3_pass=l3_pass,
             gate_v2=gate_v2,
         )
+        if operational_flow_pending is not None:
+            decision, l3_pass = "BLOCK", False
         observe_gate_v2(gate_v2)
         observe_block_rules(gate_v2["block_rules"])
         block_lineage = (profile_config or {}).get("_block_rules_lineage") or {}
@@ -2410,6 +2421,12 @@ async def _evaluate_l3_decisions(
             processed=processed,
             runtime_policy=runtime_policy,
         )
+        if operational_flow_pending is not None:
+            reasons["_sections"]["operational_data"] = {
+                "status": "BLOCK", "reason_codes": ["LIVE_ORDER_FLOW_PENDING"],
+                "observation": operational_flow_pending,
+            }
+            metrics["operational_data"] = reasons["_sections"]["operational_data"]
         metrics["l3_gate_v2"] = gate_v2
         metrics["block_rules_audit"] = gate_v2["block_rules"]
         metrics["block_rules_lineage"] = (

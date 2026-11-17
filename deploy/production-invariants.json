@@ -7,6 +7,14 @@
   },
   "required_features": [
     {
+      "id": "profile-refresh-with-flow-pending",
+      "description": "Fresh configured candle rules remain audited when operational flow is pending, with execution and Shadow still blocked.",
+      "files": [
+        {"path": "backend/app/tasks/pipeline_scan.py", "contains_all": ["PROFILE_REFRESH_WITH_FLOW_PENDING", "LIVE_ORDER_FLOW_PENDING", "operational_flow_pending"]},
+        {"path": "backend/tests/test_profile_refresh_flow_pending.py", "contains_all": ["test_profile_refreshes_without_authorizing_stale_operational_flow", "contract_authorizes_shadow_capture", "public_authorization"]}
+      ]
+    },
+    {
       "id": "m5-freshness-isolation",
       "description": "Closed M5 indicator publication stays isolated from long MTF/Shadow tasks; capture polling follows wall-clock minute boundaries.",
       "files": [
