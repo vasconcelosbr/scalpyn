@@ -71,6 +71,14 @@ async def members(db, user_id, watchlist_id: str) -> list[dict]:
              "alpha_score": float(r.alpha_score) if r.alpha_score is not None else None} for r in rows]
 
 
+async def display_members(db, user_id, watchlist_id: str) -> list[dict]:
+    """Chart membership is profile approval, independent of Shadow admission."""
+    if watchlist_id == 'l3-consolidated':
+        from .l3_profile_consolidation import load_l3_profile_consolidation
+        return (await load_l3_profile_consolidation(db, user_id=user_id))['items']
+    return await members(db, user_id, watchlist_id)
+
+
 async def profile_context(db, user_id, profile_id, include_display=True):
     profile = None
     if profile_id:

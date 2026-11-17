@@ -106,9 +106,13 @@ def test_real_database_latest_reference_and_full_universe(database, monkeypatch)
         insert('ASSET_0',at=NOW+timedelta(seconds=1),state='WAIT')
         # Latest contribution from a different profile does not arm the reference.
         insert('ASSET_1',at=NOW+timedelta(seconds=1),profile=uuid4())
-        display=await service.load_l3_armed_display(adapter,user_id=uid)
+        display=await service.load_l3_armed_display(adapter,user_id=uid,include_analysis=True)
         external=await service.load_l3_armed_assets(adapter,user_id=uid)
         assert display['total']==125 and display['armed_count']==123
+        assert display['analyses']['ASSET_0']['status']=='WAIT'
+        assert 'ASSET_1' not in display['analyses']  # Changed reference cannot leak an old ARMED into the chart.
+        assert {s for s,a in display['analyses'].items() if a['status']=='ARMED'} == {i['symbol'] for i in external['items']}
+        assert 'analyses' not in first and 'analyses' not in external
         assert {i['symbol'] for i in external['items']}=={i['symbol'] for i in display['armed_items']}
         assert external['observation_contract']=='L3_ARMED_OBSERVATION_V1'
         assert external['executable'] is external['execution_authority'] is False

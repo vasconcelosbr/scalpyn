@@ -7,6 +7,15 @@
   },
   "required_features": [
     {
+      "id": "l3-chart-profile-display-parity",
+      "description": "Consolidated chart membership ignores Shadow capacity and uses the same validated reference observation as the ARMED feed.",
+      "files": [
+        { "path": "backend/app/api/mtf_chart.py", "contains_all": ["L3_CHART_PROFILE_DISPLAY_PARITY", "include_analysis=True", "service.display_members"] },
+        { "path": "backend/tests/test_mtf_chart_api.py", "contains_all": ["test_consolidated_chart_shares_armed_observation_without_shadow_cap", "test_display_members_include_approved_assets_outside_shadow"] },
+        { "path": "frontend/app/grafico-mtf/page.tsx", "contains_all": ["watchlist !== 'l3-consolidated' && a.symbol === data?.symbol"] }
+      ]
+    },
+    {
       "id": "profile-display-narrow-latest-selection",
       "description": "Latest decision IDs are selected before historical JSON evidence is extracted, preserving profile rules and external ARMED semantics.",
       "files": [
