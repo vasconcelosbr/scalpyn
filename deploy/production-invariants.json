@@ -2571,13 +2571,15 @@
     },
     {
       "id": "shadow-consolidated-armed-source",
-      "description": "Shadow capture uses only current Consolidado ARMED observations, with immutable source identity and terminal legacy outbox handling.",
+      "description": "Shadow captures current Consolidado ARMED and TRIGGERED observations from live L2 parent assets, preserving immutable entry signal and terminal legacy outbox handling.",
       "files": [
         {
           "path": "backend/app/services/shadow_approved_source.py",
           "contains_all": [
-            "SHADOW_CONSOLIDATED_ARMED",
-            "SHADOW_ARMED_OBSERVATION_NO_LONGER_CURRENT",
+            "SHADOW_CONSOLIDATED_SIGNALS",
+            "SHADOW_SIGNAL_OBSERVATION_NO_LONGER_CURRENT",
+            "SHADOW_L2_PARENT_ASSET",
+            "entry_signal",
             "acquire_consolidation_lock",
             "mtf_observation_id"
           ]
@@ -2595,15 +2597,23 @@
           "contains_all": [
             "test_concurrent_workers_create_only_one_shadow",
             "test_replaced_outbox_event_is_terminal_without_shadow_retry",
-            "test_observation_losing_eligibility_during_quote_cannot_insert"
+            "test_observation_losing_eligibility_during_quote_cannot_insert",
+            "test_capture_rejects_unrelated_parent_assets",
+            "test_current_observation_accepts_only_armed_and_triggered",
+            "test_entry_signal_uses_frozen_origin_without_inventing_legacy_labels"
           ]
         },
         {
           "path": "frontend/lib/shadowSources.ts",
           "contains_all": [
             "L3,L3_CONSOLIDATED",
-            "applyShadowSourceFilter"
+            "applyShadowSourceFilter",
+            "shadowEntrySignalLabel"
           ]
+        },
+        {
+          "path": "frontend/app/dashboard/shadow-portfolio/page.tsx",
+          "contains_all": ["Origem do sinal", "shadowEntrySignalLabel(it.entry_signal)"]
         }
       ]
     }

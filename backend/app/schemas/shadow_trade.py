@@ -9,7 +9,7 @@ passar por aqui explicitamente.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -52,6 +52,7 @@ class ShadowTradeRead(BaseModel):
     id: UUID
     source: Optional[str] = None
     mtf_observation_id: Optional[UUID] = None
+    entry_signal: Optional[Literal['ARMED', 'TRIGGERED']] = None
     symbol: str
     direction: Optional[str] = None
     entry_price: Optional[float] = None

@@ -1,6 +1,10 @@
 # Shadow Portfolio — L3 Consolidado / Aprovados
 
-New simulated captures use the same validated current ARMED observation as the Consolidado Aprovados feed. Configuration is `spot_engine.shadow.approved_source`, editable in strategy settings. Default remains `L3` until the production rollout is complete; select `L3_CONSOLIDATED` afterward through the application config service.
+New simulated captures accept validated current ARMED and TRIGGERED observations from the consolidated profile display. The external assets endpoint independently returns TRIGGERED only. Configuration is `spot_engine.shadow.approved_source`, editable in strategy settings.
+
+The membership asset belongs to the L3 profile's live L2 parent. Capture validates that parent, user and symbol, retaining the L3 profile/watchlist as trade lineage. Requiring that asset to belong to the L3 itself incorrectly discarded every eligible capture: normal L3 scans write decisions, not L3 asset rows. Capture now uses the actual parent asset and logs missing-parent or active-approved-trade exclusions.
+
+`config_snapshot.l3_consolidated.entry_signal` freezes ARMED or TRIGGERED at entry. The list/detail API exposes `entry_signal`; the Portfolio column “Origem do sinal” renders Armado or Gatilho. Older consolidated snapshots may supply their frozen `mtf.status`; unrelated history stays unlabeled. No current market state is used to infer historical origin.
 
 Historical rows retain their original source and economics. Open historical approved trades block new consolidated captures for the same tenant/symbol/direction. The shared final writer guard disables legacy approved capture after switching. Legacy outbox events receive terminal `SHADOW_SOURCE_REPLACED` disposition.
 
