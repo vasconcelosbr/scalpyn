@@ -1,10 +1,10 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 from app.tasks import compute_indicators as compute
-from app.tasks.celery_app import TASK_ROUTES, QUEUE_STRUCTURAL_COMPUTE
+from app.tasks.celery_app import TASK_ROUTES, QUEUE_INDICATOR_5M
 from app.utils.bounded_async import bounded_map
 
 
@@ -82,8 +82,8 @@ def test_symbol_publication_waits_for_commit(monkeypatch):
         result = await compute._process_one_symbol_5m('ONDO_USDT', {}, {}, {}, 'spot', 1, 288)
         assert result == 1
         db.commit.assert_awaited_once()
-        assert envelopes[0]['envelope_metadata']['source_timestamp'] == now.isoformat()
-        assert envelopes[0]['envelope_metadata']['producer_version'] == 'compute_5m_v2'
+        assert envelopes[0]['envelope_metadata']['source_timestamp'] == (now + timedelta(minutes=5)).isoformat()
+        assert envelopes[0]['envelope_metadata']['producer_version'] == 'compute_5m_v3'
         db.commit.reset_mock()
         db.execute.side_effect = [MagicMock(fetchall=lambda: [row]), MagicMock(fetchall=lambda: []), MagicMock()]
         db.commit.side_effect = RuntimeError('commit failed')
@@ -106,7 +106,7 @@ def test_scan_only_after_successful_publication(monkeypatch):
     monkeypatch.setattr(compute, '_run_async', lambda coroutine: coroutine.close() or 2)
     compute.compute_5m.run()
     assert calls[0][0] == ('app.tasks.pipeline_scan.scan',)
-    assert TASK_ROUTES['app.tasks.compute_indicators.compute_5m']['queue'] == QUEUE_STRUCTURAL_COMPUTE
+    assert TASK_ROUTES['app.tasks.compute_indicators.compute_5m']['queue'] == QUEUE_INDICATOR_5M
 
 
 def test_collector_prefetches_before_write_transaction(monkeypatch):

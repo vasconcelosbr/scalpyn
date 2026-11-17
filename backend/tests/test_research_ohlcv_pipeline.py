@@ -248,7 +248,7 @@ def test_research_beat_entries_explicitly_target_isolated_queue() -> None:
         assert schedule[name]["options"]["queue"] == (QUEUE_CANONICAL_OHLCV if name.startswith("collect_state_") else QUEUE_RESEARCH_OHLCV)
 
     assert schedule["collect_state_1m_every_30s"]["schedule"] == 30.0
-    assert schedule["collect_state_5m_every_60s"]["schedule"] == 60.0
+    assert schedule["collect_state_5m_every_60s"]["schedule"].minute == set(range(60))
     assert schedule["collect_state_30m_every_120s"]["schedule"] == 120.0
     assert schedule["sample_ohlcv_settlement_latency_every_10s"]["schedule"] == 10.0
 

@@ -31,10 +31,12 @@ Queue topology (Task #216, operator spec parts 4-6):
                           it a dedicated worker means its own slowness no
                           longer throttles every other structural task.
     structural_compute  — Dedicated compute worker for heavy TA + scoring:
-                          compute_30m, compute_structural_5m, compute_scores,
+                          compute_30m, MTF/Shadow observers, compute_scores,
                           Isolated so a slow indicator pass
                           cannot delay lighter structural ops (pipeline_scan,
                           reconciliation, alerts) and vice-versa.
+    indicator_5m        — Dedicated closed-candle 5m indicator publication.
+                          Never shares a consumer with slow MTF/Shadow work.
     canonical_ohlcv     — Dedicated state/canonical candle collectors. Never
                           combined with research queues in the same worker.
     research_ohlcv      — Exchange-native 15m/1h collection, historical
@@ -85,6 +87,7 @@ from ..logging_config import install_brazil_time_logging
 QUEUE_MICROSTRUCTURE = "microstructure"
 QUEUE_STRUCTURAL = "structural"
 QUEUE_STRUCTURAL_COMPUTE = "structural_compute"
+QUEUE_INDICATOR_5M = "indicator_5m"
 QUEUE_EXECUTION = "execution"
 QUEUE_AI_ORCHESTRATION = "ai_orchestration"
 QUEUE_RESEARCH_OHLCV = "research_ohlcv"
@@ -105,7 +108,7 @@ QUEUE_PROFILE_BAYESIAN = "profile_bayesian"
 QUEUE_PROFILE_OPTIMIZATION = "profile_optimization"
 
 ALL_QUEUES = (
-    QUEUE_MICROSTRUCTURE, QUEUE_STRUCTURAL, QUEUE_STRUCTURAL_COMPUTE,
+    QUEUE_MICROSTRUCTURE, QUEUE_STRUCTURAL, QUEUE_STRUCTURAL_COMPUTE, QUEUE_INDICATOR_5M,
     QUEUE_EXECUTION, QUEUE_AI_ORCHESTRATION, QUEUE_RESEARCH_OHLCV,
     QUEUE_PUMP_RADAR, QUEUE_STRUCTURAL_COLLECT, QUEUE_STRUCTURAL_SCAN,
     QUEUE_PUMP_MONITOR, QUEUE_PUMP_ML, QUEUE_CANONICAL_OHLCV,
@@ -169,6 +172,12 @@ def _configured_task_modules() -> tuple[str, ...]:
     queues = tuple(
         item.strip() for item in os.getenv("WORKER_QUEUES", "").split(",") if item.strip()
     )
+    # M5_FRESHNESS_ISOLATION: closed-candle publication must not wait behind
+    # long MTF/Shadow evaluations. The consumer must remain dedicated.
+    if QUEUE_INDICATOR_5M in queues:
+        if queues != (QUEUE_INDICATOR_5M,):
+            raise ValueError("indicator_5m requires a dedicated worker")
+        return ("app.tasks.compute_indicators",)
     if QUEUE_CANONICAL_OHLCV in queues:
         if queues != (QUEUE_CANONICAL_OHLCV,):
             raise ValueError("canonical_ohlcv requires a dedicated worker")
@@ -210,7 +219,7 @@ celery_app = Celery(
 TASK_ROUTES = {
     # 5m collection and calculation use separate workers to avoid queue starvation.
     "app.tasks.collect_market_data.collect_5m":  {"queue": QUEUE_MICROSTRUCTURE},
-    "app.tasks.compute_indicators.compute_5m":   {"queue": QUEUE_STRUCTURAL_COMPUTE},
+    "app.tasks.compute_indicators.compute_5m":   {"queue": QUEUE_INDICATOR_5M},
 
     # Structural (hourly+ cadence, heavier work)
     # 2026-09-21 — moved off QUEUE_STRUCTURAL to its own single-concurrency
@@ -234,7 +243,7 @@ TASK_ROUTES = {
     "app.tasks.compute_indicators.compute_30m":          {"queue": QUEUE_STRUCTURAL_COMPUTE},
     # Structural-on-5m: chain-driven after collect_5m. Dedicated compute
     # worker isolates it from the lighter structural queue.
-    "app.tasks.compute_indicators.compute_structural_5m": {"queue": QUEUE_STRUCTURAL_COMPUTE},
+    "app.tasks.compute_indicators.compute_structural_5m": {"queue": QUEUE_INDICATOR_5M},
     # compute (1h) — deprecated stub. Invariant #4 requires a route for
     # every registered task. Remove after post-stabilisation clean-up.
     "app.tasks.compute_indicators.compute":              {"queue": QUEUE_STRUCTURAL_COMPUTE},
@@ -973,7 +982,9 @@ celery_app.conf.beat_schedule = {
     },
     "collect_state_5m_every_60s": {
         "task": "app.tasks.collect_research_ohlcv.collect_5m_shadow",
-        "schedule": 60.0,
+        # UTC minute boundary, independent of beat startup time. The DB capture
+        # contract still decides when a CLOSED candle is eligible for ingestion.
+        "schedule": crontab(minute="*"),
         "options": {"queue": QUEUE_CANONICAL_OHLCV},
     },
     "collect_state_30m_every_120s": {

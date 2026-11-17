@@ -7,6 +7,14 @@
   },
   "required_features": [
     {
+      "id": "m5-freshness-isolation",
+      "description": "Closed M5 indicator publication stays isolated from long MTF/Shadow tasks; capture polling follows wall-clock minute boundaries.",
+      "files": [
+        {"path": "backend/app/tasks/celery_app.py", "contains_all": ["M5_FRESHNESS_ISOLATION", "QUEUE_INDICATOR_5M", "indicator_5m requires a dedicated worker"]},
+        {"path": "backend/tests/test_m5_freshness_isolation.py", "contains_all": ["test_m5_publishers_are_isolated_from_slow_observers", "test_m5_worker_rejects_shared_consumers", "test_capture_poll_is_aligned_independently_of_beat_startup"]}
+      ]
+    },
+    {
       "id": "l3-profile-consolidated-display",
       "description": "Consolidated display is the union of current profile approvals, with pending data separate and no Shadow or execution veto; strict external execution feed remains independent",
       "files": [
