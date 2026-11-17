@@ -7,6 +7,14 @@
   },
   "required_features": [
     {
+      "id": "profile-display-narrow-latest-selection",
+      "description": "Latest decision IDs are selected before historical JSON evidence is extracted, preserving profile rules and external ARMED semantics.",
+      "files": [
+        { "path": "backend/app/services/profile_display_status.py", "contains_all": ["PROFILE_DISPLAY_LATEST_IDS_FIRST", "latest_profile_decision_ids", "join(latest_ids, DecisionLog.id == latest_ids.c.id)"] },
+        { "path": "backend/tests/test_profile_display_query_postgres.py", "contains_all": ["test_latest_decisions_match_legacy_without_sorting_historical_json", "EXPLAIN (VERBOSE,FORMAT JSON)", "assert new==old"] }
+      ]
+    },
+    {
       "id": "l3-armed-observation-feed",
       "description": "Existing consolidated URL exposes only fresh reference-profile ARMED observations; Watchlist remains complete and orders stay unauthorized.",
       "files": [

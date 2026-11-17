@@ -93,6 +93,28 @@ def classify_profile_snapshot(row, profile_config, *, watchlist_id, profile_id,
     return result
 
 
+def latest_profile_decisions_statement(*, user_id, pairs):
+    # PROFILE_DISPLAY_LATEST_IDS_FIRST: sort/deduplicate narrow rows before
+    # extracting JSONB. Historical metrics can be megabytes per decision.
+    latest_ids = (select(DecisionLog.id).where(
+        DecisionLog.user_id == user_id,
+        tuple_(DecisionLog.profile_id, DecisionLog.symbol).in_(pairs),
+        DecisionLog.event_type.notin_(['PROFILE_CONSOLIDATION', 'PROFILE_CONSOLIDATION_REJECTED'])
+    ).distinct(DecisionLog.profile_id, DecisionLog.symbol)
+     .order_by(DecisionLog.profile_id, DecisionLog.symbol,
+               DecisionLog.created_at.desc(), DecisionLog.id.desc())
+     .subquery('latest_profile_decision_ids'))
+    contract = DecisionLog.metrics['l3_authorization_contract_v3']
+    return select(
+        DecisionLog.id, DecisionLog.symbol, DecisionLog.profile_id, DecisionLog.score,
+        DecisionLog.metrics['price'].label('price'),
+        contract['lineage'].label('lineage'),
+        contract['evaluated_at'].label('evaluated_at'),
+        contract['sections'].label('sections'),
+        contract['profile_execution_contract']['profile_projection_hash'].label('profile_hash'),
+    ).join(latest_ids, DecisionLog.id == latest_ids.c.id)
+
+
 async def load_profile_display_rows(db, *, user_id, watchlist_id, now=None):
     from .pipeline_live_candidates import _l3_symbol_universe_statement
     from .pool_service import load_radar_watchlist_eligibility
@@ -104,22 +126,9 @@ async def load_profile_display_rows(db, *, user_id, watchlist_id, now=None):
         rows = [r for r in rows if r['symbol'] in memberships[watchlist_id]]
     if not rows:
         return []
-    contract = DecisionLog.metrics['l3_authorization_contract_v3']
-    # Select compact immutable evidence, not the multi-megabyte feature registry.
-    decisions = (await db.execute(select(
-        DecisionLog.id, DecisionLog.symbol, DecisionLog.profile_id, DecisionLog.score,
-        DecisionLog.metrics['price'].label('price'),
-        contract['lineage'].label('lineage'),
-        contract['evaluated_at'].label('evaluated_at'),
-        contract['sections'].label('sections'),
-        contract['profile_execution_contract']['profile_projection_hash'].label('profile_hash'),
-    ).where(DecisionLog.user_id == user_id,
-        tuple_(DecisionLog.profile_id, DecisionLog.symbol).in_(
-            {(r['profile_id'], r['symbol']) for r in rows}),
-        DecisionLog.event_type.notin_(['PROFILE_CONSOLIDATION', 'PROFILE_CONSOLIDATION_REJECTED'])
-    ).distinct(DecisionLog.profile_id, DecisionLog.symbol)
-     .order_by(DecisionLog.profile_id, DecisionLog.symbol,
-               DecisionLog.created_at.desc(), DecisionLog.id.desc()))).mappings().all()
+    decisions = (await db.execute(latest_profile_decisions_statement(
+        user_id=user_id, pairs={(r['profile_id'], r['symbol']) for r in rows}
+    ))).mappings().all()
     latest = {(d['profile_id'], d['symbol']): d for d in decisions}
     now = now or datetime.now(timezone.utc)
     items = []
