@@ -93,7 +93,7 @@ def classify_profile_snapshot(row, profile_config, *, watchlist_id, profile_id,
     return result
 
 
-async def load_profile_display_rows(db, *, user_id, watchlist_id):
+async def load_profile_display_rows(db, *, user_id, watchlist_id, now=None):
     from .pipeline_live_candidates import _l3_symbol_universe_statement
     from .pool_service import load_radar_watchlist_eligibility
     rows = (await db.execute(_l3_symbol_universe_statement(
@@ -121,7 +121,7 @@ async def load_profile_display_rows(db, *, user_id, watchlist_id):
      .order_by(DecisionLog.profile_id, DecisionLog.symbol,
                DecisionLog.created_at.desc(), DecisionLog.id.desc()))).mappings().all()
     latest = {(d['profile_id'], d['symbol']): d for d in decisions}
-    now = datetime.now(timezone.utc)
+    now = now or datetime.now(timezone.utc)
     items = []
     for row in rows:
         decision = latest.get((row['profile_id'], row['symbol']))

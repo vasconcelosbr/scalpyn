@@ -27,7 +27,6 @@ import {
   Crown,
   GitMerge,
   LockKeyhole,
-  Timer,
   Users,
 } from 'lucide-react';
 
@@ -79,13 +78,6 @@ interface PipelineWatchlist {
 }
 
 interface L3ConsolidatedAsset {
-  decision_id: number;
-  authorization_id: string;
-  authorization_status: 'ALLOW';
-  evaluated_at: string;
-  expires_at: string;
-  shadow_status: 'PENDING' | 'RETRY' | 'STARTED';
-  shadow_reason: string | null;
   asset_id: string;
   watchlist_id: string;
   symbol: string;
@@ -98,20 +90,19 @@ interface L3ConsolidatedAsset {
   candidate_count: number;
   candidate_profile_ids: string[];
   candidate_profile_names: string[];
-  /** 2026-09-18 (part 3): guaranteed minimum visibility floor, independent
-   * of the entry-authorization TTL — see backend l3_public_authorization.py. */
-  visible_until: string | null;
+  status: 'approved' | 'awaiting_data';
+  data_reasons: string[];
+  executable: false;
+  execution_authority: false;
 }
 
 interface L3ConsolidatedResponse {
-  id: 'l3-consolidated';
-  name: string;
-  level: 'L3';
-  virtual: true;
-  read_only: true;
-  semantic: 'LIVE_L3_CANDIDATES';
   items: L3ConsolidatedAsset[];
+  awaiting_data_items: L3ConsolidatedAsset[];
   total: number;
+  awaiting_data_count: number;
+  semantic: 'PROFILE_DISPLAY_DATA_SEPARATION';
+  execution_authority: false;
   as_of: string;
 }
 
@@ -211,17 +202,6 @@ function timeAgo(isoStr: string | null | undefined): string {
   const hrs = Math.floor(mins / 60);
   if (hrs < 24) return `${hrs}h${mins % 60 > 0 ? `${mins % 60}m` : ''}`;
   return `${Math.floor(hrs / 24)}d`;
-}
-
-/** mm:ss countdown to targetIso, or null once it has passed. */
-function formatCountdown(targetIso: string | null | undefined, nowMs: number): string | null {
-  if (!targetIso) return null;
-  const remainingMs = Date.parse(targetIso) - nowMs;
-  if (!Number.isFinite(remainingMs) || remainingMs <= 0) return null;
-  const totalSeconds = Math.floor(remainingMs / 1000);
-  const mins = Math.floor(totalSeconds / 60);
-  const secs = totalSeconds % 60;
-  return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
 /** True when last_scanned_at is >10 min old (stale pipeline). */
@@ -1483,13 +1463,26 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
 
 // ── Pipeline Tab ──────────────────────────────────────────────────────────────
 
+function profileDataReasonLabel(reason: string): string {
+  const labels: Record<string, string> = {
+    FEATURE_TTL_EXPIRED: 'Indicador desatualizado',
+    DATA_UNAVAILABLE: 'Dados indisponíveis',
+    EVALUATION_PENDING: 'Aguardando avaliação',
+    PROFILE_EVALUATION_OUTDATED: 'Aguardando avaliação do perfil atualizado',
+    PROFILE_EVALUATION_INCOMPLETE: 'Avaliação incompleta',
+    EVALUATION_TIME_INVALID: 'Horário da avaliação inválido',
+    FEATURE_AGE_UNKNOWN: 'Atualidade do indicador não confirmada',
+  };
+  return labels[reason] ?? 'Aguardando dados válidos';
+}
+
 function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
   const [expanded, setExpanded] = useState(false);
   const [data, setData] = useState<L3ConsolidatedResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const requestInFlight = useRef(false);
-  const [authorizationClock, setAuthorizationClock] = useState(Date.now());
+  const [tab, setTab] = useState<'approved' | 'awaiting_data'>('approved');
 
   const load = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
     if (requestInFlight.current) return;
@@ -1499,7 +1492,7 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
       setError(null);
     }
     try {
-      const response = await apiFetch<L3ConsolidatedResponse>('/watchlists/l3-consolidated/assets');
+      const response = await apiFetch<L3ConsolidatedResponse>('/watchlists/l3-consolidated/profile-status');
       setData(response);
       setError(null);
     } catch (err: unknown) {
@@ -1523,21 +1516,14 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
   }, [refreshTick, load]);
 
   useEffect(() => {
-    const clock = window.setInterval(() => setAuthorizationClock(Date.now()), 1000);
     const poll = window.setInterval(() => void load({ silent: true }), 5000);
-    return () => { window.clearInterval(clock); window.clearInterval(poll); };
+    return () => { window.clearInterval(poll); };
   }, [load]);
 
-  // 2026-09-18 (part 3): visible_until is a guaranteed MINIMUM floor, not a
-  // cap -- a candidate must stay visible until whichever deadline is LATER,
-  // the entry-authorization TTL (expires_at) or the floor. Filtering on
-  // expires_at alone would silently undo the backend's floor the moment the
-  // (often much shorter) feature-freshness TTL passes.
-  const items = (data?.items ?? []).filter(asset =>
-    asset.authorization_status === 'ALLOW' && (
-      Date.parse(asset.expires_at) > authorizationClock ||
-      (asset.visible_until != null && Date.parse(asset.visible_until) > authorizationClock)
-    ));
+  // L3_PROFILE_CONSOLIDATED_DISPLAY: use the same classification as Edit Profile.
+  const approved = data?.items ?? [];
+  const pending = data?.awaiting_data_items ?? [];
+  const items = tab === 'approved' ? approved : pending;
 
   return (
     <div
@@ -1580,19 +1566,19 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
             </span>
           </div>
           <p className="mt-0.5 truncate text-[11px] text-[#64748B]">
-            Somente oportunidades com autorização válida e encaminhamento para Shadow.
+            Aprovados pelas regras do Edit Profile. Pendências de dados separadas.
           </p>
         </div>
         <span
           className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold tabular-nums ${
-            items.length > 0
+            approved.length > 0
               ? 'border-[#D6A84B]/30 bg-[#D6A84B]/10 text-[#F2C66D]'
               : 'border-[#1E2433] bg-[#0F1117] text-[#4B5563]'
           }`}
           data-testid="l3-consolidated-count"
         >
           <GitMerge size={10} />
-          {loading && !data ? 'carregando' : `${items.length} favorável${items.length !== 1 ? 'is' : ''}`}
+          {loading && !data ? 'carregando' : `${approved.length} aprovado${approved.length !== 1 ? 's' : ''} · ${pending.length} aguardando dados`}
         </span>
         <div onClick={(event) => event.stopPropagation()}>
           <Link href="/grafico-mtf" className="mr-3 inline-flex rounded-lg border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-xs font-semibold text-blue-300 hover:bg-blue-500/20" onKeyDown={(event) => event.stopPropagation()}>
@@ -1616,11 +1602,18 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
           <div className="flex flex-col gap-2 border-b border-[#1E2433] bg-[#0D0E13] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-2 text-[11px] text-[#7D8494]">
               <GitMerge size={12} className="text-[#D6A84B]" />
-              Atualiza com os indicadores: se a condição deixar de ser favorável, o ativo sai da lista.
+              Cada ativo aparece uma vez quando aprovado em algum perfil. A exibição não autoriza ordens.
             </div>
-            <code className="w-fit rounded border border-[#1E2433] bg-[#08090D] px-2 py-1 text-[10px] text-[#94A3B8]">
-              GET /api/watchlists/l3-consolidated/assets
-            </code>
+          </div>
+
+          <div className="flex gap-2 border-b border-[#1E2433] px-4 py-3" role="tablist" aria-label="Classificação do Consolidado">
+            {(['approved', 'awaiting_data'] as const).map(value => (
+              <button key={value} role="tab" aria-selected={tab === value}
+                onClick={() => setTab(value)}
+                className={`rounded-lg px-3 py-1.5 text-xs ${tab === value ? 'bg-[#1E2433] text-white' : 'text-[#94A3B8]'}`}>
+                {value === 'approved' ? `Aprovados (${approved.length})` : `Aguardando dados (${pending.length})`}
+              </button>
+            ))}
           </div>
 
           {error ? (
@@ -1643,9 +1636,9 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
           ) : items.length === 0 ? (
             <div className="px-4 py-9 text-center">
               <Crown size={24} className="mx-auto mb-3 text-[#3A3324]" />
-              <p className="text-sm text-[#94A3B8]">Nenhum candidato L3 favorável agora.</p>
+              <p className="text-sm text-[#94A3B8]">{tab === 'approved' ? 'Nenhum ativo aprovado agora.' : 'Nenhuma pendência de dados agora.'}</p>
               <p className="mt-1 text-xs text-[#4B5563]">
-                Trades já abertos continuam sendo acompanhados exclusivamente no Shadow Portfolio.
+                Dados desatualizados ou indisponíveis ficam em Aguardando dados.
               </p>
             </div>
           ) : (
@@ -1655,7 +1648,7 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
                   <tr className="border-b border-[#1E2433] bg-[#090A0E] text-[9px] uppercase tracking-[0.12em] text-[#4B5563]">
                     <th className="px-4 py-2.5 font-semibold">Cripto</th>
                     <th className="px-3 py-2.5 font-semibold">Direção</th>
-                    <th className="px-3 py-2.5 font-semibold">Profile vencedor</th>
+                    <th className="px-3 py-2.5 font-semibold">Perfil de referência</th>
                     <th className="px-3 py-2.5 font-semibold">Contribuição</th>
                     <th className="px-3 py-2.5 font-semibold">Score</th>
                     <th className="px-3 py-2.5 font-semibold">Condição</th>
@@ -1666,7 +1659,6 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
                   {items.map((asset) => {
                     const contributors = asset.candidate_count;
                     const refreshedAt = asset.refreshed_at ? new Date(asset.refreshed_at) : null;
-                    const visibilityCountdown = formatCountdown(asset.visible_until, authorizationClock);
                     return (
                       <tr
                         key={`${asset.symbol}-${asset.watchlist_id}-${asset.asset_id}`}
@@ -1680,7 +1672,7 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
                             <div>
                               <div className="font-mono text-sm font-semibold text-[#E2E8F0]">{asset.symbol}</div>
                               <div className="text-[9px] uppercase tracking-[0.1em] text-[#4B5563]">
-                                oportunidade atual
+                                {tab === 'approved' ? 'aprovado no perfil' : 'avaliação pendente'}
                               </div>
                             </div>
                           </div>
@@ -1713,23 +1705,12 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
                           {typeof asset.alpha_score === 'number' ? asset.alpha_score.toFixed(2) : '—'}
                         </td>
                         <td className="px-3 py-3">
-                          <span className="rounded-full border border-[#22B97A]/25 bg-[#22B97A]/10 px-2 py-1 text-[9px] font-bold uppercase tracking-[0.1em] text-[#34D399]">
-                            Aprovado para execução
+                          <span className={`rounded-full border px-2 py-1 text-[9px] font-bold uppercase tracking-[0.1em] ${tab === 'approved' ? 'border-[#22B97A]/25 text-[#34D399]' : 'border-amber-500/25 text-amber-300'}`}>
+                            {tab === 'approved' ? 'Aprovado no perfil' : 'Aguardando dados'}
                           </span>
-                          <div className="mt-2 text-[10px] text-[#94A3B8]">
-                            {asset.shadow_status === 'STARTED' ? 'Shadow iniciado' :
-                              asset.shadow_status === 'RETRY' ? 'Falha no Shadow · nova tentativa pendente' : 'Shadow pendente'}
-                          </div>
-                          <div className="mt-1 text-[10px] text-[#64748B]">
-                            Válido até {new Date(asset.expires_at).toLocaleTimeString('pt-BR')}
-                          </div>
-                          {visibilityCountdown && (
-                            <div
-                              className="mt-1 inline-flex items-center gap-1 rounded border border-[#D6A84B]/25 bg-[#D6A84B]/8 px-1.5 py-0.5 font-mono text-[10px] font-semibold tabular-nums text-[#F2C66D]"
-                              title="Piso mínimo de visibilidade garantido para sistemas externos identificarem este ativo, independente do TTL de frescor do sinal"
-                            >
-                              <Timer size={10} />
-                              Garantido {visibilityCountdown}
+                          {asset.data_reasons.length > 0 && (
+                            <div className="mt-2 max-w-[280px] text-[10px] text-[#94A3B8]">
+                              {asset.data_reasons.map(reason => profileDataReasonLabel(reason)).join(' · ')}
                             </div>
                           )}
                         </td>

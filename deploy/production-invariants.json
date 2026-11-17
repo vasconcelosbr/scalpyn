@@ -7,6 +7,36 @@
   },
   "required_features": [
     {
+      "id": "l3-profile-consolidated-display",
+      "description": "Consolidated display is the union of current profile approvals, with pending data separate and no Shadow or execution veto; strict external execution feed remains independent",
+      "files": [
+        {
+          "path": "backend/app/services/l3_profile_consolidation.py",
+          "contains_all": [
+            "L3_PROFILE_CONSOLIDATED_DISPLAY",
+            "load_profile_display_rows",
+            "executable=False, execution_authority=False"
+          ]
+        },
+        {
+          "path": "backend/tests/test_l3_profile_consolidation.py",
+          "contains_all": [
+            "test_shadow_suppression_and_low_score_never_hide_profile_approvals",
+            "test_union_deduplicates_profiles_and_keeps_data_pending_separate",
+            "test_display_route_precedes_dynamic_route_and_never_uses_execution_loader"
+          ]
+        },
+        {
+          "path": "frontend/app/watchlist/page.tsx",
+          "contains_all": [
+            "L3_PROFILE_CONSOLIDATED_DISPLAY",
+            "/watchlists/l3-consolidated/profile-status",
+            "awaiting_data_items"
+          ]
+        }
+      ]
+    },
+    {
       "id": "profile-display-data-separation",
       "description": "Only authored profile predicates reject; stale or missing inputs have a separate non-executable UI state",
       "files": [
@@ -235,15 +265,15 @@
         {
           "path": "frontend/app/watchlist/page.tsx",
           "contains_all": [
-            "Aprovado para execução",
-            "Trades já abertos continuam sendo acompanhados exclusivamente no Shadow Portfolio",
+            "Aprovado no perfil",
+            "Aguardando dados",
             "setRefreshError(null)"
           ]
         },
         {
           "path": "frontend/lib/watchlistLiveCandidates.test.ts",
           "contains_all": [
-            "L3 consolidated renders live opportunities instead of open Shadow trades",
+            "L3 consolidated renders profile approvals separately from data and execution",
             "a successful watchlist read clears a transient refresh error"
           ]
         }

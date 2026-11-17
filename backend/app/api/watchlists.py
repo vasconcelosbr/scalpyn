@@ -1185,6 +1185,14 @@ def _l3_visible_until(authorization: Dict[str, Any], floor_seconds: int) -> Opti
     return _iso_utc(evaluated + timedelta(seconds=floor_seconds))
 
 
+@router.get('/l3-consolidated/profile-status')
+async def get_l3_consolidated_profile_status(response: Response,
+    user_id: UUID = Depends(get_current_user_id), db: AsyncSession = Depends(get_db)):
+    from ..services.l3_profile_consolidation import load_l3_profile_consolidation
+    response.headers['Cache-Control'] = 'private, no-store'
+    return await load_l3_profile_consolidation(db, user_id=user_id)
+
+
 @router.get("/l3-consolidated/assets")
 async def list_l3_consolidated_assets(
     user_id: UUID = Depends(get_current_user_id),
