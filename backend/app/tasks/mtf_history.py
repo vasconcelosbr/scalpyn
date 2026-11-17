@@ -73,10 +73,13 @@ async def dispatch_pending(db):
         AND (dispatched_at IS NULL OR dispatched_at<now()-interval '10 minutes')
         ORDER BY scheduled_at FOR UPDATE SKIP LOCKED"""))).scalars().all()
     for key in rows:
+        await db.execute(text('UPDATE mtf_history_capture_jobs SET dispatched_at=now() WHERE identity=:key'),{'key':key})
+    # Release the claimed rows before a fast consumer can attempt SKIP LOCKED.
+    # A crash or failed publish is recovered by the durable dispatch lease.
+    await db.commit()
+    for key in rows:
         from .task_dispatch import enqueue
         enqueue('app.tasks.mtf_history.capture',dedup_key='mtf-history:'+key,ttl_seconds=600,args=(key,))
-        await db.execute(text('UPDATE mtf_history_capture_jobs SET dispatched_at=now() WHERE identity=:key'),{'key':key})
-    await db.commit()
 
 
 @celery_app.task(name='app.tasks.mtf_history.maintenance', acks_late=False, soft_time_limit=240, time_limit=270)

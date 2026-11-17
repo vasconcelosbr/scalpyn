@@ -190,6 +190,26 @@ def test_bad_filters_return_validation_error():
     assert e.value.status_code==422
 
 
+def test_dispatch_releases_claim_before_consumer_can_receive():
+    from app.tasks.mtf_history import dispatch_pending
+    from unittest.mock import MagicMock
+    result=MagicMock()
+    result.scalars.return_value.all.return_value=['first','second']
+    db=AsyncMock()
+    db.execute.return_value=result
+    events=[]
+    async def committed():events.append('commit')
+    db.commit.side_effect=committed
+    def published(*args,**kwargs):
+        assert events and events[0]=='commit', 'consumer must not see locked capture rows'
+        events.append(kwargs['args'][0])
+    async def run():
+        with patch('app.tasks.task_dispatch.enqueue',side_effect=published):
+            await dispatch_pending(db)
+    asyncio.run(run())
+    assert events==['commit','first','second']
+
+
 def test_mature_outcome_follows_removed_asset_without_current_membership(database):
     from app.services import mtf_history as h
     db,uid=database;migrate(db)
