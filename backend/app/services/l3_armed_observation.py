@@ -109,12 +109,14 @@ async def load_l3_armed_display(db, *, user_id, include_analysis=False):
             **({'analyses': analyses} if include_analysis else {})}
 
 
-async def load_l3_armed_assets(db, *, user_id):
+async def load_l3_triggered_assets(db, *, user_id):
     display = await load_l3_armed_display(db, user_id=user_id)
+    # Filter after latest-observation validation; never revive an older trigger.
+    triggered = [i for i in display['items'] if i['mtf']['status'] == 'TRIGGERED']
     return dict(id='l3-consolidated', name='L3 Consolidado', level='L3', virtual=True,
-                read_only=True, semantic='MTF_ARMED_PROFILE_REFERENCE',
-                observation_contract='L3_ARMED_OBSERVATION_V1',
+                read_only=True, semantic='MTF_TRIGGERED_PROFILE_REFERENCE',
+                observation_contract='L3_TRIGGERED_OBSERVATION_V1',
                 executable=False, execution_authority=False,
-                consumer_policy='Observation only. ARMED is not order authorization. Real orders remain blocked.',
-                items=[{**i, 'profile_status':i['status'], 'status':'ARMED'} for i in display['armed_items']],
-                total=display['armed_count'], as_of=display['as_of'])
+                consumer_policy='Observation only. TRIGGERED is not order authorization. Real orders remain blocked.',
+                items=[{**i, 'profile_status':i['status'], 'status':'TRIGGERED'} for i in triggered],
+                total=len(triggered), as_of=display['as_of'])
