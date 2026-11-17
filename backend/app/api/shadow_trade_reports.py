@@ -25,7 +25,7 @@ from .shadow_trades import _consolidation_payload, _to_detail, get_shadow_trade_
 
 router = APIRouter(prefix="/api/shadow-trade-reports", tags=["Shadow Trade Reports"])
 
-ReportSource = Literal["L3", "L3_REJECTED", "L1_SPECTRUM"]
+ReportSource = Literal["L3_CONSOLIDATED", "L3", "L3_REJECTED", "L1_SPECTRUM"]
 ReportOutcome = Literal["TP_HIT", "SL_HIT", "TRAILING_STOP", "TIMEOUT", "OPEN"]
 ALL_REPORT_OUTCOMES = ("TP_HIT", "SL_HIT", "TRAILING_STOP", "TIMEOUT", "OPEN")
 _DECISION_UNSET = object()
@@ -544,7 +544,7 @@ async def build_trade_export(
 
 @router.get("/facets")
 async def detailed_report_facets(
-    sources: list[ReportSource] = Query(default=["L3"]),
+    sources: list[ReportSource] = Query(default=["L3", "L3_CONSOLIDATED"]),
     watchlist_ids: list[UUID] = Query(default=[]),
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
@@ -582,7 +582,8 @@ async def detailed_report_facets(
     ).all()
     return {
         "sources": [
-            {"id": "L3", "label": "Aprovados (L3)"},
+            {"id": "L3", "label": "L3 / M5 — origem anterior"},
+            {"id": "L3_CONSOLIDATED", "label": "L3 Consolidado — Aprovados"},
             {"id": "L3_REJECTED", "label": "Rejeitados (L3)"},
             {"id": "L1_SPECTRUM", "label": "Dataset ML (L1)"},
         ],

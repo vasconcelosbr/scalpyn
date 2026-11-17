@@ -271,7 +271,7 @@ export function EmptyProfilesState() {
 
 type EvolutionView = ProfileDailyRange | "hoje";
 
-function L3DailyEvolution({ asOf }: { asOf: string }) {
+function L3DailyEvolution({ asOf, sources }: { asOf: string; sources: string }) {
   const [view, setView] = useState<EvolutionView>("7d");
   const [data, setData] = useState<ProfileDailyPerformanceResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -286,7 +286,7 @@ function L3DailyEvolution({ asOf }: { asOf: string }) {
         if (cancelled) return null;
         setLoading(true);
         setError(null);
-        return apiGet<ProfileDailyPerformanceResponse>(profileDailyPerformanceRequestPath(asOf, range));
+        return apiGet<ProfileDailyPerformanceResponse>(`${profileDailyPerformanceRequestPath(asOf, range)}&sources=${encodeURIComponent(sources)}`);
       })
       .then((response) => {
         if (!cancelled && response) setData(response);
@@ -301,7 +301,7 @@ function L3DailyEvolution({ asOf }: { asOf: string }) {
     return () => {
       cancelled = true;
     };
-  }, [asOf, range]);
+  }, [asOf, range, sources]);
 
   const currentData = range !== null && data?.range === range && data.as_of === asOf ? data : null;
   const points = useMemo(() => currentData?.points ?? [], [currentData]);
@@ -346,7 +346,7 @@ function L3DailyEvolution({ asOf }: { asOf: string }) {
       </div>
 
       {view === "hoje" ? (
-        <L3HourlyEvolution asOf={asOf} />
+        <L3HourlyEvolution asOf={asOf} sources={sources} />
       ) : error && !currentData ? (
         <div className="px-4 py-12 text-center text-xs text-red-300">Não foi possível carregar a evolução diária: {error}</div>
       ) : loading && !currentData ? (
@@ -410,7 +410,7 @@ function L3DailyEvolution({ asOf }: { asOf: string }) {
   );
 }
 
-function L3HourlyEvolution({ asOf }: { asOf: string }) {
+function L3HourlyEvolution({ asOf, sources }: { asOf: string; sources: string }) {
   const [data, setData] = useState<ProfileHourlyPerformanceResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -419,7 +419,7 @@ function L3HourlyEvolution({ asOf }: { asOf: string }) {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    apiGet<ProfileHourlyPerformanceResponse>(profileHourlyPerformanceRequestPath(asOf))
+    apiGet<ProfileHourlyPerformanceResponse>(`${profileHourlyPerformanceRequestPath(asOf)}&sources=${encodeURIComponent(sources)}`)
       .then((response) => {
         if (!cancelled) setData(response);
       })
@@ -433,7 +433,7 @@ function L3HourlyEvolution({ asOf }: { asOf: string }) {
     return () => {
       cancelled = true;
     };
-  }, [asOf]);
+  }, [asOf, sources]);
 
   const currentData = data?.as_of === asOf ? data : null;
   const points = useMemo(() => currentData?.points ?? [], [currentData]);
@@ -803,7 +803,7 @@ function ProfileDrawer({
 }
 
 
-export default function ProfilePerformanceDashboard() {
+export default function ProfilePerformanceDashboard({ sources }: { sources: string }) {
   const [asOf, setAsOf] = useState(todayUtc);
   const [rangeDays, setRangeDays] = useState<RangeDays>(7);
   const [data, setData] = useState<ProfilePerformanceResponse | null>(null);
@@ -825,7 +825,7 @@ export default function ProfilePerformanceDashboard() {
         if (cancelled) return null;
         setLoading(true);
         setError(null);
-        return apiGet<ProfilePerformanceResponse>(profilePerformanceRequestPath(asOf, rangeDays));
+        return apiGet<ProfilePerformanceResponse>(`${profilePerformanceRequestPath(asOf, rangeDays)}&sources=${encodeURIComponent(sources)}`);
       })
       .then((response) => {
         if (!cancelled && response) setData(response);
@@ -840,7 +840,7 @@ export default function ProfilePerformanceDashboard() {
     return () => {
       cancelled = true;
     };
-  }, [asOf, rangeDays, reloadToken]);
+  }, [asOf, rangeDays, reloadToken, sources]);
 
   const filteredRows = useMemo(() => {
     if (!data) return [];
@@ -915,7 +915,7 @@ export default function ProfilePerformanceDashboard() {
         <HighlightCard label="Maior P&L" item={data.highlights.highest_pnl} detail={(item) => formatUsd(item.pnl_period_usdt)} accent={C.green} />
       </section>
 
-      <L3DailyEvolution asOf={asOf} />
+      <L3DailyEvolution asOf={asOf} sources={sources} />
 
       <section className="rounded-xl border bg-[#10121a]" style={{ borderColor: C.border }}>
         <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-4" style={{ borderColor: C.border }}>

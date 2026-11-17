@@ -731,6 +731,7 @@ async def get_profile_performance(
     as_of: date,
     range_days: int,
     profile_id: UUID | None = None,
+    sources: list[str] | None = None,
 ) -> ProfilePerformanceResponse:
     if range_days not in ALLOWED_RANGE_DAYS:
         raise ValueError("range_days must be one of 7, 14 or 30")
@@ -746,7 +747,7 @@ async def get_profile_performance(
             {
                 "uid": str(user_id),
                 "profile_id": str(profile_id) if profile_id else None,
-                "sources": config["source_filter"],
+                "sources": sources if sources is not None else config["source_filter"],
                 "series_start": as_of - timedelta(days=series_days),
                 "as_of": as_of,
                 "tp4h_seconds": int(config["thresholds"]["tp4h_seconds"]),
@@ -762,6 +763,7 @@ async def get_profile_daily_performance(
     *,
     as_of: date,
     range_key: ProfileDailyRange,
+    sources: list[str] | None = None,
 ) -> ProfileDailyPerformanceResponse:
     if range_key not in DAILY_RANGE_DAYS:
         raise ValueError("range must be one of 7d, 15d, 30d, 90d or total")
@@ -776,7 +778,7 @@ async def get_profile_daily_performance(
             PROFILE_DAILY_PERFORMANCE_QUERY,
             {
                 "uid": str(user_id),
-                "sources": config["source_filter"],
+                "sources": sources if sources is not None else config["source_filter"],
                 "series_start": series_start,
                 "as_of": as_of,
             },
@@ -794,6 +796,7 @@ async def get_profile_hourly_performance(
     user_id: UUID,
     *,
     as_of: date,
+    sources: list[str] | None = None,
 ) -> ProfileHourlyPerformanceResponse:
     if as_of > datetime.now(timezone.utc).date():
         raise ValueError("as_of cannot be in the future")
@@ -804,7 +807,7 @@ async def get_profile_hourly_performance(
             PROFILE_HOURLY_PERFORMANCE_QUERY,
             {
                 "uid": str(user_id),
-                "sources": config["source_filter"],
+                "sources": sources if sources is not None else config["source_filter"],
                 "as_of": as_of,
             },
         )

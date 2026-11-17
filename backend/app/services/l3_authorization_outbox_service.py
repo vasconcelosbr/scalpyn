@@ -268,6 +268,13 @@ async def _process_direct(event_id: Any) -> str:
             decision = await db.get(DecisionLog, event.decision_id)
             if decision is None:
                 raise ValueError("DECISION_NOT_FOUND")
+            from .shadow_approved_source import configured_source, CONSOLIDATED, SOURCE_REPLACED
+            if await configured_source(db, decision.user_id, lock=True) == CONSOLIDATED:
+                event.payload = {**(event.payload or {}), "processing_result": SOURCE_REPLACED}
+                event.status = "PROCESSED"
+                event.processed_at = datetime.now(timezone.utc)
+                event.last_error = None
+                return SOURCE_REPLACED
             contract = _contract(decision, event)
             required = bool((event.payload or {}).get("shadow_creation_required", False))
             if (event.payload or {}).get("public_authorization_v1"):
@@ -378,6 +385,16 @@ async def _process_consolidation(scan_run_id: str) -> tuple[int, str]:
     rows = await _consolidation_rows(scan_run_id)
     if not rows:
         return 0, "SKIPPED"
+    from ..database import CeleryAsyncSessionLocal
+    from .shadow_approved_source import configured_source, CONSOLIDATED, SOURCE_REPLACED
+    async with CeleryAsyncSessionLocal() as source_db:
+        selected = {uid: await configured_source(source_db, uid) for uid in {d.user_id for _, d in rows}}
+    replaced = [e.id for e, d in rows if selected[d.user_id] == CONSOLIDATED]
+    if replaced:
+        await _mark_processed(replaced, SOURCE_REPLACED)
+    rows = [(e, d) for e, d in rows if e.id not in replaced]
+    if not rows:
+        return len(replaced), SOURCE_REPLACED
     candidates_by_policy: dict[tuple[str, str], list[Any]] = {}
     candidate_events: dict[str, list[tuple[Any, Any]]] = {}
     immediate_results: dict[Any, str] = {}

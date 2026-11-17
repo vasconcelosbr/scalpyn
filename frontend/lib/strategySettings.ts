@@ -123,6 +123,7 @@ export interface MTFRuntimeAudit {
 export const EDITABLE_ROOTS = ["strategy", "spot_engine", "ml_shadow"] as const;
 
 export const ENUM_OPTIONS: Record<string, string[]> = {
+  "spot_engine.shadow.approved_source": ["L3", "L3_CONSOLIDATED"],
   "spot_engine.scanner.universe_source": ["dynamic", "watchlist", "custom"],
   "spot_engine.scanner.l3_profile_consolidation_rule_version": ["single_profile_per_symbol_v1"],
   "spot_engine.scanner.multilayer_contract.execution_contract_version": ["multilayer_profile_execution_contract_v2"],

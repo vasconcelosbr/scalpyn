@@ -321,9 +321,10 @@ async def get_performance_rankings(
     user_id: UUID,
     *,
     level: str | None = None,
+    source_filter: list[str] | None = None,
 ) -> List[Dict[str, Any]]:
     config = await get_ranking_config(db, user_id)
-    sources = config["source_filter"]
+    sources = source_filter if source_filter is not None else config["source_filter"]
     query = text("""
         WITH selected AS (
             SELECT base.*

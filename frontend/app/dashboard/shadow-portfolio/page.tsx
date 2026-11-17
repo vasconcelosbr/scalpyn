@@ -1,5 +1,7 @@
 "use client";
 
+import { applyShadowSourceFilter, shadowSourceLabel, type ApprovedOrigin } from "@/lib/shadowSources";
+
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { TrailingStatus } from '@/components/shadow-portfolio/TrailingStatus';
@@ -77,6 +79,8 @@ interface ShadowConsolidation {
 }
 
 interface ShadowTradeRead {
+  source?: string | null;
+  mtf_observation_id?: string | null;
   id: string;
   symbol: string;
   direction: string | null;
@@ -1021,6 +1025,7 @@ function TradeTable({
                   <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
                     <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {it.consolidation?.primary_profile.profile_name ?? it.profile_name ?? "—"}
+                      <div style={{ fontSize: 10, color: C.muted }}>{shadowSourceLabel(it.source)}</div>
                     </span>
                     {it.consolidation && it.consolidation.associated_count > 0 && (
                       <span style={{ flexShrink: 0, border: `1px solid ${C.purple}55`, borderRadius: 999, padding: "1px 6px", color: C.purple, fontSize: 9, fontWeight: 700 }}>
@@ -2004,6 +2009,7 @@ function DetailModal({
                     label="Decision ID"
                     value={data.decision_id ?? "—"}
                   />
+                  <DetailRow label="Origem" value={shadowSourceLabel(data.source)} />
                   {data.profile_name != null && (
                     <DetailRow
                       label="Profile (Lab)"
@@ -2320,6 +2326,7 @@ function buildBaseQuery(
   overrides: { status?: string; page?: number; page_size?: number } = {},
   source?: SourceTab,
   profileId?: string | null,
+  approvedOrigin: ApprovedOrigin = "all",
 ): string {
   const params = new URLSearchParams();
   if (overrides.status) params.set("status", overrides.status);
@@ -2331,21 +2338,21 @@ function buildBaseQuery(
   // A aba continua sendo a autoridade da lane mesmo quando um profile é
   // selecionado. Isso permite ao backend localizar o profile também entre os
   // associados de uma consolidação sem misturar fontes.
-  if (source) params.set("source", source);
+  applyShadowSourceFilter(params, source, approvedOrigin);
   if (profileId) params.set("profile_id", profileId);
   params.set("page", String(overrides.page ?? filter.page));
   params.set("page_size", String(overrides.page_size ?? filter.pageSize));
   return params.toString();
 }
 
-function buildSummaryQuery(filter: FilterState, source?: SourceTab, profileId?: string | null): string {
+function buildSummaryQuery(filter: FilterState, source?: SourceTab, profileId?: string | null, approvedOrigin: ApprovedOrigin = "all"): string {
   const params = new URLSearchParams();
   if (filter.symbol.trim()) params.set("symbol", filter.symbol.trim());
   const minDateUtc = displayDateTimeToUtcIso(filter.minDate);
   const maxDateUtc = displayDateTimeToUtcIso(filter.maxDate);
   if (minDateUtc) params.set("min_date", minDateUtc);
   if (maxDateUtc) params.set("max_date", maxDateUtc);
-  if (source) params.set("source", source);
+  applyShadowSourceFilter(params, source, approvedOrigin);
   if (profileId) params.set("profile_id", profileId);
   return params.toString();
 }
@@ -2362,6 +2369,13 @@ export default function ShadowPortfolioPage() {
   const [tick, setTick] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [sourceTab, setSourceTab] = useState<SourceTab>("L3");
+  const [approvedOrigin, setApprovedOrigin] = useState<ApprovedOrigin>("all");
+  const approvedSources = approvedOrigin === "all" ? "L3,L3_CONSOLIDATED" : approvedOrigin;
+  const [captureSource, setCaptureSource] = useState<string | null>(null);
+  useEffect(() => {
+    apiGet<{ approved_source: string }>("/shadow-trades/source-policy")
+      .then(data => setCaptureSource(data.approved_source)).catch(() => setCaptureSource(null));
+  }, [tick]);
   const [profiles, setProfiles] = useState<ProfileItem[]>([]);
   const [watchlistNames, setWatchlistNames] = useState<Record<string, string>>({});
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
@@ -2425,11 +2439,11 @@ export default function ShadowPortfolioPage() {
 
   useEffect(() => {
     setLoadingReport(true);
-    apiGet<ProfileReportRow[]>("/api/shadow-trades/profile-report?order_by=ev_score&direction=desc")
+    apiGet<ProfileReportRow[]>(`/api/shadow-trades/profile-report?order_by=ev_score&direction=desc&sources=${encodeURIComponent(approvedSources)}`)
       .then(setProfileReport)
       .catch(() => setProfileReport([]))
       .finally(() => setLoadingReport(false));
-  }, [tick]);
+  }, [tick, approvedSources]);
 
   const refreshGeneration = useRef(0);
   const [refreshSeconds, setRefreshSeconds] = useState<number | null>(null);
@@ -2444,8 +2458,8 @@ export default function ShadowPortfolioPage() {
     const override = filter.status === "ALL" ? {} : {
       status: filter.status === "OPEN" ? "OPEN" : "COMPLETED", page: 1, page_size: MAX_LOCAL_FETCH,
     };
-    const qs = buildBaseQuery(filter, override, sourceTab, selectedProfileId);
-    const summaryQs = buildSummaryQuery(filter, sourceTab, selectedProfileId);
+    const qs = buildBaseQuery(filter, override, sourceTab, selectedProfileId, approvedOrigin);
+    const summaryQs = buildSummaryQuery(filter, sourceTab, selectedProfileId, approvedOrigin);
     try {
       const [nextList, nextSummary] = await Promise.all([
         apiGet<ShadowTradeListResponse>(`/api/shadow-trades?${qs}`),
@@ -2458,7 +2472,7 @@ export default function ShadowPortfolioPage() {
     } finally {
       if (generation === refreshGeneration.current) { setLoadingList(false); setLoadingSummary(false); }
     }
-  }, [filter, sourceTab, selectedProfileId]);
+  }, [filter, sourceTab, selectedProfileId, approvedOrigin]);
   useEffect(() => {
     void refreshPortfolio();
     const visibleRefresh = () => { if (!document.hidden) void refreshPortfolio(); };
@@ -2586,8 +2600,8 @@ export default function ShadowPortfolioPage() {
           >
             {sourceTab === "L3" ? (
               <>
-                Trades simulados a partir de decisões <code>ALLOW</code> spot do
-                pipeline (L3). Alimentados pelo monitor após cada decisão aprovada.
+                Novas simulações: {captureSource ? shadowSourceLabel(captureSource) : "fonte não confirmada"}.
+                {approvedOrigin === "all" && " Indicadores incluem o histórico anterior e a nova origem; use o filtro de origem para separar."}
               </>
             ) : sourceTab === "L3_REJECTED" ? (
               <>
@@ -2692,6 +2706,15 @@ export default function ShadowPortfolioPage() {
           )}
         </div>
 
+            {(mainTab === "report" || mainTab === "profile-performance" || (mainTab === "trades" && sourceTab === "L3")) && <label style={{ color: C.muted, fontSize: 12 }}>Origem dos trades: <select
+              aria-label="Origem dos trades" value={approvedOrigin}
+              onChange={event => { setApprovedOrigin(event.target.value as ApprovedOrigin); setFilter({ ...filter, page: 1 }); }}
+              style={{ background: C.elevated, color: C.text, padding: 6, borderRadius: 6 }}>
+              <option value="all">Todas — histórico e Consolidado</option>
+              <option value="L3_CONSOLIDATED">L3 Consolidado → Aprovados</option>
+              <option value="L3">L3 — origem anterior</option>
+            </select></label>}
+
         {mainTab === "trades" ? (
           <>
             <FilterBar
@@ -2767,7 +2790,7 @@ export default function ShadowPortfolioPage() {
         ) : mainTab === "detailed-report" ? (
           <DetailedReportWorkspace />
         ) : (
-          <ProfilePerformanceDashboard />
+          <ProfilePerformanceDashboard sources={approvedSources} />
         )}
       </div>
 

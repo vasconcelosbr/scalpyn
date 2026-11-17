@@ -2568,6 +2568,44 @@
           ]
         }
       ]
+    },
+    {
+      "id": "shadow-consolidated-armed-source",
+      "description": "Shadow capture uses only current Consolidado ARMED observations, with immutable source identity and terminal legacy outbox handling.",
+      "files": [
+        {
+          "path": "backend/app/services/shadow_approved_source.py",
+          "contains_all": [
+            "SHADOW_CONSOLIDATED_ARMED",
+            "SHADOW_ARMED_OBSERVATION_NO_LONGER_CURRENT",
+            "acquire_consolidation_lock",
+            "mtf_observation_id"
+          ]
+        },
+        {
+          "path": "backend/app/services/shadow_trade_service.py",
+          "contains_all": [
+            "if not await admission",
+            "await current_observation",
+            "normalized_source != SHADOW_SOURCE_L3_CONSOLIDATED"
+          ]
+        },
+        {
+          "path": "backend/tests/test_shadow_consolidated_armed.py",
+          "contains_all": [
+            "test_concurrent_workers_create_only_one_shadow",
+            "test_replaced_outbox_event_is_terminal_without_shadow_retry",
+            "test_observation_losing_eligibility_during_quote_cannot_insert"
+          ]
+        },
+        {
+          "path": "frontend/lib/shadowSources.ts",
+          "contains_all": [
+            "L3,L3_CONSOLIDATED",
+            "applyShadowSourceFilter"
+          ]
+        }
+      ]
     }
   ]
 }

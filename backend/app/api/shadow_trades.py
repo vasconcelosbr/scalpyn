@@ -21,7 +21,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -79,7 +79,7 @@ router = APIRouter(prefix="/api/shadow-trades", tags=["Shadow Trades"])
 _ACTIVE_STATUSES = ("PENDING", "RUNNING")
 _VALID_STATUSES = {"PENDING", "RUNNING", "OPEN", "COMPLETED", "ERROR"}
 # Filtro de origem da promoção. ``None`` = todos (default).
-_VALID_SOURCES = {"L3", "L3_REJECTED", "L3_SIMULATED", "L1_SPECTRUM", "L3_LAB"}
+_VALID_SOURCES = {"L3_CONSOLIDATED", "L3", "L3_REJECTED", "L3_SIMULATED", "L1_SPECTRUM", "L3_LAB"}
 _DEFAULT_PAGE_SIZE = 50
 _MAX_PAGE_SIZE = 200
 
@@ -149,6 +149,17 @@ def _sanitize_source(source: Optional[str]) -> Optional[str]:
     return cleaned
 
 
+def _source_values(source=None, sources=None):
+    if source is not None and sources is not None:
+        raise HTTPException(status_code=422, detail="Use source or sources, not both")
+    if sources is not None:
+        values = sources.split(",")
+        if any(not value.strip() for value in values):
+            raise HTTPException(status_code=422, detail="sources must contain valid sources")
+        return list(dict.fromkeys(_sanitize_source(value) for value in values))
+    return [_sanitize_source(source)] if source else []
+
+
 def _build_filters(
     *,
     user_id: UUID,
@@ -157,13 +168,14 @@ def _build_filters(
     min_date: Optional[str],
     max_date: Optional[str],
     source: Optional[str] = None,
+    sources: Optional[str] = None,
     profile_id: Optional[UUID] = None,
     profile_version: Optional[datetime] = None,
 ) -> list[Any]:
     conditions: list[Any] = [ShadowTrade.user_id == user_id]
     sanitized_status = _sanitize_status(status)
     sanitized_symbol = _sanitize_symbol(symbol)
-    sanitized_source = _sanitize_source(source)
+    selected_sources = _source_values(source, sources)
     start_dt = _parse_iso_datetime(min_date)
     end_dt = _parse_iso_datetime(max_date, is_end=True)
     if sanitized_status == "OPEN":
@@ -172,8 +184,8 @@ def _build_filters(
         conditions.append(ShadowTrade.status == sanitized_status)
     if sanitized_symbol:
         conditions.append(ShadowTrade.symbol == sanitized_symbol)
-    if sanitized_source:
-        conditions.append(ShadowTrade.source == sanitized_source)
+    if selected_sources:
+        conditions.append(ShadowTrade.source.in_(selected_sources))
     if start_dt is not None:
         conditions.append(ShadowTrade.created_at >= start_dt)
     if end_dt is not None:
@@ -722,6 +734,8 @@ def _to_read(
         current_price = trailing_view.observed.price
     return ShadowTradeRead(
         id=row.id,
+        source=getattr(row, "source", None),
+        mtf_observation_id=getattr(row, "mtf_observation_id", None),
         symbol=row.symbol,
         direction=row.direction,
         entry_price=float(row.entry_price) if row.entry_price is not None else None,
@@ -793,6 +807,8 @@ def _to_detail(
     consolidation = consolidation_override or _consolidation_payload(row)
     return ShadowTradeDetail(
         id=row.id,
+        source=getattr(row, "source", None),
+        mtf_observation_id=getattr(row, "mtf_observation_id", None),
         l3_exit=getattr(row, "l3_exit", None),
         trailing_view=getattr(row, "trailing_view", None),
         symbol=row.symbol,
@@ -905,6 +921,7 @@ async def list_shadow_trades(
     min_date: Optional[str] = Query(None),
     max_date: Optional[str] = Query(None),
     source: Optional[str] = Query(None),
+    sources: Annotated[Optional[str], Query(description="Comma-separated source IDs")] = None,
     profile_id: Optional[UUID] = Query(None, description="Filter by Strategy Lab profile"),
     profile_version: Optional[datetime] = Query(None, description="Filter by profile version"),
     page: int = Query(1, ge=1),
@@ -915,7 +932,8 @@ async def list_shadow_trades(
     """Lista paginada de shadow trades do usuário autenticado."""
     try:
         offset = (page - 1) * page_size
-        sanitized_source = _sanitize_source(source)
+        selected_sources = _source_values(source, sources)
+        sanitized_source = selected_sources[0] if len(selected_sources) == 1 else None
         sanitized_status = _sanitize_status(status)
         project_rejected_active = sanitized_source == "L3_REJECTED" and (
             sanitized_status is None
@@ -947,7 +965,7 @@ async def list_shadow_trades(
                 symbol=symbol,
                 min_date=min_date,
                 max_date=max_date,
-                source=source,
+                source=source, sources=sources,
                 profile_id=profile_id,
                 profile_version=profile_version,
             )
@@ -1001,6 +1019,7 @@ async def shadow_trades_summary(
     min_date: Optional[str] = Query(None),
     max_date: Optional[str] = Query(None),
     source: Optional[str] = Query(None),
+    sources: Annotated[Optional[str], Query(description="Comma-separated source IDs")] = None,
     profile_id: Optional[UUID] = Query(None, description="Filter by Strategy Lab profile"),
     profile_version: Optional[datetime] = Query(None, description="Filter by profile version"),
     db: AsyncSession = Depends(get_db),
@@ -1014,7 +1033,7 @@ async def shadow_trades_summary(
             symbol=symbol,
             min_date=min_date,
             max_date=max_date,
-            source=source,
+            source=source, sources=sources,
             profile_id=profile_id,
             profile_version=profile_version,
         )
@@ -1073,7 +1092,7 @@ async def shadow_trades_summary(
         row = (await db.execute(stats_q)).one()
         total = int(row.total or 0)
         pending = int(row.pending or 0)
-        if _sanitize_source(source) == "L3_REJECTED":
+        if _source_values(source, sources) == ["L3_REJECTED"]:
             active_filters = [
                 *filters,
                 ShadowTrade.status.in_(_ACTIVE_STATUSES),
@@ -1170,6 +1189,7 @@ async def shadow_trades_analytics(
     min_date: Optional[str] = Query(None),
     max_date: Optional[str] = Query(None),
     source: Optional[str] = Query(None),
+    sources: Annotated[Optional[str], Query(description="Comma-separated source IDs")] = None,
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ) -> ShadowTradeAnalytics:
@@ -1186,7 +1206,8 @@ async def shadow_trades_analytics(
     try:
         start_dt = _parse_iso_datetime(min_date)
         end_dt = _parse_iso_datetime(max_date, is_end=True)
-        sanitized_source = _sanitize_source(source)
+        selected_sources = _source_values(source, sources)
+        sanitized_source = selected_sources[0] if len(selected_sources) == 1 else None
 
         conditions = ["user_id = :uid", "status = 'COMPLETED'"]
         params: Dict[str, Any] = {"uid": str(user_id)}
@@ -1196,9 +1217,9 @@ async def shadow_trades_analytics(
         if end_dt is not None:
             conditions.append("created_at <= :end_dt")
             params["end_dt"] = end_dt
-        if sanitized_source:
-            conditions.append("source = :source")
-            params["source"] = sanitized_source
+        if selected_sources:
+            conditions.append("source = ANY(CAST(:sources AS text[]))")
+            params["sources"] = selected_sources
 
         where_clause = " AND ".join(conditions)
 
@@ -1589,12 +1610,13 @@ async def shadow_trades_timeout_analysis(
 async def profile_report(
     order_by: str = Query("ev_score", pattern="^(ev_score|performance_priority)$"),
     direction: str = Query("desc", pattern="^(asc|desc)$"),
+    sources: Annotated[Optional[str], Query()] = None,
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ) -> List[ProfileReportRow]:
     """Canonical performance ranking shared by Shadow Portfolio and L3."""
     try:
-        rows = await get_performance_rankings(db, user_id)
+        rows = await get_performance_rankings(db, user_id, source_filter=_source_values(sources=sources) or None)
         if direction == "asc":
             rows.reverse()
         return rows
@@ -1605,6 +1627,12 @@ async def profile_report(
     except Exception as exc:
         logger.error("Failed to compute performance ranking: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to compute performance ranking") from exc
+
+
+@router.get("/source-policy")
+async def shadow_source_policy(db: AsyncSession = Depends(get_db), user_id: UUID = Depends(get_current_user_id)):
+    from ..services.shadow_approved_source import configured_source
+    return {"approved_source": await configured_source(db, user_id)}
 
 
 @router.get("/{shadow_id}/chart", response_model=ShadowTradeChartResponse)

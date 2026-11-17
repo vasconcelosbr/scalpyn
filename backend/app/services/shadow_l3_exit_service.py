@@ -37,7 +37,7 @@ async def load_frozen_policy(db, user_id):
 
 
 async def attach_states(db, rows, user_id):
-    ids = [r.id for r in rows if r.source == "L3" and (r.config_snapshot or {}).get("shadow_l3_exit_policy")]
+    ids = [r.id for r in rows if r.source in ("L3", "L3_CONSOLIDATED") and (r.config_snapshot or {}).get("shadow_l3_exit_policy")]
     if not ids:
         return
     records = (await db.execute(text("""
@@ -215,7 +215,7 @@ async def advance_shadow(db, shadow, runtime=_RUNTIME_UNSET, stats=None):
     only, never part of the replayed decision state) and logged.
     """
     snapshot = (shadow.config_snapshot or {}).get("shadow_l3_exit_policy")
-    if shadow.source != "L3" or not snapshot or not shadow.entry_timestamp or not shadow.tp_price or not shadow.sl_price:
+    if shadow.source not in ("L3", "L3_CONSOLIDATED") or not snapshot or not shadow.entry_timestamp or not shadow.tp_price or not shadow.sl_price:
         return None
     policy = validate_policy(snapshot["config"])
     if snapshot["hash"] != policy.digest():

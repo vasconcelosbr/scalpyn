@@ -89,6 +89,8 @@ export function buildShadowTradeExport(
       identity: {
         id: detail.id,
         decision_id: detail.decision_id,
+        source: detail.source,
+        mtf_observation_id: detail.mtf_observation_id,
         symbol: detail.symbol,
         direction: detail.direction,
         strategy: detail.strategy,
