@@ -16,6 +16,7 @@ install_brazil_time_logging()
 
 from .api import (
     mtf_chart,
+    mtf_history,
     auth,
     config as config_api,
     strategy_settings,
@@ -387,11 +388,11 @@ from .api import profile_bayesian_intelligence as profile_bayesian_api
 
 _RECOVERY_RESOURCE_ID = r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}"
 _RECOVERY_EDIT_ROUTES = {
-    "PUT": _re.compile(rf"/api/(?:(?:profiles|watchlists)/{_RECOVERY_RESOURCE_ID}|mtf/(?:config|preferences))"),
+    "PUT": _re.compile(rf"/api/(?:(?:profiles|watchlists)/{_RECOVERY_RESOURCE_ID}|mtf/(?:config|preferences|observations/settings))"),
     "PATCH": _re.compile(rf"/api/pools/{_RECOVERY_RESOURCE_ID}"),
     "POST": _re.compile(
         rf"/api/(?:pools/{_RECOVERY_RESOURCE_ID}/coins(?:/bulk)?"
-        rf"|watchlists/{_RECOVERY_RESOURCE_ID}/refresh)"
+        rf"|watchlists/{_RECOVERY_RESOURCE_ID}/refresh|mtf/observations/exports)"
     ),
     "DELETE": _re.compile(rf"/api/watchlists/{_RECOVERY_RESOURCE_ID}"),
 }
@@ -447,6 +448,7 @@ app.include_router(market.router)
 app.include_router(watchlist.router)
 app.include_router(watchlists.router)
 app.include_router(mtf_chart.router)
+app.include_router(mtf_history.router)
 app.include_router(radar_readonly.router)
 app.include_router(watchlists.pipeline_router)
 app.include_router(custom_watchlists.router)

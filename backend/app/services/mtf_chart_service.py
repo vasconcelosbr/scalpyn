@@ -225,6 +225,8 @@ async def chart_data(db, user_id, symbol, profile_id, cfg, include_display=True)
         # The scheduled observer persists analysis, never the drawing history.
         # Keep its original work/domain instead of adding UI-only computation.
         return {'symbol': symbol, 'frames': frames, 'analysis': analysis,
+                'indicator_config': indicators, 'market_context': book,
+                'profile_config': profile.config if profile else None,
                 'as_of': analysis['observed_at_utc']}
     for tf, frame in frames.items():
         display_zones = frame_zones(frame, tf, cfg, frames['5m']['candles'][-1]['close']) if frames['5m']['candles'] and frame.get('atr') else []

@@ -7,6 +7,16 @@
   },
   "required_features": [
     {
+      "id": "immutable-mtf-observation-history",
+      "description": "Full profile display universe, immutable inputs, separate future labels and dedicated observation queue.",
+      "files": [
+        {"path": "backend/app/services/mtf_history.py", "contains_all": ["history_members", "POST_OBSERVATION_CANDLE_GAP", "context_only"]},
+        {"path": "backend/app/tasks/celery_app.py", "contains_all": ["mtf_history requires a dedicated worker"]},
+        {"path": "backend/tests/test_mtf_history.py", "contains_all": ["test_capture_idempotence_history_removal_isolation_and_exports", "test_future_labels_exclude_pre_observation_and_detect_gaps"]},
+        {"path": "frontend/app/grafico-mtf/historico/page.tsx", "contains_all": ["Histórico de observações", "Exportar CSV ZIP"]}
+      ]
+    },
+    {
       "id": "profile-refresh-with-flow-pending",
       "description": "Fresh configured candle rules remain audited when operational flow is pending, with execution and Shadow still blocked.",
       "files": [

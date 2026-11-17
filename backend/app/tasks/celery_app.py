@@ -88,6 +88,7 @@ QUEUE_MICROSTRUCTURE = "microstructure"
 QUEUE_STRUCTURAL = "structural"
 QUEUE_STRUCTURAL_COMPUTE = "structural_compute"
 QUEUE_INDICATOR_5M = "indicator_5m"
+QUEUE_MTF_HISTORY = "mtf_history"
 QUEUE_EXECUTION = "execution"
 QUEUE_AI_ORCHESTRATION = "ai_orchestration"
 QUEUE_RESEARCH_OHLCV = "research_ohlcv"
@@ -108,7 +109,7 @@ QUEUE_PROFILE_BAYESIAN = "profile_bayesian"
 QUEUE_PROFILE_OPTIMIZATION = "profile_optimization"
 
 ALL_QUEUES = (
-    QUEUE_MICROSTRUCTURE, QUEUE_STRUCTURAL, QUEUE_STRUCTURAL_COMPUTE, QUEUE_INDICATOR_5M,
+    QUEUE_MICROSTRUCTURE, QUEUE_STRUCTURAL, QUEUE_STRUCTURAL_COMPUTE, QUEUE_INDICATOR_5M, QUEUE_MTF_HISTORY,
     QUEUE_EXECUTION, QUEUE_AI_ORCHESTRATION, QUEUE_RESEARCH_OHLCV,
     QUEUE_PUMP_RADAR, QUEUE_STRUCTURAL_COLLECT, QUEUE_STRUCTURAL_SCAN,
     QUEUE_PUMP_MONITOR, QUEUE_PUMP_ML, QUEUE_CANONICAL_OHLCV,
@@ -116,6 +117,7 @@ ALL_QUEUES = (
 )
 
 _ALL_TASK_MODULES = (
+        "app.tasks.mtf_history",
         "app.tasks.mtf_chart",
         "app.tasks.collect_market_data",
         "app.tasks.collect_structural_30m",
@@ -174,6 +176,10 @@ def _configured_task_modules() -> tuple[str, ...]:
     )
     # M5_FRESHNESS_ISOLATION: closed-candle publication must not wait behind
     # long MTF/Shadow evaluations. The consumer must remain dedicated.
+    if QUEUE_MTF_HISTORY in queues:
+        if queues != (QUEUE_MTF_HISTORY,):
+            raise ValueError("mtf_history requires a dedicated worker")
+        return ("app.tasks.mtf_history",)
     if QUEUE_INDICATOR_5M in queues:
         if queues != (QUEUE_INDICATOR_5M,):
             raise ValueError("indicator_5m requires a dedicated worker")
@@ -217,6 +223,9 @@ celery_app = Celery(
 # without adding it here causes the lint test
 # ``test_every_registered_task_is_routed`` to fail.
 TASK_ROUTES = {
+    "app.tasks.mtf_history.dispatch": {"queue": QUEUE_MTF_HISTORY},
+    "app.tasks.mtf_history.capture": {"queue": QUEUE_MTF_HISTORY},
+    "app.tasks.mtf_history.maintenance": {"queue": QUEUE_MTF_HISTORY},
     # 5m collection and calculation use separate workers to avoid queue starvation.
     "app.tasks.collect_market_data.collect_5m":  {"queue": QUEUE_MICROSTRUCTURE},
     "app.tasks.compute_indicators.compute_5m":   {"queue": QUEUE_INDICATOR_5M},
@@ -813,6 +822,16 @@ celery_app.conf.update(
 
 # Periodic task schedule
 celery_app.conf.beat_schedule = {
+    "mtf_history_after_close": {
+        "task": "app.tasks.mtf_history.dispatch",
+        "schedule": crontab(minute="*/5"),
+        "options": {"queue": QUEUE_MTF_HISTORY, "expires": 240},
+    },
+    "mtf_history_maintenance": {
+        "task": "app.tasks.mtf_history.maintenance",
+        "schedule": 60.0,
+        "options": {"queue": QUEUE_MTF_HISTORY, "expires": 55},
+    },
     "mtf_chart_after_close": {
         "task": "app.tasks.mtf_chart.observe",
         "schedule": crontab(minute="*/5"),
