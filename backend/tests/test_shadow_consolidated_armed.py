@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 import sqlalchemy as sa
@@ -82,19 +82,20 @@ def store():
 
 
 def seed(store):
-    uid, pid, wid, aid = uuid4(), uuid4(), uuid4(), uuid4()
+    uid, pid, wid, aid, parent_id = uuid4(), uuid4(), uuid4(), uuid4(), uuid4()
     now = datetime.now(timezone.utc)
     with store() as db:
         db.add(ConfigProfile(user_id=uid, config_type="spot_engine", is_active=True,
             config_json={"shadow":{"approved_source":service.CONSOLIDATED}}))
         db.add(Profile(id=pid,user_id=uid,name="Reference",is_active=True,profile_version=now,
             config={"entry_triggers":{"conditions":[]}}))
-        db.add(PipelineWatchlist(id=wid,user_id=uid,name="Original",level="L3",market_mode="spot",profile_id=pid))
-        db.add(PipelineWatchlistAsset(id=aid,watchlist_id=wid,symbol="BTC_USDT",analysis_snapshot={"indicators":[{"key":"rsi","value":50}]}))
+        db.add(PipelineWatchlist(id=parent_id,user_id=uid,name="Parent",level="L2",market_mode="spot"))
+        db.add(PipelineWatchlist(id=wid,user_id=uid,name="Original",level="L3",market_mode="spot",profile_id=pid,source_watchlist_id=parent_id))
+        db.add(PipelineWatchlistAsset(id=aid,watchlist_id=parent_id,symbol="BTC_USDT",analysis_snapshot={"indicators":[{"key":"rsi","value":50}]}))
         db.commit()
     item = dict(symbol="BTC_USDT", profile_id=str(pid),watchlist_id=str(wid),asset_id=str(aid),
         candidate_profile_ids=[str(pid)],candidate_profile_names=["Reference"],decision_id=123,
-        mtf={"observation_id":str(uuid4()),"valid_until":(now+timedelta(minutes=5)).isoformat()})
+        mtf={"status":"ARMED","observation_id":str(uuid4()),"valid_until":(now+timedelta(minutes=5)).isoformat()})
     return uid, item
 
 
@@ -118,9 +119,11 @@ def market(monkeypatch):
     monkeypatch.setattr(pool_service,"radar_shadow_entry_is_eligible",AsyncMock(return_value=True))
 
 
-def test_capture_preserves_history_reentry_and_observation_identity(store, market, monkeypatch):
+@pytest.mark.parametrize('signal', ['ARMED', 'TRIGGERED'])
+def test_capture_preserves_history_reentry_and_observation_identity(store, market, monkeypatch, signal):
     uid,item=seed(store)
-    current=AsyncMock(return_value=(item,{"status":"ARMED","execution_authority":False}))
+    item['mtf']['status'] = signal
+    current=AsyncMock(return_value=(item,{"status":signal,"execution_authority":False}))
     monkeypatch.setattr(service,"current_observation",current)
     async def capture():
         with store() as db:
@@ -137,8 +140,12 @@ def test_capture_preserves_history_reentry_and_observation_identity(store, marke
         assert row.entry_price==100 and row.tp_price==102 and row.sl_price==99
         assert row.eligible_for_training is False
         assert row.config_snapshot['l3_consolidated']['execution_authority'] is False
+        assert row.config_snapshot['l3_consolidated']['entry_signal'] == signal
+        assert row.config_snapshot['l3_consolidated']['source_asset_watchlist_id'] == str(db.get(PipelineWatchlist,UUID(item['watchlist_id'])).source_watchlist_id)
+        assert row.watchlist_id == UUID(item['watchlist_id'])
         assert row.config_snapshot['shadow_l3_exit_policy']['config']['mode']=='LEGACY'
         assert _to_read(row).source==service.CONSOLIDATED
+        assert _to_read(row).entry_signal == _to_detail(row).entry_signal == signal
         assert _to_detail(row).mtf_observation_id==row.mtf_observation_id
         assert asyncio.run(writer.record_as_simulation(Adapter(db),row)) is None
         row.status='COMPLETED';db.commit()
@@ -148,6 +155,49 @@ def test_capture_preserves_history_reentry_and_observation_identity(store, marke
     with store() as db:
         assert db.scalar(sa.select(sa.func.count()).select_from(ShadowTrade))==2
         assert db.get(ShadowTrade,first).status=='COMPLETED'
+
+
+@pytest.mark.parametrize('mismatch', ['parent', 'symbol', 'owner'])
+def test_capture_rejects_unrelated_parent_assets(store, market, monkeypatch, mismatch):
+    uid,item=seed(store)
+    monkeypatch.setattr(service, 'current_observation', AsyncMock(return_value=(item, {'status':'ARMED'})))
+    with store() as db:
+        asset=db.get(PipelineWatchlistAsset, UUID(item['asset_id']))
+        if mismatch=='parent': asset.watchlist_id=UUID(item['watchlist_id'])
+        elif mismatch=='symbol': asset.symbol='OTHER_USDT'
+        else: db.get(PipelineWatchlist, asset.watchlist_id).user_id=uuid4()
+        db.commit()
+        assert asyncio.run(service.capture_one(Adapter(db), user_id=uid, symbol=item['symbol'],
+            observation_id=item['mtf']['observation_id'], user_config=config())) is None
+        assert db.scalar(sa.select(sa.func.count()).select_from(ShadowTrade))==0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('state', ['ARMED','TRIGGERED','WAIT','NO_TRADE',None])
+async def test_current_observation_accepts_only_armed_and_triggered(monkeypatch,state):
+    uid,oid=uuid4(),uuid4()
+    item=dict(symbol='BTC_USDT',mtf=dict(status=state,observation_id=str(oid),
+        valid_until=(datetime.now(timezone.utc)+timedelta(minutes=5)).isoformat()))
+    monkeypatch.setattr(service,'load_l3_armed_display',AsyncMock(return_value={
+        'items':[item], 'analyses':{'BTC_USDT':{'status':state}}}))
+    if state in ('ARMED','TRIGGERED'):
+        assert (await service.current_observation(None,user_id=uid,symbol='BTC_USDT',observation_id=oid))[0]==item
+    else:
+        with pytest.raises(ValueError,match='SHADOW_SIGNAL_OBSERVATION_NO_LONGER_CURRENT'):
+            await service.current_observation(None,user_id=uid,symbol='BTC_USDT',observation_id=oid)
+
+
+def test_entry_signal_uses_frozen_origin_without_inventing_legacy_labels():
+    from app.api.shadow_trades import _entry_signal
+    row=SimpleNamespace(source='L3_CONSOLIDATED', config_snapshot={'l3_consolidated':{
+        'entry_signal':'ARMED', 'mtf':{'status':'TRIGGERED'}}})
+    assert _entry_signal(row)=='ARMED'
+    row.config_snapshot={'l3_consolidated':{'mtf':{'status':'TRIGGERED'}}}
+    assert _entry_signal(row)=='TRIGGERED'
+    row.source='L3'
+    assert _entry_signal(row) is None
+    row.source='L3_CONSOLIDATED';row.config_snapshot={}
+    assert _entry_signal(row) is None
 
 
 def test_concurrent_workers_create_only_one_shadow(store, market, monkeypatch):

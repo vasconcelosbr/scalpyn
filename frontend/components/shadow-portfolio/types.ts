@@ -33,6 +33,7 @@ export interface ShadowConsolidation {
 export interface ShadowTradeDetail {
   source?: string | null;
   mtf_observation_id?: string | null;
+  entry_signal?: "ARMED" | "TRIGGERED" | null;
   trailing_view?: import('@/lib/shadowTrailingView').ShadowTrailingView | null;
   id: string;
   symbol: string;

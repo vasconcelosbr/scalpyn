@@ -720,6 +720,17 @@ async def _active_projection_overrides(
     return overrides
 
 
+def _entry_signal(row):
+    """Immutable entry origin; never infer it from today's MTF status."""
+    if getattr(row, 'source', None) != 'L3_CONSOLIDATED':
+        return None
+    snapshot = getattr(row, 'config_snapshot', None)
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    consolidated = snapshot.get('l3_consolidated') or {}
+    signal = consolidated.get('entry_signal') or (consolidated.get('mtf') or {}).get('status')
+    return signal if signal in ('ARMED', 'TRIGGERED') else None
+
+
 def _to_read(
     row: ShadowTrade,
     *,
@@ -736,6 +747,7 @@ def _to_read(
         id=row.id,
         source=getattr(row, "source", None),
         mtf_observation_id=getattr(row, "mtf_observation_id", None),
+        entry_signal=_entry_signal(row),
         symbol=row.symbol,
         direction=row.direction,
         entry_price=float(row.entry_price) if row.entry_price is not None else None,
@@ -809,6 +821,7 @@ def _to_detail(
         id=row.id,
         source=getattr(row, "source", None),
         mtf_observation_id=getattr(row, "mtf_observation_id", None),
+        entry_signal=_entry_signal(row),
         l3_exit=getattr(row, "l3_exit", None),
         trailing_view=getattr(row, "trailing_view", None),
         symbol=row.symbol,

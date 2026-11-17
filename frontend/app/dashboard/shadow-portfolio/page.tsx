@@ -1,6 +1,6 @@
 "use client";
 
-import { applyShadowSourceFilter, shadowSourceLabel, type ApprovedOrigin } from "@/lib/shadowSources";
+import { applyShadowSourceFilter, shadowSourceLabel, shadowEntrySignalLabel, type ApprovedOrigin } from "@/lib/shadowSources";
 
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
@@ -81,6 +81,7 @@ interface ShadowConsolidation {
 interface ShadowTradeRead {
   source?: string | null;
   mtf_observation_id?: string | null;
+  entry_signal?: "ARMED" | "TRIGGERED" | null;
   id: string;
   symbol: string;
   direction: string | null;
@@ -722,6 +723,7 @@ const COLS: {
 }[] = [
   { key: "created_at", label: "Aberto em" },
   { key: "profile", label: "Perfil" },
+  { key: "entry_signal", label: "Origem do sinal", align: "center" },
   { key: "ev_score", label: "EV Score", align: "right" },
   { key: "symbol", label: "Símbolo" },
   { key: "status", label: "Status", align: "center" },
@@ -1033,6 +1035,13 @@ function TradeTable({
                       </span>
                     )}
                   </div>
+                </td>
+                <td
+                  title="Estado do sinal registrado na abertura da simulação"
+                  style={{ padding: "10px 12px", textAlign: "center", whiteSpace: "nowrap", fontWeight: 600,
+                    color: it.entry_signal === "TRIGGERED" ? C.green : it.entry_signal === "ARMED" ? C.blue : C.dim }}
+                >
+                  {shadowEntrySignalLabel(it.entry_signal)}
                 </td>
                 <td
                   style={{
@@ -2010,6 +2019,7 @@ function DetailModal({
                     value={data.decision_id ?? "—"}
                   />
                   <DetailRow label="Origem" value={shadowSourceLabel(data.source)} />
+                  <DetailRow label="Origem do sinal" value={shadowEntrySignalLabel(data.entry_signal)} />
                   {data.profile_name != null && (
                     <DetailRow
                       label="Profile (Lab)"

@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyShadowSourceFilter, shadowSourceLabel } from "./shadowSources";
+import { applyShadowSourceFilter, shadowSourceLabel, shadowEntrySignalLabel } from "./shadowSources";
+
+test("entry signal labels preserve unknown historical origins", () => {
+  assert.equal(shadowEntrySignalLabel("ARMED"), "Armado");
+  assert.equal(shadowEntrySignalLabel("TRIGGERED"), "Gatilho");
+  for (const value of [null, undefined, "WAIT", "L3"]) assert.equal(shadowEntrySignalLabel(value), "—");
+});
 
 test("approved views combine history and Consolidado while retaining profile filters", () => {
   const params = new URLSearchParams({profile_id: "profile", symbol: "BTC_USDT"});
