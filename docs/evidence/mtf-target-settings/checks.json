@@ -1,0 +1,11 @@
+{
+  "checks": [
+    "Target follows symbols and live candles; timeframe changes and updates preserve the canvas",
+    "Target visibility persists with an existing EMA preference",
+    "Cancel and invalid input do not save; visual-only save preserves inherited engine config",
+    "Local ATR and JSON edits round-trip; failed writes retain prior configuration",
+    "Light theme, mobile dialog and keyboard dismissal work"
+  ],
+  "errors": [],
+  "source": "Synthetic local fixtures; mocked API writes only"
+}

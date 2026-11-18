@@ -235,7 +235,7 @@ def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_
     result["candle_close_at_utc"] = iso(c["time"] + TF_SECONDS["5m"])
     direction = trend(f4["pivots"])
     last4 = [p["pattern"] for p in f4["patterns"] if p["time"] == f4["candles"][-1]["time"]]
-    force = any(p in ("ENGULF_BULL", "MARUBOZU_BULL") for p in last4)
+    force = any(p in cfg.force_patterns for p in last4)
     result["context_4h"] = {"trend": direction, "last_pivots": [p["label"] for p in f4["pivots"][-4:]],
                             "last_candle_pattern": last4[0] if last4 else None, "strength": "FORCE" if force else "NEUTRAL"}
     zs = frame_zones(f1, '1h', cfg, c['close'])
@@ -251,7 +251,7 @@ def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_
         near = distance <= cfg.zone_proximity_atr
         recent = f1["candles"][-cfg.rejection_lookback:]
         rejection_times = {x["time"] for x in recent if x["low"] <= zone["high"] and x["high"] >= zone["low"]}
-        rejection = any(p["time"] in rejection_times and p["pattern"] in ("PIN_BULL", "ENGULF_BULL") for p in f1["patterns"])
+        rejection = any(p["time"] in rejection_times and p["pattern"] in cfg.rejection_patterns for p in f1["patterns"])
         result["zone_1h"] = {**zone, "distance_atr": distance, "in_zone": near, "rejection": rejection}
     trigger = next((p for name in cfg.trigger_patterns for p in f5["patterns"] if p["time"] == c["time"] and p["pattern"] == name), None)
     preceding = f5["candles"][-cfg.vol_lookback-1:-1]

@@ -18,6 +18,7 @@ from ..models.pipeline_watchlist import PipelineWatchlist, PipelineWatchlistAsse
 from ..schemas.mtf_chart import MTFChartConfig
 from .config_service import config_service
 from .profile_runtime_config import canonical_hash
+from .mtf_indicator_config import effective_indicators
 from .mtf_chart_engine import TF_SECONDS, ENGINE_VERSION, timestamp, prepare_frame, evaluate, trend, simulate_step, closed_candles, frame_zones
 
 log = logging.getLogger(__name__)
@@ -173,6 +174,7 @@ async def prepared(raw, tf, cutoff, indicators, families, cfg, history=None):
 async def chart_data(db, user_id, symbol, profile_id, cfg, include_display=True):
     from .market_data_service import market_data_service
     profile, indicators, identity, families, names = await profile_context(db, user_id, profile_id, include_display)
+    indicators, identity = effective_indicators(indicators, identity, cfg)
     # Close snapshots first, then collect live context; observed_at is never
     # presented as a candle-close timestamp or used for historical fills.
     now = int(time.time())

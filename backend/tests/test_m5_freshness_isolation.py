@@ -31,10 +31,12 @@ def test_m5_worker_rejects_shared_consumers(monkeypatch):
         _configured_task_modules()
 
 
-def test_capture_poll_is_aligned_independently_of_beat_startup():
+def test_capture_poll_is_aligned_independently_of_beat_startup(monkeypatch):
     schedule = celery_app.conf.beat_schedule["collect_state_5m_every_60s"]["schedule"]
     # A process starting at :20 must next poll at :00, not carry a permanent
     # twenty-second delay past the capture contract's finalization boundary.
     last = datetime(2026, 11, 17, 12, 0, 20, tzinfo=timezone.utc)
+    # Celery also reads now when calculating a crontab's next occurrence.
+    monkeypatch.setattr(schedule, "now", lambda: last)
     assert last + schedule.remaining_delta(last)[1] == datetime(
         2026, 11, 17, 12, 1, tzinfo=timezone.utc)

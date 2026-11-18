@@ -2616,6 +2616,49 @@
           "contains_all": ["Origem do sinal", "shadowEntrySignalLabel(it.entry_signal)"]
         }
       ]
+    },
+    {
+      "id": "mtf-target-and-stage-settings",
+      "description": "Visual target curve and editable MTF stage settings preserve engine identity for presentation-only changes and isolate ATR from global indicators.",
+      "files": [
+        {
+          "path": "frontend/components/shadow-portfolio/TradeCandlestickChart.tsx",
+          "contains_all": [
+            "targetPoints",
+            "targetTitle",
+            "show_target"
+          ]
+        },
+        {
+          "path": "frontend/components/mtf/MTFSettingsDialog.tsx",
+          "contains_all": [
+            "ARMADO",
+            "GATILHO",
+            "settingsForSave",
+            "validateSettings"
+          ]
+        },
+        {
+          "path": "backend/app/services/mtf_chart_service.py",
+          "contains_all": [
+            "effective_indicators(indicators, identity, cfg)"
+          ]
+        },
+        {
+          "path": "backend/app/services/l3_armed_observation.py",
+          "contains_all": [
+            "effective_indicators(configs[0].config_json, identity, cfg)"
+          ]
+        },
+        {
+          "path": "backend/tests/test_mtf_settings.py",
+          "contains_all": [
+            "test_legacy_roundtrip_and_visual_changes_preserve_engine_hash",
+            "test_atr_override_calculates_locally_and_has_a_shared_identity",
+            "test_existing_rules_change_trigger_and_arming_without_new_conditions"
+          ]
+        }
+      ]
     }
   ]
 }
