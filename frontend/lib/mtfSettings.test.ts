@@ -22,6 +22,14 @@ const config={schema_version:'mtf_chart_v1',atr_period:null,force_patterns:['ENG
   candle_limits:{'4h':100,'1h':100,'5m':100},score_weights:{trend:2,force:1,zone:2,rejection:1,trigger:2,volume:1,rr:1},min_score:7,min_rr_net:2,rr_bonus_threshold:3,
   presentation:{target_pct:1,retry_initial_seconds:3,retry_max_seconds:30}} as unknown as MTFConfig;
 const boot={preset:config,presentation_preset:config.presentation,inherited_atr:{enabled:true,period:14}} as Bootstrap;
+
+test('veto draft toggles preserve saved thresholds and cancellation baseline',()=>{
+  const saved={...config,min_score:0,slippage_pct:.1,atr_period:14,veto_filters:{btc_downtrend:true,spread:true}};
+  const draft=settingsDraft(saved,{...boot,preset:saved});
+  const changed=settingsForSave(withConfigValue(draft,'veto_filters.btc_downtrend',false),saved,boot);
+  assert.deepEqual(changed,{...saved,veto_filters:{btc_downtrend:false,spread:true}});
+  assert.deepEqual(settingsDraft(saved,boot),saved);
+});
 test('drafts are independent; no-op and visual saves preserve inheritance, rule saves freeze local ATR',()=>{
   const draft=settingsDraft(config,boot);
   const changed=withConfigValue(draft,'presentation.target_pct',2);

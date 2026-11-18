@@ -29,7 +29,7 @@ function chart(symbol){
   await context.addInitScript(()=>{localStorage.setItem('token','SYNTHETIC_LOCAL_TEST');localStorage.setItem('user',JSON.stringify({id:'fixture',email:'fixture@example.invalid'}));});
   await page.route('**/api/**',async route=>{
     const p=new URL(route.request().url()); let body={};let status=200;
-    if(p.pathname==='/api/mtf/bootstrap') body={...seed,config,preferences,watchlists:[{id:'l3-consolidated',name:'L3 Consolidado'}],profiles:[]};
+    if(p.pathname==='/api/mtf/bootstrap') body={...seed,inherited_atr:seed.inherited_atr??{enabled:true,period:14},config,preferences,watchlists:[{id:'l3-consolidated',name:'L3 Consolidado'}],profiles:[]};
     else if(p.pathname==='/api/mtf/preferences'){preferences=JSON.parse(route.request().postData());body=preferences;}
     else if(p.pathname==='/api/mtf/config'){
       writes++; if(failSave){status=503;body={detail:'Falha de teste; configuração anterior preservada'};}
@@ -75,7 +75,7 @@ function chart(symbol){
     await open();await page.getByRole('button',{name:'GATILHO',exact:true}).click();
     await shot('settings-trigger');
     await page.getByLabel('Score mínimo',{exact:false}).fill('999');await save();assert.equal(writes,0);
-    assert(await page.getByText('O score mínimo excede a soma dos pesos.',{exact:false}).count()>0);
+    await page.getByText('O score mínimo excede a soma dos pesos.',{exact:false}).first().waitFor();
     await page.getByLabel('Score mínimo',{exact:false}).fill(String(seed.preset.min_score));
     await page.getByRole('button',{name:'Avançado',exact:true}).click();
     await page.getByLabel('Valorização do Target',{exact:false}).fill('2');await save();
@@ -104,8 +104,27 @@ function chart(symbol){
     const bounds=await page.getByRole('dialog').boundingBox();assert(bounds.x>=0&&bounds.x+bounds.width<=390);
     await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
     checks.push('Light theme, mobile dialog and keyboard dismissal work');
+    await page.setViewportSize({width:1440,height:1000});await open();
+    await page.getByRole('button',{name:'Vetos',exact:true}).click();
+    const btc=page.getByLabel('Vetar Bitcoin em tendência de baixa',{exact:true});
+    const priorConfig=structuredClone(config);const priorWrites=writes;
+    assert.equal(await btc.inputValue(),'true');await btc.selectOption('false');
+    await page.getByRole('button',{name:'Cancelar',exact:true}).click();assert.equal(writes,priorWrites);
+    await open();await page.getByRole('button',{name:'Vetos',exact:true}).click();assert.equal(await btc.inputValue(),'true');
+    await btc.selectOption('false');await save();await page.getByRole('dialog').waitFor({state:'hidden'});
+    assert.deepEqual(config,{...priorConfig,veto_filters:{...priorConfig.veto_filters,btc_downtrend:false}});
+    await page.reload();await page.locator('.mtf-chart-scroll canvas').first().waitFor();await open();
+    await page.getByRole('button',{name:'Vetos',exact:true}).click();assert.equal(await btc.inputValue(),'false');
+    await shot('veto-settings');await page.getByRole('button',{name:'Avançado',exact:true}).click();
+    await page.getByRole('button',{name:'Editar JSON avançado'}).click();
+    const savedVetoJson=JSON.parse(await page.getByLabel('Configuração MTF em JSON').inputValue());
+    assert.equal(savedVetoJson.veto_filters.btc_downtrend,false);
+    checks.push('Veto cancel preserves settings; save survives reload and advanced JSON without changing other parameters');
     assert.deepEqual(errors,[]);
     fs.writeFileSync(path.join(output,'checks.json'),JSON.stringify({checks,errors,source:'Synthetic local fixtures; mocked API writes only'},null,2));
     console.log(JSON.stringify({checks,errors}));
+  } catch(error) {
+    console.error((await page.locator('body').innerText()).slice(-6000));
+    await shot('failure');throw error;
   } finally {await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

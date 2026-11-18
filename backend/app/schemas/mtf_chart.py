@@ -1,6 +1,6 @@
 """Required, versioned configuration for the observational chart, not trading."""
 from typing import Literal
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 BullPattern = Literal['ENGULF_BULL', 'PIN_BULL', 'MARUBOZU_BULL']
 LEGACY_FORCE_PATTERNS = ['ENGULF_BULL', 'MARUBOZU_BULL']
@@ -47,7 +47,7 @@ def presentation_preset() -> dict:
         'marker_min_range_atr': 0.25, 'zones_per_side': 2, 'removal_confirmations': 2,
         'retry_initial_seconds': 3, 'retry_max_seconds': 60, 'watchlist_poll_seconds': 30,
         'autoscale_clip_pct': 1, 'pair_metadata_ttl_seconds': 3600,
-        'reason_labels': {'BTC_DOWNTREND': 'Bitcoin em tendência de baixa',
+        'reason_labels': {'INVALID_PLAN': 'Plano inválido: entrada, stop ou risco inconsistente', 'BTC_DOWNTREND': 'Bitcoin em tendência de baixa',
             'BTC_CONTEXT_UNAVAILABLE': 'Contexto do Bitcoin indisponível', 'SPOT_NOT_BUYING': 'Viés de baixa: não comprar em Spot',
             'TREND_RANGE': 'Tendência lateral', 'SPREAD_UNAVAILABLE': 'Spread indisponível',
             'SPREAD_TOO_WIDE': 'Spread acima do limite', 'STOP_TOO_WIDE': 'Stop acima do limite',
@@ -57,10 +57,22 @@ def presentation_preset() -> dict:
     }).model_dump()
 
 
+class MTFVetoFilters(BaseModel):
+    """Legacy-equivalent defaults; switches affect only observational strategy gates."""
+    model_config = ConfigDict(extra="forbid")
+    asset_downtrend: StrictBool = True
+    asset_range: StrictBool = True
+    btc_downtrend: StrictBool = True
+    spread: StrictBool = True
+    stop_distance: StrictBool = True
+    risk_reward: StrictBool = True
+
+
 class MTFChartConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     schema_version: Literal["mtf_chart_v1", "mtf_chart_v2"]
     presentation: MTFPresentation | None = None
+    veto_filters: MTFVetoFilters = Field(default_factory=MTFVetoFilters)
     # None retains the legacy global ATR until the settings are explicitly saved.
     atr_period: int | None = Field(default=None, ge=1)
     force_patterns: list[BullPattern] = Field(default_factory=lambda: list(LEGACY_FORCE_PATTERNS), min_length=1)
@@ -132,6 +144,9 @@ class MTFChartConfig(BaseModel):
 
     def engine_dump(self):
         data = self.model_dump(exclude={'presentation'})
+        # MTF_CONFIGURABLE_VETO_FILTERS: default switches preserve frozen identities.
+        if self.veto_filters == MTFVetoFilters():
+            data.pop('veto_filters')
         # Preserve legacy identities when the added controls retain old behavior.
         if self.atr_period is None:
             data.pop('atr_period')

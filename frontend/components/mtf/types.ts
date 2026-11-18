@@ -105,6 +105,6 @@ export function visibleMarks(frame: Frame, config: Presentation, preferences: Pr
 
 export function reasonLabel(code: string, config?: Presentation) {
   const [key, suffix] = code.split(':');
-  const label = config?.reason_labels[key] ?? 'Condição de análise indisponível';
+  const label = config?.reason_labels[key] ?? (key === 'INVALID_PLAN' ? 'Plano inválido: entrada, stop ou risco inconsistente' : 'Condição de análise indisponível');
   return suffix ? `${label} (${suffix.toUpperCase()})` : label;
 }

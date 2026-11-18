@@ -99,6 +99,23 @@ def test_auth_required_without_overrides():
     assert TestClient(app).get('/api/mtf/bootstrap').status_code in (401,403)
 
 
+def test_veto_settings_save_through_config_service_with_existing_thresholds(client, monkeypatch):
+    http, uid, _ = client
+    monkeypatch.setattr(mtf_chart.service, 'watchlist_options', AsyncMock(return_value=[{'id':'l3-consolidated'}]))
+    cfg=experimental_preset()
+    cfg.update(min_score=0, slippage_pct=.1, atr_period=14)
+    cfg['veto_filters']['btc_downtrend']=False
+    write=AsyncMock(return_value=cfg)
+    monkeypatch.setattr(mtf_chart.config_service,'update_config',write)
+    response=http.put('/api/mtf/config',json=cfg)
+    assert response.status_code==200 and response.json()==cfg
+    assert write.await_args.args[1:]==('mtf_analysis',uid,cfg,uid)
+    write.reset_mock()
+    cfg['veto_filters']['btc_downtrend']='false'
+    assert http.put('/api/mtf/config',json=cfg).status_code==422
+    write.assert_not_awaited()
+
+
 def test_consolidated_chart_shares_armed_observation_without_shadow_cap(client, monkeypatch):
     from app.services import l3_armed_observation
     http, uid, write = client
