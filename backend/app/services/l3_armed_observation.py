@@ -9,6 +9,7 @@ from ..models.profile import Profile
 from .l3_profile_consolidation import load_l3_profile_consolidation
 from .mtf_chart_service import ENGINE_VERSION, TF_SECONDS, load_config
 from .profile_runtime_config import canonical_hash
+from .mtf_indicator_config import effective_indicators
 
 
 def timestamp(value):
@@ -89,6 +90,8 @@ async def load_l3_armed_display(db, *, user_id, include_analysis=False):
     if len(configs) == 1 and configs[0].config_json:
         identity = dict(config_profile_id=str(configs[0].id), config_user_id=str(user_id),
                         config_hash=canonical_hash(configs[0].config_json))
+        if cfg is not None:
+            _, identity = effective_indicators(configs[0].config_json, identity, cfg)
     # Select latest first, then validate. Never resurrect an older ARMED reading.
     rows = (await db.execute(text('''SELECT DISTINCT ON (symbol)
         id,symbol,profile_id,observed_at,status,quality,payload->'analysis' AS analysis

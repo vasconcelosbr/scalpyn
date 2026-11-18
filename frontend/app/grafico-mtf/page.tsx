@@ -7,6 +7,7 @@ import { apiFetch, ApiError } from '@/lib/api';
 import { MTFCandlestickChart } from '@/components/shadow-portfolio/TradeCandlestickChart';
 import { number, patternLabels, patternShort, statusLabels, shadowLabels, readingLabel, mergeChart, reasonLabel, type Analysis, type Asset, type Bootstrap, type ChartData, type HistoryItem, type MTFConfig, type MTFReport, type Preferences, type Timeframe } from '@/components/mtf/types';
 import './style.css';
+import { MTFSettingsDialog } from '@/components/mtf/MTFSettingsDialog';
 
 const initialPreferences: Preferences = { theme: 'dark', timezone: 'America/Sao_Paulo', sound: false, aligned_only: false };
 const statusOrder = { TRIGGERED: 0, ARMED: 1, WAIT: 2, NO_TRADE: 3 };
@@ -33,9 +34,6 @@ export default function MTFPage() {
   const [listLoading, setListLoading] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const [configOpen, setConfigOpen] = useState(false);
-  const [configText, setConfigText] = useState('');
-  const [configError, setConfigError] = useState('');
-  const [saving, setSaving] = useState(false);
   const [left, setLeft] = useState(true);
   const [right, setRight] = useState(true);
   const [full, setFull] = useState(false);
@@ -63,7 +61,7 @@ export default function MTFPage() {
       prefsRef.current=saved;setPrefs(saved);
       setWatchlist(b.watchlists.some(w=>w.id===saved.last_watchlist)?saved.last_watchlist!:b.config?.default_watchlist??b.preset.default_watchlist);
       if (saved.last_timeframe) setTf(saved.last_timeframe);
-      if (!b.config?.presentation) { setConfigText(JSON.stringify({...b.config??b.preset,presentation:b.presentation_preset}, null, 2)); setConfigOpen(true); }
+      if (!b.config?.presentation) setConfigOpen(true);
     }).catch(e => { if (!controller.signal.aborted) setError(e.message); });
     return () => controller.abort();
   }, []);
@@ -163,15 +161,6 @@ export default function MTFPage() {
     return () => { controller.abort(); clearTimeout(timer); clearTimeout(start); };
   }, [cfg, watchlist, symbol, profile, refresh]);
 
-  const saveConfig = async () => {
-    setSaving(true); setConfigError('');
-    try {
-      const parsed = JSON.parse(configText) as MTFConfig;
-      await apiFetch('/mtf/config', { method: 'PUT', body: JSON.stringify(parsed) });
-      setCfg(parsed); setConfigOpen(false); if (!watchlist) setWatchlist(parsed.default_watchlist);
-    } catch (e) { setConfigError(e instanceof Error ? e.message : 'Configuração inválida'); }
-    finally { setSaving(false); }
-  };
   const monitor = async () => {
     if (!cfg) return;
     const next = { ...cfg, monitored_watchlists: [...new Set([...cfg.monitored_watchlists, watchlist])] };
@@ -204,7 +193,7 @@ export default function MTFPage() {
       <div className="mtf-symbol"><strong>{symbol.replace('_','/') || 'Selecione um ativo'}</strong><span>{priceText}</span></div>
       <div className="mtf-timeframes">{(['4h','1h','5m'] as Timeframe[]).map(t => <button key={t} className={t === tf ? 'active' : ''} onClick={() => {setTf(t);preference({last_timeframe:t});}}>{t.toUpperCase()}</button>)}</div>
       <label className="mtf-select"><span>Profile</span><select aria-label="Strategy Profile" value={profile} onChange={e => setProfile(e.target.value)}><option value="">Profile da watchlist</option>{boot?.profiles.map(p => <option key={p.id} value={p.id}>{p.name} · {p.default_timeframe?.toUpperCase() ?? "TF não definido"} · {p.id.slice(0,6)}</option>)}</select></label>
-      <div className="mtf-header-tools"><span className="mtf-shadow"><ShieldCheck size={13}/> SHADOW</span><button aria-label="Alternar tema do ambiente MTF" title="Tema do ambiente MTF" onClick={() => preference({ theme: prefs.theme === 'dark' ? 'light' : 'dark' })}>{prefs.theme === 'dark' ? <Sun size={17}/> : <Moon size={17}/>}</button><button aria-label="Tela cheia" onClick={() => setFull(!full)}>{full ? <X size={17}/> : <Maximize2 size={17}/>}</button><button aria-label="Configurar análise MTF" onClick={() => { setConfigText(JSON.stringify({...cfg??boot?.preset,presentation:cfg?.presentation??boot?.presentation_preset}, null, 2)); setConfigOpen(true); }}><Settings2 size={17}/></button></div>
+      <div className="mtf-header-tools"><span className="mtf-shadow"><ShieldCheck size={13}/> SHADOW</span><button aria-label="Alternar tema do ambiente MTF" title="Tema do ambiente MTF" onClick={() => preference({ theme: prefs.theme === 'dark' ? 'light' : 'dark' })}>{prefs.theme === 'dark' ? <Sun size={17}/> : <Moon size={17}/>}</button><button aria-label="Tela cheia" onClick={() => setFull(!full)}>{full ? <X size={17}/> : <Maximize2 size={17}/>}</button><button aria-label="Configurar análise MTF" onClick={() => setConfigOpen(true)}><Settings2 size={17}/></button></div>
     </header>
     <div className="mtf-context-bar">
       <div><small>4H · DIREÇÃO</small><strong className={analysis?.context_4h.trend === 'UP' ? 'positive' : ''}>{bias(analysis?.context_4h.trend)}</strong></div>
@@ -229,7 +218,7 @@ export default function MTFPage() {
         {error && <div className="mtf-error">{error}<button onClick={() => setRefresh(v=>v+1)}>Tentar novamente</button></div>}
         {membership==='removed' && data && <div className="mtf-warning">Ativo saiu da watchlist. Dados anteriores disponíveis apenas para consulta histórica.</div>}
         {loading && !data && <div className="mtf-empty mtf-loading"><RefreshCw className="spin"/> Carregando candles e indicadores canônicos…</div>}
-        {data && cfg?.presentation && <><div className="mtf-data-freshness">{historical?`CONSULTA HISTÓRICA · dados de ${date(data.as_of)} · sem confirmação de oportunidade atual`:`Dados consultados em ${date(data.as_of)}`}</div><MTFCandlestickChart data={data} timeframe={tf} preferences={prefs} config={cfg.presentation} onPreference={preference}/></>}
+        {data && cfg?.presentation && <><div className="mtf-data-freshness">{historical?`CONSULTA HISTÓRICA · dados de ${date(data.as_of)} · sem confirmação de oportunidade atual`:`Dados consultados em ${date(data.as_of)}`}</div><MTFCandlestickChart data={data} timeframe={tf} preferences={prefs} config={cfg.presentation} onPreference={preference} targetEnabled={watchlist==='l3-consolidated'}/></>}
         {!data && !loading && !error && <div className="mtf-empty mtf-welcome"><Activity size={42}/><h2>O contexto antes do gatilho.</h2><p>Selecione uma oportunidade para conectar direção, zona e price action.</p><span>4H DIREÇÃO → 1H ZONA → 5M GATILHO</span></div>}
       </section>
       {right && <aside className="mtf-analysis">
@@ -245,6 +234,6 @@ export default function MTFPage() {
         <section className="mtf-card"><div className="mtf-card-title"><strong>Histórico · Shadow MTF</strong></div><div className="mtf-panel-body">{history.length ? history.map((h,i) => <div className="mtf-history-row" key={h.evaluation.evaluation_id ?? i}><small>{date(h.observed_at)}</small><span>{h.evaluation.trigger_5m ? patternLabels[h.evaluation.trigger_5m.pattern] : statusLabels[h.evaluation.status]}<small>{h.shadow ? shadowLabels[h.shadow.status] ?? 'Estado indisponível' : 'Avaliação'}{h.shadow?.ambiguous ? ' · intrabar ambíguo' : ''}</small></span><b className={(h.shadow?.pnl_pct ?? 0) < 0 ? 'negative' : 'positive'}>{h.shadow?.pnl_pct == null ? '—' : `${number(h.shadow.pnl_pct,2)}%`}</b></div>) : <p className="mtf-muted">Sem avaliações registradas para este contexto. A observação ocorre no backend após o fechamento dos candles.</p>}{cursor && <button className="mtf-more" onClick={moreHistory}>Carregar anteriores <ChevronDown size={13}/></button>}<p className="mtf-muted">Histórico separado do Shadow Portfolio operacional. Resultados líquidos dos custos configurados.</p></div></section>
       </aside>}
     </div>
-    {configOpen && <div className="mtf-modal-backdrop"><section className="mtf-modal" role="dialog" aria-modal="true" aria-label="Configuração experimental MTF"><div className="mtf-card-title"><strong>Configuração MTF · experimental</strong><button aria-label="Fechar configuração" onClick={()=>setConfigOpen(false)}><X size={18}/></button></div><p>Todos os limiares, custos, capital e pesos ficam nesta configuração auditada. Valores iniciais são hipóteses não calibradas; não alteram profiles ou ordens reais.</p><textarea aria-label="Configuração MTF em JSON" spellCheck={false} value={configText} onChange={e=>setConfigText(e.target.value)}/>{configError && <div className="mtf-error">{configError}</div>}<div className="mtf-modal-actions"><button onClick={()=>setConfigText(JSON.stringify({...boot?.preset,presentation:boot?.presentation_preset},null,2))}>Carregar preset experimental</button><button className="mtf-primary" disabled={saving} onClick={saveConfig}>{saving ? 'Salvando…' : 'Salvar configuração'}</button></div></section></div>}
+    {configOpen && boot && <MTFSettingsDialog config={cfg} boot={boot} onClose={()=>setConfigOpen(false)} onSaved={next=>{setCfg(next);setConfigOpen(false);if(!watchlist)setWatchlist(next.default_watchlist);}}/>}
   </div>;
 }

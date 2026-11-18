@@ -2,9 +2,14 @@
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+BullPattern = Literal['ENGULF_BULL', 'PIN_BULL', 'MARUBOZU_BULL']
+LEGACY_FORCE_PATTERNS = ['ENGULF_BULL', 'MARUBOZU_BULL']
+LEGACY_REJECTION_PATTERNS = ['PIN_BULL', 'ENGULF_BULL']
+
 
 class MTFPresentation(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    target_pct: float = Field(default=1, gt=0)
     visible_candles: dict[Literal['4h', '1h', '5m'], int]
     panel_heights: dict[Literal['price', 'volume', 'rsi', 'adx', 'other'], int]
     default_indicators: list[str]
@@ -56,6 +61,10 @@ class MTFChartConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     schema_version: Literal["mtf_chart_v1", "mtf_chart_v2"]
     presentation: MTFPresentation | None = None
+    # None retains the legacy global ATR until the settings are explicitly saved.
+    atr_period: int | None = Field(default=None, ge=1)
+    force_patterns: list[BullPattern] = Field(default_factory=lambda: list(LEGACY_FORCE_PATTERNS), min_length=1)
+    rejection_patterns: list[BullPattern] = Field(default_factory=lambda: list(LEGACY_REJECTION_PATTERNS), min_length=1)
     zone_lookback_candles: dict[Literal['4h', '1h', '5m'], int] | None = None
     enabled: bool
     calibrated: Literal[False]
@@ -110,6 +119,8 @@ class MTFChartConfig(BaseModel):
                 raise ValueError('ZONE_LOOKBACK_OUT_OF_RANGE')
         if any(n < 50 or n > 1000 for n in self.candle_limits.values()):
             raise ValueError("CANDLE_LIMIT_OUT_OF_RANGE")
+        if self.atr_period is not None and self.atr_period >= min(self.candle_limits.values()):
+            raise ValueError('ATR_PERIOD_EXCEEDS_HISTORY')
         expected = {"trend", "force", "zone", "rejection", "trigger", "volume", "rr"}
         if set(self.score_weights) != expected or any(v < 0 for v in self.score_weights.values()):
             raise ValueError("SCORE_WEIGHTS_INCOMPLETE")
@@ -121,6 +132,12 @@ class MTFChartConfig(BaseModel):
 
     def engine_dump(self):
         data = self.model_dump(exclude={'presentation'})
+        # Preserve legacy identities when the added controls retain old behavior.
+        if self.atr_period is None:
+            data.pop('atr_period')
+        for key, legacy in (('force_patterns', LEGACY_FORCE_PATTERNS), ('rejection_patterns', LEGACY_REJECTION_PATTERNS)):
+            if data[key] == legacy:
+                data.pop(key)
         if self.schema_version == 'mtf_chart_v1':
             data.pop('zone_lookback_candles', None)
         return data
@@ -163,5 +180,6 @@ class MTFPreferences(BaseModel):
     show_patterns: bool = True
     show_pivots: bool = True
     show_zones: bool = True
+    show_target: bool = True
     collapsed_panels: list[str] = Field(default_factory=list)
     clipped_scale: bool = False

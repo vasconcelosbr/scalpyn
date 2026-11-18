@@ -212,12 +212,15 @@ export function TradeCandlestickChart({ data }: { data: ShadowTradeChartResponse
 }
 
 const family = (name: string) => name.startsWith('di_') || name.startsWith('adx') ? 'adx' : name.split('_')[0];
-const overlay = (name: string) => name.startsWith('ema') || name.startsWith('bb_') || name==='vwap' || name==='psar';
+const overlay = (name: string) => name==='target' || name.startsWith('ema') || name.startsWith('bb_') || name==='vwap' || name==='psar';
+
+import { targetLabel, targetPoints } from '@/lib/mtfSettings';
 
 /** MTF extension: one chart instance, independent data/layout/theme updates. */
-export function MTFCandlestickChart({ data, timeframe, preferences, config, onPreference }: {
+export function MTFCandlestickChart({ data, timeframe, preferences, config, onPreference, targetEnabled = false }: {
   data: ChartData; timeframe: Timeframe; preferences: Preferences; config: Presentation;
   onPreference: (change: Partial<Preferences>) => void;
+  targetEnabled?: boolean;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -234,6 +237,9 @@ export function MTFCandlestickChart({ data, timeframe, preferences, config, onPr
   const [visibleRange, setVisibleRange] = useState<{from:number;to:number}|null>(null);
   const [height, setHeight] = useState(config.panel_heights.price);
   const frame = data.frames[timeframe];
+  const target = useMemo(() => targetPoints(frame.candles, config.target_pct), [frame.candles, config.target_pct]);
+  const targetTitle = config.target_pct == null ? 'Target' : targetLabel(config.target_pct);
+  const showTarget = targetEnabled && preferences.show_target !== false && target.length > 0;
   const enabled = useMemo(()=>preferences.enabled_indicators ?? config.default_indicators,[preferences.enabled_indicators,config.default_indicators]);
   const collapsed = useMemo(()=>preferences.collapsed_panels ?? [],[preferences.collapsed_panels]);
   const light = preferences.theme === 'light';
@@ -278,6 +284,7 @@ export function MTFCandlestickChart({ data, timeframe, preferences, config, onPr
     const chart=chartRef.current, price=priceRef.current;
     if (!chart || !price) return;
     const names=Object.keys(frame.indicators).filter(n=>n!=='atr' && n!=='volume_ma' && enabled.includes(n) && (overlay(n)||!collapsed.includes(family(n))));
+    if (showTarget) names.push('target');
     const key=JSON.stringify([names,collapsed,enabled.includes('volume_ma'),config.panel_heights]);
     const sameContext=context.current===`${data.symbol}:${timeframe}`;
     const range=sameContext?chart.timeScale().getVisibleLogicalRange():null;
@@ -305,7 +312,7 @@ export function MTFCandlestickChart({ data, timeframe, preferences, config, onPr
       const colors=['#f5aa42','#5a86ff','#bb91ff','#2dd4bf','#ec8ba8','#92c964'];
       names.forEach((name,i)=>{
         if (!overlay(name) && !groups.has(family(name))) groups.set(family(name),pane++);
-        lines.current.set(name,chart.addSeries(LineSeries,{color:colors[i%colors.length],lineWidth:1,title:name.toUpperCase(),priceLineVisible:false,lastValueVisible:false},overlay(name)?0:groups.get(family(name))));
+        lines.current.set(name,chart.addSeries(LineSeries,{color:name==='target'?'#38bdf8':colors[i%colors.length],lineWidth:1,title:name==='target'?targetTitle:name.toUpperCase(),priceLineVisible:false,lastValueVisible:name==='target'},overlay(name)?0:groups.get(family(name))));
       });
       paneHeights.current=[config.panel_heights.price];
       let total=config.panel_heights.price;
@@ -323,7 +330,10 @@ export function MTFCandlestickChart({ data, timeframe, preferences, config, onPr
       }});
     price.setData(frame.candles.map(c=>({...c,time:c.time as Time,...(c.closed?{}:{color:'#6b7280',wickColor:'#6b7280'})})));
     volumeRef.current?.setData(frame.candles.map(c=>({time:c.time as Time,value:c.volume,color:c.close>=c.open?'#18c98b60':'#ff526360'})));
-    lines.current.forEach((series,name)=>series.setData((frame.indicators[name]??[]).map(p=>({...p,time:p.time as Time}))));
+    lines.current.forEach((series,name)=>{
+      if (name==='target') series.applyOptions({title:targetTitle,priceFormat:data.price_format?{type:'price',precision:data.price_format.precision,minMove:data.price_format.min_move}:{type:'custom',formatter:formatPrice,minMove:Number.EPSILON}});
+      series.setData((name==='target'?target:frame.indicators[name]??[]).map(p=>({...p,time:p.time as Time})));
+    });
     markersRef.current?.setMarkers(visibleMarks(frame,config,preferences,timeframe==='5m'?data.analysis.trigger_5m:null).map(m=>({time:m.time as Time,text:m.label,position:m.above?'aboveBar':'belowBar',shape:'circle',color:m.pattern?(m.above?COLORS.red:COLORS.green):'#95a3b8'})));
     if (zoneRef.current) price.detachPrimitive(zoneRef.current);
     const reference=data.frames['5m'].candles.filter(c=>c.closed).at(-1)?.close;
@@ -339,7 +349,7 @@ export function MTFCandlestickChart({ data, timeframe, preferences, config, onPr
     if (!sameContext) {const end=frame.candles.length-1;chart.timeScale().setVisibleLogicalRange({from:Math.max(0,end-config.visible_candles[timeframe]+1),to:end});setHover(null);}
     else if(range) chart.timeScale().setVisibleLogicalRange(range);
     context.current=`${data.symbol}:${timeframe}`;
-  }, [data,timeframe,preferences,config,frame,enabled,collapsed,formatPrice,clipping]);
+  }, [data,timeframe,preferences,config,frame,enabled,collapsed,formatPrice,clipping,showTarget,target,targetTitle]);
 
   useEffect(()=>{
     const animation=requestAnimationFrame(()=>{
@@ -355,6 +365,7 @@ export function MTFCandlestickChart({ data, timeframe, preferences, config, onPr
     <div className="mtf-chart-heading"><strong>{data.symbol.replace('_','/')} <span>{timeframe.toUpperCase()}</span></strong><button onClick={()=>chartRef.current?.timeScale().scrollToRealTime()}>Último candle ↗</button></div>
     <div className="mtf-ohlc">{candle?`${date(candle.time)} · ${candle.closed?'fechado':'em formação'} · O ${formatPrice(candle.open)} H ${formatPrice(candle.high)} L ${formatPrice(candle.low)} C ${formatPrice(candle.close)} · Vol ${number(candle.volume,1)}`:'Aguardando candles'}</div>
     <div className="mtf-indicator-toggles">
+      {targetEnabled && config.target_pct != null && <button className={preferences.show_target===false?'off':'mtf-target-toggle'} aria-pressed={preferences.show_target!==false} onClick={()=>onPreference({show_target:preferences.show_target===false})}>{targetTitle}</button>}
       {(['patterns','pivots','zones'] as const).map(key=>{const prop=`show_${key}` as 'show_patterns'|'show_pivots'|'show_zones';return <button key={key} aria-pressed={preferences[prop]!==false} className={preferences[prop]===false?'off':''} onClick={()=>onPreference({[prop]:preferences[prop]===false})}>{key==='patterns'?'Padrões':key==='pivots'?'Pivôs':'Zonas'}</button>;})}
       {Object.keys(frame.indicators).filter(n=>n!=='atr').map(name=><button key={name} aria-pressed={enabled.includes(name)} className={enabled.includes(name)?'':'off'} onClick={()=>onPreference({enabled_indicators:enabled.includes(name)?enabled.filter(n=>n!==name):[...enabled,name]})}>{name.toUpperCase()}</button>)}
     </div>
@@ -366,7 +377,8 @@ export function MTFCandlestickChart({ data, timeframe, preferences, config, onPr
     {(frame.error||frame.warmup?.reason)&&<div className="mtf-warning">Histórico insuficiente ou descontínuo: indicadores sem cobertura permanecem indisponíveis.</div>}
     {frame.stale&&<div className="mtf-warning">Dados de mercado atrasados — sem confirmação de sinal atual.</div>}
     <div className="mtf-chart-scroll"><div ref={host} style={{width:'100%',height}} /></div>
-    <div className="mtf-hover-detail">{candle&&Object.entries(frame.indicators).flatMap(([name,points])=>{const point=points.find(p=>p.time===candle.time);return point?[`${name.toUpperCase()} ${number(point.value,4)}`]:[];}).join(' · ')}<br/>{frame.patterns.filter(p=>p.time===candle?.time).map(p=>patternLabels[p.pattern]??'Padrão').join(' · ')}</div>
+    <div className="mtf-hover-detail">{showTarget && candle && <span className="mtf-target-value">{targetTitle} {formatPrice(target.find(p=>p.time===candle.time)?.value ?? NaN)} · </span>}{candle&&Object.entries(frame.indicators).flatMap(([name,points])=>{const point=points.find(p=>p.time===candle.time);return point?[`${name.toUpperCase()} ${number(point.value,4)}`]:[];}).join(' · ')}<br/>{frame.patterns.filter(p=>p.time===candle?.time).map(p=>patternLabels[p.pattern]??'Padrão').join(' · ')}</div>
+    {targetEnabled && <div className="mtf-chart-note">{targetTitle}: valorização bruta sobre o fechamento de cada candle, antes de taxas. O ponto em formação acompanha o preço.</div>}
     <div className="mtf-chart-note">Zonas do {timeframe.toUpperCase()} · Contexto do plano: H1 · Candle cinza em formação não gera sinal · {preferences.timezone==='UTC'?'UTC':'Brasília'}</div>
   </div>;
 }

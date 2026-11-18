@@ -25,10 +25,18 @@ async def config_or_error(db, uid):
 async def bootstrap(response: Response, db: AsyncSession = Depends(get_db), uid: UUID = Depends(get_current_user_id)):
     response.headers["Cache-Control"] = "private, no-store"
     config = await config_service.get_config(db, "mtf_analysis", uid)
+    # Read-only compatibility normalization. Saving persists these new fields.
+    if config:
+        try:
+            config = MTFChartConfig.model_validate(config).model_dump()
+        except ValidationError:
+            pass  # Keep incomplete configurations editable, never invent missing rules.
+    indicators = await config_service.get_config(db, 'indicators', uid)
     profiles = (await db.execute(select(Profile).where(Profile.user_id == uid, Profile.is_active.is_(True)))).scalars().all()
     return {"config": config or None, "preset": experimental_preset(), "watchlists": await service.watchlist_options(db, uid),
             "profiles": [{"id": str(p.id), "name": p.name, "default_timeframe": (p.config or {}).get("default_timeframe")} for p in profiles],
             "preferences": await config_service.get_config(db, "mtf_preferences", uid), 'presentation_preset': presentation_preset(),
+            'inherited_atr': indicators.get('atr'), 'config_schema': MTFChartConfig.model_json_schema(),
             "mode": "SHADOW", "operational_effect": False}
 
 

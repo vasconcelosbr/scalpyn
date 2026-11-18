@@ -26,6 +26,7 @@ export interface MTFConfig {
   [key: string]: unknown;
 }
 export interface Presentation {
+  target_pct?: number;
   visible_candles: Record<Timeframe,number>; panel_heights: Record<string,number>;
   default_indicators: string[]; markers_max: number; markers_recent_signals: number;
   pivots_per_type: number; marker_min_range_atr: number; zones_per_side: number;
@@ -37,8 +38,10 @@ export interface Preferences { theme: 'dark' | 'light'; timezone: 'America/Sao_P
   last_symbol?: string | null; last_watchlist?: string | null; last_timeframe?: Timeframe | null;
   enabled_indicators?: string[] | null; show_patterns?: boolean; show_pivots?: boolean; show_zones?: boolean;
   collapsed_panels?: string[]; clipped_scale?: boolean;
+  show_target?: boolean;
 }
-export interface Bootstrap { config: MTFConfig | null; preset: MTFConfig; presentation_preset: Presentation; watchlists: Watchlist[]; profiles: Profile[]; preferences: Partial<Preferences> }
+export interface ConfigSchema { type?: string; $ref?: string; $defs?: Record<string, ConfigSchema>; properties?: Record<string, ConfigSchema>; anyOf?: ConfigSchema[]; items?: ConfigSchema; additionalProperties?: ConfigSchema | boolean; minimum?: number; maximum?: number; exclusiveMinimum?: number; exclusiveMaximum?: number; enum?: unknown[]; required?: string[]; minItems?: number }
+export interface Bootstrap { config: MTFConfig | null; preset: MTFConfig; presentation_preset: Presentation; watchlists: Watchlist[]; profiles: Profile[]; preferences: Partial<Preferences>; inherited_atr?: { enabled?: boolean; period?: number } | null; config_schema?: ConfigSchema }
 export interface HistoryItem { evaluation: Analysis; observed_at: string; shadow: { status: string; pnl_pct?: number | null; pnl_usdt?: number | null; fill?: number; ambiguous?: boolean; reason?: string } | null }
 export interface MTFReport { groups: { pattern: string; config_hash: string; n: number; mean_pct: number; ambiguous: number; sample_sufficient: boolean; confidence_interval: [number,number] | null; fee_per_side_pct: number; slippage_pct: number }[]; confidence_level: number; formula: string; origin: string; method: string }
 export const statusLabels: Record<MTFStatus, string> = { NO_TRADE: 'SEM TRADE', WAIT: 'AGUARDAR', ARMED: 'ARMADO', TRIGGERED: 'GATILHO' };
