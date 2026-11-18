@@ -1,16 +1,16 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { X, SlidersHorizontal, Crosshair, Layers, Settings2 } from 'lucide-react';
+import { X, SlidersHorizontal, Crosshair, Layers, Settings2, ShieldCheck } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
 import { configValue, schemaAt, settingsDraft, settingsForSave, validateSettings, withConfigValue } from '@/lib/mtfSettings';
 import { patternLabels, type Bootstrap, type MTFConfig } from './types';
 
-type Tab = 'armed' | 'trigger' | 'shared' | 'advanced';
+type Tab = 'armed' | 'trigger' | 'vetoes' | 'shared' | 'advanced';
 type FieldSpec = {path: string; label: string; hint: string; unit?: string; kind?: 'patterns' | 'boolean'};
 const field = (path: string, label: string, hint: string, unit?: string): FieldSpec => ({path, label, hint, unit});
 const sections: {tab: Tab; title: string; note?: string; fields: FieldSpec[]}[] = [
-  {tab:'armed', title:'Estrutura e aproximação', note:'ARMADO exige direção de alta, proximidade da zona e ausência de vetos. Força e rejeição contribuem para o score; não são condições obrigatórias isoladas.', fields:[
+  {tab:'armed', title:'Estrutura e aproximação', note:'ARMADO exige proximidade da zona e ausência dos vetos habilitados. Os filtros de direção ficam em Vetos. Força e rejeição contribuem para o score.', fields:[
     field('pivot_left','Pivô · candles à esquerda','Confirma a estrutura de tendência. Compartilhado entre os timeframes.','candles'),
     field('pivot_right','Pivô · candles à direita','Só confirma o pivô após os candles seguintes. Compartilhado.','candles'),
     field('zone_atr_mult','Largura e agrupamento da zona','Distância usada para agrupar pivôs e formar a faixa de suporte/resistência.','× ATR'),
@@ -36,11 +36,22 @@ const sections: {tab: Tab; title: string; note?: string; fields: FieldSpec[]}[] 
     field('score_weights.rr','Peso · retorno/risco','Pontos pelo bônus de retorno/risco.','pontos'),
   ]},
   {tab:'trigger', title:'Validade do plano', fields:[
-    field('max_spread_pct','Spread máximo','Veto compartilhado: um spread superior impede ARMADO e GATILHO.','%'),
     field('stop_buffer_atr','Margem do stop','Margem sob a mínima do candle; o spread também participa do cálculo.','× ATR'),
-    field('max_stop_atr','Distância máxima do stop','Veta planos cujo stop fica distante demais.','× ATR'),
-    field('min_rr_net','Retorno/risco líquido mínimo','Veta planos abaixo da relação, já considerando custos.','R:R'),
     field('rr_bonus_threshold','Retorno/risco para bônus','Relação necessária para receber os pontos de retorno/risco.','R:R'),
+  ]},
+  {tab:'vetoes', title:'Filtros de estratégia', note:'Sim ativa o veto; Não ignora somente esse filtro. Os limites são preservados ao desativar. As alterações só entram em vigor ao salvar e afetam as próximas avaliações MTF.', fields:[
+    {path:'veto_filters.asset_downtrend',label:'Vetar tendência de baixa do ativo',hint:'Impede ARMADO e GATILHO quando a estrutura do ativo está em baixa. A direção continua sendo calculada e exibida.',kind:'boolean'},
+    {path:'veto_filters.asset_range',label:'Vetar tendência lateral do ativo',hint:'Impede ARMADO e GATILHO quando a estrutura do ativo está lateral. Não altera os pontos de tendência.',kind:'boolean'},
+    {path:'veto_filters.btc_downtrend',label:'Vetar Bitcoin em tendência de baixa',hint:'Filtra os demais ativos pelo contexto do Bitcoin. Desativado, o contexto do Bitcoin não é exigido; os dados do próprio ativo continuam obrigatórios.',kind:'boolean'},
+    {path:'veto_filters.spread',label:'Vetar spread acima do limite',hint:'Impede ARMADO e GATILHO quando o spread supera o limite. Desativar não dispensa a leitura do spread nem remove custos do plano.',kind:'boolean'},
+    field('max_spread_pct','Spread máximo','Limite aplicado quando o filtro de spread está ativo.','%'),
+    {path:'veto_filters.stop_distance',label:'Vetar stop distante demais',hint:'Rejeita o plano quando a distância até o stop supera o limite. O stop deve continuar válido mesmo com o filtro desativado.',kind:'boolean'},
+    field('max_stop_atr','Distância máxima do stop','Limite aplicado quando o filtro de distância do stop está ativo.','× ATR'),
+    {path:'veto_filters.risk_reward',label:'Vetar retorno/risco abaixo do mínimo',hint:'Aplica o mínimo ao plano e à entrada simulada. Desativar não remove taxas, slippage, cálculo de risco ou o bônus de score.',kind:'boolean'},
+    field('min_rr_net','Retorno/risco líquido mínimo','Limite aplicado quando o filtro de retorno/risco está ativo.','R:R'),
+  ]},
+  {tab:'vetoes', title:'Validação de dados e do plano', note:'Candles e ATR ausentes, spread indisponível, dados vencidos, alvos estruturais ausentes e plano inválido continuam impedindo a avaliação. Não são filtros opcionais de estratégia. O contexto do Bitcoin só é obrigatório quando seu filtro está ativo.', fields:[
+    field('stale_tf_multiplier','Validade dos dados','Tolerância para dados antigos. Dados vencidos impedem ARMADO e GATILHO.','× timeframe'),
   ]},
   {tab:'shared', title:'Indicador e geometria dos candles', note:'Estes parâmetros são usados nas duas etapas. A edição vale somente no MTF. EMAs, RSI e ADX exibidos no gráfico não são condições desses estados.', fields:[
     field('atr_period','Período do ATR','Base de volatilidade para zonas, padrões e stops. Ao salvar, fica definido no MTF.','candles'),
@@ -54,7 +65,6 @@ const sections: {tab: Tab; title: string; note?: string; fields: FieldSpec[]}[] 
   ]},
   {tab:'shared', title:'Histórico e validade', fields:[
     ...(['4h','1h','5m'] as const).map(tf=>field(`candle_limits.${tf}`,`Histórico ${tf.toUpperCase()}`,'Janela de candles usada na avaliação.','candles')),
-    field('stale_tf_multiplier','Validade dos dados','Multiplicador da duração do candle para rejeitar dados antigos.','× timeframe'),
   ]},
   {tab:'advanced', title:'Target · referência visual', fields:[
     field('presentation.target_pct','Valorização do Target','Curva sobre o fechamento de cada candle, antes de taxas. Não altera os alvos das operações.','%'),
@@ -151,13 +161,13 @@ export function MTFSettingsDialog({config, boot, onClose, onSaved}: {config: MTF
   return <dialog ref={dialog} className="mtf-settings" aria-labelledby="mtf-settings-title" onCancel={e=>{e.preventDefault();if(!saving)onClose();}}>
     <header className="mtf-settings-header"><div><span className="mtf-settings-eyebrow">ANÁLISE MTF · CONFIGURAÇÃO</span><h2 id="mtf-settings-title">Da estrutura ao gatilho</h2><p>Regras existentes, organizadas por etapa. Alterações valem para o MTF deste usuário.</p></div><button type="button" disabled={saving} aria-label="Fechar configuração" onClick={onClose}><X size={20}/></button></header>
     <nav className="mtf-settings-tabs" aria-label="Etapas da configuração">{([
-      ['armed','ARMADO',Layers],['trigger','GATILHO',Crosshair],['shared','Compartilhados',SlidersHorizontal],['advanced','Avançado',Settings2],
+      ['armed','ARMADO',Layers],['trigger','GATILHO',Crosshair],['vetoes','Vetos',ShieldCheck],['shared','Compartilhados',SlidersHorizontal],['advanced','Avançado',Settings2],
     ] as const).map(([key,label,Icon])=><button type="button" key={key} aria-pressed={tab===key&&!jsonOpen} onClick={()=>{if(jsonOpen){try{const parsed=JSON.parse(jsonText);if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error();const invalid=validateSettings(parsed,rootSchema);if(Object.keys(invalid).length){setErrors(invalid);setMessage('Corrija os campos do JSON antes de voltar aos formulários.');return;}setDraft(parsed);setErrors({});setJsonOpen(false);setMessage('');}catch{setMessage('Corrija o JSON antes de voltar aos formulários.');return;}}setTab(key);}}><Icon size={15}/>{label}{errorTab(key)&&<span className="mtf-error-dot" aria-label="Há campos inválidos"/>}</button>)}</nav>
     <div className="mtf-settings-body">
       {jsonOpen ? <section className="mtf-settings-section"><h3>JSON avançado</h3><p>A mesma configuração dos formulários. Alterações só entram em vigor ao salvar.</p><textarea aria-label="Configuração MTF em JSON" spellCheck={false} value={jsonText} disabled={saving} onChange={e=>setJsonText(e.target.value)}/></section> : <>
         {sections.filter(section=>section.tab===tab).map(section=><section className="mtf-settings-section" key={section.title}><h3>{section.title}</h3>{section.note&&<p>{section.note}</p>}<div className="mtf-settings-grid">{section.fields.map(renderField)}</div></section>)}
         {tab==='armed' && draft.schema_version==='mtf_chart_v2' && <section className="mtf-settings-section"><h3>Janela das zonas</h3><div className="mtf-settings-grid">{['4h','1h','5m'].map(tf=>renderField(field(`zone_lookback_candles.${tf}`,`Zonas ${tf.toUpperCase()}`,'Janela de pivôs usada na versão ativa de zonas.','candles')))}</div></section>}
-        {tab==='shared' && <div className="mtf-settings-note">Direção por estrutura, contexto do Bitcoin e uso de candles fechados permanecem parte da lógica do motor. Os campos compartilhados têm efeito nas duas etapas.</div>}
+        {tab==='shared' && <div className="mtf-settings-note">Os filtros de direção e Bitcoin e a validade dos dados ficam em Vetos. A análise continua usando candles fechados. Os campos compartilhados têm efeito nas duas etapas.</div>}
         {tab==='advanced' && <>
           <section className="mtf-settings-section"><h3>Watchlists</h3><div className="mtf-setting"><label htmlFor="mtf-default-watchlist">Watchlist inicial</label><select id="mtf-default-watchlist" value={draft.default_watchlist} disabled={saving} onChange={e=>update('default_watchlist',e.target.value)}>{boot.watchlists.map(w=><option value={w.id} key={w.id}>{w.name}</option>)}</select></div><fieldset className="mtf-pattern-options"><legend>Monitoradas pelo observador</legend>{boot.watchlists.map(w=><label key={w.id}><input type="checkbox" disabled={saving} checked={draft.monitored_watchlists.includes(w.id)} onChange={e=>update('monitored_watchlists',e.target.checked?[...draft.monitored_watchlists,w.id]:draft.monitored_watchlists.filter(id=>id!==w.id))}/>{w.name}</label>)}</fieldset></section>
           <details className="mtf-settings-section"><summary>Apresentação e atualização</summary><div className="mtf-settings-grid">{visualFields.map(renderField)}<div className="mtf-setting"><label htmlFor="mtf-default-indicators">Indicadores visuais iniciais</label><input id="mtf-default-indicators" disabled={saving} value={draft.presentation?.default_indicators.join(', ')??''} onChange={e=>update('presentation.default_indicators',e.target.value.split(',').map(s=>s.trim()).filter(Boolean))}/><small>Nomes separados por vírgula. A seleção pessoal de indicadores tem prioridade.</small></div></div></details>

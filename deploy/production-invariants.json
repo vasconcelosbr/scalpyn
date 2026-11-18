@@ -2659,6 +2659,43 @@
           ]
         }
       ]
+    },
+    {
+      "id": "mtf-configurable-strategy-vetoes",
+      "description": "Configurable observational veto filters preserve legacy behavior and mandatory data integrity.",
+      "files": [
+        {
+          "path": "backend/app/schemas/mtf_chart.py",
+          "contains_all": [
+            "MTF_CONFIGURABLE_VETO_FILTERS",
+            "class MTFVetoFilters"
+          ]
+        },
+        {
+          "path": "backend/app/services/mtf_chart_engine.py",
+          "contains_all": [
+            "cfg.veto_filters.btc_downtrend",
+            "cfg.veto_filters.risk_reward",
+            "cfg.veto_filters.asset_downtrend"
+          ]
+        },
+        {
+          "path": "frontend/components/mtf/MTFSettingsDialog.tsx",
+          "contains_all": [
+            "Filtros de estratégia",
+            "veto_filters.btc_downtrend",
+            "Validação de dados e do plano"
+          ]
+        },
+        {
+          "path": "backend/tests/test_mtf_veto_filters.py",
+          "contains_all": [
+            "test_strategy_veto_switch_removes_only_its_rule",
+            "test_disabled_strategy_filters_do_not_disable_data_or_plan_validation",
+            "test_rr_toggle_is_frozen_into_simulation_and_applies_at_fill"
+          ]
+        }
+      ]
     }
   ]
 }

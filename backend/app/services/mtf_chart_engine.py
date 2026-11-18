@@ -259,15 +259,17 @@ def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_
     ratio = c["volume"] / average if average else None
     if trigger:
         result["trigger_5m"] = {**trigger, "type": "CONTINUATION" if trigger["pattern"] == "MARUBOZU_BULL" else "REVERSAL", "volume_ratio": ratio}
-    if direction != "UP":
-        vetoes.append("SPOT_NOT_BUYING" if direction == "DOWN" else "TREND_RANGE")
+    if direction == "DOWN" and cfg.veto_filters.asset_downtrend:
+        vetoes.append("SPOT_NOT_BUYING")
+    elif direction == "RANGE" and cfg.veto_filters.asset_range:
+        vetoes.append("TREND_RANGE")
     if spread_pct is None:
         vetoes.append("SPREAD_UNAVAILABLE")
-    elif spread_pct > cfg.max_spread_pct:
+    elif cfg.veto_filters.spread and spread_pct > cfg.max_spread_pct:
         vetoes.append("SPREAD_TOO_WIDE")
-    if symbol != "BTC_USDT" and btc_trend is None:
+    if cfg.veto_filters.btc_downtrend and symbol != "BTC_USDT" and btc_trend is None:
         vetoes.append("BTC_CONTEXT_UNAVAILABLE")
-    if symbol != "BTC_USDT" and btc_trend == "DOWN":
+    if cfg.veto_filters.btc_downtrend and symbol != "BTC_USDT" and btc_trend == "DOWN":
         vetoes.append("BTC_DOWNTREND")
     rr = None
     if trigger and near:
@@ -275,7 +277,9 @@ def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_
         stop = c["low"] - max(cfg.stop_buffer_atr * f5["atr"], entry*(spread_pct or 0)/100)
         targets = sorted({z["low"] for z in zs if z["type"] == "RESISTANCE" and z["low"] > entry})
         targets = targets or sorted({p["price"] for p in f1["pivots"] if p["kind"] == "H" and p["price"] > entry})
-        if stop <= 0 or entry-stop > cfg.max_stop_atr*f5["atr"]:
+        if stop <= 0:
+            vetoes.append("INVALID_PLAN")
+        elif cfg.veto_filters.stop_distance and entry-stop > cfg.max_stop_atr*f5["atr"]:
             vetoes.append("STOP_TOO_WIDE")
         if len(targets) < 2:
             vetoes.append("STRUCTURAL_TARGETS_UNAVAILABLE")
@@ -286,7 +290,9 @@ def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_
             loss = cost_entry-stop*(1-slip)*(1-fee)
             reward = targets[0]*(1-slip)*(1-fee)-cost_entry
             rr = reward/loss if loss > 0 else None
-            if rr is None or rr < cfg.min_rr_net:
+            if rr is None:
+                vetoes.append("INVALID_PLAN")
+            elif cfg.veto_filters.risk_reward and rr < cfg.min_rr_net:
                 vetoes.append("RR_BELOW_MIN")
             qty = min(cfg.capital_usdt/cost_entry, cfg.capital_usdt*cfg.risk_per_trade_pct/100/loss) if loss > 0 else None
             result["plan"] = {"side": "LONG", "entry_type": "MARKET_ON_CLOSE", "entry": entry,
@@ -331,7 +337,7 @@ def simulate_step(state: dict, candle: dict, cfg: MTFChartConfig, hourly_close: 
             return {**s, "status": "EXPIRED", "reason": "GAP_INVALIDATED", "pnl_usdt": 0, "pnl_pct": None}
         risk = fill*(1+fee)-s["stop"]*(1-slip)*(1-fee)
         reward = s["tp1"]*(1-slip)*(1-fee)-fill*(1+fee)
-        if risk <= 0 or reward/risk < cfg.min_rr_net:
+        if risk <= 0 or (cfg.veto_filters.risk_reward and reward/risk < cfg.min_rr_net):
             return {**s, "status": "EXPIRED", "reason": "FILL_RR_BELOW_MIN", "pnl_usdt": 0, "pnl_pct": None}
         qty = min(cfg.capital_usdt/(fill*(1+fee)), cfg.capital_usdt*cfg.risk_per_trade_pct/100/risk)
         s.update(status="OPEN", fill=fill, filled_at=candle["time"], quantity=qty, remaining=qty,

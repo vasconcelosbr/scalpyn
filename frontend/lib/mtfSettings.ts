@@ -13,6 +13,7 @@ export function settingsDraft(config: MTFConfig | null, boot: Bootstrap): MTFCon
     target_pct: next.presentation?.target_pct ?? boot.presentation_preset.target_pct};
   next.force_patterns ??= boot.preset.force_patterns;
   next.rejection_patterns ??= boot.preset.rejection_patterns;
+  if (next.veto_filters == null && boot.preset.veto_filters != null) next.veto_filters = structuredClone(boot.preset.veto_filters);
   return next;
 }
 
