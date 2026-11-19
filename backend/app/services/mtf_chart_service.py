@@ -233,6 +233,9 @@ async def chart_data(db, user_id, symbol, profile_id, cfg, include_display=True)
     analysis["unavailable_profile_indicators"] = unavailable
     from .mtf_trigger_diagnostics import finalize_diagnostics
     finalize_diagnostics(analysis, cfg, now, cutoff)
+    # MTF_PUMP_FLOW_SHADOW: additive frozen context, never passed to evaluate().
+    from .mtf_pump_flow import load_context
+    analysis['pump_flow'] = await load_context(db, user_id, symbol, analysis['candle_close_at_utc'] if analysis.get('candle_close_at_utc') else analysis['evaluated_at_utc'], cfg.pump_flow)
     if not include_display:
         # The scheduled observer persists analysis, never the drawing history.
         # Keep its original work/domain instead of adding UI-only computation.

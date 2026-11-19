@@ -1,5 +1,5 @@
 """Required, versioned configuration for the observational chart, not trading."""
-from typing import Literal
+from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 BullPattern = Literal['ENGULF_BULL', 'PIN_BULL', 'MARUBOZU_BULL']
@@ -68,10 +68,45 @@ class MTFVetoFilters(BaseModel):
     risk_reward: StrictBool = True
 
 
+class MTFPumpFlowConfig(BaseModel):
+    """Context-only hypothesis; never part of the MTF engine identity or gates."""
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    enabled: StrictBool
+    min_coverage: float = Field(gt=0, le=1)
+    max_source_age_seconds: int = Field(ge=1, le=3600)
+    max_evaluation_delay_seconds: int = Field(ge=1, le=3600)
+    query_timeout_ms: int = Field(ge=100, le=10000)
+    capital_neutral_ratio: dict[Literal['4h', '1h', '5m'], Annotated[float, Field(gt=0, le=1)]]
+    require_capital: dict[Literal['4h', '1h', '5m'], StrictBool]
+    asset_min_delta: float = Field(gt=0, le=1)
+    asset_min_buy_persistence: float = Field(gt=0, le=1)
+
+    @model_validator(mode='after')
+    def complete(self):
+        for values in (self.capital_neutral_ratio, self.require_capital):
+            if set(values) != {'4h', '1h', '5m'}:
+                raise ValueError('CAPITAL_WINDOWS_REQUIRED')
+        if any(not 0 < value <= 1 for value in self.capital_neutral_ratio.values()):
+            raise ValueError('CAPITAL_RATIO_OUT_OF_RANGE')
+        return self
+
+
+def pump_flow_preset() -> dict:
+    # Editable starting hypothesis, not calibrated strategy parameters.
+    return MTFPumpFlowConfig.model_validate({
+        'enabled': False, 'min_coverage': .8, 'max_source_age_seconds': 180,
+        'query_timeout_ms': 2000, 'max_evaluation_delay_seconds': 600,
+        'capital_neutral_ratio': {'4h': .03, '1h': .03, '5m': .03},
+        'require_capital': {'4h': False, '1h': True, '5m': False},
+        'asset_min_delta': .03, 'asset_min_buy_persistence': .6,
+    }).model_dump()
+
+
 class MTFChartConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     schema_version: Literal["mtf_chart_v1", "mtf_chart_v2"]
     presentation: MTFPresentation | None = None
+    pump_flow: MTFPumpFlowConfig | None = None
     veto_filters: MTFVetoFilters = Field(default_factory=MTFVetoFilters)
     # None retains the legacy global ATR until the settings are explicitly saved.
     atr_period: int | None = Field(default=None, ge=1)
@@ -143,7 +178,7 @@ class MTFChartConfig(BaseModel):
         return self
 
     def engine_dump(self):
-        data = self.model_dump(exclude={'presentation'})
+        data = self.model_dump(exclude={'presentation', 'pump_flow'})
         # MTF_CONFIGURABLE_VETO_FILTERS: default switches preserve frozen identities.
         if self.veto_filters == MTFVetoFilters():
             data.pop('veto_filters')

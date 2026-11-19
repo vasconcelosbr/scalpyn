@@ -8,6 +8,7 @@ import { MTFCandlestickChart } from '@/components/shadow-portfolio/TradeCandlest
 import { number, patternLabels, patternShort, statusLabels, shadowLabels, readingLabel, mergeChart, reasonLabel, type Analysis, type Asset, type Bootstrap, type ChartData, type HistoryItem, type MTFConfig, type MTFReport, type Preferences, type Timeframe } from '@/components/mtf/types';
 import './style.css';
 import { MTFSettingsDialog } from '@/components/mtf/MTFSettingsDialog';
+import { MTFPumpFlow } from '@/components/mtf/MTFPumpFlow';
 import { MTFTriggerDiagnostics } from '@/components/mtf/MTFTriggerDiagnostics';
 
 const initialPreferences: Preferences = { theme: 'dark', timezone: 'America/Sao_Paulo', sound: false, aligned_only: false };
@@ -224,6 +225,7 @@ export default function MTFPage() {
         {!data && !loading && !error && <div className="mtf-empty mtf-welcome"><Activity size={42}/><h2>O contexto antes do gatilho.</h2><p>Selecione uma oportunidade para conectar direção, zona e price action.</p><span>4H DIREÇÃO → 1H ZONA → 5M GATILHO</span></div>}
       </section>
       {right && <aside className="mtf-analysis">
+        {cfg?.presentation && <MTFPumpFlow key={`flow:${watchlist}:${symbol}:${profile}`} context={analysis?.pump_flow} watchlist={watchlist} pollSeconds={cfg.presentation.watchlist_poll_seconds} timezone={prefs.timezone} stale={historical} />}
         <MTFTriggerDiagnostics key={`${watchlist}:${symbol}:${profile}`} analysis={analysis} symbol={symbol} date={date}
           pending={historical ? 'Avaliação indisponível ou desatualizada. Aguardando atualização.' : undefined}/>
         <section className="mtf-card"><div className="mtf-card-title"><strong>Plano simulado · 5M</strong><Badge analysis={analysis}/></div><div className="mtf-panel-body">

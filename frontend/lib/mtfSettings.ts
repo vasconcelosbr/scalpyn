@@ -11,6 +11,7 @@ export function settingsDraft(config: MTFConfig | null, boot: Bootstrap): MTFCon
   const next = structuredClone(config ?? boot.preset);
   next.presentation = {...(next.presentation ?? boot.presentation_preset),
     target_pct: next.presentation?.target_pct ?? boot.presentation_preset.target_pct};
+  if (next.pump_flow == null && boot.pump_flow_preset) next.pump_flow = structuredClone(boot.pump_flow_preset);
   next.force_patterns ??= boot.preset.force_patterns;
   next.rejection_patterns ??= boot.preset.rejection_patterns;
   if (next.veto_filters == null && boot.preset.veto_filters != null) next.veto_filters = structuredClone(boot.preset.veto_filters);
@@ -34,7 +35,7 @@ export function settingsForSave(draft: MTFConfig, current: MTFConfig | null, boo
   const baseline = settingsDraft(current, boot);
   const canonical = (value: unknown): string => JSON.stringify(value, (_key, v) => v && typeof v === 'object' && !Array.isArray(v)
     ? Object.fromEntries(Object.entries(v).sort(([a],[b])=>a.localeCompare(b))) : v);
-  const engine = (c: MTFConfig) => Object.fromEntries(Object.entries(c).filter(([key])=>key!=='presentation'));
+  const engine = (c: MTFConfig) => Object.fromEntries(Object.entries(c).filter(([key])=>key!=='presentation' && key!=='pump_flow'));
   // Visual-only/no-op saves must preserve the engine identity. The first rule
   // edit freezes the inherited ATR; editing ATR itself always creates an override.
   if (next.atr_period == null && (!current || canonical(engine(next)) !== canonical(engine(baseline))))

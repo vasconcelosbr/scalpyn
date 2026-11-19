@@ -54,3 +54,14 @@ test('validation applies published server bounds and score/history consistency',
   assert(validateSettings(withConfigValue(config,'trigger_patterns',[]),schema).trigger_patterns);
   assert(validateSettings(withConfigValue(config,'rr_bonus_threshold',1),schema).rr_bonus_threshold);
 });
+
+test('flow-only saves preserve inherited ATR, scoring and veto configuration',()=>{
+  const withFlow={...boot,pump_flow_preset:{enabled:false,asset_min_delta:.03}};
+  const draft=settingsDraft(config,withFlow);
+  const changed=settingsForSave(withConfigValue(draft,'pump_flow.enabled',true),config,withFlow);
+  assert.equal(changed.atr_period,null);
+  assert.deepEqual(changed.score_weights,config.score_weights);
+  assert.deepEqual(changed.veto_filters,config.veto_filters);
+  assert.deepEqual(changed.pump_flow,{enabled:true,asset_min_delta:.03});
+  assert.deepEqual(withFlow.pump_flow_preset,{enabled:false,asset_min_delta:.03});
+});

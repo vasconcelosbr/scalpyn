@@ -22,6 +22,7 @@ export interface TriggerDiagnostics {
   patterns: { pattern: string; state: DiagnosticState; conditions: TriggerCheck[] }[];
 }
 export interface Analysis {
+  pump_flow?: PumpFlowContext;
   trigger_diagnostics?: TriggerDiagnostics;
   evaluation_id?: string; symbol: string; status: MTFStatus; observed_at_utc: string; evaluated_at_utc: string;
   candle_closed_5m: string | null; candle_close_at_utc?: string; config_hash: string; mode: 'SHADOW'; operational_effect: false;
@@ -56,7 +57,7 @@ export interface Preferences { theme: 'dark' | 'light'; timezone: 'America/Sao_P
   show_target?: boolean;
 }
 export interface ConfigSchema { type?: string; $ref?: string; $defs?: Record<string, ConfigSchema>; properties?: Record<string, ConfigSchema>; anyOf?: ConfigSchema[]; items?: ConfigSchema; additionalProperties?: ConfigSchema | boolean; minimum?: number; maximum?: number; exclusiveMinimum?: number; exclusiveMaximum?: number; enum?: unknown[]; required?: string[]; minItems?: number }
-export interface Bootstrap { config: MTFConfig | null; preset: MTFConfig; presentation_preset: Presentation; watchlists: Watchlist[]; profiles: Profile[]; preferences: Partial<Preferences>; inherited_atr?: { enabled?: boolean; period?: number } | null; config_schema?: ConfigSchema }
+export interface Bootstrap { pump_flow_preset?: Record<string, unknown>; config: MTFConfig | null; preset: MTFConfig; presentation_preset: Presentation; watchlists: Watchlist[]; profiles: Profile[]; preferences: Partial<Preferences>; inherited_atr?: { enabled?: boolean; period?: number } | null; config_schema?: ConfigSchema }
 export interface HistoryItem { evaluation: Analysis; observed_at: string; shadow: { status: string; pnl_pct?: number | null; pnl_usdt?: number | null; fill?: number; ambiguous?: boolean; reason?: string } | null }
 export interface MTFReport { groups: { pattern: string; config_hash: string; n: number; mean_pct: number; ambiguous: number; sample_sufficient: boolean; confidence_interval: [number,number] | null; fee_per_side_pct: number; slippage_pct: number }[]; confidence_level: number; formula: string; origin: string; method: string }
 export const statusLabels: Record<MTFStatus, string> = { NO_TRADE: 'SEM TRADE', WAIT: 'AGUARDAR', ARMED: 'ARMADO', TRIGGERED: 'GATILHO' };
@@ -122,4 +123,19 @@ export function reasonLabel(code: string, config?: Presentation) {
   const [key, suffix] = code.split(':');
   const label = config?.reason_labels[key] ?? (key === 'INVALID_PLAN' ? 'Plano inválido: entrada, stop ou risco inconsistente' : 'Condição de análise indisponível');
   return suffix ? `${label} (${suffix.toUpperCase()})` : label;
+}
+
+export interface FlowReading {
+  state: string; reason?: string | null; ratio?: number | null; net_usdt?: number | null;
+  coverage?: number; usable_minutes?: number; expected_minutes?: number; buy_persistence?: number | null;
+  window_start?: string; window_end?: string;
+}
+export interface PumpFlowContext {
+  confirmation: string; capital: Partial<Record<Timeframe, FlowReading>>; asset: Partial<FlowReading>;
+  captured_at?: string; cutoff?: string; config_hash?: string; reasons?: string[];
+}
+export interface FlowComparison {
+  status: string; minimum_sample: number;
+  groups: {flow_config_hash: string; mtf_config_hash: string; cohort: string; observations: number;
+    closed: number; mean_net_pct: number | null; ambiguous: number}[];
 }
