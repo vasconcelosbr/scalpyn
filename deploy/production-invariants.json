@@ -2811,6 +2811,16 @@
         {"path": "backend/tests/test_shadow_fixed_exit_policy.py", "contains_all": ["test_creation_freezes_fixed_snapshot_and_disables_early_exits", "test_fixed_boundaries_hold_or_close_without_early_exit"]},
         {"path": "frontend/app/settings/strategies/page.tsx", "contains_all": ["TP fixo do Shadow", "SL fixo do Shadow", "Encerrar somente por TP ou SL"]}
       ]
+    },
+    {
+      "id": "mtf-btc-gate-header",
+      "description": "Independent Gate.io BTC/USDT header quote and rolling changes, with no influence on score or vetoes.",
+      "files": [
+        {"path": "backend/app/services/mtf_btc_market.py", "contains_all": ["MTF_BTC_MARKET_DISPLAY_ONLY", "GATE_TICKERS_URL", "GATE_SPOT_URL", "TICKER_VS_MINUTE_CLOSE"]},
+        {"path": "backend/tests/test_mtf_btc_market.py", "contains_all": ["test_rolling_returns_use_prior_close_and_independent_signs", "test_authenticated_endpoint_releases_db_without_evaluating_or_writing", "https://api.gateio.ws/api/v4/spot/"]},
+        {"path": "frontend/components/mtf/MTFBitcoinTicker.tsx", "contains_all": ["/mtf/btc-market", "Gate.io", "ArrowDown", "ArrowUp"]},
+        {"path": "frontend/app/grafico-mtf/page.tsx", "contains_all": ["<MTFBitcoinTicker"]}
+      ]
     }
   ]
 }

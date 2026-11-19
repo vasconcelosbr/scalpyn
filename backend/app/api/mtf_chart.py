@@ -21,6 +21,15 @@ async def config_or_error(db, uid):
         raise HTTPException(422, detail="MTF_CONFIG_REQUIRED: configure o preset experimental") from exc
 
 
+@router.get("/btc-market")
+async def btc_market(response: Response, db: AsyncSession = Depends(get_db), uid: UUID = Depends(get_current_user_id)):
+    from ..services.mtf_btc_market import get_snapshot
+    cfg = await config_or_error(db, uid)
+    await db.rollback()  # Release the read transaction before public market I/O.
+    response.headers["Cache-Control"] = "no-store"
+    return await get_snapshot(cfg)
+
+
 @router.get("/bootstrap")
 async def bootstrap(response: Response, db: AsyncSession = Depends(get_db), uid: UUID = Depends(get_current_user_id)):
     response.headers["Cache-Control"] = "private, no-store"
