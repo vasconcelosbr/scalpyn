@@ -7,7 +7,22 @@ export interface Pivot { time: number; price: number; label: string; kind: strin
 export interface Zone { type: string; low: number; high: number; touches: number; available_at: number; distance_atr?: number; in_zone?: boolean; rejection?: boolean }
 export interface Frame { candles: Candle[]; indicators: Record<string, Point[]>; patterns: Pattern[]; pivots: Pivot[]; patterns_removed?: [number,string][]; pivots_removed?: [number,string][]; zones?: Zone[]; warmup?: {reason: string | null}; window_start?: number; error?: string | null; stale: boolean; source: string }
 export interface Plan { side: string; entry_type: string; entry: number; stop: number; tp1: number; tp2: number; rr_net: number; rr_gross: number; quantity: number; notional_usdt: number; expires_at: string; expires_after_candles: number }
+export type DiagnosticState = 'PASS' | 'FAIL' | 'DISABLED' | 'UNAVAILABLE' | 'WAITING';
+export interface TriggerCheck {
+  id: string; label: string; actual: number | string | boolean | null;
+  operator: string; expected: number | string | boolean | null; unit: string;
+  role: 'required' | 'veto' | 'score'; timeframe: Timeframe | null;
+  state: DiagnosticState; gap: number | null; note: string | null;
+  points?: number; maximum_points?: number;
+}
+export interface TriggerDiagnostics {
+  version: 'mtf_trigger_diagnostics_v1'; status: MTFStatus;
+  candle_close_at_utc?: string | null; observed_at_utc?: string; config_hash?: string;
+  checks: TriggerCheck[];
+  patterns: { pattern: string; state: DiagnosticState; conditions: TriggerCheck[] }[];
+}
 export interface Analysis {
+  trigger_diagnostics?: TriggerDiagnostics;
   evaluation_id?: string; symbol: string; status: MTFStatus; observed_at_utc: string; evaluated_at_utc: string;
   candle_closed_5m: string | null; candle_close_at_utc?: string; config_hash: string; mode: 'SHADOW'; operational_effect: false;
   context_4h: { trend: string; last_pivots: string[]; strength: string; last_candle_pattern: string | null };
