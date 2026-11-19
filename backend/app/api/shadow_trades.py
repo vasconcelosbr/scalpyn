@@ -21,7 +21,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Annotated, Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -946,7 +946,7 @@ async def list_shadow_trades(
     max_date: Optional[str] = Query(None),
     source: Optional[str] = Query(None),
     sources: Annotated[Optional[str], Query(description="Comma-separated source IDs")] = None,
-    entry_signal: Annotated[Optional[Literal["ARMED", "TRIGGERED"]], Query(description="Frozen signal origin at entry")] = None,
+    entry_signal: Annotated[Optional[str], Query(description="Frozen signal origin at entry", enum=["ARMED", "TRIGGERED"])] = None,
     profile_id: Optional[UUID] = Query(None, description="Filter by Strategy Lab profile"),
     profile_version: Optional[datetime] = Query(None, description="Filter by profile version"),
     page: int = Query(1, ge=1),
@@ -1045,7 +1045,7 @@ async def shadow_trades_summary(
     max_date: Optional[str] = Query(None),
     source: Optional[str] = Query(None),
     sources: Annotated[Optional[str], Query(description="Comma-separated source IDs")] = None,
-    entry_signal: Annotated[Optional[Literal["ARMED", "TRIGGERED"]], Query(description="Frozen signal origin at entry")] = None,
+    entry_signal: Annotated[Optional[str], Query(description="Frozen signal origin at entry", enum=["ARMED", "TRIGGERED"])] = None,
     profile_id: Optional[UUID] = Query(None, description="Filter by Strategy Lab profile"),
     profile_version: Optional[datetime] = Query(None, description="Filter by profile version"),
     db: AsyncSession = Depends(get_db),
