@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from .config import get_current_user_id
 from ..models.profile import Profile
-from ..schemas.mtf_chart import MTFChartConfig, MTFPreferences, experimental_preset, presentation_preset
+from ..schemas.mtf_chart import MTFChartConfig, MTFPreferences, experimental_preset, presentation_preset, pump_flow_preset
 from ..services.config_service import config_service
 from ..services import mtf_chart_service as service
 
@@ -36,7 +36,7 @@ async def bootstrap(response: Response, db: AsyncSession = Depends(get_db), uid:
     return {"config": config or None, "preset": experimental_preset(), "watchlists": await service.watchlist_options(db, uid),
             "profiles": [{"id": str(p.id), "name": p.name, "default_timeframe": (p.config or {}).get("default_timeframe")} for p in profiles],
             "preferences": await config_service.get_config(db, "mtf_preferences", uid), 'presentation_preset': presentation_preset(),
-            'inherited_atr': indicators.get('atr'), 'config_schema': MTFChartConfig.model_json_schema(),
+            'pump_flow_preset': pump_flow_preset(), 'inherited_atr': indicators.get('atr'), 'config_schema': MTFChartConfig.model_json_schema(),
             "mode": "SHADOW", "operational_effect": False}
 
 
@@ -174,3 +174,13 @@ async def report(watchlist_id: str, db: AsyncSession = Depends(get_db), uid: UUI
             'origin': 'mtf_chart_shadow_events; latest event per evaluation; pnl net of frozen configured costs',
             'formula': 'mean(pnl_pct) ± NormalQuantile((1+confidence)/2) × stddev_samp(pnl_pct)/sqrt(N)',
             'operational_effect': False}
+
+
+@router.get("/pump-flow/report")
+async def pump_flow_report(response: Response, watchlist_id: str,
+                           db: AsyncSession = Depends(get_db), uid: UUID = Depends(get_current_user_id)):
+    """Descriptive cohorts of the unchanged MTF Shadow fills, with frozen flow."""
+    from ..services.mtf_pump_flow import comparison_report
+    response.headers['Cache-Control'] = 'private, no-store'
+    cfg = await config_or_error(db, uid)
+    return await comparison_report(db, uid, watchlist_id, cfg)

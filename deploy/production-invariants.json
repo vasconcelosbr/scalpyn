@@ -2725,6 +2725,34 @@
           ]
         }
       ]
+    },
+    {
+      "id": "mtf-pump-flow-shadow",
+      "description": "Capital multiwindow and per-asset flow are frozen context only; engine score/veto identity is invariant. Shadow report compares unchanged fills.",
+      "files": [
+        {
+          "path": "backend/app/services/mtf_pump_flow.py",
+          "contains_all": [
+            "MTF_PUMP_FLOW_SHADOW",
+            "computed_at<=:known_at",
+            "async def comparison_report"
+          ]
+        },
+        {
+          "path": "backend/tests/test_mtf_pump_flow.py",
+          "contains_all": [
+            "test_flow_config_never_changes_score_veto_status_plan_or_engine_identity",
+            "test_future_and_late_data_are_not_visible_and_duplicates_rejected"
+          ]
+        },
+        {
+          "path": "frontend/components/mtf/MTFPumpFlow.tsx",
+          "contains_all": [
+            "Capital e fluxo",
+            "Comparação Shadow"
+          ]
+        }
+      ]
     }
   ]
 }

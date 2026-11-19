@@ -6,10 +6,27 @@ import { apiFetch, ApiError } from '@/lib/api';
 import { configValue, schemaAt, settingsDraft, settingsForSave, validateSettings, withConfigValue } from '@/lib/mtfSettings';
 import { patternLabels, type Bootstrap, type MTFConfig } from './types';
 
-type Tab = 'armed' | 'trigger' | 'vetoes' | 'shared' | 'advanced';
+type Tab = 'flow' | 'armed' | 'trigger' | 'vetoes' | 'shared' | 'advanced';
 type FieldSpec = {path: string; label: string; hint: string; unit?: string; kind?: 'patterns' | 'boolean'};
 const field = (path: string, label: string, hint: string, unit?: string): FieldSpec => ({path, label, hint, unit});
 const sections: {tab: Tab; title: string; note?: string; fields: FieldSpec[]}[] = [
+  {tab:'flow',title:'Capital e fluxo · comparação Shadow',note:'Hipótese observacional. Não altera score, vetos, plano ou admissões. A comparação usa os mesmos resultados Shadow, separados pela confirmação registrada na entrada.',fields:[
+    {path:'pump_flow.enabled',label:'Ativar contexto e comparação',hint:'Registra os dados nas próximas avaliações. Não reclassifica o histórico.',kind:'boolean'},
+    field('pump_flow.min_coverage','Cobertura mínima','Fração mínima de minutos e símbolos disponíveis. Ausência não equivale a fluxo neutro.','fração'),
+    field('pump_flow.max_source_age_seconds','Idade máxima do snapshot Pump','Validade do universo monitorado consultado.','segundos'),
+    field('pump_flow.max_evaluation_delay_seconds','Atraso máximo da avaliação','Tempo máximo entre fechamento do candle e captura do contexto.','segundos'),
+    field('pump_flow.query_timeout_ms','Tempo máximo da consulta','Se a consulta falhar, mantém a avaliação MTF e marca fluxo indisponível.','ms'),
+  ]},
+  {tab:'flow',title:'Capital do universo',note:'Janelas móveis de minutos fechados, terminando no fechamento MTF. Cada janela tem seu próprio limite. Janelas sobrepostas não somam pontos.',fields:[
+    ...(['4h','1h','5m'] as const).flatMap(tf=>[
+      field(`pump_flow.capital_neutral_ratio.${tf}`,`Faixa neutra · ${tf.toUpperCase()}`,'Razão líquida entre compra e venda. Acima do limite: entrada; abaixo do negativo: saída.','fração'),
+      {path:`pump_flow.require_capital.${tf}`,label:`Exigir contexto · ${tf.toUpperCase()}`,hint:'Para a comparação confirmada, exige Capital neutro ou de entrada com dados suficientes.',kind:'boolean' as const},
+    ]),
+  ]},
+  {tab:'flow',title:'Confirmação por ativo · 5m',fields:[
+    field('pump_flow.asset_min_delta','Delta normalizado mínimo','(Compra − venda) / (compra + venda), em USDT.','fração'),
+    field('pump_flow.asset_min_buy_persistence','Persistência compradora mínima','Fração dos minutos disponíveis com compra maior que venda. Exige também o delta mínimo.','fração'),
+  ]},
   {tab:'armed', title:'Estrutura e aproximação', note:'ARMADO exige proximidade da zona e ausência dos vetos habilitados. Os filtros de direção ficam em Vetos. Força e rejeição contribuem para o score.', fields:[
     field('pivot_left','Pivô · candles à esquerda','Confirma a estrutura de tendência. Compartilhado entre os timeframes.','candles'),
     field('pivot_right','Pivô · candles à direita','Só confirma o pivô após os candles seguintes. Compartilhado.','candles'),
@@ -161,7 +178,7 @@ export function MTFSettingsDialog({config, boot, onClose, onSaved}: {config: MTF
   return <dialog ref={dialog} className="mtf-settings" aria-labelledby="mtf-settings-title" onCancel={e=>{e.preventDefault();if(!saving)onClose();}}>
     <header className="mtf-settings-header"><div><span className="mtf-settings-eyebrow">ANÁLISE MTF · CONFIGURAÇÃO</span><h2 id="mtf-settings-title">Da estrutura ao gatilho</h2><p>Regras existentes, organizadas por etapa. Alterações valem para o MTF deste usuário.</p></div><button type="button" disabled={saving} aria-label="Fechar configuração" onClick={onClose}><X size={20}/></button></header>
     <nav className="mtf-settings-tabs" aria-label="Etapas da configuração">{([
-      ['armed','ARMADO',Layers],['trigger','GATILHO',Crosshair],['vetoes','Vetos',ShieldCheck],['shared','Compartilhados',SlidersHorizontal],['advanced','Avançado',Settings2],
+      ['armed','ARMADO',Layers],['flow','Capital e fluxo',Layers],['trigger','GATILHO',Crosshair],['vetoes','Vetos',ShieldCheck],['shared','Compartilhados',SlidersHorizontal],['advanced','Avançado',Settings2],
     ] as const).map(([key,label,Icon])=><button type="button" key={key} aria-pressed={tab===key&&!jsonOpen} onClick={()=>{if(jsonOpen){try{const parsed=JSON.parse(jsonText);if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error();const invalid=validateSettings(parsed,rootSchema);if(Object.keys(invalid).length){setErrors(invalid);setMessage('Corrija os campos do JSON antes de voltar aos formulários.');return;}setDraft(parsed);setErrors({});setJsonOpen(false);setMessage('');}catch{setMessage('Corrija o JSON antes de voltar aos formulários.');return;}}setTab(key);}}><Icon size={15}/>{label}{errorTab(key)&&<span className="mtf-error-dot" aria-label="Há campos inválidos"/>}</button>)}</nav>
     <div className="mtf-settings-body">
       {jsonOpen ? <section className="mtf-settings-section"><h3>JSON avançado</h3><p>A mesma configuração dos formulários. Alterações só entram em vigor ao salvar.</p><textarea aria-label="Configuração MTF em JSON" spellCheck={false} value={jsonText} disabled={saving} onChange={e=>setJsonText(e.target.value)}/></section> : <>
