@@ -231,6 +231,8 @@ async def chart_data(db, user_id, symbol, profile_id, cfg, include_display=True)
     analysis["data_errors"] = errors
     unavailable = [name for name in names if not any(name in f["indicators"] for f in frames.values())]
     analysis["unavailable_profile_indicators"] = unavailable
+    from .mtf_trigger_diagnostics import finalize_diagnostics
+    finalize_diagnostics(analysis, cfg, now, cutoff)
     if not include_display:
         # The scheduled observer persists analysis, never the drawing history.
         # Keep its original work/domain instead of adding UI-only computation.

@@ -65,6 +65,10 @@ async def test_display_warmup_covers_visible_series_without_changing_engine(monk
     frames={tf:prepare_frame(cs[-50:],tf,now,indicators,set(indicators),cfg,30) for tf,cs in candles.items()}
     expected=evaluate('BTC_USDT',frames,cfg,now,.01,trend(frames['4h']['pivots']))
     result=await service.chart_data(object(),'user','BTC_USDT',None,cfg)
+    from app.services.mtf_trigger_diagnostics import finalize_diagnostics
+    # Diagnostic freshness/identity are finalized by the service, after engine evaluation.
+    expected.update({key:result['analysis'][key] for key in ('observed_at_utc','config_hash','data_errors')})
+    finalize_diagnostics(expected,cfg,now,now)
     for key,value in expected.items(): assert result['analysis'][key]==value,key
     for tf,frame in result['frames'].items():
         if prefix_gap:
@@ -79,6 +83,8 @@ async def test_display_warmup_covers_visible_series_without_changing_engine(monk
         return await fetch(symbol,tf,config,limit)
     monkeypatch.setattr(service,'market_candles',observer_fetch)
     observer=await service.chart_data(object(),'user','BTC_USDT',None,cfg,include_display=False)
+    expected['observed_at_utc'] = observer['analysis']['observed_at_utc']
+    expected['trigger_diagnostics']['observed_at_utc'] = observer['analysis']['observed_at_utc']
     for key,value in expected.items(): assert observer['analysis'][key]==value,key
     assert all(limit == cfg.candle_limits[tf] for tf,limit in requested)
     assert service.profile_context.await_args.args[-1] is False
@@ -91,9 +97,11 @@ def test_delta_is_owner_and_version_scoped_and_carries_overlay_deletions():
     data={'symbol':'BTC_USDT','frames':{tf:deepcopy(frame) for tf in TF_SECONDS},'analysis':{'config_hash':'cfg','engine_version':'v1'},'as_of':'one'}
     full=service.chart_transport(data,context={'user':'a'},since=None,max_entries=10)
     later=deepcopy(data);later['as_of']='two'
+    later['analysis']['trigger_diagnostics']={'status':'ARMED','checks':[{'actual':.000001,'expected':.000002}]}
     for f in later['frames'].values(): f['candles'][-1]['close']=999;f['patterns']=[]
     delta=service.chart_transport(later,context={'user':'a'},since=full['cursor'],max_entries=10)
     assert delta['transport']=='delta'
+    assert delta['analysis']['trigger_diagnostics']==later['analysis']['trigger_diagnostics']
     assert delta['frames']['5m']['candles']==[{'time':199,'close':999}]
     assert delta['frames']['5m']['patterns_removed']==[[1,'DOJI']]
     assert 'zones' not in delta['frames']['5m']

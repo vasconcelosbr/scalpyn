@@ -8,6 +8,7 @@ import { MTFCandlestickChart } from '@/components/shadow-portfolio/TradeCandlest
 import { number, patternLabels, patternShort, statusLabels, shadowLabels, readingLabel, mergeChart, reasonLabel, type Analysis, type Asset, type Bootstrap, type ChartData, type HistoryItem, type MTFConfig, type MTFReport, type Preferences, type Timeframe } from '@/components/mtf/types';
 import './style.css';
 import { MTFSettingsDialog } from '@/components/mtf/MTFSettingsDialog';
+import { MTFTriggerDiagnostics } from '@/components/mtf/MTFTriggerDiagnostics';
 
 const initialPreferences: Preferences = { theme: 'dark', timezone: 'America/Sao_Paulo', sound: false, aligned_only: false };
 const statusOrder = { TRIGGERED: 0, ARMED: 1, WAIT: 2, NO_TRADE: 3 };
@@ -25,6 +26,7 @@ export default function MTFPage() {
   const [profile, setProfile] = useState('');
   const [tf, setTf] = useState<Timeframe>('4h');
   const [data, setData] = useState<ChartData | null>(null);
+  const [loadedContext, setLoadedContext] = useState('');
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [report, setReport] = useState<MTFReport | null>(null);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -146,7 +148,7 @@ export default function MTFPage() {
         const result = await apiFetch<ChartData>(`/mtf/chart?${query}`, { signal: controller.signal });
         if (controller.signal.aborted) return;
         const merged=mergeChart(dataRef.current,result);
-        dataRef.current=merged;setData(merged); setError('');setStale(false);setMembership('current');failures=0;
+        dataRef.current=merged;setData(merged);setLoadedContext(key); setError('');setStale(false);setMembership('current');failures=0;
         const h = await apiFetch<{ items: HistoryItem[]; next_cursor: string | null }>(`/mtf/history?${new URLSearchParams({ watchlist_id: watchlist, symbol })}`, { signal: controller.signal });
         if (!controller.signal.aborted) { setHistory(h.items); setCursor(h.next_cursor); }
       } catch (e) { if (!controller.signal.aborted) { failures++;setError(e instanceof Error ? e.message : 'Falha no gráfico'); setStale(true);
@@ -176,7 +178,7 @@ export default function MTFPage() {
     } catch (e) { setError(e instanceof Error ? e.message : 'Falha no histórico'); }
   };
   const historical=stale || membership==='removed';
-  const analysis = historical ? undefined : data?.analysis;
+  const analysis = historical || loadedContext !== `${watchlist}:${symbol}:${profile}` ? undefined : data?.analysis;
   const plan = analysis?.plan;
   // Consolidated membership/status comes from the same observation as Aprovados;
   // selecting a symbol or an exploratory profile must not rewrite that snapshot.
@@ -209,7 +211,7 @@ export default function MTFPage() {
       {left && <aside className="mtf-assets mtf-card"><div className="mtf-card-title"><strong>{boot?.watchlists.find(w => w.id === watchlist)?.name}</strong><span>{assets.length} ativos</span></div><div className="mtf-asset-controls"><label><input type="checkbox" checked={prefs.aligned_only} onChange={e => preference({ aligned_only: e.target.checked })}/> Só alinhados</label><button onClick={() => setScoreOrder(!scoreOrder)}><ListFilter size={13}/>{scoreOrder ? 'Proximidade (bruto / zona)' : 'Status / score'}</button></div>
         {listError && <div className="mtf-error">{listError}</div>}{limited && <div className="mtf-warning">Lista limitada pela configuração.</div>}
         <div className="mtf-asset-head"><span>ATIVO</span><span>4H / ZONA 1H</span><span>SCORE</span></div>
-        {shown.map(asset => <button className={`mtf-asset ${symbol === asset.symbol ? 'selected' : ''}`} key={asset.symbol} onClick={() => {setSymbol(asset.symbol);preference({last_symbol:asset.symbol});}}><div><strong>{asset.symbol.replace('_','/')}</strong><small>{asset.current_price?.toLocaleString("pt-BR",{maximumSignificantDigits:16}) ?? "—"}</small><small>{asset.price_snapshot_at ? date(asset.price_snapshot_at) : 'Horário indisponível'}</small><span>{asset.mtf?.trigger_5m ? patternShort[asset.mtf.trigger_5m.pattern] : '—'} · {date(asset.mtf?.candle_close_at_utc)}</span></div><div><span className={asset.mtf?.context_4h.trend === 'UP' ? 'positive' : ''}>{bias(asset.mtf?.context_4h.trend)}</span><small>{asset.mtf?.zone_1h ? `${number(asset.mtf.zone_1h.distance_atr,1)} ATR` : '—'}</small><Badge analysis={asset.mtf}/></div><b>{asset.mtf ? number(asset.mtf.score.total,1) : '—'}{asset.mtf?.vetoes.length ? <small>bruto {number(asset.mtf.score.raw,1)}</small> : null}</b></button>)}
+        {shown.map(asset => <button className={`mtf-asset ${symbol === asset.symbol ? 'selected' : ''}`} key={asset.symbol} onClick={() => {setSymbol(asset.symbol);setRight(true);preference({last_symbol:asset.symbol});}}><div><strong>{asset.symbol.replace('_','/')}</strong><small>{asset.current_price?.toLocaleString("pt-BR",{maximumSignificantDigits:16}) ?? "—"}</small><small>{asset.price_snapshot_at ? date(asset.price_snapshot_at) : 'Horário indisponível'}</small><span>{asset.mtf?.trigger_5m ? patternShort[asset.mtf.trigger_5m.pattern] : '—'} · {date(asset.mtf?.candle_close_at_utc)}</span></div><div><span className={asset.mtf?.context_4h.trend === 'UP' ? 'positive' : ''}>{bias(asset.mtf?.context_4h.trend)}</span><small>{asset.mtf?.zone_1h ? `${number(asset.mtf.zone_1h.distance_atr,1)} ATR` : '—'}</small><Badge analysis={asset.mtf}/></div><b>{asset.mtf ? number(asset.mtf.score.total,1) : '—'}{asset.mtf?.vetoes.length ? <small>bruto {number(asset.mtf.score.raw,1)}</small> : null}</b></button>)}
         {!shown.length && <div className="mtf-empty">{listLoading ? 'Consultando oportunidades…' : prefs.aligned_only ? 'Nenhum ativo alinhado neste momento.' : 'Nenhuma oportunidade nesta watchlist. Selecione outra lista para explorar.'}</div>}
         <footer>Preços: snapshot da watchlist; horário de atualização quando disponível. Elegibilidade conforme os filtros habilitados em Vetos. Score MTF independente do pipeline.</footer>
         <section className="mtf-card"><div className="mtf-card-title"><strong>Expectativa · Shadow MTF</strong></div><div className="mtf-panel-body">{report?.groups.length ? report.groups.map(group => <div className="mtf-reading" key={`${group.pattern}:${group.config_hash}`}><strong>{patternLabels[group.pattern] ?? group.pattern} · 5M</strong><p>Amostra: {group.n} · Média líquida: {number(group.mean_pct,3)}%</p><p>{group.confidence_interval ? `IC ${number(report.confidence_level*100,0)}%: ${number(group.confidence_interval[0],3)}% a ${number(group.confidence_interval[1],3)}%` : 'Amostra insuficiente para intervalo de confiança.'}</p><small>Taxa por lado: {number(group.fee_per_side_pct,3)}% · Slippage: {number(group.slippage_pct,3)}% · Ambíguos: {group.ambiguous}</small></div>) : <p className="mtf-muted">Ainda não há resultados encerrados para estimar expectativa.</p>}<p className="mtf-muted">Apuração por versão de configuração. Intervalos descritivos; observações sobrepostas não são independentes. Sem calibração ou promoção automática.</p></div></section>
@@ -222,6 +224,8 @@ export default function MTFPage() {
         {!data && !loading && !error && <div className="mtf-empty mtf-welcome"><Activity size={42}/><h2>O contexto antes do gatilho.</h2><p>Selecione uma oportunidade para conectar direção, zona e price action.</p><span>4H DIREÇÃO → 1H ZONA → 5M GATILHO</span></div>}
       </section>
       {right && <aside className="mtf-analysis">
+        <MTFTriggerDiagnostics key={`${watchlist}:${symbol}:${profile}`} analysis={analysis} symbol={symbol} date={date}
+          pending={historical ? 'Avaliação indisponível ou desatualizada. Aguardando atualização.' : undefined}/>
         <section className="mtf-card"><div className="mtf-card-title"><strong>Plano simulado · 5M</strong><Badge analysis={analysis}/></div><div className="mtf-panel-body">
           <div className="mtf-data-row"><span>Viés Spot</span><b className={analysis?.context_4h.trend === 'UP' ? 'positive' : ''}>{analysis?.context_4h.trend === 'UP' ? 'COMPRA (Long)' : 'Não comprar'}</b></div>
           <div className="mtf-data-row"><span>Gatilho</span><b>{analysis?.trigger_5m ? patternLabels[analysis.trigger_5m.pattern] : '—'}</b></div>
@@ -234,6 +238,6 @@ export default function MTFPage() {
         <section className="mtf-card"><div className="mtf-card-title"><strong>Histórico · Shadow MTF</strong></div><div className="mtf-panel-body">{history.length ? history.map((h,i) => <div className="mtf-history-row" key={h.evaluation.evaluation_id ?? i}><small>{date(h.observed_at)}</small><span>{h.evaluation.trigger_5m ? patternLabels[h.evaluation.trigger_5m.pattern] : statusLabels[h.evaluation.status]}<small>{h.shadow ? shadowLabels[h.shadow.status] ?? 'Estado indisponível' : 'Avaliação'}{h.shadow?.ambiguous ? ' · intrabar ambíguo' : ''}</small></span><b className={(h.shadow?.pnl_pct ?? 0) < 0 ? 'negative' : 'positive'}>{h.shadow?.pnl_pct == null ? '—' : `${number(h.shadow.pnl_pct,2)}%`}</b></div>) : <p className="mtf-muted">Sem avaliações registradas para este contexto. A observação ocorre no backend após o fechamento dos candles.</p>}{cursor && <button className="mtf-more" onClick={moreHistory}>Carregar anteriores <ChevronDown size={13}/></button>}<p className="mtf-muted">Histórico separado do Shadow Portfolio operacional. Resultados líquidos dos custos configurados.</p></div></section>
       </aside>}
     </div>
-    {configOpen && boot && <MTFSettingsDialog config={cfg} boot={boot} onClose={()=>setConfigOpen(false)} onSaved={next=>{setCfg(next);setConfigOpen(false);if(!watchlist)setWatchlist(next.default_watchlist);}}/>}
+    {configOpen && boot && <MTFSettingsDialog config={cfg} boot={boot} onClose={()=>setConfigOpen(false)} onSaved={next=>{setLoadedContext('');setCfg(next);setConfigOpen(false);if(!watchlist)setWatchlist(next.default_watchlist);}}/>}
   </div>;
 }

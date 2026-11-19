@@ -2696,6 +2696,35 @@
           ]
         }
       ]
+    },
+    {
+      "id": "mtf-trigger-diagnostics",
+      "description": "Explain confirmed trigger predicates without changing strategy or fabricating pending plans.",
+      "files": [
+        {
+          "path": "backend/app/services/mtf_trigger_diagnostics.py",
+          "contains_all": [
+            "MTF_TRIGGER_DIAGNOSTICS",
+            "def pattern_conditions",
+            "def finalize_diagnostics"
+          ]
+        },
+        {
+          "path": "backend/tests/test_mtf_trigger_diagnostics.py",
+          "contains_all": [
+            "test_shared_pattern_predicates_preserve_legacy_semantics",
+            "test_armed_explains_missing_trigger_without_fabricating_plan"
+          ]
+        },
+        {
+          "path": "frontend/components/mtf/MTFTriggerDiagnostics.tsx",
+          "contains_all": [
+            "O que falta para o GATILHO",
+            "Observado",
+            "Exigido"
+          ]
+        }
+      ]
     }
   ]
 }

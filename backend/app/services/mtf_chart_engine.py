@@ -38,37 +38,14 @@ def closed_candles(candles: list[dict], timeframe: str, as_of: int) -> list[dict
 
 
 def patterns(c: dict, previous: dict | None, atr: float | None, cfg: MTFChartConfig) -> list[dict]:
-    amplitude = c["high"] - c["low"]
-    if not atr or amplitude <= 0 or amplitude < cfg.min_range_atr * atr:
-        return []
-    body = abs(c["close"] - c["open"])
-    upper = c["high"] - max(c["open"], c["close"])
-    lower = min(c["open"], c["close"]) - c["low"]
-    bull = c["close"] > c["open"]
-    found = []
-    def add(name):
-        found.append({"time": c["time"], "pattern": name,
-                      "metrics": {"body": body, "range": amplitude, "upper_wick": upper,
-                                  "lower_wick": lower, "atr": atr}})
-    if body <= amplitude * cfg.doji_body_pct:
-        add("DOJI")
-    if lower >= cfg.pin_wick_ratio * body and lower >= cfg.pin_wick_pct * amplitude and c["close"] >= c["high"] - amplitude * cfg.pin_close_fraction:
-        add("PIN_BULL")
-    if upper >= cfg.pin_wick_ratio * body and upper >= cfg.pin_wick_pct * amplitude and c["close"] <= c["low"] + amplitude * cfg.pin_close_fraction:
-        add("PIN_BEAR")
-    if upper + lower <= cfg.marubozu_wick_pct * amplitude:
-        add("MARUBOZU_BULL" if bull else "MARUBOZU_BEAR")
-    if previous:
-        prev_bull = previous["close"] > previous["open"]
-        low, high = (c["low"], c["high"]) if cfg.engulf_include_wicks else sorted([c["open"], c["close"]])
-        plow, phigh = (previous["low"], previous["high"]) if cfg.engulf_include_wicks else sorted([previous["open"], previous["close"]])
-        if bull != prev_bull and body > 0 and previous["close"] != previous["open"] and low <= plow and high >= phigh:
-            add("ENGULF_BULL" if bull else "ENGULF_BEAR")
-        if c["low"] > previous["low"] and c["high"] < previous["high"]:
-            add("INSIDE_BAR")
-        if min(c["open"], c["close"]) > min(previous["open"], previous["close"]) and max(c["open"], c["close"]) < max(previous["open"], previous["close"]):
-            add("HARAMI")
-    return found
+    from .mtf_trigger_diagnostics import pattern_conditions, passed
+    rules = pattern_conditions(c, previous, atr, cfg)
+    body = abs(c['close']-c['open'])
+    return [{'time': c['time'], 'pattern': name,
+             'metrics': {'body': body, 'range': c['high']-c['low'],
+                         'upper_wick': c['high']-max(c['open'], c['close']),
+                         'lower_wick': min(c['open'], c['close'])-c['low'], 'atr': atr}}
+            for name, conditions in rules.items() if passed(conditions)]
 
 
 def pivots(candles: list[dict], timeframe: str, cfg: MTFChartConfig) -> list[dict]:
@@ -214,6 +191,7 @@ def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_
         "zone_1h": None, "zones": [], "trigger_5m": None, "plan": None,
         "score": {"total": 0, "raw": None, "maximum": sum(cfg.score_weights.values()), "components": {}, "calibrated": False},
         "vetoes": [], "status": "NO_TRADE", "explanation": []}
+    from .mtf_trigger_diagnostics import build_diagnostics
     vetoes = result["vetoes"]
     closed_5m = frames.get("5m", {}).get("candles", [])
     if closed_5m:
@@ -228,6 +206,7 @@ def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_
             vetoes.append(f"DATA_STALE:{tf}")
     if vetoes:
         result["explanation"] = ["SEM TRADE: candles fechados ou ATR indisponíveis/desatualizados."]
+        result["trigger_diagnostics"] = build_diagnostics(result, frames, cfg, as_of, spread_pct, btc_trend)
         return result
     f4, f1, f5 = (frames[tf] for tf in ("4h", "1h", "5m"))
     c = f5["candles"][-1]
@@ -272,11 +251,13 @@ def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_
     if cfg.veto_filters.btc_downtrend and symbol != "BTC_USDT" and btc_trend == "DOWN":
         vetoes.append("BTC_DOWNTREND")
     rr = None
+    plan_inputs = None
     if trigger and near:
         entry = c["close"]
         stop = c["low"] - max(cfg.stop_buffer_atr * f5["atr"], entry*(spread_pct or 0)/100)
         targets = sorted({z["low"] for z in zs if z["type"] == "RESISTANCE" and z["low"] > entry})
         targets = targets or sorted({p["price"] for p in f1["pivots"] if p["kind"] == "H" and p["price"] > entry})
+        plan_inputs = dict(stop=stop, stop_distance=entry-stop, target_count=len(targets))
         if stop <= 0:
             vetoes.append("INVALID_PLAN")
         elif cfg.veto_filters.stop_distance and entry-stop > cfg.max_stop_atr*f5["atr"]:
@@ -288,6 +269,7 @@ def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_
             slip = cfg.slippage_pct / 100
             cost_entry = entry*(1+slip)*(1+fee)
             loss = cost_entry-stop*(1-slip)*(1-fee)
+            plan_inputs["loss"] = loss
             reward = targets[0]*(1-slip)*(1-fee)-cost_entry
             rr = reward/loss if loss > 0 else None
             if rr is None:
@@ -314,6 +296,8 @@ def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_
         f"Gatilho fechado: {trigger['pattern']} em {iso(c['time'])}." if trigger else "Sem gatilho de compra no último candle fechado.",
         "Plano experimental; stops e perdas pertencem somente à simulação.",
     ]
+    result["trigger_diagnostics"] = build_diagnostics(result, frames, cfg, as_of, spread_pct, btc_trend,
+        ratio=ratio, flags=flags, plan_inputs=plan_inputs)
     return result
 
 
