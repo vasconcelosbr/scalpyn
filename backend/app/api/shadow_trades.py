@@ -21,7 +21,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -171,6 +171,7 @@ def _build_filters(
     sources: Optional[str] = None,
     profile_id: Optional[UUID] = None,
     profile_version: Optional[datetime] = None,
+    entry_signal: Optional[str] = None,
 ) -> list[Any]:
     conditions: list[Any] = [ShadowTrade.user_id == user_id]
     sanitized_status = _sanitize_status(status)
@@ -194,6 +195,16 @@ def _build_filters(
         conditions.append(ShadowTrade.profile_id == profile_id)
     if profile_version is not None:
         conditions.append(ShadowTrade.profile_version == profile_version)
+    if entry_signal is not None:
+        if entry_signal not in ("ARMED", "TRIGGERED"):
+            raise HTTPException(status_code=422, detail="entry_signal must be ARMED or TRIGGERED")
+        # SHADOW_ENTRY_SIGNAL_FILTER: same frozen origin as _entry_signal().
+        frozen = ShadowTrade.config_snapshot["l3_consolidated"]
+        conditions.extend([
+            ShadowTrade.source == "L3_CONSOLIDATED",
+            func.coalesce(func.nullif(frozen["entry_signal"].astext, ""),
+                          frozen["mtf"]["status"].astext) == entry_signal,
+        ])
     return conditions
 
 
@@ -935,6 +946,7 @@ async def list_shadow_trades(
     max_date: Optional[str] = Query(None),
     source: Optional[str] = Query(None),
     sources: Annotated[Optional[str], Query(description="Comma-separated source IDs")] = None,
+    entry_signal: Annotated[Optional[Literal["ARMED", "TRIGGERED"]], Query(description="Frozen signal origin at entry")] = None,
     profile_id: Optional[UUID] = Query(None, description="Filter by Strategy Lab profile"),
     profile_version: Optional[datetime] = Query(None, description="Filter by profile version"),
     page: int = Query(1, ge=1),
@@ -948,7 +960,7 @@ async def list_shadow_trades(
         selected_sources = _source_values(source, sources)
         sanitized_source = selected_sources[0] if len(selected_sources) == 1 else None
         sanitized_status = _sanitize_status(status)
-        project_rejected_active = sanitized_source == "L3_REJECTED" and (
+        project_rejected_active = entry_signal is None and sanitized_source == "L3_REJECTED" and (
             sanitized_status is None
             or sanitized_status in {"OPEN", "PENDING", "RUNNING"}
         )
@@ -978,7 +990,7 @@ async def list_shadow_trades(
                 symbol=symbol,
                 min_date=min_date,
                 max_date=max_date,
-                source=source, sources=sources,
+                source=source, sources=sources, entry_signal=entry_signal,
                 profile_id=profile_id,
                 profile_version=profile_version,
             )
@@ -1033,6 +1045,7 @@ async def shadow_trades_summary(
     max_date: Optional[str] = Query(None),
     source: Optional[str] = Query(None),
     sources: Annotated[Optional[str], Query(description="Comma-separated source IDs")] = None,
+    entry_signal: Annotated[Optional[Literal["ARMED", "TRIGGERED"]], Query(description="Frozen signal origin at entry")] = None,
     profile_id: Optional[UUID] = Query(None, description="Filter by Strategy Lab profile"),
     profile_version: Optional[datetime] = Query(None, description="Filter by profile version"),
     db: AsyncSession = Depends(get_db),
@@ -1046,7 +1059,7 @@ async def shadow_trades_summary(
             symbol=symbol,
             min_date=min_date,
             max_date=max_date,
-            source=source, sources=sources,
+            source=source, sources=sources, entry_signal=entry_signal,
             profile_id=profile_id,
             profile_version=profile_version,
         )
