@@ -53,3 +53,22 @@ def test_list_pagination_summary_and_frozen_label_agree(store, monkeypatch):
         rejected={**args,"source":"L3_REJECTED","sources":None}
         assert asyncio.run(api.list_shadow_trades(**rejected,entry_signal="ARMED",page=1,page_size=1)).total==0
         assert asyncio.run(api.shadow_trades_summary(**rejected,entry_signal="ARMED")).total==0
+
+
+def test_invalid_signal_returns_validation_error_through_real_db_dependency(monkeypatch):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app import database
+    @asynccontextmanager
+    async def session():
+        yield SimpleNamespace(rollback=AsyncMock(),in_transaction=lambda:False)
+    monkeypatch.setattr(database,"AsyncSessionLocal",session)
+    app=FastAPI();app.include_router(api.router)
+    app.dependency_overrides[api.get_current_user_id]=lambda:uuid4()
+    with TestClient(app) as client:
+        for path in ("/api/shadow-trades","/api/shadow-trades/summary"):
+            response=client.get(path,params={"entry_signal":"INVALID"})
+            assert response.status_code==422
+            assert response.json()["detail"]=="entry_signal must be ARMED or TRIGGERED"
