@@ -19,6 +19,7 @@ from ..schemas.strategy_settings import (
 )
 from ..services.strategy_settings_service import (
     StrategySettingsConflictError,
+    StrategySettingsRecoveryError,
     StrategySettingsValidationError,
     strategy_settings_service,
 )
@@ -124,6 +125,8 @@ async def validate_strategy_settings_import(
                 "The imported source_hash is stale; review against the current configuration"
             )
         return result
+    except StrategySettingsRecoveryError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except StrategySettingsConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except StrategySettingsValidationError as exc:
@@ -631,6 +634,8 @@ async def update_strategy_settings(
             change_description=request.change_description,
             source=request.source,
         )
+    except StrategySettingsRecoveryError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except StrategySettingsConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except StrategySettingsValidationError as exc:

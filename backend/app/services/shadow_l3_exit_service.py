@@ -214,6 +214,8 @@ async def advance_shadow(db, shadow, runtime=_RUNTIME_UNSET, stats=None):
     skipped explicitly, recorded under ``state.price_gaps`` (bookkeeping
     only, never part of the replayed decision state) and logged.
     """
+    if (shadow.config_snapshot or {}).get("shadow_only_tp_sl") is True:
+        return None
     snapshot = (shadow.config_snapshot or {}).get("shadow_l3_exit_policy")
     if shadow.source not in ("L3", "L3_CONSOLIDATED") or not snapshot or not shadow.entry_timestamp or not shadow.tp_price or not shadow.sl_price:
         return None

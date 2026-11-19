@@ -19,6 +19,18 @@ from app.services.shadow_trade_service import (
     _resolve_barrier_contract_version,
 )
 
+@pytest.fixture(autouse=True)
+def admit_barrier_test(monkeypatch):
+    # Source admission is tested separately; these tests exercise barrier validation.
+    monkeypatch.setattr("app.services.shadow_approved_source.admission", AsyncMock(return_value=True))
+    monkeypatch.setattr("app.services.shadow_entry_quote.require_current_quote", lambda *args, **kwargs: None)
+    at = datetime(2026, 7, 16, 1, 0, tzinfo=timezone.utc).isoformat()
+    monkeypatch.setattr("app.services.shadow_entry_quote.capture_entry_quote", AsyncMock(return_value={
+        "value": 100.0, "entry_at": at, "source_at": at, "age_seconds": 0,
+        "contract_version": "gate_spot_entry_quote_v1",
+    }))
+
+
 _ML_V2_FULL = {
     "ml_active_barrier_contract_version": "shadow_atr_dynamic_v2",
     "shadow_barrier_mode": "ATR_DYNAMIC",

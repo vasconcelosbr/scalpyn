@@ -173,6 +173,25 @@ def _apply_barrier_params(user_config: dict, ml_config: dict) -> dict:
     user_config["ml_l3_managed_exit"] = deepcopy(ml_config.get("ml_l3_managed_exit"))
     user_config["ml_feature_contract"] = deepcopy(ml_config.get("ml_feature_contract") or {})
     user_config["shadow_barrier_mode"] = ml_config.get("shadow_barrier_mode")
+    # SHADOW_FIXED_EXIT_POLICY: explicit Shadow values never write into Spot.
+    fixed_tp = ml_config.get("shadow_fixed_tp_pct")
+    fixed_sl = ml_config.get("shadow_fixed_sl_pct")
+    only_tp_sl = ml_config.get("shadow_only_tp_sl") is True
+    if (fixed_tp is None) != (fixed_sl is None):
+        raise ValueError("shadow_fixed_barriers_incomplete")
+    if fixed_tp is not None:
+        if not (0 < float(fixed_tp) <= 100 and 0 < float(fixed_sl) < 100):
+            raise ValueError("shadow_fixed_barriers_invalid")
+        if user_config["shadow_barrier_mode"] == "FIXED":
+            user_config["tp_pct"] = float(fixed_tp)
+            user_config["sl_pct"] = float(fixed_sl)
+    if only_tp_sl:
+        if user_config["shadow_barrier_mode"] != "FIXED" or fixed_tp is None:
+            raise ValueError("shadow_only_tp_sl_requires_fixed_barriers")
+        user_config["timeout_candles"] = 0
+        user_config["trailing"] = {**(user_config.get("trailing") or {}), "enabled": False}
+    user_config["shadow_only_tp_sl"] = only_tp_sl
+
     user_config["shadow_atr_timeframe"] = ml_config.get("shadow_atr_timeframe")
     user_config["tp_atr_multiplier"] = ml_config.get("shadow_atr_multiplier_tp")
     user_config["sl_atr_multiplier"] = ml_config.get("shadow_atr_multiplier_sl")
@@ -458,7 +477,7 @@ def _resolve_lab_barrier(
         BARRIER_CONTRACT_ATR_DYNAMIC_V2,
         BARRIER_CONTRACT_ATR_DYNAMIC_V3,
     }:
-        return "FIXED", tp_pct, sl_pct, "shadow_fixed_v1"
+        return "FIXED", barrier_cfg.get("tp_pct", tp_pct), barrier_cfg.get("sl_pct", sl_pct), "shadow_fixed_v1"
     _atr_raw = features_flat.get("atr_percent")
     if _atr_raw is None:
         _atr_raw = features_flat.get("atr_pct")
@@ -507,6 +526,7 @@ def _build_economic_config_snapshot(
     """Fase 1 B.1 — contrato econômico completo, cópia point-in-time da
     config vigente na criação (nunca referência à config viva)."""
     return {
+        "shadow_only_tp_sl": bool(user_config.get("shadow_only_tp_sl")),
         "tp_pct": tp_pct,
         "sl_pct": sl_pct,
         "timeout_candles": timeout_candles,
@@ -1791,7 +1811,7 @@ async def _create_from_decision(
     )
     config_snap["feature_source_times"] = native_capture.source_times
     config_snap["feature_contract_errors"] = feature_errors
-    if normalized_source in APPROVED_SHADOW_SOURCES:
+    if normalized_source in APPROVED_SHADOW_SOURCES and not config_snap["shadow_only_tp_sl"]:
         from .shadow_l3_exit_service import load_frozen_policy
         config_snap["shadow_l3_exit_policy"] = await load_frozen_policy(db, decision.user_id)
     # Social Score is immutable decision-time context, not an ML feature in
@@ -2090,7 +2110,7 @@ async def _create_from_decision(
 
     row = res.fetchone()
     shadow_trade_id = row[0] if row is not None else None
-    if shadow_trade_id is not None and normalized_source in APPROVED_SHADOW_SOURCES:
+    if shadow_trade_id is not None and normalized_source in APPROVED_SHADOW_SOURCES and not config_snap["shadow_only_tp_sl"]:
         from .shadow_l3_exit_service import register_shadow
         await register_shadow(db, shadow_trade_id, decision.user_id, config_snap["shadow_l3_exit_policy"])
     if shadow_trade_id is not None and isinstance(_l3_gate_v2, dict):
@@ -4612,6 +4632,9 @@ async def create_strategy_lab_shadows(
     # carimbado como v2).
     try:
         barrier_cfg = await _load_lab_barrier_config(user_id)
+        if barrier_cfg.get("shadow_only_tp_sl"):
+            timeout_candles = 0
+            trailing_policy = {**trailing_policy, "enabled": False}
     except Exception:
         return 0
     if barrier_cfg.get("ml_active_barrier_contract_version") == BARRIER_CONTRACT_ATR_DYNAMIC_V2:
@@ -4723,6 +4746,7 @@ async def create_strategy_lab_shadows(
             initial_status = "PENDING"
 
         config_snap = {
+            "shadow_only_tp_sl": bool(barrier_cfg.get("shadow_only_tp_sl")),
             "tp_pct": _tp_eff,
             "sl_pct": _sl_eff,
             "timeout_candles": timeout_candles,
@@ -4914,6 +4938,9 @@ async def create_strategy_lab_rejected_shadows(
     # Contrato de barreira — mesma fonte do L3 canônico (ver create_strategy_lab_shadows).
     try:
         barrier_cfg = await _load_lab_barrier_config(user_id)
+        if barrier_cfg.get("shadow_only_tp_sl"):
+            timeout_candles = 0
+            trailing_policy = {**trailing_policy, "enabled": False}
     except Exception:
         return 0
     if barrier_cfg.get("ml_active_barrier_contract_version") == BARRIER_CONTRACT_ATR_DYNAMIC_V2:
@@ -5022,6 +5049,7 @@ async def create_strategy_lab_rejected_shadows(
             initial_status = "PENDING"
 
         config_snap = {
+            "shadow_only_tp_sl": bool(barrier_cfg.get("shadow_only_tp_sl")),
             "tp_pct": _tp_eff,
             "sl_pct": _sl_eff,
             "timeout_candles": timeout_candles,

@@ -20,6 +20,9 @@ ML_SHADOW_KEYS = (
     "ml_active_barrier_contract_version",
 )
 ML_SHADOW_OPTIONAL_KEYS = (
+    "shadow_fixed_tp_pct",
+    "shadow_fixed_sl_pct",
+    "shadow_only_tp_sl",
     "ml_l3_managed_exit",
     "shadow_capture_l3_rejected_max_per_hour",
     "shadow_measurement_timeframe_priority",
@@ -76,6 +79,10 @@ class MLShadowConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     shadow_barrier_mode: Literal["FIXED", "ATR_DYNAMIC"] = "ATR_DYNAMIC"
+    # Optional for compatibility: legacy FIXED snapshots keep their Spot-derived values.
+    shadow_fixed_tp_pct: float | None = Field(default=None, gt=0, le=100)
+    shadow_fixed_sl_pct: float | None = Field(default=None, gt=0, lt=100)
+    shadow_only_tp_sl: bool = False
     shadow_atr_timeframe: Literal["1m", "5m", "15m", "1h"] = "5m"
     shadow_atr_multiplier_tp: float = Field(1.5, gt=0, le=100)
     shadow_atr_multiplier_sl: float = Field(1.5, gt=0, le=100)
@@ -166,6 +173,12 @@ class MLShadowConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_contract_pair(self) -> "MLShadowConfig":
+        if (self.shadow_fixed_tp_pct is None) != (self.shadow_fixed_sl_pct is None):
+            raise ValueError("Informe TP e SL fixos do Shadow juntos")
+        if self.shadow_only_tp_sl and (
+            self.shadow_barrier_mode != "FIXED" or self.shadow_fixed_tp_pct is None
+        ):
+            raise ValueError("Somente TP/SL exige modo FIXED e percentuais fixos explícitos")
         allowed = (
             {"shadow_atr_dynamic_v2", "shadow_atr_dynamic_v3"}
             if self.shadow_barrier_mode == "ATR_DYNAMIC"
