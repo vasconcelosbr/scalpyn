@@ -2779,6 +2779,38 @@
           ]
         }
       ]
+    },
+    {
+      "id": "recovery-shadow-settings-save",
+      "description": "Recovery allows Shadow-only aggregate settings saves; operational documents and trading routes remain protected.",
+      "files": [
+        {
+          "path": "backend/app/services/strategy_settings_service.py",
+          "contains_all": [
+            "RECOVERY_SHADOW_SETTINGS_ONLY",
+            "_recovery_shadow_only(current_parts, candidate_parts)",
+            "documents = {\"ml\": full_ml}"
+          ]
+        },
+        {
+          "path": "backend/tests/test_strategy_settings_recovery.py",
+          "contains_all": [
+            "test_recovery_form_saves_shadow_preserves_raw_spot_and_invalidates_cache",
+            "test_recovery_rejects_mixed_live_edits_before_any_write"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "shadow-fixed-independent-exits",
+      "description": "Explicit Shadow fixed TP/SL and barrier-only exit policy are frozen for new trades, independent of Spot and managed exits.",
+      "files": [
+        {"path": "backend/app/services/shadow_trade_service.py", "contains_all": ["SHADOW_FIXED_EXIT_POLICY", "shadow_only_tp_sl"]},
+        {"path": "backend/app/tasks/shadow_trade_monitor.py", "contains_all": ["not only_tp_sl"]},
+        {"path": "backend/app/services/shadow_l3_exit_service.py", "contains_all": ["shadow_only_tp_sl"]},
+        {"path": "backend/tests/test_shadow_fixed_exit_policy.py", "contains_all": ["test_creation_freezes_fixed_snapshot_and_disables_early_exits", "test_fixed_boundaries_hold_or_close_without_early_exit"]},
+        {"path": "frontend/app/settings/strategies/page.tsx", "contains_all": ["TP fixo do Shadow", "SL fixo do Shadow", "Encerrar somente por TP ou SL"]}
+      ]
     }
   ]
 }

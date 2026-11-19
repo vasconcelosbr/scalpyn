@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable
@@ -81,6 +82,23 @@ class StrategySettingsConflictError(RuntimeError):
 
 class StrategySettingsValidationError(ValueError):
     """Raised when an imported or edited aggregate document is invalid."""
+
+
+class StrategySettingsRecoveryError(PermissionError):
+    """Recovery permits Shadow-only edits, never live strategy changes."""
+
+
+def _recovery_shadow_only(current: Dict[str, Any], candidate: Dict[str, Any]) -> bool:
+    # RECOVERY_SHADOW_SETTINGS_ONLY: check normalized changes, not submitted keys.
+    if os.environ.get("RECOVERY_OBSERVATION_ONLY") != "1":
+        return False
+    changed = [key for key in ("strategy", "spot_engine") if candidate[key] != current[key]]
+    if changed:
+        raise StrategySettingsRecoveryError(
+            "Modo de recuperação: salve apenas alterações em Shadow Portfolio — Barreiras e custos. "
+            "Alterações de estratégia/Spot continuam bloqueadas: " + ", ".join(changed)
+        )
+    return True
 
 
 def _canonical_hash(parts: Dict[str, Any]) -> str:
@@ -745,6 +763,7 @@ class StrategySettingsService:
             for key in ("strategy", "spot_engine", "ml_shadow")
         }
         candidate_parts = self.validate_payload(payload, current_parts)
+        _recovery_shadow_only(current_parts, candidate_parts)
         return {
             "valid": True,
             "source_hash": current["config"]["source_hash"],
@@ -776,6 +795,7 @@ class StrategySettingsService:
             )
 
         candidate_parts = self.validate_payload(payload, current_parts)
+        recovery_shadow_only = _recovery_shadow_only(current_parts, candidate_parts)
         full_ml = dict(raw_by_type.get("ml") or {})
         full_ml.update(candidate_parts["ml_shadow"])
         documents = {
@@ -783,6 +803,9 @@ class StrategySettingsService:
             "spot_engine": candidate_parts["spot_engine"],
             "ml": full_ml,
         }
+        if recovery_shadow_only:
+            # Do not materialize defaults or normalize unrelated raw documents.
+            documents = {"ml": full_ml}
         changed_types: list[str] = []
         for config_type, new_json in documents.items():
             profile = profiles.get(config_type)

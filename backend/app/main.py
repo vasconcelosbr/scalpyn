@@ -388,11 +388,11 @@ from .api import profile_bayesian_intelligence as profile_bayesian_api
 
 _RECOVERY_RESOURCE_ID = r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}"
 _RECOVERY_EDIT_ROUTES = {
-    "PUT": _re.compile(rf"/api/(?:(?:profiles|watchlists)/{_RECOVERY_RESOURCE_ID}|mtf/(?:config|preferences|observations/settings))"),
+    "PUT": _re.compile(rf"/api/(?:(?:profiles|watchlists)/{_RECOVERY_RESOURCE_ID}|mtf/(?:config|preferences|observations/settings)|strategy-settings/config)"),
     "PATCH": _re.compile(rf"/api/pools/{_RECOVERY_RESOURCE_ID}"),
     "POST": _re.compile(
         rf"/api/(?:pools/{_RECOVERY_RESOURCE_ID}/coins(?:/bulk)?"
-        rf"|watchlists/{_RECOVERY_RESOURCE_ID}/refresh|mtf/observations/exports)"
+        rf"|watchlists/{_RECOVERY_RESOURCE_ID}/refresh|mtf/observations/exports|strategy-settings/import/validate)"
     ),
     "DELETE": _re.compile(rf"/api/watchlists/{_RECOVERY_RESOURCE_ID}"),
 }

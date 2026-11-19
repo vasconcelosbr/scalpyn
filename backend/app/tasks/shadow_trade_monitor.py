@@ -1416,7 +1416,8 @@ async def _advance_shadow(
         return "pending"
 
     l3_policy = (shadow.config_snapshot or {}).get("shadow_l3_exit_policy") or {}
-    if shadow.source in ("L3", "L3_CONSOLIDATED") and (l3_policy.get("config") or {}).get("mode") == "APPLY":
+    only_tp_sl = (shadow.config_snapshot or {}).get("shadow_only_tp_sl") is True
+    if not only_tp_sl and shadow.source in ("L3", "L3_CONSOLIDATED") and (l3_policy.get("config") or {}).get("mode") == "APPLY":
         from ..services.shadow_l3_exit_service import advance_shadow
         await advance_shadow(db, shadow)
         return "completed" if shadow.status == "COMPLETED" else "running"
@@ -1715,7 +1716,8 @@ async def _advance_shadow(
             return "completed"
 
     if (
-        force_close_policy
+        not only_tp_sl
+        and force_close_policy
         and force_close_policy.get("enabled")
     ):
         now_utc = datetime.now(timezone.utc)
