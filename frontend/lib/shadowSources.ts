@@ -13,3 +13,8 @@ export function applyShadowSourceFilter(params: URLSearchParams, tab?: string, o
   if (tab === "L3" && origin === "all") params.set("sources", "L3,L3_CONSOLIDATED");
   else if (tab) params.set("source", tab === "L3" ? origin : tab);
 }
+
+export type EntrySignalFilter = "ALL" | "ARMED" | "TRIGGERED";
+export function applyShadowEntrySignalFilter(params: URLSearchParams, signal: EntrySignalFilter) {
+  if (signal !== "ALL") params.set("entry_signal", signal);
+}

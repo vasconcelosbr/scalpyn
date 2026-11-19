@@ -2753,6 +2753,32 @@
           ]
         }
       ]
+    },
+    {
+      "id": "shadow-entry-signal-filter",
+      "description": "Shadow Portfolio filters frozen ARMED/TRIGGERED entry origin before pagination and aggregation.",
+      "files": [
+        {
+          "path": "backend/app/api/shadow_trades.py",
+          "contains_all": [
+            "SHADOW_ENTRY_SIGNAL_FILTER",
+            "entry_signal=entry_signal"
+          ]
+        },
+        {
+          "path": "backend/tests/test_shadow_entry_signal_filter.py",
+          "contains_all": [
+            "test_list_pagination_summary_and_frozen_label_agree"
+          ]
+        },
+        {
+          "path": "frontend/app/dashboard/shadow-portfolio/page.tsx",
+          "contains_all": [
+            "aria-label=\"Origem do sinal\"",
+            "applyShadowEntrySignalFilter(params, filter.entrySignal)"
+          ]
+        }
+      ]
     }
   ]
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { applyShadowSourceFilter, shadowSourceLabel, shadowEntrySignalLabel, type ApprovedOrigin } from "@/lib/shadowSources";
+import { applyShadowSourceFilter, shadowSourceLabel, shadowEntrySignalLabel, type ApprovedOrigin, applyShadowEntrySignalFilter, type EntrySignalFilter } from "@/lib/shadowSources";
 
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
@@ -263,6 +263,7 @@ interface ProfileIntelligenceCandidate {
 type StatusFilter = "ALL" | "OPEN" | "TP_HIT" | "SL_HIT" | "TRAILING_STOP" | "TIMEOUT";
 
 interface FilterState {
+  entrySignal: EntrySignalFilter;
   status: StatusFilter;
   symbol: string;
   minDate: string; // <input type="datetime-local"> value, DISPLAY_TZ (GMT-3) wall-clock
@@ -272,6 +273,7 @@ interface FilterState {
 }
 
 const DEFAULT_FILTER: FilterState = {
+  entrySignal: "ALL",
   status: "ALL",
   symbol: "",
   minDate: "",
@@ -535,6 +537,20 @@ function FilterBar({
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <label style={{ color: C.muted, fontSize: 11.5 }}>
+          Origem do sinal{" "}
+          <select
+            aria-label="Origem do sinal"
+            value={filter.entrySignal}
+            onChange={event => onChange({ ...filter, entrySignal: event.target.value as EntrySignalFilter, page: 1 })}
+            style={{ background: C.elevated, border: `1px solid ${C.border}`, color: C.text,
+              borderRadius: 6, padding: "6px 10px", fontSize: 11.5 }}
+          >
+            <option value="ALL">Todos</option>
+            <option value="ARMED">Armado</option>
+            <option value="TRIGGERED">Gatilho</option>
+          </select>
+        </label>
         <input
           type="text"
           value={filter.symbol}
@@ -2349,6 +2365,7 @@ function buildBaseQuery(
   // selecionado. Isso permite ao backend localizar o profile também entre os
   // associados de uma consolidação sem misturar fontes.
   applyShadowSourceFilter(params, source, approvedOrigin);
+  applyShadowEntrySignalFilter(params, filter.entrySignal);
   if (profileId) params.set("profile_id", profileId);
   params.set("page", String(overrides.page ?? filter.page));
   params.set("page_size", String(overrides.page_size ?? filter.pageSize));
@@ -2363,6 +2380,7 @@ function buildSummaryQuery(filter: FilterState, source?: SourceTab, profileId?: 
   if (minDateUtc) params.set("min_date", minDateUtc);
   if (maxDateUtc) params.set("max_date", maxDateUtc);
   applyShadowSourceFilter(params, source, approvedOrigin);
+  applyShadowEntrySignalFilter(params, filter.entrySignal);
   if (profileId) params.set("profile_id", profileId);
   return params.toString();
 }
