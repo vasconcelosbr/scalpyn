@@ -11,7 +11,7 @@ import httpx
 from .redis_client import get_async_redis
 
 CMC_FEAR_GREED_URL = 'https://pro-api.coinmarketcap.com/v3/fear-and-greed/latest'
-CLASSIFICATIONS = {'Extreme Fear', 'Fear', 'Neutral', 'Greed', 'Extreme Greed'}
+CLASSIFICATIONS = {label.casefold(): label for label in ('Extreme Fear', 'Fear', 'Neutral', 'Greed', 'Extreme Greed')}
 
 
 def reading(data, now):
@@ -21,12 +21,15 @@ def reading(data, now):
     value = data.get('value')
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 <= value <= 100:
         raise ValueError('INVALID_VALUE')
-    if data.get('value_classification') not in CLASSIFICATIONS:
+    # CMC_CLASSIFICATION_CASE: live API uses "Extreme fear", docs use "Extreme Fear".
+    raw_classification = data.get('value_classification')
+    classification = CLASSIFICATIONS.get(raw_classification.casefold()) if isinstance(raw_classification, str) else None
+    if classification is None:
         raise ValueError('INVALID_CLASSIFICATION')
     at = datetime.fromisoformat(str(data.get('update_time')).replace('Z', '+00:00'))
     if at.tzinfo is None or at.timestamp() > now:
         raise ValueError('INVALID_SOURCE_TIME')
-    return {'value': value, 'classification': data['value_classification'],
+    return {'value': value, 'classification': classification,
             'update_time': at.astimezone(timezone.utc).isoformat()}
 
 
@@ -69,7 +72,8 @@ async def get_snapshot(uid, key, cfg):
         return {**snapshot(None, cfg, now=time.time()), 'status': 'NOT_CONFIGURED', 'reason': 'KEY_NOT_CONFIGURED'}
     # Per-user cache and credential fingerprint prevent cross-account reuse and
     # make replacing/removing a key effective immediately. Never log the key.
-    cache_key = f'mtf:cmc:fear-greed:v1:{uid}:{sha256(key.encode()).hexdigest()}'
+    # New parser version must not reuse failures cached by case-sensitive parsing.
+    cache_key = f'mtf:cmc:fear-greed:v2:{uid}:{sha256(key.encode()).hexdigest()}'
     entry = None
     try:
         async with asyncio.timeout(20):

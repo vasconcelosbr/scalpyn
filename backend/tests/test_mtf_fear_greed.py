@@ -35,8 +35,17 @@ def test_invalid_values_never_become_sentiment(value):
 
 
 def test_invalid_classification_and_time():
-    for payload in [data(classification='unknown'), data(at=AT+1), {**data(), 'update_time': '2026-11-20T01:00:00'}]:
+    for payload in [data(classification=v) for v in ('unknown', '', None, [], True)] + [data(at=AT+1), {**data(), 'update_time': '2026-11-20T01:00:00'}]:
         with pytest.raises(ValueError): service.reading(payload, AT)
+
+
+@pytest.mark.parametrize('source,expected', [('Extreme fear','Extreme Fear'), ('Extreme greed','Extreme Greed'), ('FEAR','Fear'), ('neutral','Neutral'), ('greed','Greed')])
+def test_live_classification_casing_preserves_source_value_and_time(source, expected):
+    payload = data(value=8, classification=source)
+    result = service.snapshot({'data': payload, 'fetched_at': 'original'}, CFG, now=AT)
+    assert result['status'] == 'READY' and result['classification'] == expected
+    assert result['value'] == payload['value'] and result['update_time'] == payload['update_time']
+    assert result['fetched_at'] == 'original'
 
 
 def test_age_uses_source_time_not_latest_fetch_and_settings_do_not_change_engine():
@@ -104,7 +113,7 @@ async def test_official_api_only_and_provider_errors(monkeypatch, code, expected
         async def get(self, url, **kwargs):
             assert url == 'https://pro-api.coinmarketcap.com/v3/fear-and-greed/latest'
             assert kwargs['headers']['X-CMC_PRO_API_KEY'] == 'private-key'
-            return httpx.Response(code, json={'data':data(),'status':{'error_code':'0'}}, request=httpx.Request('GET',url))
+            return httpx.Response(code, json={'data':data(classification='Extreme fear'),'status':{'error_code':'0'}}, request=httpx.Request('GET',url))
     monkeypatch.setattr(service.httpx, 'AsyncClient', lambda **kwargs: Client())
     monkeypatch.setattr(service.time, 'time', lambda: AT)
     value, error = await service.fetch_reading('private-key')
