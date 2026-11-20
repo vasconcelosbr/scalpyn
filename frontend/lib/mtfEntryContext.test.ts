@@ -6,7 +6,7 @@ import { MTFEntryContext } from '../components/mtf/MTFEntryContext';
 import type { Analysis, Presentation } from '../components/mtf/types';
 
 const analysis = {
-  status: 'NO_TRADE', config_hash: 'current', context_4h: { trend: 'UP' },
+  status: 'NO_TRADE', config_hash: 'current', context_4h: { trend: 'UP', last_pivots:['HH','HL'] },
   vetoes: ['BTC_DOWNTREND'], trigger_5m: null, plan: null,
   trigger_diagnostics: { status: 'NO_TRADE', config_hash: 'current', checks: [
     { id: 'zone', label: 'Proximidade do suporte', timeframe: '1h', role: 'required', state: 'FAIL' },
@@ -20,7 +20,7 @@ const render = (value?: Analysis) => renderToStaticMarkup(createElement(MTFEntry
 test('uptrend with veto remains no trade and shows unmet entry conditions without changing analysis', () => {
   const original = structuredClone(analysis);
   const html = render(analysis);
-  for (const text of ['Viés estrutural', 'Alta', 'SEM TRADE', 'Bitcoin em tendência de baixa', 'Proximidade do suporte', 'Padrão de compra no candle fechado']) assert(html.includes(text));
+  for (const text of ['Estrutura 4H', 'Alta', 'SEM TRADE', 'Bitcoin em tendência de baixa', 'Proximidade do suporte', 'Padrão de compra no candle fechado']) assert(html.includes(text));
   for (const text of ['COMPRA (Long)', 'GATILHO CONFIRMADO', 'Volume relativo']) assert(!html.includes(text));
   assert.deepEqual(analysis, original);
 });

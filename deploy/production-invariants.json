@@ -2816,7 +2816,7 @@
       "id": "mtf-structure-entry-separation",
       "description": "MTF displays structural direction independently from simulated entry status and active vetoes, without labeling an uptrend as a buy.",
       "files": [
-        {"path": "frontend/components/mtf/MTFEntryContext.tsx", "contains_all": ["MTF_ENTRY_CONTEXT", "Viés estrutural", "Entrada simulada", "analysis.vetoes", "entries[analysis.status]"]},
+        {"path": "frontend/components/mtf/MTFEntryContext.tsx", "contains_all": ["MTF_ENTRY_CONTEXT", "MTFStructurePanel", "Entrada simulada", "analysis.vetoes", "entries[analysis.status]"]},
         {"path": "frontend/app/grafico-mtf/page.tsx", "contains_all": ["<MTFEntryContext analysis={analysis}"]},
         {"path": "frontend/lib/mtfEntryContext.test.ts", "contains_all": ["uptrend with veto remains no trade", "unavailable evaluations never suggest an entry"]}
       ]
@@ -2846,7 +2846,7 @@
         {"path": "backend/app/services/mtf_btc_market.py", "contains_all": ["MTF_BTC_MARKET_DISPLAY_ONLY", "GATE_TICKERS_URL", "GATE_SPOT_URL", "TICKER_VS_MINUTE_CLOSE"]},
         {"path": "backend/tests/test_mtf_btc_market.py", "contains_all": ["test_rolling_returns_use_prior_close_and_independent_signs", "test_authenticated_endpoint_releases_db_without_evaluating_or_writing", "https://api.gateio.ws/api/v4/spot/"]},
         {"path": "frontend/components/mtf/MTFBitcoinTicker.tsx", "contains_all": ["/mtf/btc-market", "Gate.io", "ArrowDown", "ArrowUp", "MTF_BTC_VETO_READING", "analysis.btc_trend", "Tendência do Bitcoin · 4H"]},
-        {"path": "frontend/app/grafico-mtf/page.tsx", "contains_all": ["<MTFBitcoinTicker", "timezone={prefs.timezone} analysis={analysis}", "e.detail === 'ASSET_NO_LONGER_IN_WATCHLIST'"]}
+        {"path": "frontend/app/grafico-mtf/page.tsx", "contains_all": ["<MTFBitcoinTicker", "timezone={prefs.timezone} analysis={analysis}", "chartRemovalState"]}
       ]
     },
     {
@@ -2886,6 +2886,57 @@
             "new EntryBandPrimitive",
             "entryBandView",
             "Faixa candidata de entrada"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "mtf-structure-read-only",
+      "description": "Separate confirmed pivot structure, state and conflicts without changing decisions; reconcile removal with a fresh watchlist read.",
+      "files": [
+        {
+          "path": "backend/app/services/mtf_structure.py",
+          "contains_all": [
+            "MTF_STRUCTURE_READ_ONLY",
+            "async def enrich_watchlist",
+            "structure_context"
+          ]
+        },
+        {
+          "path": "backend/app/api/mtf_chart.py",
+          "contains_all": [
+            "'structure_context': structure_context(data, cfg)",
+            "enrich_watchlist(db, uid, watchlist_id, items, cfg)"
+          ]
+        },
+        {
+          "path": "frontend/components/mtf/MTFStructurePanel.tsx",
+          "contains_all": [
+            "Estrutura 4H",
+            "Invalidação estrutural",
+            "EMA50",
+            "Conflito MTF"
+          ]
+        },
+        {
+          "path": "frontend/app/grafico-mtf/page.tsx",
+          "contains_all": [
+            "chartRemovalState",
+            "Carregando avaliação…",
+            "<MTFStructureCompact"
+          ]
+        },
+        {
+          "path": "backend/tests/test_mtf_structure.py",
+          "contains_all": [
+            "test_projection_preserves_entire_evaluation_and_separates_open_candle",
+            "test_watchlist_reads_exact_validated_owner_observation_without_writes"
+          ]
+        },
+        {
+          "path": "frontend/lib/mtfMembership.test.ts",
+          "contains_all": [
+            "racing chart 404 cannot declare removal"
           ]
         }
       ]

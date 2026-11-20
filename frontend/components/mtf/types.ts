@@ -4,6 +4,18 @@ export interface Candle { time: number; open: number; high: number; low: number;
 export interface Point { time: number; value: number }
 export interface Pattern { time: number; pattern: string; metrics: Record<string, number> }
 export interface Pivot { time: number; price: number; label: string; kind: string; confirmed_at: number }
+export interface StructureFrame {
+  trend: 'UP'|'DOWN'|'RANGE'|null; pivots: Pivot[]; last_hl: Pivot|null; last_lh: Pivot|null;
+  last_pivot_age_candles: number|null; atr:number|null; ema50:number|null; closed_close:number|null;
+  closed_at:string|null; extension_atr:number|null; live_candle:Candle|null; live_change_pct:number|null;
+}
+export interface StructureContext {
+  source:'chart'|'observation'; as_of:string; evaluated_at:string; valid_until:string; config_hash:string;
+  profile_id:string|null; frames:Record<Timeframe,StructureFrame>; current_price:number|null;
+  current_price_source:string|null; invalidation:Pivot|null; invalidation_distance_atr:number|null;
+  conflict:boolean|null; conflicts:{kind:'structure'|'flow';timeframe:'1h'|'5m';state:string;sequence:string[];ratio:number|null}[];
+  operational_effect:false;
+}
 export interface Zone { type: string; low: number; high: number; touches: number; available_at: number; distance_atr?: number; in_zone?: boolean; rejection?: boolean }
 export interface Frame { candles: Candle[]; indicators: Record<string, Point[]>; patterns: Pattern[]; pivots: Pivot[]; patterns_removed?: [number,string][]; pivots_removed?: [number,string][]; zones?: Zone[]; warmup?: {reason: string | null}; window_start?: number; error?: string | null; stale: boolean; source: string }
 export interface Plan { side: string; entry_type: string; entry: number; stop: number; tp1: number; tp2: number; rr_net: number; rr_gross: number; quantity: number; notional_usdt: number; expires_at: string; expires_after_candles: number }
@@ -22,6 +34,7 @@ export interface TriggerDiagnostics {
   patterns: { pattern: string; state: DiagnosticState; conditions: TriggerCheck[] }[];
 }
 export interface Analysis {
+  profile_id?: string | null;
   entry_candidate?: EntryCandidate | null;
   pump_flow?: PumpFlowContext;
   trigger_diagnostics?: TriggerDiagnostics;
@@ -32,10 +45,10 @@ export interface Analysis {
   plan: Plan | null; score: { total: number; raw?: number | null; maximum: number; components: Record<string, number>; calibrated: false };
   vetoes: string[]; explanation: string[]; unavailable_profile_indicators: string[]; spread_pct: number | null; btc_trend: string | null;
 }
-export interface ChartData { symbol: string; frames: Record<Timeframe, Frame>; analysis: Analysis; as_of: string; profile: Profile | null; indicator_config: Record<string, unknown>; cursor?: string; transport?: 'full'|'delta'; price_format?: {precision: number; min_move: number; source: string} | null }
+export interface ChartData { structure_context?: StructureContext | null; symbol: string; frames: Record<Timeframe, Frame>; analysis: Analysis; as_of: string; profile: Profile | null; indicator_config: Record<string, unknown>; cursor?: string; transport?: 'full'|'delta'; price_format?: {precision: number; min_move: number; source: string} | null }
 export interface Profile { id: string; name: string; default_timeframe?: string }
 export interface Watchlist { id: string; name: string; profile_id?: string }
-export interface Asset { symbol: string; current_price?: number | null; price_snapshot_at?: string | null; alpha_score?: number | null; profile_id?: string; mtf?: Analysis | null }
+export interface Asset { structure_context?: StructureContext | null; symbol: string; current_price?: number | null; price_snapshot_at?: string | null; alpha_score?: number | null; profile_id?: string; mtf?: Analysis | null }
 export interface MTFConfig {
   schema_version: string; enabled: boolean; calibrated: false; default_watchlist: string; monitored_watchlists: string[];
   poll_seconds: number; history_page_size: number; candle_limits: Record<Timeframe, number>; stale_tf_multiplier: number;
