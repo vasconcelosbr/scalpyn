@@ -2833,8 +2833,8 @@
       "id": "mtf-cmc-fear-greed-display",
       "description": "Official CMC sentiment is display-only, user-key scoped and cached; presentation settings never change the MTF engine.",
       "files": [
-        {"path": "backend/app/services/mtf_fear_greed.py", "contains_all": ["MTF_CMC_DISPLAY_ONLY", "https://pro-api.coinmarketcap.com/v3/fear-and-greed/latest", "redis.lock", "KEY_NOT_CONFIGURED"]},
-        {"path": "backend/tests/test_mtf_fear_greed.py", "contains_all": ["test_coalesced_user_cache_rotation_failure_and_original_time", "test_endpoint_auth_read_only_and_releases_transaction", "test_age_uses_source_time_not_latest_fetch_and_settings_do_not_change_engine"]},
+        {"path": "backend/app/services/mtf_fear_greed.py", "contains_all": ["MTF_CMC_DISPLAY_ONLY", "https://pro-api.coinmarketcap.com/v3/fear-and-greed/latest", "redis.lock", "KEY_NOT_CONFIGURED", "CMC_CLASSIFICATION_CASE"]},
+        {"path": "backend/tests/test_mtf_fear_greed.py", "contains_all": ["test_coalesced_user_cache_rotation_failure_and_original_time", "test_endpoint_auth_read_only_and_releases_transaction", "test_age_uses_source_time_not_latest_fetch_and_settings_do_not_change_engine", "test_live_classification_casing_preserves_source_value_and_time"]},
         {"path": "frontend/components/mtf/MTFFearGreed.tsx", "contains_all": ["/mtf/fear-greed", "Configure a CoinMarketCap", "Desatualizado"]},
         {"path": "frontend/app/grafico-mtf/page.tsx", "contains_all": ["<MTFFearGreed"]}
       ]
