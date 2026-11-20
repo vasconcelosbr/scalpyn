@@ -23,6 +23,17 @@ const config={schema_version:'mtf_chart_v1',atr_period:null,force_patterns:['ENG
   presentation:{target_pct:1,retry_initial_seconds:3,retry_max_seconds:30}} as unknown as MTFConfig;
 const boot={preset:config,presentation_preset:config.presentation,inherited_atr:{enabled:true,period:14}} as Bootstrap;
 
+test('entry band is editable without changing inherited ATR, score or veto rules',()=>{
+  const context={...boot,presentation_preset:{...boot.presentation_preset,entry_band_enabled:true}};
+  const draft=settingsDraft(config,context);
+  assert.equal(draft.presentation?.entry_band_enabled,true);
+  const changed=settingsForSave(withConfigValue(draft,'presentation.entry_band_enabled',false),config,context);
+  const {presentation,...rules}=changed;
+  const {presentation:old,...original}=config;
+  assert.deepEqual(rules,original);
+  assert.deepEqual(presentation,{...old,entry_band_enabled:false});
+});
+
 test('fear and greed controls preserve rules and validate source freshness',()=>{
   const presentation={...boot.presentation_preset,fear_greed:{enabled:true,refresh_seconds:900,max_age_seconds:3600}};
   const context={...boot,presentation_preset:presentation};

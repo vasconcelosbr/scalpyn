@@ -24,6 +24,7 @@ class MTFPresentation(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     target_pct: float = Field(default=1, gt=0)
     fear_greed: MTFFearGreedConfig | None = None
+    entry_band_enabled: StrictBool | None = None
     visible_candles: dict[Literal['4h', '1h', '5m'], int]
     panel_heights: dict[Literal['price', 'volume', 'rsi', 'adx', 'other'], int]
     default_indicators: list[str]
@@ -55,6 +56,7 @@ def presentation_preset() -> dict:
     """Explicit editable seed, never merged into persisted engine configuration."""
     return MTFPresentation.model_validate({
         'fear_greed': {'enabled': True, 'refresh_seconds': 900, 'max_age_seconds': 3600},
+        'entry_band_enabled': True,
         'visible_candles': {'4h': 90, '1h': 120, '5m': 150},
         'panel_heights': {'price': 420, 'volume': 90, 'rsi': 110, 'adx': 110, 'other': 110},
         'default_indicators': ['ema9', 'ema21', 'volume_ma', 'rsi', 'adx'],

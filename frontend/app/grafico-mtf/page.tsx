@@ -230,7 +230,7 @@ export default function MTFPage() {
         {error && <div className="mtf-error">{error}<button onClick={() => setRefresh(v=>v+1)}>Tentar novamente</button></div>}
         {membership==='removed' && <div className="mtf-warning">Ativo saiu da watchlist.{data && ' Dados anteriores disponíveis apenas para consulta histórica.'}</div>}
         {loading && !data && <div className="mtf-empty mtf-loading"><RefreshCw className="spin"/> Carregando candles e indicadores canônicos…</div>}
-        {data && cfg?.presentation && <><div className="mtf-data-freshness">{historical?`CONSULTA HISTÓRICA · dados de ${date(data.as_of)} · sem confirmação de oportunidade atual`:`Dados consultados em ${date(data.as_of)}`}</div><MTFCandlestickChart data={data} timeframe={tf} preferences={prefs} config={cfg.presentation} onPreference={preference} targetEnabled={watchlist==='l3-consolidated'}/></>}
+        {data && cfg?.presentation && <><div className="mtf-data-freshness">{historical?`CONSULTA HISTÓRICA · dados de ${date(data.as_of)} · sem confirmação de oportunidade atual`:`Dados consultados em ${date(data.as_of)}`}</div><MTFCandlestickChart data={data} timeframe={tf} preferences={prefs} config={cfg.presentation} onPreference={preference} targetEnabled={watchlist==='l3-consolidated'} analysisCurrent={!!analysis}/></>}
         {!data && !loading && !error && membership!=='removed' && <div className="mtf-empty mtf-welcome"><Activity size={42}/><h2>O contexto antes do gatilho.</h2><p>Selecione uma oportunidade para conectar direção, zona e price action.</p><span>4H DIREÇÃO → 1H ZONA → 5M GATILHO</span></div>}
       </section>
       {right && <aside className="mtf-analysis">

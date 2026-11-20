@@ -13,6 +13,8 @@ export function settingsDraft(config: MTFConfig | null, boot: Bootstrap): MTFCon
     target_pct: next.presentation?.target_pct ?? boot.presentation_preset.target_pct};
   if (next.presentation.fear_greed == null && boot.presentation_preset.fear_greed)
     next.presentation.fear_greed = structuredClone(boot.presentation_preset.fear_greed);
+  if (next.presentation.entry_band_enabled == null && boot.presentation_preset.entry_band_enabled != null)
+    next.presentation.entry_band_enabled = boot.presentation_preset.entry_band_enabled;
   if (next.pump_flow == null && boot.pump_flow_preset) next.pump_flow = structuredClone(boot.pump_flow_preset);
   next.force_patterns ??= boot.preset.force_patterns;
   next.rejection_patterns ??= boot.preset.rejection_patterns;

@@ -2848,6 +2848,47 @@
         {"path": "frontend/components/mtf/MTFBitcoinTicker.tsx", "contains_all": ["/mtf/btc-market", "Gate.io", "ArrowDown", "ArrowUp", "MTF_BTC_VETO_READING", "analysis.btc_trend", "Tendência do Bitcoin · 4H"]},
         {"path": "frontend/app/grafico-mtf/page.tsx", "contains_all": ["<MTFBitcoinTicker", "timezone={prefs.timezone} analysis={analysis}", "e.detail === 'ASSET_NO_LONGER_IN_WATCHLIST'"]}
       ]
+    },
+    {
+      "id": "mtf-candidate-entry-display",
+      "description": "Current selected support guide is optional, expires and preserves all strategy gates.",
+      "files": [
+        {
+          "path": "backend/app/services/mtf_entry_band.py",
+          "contains_all": [
+            "MTF_CANDIDATE_ENTRY_DISPLAY_ONLY",
+            "zone_proximity_atr",
+            "operational_effect=False"
+          ]
+        },
+        {
+          "path": "backend/app/services/mtf_chart_service.py",
+          "contains_all": [
+            "analysis['entry_candidate'] = candidate_entry_band(analysis, frames, cfg, now)"
+          ]
+        },
+        {
+          "path": "backend/tests/test_mtf_entry_band.py",
+          "contains_all": [
+            "test_band_preserves_engine_identity_score_vetoes_and_plan",
+            "test_invalid_or_stale_context_never_draws_a_candidate"
+          ]
+        },
+        {
+          "path": "frontend/components/mtf/MTFSettingsDialog.tsx",
+          "contains_all": [
+            "presentation.entry_band_enabled"
+          ]
+        },
+        {
+          "path": "frontend/components/shadow-portfolio/TradeCandlestickChart.tsx",
+          "contains_all": [
+            "new EntryBandPrimitive",
+            "entryBandView",
+            "Faixa candidata de entrada"
+          ]
+        }
+      ]
     }
   ]
 }
