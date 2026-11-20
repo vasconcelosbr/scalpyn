@@ -11,6 +11,8 @@ export function settingsDraft(config: MTFConfig | null, boot: Bootstrap): MTFCon
   const next = structuredClone(config ?? boot.preset);
   next.presentation = {...(next.presentation ?? boot.presentation_preset),
     target_pct: next.presentation?.target_pct ?? boot.presentation_preset.target_pct};
+  if (next.presentation.fear_greed == null && boot.presentation_preset.fear_greed)
+    next.presentation.fear_greed = structuredClone(boot.presentation_preset.fear_greed);
   if (next.pump_flow == null && boot.pump_flow_preset) next.pump_flow = structuredClone(boot.pump_flow_preset);
   next.force_patterns ??= boot.preset.force_patterns;
   next.rejection_patterns ??= boot.preset.rejection_patterns;
@@ -100,6 +102,8 @@ export function validateSettings(config: MTFConfig, root: ConfigSchema): Record<
   if (config.atr_period != null && Number(config.atr_period) >= Math.min(...Object.values(config.candle_limits))) errors.atr_period = 'O período deve ser menor que o histórico de cada timeframe.';
   if (!(config.trigger_patterns as unknown[])?.length) errors.trigger_patterns = 'Selecione pelo menos um padrão.';
   if (config.presentation && config.presentation.retry_initial_seconds > config.presentation.retry_max_seconds) errors['presentation.retry_max_seconds'] = 'Deve ser igual ou maior que o intervalo inicial.';
+  if (config.presentation?.fear_greed && config.presentation.fear_greed.max_age_seconds < config.presentation.fear_greed.refresh_seconds)
+    errors['presentation.fear_greed.max_age_seconds'] = 'Deve ser igual ou maior que o intervalo de consulta.';
   if (config.schema_version === 'mtf_chart_v2') for (const tf of ['4h', '1h', '5m']) {
     const n = (config.zone_lookback_candles as Record<string, number> | null)?.[tf];
     if (n == null || n < 1 || n > config.candle_limits[tf as keyof typeof config.candle_limits]) errors[`zone_lookback_candles.${tf}`] = 'Informe uma janela dentro do histórico disponível.';

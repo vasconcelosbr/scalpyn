@@ -23,6 +23,19 @@ const config={schema_version:'mtf_chart_v1',atr_period:null,force_patterns:['ENG
   presentation:{target_pct:1,retry_initial_seconds:3,retry_max_seconds:30}} as unknown as MTFConfig;
 const boot={preset:config,presentation_preset:config.presentation,inherited_atr:{enabled:true,period:14}} as Bootstrap;
 
+test('fear and greed controls preserve rules and validate source freshness',()=>{
+  const presentation={...boot.presentation_preset,fear_greed:{enabled:true,refresh_seconds:900,max_age_seconds:3600}};
+  const context={...boot,presentation_preset:presentation};
+  const draft=settingsDraft(config,context);
+  const changed=settingsForSave(withConfigValue(draft,'presentation.fear_greed.refresh_seconds',1800),config,context);
+  const {presentation:visual,...rules}=changed;
+  const {presentation:oldVisual,...original}=config;
+  assert.deepEqual(rules,original);
+  assert.equal(visual?.fear_greed?.refresh_seconds,1800);
+  const invalid=withConfigValue(changed,'presentation.fear_greed.max_age_seconds',900);
+  assert.match(validateSettings(invalid,{})['presentation.fear_greed.max_age_seconds'],/intervalo de consulta/);
+});
+
 test('veto draft toggles preserve saved thresholds and cancellation baseline',()=>{
   const saved={...config,min_score:0,slippage_pct:.1,atr_period:14,veto_filters:{btc_downtrend:true,spread:true}};
   const draft=settingsDraft(saved,{...boot,preset:saved});
