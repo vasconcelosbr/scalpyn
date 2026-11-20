@@ -49,6 +49,18 @@ async def bootstrap(response: Response, db: AsyncSession = Depends(get_db), uid:
             "mode": "SHADOW", "operational_effect": False}
 
 
+@router.get('/fear-greed')
+async def fear_greed(response: Response, db: AsyncSession = Depends(get_db), uid: UUID = Depends(get_current_user_id)):
+    from ..services.mtf_fear_greed import get_snapshot
+    from ..services.ai_keys_service import get_decrypted_api_key
+    cfg = await config_or_error(db, uid)
+    settings = cfg.presentation.fear_greed if cfg.presentation else None
+    key = await get_decrypted_api_key(db, uid, 'coinmarketcap') if settings and settings.enabled else None
+    await db.rollback()
+    response.headers['Cache-Control'] = 'private, no-store'
+    return await get_snapshot(uid, key, settings)
+
+
 @router.put("/config")
 async def update_config(payload: MTFChartConfig, db: AsyncSession = Depends(get_db), uid: UUID = Depends(get_current_user_id)):
     allowed = {w["id"] for w in await service.watchlist_options(db, uid)}

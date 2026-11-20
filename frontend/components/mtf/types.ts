@@ -42,6 +42,7 @@ export interface MTFConfig {
   [key: string]: unknown;
 }
 export interface Presentation {
+  fear_greed?: { enabled: boolean; refresh_seconds: number; max_age_seconds: number } | null;
   target_pct?: number;
   visible_candles: Record<Timeframe,number>; panel_heights: Record<string,number>;
   default_indicators: string[]; markers_max: number; markers_recent_signals: number;

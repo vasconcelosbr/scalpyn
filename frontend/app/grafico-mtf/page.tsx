@@ -11,6 +11,7 @@ import { MTFSettingsDialog } from '@/components/mtf/MTFSettingsDialog';
 import { MTFPumpFlow } from '@/components/mtf/MTFPumpFlow';
 import { MTFTriggerDiagnostics } from '@/components/mtf/MTFTriggerDiagnostics';
 import { MTFBitcoinTicker } from '@/components/mtf/MTFBitcoinTicker';
+import { MTFFearGreed } from '@/components/mtf/MTFFearGreed';
 
 const initialPreferences: Preferences = { theme: 'dark', timezone: 'America/Sao_Paulo', sound: false, aligned_only: false };
 const statusOrder = { TRIGGERED: 0, ARMED: 1, WAIT: 2, NO_TRADE: 3 };
@@ -199,7 +200,10 @@ export default function MTFPage() {
       <div className="mtf-symbol"><strong>{symbol.replace('_','/') || 'Selecione um ativo'}</strong><span>{priceText}</span></div>
       <div className="mtf-timeframes">{(['4h','1h','5m'] as Timeframe[]).map(t => <button key={t} className={t === tf ? 'active' : ''} onClick={() => {setTf(t);preference({last_timeframe:t});}}>{t.toUpperCase()}</button>)}</div>
       <label className="mtf-select"><span>Profile</span><select aria-label="Strategy Profile" value={profile} onChange={e => setProfile(e.target.value)}><option value="">Profile da watchlist</option>{boot?.profiles.map(p => <option key={p.id} value={p.id}>{p.name} · {p.default_timeframe?.toUpperCase() ?? "TF não definido"} · {p.id.slice(0,6)}</option>)}</select></label>
-      <MTFBitcoinTicker pollSeconds={cfg?.poll_seconds} refresh={refresh} timezone={prefs.timezone} analysis={analysis}/>
+      <div className="mtf-market-context">
+        <MTFBitcoinTicker pollSeconds={cfg?.poll_seconds} refresh={refresh} timezone={prefs.timezone} analysis={analysis}/>
+        <MTFFearGreed config={cfg?.presentation?.fear_greed} refresh={refresh} timezone={prefs.timezone}/>
+      </div>
       <div className="mtf-header-tools"><span className="mtf-shadow"><ShieldCheck size={13}/> SHADOW</span><button aria-label="Alternar tema do ambiente MTF" title="Tema do ambiente MTF" onClick={() => preference({ theme: prefs.theme === 'dark' ? 'light' : 'dark' })}>{prefs.theme === 'dark' ? <Sun size={17}/> : <Moon size={17}/>}</button><button aria-label="Tela cheia" onClick={() => setFull(!full)}>{full ? <X size={17}/> : <Maximize2 size={17}/>}</button><button aria-label="Configurar análise MTF" onClick={() => setConfigOpen(true)}><Settings2 size={17}/></button></div>
     </header>
     <div className="mtf-context-bar">

@@ -86,6 +86,11 @@ const sections: {tab: Tab; title: string; note?: string; fields: FieldSpec[]}[] 
   {tab:'advanced', title:'Target · referência visual', fields:[
     field('presentation.target_pct','Valorização do Target','Curva sobre o fechamento de cada candle, antes de taxas. Não altera os alvos das operações.','%'),
   ]},
+  {tab:'advanced', title:'Fear & Greed · CoinMarketCap', note:'Somente exibição do sentimento do mercado. Não altera score, vetos ou simulações. Chave em Configurações → Geral.', fields:[
+    {path:'presentation.fear_greed.enabled',label:'Exibir Fear & Greed',hint:'Mostra o índice oficial da CoinMarketCap ao lado do BTC.',kind:'boolean'},
+    field('presentation.fear_greed.refresh_seconds','Consulta à CoinMarketCap','Intervalo compartilhado entre abas; respeita a atualização da fonte.','segundos'),
+    field('presentation.fear_greed.max_age_seconds','Validade do Fear & Greed','Idade máxima da publicação original para considerá-la atual.','segundos'),
+  ]},
   {tab:'advanced', title:'Custos e simulação', fields:[
     field('fee_per_side_pct','Taxa por lado','Aplicada à entrada e à saída da simulação.','%'),
     field('slippage_pct','Slippage','Desvio de preço usado no plano simulado.','%'),

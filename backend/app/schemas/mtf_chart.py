@@ -7,9 +7,23 @@ LEGACY_FORCE_PATTERNS = ['ENGULF_BULL', 'MARUBOZU_BULL']
 LEGACY_REJECTION_PATTERNS = ['PIN_BULL', 'ENGULF_BULL']
 
 
+class MTFFearGreedConfig(BaseModel):
+    model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
+    enabled: StrictBool
+    refresh_seconds: int = Field(ge=900, le=86400)
+    max_age_seconds: int = Field(ge=900, le=604800)
+
+    @model_validator(mode='after')
+    def valid_age(self):
+        if self.max_age_seconds < self.refresh_seconds:
+            raise ValueError('FEAR_GREED_MAX_AGE_BELOW_REFRESH')
+        return self
+
+
 class MTFPresentation(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     target_pct: float = Field(default=1, gt=0)
+    fear_greed: MTFFearGreedConfig | None = None
     visible_candles: dict[Literal['4h', '1h', '5m'], int]
     panel_heights: dict[Literal['price', 'volume', 'rsi', 'adx', 'other'], int]
     default_indicators: list[str]
@@ -40,6 +54,7 @@ class MTFPresentation(BaseModel):
 def presentation_preset() -> dict:
     """Explicit editable seed, never merged into persisted engine configuration."""
     return MTFPresentation.model_validate({
+        'fear_greed': {'enabled': True, 'refresh_seconds': 900, 'max_age_seconds': 3600},
         'visible_candles': {'4h': 90, '1h': 120, '5m': 150},
         'panel_heights': {'price': 420, 'volume': 90, 'rsi': 110, 'adx': 110, 'other': 110},
         'default_indicators': ['ema9', 'ema21', 'volume_ma', 'rsi', 'adx'],
