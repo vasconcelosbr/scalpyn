@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { ArrowDown, ArrowUp, Bitcoin, Minus } from 'lucide-react';
+import { ArrowDown, ArrowUp, Bitcoin, CircleHelp, Minus, MoveRight, TrendingDown, TrendingUp } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
+import type { Analysis } from './types';
 
 type BitcoinQuote = {
   price: number | null;
@@ -11,8 +12,8 @@ type BitcoinQuote = {
   changes: Record<'4h' | '1h' | '5m', { pct: number | null; reference_at: string | null }>;
 };
 
-export function MTFBitcoinTicker({ pollSeconds, refresh, timezone }: {
-  pollSeconds?: number; refresh: number; timezone: string;
+export function MTFBitcoinTicker({ pollSeconds, refresh, timezone, analysis }: {
+  pollSeconds?: number; refresh: number; timezone: string; analysis?: Analysis;
 }) {
   const [quote, setQuote] = useState<BitcoinQuote | null>(null);
   const [failed, setFailed] = useState(false);
@@ -41,6 +42,16 @@ export function MTFBitcoinTicker({ pollSeconds, refresh, timezone }: {
   const status = failed || quote?.status === 'UNAVAILABLE' ? 'Indisponível'
     : quote?.status === 'STALE' ? 'Sem dados recentes' : quote?.status === 'PARTIAL' ? 'Histórico parcial'
     : quote?.as_of ? `Consultado ${time(quote.as_of)}` : 'Carregando…';
+  // MTF_BTC_VETO_READING: use the selected evaluation, never the live price return.
+  const current = analysis && !analysis.vetoes.some(v => /^(DATA_STALE|EVALUATION_STALE|CONFIG_CHANGED)/.test(v))
+    && analysis.trigger_diagnostics?.checks.find(c => c.id === 'evaluation_current')?.state !== 'FAIL';
+  const trend = current ? analysis.btc_trend : null;
+  const trendLabel = trend === 'UP' ? 'Alta' : trend === 'DOWN' ? 'Baixa' : trend === 'RANGE' ? 'Lateral' : 'Indisponível';
+  const TrendIcon = trend === 'UP' ? TrendingUp : trend === 'DOWN' ? TrendingDown : trend === 'RANGE' ? MoveRight : CircleHelp;
+  const trendClass = trend === 'UP' ? 'up' : trend === 'DOWN' ? 'down' : trend === 'RANGE' ? 'range' : 'unavailable';
+  const trendHint = current && trendLabel !== 'Indisponível'
+    ? `Estrutura de topos e fundos confirmados da Gate.io. Mesma leitura usada pelo filtro de tendência do Bitcoin na avaliação de ${analysis.symbol.replace('_', '/')} às ${time(analysis.observed_at_utc)}. Não é a variação percentual. Alta ou lateral não garantem um gatilho; os demais critérios continuam aplicáveis.`
+    : 'Aguardando uma avaliação atual do ativo com o contexto estrutural do Bitcoin. A variação percentual não substitui essa leitura.';
 
   return <section className="mtf-btc-ticker" aria-label="Cotação do Bitcoin em USDT">
     <div className="mtf-btc-price">
@@ -66,5 +77,10 @@ export function MTFBitcoinTicker({ pollSeconds, refresh, timezone }: {
     <small className="mtf-btc-source" title="Cotação BTC/USDT da Gate.io. Variações móveis com referência no último fechamento de 1min anterior a cada intervalo.">
       Gate.io · {status}
     </small>
+    <div className={`mtf-btc-trend ${trendClass}`} role="status"
+      aria-label={`Tendência do Bitcoin · 4H: ${trendLabel}`} title={trendHint}>
+      <span>Tendência do Bitcoin · 4H</span>
+      <strong><TrendIcon size={16} aria-hidden="true"/>{trendLabel}</strong>
+    </div>
   </section>;
 }
