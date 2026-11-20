@@ -2813,6 +2813,15 @@
       ]
     },
     {
+      "id": "mtf-structure-entry-separation",
+      "description": "MTF displays structural direction independently from simulated entry status and active vetoes, without labeling an uptrend as a buy.",
+      "files": [
+        {"path": "frontend/components/mtf/MTFEntryContext.tsx", "contains_all": ["MTF_ENTRY_CONTEXT", "Viés estrutural", "Entrada simulada", "analysis.vetoes", "entries[analysis.status]"]},
+        {"path": "frontend/app/grafico-mtf/page.tsx", "contains_all": ["<MTFEntryContext analysis={analysis}"]},
+        {"path": "frontend/lib/mtfEntryContext.test.ts", "contains_all": ["uptrend with veto remains no trade", "unavailable evaluations never suggest an entry"]}
+      ]
+    },
+    {
       "id": "recovery-cmc-credentials",
       "description": "Recovery permits only CMC credential save/test/delete while retaining authentication and blocking real trading mutations.",
       "files": [

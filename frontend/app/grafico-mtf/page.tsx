@@ -12,6 +12,7 @@ import { MTFPumpFlow } from '@/components/mtf/MTFPumpFlow';
 import { MTFTriggerDiagnostics } from '@/components/mtf/MTFTriggerDiagnostics';
 import { MTFBitcoinTicker } from '@/components/mtf/MTFBitcoinTicker';
 import { MTFFearGreed } from '@/components/mtf/MTFFearGreed';
+import { MTFEntryContext } from '@/components/mtf/MTFEntryContext';
 
 const initialPreferences: Preferences = { theme: 'dark', timezone: 'America/Sao_Paulo', sound: false, aligned_only: false };
 const statusOrder = { TRIGGERED: 0, ARMED: 1, WAIT: 2, NO_TRADE: 3 };
@@ -237,7 +238,7 @@ export default function MTFPage() {
         <MTFTriggerDiagnostics key={`${watchlist}:${symbol}:${profile}`} analysis={analysis} symbol={symbol} date={date}
           pending={historical ? 'Avaliação indisponível ou desatualizada. Aguardando atualização.' : undefined}/>
         <section className="mtf-card"><div className="mtf-card-title"><strong>Plano simulado · 5M</strong><Badge analysis={analysis}/></div><div className="mtf-panel-body">
-          <div className="mtf-data-row"><span>Viés Spot</span><b className={analysis?.context_4h.trend === 'UP' ? 'positive' : ''}>{analysis?.context_4h.trend === 'UP' ? 'COMPRA (Long)' : 'Não comprar'}</b></div>
+          <MTFEntryContext analysis={analysis} presentation={cfg?.presentation}/>
           <div className="mtf-data-row"><span>Gatilho</span><b>{analysis?.trigger_5m ? patternLabels[analysis.trigger_5m.pattern] : '—'}</b></div>
           {([['Entrada teórica',plan?.entry,'accent'],['Stop simulado',plan?.stop,'negative'],['TP1 estrutural',plan?.tp1,'positive'],['TP2 estrutural',plan?.tp2,'positive'],['R:R líquido',plan?.rr_net,'positive'],['Posição · USDT',plan?.notional_usdt,'']] as const).map(([label,value,color]) => <div className="mtf-data-row" key={label}><span>{label}</span><b className={color}>{number(value)}</b></div>)}
           <div className="mtf-data-row"><span>Validade da entrada</span><b>{date(plan?.expires_at)}</b></div>
