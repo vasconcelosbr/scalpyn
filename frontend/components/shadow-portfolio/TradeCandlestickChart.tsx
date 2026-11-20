@@ -18,6 +18,9 @@ import {
 import type { ShadowTradeChartResponse } from "./types";
 import { chartTickMarkFormatter, chartTimeFormatter, formatTime } from "@/lib/datetime";
 import { ZonePrimitive } from '@/components/mtf/ZonePrimitive';
+import { EntryBandPrimitive } from '@/components/mtf/EntryBandPrimitive';
+import { entryBandView, entryBandLabels, entryBandColors } from '@/lib/mtfEntryBand';
+import { reasonLabel } from '@/components/mtf/types';
 import { number, patternLabels, type ChartData, type Timeframe, type Preferences, type Presentation, visibleMarks } from '@/components/mtf/types';
 
 const COLORS = {
@@ -217,10 +220,11 @@ const overlay = (name: string) => name==='target' || name.startsWith('ema') || n
 import { targetLabel, targetPoints } from '@/lib/mtfSettings';
 
 /** MTF extension: one chart instance, independent data/layout/theme updates. */
-export function MTFCandlestickChart({ data, timeframe, preferences, config, onPreference, targetEnabled = false }: {
+export function MTFCandlestickChart({ data, timeframe, preferences, config, onPreference, targetEnabled = false, analysisCurrent = false }: {
   data: ChartData; timeframe: Timeframe; preferences: Preferences; config: Presentation;
   onPreference: (change: Partial<Preferences>) => void;
   targetEnabled?: boolean;
+  analysisCurrent?: boolean;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -229,6 +233,19 @@ export function MTFCandlestickChart({ data, timeframe, preferences, config, onPr
   const volumeRef = useRef<ISeriesApi<'Histogram'> | null>(null);
   const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const zoneRef = useRef<ZonePrimitive | null>(null);
+  const entryBandRef = useRef<EntryBandPrimitive | null>(null);
+  const [bandClock, setBandClock] = useState(Date.now);
+  const [fitBand, setFitBand] = useState(false);
+  const band = config.entry_band_enabled ? entryBandView(data.analysis, analysisCurrent, bandClock) : null;
+  const bandAvailable = !!band && band.low != null && band.high != null && band.state !== 'UNAVAILABLE';
+  useEffect(() => {
+    setBandClock(Date.now());
+    const expires = Date.parse(data.analysis.entry_candidate?.valid_until ?? '');
+    if (!Number.isFinite(expires) || expires <= Date.now()) return;
+    const timer = setTimeout(() => setBandClock(Date.now()), expires - Date.now());
+    return () => clearTimeout(timer);
+  }, [data.analysis.entry_candidate]);
+  useEffect(() => { setFitBand(false); }, [data.symbol]);
   const priceLines = useRef<IPriceLine[]>([]);
   const layoutKey = useRef('');
   const context = useRef('');
@@ -295,6 +312,7 @@ export function MTFCandlestickChart({ data, timeframe, preferences, config, onPr
       chart.clearCrosshairPosition();
       markersRef.current?.setMarkers([]);
       if (zoneRef.current) {price.detachPrimitive(zoneRef.current);zoneRef.current=null;}
+      if (entryBandRef.current) {price.detachPrimitive(entryBandRef.current);entryBandRef.current=null;}
       lines.current.forEach(series=>series.setData([]));
       volumeRef.current?.setData([]);
       price.setData([]);
@@ -326,7 +344,9 @@ export function MTFCandlestickChart({ data, timeframe, preferences, config, onPr
     }
     price.applyOptions({priceFormat:data.price_format?{type:'price',precision:data.price_format.precision,minMove:data.price_format.min_move}:{type:'custom',formatter:formatPrice,minMove:Number.EPSILON},
       autoscaleInfoProvider:(base:()=>AutoscaleInfo|null)=>{
-        return clipping?{priceRange:{minValue:clipping.low,maxValue:clipping.high}}:base();
+        const scale = clipping?{priceRange:{minValue:clipping.low,maxValue:clipping.high}}:base();
+        if (scale?.priceRange && fitBand && bandAvailable) return {...scale,priceRange:{minValue:Math.min(scale.priceRange.minValue,band!.low!),maxValue:Math.max(scale.priceRange.maxValue,band!.high!)}};
+        return scale;
       }});
     price.setData(frame.candles.map(c=>({...c,time:c.time as Time,...(c.closed?{}:{color:'#6b7280',wickColor:'#6b7280'})})));
     volumeRef.current?.setData(frame.candles.map(c=>({time:c.time as Time,value:c.volume,color:c.close>=c.open?'#18c98b60':'#ff526360'})));
@@ -342,14 +362,22 @@ export function MTFCandlestickChart({ data, timeframe, preferences, config, onPr
     const above=zones.filter(z=>z.low>reference!).sort((a,b)=>a.low-b.low).slice(0,config.zones_per_side);
     const inside=zones.filter(z=>z.low<=reference! && z.high>=reference!).slice(0,config.zones_per_side);
     zoneRef.current=new ZonePrimitive(preferences.show_zones===false?[]:[...below,...inside,...above]);price.attachPrimitive(zoneRef.current);
+    if (entryBandRef.current) {price.detachPrimitive(entryBandRef.current);entryBandRef.current=null;}
+    if (bandAvailable) {entryBandRef.current=new EntryBandPrimitive(band!.low!,band!.high!,entryBandColors[band!.state]);price.attachPrimitive(entryBandRef.current);}
     priceLines.current.forEach(line=>price.removePriceLine(line));priceLines.current=[];
+    if (bandAvailable) for(const [title,value] of [['FAIXA CANDIDATA · MÍN',band!.low!],['FAIXA CANDIDATA · MÁX',band!.high!]] as const)
+      priceLines.current.push(price.createPriceLine({price:value,color:entryBandColors[band!.state],lineWidth:1,lineStyle:2,axisLabelVisible:true,title}));
+    if (band?.state==='CONFIRMED' && band.entry!=null)
+      priceLines.current.push(price.createPriceLine({price:band.entry,color:entryBandColors.CONFIRMED,lineWidth:2,lineStyle:0,axisLabelVisible:true,title:'GATILHO CONFIRMADO · SHADOW'}));
     const plan=data.analysis.plan;
-    if (plan) for(const [title,value,color] of [['ENTRADA TEÓRICA',plan.entry,COLORS.blue],['STOP SIMULADO',plan.stop,COLORS.red],['TP1',plan.tp1,COLORS.green],['TP2',plan.tp2,COLORS.green]] as const)
+    if (plan) for(const [title,value,color] of [['ENTRADA TEÓRICA',plan.entry,COLORS.blue],['STOP SIMULADO',plan.stop,COLORS.red],['TP1',plan.tp1,COLORS.green],['TP2',plan.tp2,COLORS.green]] as const) {
+      if (title==='ENTRADA TEÓRICA' && band?.state==='CONFIRMED') continue;
       priceLines.current.push(price.createPriceLine({price:value,color,lineWidth:1,lineStyle:2,axisLabelVisible:true,title}));
+    }
     if (!sameContext) {const end=frame.candles.length-1;chart.timeScale().setVisibleLogicalRange({from:Math.max(0,end-config.visible_candles[timeframe]+1),to:end});setHover(null);}
     else if(range) chart.timeScale().setVisibleLogicalRange(range);
     context.current=`${data.symbol}:${timeframe}`;
-  }, [data,timeframe,preferences,config,frame,enabled,collapsed,formatPrice,clipping,showTarget,target,targetTitle]);
+  }, [data,timeframe,preferences,config,frame,enabled,collapsed,formatPrice,clipping,showTarget,target,targetTitle,bandClock,analysisCurrent,fitBand]);
 
   useEffect(()=>{
     const animation=requestAnimationFrame(()=>{
@@ -376,6 +404,16 @@ export function MTFCandlestickChart({ data, timeframe, preferences, config, onPr
     {!data.price_format&&<div className="mtf-warning">Precisão do par indisponível; preços exibidos sem arredondamento por tick.</div>}
     {(frame.error||frame.warmup?.reason)&&<div className="mtf-warning">Histórico insuficiente ou descontínuo: indicadores sem cobertura permanecem indisponíveis.</div>}
     {frame.stale&&<div className="mtf-warning">Dados de mercado atrasados — sem confirmação de sinal atual.</div>}
+    {config.entry_band_enabled && <section className={`mtf-entry-band ${band?.state ?? 'UNAVAILABLE'}`} aria-label="Faixa candidata de entrada" aria-live="polite">
+      <div className="mtf-entry-band-heading"><strong>Faixa candidata · suporte 1H</strong><span>{entryBandLabels[band?.state ?? 'UNAVAILABLE']}</span></div>
+      {bandAvailable ? <>
+        <div className="mtf-entry-band-prices"><b>{formatPrice(band!.low!)} — {formatPrice(band!.high!)}</b><button onClick={()=>setFitBand(!fitBand)} aria-pressed={fitBand}>{fitBand?'Restaurar enquadramento':'Enquadrar faixa'}</button></div>
+        <p>Suporte: {formatPrice(band!.support_low!)} — {formatPrice(band!.support_high!)} · proximidade: {number(band!.proximity_atr,2)} × ATR do 1H.</p>
+        {band?.vetoes.map(v=><p key={v}>Veto: {reasonLabel(v,config)}.</p>)}
+        {band?.state==='CONFIRMED' && band.entry!=null && <p>Entrada confirmada para simulação: {formatPrice(band.entry)}.</p>}
+        <p>Faixa da avaliação de {date(Date.parse(band!.evaluated_at)/1000)}, válida até {date(Date.parse(band!.valid_until)/1000)}. Guia atual de proximidade; não representa entradas históricas nem aprovação de todos os preços da faixa.</p>
+      </> : <p>{band?.reason==='NO_SUPPORT'?'Sem suporte confirmado selecionado pela análise.':'Sem avaliação atual válida para desenhar a faixa.'}</p>}
+    </section>}
     <div className="mtf-chart-scroll"><div ref={host} style={{width:'100%',height}} /></div>
     <div className="mtf-hover-detail">{showTarget && candle && <span className="mtf-target-value">{targetTitle} {formatPrice(target.find(p=>p.time===candle.time)?.value ?? NaN)} · </span>}{candle&&Object.entries(frame.indicators).flatMap(([name,points])=>{const point=points.find(p=>p.time===candle.time);return point?[`${name.toUpperCase()} ${number(point.value,4)}`]:[];}).join(' · ')}<br/>{frame.patterns.filter(p=>p.time===candle?.time).map(p=>patternLabels[p.pattern]??'Padrão').join(' · ')}</div>
     {targetEnabled && <div className="mtf-chart-note">{targetTitle}: valorização bruta sobre o fechamento de cada candle, antes de taxas. O ponto em formação acompanha o preço.</div>}

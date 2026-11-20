@@ -22,6 +22,7 @@ export interface TriggerDiagnostics {
   patterns: { pattern: string; state: DiagnosticState; conditions: TriggerCheck[] }[];
 }
 export interface Analysis {
+  entry_candidate?: EntryCandidate | null;
   pump_flow?: PumpFlowContext;
   trigger_diagnostics?: TriggerDiagnostics;
   evaluation_id?: string; symbol: string; status: MTFStatus; observed_at_utc: string; evaluated_at_utc: string;
@@ -42,6 +43,7 @@ export interface MTFConfig {
   [key: string]: unknown;
 }
 export interface Presentation {
+  entry_band_enabled?: boolean | null;
   fear_greed?: { enabled: boolean; refresh_seconds: number; max_age_seconds: number } | null;
   target_pct?: number;
   visible_candles: Record<Timeframe,number>; panel_heights: Record<string,number>;
@@ -50,6 +52,12 @@ export interface Presentation {
   removal_confirmations: number; retry_initial_seconds: number; retry_max_seconds: number;
   watchlist_poll_seconds: number; autoscale_clip_pct: number; pair_metadata_ttl_seconds: number;
   reason_labels: Record<string,string>;
+}
+export interface EntryCandidate {
+  state: 'WAITING' | 'BLOCKED' | 'CONFIRMED' | 'UNAVAILABLE'; reason: string | null;
+  timeframe: '1h'; low: number | null; high: number | null; support_low: number | null; support_high: number | null;
+  atr: number | null; proximity_atr: number; entry: number | null; evaluated_at: string; valid_until: string;
+  config_hash: string; vetoes: string[]; operational_effect: false;
 }
 export interface Preferences { theme: 'dark' | 'light'; timezone: 'America/Sao_Paulo' | 'UTC'; sound: boolean; aligned_only: boolean;
   last_symbol?: string | null; last_watchlist?: string | null; last_timeframe?: Timeframe | null;

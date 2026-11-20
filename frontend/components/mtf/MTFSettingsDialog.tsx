@@ -83,6 +83,9 @@ const sections: {tab: Tab; title: string; note?: string; fields: FieldSpec[]}[] 
   {tab:'shared', title:'Histórico e validade', fields:[
     ...(['4h','1h','5m'] as const).map(tf=>field(`candle_limits.${tf}`,`Histórico ${tf.toUpperCase()}`,'Janela de candles usada na avaliação.','candles')),
   ]},
+  {tab:'advanced', title:'Faixa candidata de entrada', note:'Referência visual do suporte selecionado no 1H e da proximidade já configurada. Não altera score, vetos ou simulações.', fields:[
+    {path:'presentation.entry_band_enabled',label:'Exibir faixa candidata de entrada',hint:'Âmbar: aguardando. Vermelho: bloqueada. Verde: gatilho confirmado. Sem dados atuais, a faixa não é desenhada.',kind:'boolean'},
+  ]},
   {tab:'advanced', title:'Target · referência visual', fields:[
     field('presentation.target_pct','Valorização do Target','Curva sobre o fechamento de cada candle, antes de taxas. Não altera os alvos das operações.','%'),
   ]},
