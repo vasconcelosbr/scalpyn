@@ -2813,6 +2813,14 @@
       ]
     },
     {
+      "id": "recovery-cmc-credentials",
+      "description": "Recovery permits only CMC credential save/test/delete while retaining authentication and blocking real trading mutations.",
+      "files": [
+        {"path": "backend/app/main.py", "contains_all": ["RECOVERY_CMC_CREDENTIALS", "ai-keys/coinmarketcap(?:/test)?"]},
+        {"path": "backend/tests/test_mtf_recovery_gate.py", "contains_all": ["test_recovery_cmc_routes_keep_auth_and_user_scoped_storage", "test_recovery_cmc_exception_never_opens_other_mutations"]}
+      ]
+    },
+    {
       "id": "mtf-cmc-fear-greed-display",
       "description": "Official CMC sentiment is display-only, user-key scoped and cached; presentation settings never change the MTF engine.",
       "files": [

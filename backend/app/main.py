@@ -392,9 +392,11 @@ _RECOVERY_EDIT_ROUTES = {
     "PATCH": _re.compile(rf"/api/pools/{_RECOVERY_RESOURCE_ID}"),
     "POST": _re.compile(
         rf"/api/(?:pools/{_RECOVERY_RESOURCE_ID}/coins(?:/bulk)?"
-        rf"|watchlists/{_RECOVERY_RESOURCE_ID}/refresh|mtf/observations/exports|strategy-settings/import/validate)"
+        rf"|watchlists/{_RECOVERY_RESOURCE_ID}/refresh|mtf/observations/exports|strategy-settings/import/validate"
+        r"|ai-keys/coinmarketcap(?:/test)?)"
     ),
-    "DELETE": _re.compile(rf"/api/watchlists/{_RECOVERY_RESOURCE_ID}"),
+    # RECOVERY_CMC_CREDENTIALS: market-data access only; never exchange keys or orders.
+    "DELETE": _re.compile(rf"/api/(?:watchlists/{_RECOVERY_RESOURCE_ID}|ai-keys/coinmarketcap)"),
 }
 
 
