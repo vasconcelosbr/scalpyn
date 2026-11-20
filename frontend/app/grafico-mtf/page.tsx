@@ -153,8 +153,10 @@ export default function MTFPage() {
         dataRef.current=merged;setData(merged);setLoadedContext(key); setError('');setStale(false);setMembership('current');failures=0;
         const h = await apiFetch<{ items: HistoryItem[]; next_cursor: string | null }>(`/mtf/history?${new URLSearchParams({ watchlist_id: watchlist, symbol })}`, { signal: controller.signal });
         if (!controller.signal.aborted) { setHistory(h.items); setCursor(h.next_cursor); }
-      } catch (e) { if (!controller.signal.aborted) { failures++;setError(e instanceof Error ? e.message : 'Falha no gráfico'); setStale(true);
-        if(e instanceof ApiError && e.status===404) setMembership('removed');
+      } catch (e) { if (!controller.signal.aborted) { failures++;setStale(true);
+        const removed = e instanceof ApiError && e.status === 404 && e.detail === 'ASSET_NO_LONGER_IN_WATCHLIST';
+        setError(removed ? '' : e instanceof Error ? e.message : 'Falha no gráfico');
+        if (removed) setMembership('removed');
       } }
       finally {
         first = false;
@@ -197,7 +199,7 @@ export default function MTFPage() {
       <div className="mtf-symbol"><strong>{symbol.replace('_','/') || 'Selecione um ativo'}</strong><span>{priceText}</span></div>
       <div className="mtf-timeframes">{(['4h','1h','5m'] as Timeframe[]).map(t => <button key={t} className={t === tf ? 'active' : ''} onClick={() => {setTf(t);preference({last_timeframe:t});}}>{t.toUpperCase()}</button>)}</div>
       <label className="mtf-select"><span>Profile</span><select aria-label="Strategy Profile" value={profile} onChange={e => setProfile(e.target.value)}><option value="">Profile da watchlist</option>{boot?.profiles.map(p => <option key={p.id} value={p.id}>{p.name} · {p.default_timeframe?.toUpperCase() ?? "TF não definido"} · {p.id.slice(0,6)}</option>)}</select></label>
-      <MTFBitcoinTicker pollSeconds={cfg?.poll_seconds} refresh={refresh} timezone={prefs.timezone}/>
+      <MTFBitcoinTicker pollSeconds={cfg?.poll_seconds} refresh={refresh} timezone={prefs.timezone} analysis={analysis}/>
       <div className="mtf-header-tools"><span className="mtf-shadow"><ShieldCheck size={13}/> SHADOW</span><button aria-label="Alternar tema do ambiente MTF" title="Tema do ambiente MTF" onClick={() => preference({ theme: prefs.theme === 'dark' ? 'light' : 'dark' })}>{prefs.theme === 'dark' ? <Sun size={17}/> : <Moon size={17}/>}</button><button aria-label="Tela cheia" onClick={() => setFull(!full)}>{full ? <X size={17}/> : <Maximize2 size={17}/>}</button><button aria-label="Configurar análise MTF" onClick={() => setConfigOpen(true)}><Settings2 size={17}/></button></div>
     </header>
     <div className="mtf-context-bar">
@@ -221,10 +223,10 @@ export default function MTFPage() {
       </aside>}
       <section className="mtf-center mtf-card">
         {error && <div className="mtf-error">{error}<button onClick={() => setRefresh(v=>v+1)}>Tentar novamente</button></div>}
-        {membership==='removed' && data && <div className="mtf-warning">Ativo saiu da watchlist. Dados anteriores disponíveis apenas para consulta histórica.</div>}
+        {membership==='removed' && <div className="mtf-warning">Ativo saiu da watchlist.{data && ' Dados anteriores disponíveis apenas para consulta histórica.'}</div>}
         {loading && !data && <div className="mtf-empty mtf-loading"><RefreshCw className="spin"/> Carregando candles e indicadores canônicos…</div>}
         {data && cfg?.presentation && <><div className="mtf-data-freshness">{historical?`CONSULTA HISTÓRICA · dados de ${date(data.as_of)} · sem confirmação de oportunidade atual`:`Dados consultados em ${date(data.as_of)}`}</div><MTFCandlestickChart data={data} timeframe={tf} preferences={prefs} config={cfg.presentation} onPreference={preference} targetEnabled={watchlist==='l3-consolidated'}/></>}
-        {!data && !loading && !error && <div className="mtf-empty mtf-welcome"><Activity size={42}/><h2>O contexto antes do gatilho.</h2><p>Selecione uma oportunidade para conectar direção, zona e price action.</p><span>4H DIREÇÃO → 1H ZONA → 5M GATILHO</span></div>}
+        {!data && !loading && !error && membership!=='removed' && <div className="mtf-empty mtf-welcome"><Activity size={42}/><h2>O contexto antes do gatilho.</h2><p>Selecione uma oportunidade para conectar direção, zona e price action.</p><span>4H DIREÇÃO → 1H ZONA → 5M GATILHO</span></div>}
       </section>
       {right && <aside className="mtf-analysis">
         {cfg?.presentation && <MTFPumpFlow key={`flow:${watchlist}:${symbol}:${profile}`} context={analysis?.pump_flow} watchlist={watchlist} pollSeconds={cfg.presentation.watchlist_poll_seconds} timezone={prefs.timezone} stale={historical} />}
