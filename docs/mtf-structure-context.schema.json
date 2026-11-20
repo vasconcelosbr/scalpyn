@@ -1,0 +1,366 @@
+{
+  "$defs": {
+    "StructureConflict": {
+      "properties": {
+        "kind": {
+          "enum": [
+            "structure",
+            "flow"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "timeframe": {
+          "enum": [
+            "1h",
+            "5m"
+          ],
+          "title": "Timeframe",
+          "type": "string"
+        },
+        "state": {
+          "title": "State",
+          "type": "string"
+        },
+        "sequence": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Sequence",
+          "type": "array"
+        },
+        "ratio": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ratio"
+        }
+      },
+      "required": [
+        "kind",
+        "timeframe",
+        "state"
+      ],
+      "title": "StructureConflict",
+      "type": "object"
+    },
+    "StructureFrame": {
+      "properties": {
+        "trend": {
+          "anyOf": [
+            {
+              "enum": [
+                "UP",
+                "DOWN",
+                "RANGE"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trend"
+        },
+        "pivots": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/StructurePivot"
+          },
+          "title": "Pivots",
+          "type": "array"
+        },
+        "last_hl": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StructurePivot"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "last_lh": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StructurePivot"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "last_pivot_age_candles": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Pivot Age Candles"
+        },
+        "atr": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Atr"
+        },
+        "ema50": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ema50"
+        },
+        "closed_close": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Closed Close"
+        },
+        "closed_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Closed At"
+        },
+        "extension_atr": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Extension Atr"
+        },
+        "live_candle": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Live Candle"
+        },
+        "live_change_pct": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Live Change Pct"
+        }
+      },
+      "title": "StructureFrame",
+      "type": "object"
+    },
+    "StructurePivot": {
+      "properties": {
+        "time": {
+          "title": "Time",
+          "type": "number"
+        },
+        "confirmed_at": {
+          "title": "Confirmed At",
+          "type": "number"
+        },
+        "price": {
+          "title": "Price",
+          "type": "number"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "time",
+        "confirmed_at",
+        "price",
+        "label",
+        "kind"
+      ],
+      "title": "StructurePivot",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "source": {
+      "enum": [
+        "chart",
+        "observation"
+      ],
+      "title": "Source",
+      "type": "string"
+    },
+    "as_of": {
+      "title": "As Of",
+      "type": "string"
+    },
+    "evaluated_at": {
+      "title": "Evaluated At",
+      "type": "string"
+    },
+    "valid_until": {
+      "title": "Valid Until",
+      "type": "string"
+    },
+    "config_hash": {
+      "title": "Config Hash",
+      "type": "string"
+    },
+    "profile_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Profile Id"
+    },
+    "frames": {
+      "additionalProperties": {
+        "$ref": "#/$defs/StructureFrame"
+      },
+      "title": "Frames",
+      "type": "object"
+    },
+    "current_price": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Current Price"
+    },
+    "current_price_source": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Current Price Source"
+    },
+    "invalidation": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StructurePivot"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "invalidation_distance_atr": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Invalidation Distance Atr"
+    },
+    "conflict": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Conflict"
+    },
+    "conflicts": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/StructureConflict"
+      },
+      "title": "Conflicts",
+      "type": "array"
+    },
+    "operational_effect": {
+      "const": false,
+      "default": false,
+      "title": "Operational Effect",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "source",
+    "as_of",
+    "evaluated_at",
+    "valid_until",
+    "config_hash",
+    "frames"
+  ],
+  "title": "StructureContext",
+  "type": "object"
+}

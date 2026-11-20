@@ -89,6 +89,8 @@ async def watchlist(response: Response, watchlist_id: str, db: AsyncSession = De
         items = [{**item, 'price_snapshot_at': item.get('refreshed_at'),
                   'mtf_observation': item['mtf'], 'mtf': display['analyses'].get(item['symbol'])}
                  for item in display['items']]
+        from ..services.mtf_structure import enrich_watchlist
+        items = await enrich_watchlist(db, uid, watchlist_id, items, cfg)
         return {'items': items, 'total': len(items), 'limited': False,
                 'awaiting_data_items': display['awaiting_data_items'],
                 'awaiting_data_count': display['awaiting_data_count'],
@@ -130,6 +132,8 @@ async def chart(response: Response, symbol: str, watchlist_id: str, profile_id: 
         if member is None:
             raise HTTPException(404, "ASSET_NO_LONGER_IN_WATCHLIST")
         data = await service.chart_data(db, uid, symbol, profile_id or member.get("profile_id"), cfg)
+        from ..services.mtf_structure import structure_context
+        data = {**data, 'structure_context': structure_context(data, cfg)}
         # A cold chart can outlive an L3 authorization while computing history.
         if not any(m['symbol'] == symbol for m in await service.display_members(db, uid, watchlist_id)):
             raise HTTPException(404, 'ASSET_NO_LONGER_IN_WATCHLIST')
