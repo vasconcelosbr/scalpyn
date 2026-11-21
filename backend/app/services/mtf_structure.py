@@ -5,6 +5,7 @@ from uuid import UUID
 from sqlalchemy import text
 from ..schemas.mtf_structure import StructureContext
 from .mtf_chart_engine import TF_SECONDS, trend, timestamp, iso
+from .mtf_structure_indicators import STRUCTURE_EMA_NAME
 
 
 def positive(value):
@@ -36,7 +37,7 @@ def structure_context(data, cfg, *, source='chart', now=None):
         complete = any(p['label'] in ('HH', 'LH') for p in points) and any(p['label'] in ('HL', 'LL') for p in points)
         direction = (analysis.get('context_4h') or {}).get('trend') if tf == '4h' else trend(points) if complete else None
         atr = positive(frame.get('atr'))
-        ema = next((positive(p.get('value')) for p in frame.get('indicators', {}).get('ema50', []) if p['time'] == last['time']), None)
+        ema = next((positive(p.get('value')) for p in frame.get('indicators', {}).get(STRUCTURE_EMA_NAME, []) if p['time'] == last['time']), None)
         close = positive(last.get('close'))
         live = next((dict(c) for c in reversed(frame.get('candles', [])) if c.get('closed') is False and c['time'] <= at < c['time'] + duration), None)
         change = ((live['close'] / live['open']) - 1) * 100 if live and positive(live.get('open')) and positive(live.get('close')) else None
