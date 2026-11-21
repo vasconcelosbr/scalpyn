@@ -105,7 +105,7 @@ def build_diagnostics(result, frames, cfg, as_of, spread, btc_trend, *, ratio=No
     for key, label, actual, forbidden, enabled, tf in [
         ('asset_downtrend', 'Tendência do ativo: veto de baixa', direction, 'DOWN', cfg.veto_filters.asset_downtrend, '4h'),
         ('asset_range', 'Tendência do ativo: veto de lateralidade', direction, 'RANGE', cfg.veto_filters.asset_range, '4h'),
-        ('btc_downtrend', 'Tendência do Bitcoin', btc_trend, 'DOWN', cfg.veto_filters.btc_downtrend and result['symbol']!='BTC_USDT', '4h'),
+        ('btc_downtrend', 'Tendência do Bitcoin', btc_trend, 'DOWN', cfg.veto_filters.btc_downtrend and result['symbol']!='BTC_USDT', cfg.btc_trend_timeframe),
     ]:
         checks.append(check(key, label, actual, '!=', forbidden, role='veto', timeframe=tf, enabled=enabled, waiting=waiting_data))
     checks.append(check('spread_available', 'Spread disponível', spread is not None, '=', True, waiting=waiting_data))

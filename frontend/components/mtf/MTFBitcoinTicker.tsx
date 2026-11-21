@@ -45,12 +45,10 @@ export function MTFBitcoinTicker({ pollSeconds, refresh, timezone, analysis }: {
   // MTF_BTC_VETO_READING: use the selected evaluation, never the live price return.
   const current = analysis && !analysis.vetoes.some(v => /^(DATA_STALE|EVALUATION_STALE|CONFIG_CHANGED)/.test(v))
     && analysis.trigger_diagnostics?.checks.find(c => c.id === 'evaluation_current')?.state !== 'FAIL';
-  const trend = current ? analysis.btc_trend : null;
-  const trendLabel = trend === 'UP' ? 'Alta' : trend === 'DOWN' ? 'Baixa' : trend === 'RANGE' ? 'Lateral' : 'Indisponível';
-  const TrendIcon = trend === 'UP' ? TrendingUp : trend === 'DOWN' ? TrendingDown : trend === 'RANGE' ? MoveRight : CircleHelp;
-  const trendClass = trend === 'UP' ? 'up' : trend === 'DOWN' ? 'down' : trend === 'RANGE' ? 'range' : 'unavailable';
-  const trendHint = current && trendLabel !== 'Indisponível'
-    ? `Estrutura de topos e fundos confirmados da Gate.io. Mesma leitura usada pelo filtro de tendência do Bitcoin na avaliação de ${analysis.symbol.replace('_', '/')} às ${time(analysis.observed_at_utc)}. Não é a variação percentual. Alta ou lateral não garantem um gatilho; os demais critérios continuam aplicáveis.`
+  const activeTimeframe = analysis?.btc_context?.active_timeframe ?? analysis?.btc_trend_timeframe ?? '4h';
+  const vetoEnabled = analysis?.btc_context?.veto_enabled ?? true;
+  const trendHint = current
+    ? `Estruturas de topos e fundos confirmados da Gate.io, congeladas na avaliação de ${analysis.symbol.replace('_', '/')} às ${time(analysis.observed_at_utc)}. O filtro usa o timeframe indicado como veto ativo. Alta ou lateral não garantem um gatilho; os demais critérios continuam aplicáveis.`
     : 'Aguardando uma avaliação atual do ativo com o contexto estrutural do Bitcoin. A variação percentual não substitui essa leitura.';
 
   return <section className="mtf-btc-ticker" aria-label="Cotação do Bitcoin em USDT">
@@ -77,10 +75,19 @@ export function MTFBitcoinTicker({ pollSeconds, refresh, timezone, analysis }: {
     <small className="mtf-btc-source" title="Cotação BTC/USDT da Gate.io. Variações móveis com referência no último fechamento de 1min anterior a cada intervalo.">
       Gate.io · {status}
     </small>
-    <div className={`mtf-btc-trend ${trendClass}`} role="status"
-      aria-label={`Tendência do Bitcoin · 4H: ${trendLabel}`} title={trendHint}>
-      <span>Tendência do Bitcoin · 4H</span>
-      <strong><TrendIcon size={16} aria-hidden="true"/>{trendLabel}</strong>
-    </div>
+    {(['4h', '1h'] as const).map(tf => {
+      const trend = current ? (analysis.btc_context
+        ? analysis.btc_context.frames[tf]?.trend
+        : tf === activeTimeframe ? analysis.btc_trend : null) : null;
+      const trendLabel = trend === 'UP' ? 'Alta' : trend === 'DOWN' ? 'Baixa' : trend === 'RANGE' ? 'Lateral' : 'Indisponível';
+      const TrendIcon = trend === 'UP' ? TrendingUp : trend === 'DOWN' ? TrendingDown : trend === 'RANGE' ? MoveRight : CircleHelp;
+      const trendClass = trend === 'UP' ? 'up' : trend === 'DOWN' ? 'down' : trend === 'RANGE' ? 'range' : 'unavailable';
+      const active = tf === activeTimeframe;
+      return <div key={tf} className={`mtf-btc-trend ${trendClass}`} role="status"
+        aria-label={`Tendência do Bitcoin · ${tf.toUpperCase()}: ${trendLabel}`} title={trendHint}>
+        <span>Tendência do Bitcoin · {tf.toUpperCase()}{active && <small> · {vetoEnabled ? 'Veto ativo' : 'Veto desativado'}</small>}</span>
+        <strong><TrendIcon size={16} aria-hidden="true"/>{trendLabel}</strong>
+      </div>;
+    })}
   </section>;
 }

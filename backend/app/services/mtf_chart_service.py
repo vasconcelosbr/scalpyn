@@ -19,7 +19,7 @@ from ..schemas.mtf_chart import MTFChartConfig
 from .config_service import config_service
 from .profile_runtime_config import canonical_hash
 from .mtf_indicator_config import effective_indicators
-from .mtf_chart_engine import TF_SECONDS, ENGINE_VERSION, timestamp, prepare_frame, evaluate, trend, simulate_step, closed_candles, frame_zones
+from .mtf_chart_engine import TF_SECONDS, ENGINE_VERSION, timestamp, prepare_frame, evaluate, simulate_step, closed_candles, frame_zones
 
 log = logging.getLogger(__name__)
 _market_cache: OrderedDict = OrderedDict()
@@ -202,17 +202,9 @@ async def chart_data(db, user_id, symbol, profile_id, cfg, include_display=True)
         except ValueError as exc:
             errors[tf] = str(exc)
             frames[tf] = {"candles": [], "indicators": {}, "patterns": [], "pivots": [], "atr": None}
-    btc_trend = None
-    if symbol == "BTC_USDT":
-        btc_trend = trend(frames["4h"]["pivots"])
-    else:
-        try:
-            btc = await market_candles("BTC_USDT", "4h", cfg)
-            btc_frame = await prepared(btc, "4h", cutoff, indicators, {"atr"}, cfg)
-            if btc_frame["candles"] and cutoff-(btc_frame["candles"][-1]["time"]+TF_SECONDS["4h"]) <= cfg.stale_tf_multiplier*TF_SECONDS["4h"]:
-                btc_trend = trend(btc_frame["pivots"])
-        except ValueError:
-            pass
+    from .mtf_btc_context import load_btc_context
+    btc_context = await load_btc_context(symbol, frames, cutoff, indicators, cfg, market_candles, prepared)
+    btc_trend = btc_context["frames"][cfg.btc_trend_timeframe]["trend"]
     book = await market_data_service.fetch_orderbook_metrics(symbol)
     spread = book.get("spread_pct") if book.get("market_data_source") in ("gate.io", "gate") else None
     analysis = evaluate(symbol, frames, cfg, cutoff, spread, btc_trend)
@@ -228,6 +220,8 @@ async def chart_data(db, user_id, symbol, profile_id, cfg, include_display=True)
     analysis["source"] = "gate.io"
     analysis["spread_pct"] = spread
     analysis["btc_trend"] = btc_trend
+    analysis["btc_trend_timeframe"] = cfg.btc_trend_timeframe
+    analysis["btc_context"] = btc_context
     analysis["data_errors"] = errors
     unavailable = [name for name in names if not any(name in f["indicators"] for f in frames.values())]
     analysis["unavailable_profile_indicators"] = unavailable

@@ -7,7 +7,7 @@ import { configValue, schemaAt, settingsDraft, settingsForSave, validateSettings
 import { patternLabels, type Bootstrap, type MTFConfig } from './types';
 
 type Tab = 'flow' | 'armed' | 'trigger' | 'vetoes' | 'shared' | 'advanced';
-type FieldSpec = {path: string; label: string; hint: string; unit?: string; kind?: 'patterns' | 'boolean'};
+type FieldSpec = {path: string; label: string; hint: string; unit?: string; kind?: 'patterns' | 'boolean' | 'btc-timeframe'};
 const field = (path: string, label: string, hint: string, unit?: string): FieldSpec => ({path, label, hint, unit});
 const sections: {tab: Tab; title: string; note?: string; fields: FieldSpec[]}[] = [
   {tab:'flow',title:'Capital e fluxo · comparação Shadow',note:'Hipótese observacional. Não altera score, vetos, plano ou admissões. A comparação usa os mesmos resultados Shadow, separados pela confirmação registrada na entrada.',fields:[
@@ -60,6 +60,7 @@ const sections: {tab: Tab; title: string; note?: string; fields: FieldSpec[]}[] 
     {path:'veto_filters.asset_downtrend',label:'Vetar tendência de baixa do ativo',hint:'Impede ARMADO e GATILHO quando a estrutura do ativo está em baixa. A direção continua sendo calculada e exibida.',kind:'boolean'},
     {path:'veto_filters.asset_range',label:'Vetar tendência lateral do ativo',hint:'Impede ARMADO e GATILHO quando a estrutura do ativo está lateral. Não altera os pontos de tendência.',kind:'boolean'},
     {path:'veto_filters.btc_downtrend',label:'Vetar Bitcoin em tendência de baixa',hint:'Filtra os demais ativos pelo contexto do Bitcoin. Desativado, o contexto do Bitcoin não é exigido; os dados do próprio ativo continuam obrigatórios.',kind:'boolean'},
+    {path:'btc_trend_timeframe',label:'Timeframe da tendência do Bitcoin',hint:'Usa pivôs confirmados de candles fechados. Salvar outra opção inicia uma nova versão de configuração; o histórico é preservado.',kind:'btc-timeframe'},
     {path:'veto_filters.spread',label:'Vetar spread acima do limite',hint:'Impede ARMADO e GATILHO quando o spread supera o limite. Desativar não dispensa a leitura do spread nem remove custos do plano.',kind:'boolean'},
     field('max_spread_pct','Spread máximo','Limite aplicado quando o filtro de spread está ativo.','%'),
     {path:'veto_filters.stop_distance',label:'Vetar stop distante demais',hint:'Rejeita o plano quando a distância até o stop supera o limite. O stop deve continuar válido mesmo com o filtro desativado.',kind:'boolean'},
@@ -174,7 +175,7 @@ export function MTFSettingsDialog({config, boot, onClose, onSaved}: {config: MTF
     const issue = errors[spec.path];
     return <div className={`mtf-setting ${issue?'invalid':''}`} key={spec.path}>
       <label htmlFor={id}>{spec.label}{spec.unit && <span>{spec.unit}</span>}</label>
-      {spec.kind==='patterns' ? <div className="mtf-pattern-options" role="group" aria-label={spec.label}>
+      {spec.kind==='btc-timeframe' ? <select id={id} disabled={saving} value={String(value ?? '4h')} onChange={e=>update(spec.path,e.target.value)}><option value="4h">4H</option><option value="1h">1H</option></select> : spec.kind==='patterns' ? <div className="mtf-pattern-options" role="group" aria-label={spec.label}>
         {['ENGULF_BULL','PIN_BULL','MARUBOZU_BULL'].map(pattern=><label key={pattern}><input type="checkbox" disabled={saving} checked={(value as string[] ?? []).includes(pattern)} onChange={e=>update(spec.path,e.target.checked?[...(value as string[] ?? []),pattern]:(value as string[]).filter(p=>p!==pattern))}/>{patternLabels[pattern]}</label>)}
       </div> : spec.kind==='boolean' ? <select id={id} disabled={saving} value={String(value)} onChange={e=>update(spec.path,e.target.value==='true')}><option value="true">Sim</option><option value="false">Não</option></select> :
         <input id={id} disabled={saving} type="number" step={schema.type==='integer'?1:'any'} min={schema.minimum} max={schema.maximum} value={displayed==null?'':String(displayed)} aria-invalid={!!issue} aria-describedby={`${id}-hint`} onChange={e=>update(spec.path,e.target.value===''?'':Number(e.target.value))}/>}
