@@ -45,6 +45,9 @@ def sample(state='TRIGGERED', count=60, window=50):
 @pytest.mark.parametrize('state', ['TRIGGERED', 'ARMED', 'WAIT', 'NO_TRADE'])
 def test_observer_enrichment_preserves_entire_decision_and_snapshot_identity(state):
     cfg, data = sample(state)
+    if state == 'NO_TRADE':
+        # Display enrichment cannot repair a required profile input retroactively.
+        data['analysis']['unavailable_profile_indicators'] = ['ema50']
     before = deepcopy(data)
     old = history.snapshot(data, {}, cfg, HistoryConfig(), iso(28800))
     enrich_observer_frames(data)
@@ -54,6 +57,9 @@ def test_observer_enrichment_preserves_entire_decision_and_snapshot_identity(sta
     assert new['analysis'] == old['analysis']  # raw/total, vetoes, status, plan and hashes
     assert new['quality'] == old['quality']
     assert new['data_reasons'] == old['data_reasons']
+    if state == 'NO_TRADE':
+        assert new['quality'] == 'pending'
+        assert 'PROFILE_INDICATORS_UNAVAILABLE' in new['data_reasons']
     assert evaluate('TEST_USDT', data['frames'], cfg, 28800, .01,
                     'DOWN' if state == 'NO_TRADE' else 'UP') == evaluate(
         'TEST_USDT', before['frames'], cfg, 28800, .01, 'DOWN' if state == 'NO_TRADE' else 'UP')
