@@ -18,6 +18,7 @@ from alembic.operations import Operations
 
 from app.services import shadow_approved_source as service
 from app.services import shadow_trade_service as writer
+from app.services.shadow_entry_quote import require_current_quote as real_quote_guard
 from app.models.config_profile import ConfigProfile
 from app.models.profile import Profile
 from app.models.pipeline_watchlist import PipelineWatchlist, PipelineWatchlistAsset
@@ -233,6 +234,37 @@ def test_observation_losing_eligibility_during_quote_cannot_insert(store,market,
         with pytest.raises(ValueError,match='NO_LONGER_CURRENT'):
             asyncio.run(service.capture_one(Adapter(db),user_id=uid,symbol=item['symbol'],
                 observation_id=item['mtf']['observation_id'],user_config=config()))
+        assert db.scalar(sa.select(sa.func.count()).select_from(ShadowTrade))==0
+
+
+def test_quote_expiring_during_final_revalidation_cannot_insert(store,market,monkeypatch):
+    from app.services import shadow_entry_quote
+    # Restore the real age guard replaced by the generic market fixture.
+    monkeypatch.setattr(shadow_entry_quote,'require_current_quote',real_quote_guard)
+    frozen=quote()
+    original=dict(frozen)
+    class Clock(datetime):
+        offset=timedelta()
+        @classmethod
+        def now(cls,tz=None): return datetime.now(tz)+cls.offset
+    monkeypatch.setattr(writer,'datetime',Clock)
+    monkeypatch.setattr(shadow_entry_quote,'capture_entry_quote',AsyncMock(return_value=frozen))
+    uid,item=seed(store)
+    calls=0
+    async def revalidate(*args,**kwargs):
+        nonlocal calls
+        calls+=1
+        if calls==2:
+            # Simulate elapsed DB work without sleeping or changing the configured limit.
+            Clock.offset=timedelta(seconds=61)
+        return item,{}
+    monkeypatch.setattr(service,'current_observation',revalidate)
+    with store() as db:
+        with pytest.raises(shadow_entry_quote.EntryQuoteUnavailable,match='EXPIRED_BEFORE_INSERT'):
+            asyncio.run(service.capture_one(Adapter(db),user_id=uid,symbol=item['symbol'],
+                observation_id=item['mtf']['observation_id'],user_config=config()))
+        assert calls==2
+        assert frozen==original
         assert db.scalar(sa.select(sa.func.count()).select_from(ShadowTrade))==0
 
 
