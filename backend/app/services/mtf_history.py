@@ -8,6 +8,7 @@ from ..schemas.mtf_history import HistoryConfig, HistoryFilter
 from .profile_runtime_config import canonical_hash
 from . import mtf_chart_service as chart
 from .config_service import config_service
+from .mtf_structure_indicators import enrich_observer_frames
 
 
 def serial(value):
@@ -56,6 +57,7 @@ def snapshot(data, member, cfg, history_cfg, scheduled_at):
         frames[tf] = {k: v for k,v in frame.items() if k not in ('candles','indicators')}
         frames[tf]['last_closed_candle'] = candles[-1] if candles else None
         for name, series in frame.get('indicators', {}).items():
+            display = frame.get('display_only_indicators', {}).get(name)
             point = series[-1] if series else None
             source_at = utc(point['time']) + timedelta(seconds=chart.TF_SECONDS[tf]) if point else None
             age = (observed-source_at).total_seconds() if source_at else None
@@ -63,8 +65,10 @@ def snapshot(data, member, cfg, history_cfg, scheduled_at):
                 candle_open_at=utc(point['time']).isoformat() if point else None,
                 source_at=source_at.isoformat() if source_at else None, age_seconds=age,
                 quality='missing' if point is None else 'stale' if age > cfg.stale_tf_multiplier*chart.TF_SECONDS[tf] else 'current',
-                source='gate.io', producer='mtf_chart', role='available_to_evaluation',
-                configuration=data.get('indicator_config'), configuration_identity=analysis.get('indicator_identity')))
+                source='gate.io', producer='mtf_chart', role='structural_display_only' if display else 'available_to_evaluation',
+                configuration=display['configuration'] if display else data.get('indicator_config'),
+                configuration_identity={'version': display['version'], 'sample_count': display['sample_count']}
+                    if display else analysis.get('indicator_identity')))
     if analysis.get('unavailable_profile_indicators'):
         reasons.append('PROFILE_INDICATORS_UNAVAILABLE')
     if not data.get('quote'):
@@ -108,6 +112,9 @@ async def capture(db, uid, wid, member, scheduled_at):
     if await db.scalar(text('SELECT id FROM mtf_history_observations WHERE identity=:key'), {'key': identity}):
         return False
     data = await chart.chart_data(db, uid, member['symbol'], member.get('profile_id'), cfg, include_display=False)
+    # Display enrichment is outside chart_data: scores, gates, plans and their
+    # identities are already finalized, including unavailable profile inputs.
+    enrich_observer_frames(data)
     # Fresh public read, no cache and no credentials. Gate ticker has no event
     # timestamp: receipt time is recorded under its own name, never fabricated.
     import httpx

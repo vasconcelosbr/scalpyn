@@ -7,6 +7,15 @@
   },
   "required_features": [
     {
+      "id": "mtf-observer-structural-display-indicators",
+      "description": "New history snapshots add the structural EMA after evaluation, with separate display provenance and legacy observation compatibility.",
+      "files": [
+        { "path": "backend/app/services/mtf_history.py", "contains_all": ["enrich_observer_frames(data)", "structural_display_only"] },
+        { "path": "backend/app/services/mtf_structure_indicators.py", "contains_all": ["mtf_structure_indicators_v1", "STRUCTURE_REQUIRED_INDICATORS", "indicator_sample_count"] },
+        { "path": "backend/tests/test_mtf_structure_indicators.py", "contains_all": ["test_observer_enrichment_preserves_entire_decision_and_snapshot_identity", "test_old_observation_without_ema_passes_l3_validation_and_projection", "test_capture_persists_structural_ema_for_profile_without_ema"] }
+      ]
+    },
+    {
       "id": "l3-chart-profile-display-parity",
       "description": "Consolidated chart membership ignores Shadow capacity and uses the same validated reference observation as the ARMED feed.",
       "files": [
