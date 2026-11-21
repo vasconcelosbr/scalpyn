@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     RADAR_READONLY_KEY_SHA256: str = ""
     RADAR_READONLY_USER_ID: str = ""
     RADAR_READONLY_WATCHLIST_IDS: str = ""
+    # Separate machine key for strong-long Pump Monitor export; empty = disabled.
+    PUMP_READONLY_KEY_SHA256: str = ""
+    PUMP_READONLY_USER_ID: str = ""
 
     # Maximum seconds a trade may remain open before the Trade Monitor closes
     # it with outcome = "timeout".  Override via the TRADE_MONITOR_TIMEOUT_SECONDS
