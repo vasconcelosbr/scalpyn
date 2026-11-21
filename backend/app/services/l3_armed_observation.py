@@ -93,12 +93,17 @@ async def load_l3_armed_display(db, *, user_id, include_analysis=False):
         if cfg is not None:
             _, identity = effective_indicators(configs[0].config_json, identity, cfg)
     # Select latest first, then validate. Never resurrect an older ARMED reading.
-    rows = (await db.execute(text('''SELECT DISTINCT ON (symbol)
-        id,symbol,profile_id,observed_at,status,quality,payload->'analysis' AS analysis
+    # MTF_LATEST_IDS_FIRST: do not extract/sort historical JSON before deduplication.
+    rows = (await db.execute(text('''WITH latest AS MATERIALIZED (
+        SELECT DISTINCT ON (symbol) id,symbol
         FROM mtf_history_observations
         WHERE user_id=:uid AND watchlist_id='l3-consolidated'
           AND symbol=ANY(CAST(:symbols AS text[])) AND observed_at<=:now
-        ORDER BY symbol,observed_at DESC,id DESC'''),
+        ORDER BY symbol,observed_at DESC,id DESC
+    ) SELECT o.id,o.symbol,o.profile_id,o.observed_at,o.status,o.quality,
+        o.payload->'analysis' AS analysis
+        FROM latest l JOIN mtf_history_observations o ON o.id=l.id
+        ORDER BY o.symbol'''),
         {'uid':user_id, 'symbols':[i['symbol'] for i in items], 'now':now})).mappings().all()
     latest = {r['symbol']: r for r in rows}
     enriched = [{**item, 'mtf':reading(item, latest.get(item['symbol']), now=now, cfg=cfg,

@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 import sqlalchemy as sa
@@ -83,12 +83,12 @@ def test_real_database_latest_reference_and_full_universe(database, monkeypatch)
     base=dict(id='l3-consolidated',items=items,awaiting_data_items=pending,total=len(items),awaiting_data_count=1,as_of=NOW.isoformat())
     monkeypatch.setattr(service,'load_l3_profile_consolidation',AsyncMock(return_value=base))
     monkeypatch.setattr(service,'load_config',AsyncMock(return_value=kwargs['cfg']))
-    def insert(symbol,*,at=NOW,state='ARMED',owner=uid,profile=pid,wid='l3-consolidated'):
+    def insert(symbol,*,at=NOW,state='ARMED',owner=uid,profile=pid,wid='l3-consolidated',id=None):
         a={**row['analysis'],'status':state,'profile_id':str(profile)}
         db.execute(sa.text('''INSERT INTO mtf_history_observations
             (id,user_id,watchlist_id,symbol,profile_id,identity,observed_at,status,quality,payload)
             VALUES(:id,:uid,:wid,:s,:p,:key,:at,:state,'current',CAST(:j AS jsonb))'''),
-            dict(id=uuid4(),uid=owner,wid=wid,s=symbol,p=str(profile),key=str(uuid4()),at=at,state=state,
+            dict(id=id or uuid4(),uid=owner,wid=wid,s=symbol,p=str(profile),key=str(uuid4()),at=at,state=state,
                  j=json.dumps({'operational_effect':False,'analysis':a})))
     for item in items: insert(item['symbol'])
     # An older ARMED must not mask a later WAIT, even when future labels exist.
@@ -100,8 +100,29 @@ def test_real_database_latest_reference_and_full_universe(database, monkeypatch)
     other=uuid4();db.execute(sa.text('INSERT INTO users VALUES(:u)'),{'u':other})
     insert('ASSET_0',owner=other,state='NO_TRADE')
     insert('ASSET_0',wid='different',state='NO_TRADE')
+    class ParityAdapter(Adapter):
+        async def execute(self, statement, params=None):
+            if str(statement).startswith('WITH latest AS MATERIALIZED'):
+                legacy=sa.text('''SELECT DISTINCT ON (symbol)
+                    id,symbol,profile_id,observed_at,status,quality,payload->'analysis' AS analysis
+                    FROM mtf_history_observations
+                    WHERE user_id=:uid AND watchlist_id='l3-consolidated'
+                    AND symbol=ANY(CAST(:symbols AS text[])) AND observed_at<=:now
+                    ORDER BY symbol,observed_at DESC,id DESC''')
+                old=list(db.execute(legacy,params).mappings())
+                new=list(db.execute(statement,params).mappings())
+                assert new==old  # Entire payload and selection semantics, not only IDs.
+                plan=db.scalar(sa.text('EXPLAIN (VERBOSE,FORMAT JSON) '+str(statement)),params)[0]['Plan']
+                def nodes(node):
+                    yield node
+                    for child in node.get('Plans',[]): yield from nodes(child)
+                uniques=[n for n in nodes(plan) if n['Node Type']=='Unique']
+                assert uniques
+                assert all('payload' not in expr for unique in uniques
+                           for n in nodes(unique) for expr in n.get('Output',[]))
+            return await super().execute(statement,params)
     async def run():
-        adapter=Adapter(db)
+        adapter=ParityAdapter(db)
         first=await service.load_l3_armed_display(adapter,user_id=uid)
         assert first['armed_count']==125 and first['total']==125
         assert first['awaiting_data_items']==pending and all('mtf' not in i for i in pending)
@@ -111,10 +132,16 @@ def test_real_database_latest_reference_and_full_universe(database, monkeypatch)
         # Latest contribution from a different profile does not arm the reference.
         insert('ASSET_1',at=NOW+timedelta(seconds=1),profile=uuid4())
         insert('ASSET_2',at=NOW+timedelta(seconds=1),state='TRIGGERED')
+        # Highest ID wins a tied timestamp; never revive the older ARMED.
+        insert('ASSET_4',at=NOW+timedelta(seconds=1),state='NO_TRADE',id=UUID(int=2))
+        insert('ASSET_4',at=NOW+timedelta(seconds=1),state='ARMED',id=UUID(int=1))
+        insert('ASSET_5',at=NOW+timedelta(seconds=2),state='NO_TRADE')  # Future row excluded.
         display=await service.load_l3_armed_display(adapter,user_id=uid,include_analysis=True)
         external=await service.load_l3_triggered_assets(adapter,user_id=uid)
-        assert display['total']==125 and display['armed_count']==122
+        assert display['total']==125 and display['armed_count']==121
         assert display['analyses']['ASSET_0']['status']=='WAIT'
+        assert display['analyses']['ASSET_4']['status']=='NO_TRADE'
+        assert display['analyses']['ASSET_5']['status']=='ARMED'
         assert 'ASSET_1' not in display['analyses']  # Changed reference cannot leak an old ARMED into the chart.
         assert {s for s,a in display['analyses'].items() if a['status']=='TRIGGERED'} == {i['symbol'] for i in external['items']}
         assert 'analyses' not in first and 'analyses' not in external

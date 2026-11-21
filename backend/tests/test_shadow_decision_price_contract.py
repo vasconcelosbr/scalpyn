@@ -60,6 +60,7 @@ async def test_new_shadow_uses_gate_quote_and_does_not_backdate_the_fill(quote_f
              "entry_at": captured_at.isoformat(), "age_seconds": 0.0,
              "contract_version": "gate_spot_entry_quote_v1"}
     with (
+        patch("app.services.shadow_approved_source.admission", new=AsyncMock(return_value=True)),
         patch("app.services.shadow_entry_quote.capture_entry_quote", new=AsyncMock(return_value=quote, side_effect=EntryQuoteUnavailable(quote_failure) if quote_failure else None)),
         patch("app.services.shadow_trade_service._has_active_profile_shadow", new=AsyncMock(return_value=False)),
         patch("app.services.shadow_l3_exit_service.load_frozen_policy", new=AsyncMock(return_value={})),

@@ -7,6 +7,17 @@
   },
   "required_features": [
     {
+      "id": "mtf-latest-observation-narrow-selection",
+      "description": "Select latest observation IDs before JSON extraction while retaining post-quote eligibility and expiry guards.",
+      "files": [
+        {"path": "backend/app/services/l3_armed_observation.py", "contains_all": ["MTF_LATEST_IDS_FIRST", "WITH latest AS MATERIALIZED", "o.payload->'analysis'"]},
+        {"path": "backend/tests/test_l3_armed_observation.py", "contains_all": ["assert new==old", "EXPLAIN (VERBOSE,FORMAT JSON)", "'payload' not in expr"]},
+        {"path": "backend/tests/test_shadow_consolidated_armed.py", "contains_all": ["test_observation_losing_eligibility_during_quote_cannot_insert", "test_quote_expiring_during_final_revalidation_cannot_insert"]},
+        {"path": "backend/app/services/shadow_trade_service.py", "contains_all": ["await current_observation", "require_current_quote("]},
+        {"path": "backend/app/services/shadow_entry_quote.py", "contains_all": ["ENTRY_QUOTE_EXPIRED_BEFORE_INSERT"]}
+      ]
+    },
+    {
       "id": "mtf-btc-configurable-timeframe",
       "description": "Legacy 4H identity, configurable BTC veto timeframe and both frozen structural contexts.",
       "files": [
