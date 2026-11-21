@@ -24,12 +24,15 @@ def enrich_observer_frames(data):
     for tf, frame in data['frames'].items():
         if frame.get('indicators', {}).get(STRUCTURE_EMA_NAME):
             continue
+        window = frame.get('indicator_sample_count')
+        cutoff = data.get('analysis', {}).get('evaluated_at_utc')
+        if not window or window < STRUCTURE_EMA_PERIOD or not cutoff:
+            continue
         # Observer frames retain the market-data is_closed field; the UI's
         # closed flag is added only in the separate drawing transport.
         candles = closed_candles(frame.get('candles', []), tf,
-                                 timestamp(data['analysis']['evaluated_at_utc']))
-        window = frame.get('indicator_sample_count')
-        if not window or window < STRUCTURE_EMA_PERIOD or len(candles) < window:
+                                 timestamp(cutoff))
+        if len(candles) < window:
             continue
         value = FeatureEngine(STRUCTURE_INDICATOR_CONFIG)._calc_ema(
             pd.DataFrame(candles[-window:])).get(STRUCTURE_EMA_NAME)

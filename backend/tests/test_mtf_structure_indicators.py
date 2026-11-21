@@ -93,6 +93,14 @@ def test_forming_candle_is_excluded_and_missing_atr_is_not_fabricated():
     assert structure_context(data,cfg,now=28802)['frames']['4h']['extension_atr'] is None
 
 
+def test_incomplete_legacy_frame_without_producer_metadata_is_unchanged():
+    from test_mtf_history import sample as legacy_sample
+    data = legacy_sample()
+    before = deepcopy(data)
+    enrich_observer_frames(data)
+    assert data == before
+
+
 @pytest.mark.asyncio
 async def test_old_observation_without_ema_passes_l3_validation_and_projection(monkeypatch):
     from test_l3_armed_observation import context
