@@ -4,6 +4,7 @@ from math import isfinite
 import pandas as pd
 
 from .feature_engine import FeatureEngine
+from .mtf_chart_engine import closed_candles, timestamp
 
 
 STRUCTURE_INDICATOR_VERSION = 'mtf_structure_indicators_v1'
@@ -20,10 +21,13 @@ def enrich_observer_frames(data):
     Keep existing EMA samples and the original full-window warmup requirement.
     Only the latest closed sample is needed by the immutable snapshot.
     """
-    for frame in data['frames'].values():
+    for tf, frame in data['frames'].items():
         if frame.get('indicators', {}).get(STRUCTURE_EMA_NAME):
             continue
-        candles = [c for c in frame.get('candles', []) if c.get('closed')]
+        # Observer frames retain the market-data is_closed field; the UI's
+        # closed flag is added only in the separate drawing transport.
+        candles = closed_candles(frame.get('candles', []), tf,
+                                 timestamp(data['analysis']['evaluated_at_utc']))
         window = frame.get('indicator_sample_count')
         if not window or window < STRUCTURE_EMA_PERIOD or len(candles) < window:
             continue

@@ -136,3 +136,31 @@ async def test_capture_persists_structural_ema_for_profile_without_ema(monkeypat
     assert payload['analysis']==before
     assert {p['timeframe'] for p in payload['indicators'] if p['name']=='ema50'}==set(TF_SECONDS)
     assert history.chart.chart_data.await_args.kwargs=={'include_display':False}
+
+
+@pytest.mark.asyncio
+async def test_real_chart_observer_frames_use_market_closed_flag(monkeypatch):
+    from app.services import mtf_chart_service as chart, mtf_pump_flow
+    from app.services.market_data_service import market_data_service
+    cfg = MTFChartConfig.model_validate(experimental_preset())
+    now = 14400*100
+    profile = SimpleNamespace(id=uuid4(),config={'default_timeframe':'4h'})
+    config = {'atr':{'enabled':True,'period':14},'ema':{'enabled':True,'periods':[50]}}
+    monkeypatch.setattr(chart,'profile_context',AsyncMock(return_value=(profile,config,{}, {'atr'},['atr'])))
+    monkeypatch.setattr(chart,'calculation_window',lambda *args:50)
+    monkeypatch.setattr(chart.time,'time',lambda:now)
+    async def fetch(symbol,tf,cfg,limit=None):
+        return [dict(candle(t=now-(60-i)*TF_SECONDS[tf],c=100+math.sin(i)),is_closed=True)
+                for i in range(60)]
+    monkeypatch.setattr(chart,'market_candles',fetch)
+    monkeypatch.setattr(market_data_service,'fetch_orderbook_metrics',AsyncMock(
+        return_value={'spread_pct':.01,'market_data_source':'gate.io'}))
+    monkeypatch.setattr(mtf_pump_flow,'load_context',AsyncMock(return_value=None))
+    data = await chart.chart_data(object(),uuid4(),'BTC_USDT',profile.id,cfg,include_display=False)
+    assert all('ema50' not in f['indicators'] for f in data['frames'].values())
+    assert all(c['is_closed'] and 'closed' not in c for f in data['frames'].values() for c in f['candles'])
+    before = deepcopy(data['analysis'])
+    enrich_observer_frames(data)
+    payload = history.snapshot(data,{},cfg,HistoryConfig(),iso(now))
+    assert payload['analysis']==before
+    assert {p['timeframe'] for p in payload['indicators'] if p['name']=='ema50'}==set(TF_SECONDS)
