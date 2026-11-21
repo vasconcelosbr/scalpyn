@@ -104,6 +104,7 @@ def test_veto_settings_save_through_config_service_with_existing_thresholds(clie
     monkeypatch.setattr(mtf_chart.service, 'watchlist_options', AsyncMock(return_value=[{'id':'l3-consolidated'}]))
     cfg=experimental_preset()
     cfg.update(min_score=0, slippage_pct=.1, atr_period=14)
+    cfg['btc_trend_timeframe']='1h'
     cfg['veto_filters']['btc_downtrend']=False
     write=AsyncMock(return_value=cfg)
     monkeypatch.setattr(mtf_chart.config_service,'update_config',write)

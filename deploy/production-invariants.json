@@ -7,6 +7,18 @@
   },
   "required_features": [
     {
+      "id": "mtf-btc-configurable-timeframe",
+      "description": "Legacy 4H identity, configurable BTC veto timeframe and both frozen structural contexts.",
+      "files": [
+        {"path": "backend/app/schemas/mtf_chart.py", "contains_all": ["MTF_BTC_TIMEFRAME_V1", "btc_trend_timeframe"]},
+        {"path": "backend/app/services/mtf_btc_context.py", "contains_all": ["mtf_btc_context_v1", "pivots_used", "active_timeframe"]},
+        {"path": "backend/app/services/mtf_chart_service.py", "contains_all": ["load_btc_context", "analysis[\"btc_context\"]"]},
+        {"path": "backend/tests/test_mtf_btc_timeframe.py", "contains_all": ["test_hourly_selection_changes_only_btc_gate", "test_legacy_identity_l3_validation_and_configuration_rollback"]},
+        {"path": "frontend/components/mtf/MTFSettingsDialog.tsx", "contains_all": ["btc_trend_timeframe"]},
+        {"path": "frontend/lib/mtfBtcTimeframe.test.ts", "contains_all": ["both frozen BTC states", "legacy BTC reading"]}
+      ]
+    },
+    {
       "id": "mtf-observer-structural-display-indicators",
       "description": "New history snapshots add the structural EMA after evaluation, with separate display provenance and legacy observation compatibility.",
       "files": [

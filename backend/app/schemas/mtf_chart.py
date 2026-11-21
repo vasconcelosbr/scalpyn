@@ -125,6 +125,7 @@ class MTFChartConfig(BaseModel):
     presentation: MTFPresentation | None = None
     pump_flow: MTFPumpFlowConfig | None = None
     veto_filters: MTFVetoFilters = Field(default_factory=MTFVetoFilters)
+    btc_trend_timeframe: Literal["4h", "1h"] = "4h"
     # None retains the legacy global ATR until the settings are explicitly saved.
     atr_period: int | None = Field(default=None, ge=1)
     force_patterns: list[BullPattern] = Field(default_factory=lambda: list(LEGACY_FORCE_PATTERNS), min_length=1)
@@ -196,6 +197,9 @@ class MTFChartConfig(BaseModel):
 
     def engine_dump(self):
         data = self.model_dump(exclude={'presentation', 'pump_flow'})
+        # MTF_BTC_TIMEFRAME_V1: legacy/default 4h keeps the frozen identity.
+        if self.btc_trend_timeframe == "4h":
+            data.pop("btc_trend_timeframe")
         # MTF_CONFIGURABLE_VETO_FILTERS: default switches preserve frozen identities.
         if self.veto_filters == MTFVetoFilters():
             data.pop('veto_filters')

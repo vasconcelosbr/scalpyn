@@ -34,6 +34,12 @@ export interface TriggerDiagnostics {
   patterns: { pattern: string; state: DiagnosticState; conditions: TriggerCheck[] }[];
 }
 export interface Analysis {
+  btc_trend_timeframe?: '4h' | '1h';
+  btc_context?: {
+    version: 'mtf_btc_context_v1'; active_timeframe: '4h' | '1h'; veto_enabled: boolean; exempt: boolean;
+    frames: Record<'4h' | '1h', {trend: 'UP' | 'DOWN' | 'RANGE' | null; reason: string | null;
+      pivots_used: Pivot[]; reference_candle: {open_at: string; close_at: string; close: number} | null}>;
+  };
   profile_id?: string | null;
   entry_candidate?: EntryCandidate | null;
   pump_flow?: PumpFlowContext;
@@ -50,6 +56,7 @@ export interface Profile { id: string; name: string; default_timeframe?: string 
 export interface Watchlist { id: string; name: string; profile_id?: string }
 export interface Asset { structure_context?: StructureContext | null; symbol: string; current_price?: number | null; price_snapshot_at?: string | null; alpha_score?: number | null; profile_id?: string; mtf?: Analysis | null }
 export interface MTFConfig {
+  btc_trend_timeframe?: '4h' | '1h';
   schema_version: string; enabled: boolean; calibrated: false; default_watchlist: string; monitored_watchlists: string[];
   poll_seconds: number; history_page_size: number; candle_limits: Record<Timeframe, number>; stale_tf_multiplier: number;
   presentation?: Presentation;
