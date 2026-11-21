@@ -7,6 +7,16 @@
   },
   "required_features": [
     {
+      "id": "pump-strong-readonly-export",
+      "description": "Dedicated machine key exports all final strong-long arrows from the complete cycle, without writes or engine execution.",
+      "files": [
+        {"path": "backend/app/services/pump_readonly.py", "contains_all": ["PUMP_STRONG_READONLY", "complete_cycle_unavailable", "config_changed_waiting_for_cycle"]},
+        {"path": "backend/app/api/pump_readonly.py", "contains_all": ["PUMP_READONLY_KEY_SHA256", "hmac.compare_digest", "readonly_session()", "/strong-rising/assets"]},
+        {"path": "backend/app/main.py", "contains_all": ["app.include_router(pump_readonly.router)"]},
+        {"path": "backend/tests/test_pump_readonly.py", "contains_all": ["test_export_matches_display_and_reads_only", "test_all_strong_rows_even_outside_top_and_only_rising_filter", "test_revocation_and_key_does_not_authorize_existing_routes"]}
+      ]
+    },
+    {
       "id": "mtf-latest-observation-narrow-selection",
       "description": "Select latest observation IDs before JSON extraction while retaining post-quote eligibility and expiry guards.",
       "files": [

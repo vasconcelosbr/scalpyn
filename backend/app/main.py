@@ -50,6 +50,7 @@ from .api import (
     metrics as metrics_api,
     social_intelligence,
     radar_readonly,
+    pump_readonly,
     pump_radar,
 )
 
@@ -452,6 +453,7 @@ app.include_router(watchlists.router)
 app.include_router(mtf_chart.router)
 app.include_router(mtf_history.router)
 app.include_router(radar_readonly.router)
+app.include_router(pump_readonly.router)
 app.include_router(watchlists.pipeline_router)
 app.include_router(custom_watchlists.router)
 
